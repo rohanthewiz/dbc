@@ -1,0 +1,26 @@
+# dbc configuration — copy to ./dbc.toml or ~/.config/dbc/config.toml
+
+# Directory scanned for Go scripts (Ctrl+O in the TUI)
+scripts_dir = "scripts"
+
+# Query results are truncated at this many rows in the client
+max_rows = 1000
+
+# Connection activated at startup
+default_connection = "local-pg"
+
+[[connection]]
+name   = "local-pg"
+driver = "postgres"
+# Env vars are expanded — keep secrets out of the file
+dsn    = "postgres://postgres:${PGPASS}@localhost:5432/mydb?sslmode=disable"
+
+[[connection]]
+name   = "reporting-mysql"
+driver = "mysql"
+dsn    = "reporter:${MYSQL_PASS}@tcp(db.example.com:3306)/reports?parseTime=true"
+
+[[connection]]
+name   = "scratch"
+driver = "sqlite"
+dsn    = "file:scratch.db"

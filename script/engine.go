@@ -27,8 +27,9 @@ func Run(path string, s *sdb.S) (err error) {
 	}
 	if err = i.Use(interp.Exports{
 		"github.com/rohanthewiz/dbc/sdb/sdb": {
-			"S":      reflect.ValueOf((*sdb.S)(nil)),
-			"Result": reflect.ValueOf((*model.Result)(nil)),
+			"S":          reflect.ValueOf((*sdb.S)(nil)),
+			"Result":     reflect.ValueOf((*model.Result)(nil)),
+			"IsCanceled": reflect.ValueOf(sdb.IsCanceled),
 		},
 	}); err != nil {
 		return serr.Wrap(err, "phase", "load sdb symbols")

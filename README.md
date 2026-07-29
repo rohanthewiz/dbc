@@ -42,7 +42,8 @@ Layout: connections sidebar · SQL editor · results table · log pane · status
 
 | Key | Action |
 | --- | --- |
-| `Ctrl+R` | Run the editor's SQL on the active connection |
+| `Ctrl+R` | Run the statement under the cursor (or the selection) |
+| `Ctrl+K` | Stop the running query or script — same as the **■ Stop** button |
 | `Ctrl+E` | Export the last result (format + clipboard/file dialog) |
 | `Ctrl+O` | Pick and run a Go script from `scripts_dir` |
 | `Ctrl+L` | Jump to the connections list (`Enter` activates one) |
@@ -52,6 +53,39 @@ Layout: connections sidebar · SQL editor · results table · log pane · status
 
 Non-SELECT statements (INSERT/UPDATE/DDL…) run as exec and report rows
 affected. Results are truncated at `max_rows`.
+
+### Multi-statement buffers
+
+Keep a whole scratchpad of SQL in the editor and run one statement at a time:
+`Ctrl+R` executes only the statement the cursor sits in, and the log says
+which one (`running statement 2/4 …`). Select a region first and `Ctrl+R`
+runs exactly that instead.
+
+Statements are separated on semicolons, ignoring the ones inside strings,
+quoted identifiers, comments, and PostgreSQL `$$` bodies — so a function
+definition stays in one piece.
+
+### Stopping a long query
+
+While a query or script runs, the status bar shows a live elapsed time and a
+**■ Stop** button appears at its right edge. `Ctrl+K` or a click on the button
+cancels it: the statement is aborted on the server (Postgres, MySQL) or
+interrupted (SQLite), and the run is reported as stopped rather than failed.
+
+A canceled script unwinds through its own error handling — the query in flight
+is aborted and every later `s.Query`/`s.Exec` fails immediately. A script that
+loops without touching the database can still check `s.Canceled()`, and
+`sdb.IsCanceled(err)` tells a stop apart from a real failure:
+
+```go
+r, err := s.Query("demo", bigQuery)
+if err != nil {
+	if sdb.IsCanceled(err) {
+		return nil // stopped by the user, not a failure
+	}
+	return err
+}
+```
 
 ## Scripting in Go
 
@@ -94,6 +128,9 @@ Go module; dbc runs them regardless.
 | `s.Show(r)` | Push a result to the results table (stdout when headless) |
 | `s.Print(format, args...)` | Log to the TUI log pane (stdout when headless) |
 | `s.Export(r, format, path)` | Export a result; empty path → clipboard |
+| `s.Canceled() bool` | True once the user has stopped this run |
+| `s.Ctx() context.Context` | The run's context, for `select` on `Done()` |
+| `sdb.IsCanceled(err) bool` | Tells a stop apart from a real query failure |
 
 `sdb.Result` gives you `Columns []string`, `Rows [][]string`, `Raw [][]any`,
 `Duration`, and `Affected`. Use the placeholder style of the target driver
@@ -114,6 +151,8 @@ Everything works without the TUI, for cron jobs and shell pipelines:
 ```
 
 Flags go before the SQL: `-config path`, `-c connection`, `-f format`, `-o outfile`.
+Use `--` before SQL that starts with a comment, so the flag parser leaves it
+alone. `Ctrl+C` cancels a running query or script and exits 130.
 
 ## Export formats
 

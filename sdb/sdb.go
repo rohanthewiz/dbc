@@ -8,7 +8,9 @@
 package sdb
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -26,13 +28,52 @@ type S struct {
 	mgr   *db.Manager
 	show  func(*model.Result)
 	print func(string)
+	ctx   context.Context
 }
 
 // New builds a script session. show receives results pushed via Show;
 // print receives Print output (results table / log pane in the TUI,
 // stdout in headless mode).
 func New(mgr *db.Manager, show func(*model.Result), print func(string)) *S {
-	return &S{mgr: mgr, show: show, print: print}
+	return &S{mgr: mgr, show: show, print: print, ctx: context.Background()}
+}
+
+// WithContext attaches a cancellation context to the session and returns it.
+// The host — not the script — sets this: when the user stops a run, the query
+// in flight is aborted and every later Query or Exec fails immediately, so a
+// looping script unwinds through its own error handling.
+func (s *S) WithContext(ctx context.Context) *S {
+	if ctx != nil {
+		s.ctx = ctx
+	}
+	return s
+}
+
+// Ctx returns the session's context. Long-running scripts can select on
+// s.Ctx().Done() (or check s.Canceled()) to bail out early.
+func (s *S) Ctx() context.Context {
+	if s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
+}
+
+// Canceled reports whether the user has stopped this run.
+func (s *S) Canceled() bool {
+	return s.Ctx().Err() != nil
+}
+
+// IsCanceled reports whether an error from Query or Exec is the user stopping
+// the run, as opposed to a genuine failure — so a script can unwind quietly:
+//
+//	if err != nil {
+//		if sdb.IsCanceled(err) {
+//			return nil
+//		}
+//		return err
+//	}
+func IsCanceled(err error) bool {
+	return errors.Is(err, db.ErrCanceled)
 }
 
 // Conns returns the configured connection names.
@@ -44,12 +85,12 @@ func (s *S) Conns() []string {
 // returns the result set. Use the placeholder style of the target driver
 // ($1 for postgres, ? for mysql/sqlite).
 func (s *S) Query(conn, query string, args ...any) (*Result, error) {
-	return s.mgr.Run(conn, query, args...)
+	return s.mgr.RunContext(s.Ctx(), conn, query, args...)
 }
 
 // Exec runs a non-query statement and returns the rows affected.
 func (s *S) Exec(conn, stmt string, args ...any) (int64, error) {
-	r, err := s.mgr.Run(conn, stmt, args...)
+	r, err := s.mgr.RunContext(s.Ctx(), conn, stmt, args...)
 	if err != nil {
 		return 0, err
 	}

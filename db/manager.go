@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/model"
+	"github.com/rohanthewiz/dbc/sqlsplit"
 	"github.com/rohanthewiz/serr"
 )
 
@@ -98,23 +100,27 @@ func (m *Manager) Close() {
 	}
 }
 
-var queryPrefixes = []string{
-	"select", "with", "show", "explain", "describe", "desc", "pragma", "values", "table",
+var queryVerbs = map[string]bool{
+	"select": true, "with": true, "show": true, "explain": true,
+	"describe": true, "desc": true, "pragma": true, "values": true, "table": true,
 }
 
+// isQuery reports whether a statement returns rows. Leading comments are
+// skipped, so an annotated SELECT is still recognized.
 func isQuery(stmt string) bool {
-	head := strings.ToLower(strings.TrimSpace(stmt))
-	for _, p := range queryPrefixes {
-		if strings.HasPrefix(head, p) {
-			return true
-		}
-	}
-	return false
+	return queryVerbs[sqlsplit.FirstKeyword(stmt)]
 }
 
-// Run executes a statement on the named connection. SELECT-like statements
-// return their rows; anything else runs as Exec and returns rows affected.
+// Run executes a statement on the named connection, without cancellation.
 func (m *Manager) Run(name, stmt string, args ...any) (*model.Result, error) {
+	return m.RunContext(context.Background(), name, stmt, args...)
+}
+
+// RunContext executes a statement on the named connection. SELECT-like
+// statements return their rows; anything else runs as Exec and returns rows
+// affected. Canceling ctx aborts the statement on the server where the driver
+// supports it, and always stops row collection.
+func (m *Manager) RunContext(ctx context.Context, name, stmt string, args ...any) (*model.Result, error) {
 	dbh, err := m.DB(name)
 	if err != nil {
 		return nil, err
@@ -126,9 +132,9 @@ func (m *Manager) Run(name, stmt string, args ...any) (*model.Result, error) {
 	start := time.Now()
 
 	if !isQuery(stmt) {
-		res, err := dbh.Exec(stmt, args...)
+		res, err := dbh.ExecContext(ctx, stmt, args...)
 		if err != nil {
-			return nil, serr.Wrap(err, "conn", name)
+			return nil, wrapRunErr(ctx, err, name)
 		}
 		aff, _ := res.RowsAffected()
 		return &model.Result{
@@ -140,15 +146,15 @@ func (m *Manager) Run(name, stmt string, args ...any) (*model.Result, error) {
 		}, nil
 	}
 
-	rows, err := dbh.Query(stmt, args...)
+	rows, err := dbh.QueryContext(ctx, stmt, args...)
 	if err != nil {
-		return nil, serr.Wrap(err, "conn", name)
+		return nil, wrapRunErr(ctx, err, name)
 	}
 	defer rows.Close()
 
 	cols, err := rows.Columns()
 	if err != nil {
-		return nil, serr.Wrap(err, "conn", name, "op", "columns")
+		return nil, wrapRunErr(ctx, err, name, "op", "columns")
 	}
 
 	result := &model.Result{Conn: name, Query: stmt, Columns: cols}
@@ -157,12 +163,15 @@ func (m *Manager) Run(name, stmt string, args ...any) (*model.Result, error) {
 		holders[i] = new(any)
 	}
 	for rows.Next() {
+		if err = ctx.Err(); err != nil {
+			return nil, wrapRunErr(ctx, err, name, "op", "fetch")
+		}
 		if len(result.Rows) >= m.cfg.MaxRows {
 			result.Truncated = true
 			break
 		}
 		if err = rows.Scan(holders...); err != nil {
-			return nil, serr.Wrap(err, "conn", name, "op", "scan")
+			return nil, wrapRunErr(ctx, err, name, "op", "scan")
 		}
 		disp := make([]string, len(cols))
 		raw := make([]any, len(cols))
@@ -175,10 +184,33 @@ func (m *Manager) Run(name, stmt string, args ...any) (*model.Result, error) {
 		result.Raw = append(result.Raw, raw)
 	}
 	if err = rows.Err(); err != nil {
-		return nil, serr.Wrap(err, "conn", name, "op", "iterate")
+		return nil, wrapRunErr(ctx, err, name, "op", "iterate")
 	}
 	result.Duration = time.Since(start)
 	return result, nil
+}
+
+// ErrCanceled is returned when a statement was stopped by the user. Callers
+// test for it with errors.Is; the underlying context error stays wrapped
+// inside for anyone who cares which one it was.
+var ErrCanceled = errors.New("statement canceled")
+
+// wrapRunErr adds connection context to a statement error, and marks it as a
+// cancellation when the context was the cause. Drivers report an aborted
+// statement in their own words ("pq: canceling statement due to user
+// request", "interrupted"), so the context is the reliable signal.
+func wrapRunErr(ctx context.Context, err error, name string, kv ...string) error {
+	fields := append([]string{"conn", name}, kv...)
+	cerr := ctx.Err()
+	if cerr == nil {
+		return serr.Wrap(err, fields...)
+	}
+	cause := "user"
+	if errors.Is(cerr, context.DeadlineExceeded) {
+		cause = "timeout"
+	}
+	return serr.Wrap(fmt.Errorf("%w: %w", ErrCanceled, cerr),
+		append(fields, "cause", cause, "driver_err", err.Error())...)
 }
 
 func renderVal(v any) string {

@@ -4,6 +4,9 @@
 //	dbc "SELECT * FROM cats"       run one query headless (uses -c / default conn)
 //	dbc script scripts/loop.go     run a Go script headless
 //
+// Headless runs are cancelable with Ctrl+C, which aborts the statement on the
+// server and exits 130.
+//
 // Flags (before positional args):
 //
 //	-config path   config file (default: ./dbc.toml, ~/.config/dbc/config.toml)
@@ -13,9 +16,13 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/rohanthewiz/logger"
 	"github.com/rohanthewiz/serr"
@@ -88,8 +95,14 @@ func runQueryHeadless(cfg *config.Config, mgr *db.Manager, stmt string) {
 	if err != nil {
 		fail(err, "bad -f format")
 	}
-	res, err := mgr.Run(conn, stmt)
+	ctx, stop := interruptible()
+	defer stop()
+
+	res, err := mgr.RunContext(ctx, conn, stmt)
 	if err != nil {
+		if errors.Is(err, db.ErrCanceled) {
+			canceled("query")
+		}
 		fail(err, "query failed")
 	}
 	out, err := export.Render(res, f)
@@ -107,6 +120,9 @@ func runQueryHeadless(cfg *config.Config, mgr *db.Manager, stmt string) {
 }
 
 func runScriptHeadless(mgr *db.Manager, path string) {
+	ctx, stop := interruptible()
+	defer stop()
+
 	s := sdb.New(mgr,
 		func(r *model.Result) {
 			fmt.Printf("-- %s │ %d rows in %s\n", r.Conn, len(r.Rows), r.Duration)
@@ -114,10 +130,26 @@ func runScriptHeadless(mgr *db.Manager, path string) {
 		},
 		func(msg string) {
 			fmt.Println(msg)
-		})
+		}).WithContext(ctx)
+
 	if err := script.Run(path, s); err != nil {
+		if errors.Is(err, db.ErrCanceled) {
+			canceled("script")
+		}
 		fail(err, "script failed")
 	}
+}
+
+// interruptible returns a context canceled by Ctrl+C or SIGTERM, so a long
+// headless query is aborted on the server rather than orphaned.
+func interruptible() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
+
+func canceled(what string) {
+	fmt.Fprintf(os.Stderr, "%s canceled\n", what)
+	logger.CloseLog()
+	os.Exit(130) // conventional exit status for an interrupt
 }
 
 func fail(err error, msg string) {

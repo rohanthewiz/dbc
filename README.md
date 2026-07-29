@@ -147,12 +147,67 @@ Everything works without the TUI, for cron jobs and shell pipelines:
 ./dbc "SELECT * FROM cats"                       # aligned text table
 ./dbc -c local-pg -f csv "SELECT * FROM users"   # any format to stdout
 ./dbc -f html -o report.html "SELECT ..."        # straight to a file
+./dbc "INSERT ...; SELECT ..."                   # several statements, in order
 ./dbc script scripts/loop_params.go              # run a Go script
 ```
 
 Flags go before the SQL: `-config path`, `-c connection`, `-f format`, `-o outfile`.
 Use `--` before SQL that starts with a comment, so the flag parser leaves it
 alone. `Ctrl+C` cancels a running query or script and exits 130.
+
+### Multi-statement runs
+
+The SQL argument may hold several statements, split the same way the editor
+splits them — semicolons inside strings, comments, and `$$` bodies don't count.
+They run in order on one connection, and every result is rendered:
+
+```sh
+./dbc "INSERT INTO cats (name, breed, age) VALUES ('Zed', 'Tabby', 4);
+       SELECT breed, count(*) AS n FROM cats GROUP BY breed ORDER BY n DESC"
+```
+
+```
+-- 1/2 │ demo │ 1 rows affected in 50µs
+-- INSERT INTO cats (name, breed, age) VALUES ('Zed', 'Tabby', 4)
+rows_affected
+-------------
+1
+
+-- 2/2 │ demo │ 3 rows in 150µs
+-- SELECT breed, count(*) AS n FROM cats GROUP BY breed ORDER BY n DESC
+breed       n
+----------  -
+Tabby       3
+Siamese     2
+Maine Coon  2
+```
+
+A run stops at the first statement that fails — later statements are skipped —
+but the results collected before it are still written, and the error names the
+one that broke (`statement=2/3`). Exit status is 1 for a failure, 130 for a
+Ctrl+C.
+
+The statements share one pinned database session, so session-scoped SQL means
+what it says across them: nothing is committed until you say so in
+
+```sh
+./dbc "BEGIN; UPDATE cats SET age = age + 1; SELECT * FROM cats; COMMIT"
+```
+
+and `SET`, `PRAGMA`, and temp tables set up by one statement are still there
+for the next. Nothing is wrapped in a transaction for you — without a `BEGIN`
+each statement commits on its own.
+
+Each format keeps its own shape across statements:
+
+| Format | Multi-statement output |
+| --- | --- |
+| `text`, `markdown` | a banner per statement (position, connection, rows, time) above each table |
+| `csv`, `tsv` | blocks separated by a blank line, each with its own header row — no banners to break parsing |
+| `html` | one page, a section per statement |
+| `json` | an array of envelopes: `{"statement", "conn", "duration", "columns", "rows"}`, or `"rows_affected"` for a non-query |
+
+A single statement renders exactly as it always did, in every format.
 
 ## Export formats
 

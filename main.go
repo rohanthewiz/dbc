@@ -2,6 +2,7 @@
 //
 //	dbc                            launch the TUI
 //	dbc "SELECT * FROM cats"       run one query headless (uses -c / default conn)
+//	dbc "INSERT …; SELECT …"       run several statements in order, on one conn
 //	dbc script scripts/loop.go     run a Go script headless
 //
 // Headless runs are cancelable with Ctrl+C, which aborts the statement on the
@@ -33,6 +34,7 @@ import (
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/script"
 	"github.com/rohanthewiz/dbc/sdb"
+	"github.com/rohanthewiz/dbc/sqlsplit"
 	"github.com/rohanthewiz/dbc/ui"
 )
 
@@ -79,7 +81,10 @@ func main() {
 	}
 }
 
-func runQueryHeadless(cfg *config.Config, mgr *db.Manager, stmt string) {
+// runQueryHeadless runs the SQL buffer given on the command line. It may hold
+// several statements: they run in order on one connection, stopping at the
+// first failure, and every result that made it is still rendered.
+func runQueryHeadless(cfg *config.Config, mgr *db.Manager, sql string) {
 	conn := *flagConn
 	if conn == "" {
 		conn = cfg.DefaultConnection
@@ -95,28 +100,78 @@ func runQueryHeadless(cfg *config.Config, mgr *db.Manager, stmt string) {
 	if err != nil {
 		fail(err, "bad -f format")
 	}
+	stmts := sqlsplit.Split(sql)
+	if len(stmts) == 0 {
+		fmt.Fprintln(os.Stderr, "nothing to run — the SQL holds no statement")
+		os.Exit(2)
+	}
 	ctx, stop := interruptible()
 	defer stop()
 
-	res, err := mgr.RunContext(ctx, conn, stmt)
+	// one pinned session for the whole buffer, so BEGIN/COMMIT, SET, and temp
+	// tables mean what they say across statements
+	sess, err := mgr.Session(ctx, conn)
 	if err != nil {
-		if errors.Is(err, db.ErrCanceled) {
+		fail(err, "could not open connection")
+	}
+	defer sess.Close()
+
+	results, runErr := runStatements(ctx, sess, stmts)
+	// output first: a failing statement 3 does not invalidate results 1 and 2
+	if len(results) > 0 {
+		emit(results, f)
+	}
+	if runErr != nil {
+		if errors.Is(runErr, db.ErrCanceled) {
 			canceled("query")
 		}
-		fail(err, "query failed")
+		fail(runErr, "query failed")
 	}
-	out, err := export.Render(res, f)
+}
+
+// runStatements executes stmts in order on one session, stopping at the first
+// failure. It returns the results that completed and the error that stopped
+// it, so the caller can still report the work that got done. A failure in a
+// multi-statement run is tagged with the statement's position.
+func runStatements(ctx context.Context, sess *db.Session,
+	stmts []sqlsplit.Stmt) ([]*model.Result, error) {
+
+	results := make([]*model.Result, 0, len(stmts))
+	for i, st := range stmts {
+		res, err := sess.Run(ctx, st.Text)
+		if err != nil {
+			if len(stmts) > 1 {
+				err = serr.Wrap(err, "statement", fmt.Sprintf("%d/%d", i+1, len(stmts)))
+			}
+			return results, err
+		}
+		results = append(results, res)
+	}
+	return results, nil
+}
+
+// emit renders the results to stdout, or to the -o file when one was given.
+func emit(results []*model.Result, f export.Format) {
+	out, err := export.RenderAll(results, f)
 	if err != nil {
 		fail(err, "render failed")
 	}
-	if *flagOut != "" {
-		if err = os.WriteFile(*flagOut, []byte(out), 0644); err != nil {
-			fail(serr.Wrap(err, "path", *flagOut), "write failed")
-		}
-		fmt.Printf("wrote %d rows to %s\n", len(res.Rows), *flagOut)
+	if *flagOut == "" {
+		fmt.Print(out)
 		return
 	}
-	fmt.Print(out)
+	if err = os.WriteFile(*flagOut, []byte(out), 0644); err != nil {
+		fail(serr.Wrap(err, "path", *flagOut), "write failed")
+	}
+	rows := 0
+	for _, r := range results {
+		rows += len(r.Rows)
+	}
+	if len(results) > 1 {
+		fmt.Printf("wrote %d results (%d rows) to %s\n", len(results), rows, *flagOut)
+		return
+	}
+	fmt.Printf("wrote %d rows to %s\n", rows, *flagOut)
 }
 
 func runScriptHeadless(mgr *db.Manager, path string) {

@@ -120,11 +120,25 @@ func (m *Manager) Run(name, stmt string, args ...any) (*model.Result, error) {
 // statements return their rows; anything else runs as Exec and returns rows
 // affected. Canceling ctx aborts the statement on the server where the driver
 // supports it, and always stops row collection.
+//
+// The statement takes whichever pooled connection is free. Statements that
+// depend on session state — BEGIN/COMMIT, SET, temp tables — need a Session.
 func (m *Manager) RunContext(ctx context.Context, name, stmt string, args ...any) (*model.Result, error) {
 	dbh, err := m.DB(name)
 	if err != nil {
 		return nil, err
 	}
+	return m.run(ctx, dbh, name, stmt, args...)
+}
+
+// execQuerier is the part of *sql.DB and *sql.Conn that running a statement
+// needs, so the same code serves a pooled run and a pinned session.
+type execQuerier interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func (m *Manager) run(ctx context.Context, ex execQuerier, name, stmt string, args ...any) (*model.Result, error) {
 	stmt = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(stmt), ";"))
 	if stmt == "" {
 		return nil, serr.New("empty statement")
@@ -132,7 +146,7 @@ func (m *Manager) RunContext(ctx context.Context, name, stmt string, args ...any
 	start := time.Now()
 
 	if !isQuery(stmt) {
-		res, err := dbh.ExecContext(ctx, stmt, args...)
+		res, err := ex.ExecContext(ctx, stmt, args...)
 		if err != nil {
 			return nil, wrapRunErr(ctx, err, name)
 		}
@@ -146,7 +160,7 @@ func (m *Manager) RunContext(ctx context.Context, name, stmt string, args ...any
 		}, nil
 	}
 
-	rows, err := dbh.QueryContext(ctx, stmt, args...)
+	rows, err := ex.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, wrapRunErr(ctx, err, name)
 	}
@@ -188,6 +202,41 @@ func (m *Manager) RunContext(ctx context.Context, name, stmt string, args ...any
 	}
 	result.Duration = time.Since(start)
 	return result, nil
+}
+
+// Session is a run pinned to one connection from the pool, so a sequence of
+// statements shares a database session: BEGIN/COMMIT bracket the statements
+// between them, SET and temp tables outlive the statement that made them.
+// Close returns the connection to the pool.
+type Session struct {
+	m    *Manager
+	name string
+	conn *sql.Conn
+}
+
+// Session pins a connection on the named database. The caller must Close it.
+func (m *Manager) Session(ctx context.Context, name string) (*Session, error) {
+	dbh, err := m.DB(name)
+	if err != nil {
+		return nil, err
+	}
+	c, err := dbh.Conn(ctx)
+	if err != nil {
+		return nil, wrapRunErr(ctx, err, name, "op", "session")
+	}
+	return &Session{m: m, name: name, conn: c}, nil
+}
+
+// Run executes one statement on the pinned connection, as RunContext does on
+// the pool.
+func (s *Session) Run(ctx context.Context, stmt string, args ...any) (*model.Result, error) {
+	return s.m.run(ctx, s.conn, s.name, stmt, args...)
+}
+
+// Close releases the connection. An unfinished transaction on it is rolled
+// back by the driver when the connection is reset.
+func (s *Session) Close() error {
+	return s.conn.Close()
 }
 
 // ErrCanceled is returned when a statement was stopped by the user. Callers

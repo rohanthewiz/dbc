@@ -74,6 +74,98 @@ func Render(r *model.Result, f Format) (string, error) {
 	return "", serr.New("unknown format", "format", string(f))
 }
 
+// RenderAll produces one document holding the results of a multi-statement
+// run, in the requested format. Each result carries a banner naming its
+// position, connection, and row count, so the blocks stay tellable apart —
+// except in CSV and TSV, where a banner would not be data; there the blocks
+// are separated by a blank line and each keeps its own header row. A single
+// result renders exactly as Render does.
+func RenderAll(rs []*model.Result, f Format) (string, error) {
+	switch {
+	case len(rs) == 0:
+		return "", serr.New("no result to export")
+	case len(rs) == 1:
+		return Render(rs[0], f)
+	}
+	switch f {
+	case CSV:
+		return joinBlocks(rs, func(r *model.Result) (string, error) { return delimited(r, ',') })
+	case TSV:
+		return joinBlocks(rs, func(r *model.Result) (string, error) { return delimited(r, '\t') })
+	case Markdown:
+		return joinBlocks(rs, func(r *model.Result) (string, error) {
+			return mdBanner(r, position(rs, r)) + markdown(r), nil
+		})
+	case Text:
+		return joinBlocks(rs, func(r *model.Result) (string, error) {
+			return textBanner(r, position(rs, r)) + TextTable(r), nil
+		})
+	case HTML:
+		return htmlDocAll(rs), nil
+	case JSON:
+		return jsonAll(rs)
+	}
+	return "", serr.New("unknown format", "format", string(f))
+}
+
+// joinBlocks renders every result and separates the blocks by a blank line.
+// Each renderer ends its block with a newline, so one more makes the gap.
+func joinBlocks(rs []*model.Result, render func(*model.Result) (string, error)) (string, error) {
+	blocks := make([]string, 0, len(rs))
+	for _, r := range rs {
+		b, err := render(r)
+		if err != nil {
+			return "", err
+		}
+		blocks = append(blocks, b)
+	}
+	return strings.Join(blocks, "\n"), nil
+}
+
+// position returns the 1-based place of r in rs, by identity.
+func position(rs []*model.Result, r *model.Result) string {
+	for i, x := range rs {
+		if x == r {
+			return fmt.Sprintf("%d/%d", i+1, len(rs))
+		}
+	}
+	return ""
+}
+
+// summary describes what a statement did, for the multi-result banners. The
+// duration is rounded as the status bar rounds it — a fast statement reads as
+// 380µs rather than 0s.
+func summary(r *model.Result) string {
+	d := r.Duration.Round(10 * time.Microsecond)
+	if r.IsExec {
+		return fmt.Sprintf("%d rows affected in %s", r.Affected, d)
+	}
+	s := fmt.Sprintf("%d rows in %s", len(r.Rows), d)
+	if r.Truncated {
+		s += " (truncated)"
+	}
+	return s
+}
+
+func textBanner(r *model.Result, pos string) string {
+	return fmt.Sprintf("-- %s │ %s │ %s\n-- %s\n", pos, r.Conn, summary(r), preview(r.Query))
+}
+
+func mdBanner(r *model.Result, pos string) string {
+	return fmt.Sprintf("**%s** · `%s` · %s\n\n```sql\n%s\n```\n\n", pos, r.Conn, summary(r), r.Query)
+}
+
+const maxPreviewLen = 72
+
+// preview flattens a statement to one clipped line, for banners.
+func preview(stmt string) string {
+	s := strings.Join(strings.Fields(stmt), " ")
+	if rs := []rune(s); len(rs) > maxPreviewLen {
+		s = string(rs[:maxPreviewLen-1]) + "…"
+	}
+	return s
+}
+
 // ToClipboard renders the result and places it on the system clipboard.
 func ToClipboard(r *model.Result, f Format) error {
 	out, err := Render(r, f)
@@ -145,9 +237,13 @@ func markdown(r *model.Result) string {
 }
 
 func jsonArr(r *model.Result) (string, error) {
-	rows := r.Raw
-	out := make([]map[string]any, 0, len(rows))
-	for _, row := range rows {
+	return marshal(rowMaps(r))
+}
+
+// rowMaps turns the typed rows into column-keyed objects.
+func rowMaps(r *model.Result) []map[string]any {
+	out := make([]map[string]any, 0, len(r.Raw))
+	for _, row := range r.Raw {
 		m := make(map[string]any, len(r.Columns))
 		for i, col := range r.Columns {
 			if i < len(row) {
@@ -156,7 +252,36 @@ func jsonArr(r *model.Result) (string, error) {
 		}
 		out = append(out, m)
 	}
-	bs, err := json.MarshalIndent(out, "", "  ")
+	return out
+}
+
+// jsonAll wraps each result of a multi-statement run in an envelope naming
+// the statement it came from — a bare concatenation of row arrays would lose
+// which rows belong to which statement.
+func jsonAll(rs []*model.Result) (string, error) {
+	out := make([]map[string]any, 0, len(rs))
+	for _, r := range rs {
+		m := map[string]any{
+			"statement": r.Query,
+			"conn":      r.Conn,
+			"duration":  r.Duration.Round(time.Millisecond).String(),
+		}
+		if r.IsExec {
+			m["rows_affected"] = r.Affected
+		} else {
+			m["columns"] = r.Columns
+			m["rows"] = rowMaps(r)
+			if r.Truncated {
+				m["truncated"] = true
+			}
+		}
+		out = append(out, m)
+	}
+	return marshal(out)
+}
+
+func marshal(v any) (string, error) {
+	bs, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return "", serr.Wrap(err)
 	}
@@ -173,7 +298,11 @@ th { background: #eef2f7; }
 tbody tr:nth-child(even) { background: #fafafa; }
 `
 
-func htmlDoc(r *model.Result) string {
+func htmlDoc(r *model.Result) string { return htmlDocAll([]*model.Result{r}) }
+
+// htmlDocAll builds one page with a section per result. With a single result
+// the section is the whole page, as a one-statement export always was.
+func htmlDocAll(rs []*model.Result) string {
 	esc := stdhtml.EscapeString
 	b := element.B()
 	b.Html().R(
@@ -183,28 +312,34 @@ func htmlDoc(r *model.Result) string {
 			b.Style().T(exportCSS),
 		),
 		b.Body().R(
-			b.H2().T("Query Result"),
-			b.PClass("meta").T(esc(fmt.Sprintf("connection: %s · %d rows · %s",
-				r.Conn, len(r.Rows), r.Duration.Round(time.Millisecond)))),
-			b.Pre().T(esc(r.Query)),
-			b.Table().R(
-				b.THead().R(
-					b.Tr().R(
-						element.ForEach(r.Columns, func(c string) {
-							b.Th().T(esc(c))
+			element.ForEach2(rs, func(r *model.Result, i int) {
+				heading := "Query Result"
+				if len(rs) > 1 {
+					heading = fmt.Sprintf("Statement %d of %d", i+1, len(rs))
+				}
+				b.H2().T(heading)
+				b.PClass("meta").T(esc(fmt.Sprintf("connection: %s · %s",
+					r.Conn, summary(r))))
+				b.Pre().T(esc(r.Query))
+				b.Table().R(
+					b.THead().R(
+						b.Tr().R(
+							element.ForEach(r.Columns, func(c string) {
+								b.Th().T(esc(c))
+							}),
+						),
+					),
+					b.TBody().R(
+						element.ForEach(r.Rows, func(row []string) {
+							b.Tr().R(
+								element.ForEach(row, func(v string) {
+									b.Td().T(esc(v))
+								}),
+							)
 						}),
 					),
-				),
-				b.TBody().R(
-					element.ForEach(r.Rows, func(row []string) {
-						b.Tr().R(
-							element.ForEach(row, func(v string) {
-								b.Td().T(esc(v))
-							}),
-						)
-					}),
-				),
-			),
+				)
+			}),
 		),
 	)
 	return b.String()

@@ -22,6 +22,14 @@ const slowQuery = `WITH RECURSIVE c(x) AS (
 // running, so tests exercise the same paths as a real session.
 func newTestApp(t *testing.T) *App {
 	t.Helper()
+	a, _ := newTestAppScreen(t)
+	return a
+}
+
+// newTestAppScreen is newTestApp plus the screen it draws on, for tests that
+// inspect what actually landed on the cells.
+func newTestAppScreen(t *testing.T) (*App, tcell.SimulationScreen) {
+	t.Helper()
 
 	cfg := &config.Config{
 		ScriptsDir:        "../scripts",
@@ -67,7 +75,7 @@ func newTestApp(t *testing.T) *App {
 	})
 
 	drain(t, a) // wait for the first draw
-	return a
+	return a, screen
 }
 
 // onUI runs f on the UI goroutine and returns its value, which keeps tests

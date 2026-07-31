@@ -26,7 +26,13 @@ import (
 
 // keyHints is kept tight: with the Stop button taking the right edge, a long
 // hint line is the first thing an 80-column terminal truncates.
-const keyHints = "[gray]^R[-] run [gray]^K[-] stop [gray]^E[-] export [gray]^O[-] scripts [gray]^L[-] conns [gray]Tab[-] focus [gray]^Q[-] quit"
+const keyHints = tagAccent + "^R" + tagOff + " run " +
+	tagAccent + "^K" + tagOff + " stop " +
+	tagAccent + "^E" + tagOff + " export " +
+	tagAccent + "^O" + tagOff + " scripts " +
+	tagAccent + "^L" + tagOff + " conns " +
+	tagAccent + "Tab" + tagOff + " focus " +
+	tagAccent + "^Q" + tagOff + " quit"
 
 // stopBtnWidth is the width the Stop button takes in the status row while
 // something is running. It is resized to zero the rest of the time.
@@ -72,32 +78,48 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 
 	if cfg.Demo {
 		a.editor.SetText("SELECT id, name, breed, age, adopted FROM cats ORDER BY age", true)
-		a.logf("no config found — using the built-in [aqua]demo[-] connection (see dbc.example.toml)")
-		a.logf("press [yellow]Ctrl+R[-] to run the query")
+		a.logf("no config found — using the built-in " + tagAccent + "demo" + tagOff + " connection (see dbc.example.toml)")
+		a.logf("press " + tagWarn + "Ctrl+R" + tagOff + " to run the query")
 	} else if cfg.Path != "" {
 		a.logf("loaded config from %s", cfg.Path)
 	}
-	a.setStatusText(fmt.Sprintf("[aqua]%s[-] │ ready", a.active))
+	a.setStatusText(fmt.Sprintf(tagAccent+"%s"+tagOff+" │ ready", a.active))
 
 	a.app.EnableMouse(true)
 	return a.app.Run()
 }
 
 func (a *App) build() {
+	applyTheme()
+
 	a.connList = tview.NewList().ShowSecondaryText(true)
+	a.connList.SetMainTextColor(colFg).SetSecondaryTextColor(colMuted).
+		SetSelectedStyle(tcell.StyleDefault.
+			Background(colSel).Foreground(colFg).Bold(true))
 	a.connList.SetBorder(true).SetTitle(" Connections ")
+	pane(a.connList.Box, colPanel)
 
 	a.editor = tview.NewTextArea()
 	a.editor.SetPlaceholder("Type SQL here, then Ctrl+R to run…")
+	a.editor.SetTextStyle(tcell.StyleDefault.Background(colBg).Foreground(colFg))
+	a.editor.SetPlaceholderStyle(tcell.StyleDefault.Background(colBg).Foreground(colMuted))
+	a.editor.SetSelectedStyle(tcell.StyleDefault.Background(colSel).Foreground(colFg))
 	a.editor.SetBorder(true).SetTitle(" Query ")
+	pane(a.editor.Box, colBg)
 
 	a.table = tview.NewTable().SetFixed(1, 0).SetSelectable(true, false)
+	a.table.SetSelectedStyle(tcell.StyleDefault.
+		Background(colSel).Foreground(colFg).Bold(true))
 	a.table.SetBorder(true).SetTitle(" Results ")
+	pane(a.table.Box, colBg)
 
 	a.logView = tview.NewTextView().SetDynamicColors(true).SetScrollable(true)
+	a.logView.SetTextColor(colFg)
 	a.logView.SetBorder(true).SetTitle(" Log ")
+	pane(a.logView.Box, colPanel)
 
 	a.status = tview.NewTextView().SetDynamicColors(true)
+	a.status.SetTextColor(colMuted).SetBackgroundColor(colPanel2)
 	a.setStatusText("ready")
 
 	// The Stop button lives at the right edge of the status bar. It is only
@@ -108,13 +130,14 @@ func (a *App) build() {
 		a.app.SetFocus(a.editor)
 	})
 	a.stopBtn.SetStyle(tcell.StyleDefault.
-		Background(tcell.ColorDarkRed).Foreground(tcell.ColorWhite))
+		Background(colPanel2).Foreground(colErr).Bold(true))
 	a.stopBtn.SetActivatedStyle(tcell.StyleDefault.
-		Background(tcell.ColorRed).Foreground(tcell.ColorWhite))
+		Background(colErr).Foreground(colBg).Bold(true))
 
 	a.statusRow = tview.NewFlex().
 		AddItem(a.status, 0, 1, false).
 		AddItem(a.stopBtn, 0, 0, false)
+	a.statusRow.SetBackgroundColor(colPanel2)
 
 	right := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(a.editor, 0, 3, true).
@@ -199,18 +222,18 @@ func (a *App) refreshConnList() {
 }
 
 func (a *App) setActive(name string) {
-	a.logf("connecting to [aqua]%s[-]…", name)
+	a.logf("connecting to "+tagAccent+"%s"+tagOff+"…", name)
 	go func() {
 		_, err := a.mgr.DB(name)
 		a.app.QueueUpdateDraw(func() {
 			if err != nil {
-				a.logf("[red]connect failed: %s", tview.Escape(serr.StringFromErr(err)))
+				a.logf(tagErr+"connect failed: %s", tview.Escape(serr.StringFromErr(err)))
 				return
 			}
 			a.active = name
 			a.refreshConnList()
-			a.logf("[green]connected to %s", name)
-			a.setStatusText(fmt.Sprintf("[aqua]%s[-] │ connected", name))
+			a.logf(tagOk+"connected to %s", name)
+			a.setStatusText(fmt.Sprintf(tagAccent+"%s"+tagOff+" │ connected", name))
 		})
 	}()
 }
@@ -223,7 +246,7 @@ func (a *App) beginRun(tag string) (context.Context, bool) {
 		a.runMu.Lock()
 		running := a.runTag
 		a.runMu.Unlock()
-		a.logf("[yellow]busy — %s is still running (Ctrl+K stops it)", running)
+		a.logf(tagWarn+"busy — %s is still running (Ctrl+K stops it)", running)
 		return nil, false
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -266,12 +289,12 @@ func (a *App) cancelRun() {
 	a.runMu.Unlock()
 
 	if !a.busy.Load() || cancel == nil {
-		a.logf("[yellow]nothing is running")
+		a.logf(tagWarn + "nothing is running")
 		return
 	}
 	cancel()
-	a.logf("[yellow]stopping %s…", tag)
-	a.setStatusText(fmt.Sprintf("[aqua]%s[-] │ [yellow]stopping %s…", a.active, tag))
+	a.logf(tagWarn+"stopping %s…", tag)
+	a.setStatusText(fmt.Sprintf(tagAccent+"%s"+tagOff+" │ "+tagWarn+"stopping %s…", a.active, tag))
 }
 
 // quit cancels anything in flight — so the server is told to abort rather
@@ -310,7 +333,7 @@ func (a *App) runningStatus() string {
 	a.runMu.Lock()
 	tag, at := a.runTag, a.runAt
 	a.runMu.Unlock()
-	return fmt.Sprintf("[aqua]%s[-] │ [yellow]%s %s[-]",
+	return fmt.Sprintf(tagAccent+"%s"+tagOff+" │ "+tagWarn+"%s %s"+tagOff,
 		a.active, tag, time.Since(at).Round(100*time.Millisecond))
 }
 
@@ -333,11 +356,11 @@ func (a *App) stmtToRun() (stmt string, idx, total int) {
 func (a *App) runQuery() {
 	stmt, idx, total := a.stmtToRun()
 	if stmt == "" {
-		a.logf("[yellow]nothing to run — type a query first")
+		a.logf(tagWarn + "nothing to run — type a query first")
 		return
 	}
 	if a.active == "" {
-		a.logf("[yellow]no active connection — Ctrl+L then Enter to pick one")
+		a.logf(tagWarn + "no active connection — Ctrl+L then Enter to pick one")
 		return
 	}
 	tag := "query"
@@ -352,7 +375,7 @@ func (a *App) runQuery() {
 		return
 	}
 	conn := a.active
-	a.logf("running %s on [aqua]%s[-] — [gray]%s", tag, conn, tview.Escape(preview(stmt)))
+	a.logf("running %s on "+tagAccent+"%s"+tagOff+" — "+tagMuted+"%s", tag, conn, tview.Escape(preview(stmt)))
 	go func() {
 		res, err := a.mgr.RunContext(ctx, conn, stmt)
 		a.app.QueueUpdateDraw(func() {
@@ -374,7 +397,7 @@ func (a *App) runScript(path string) {
 	if !ok {
 		return
 	}
-	a.logf("running [aqua]%s[-]", tag)
+	a.logf("running "+tagAccent+"%s"+tagOff, tag)
 	s := sdb.New(a.mgr,
 		func(r *model.Result) {
 			a.app.QueueUpdateDraw(func() {
@@ -395,7 +418,7 @@ func (a *App) runScript(path string) {
 				a.reportRunErr(a.active, tag, err, elapsed)
 				return
 			}
-			a.logf("[green]%s completed in %s", tag, elapsed.Round(time.Millisecond))
+			a.logf(tagOk+"%s completed in %s", tag, elapsed.Round(time.Millisecond))
 			if a.lastRes != nil {
 				a.setStatusFromResult(a.lastRes)
 			}
@@ -406,13 +429,13 @@ func (a *App) runScript(path string) {
 // reportRunErr writes a failed or canceled run to the log and status bar.
 func (a *App) reportRunErr(conn, tag string, err error, elapsed time.Duration) {
 	if errors.Is(err, db.ErrCanceled) {
-		a.logf("[yellow]%s stopped after %s", tag, elapsed.Round(time.Millisecond))
-		a.setStatusText(fmt.Sprintf("[aqua]%s[-] │ [yellow]stopped[-] after %s",
+		a.logf(tagWarn+"%s stopped after %s", tag, elapsed.Round(time.Millisecond))
+		a.setStatusText(fmt.Sprintf(tagAccent+"%s"+tagOff+" │ "+tagWarn+"stopped"+tagOff+" after %s",
 			conn, elapsed.Round(time.Millisecond)))
 		return
 	}
-	a.logf("[red]%s", tview.Escape(serr.StringFromErr(err)))
-	a.setStatusText(fmt.Sprintf("[aqua]%s[-] │ [red]error[-] after %s",
+	a.logf(tagErr+"%s", tview.Escape(serr.StringFromErr(err)))
+	a.setStatusText(fmt.Sprintf(tagAccent+"%s"+tagOff+" │ "+tagErr+"error"+tagOff+" after %s",
 		conn, elapsed.Round(time.Millisecond)))
 }
 
@@ -430,13 +453,16 @@ func (a *App) renderResult(r *model.Result) {
 	t.Clear()
 	for c, col := range r.Columns {
 		t.SetCell(0, c, tview.NewTableCell(" "+tview.Escape(col)+" ").
-			SetTextColor(tcell.ColorYellow).
+			SetTextColor(colAccent).
+			SetBackgroundColor(colPanel2). // a header band, so it holds when scrolled under
 			SetAttributes(tcell.AttrBold).
 			SetSelectable(false))
 	}
 	for ri, row := range r.Rows {
 		for ci, val := range row {
-			t.SetCell(ri+1, ci, tview.NewTableCell(" "+tview.Escape(val)+" ").SetMaxWidth(48))
+			t.SetCell(ri+1, ci, tview.NewTableCell(" "+tview.Escape(val)+" ").
+				SetTextColor(colFg).
+				SetMaxWidth(48))
 		}
 	}
 	t.ScrollToBeginning()
@@ -452,9 +478,9 @@ func (a *App) setStatusFromResult(r *model.Result) {
 	}
 	trunc := ""
 	if r.Truncated {
-		trunc = fmt.Sprintf(" [yellow](truncated at %d)[-]", a.cfg.MaxRows)
+		trunc = fmt.Sprintf(" "+tagWarn+"(truncated at %d)"+tagOff, a.cfg.MaxRows)
 	}
-	a.setStatusText(fmt.Sprintf("[aqua]%s[-] │ %s in %s%s",
+	a.setStatusText(fmt.Sprintf(tagAccent+"%s"+tagOff+" │ %s in %s%s",
 		r.Conn, verb, r.Duration.Round(10*time.Microsecond), trunc))
 }
 
@@ -465,7 +491,7 @@ func (a *App) setStatusText(left string) {
 // logf appends a timestamped line to the log pane. Call from the UI
 // goroutine (or inside QueueUpdateDraw).
 func (a *App) logf(format string, args ...any) {
-	fmt.Fprintf(a.logView, "[gray]%s[-] %s\n",
+	fmt.Fprintf(a.logView, tagMuted+"%s"+tagOff+" %s\n",
 		time.Now().Format("15:04:05"), fmt.Sprintf(format, args...))
 	a.logView.ScrollToEnd()
 }

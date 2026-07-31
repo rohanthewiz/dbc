@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
 	"github.com/rohanthewiz/dbc/export"
@@ -24,7 +25,7 @@ func center(p tview.Primitive, w, h int) tview.Primitive {
 
 func (a *App) showExportModal() {
 	if a.lastRes == nil {
-		a.logf("[yellow]no result to export — run a query first")
+		a.logf(tagWarn + "no result to export — run a query first")
 		return
 	}
 	var form *tview.Form
@@ -35,7 +36,7 @@ func (a *App) showExportModal() {
 
 		f, err := export.ParseFormat(fstr)
 		if err != nil {
-			a.logf("[red]%s", tview.Escape(serr.StringFromErr(err)))
+			a.logf(tagErr+"%s", tview.Escape(serr.StringFromErr(err)))
 			return
 		}
 		dest := "clipboard"
@@ -46,10 +47,10 @@ func (a *App) showExportModal() {
 			dest = path
 		}
 		if err != nil {
-			a.logf("[red]export failed: %s", tview.Escape(serr.StringFromErr(err)))
+			a.logf(tagErr+"export failed: %s", tview.Escape(serr.StringFromErr(err)))
 			return
 		}
-		a.logf("[green]exported %d rows as %s to %s", len(a.lastRes.Rows), fstr, dest)
+		a.logf(tagOk+"exported %d rows as %s to %s", len(a.lastRes.Rows), fstr, dest)
 	}
 	form = tview.NewForm().
 		AddDropDown("Format", export.Names(), 0, nil).
@@ -58,6 +59,7 @@ func (a *App) showExportModal() {
 		AddButton("Cancel", func() { a.pages.RemovePage("export") })
 	form.SetBorder(true)
 	form.SetTitle(" Export result (Esc to close) ")
+	themeForm(form)
 
 	a.pages.AddPage("export", center(form, 64, 11), true, true)
 	a.app.SetFocus(form)
@@ -66,12 +68,15 @@ func (a *App) showExportModal() {
 func (a *App) showScriptsModal() {
 	files, err := filepath.Glob(filepath.Join(a.cfg.ScriptsDir, "*.go"))
 	if err != nil || len(files) == 0 {
-		a.logf("[yellow]no scripts found in %s — add .go files with func Run(s *sdb.S) error", a.cfg.ScriptsDir)
+		a.logf(tagWarn+"no scripts found in %s — add .go files with func Run(s *sdb.S) error", a.cfg.ScriptsDir)
 		return
 	}
 	sort.Strings(files)
 
 	list := tview.NewList().ShowSecondaryText(false)
+	list.SetMainTextColor(colFg).
+		SetSelectedStyle(tcell.StyleDefault.
+			Background(colSel).Foreground(colFg).Bold(true))
 	for _, f := range files {
 		f := f
 		list.AddItem(filepath.Base(f), "", 0, func() {
@@ -81,6 +86,7 @@ func (a *App) showScriptsModal() {
 	}
 	list.SetBorder(true)
 	list.SetTitle(" Scripts (Enter runs, Esc closes) ")
+	themeModal(list.Box)
 
 	h := len(files) + 4
 	if h > 20 {

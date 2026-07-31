@@ -54,6 +54,11 @@ Layout: connections sidebar · SQL editor · results table · log pane · status
 Non-SELECT statements (INSERT/UPDATE/DDL…) run as exec and report rows
 affected. Results are truncated at `max_rows`.
 
+The interface wears a muted green theme — dark gray-green surfaces with a
+single green accent, shared with [cdx](https://github.com/rohanthewiz/cdx).
+The accent is the focus cue: the pane holding the keys is the one whose
+border and title are lit.
+
 ### Multi-statement buffers
 
 Keep a whole scratchpad of SQL in the editor and run one statement at a time:

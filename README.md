@@ -70,6 +70,12 @@ Statements are separated on semicolons, ignoring the ones inside strings,
 quoted identifiers, comments, and PostgreSQL `$$` bodies — so a function
 definition stays in one piece.
 
+Editor runs share one pinned database session per connection, just like a
+headless multi-statement buffer: `BEGIN` in one `Ctrl+R` and `COMMIT` in a
+later one bracket a real transaction, and `SET`, `PRAGMA`, and temp tables
+persist between runs. Switching connections releases the session — along with
+any transaction it had open.
+
 ### Stopping a long query
 
 While a query or script runs, the status bar shows a live elapsed time and a

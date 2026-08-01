@@ -208,6 +208,27 @@ func TestRunSelection(t *testing.T) {
 	}
 }
 
+// TestSessionStateCarriesAcrossRuns proves editor runs share one pinned
+// session: a temp table is visible only on the connection that created it, so
+// three separate Ctrl+R runs seeing it means they rode the same session.
+func TestSessionStateCarriesAcrossRuns(t *testing.T) {
+	a := newTestApp(t)
+	steps := []string{
+		"CREATE TEMP TABLE scratch (x INTEGER)",
+		"INSERT INTO scratch VALUES (7)",
+		"SELECT x FROM scratch",
+	}
+	for _, stmt := range steps {
+		onUI(t, a, func() bool { a.lastRes = nil; return true })
+		setBuffer(t, a, stmt, 0)
+		press(a, tcell.KeyCtrlR)
+		waitFor(t, a, stmt, func() bool { return a.lastRes != nil })
+	}
+	if got := onUI(t, a, func() string { return a.lastRes.Rows[0][0] }); got != "7" {
+		t.Errorf("temp table did not survive across runs: got %q, want %q", got, "7")
+	}
+}
+
 func TestCtrlKCancelsQuery(t *testing.T) {
 	a := newTestApp(t)
 	setBuffer(t, a, slowQuery, 0)

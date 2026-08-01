@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"strconv"
@@ -75,8 +76,10 @@ func (m *Manager) DB(name string) (*sql.DB, error) {
 		return nil, serr.Wrap(err, "conn", name, "driver", drv)
 	}
 	if drv == "sqlite" && strings.Contains(cc.DSN, "mode=memory") {
-		// A shared in-memory DB vanishes when its last conn closes; hold one open
-		dbh.SetMaxOpenConns(1)
+		// A shared in-memory DB vanishes when its last conn closes; hold one
+		// open. Two are allowed so a pinned Session (the TUI's) cannot starve
+		// a script running on the pool.
+		dbh.SetMaxOpenConns(2)
 		dbh.SetConnMaxIdleTime(0)
 		dbh.SetConnMaxLifetime(0)
 	}
@@ -237,6 +240,13 @@ func (s *Session) Run(ctx context.Context, stmt string, args ...any) (*model.Res
 // back by the driver when the connection is reset.
 func (s *Session) Close() error {
 	return s.conn.Close()
+}
+
+// BadConn reports whether err means the connection the statement ran on is no
+// longer usable — a caller holding a Session should discard it and open a
+// fresh one.
+func BadConn(err error) bool {
+	return errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone)
 }
 
 // ErrCanceled is returned when a statement was stopped by the user. Callers

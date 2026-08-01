@@ -62,6 +62,14 @@ type App struct {
 	runTag string        // what is running, for status and log text
 	runAt  time.Time     // when the run started
 	tick   chan struct{} // closed to stop the elapsed-time ticker
+
+	// The editor's queries run on a session pinned to the active connection,
+	// so BEGIN/COMMIT, SET, and temp tables carry across runs. Runs are
+	// serialized by the busy slot, so sessMu is uncontended; it exists to make
+	// the shutdown path safe.
+	sessMu   sync.Mutex
+	sess     *db.Session
+	sessName string // connection the session is pinned to
 }
 
 // Run builds and runs the TUI. It blocks until the user quits.
@@ -86,7 +94,9 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 	a.setStatusText(fmt.Sprintf(tagAccent+"%s"+tagOff+" │ ready", a.active))
 
 	a.app.EnableMouse(true)
-	return a.app.Run()
+	err := a.app.Run()
+	a.dropSession() // release the pinned connection before the pools close
+	return err
 }
 
 func (a *App) build() {
@@ -337,6 +347,47 @@ func (a *App) runningStatus() string {
 		a.active, tag, time.Since(at).Round(100*time.Millisecond))
 }
 
+// runOnSession executes one statement on a session pinned to conn, so
+// session-scoped SQL — BEGIN/COMMIT, SET, temp tables — carries across runs
+// the way it does across the statements of a headless buffer. The session is
+// opened on first use, swapped when the connection changes (closing the old
+// one rolls back whatever it left open), and rebuilt once when the pinned
+// connection has gone bad, e.g. cut by a server-side idle timeout.
+func (a *App) runOnSession(ctx context.Context, conn, stmt string) (*model.Result, error) {
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	for retried := false; ; retried = true {
+		if a.sess == nil || a.sessName != conn {
+			a.dropSessionLocked()
+			sess, err := a.mgr.Session(ctx, conn)
+			if err != nil {
+				return nil, err
+			}
+			a.sess, a.sessName = sess, conn
+		}
+		res, err := a.sess.Run(ctx, stmt)
+		if err != nil && db.BadConn(err) && !retried {
+			a.dropSessionLocked()
+			continue
+		}
+		return res, err
+	}
+}
+
+// dropSessionLocked closes the pinned session, if any. The caller holds sessMu.
+func (a *App) dropSessionLocked() {
+	if a.sess != nil {
+		_ = a.sess.Close()
+		a.sess, a.sessName = nil, ""
+	}
+}
+
+func (a *App) dropSession() {
+	a.sessMu.Lock()
+	defer a.sessMu.Unlock()
+	a.dropSessionLocked()
+}
+
 // stmtToRun picks what Ctrl+R should execute: the selection when the user has
 // made one, otherwise the statement the cursor sits in. idx and total are the
 // statement's 1-based position in the buffer, or zero for a selection.
@@ -377,7 +428,7 @@ func (a *App) runQuery() {
 	conn := a.active
 	a.logf("running %s on "+tagAccent+"%s"+tagOff+" — "+tagMuted+"%s", tag, conn, tview.Escape(preview(stmt)))
 	go func() {
-		res, err := a.mgr.RunContext(ctx, conn, stmt)
+		res, err := a.runOnSession(ctx, conn, stmt)
 		a.app.QueueUpdateDraw(func() {
 			elapsed := a.endRun()
 			if err != nil {

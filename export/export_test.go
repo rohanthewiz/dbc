@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rohanthewiz/dbc/model"
+	"github.com/rohanthewiz/dbc/theme"
 )
 
 func query(conn, sql string, cols []string, rows [][]string) *model.Result {
@@ -155,6 +156,26 @@ func TestRenderAllHTMLSections(t *testing.T) {
 	for _, want := range []string{"Statement 1 of 2", "Statement 2 of 2", "<th>name</th>"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("html missing %q", want)
+		}
+	}
+}
+
+// The export page is dressed from the shared palette, not a stylesheet of its
+// own — so retheming the TUI reaches the exports too.
+func TestHTMLExportWearsTheTheme(t *testing.T) {
+	out, err := Render(query("demo", "SELECT id FROM cats", []string{"id"}, [][]string{{"1"}}), HTML)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for _, want := range []string{
+		"color-scheme: dark",
+		"background: " + theme.Bg,
+		"color: " + theme.Fg,
+		theme.Accent, // headings and the table header band
+		theme.Line,   // rules
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("export stylesheet missing %q", want)
 		}
 	}
 }

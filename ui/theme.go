@@ -3,46 +3,32 @@ package ui
 import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+
+	"github.com/rohanthewiz/dbc/theme"
 )
 
-// Muted green theme, ported from cdx (GoNotes palette): warm dark gray-green
-// surfaces with a single green accent. The hex strings are the one source of
-// truth — the tcell colors below drive widget styles, and the tag constants
-// drive tview's dynamic-color markup in log and status text.
-const (
-	hexBg     = "#1f2420" // deepest surface — editor, results table
-	hexPanel  = "#242a25" // sidebar, log pane
-	hexPanel2 = "#2b322c" // status bar, modal fields, table header band
-	hexSel    = "#3a4a3f" // selected row
-	hexLine   = "#38403a" // borders and rules at rest
-	hexFg     = "#d6ddd6"
-	hexMuted  = "#9db0a2"
-	hexAccent = "#4db380"
-	// Not in cdx; dbc needs a busy/stopped tone. It is markup-only, so it has
-	// no tcell.Color counterpart below.
-	hexWarn = "#d9a45b"
-	hexErr  = "#e57373"
-)
-
+// The palette as tcell colors, for widget styles. theme.Warn has no
+// counterpart here — it is only ever markup.
 var (
-	colBg     = tcell.GetColor(hexBg)
-	colPanel  = tcell.GetColor(hexPanel)
-	colPanel2 = tcell.GetColor(hexPanel2)
-	colSel    = tcell.GetColor(hexSel)
-	colLine   = tcell.GetColor(hexLine)
-	colFg     = tcell.GetColor(hexFg)
-	colMuted  = tcell.GetColor(hexMuted)
-	colAccent = tcell.GetColor(hexAccent)
-	colErr    = tcell.GetColor(hexErr)
+	colBg     = tcell.GetColor(theme.Bg)
+	colPanel  = tcell.GetColor(theme.Panel)
+	colPanel2 = tcell.GetColor(theme.Panel2)
+	colSel    = tcell.GetColor(theme.Sel)
+	colLine   = tcell.GetColor(theme.Line)
+	colFg     = tcell.GetColor(theme.Fg)
+	colMuted  = tcell.GetColor(theme.Muted)
+	colAccent = tcell.GetColor(theme.Accent)
+	colErr    = tcell.GetColor(theme.Err)
 )
 
-// Color tags for tview's dynamic-color markup. tagOff closes a run.
+// The palette as tview color tags, for the log and status text. tagOff closes
+// a run.
 const (
-	tagAccent = "[" + hexAccent + "]" // connection names, key hints
-	tagOk     = "[" + hexAccent + "]" // success — the accent doubles as "good"
-	tagMuted  = "[" + hexMuted + "]"
-	tagWarn   = "[" + hexWarn + "]"
-	tagErr    = "[" + hexErr + "]"
+	tagAccent = "[" + theme.Accent + "]" // connection names, key hints
+	tagOk     = "[" + theme.Accent + "]" // success — the accent doubles as "good"
+	tagMuted  = "[" + theme.Muted + "]"
+	tagWarn   = "[" + theme.Warn + "]"
+	tagErr    = "[" + theme.Err + "]"
 	tagOff    = "[-]"
 )
 

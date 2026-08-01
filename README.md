@@ -219,3 +219,7 @@ A single statement renders exactly as it always did, in every format.
 `csv`, `tsv`, `markdown`, `html` (styled standalone page), `json`
 (array of objects), `text` (aligned table) — from the `Ctrl+E` dialog
 (clipboard or file), from scripts via `s.Export`, or headless via `-f`.
+
+The HTML page wears the same muted green as the TUI, surface for surface.
+Both read the palette from [`theme/`](theme/theme.go), so a change to those
+constants reaches the app and its exports together.

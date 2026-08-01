@@ -14,6 +14,7 @@ import (
 	"github.com/rohanthewiz/serr"
 
 	"github.com/rohanthewiz/dbc/model"
+	"github.com/rohanthewiz/dbc/theme"
 )
 
 // Format is an output rendering for a query result.
@@ -288,14 +289,24 @@ func marshal(v any) (string, error) {
 	return string(bs) + "\n", nil
 }
 
+// exportCSS dresses the page in the same muted green as the TUI, surface for
+// surface: the page is the editor's background, the header band and zebra
+// rows are the panels, and a row lights up on hover the way a selected row
+// does. color-scheme keeps the scrollbars and form chrome from coming back
+// light against it.
 const exportCSS = `
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #222; }
-.meta { color: #666; font-size: 0.9rem; }
-pre { background: #f6f6f6; padding: 0.6rem 0.9rem; border-radius: 6px; overflow-x: auto; }
+:root { color-scheme: dark; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem;
+       background: ` + theme.Bg + `; color: ` + theme.Fg + `; }
+h2 { color: ` + theme.Accent + `; font-weight: 600; }
+.meta { color: ` + theme.Muted + `; font-size: 0.9rem; }
+pre { background: ` + theme.Panel + `; border: 1px solid ` + theme.Line + `; color: ` + theme.Fg + `;
+      padding: 0.6rem 0.9rem; border-radius: 6px; overflow-x: auto; }
 table { border-collapse: collapse; margin-top: 1rem; }
-th, td { border: 1px solid #ccc; padding: 0.35rem 0.7rem; text-align: left; }
-th { background: #eef2f7; }
-tbody tr:nth-child(even) { background: #fafafa; }
+th, td { border: 1px solid ` + theme.Line + `; padding: 0.35rem 0.7rem; text-align: left; }
+th { background: ` + theme.Panel2 + `; color: ` + theme.Accent + `; }
+tbody tr:nth-child(even) { background: ` + theme.Panel + `; }
+tbody tr:hover { background: ` + theme.Sel + `; }
 `
 
 func htmlDoc(r *model.Result) string { return htmlDocAll([]*model.Result{r}) }

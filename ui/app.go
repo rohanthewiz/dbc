@@ -63,6 +63,9 @@ type App struct {
 	active  string // active connection name
 	lastRes *model.Result
 
+	hist       *history // statements run, for Ctrl+P recall
+	histWarned bool     // a history write already failed and was reported
+
 	busy atomic.Bool // a query or script is running
 
 	runMu  sync.Mutex // guards the run state below
@@ -83,6 +86,7 @@ type App struct {
 // Run builds and runs the TUI. It blocks until the user quits.
 func Run(cfg *config.Config, mgr *db.Manager) error {
 	a := &App{cfg: cfg, mgr: mgr, app: tview.NewApplication()}
+	a.hist = loadHistory(historyFile())
 	a.build()
 
 	if _, ok := cfg.ConnByName(cfg.DefaultConnection); ok {
@@ -98,6 +102,7 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 	} else if cfg.Path != "" {
 		a.logf("loaded config from %s", cfg.Path)
 	}
+	a.logKeys() // the status bar has room for seven of these, the log for all
 	for _, w := range cfg.Warnings {
 		a.logf(tagWarn+"%s", tview.Escape(w))
 	}
@@ -122,6 +127,12 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 
 func (a *App) build() {
 	applyTheme()
+
+	// a session-only history until Run loads the persisted one, so nothing
+	// here has to guard against a nil one
+	if a.hist == nil {
+		a.hist = &history{}
+	}
 
 	a.connList = tview.NewList().ShowSecondaryText(true)
 	a.connList.SetMainTextColor(colFg).SetSecondaryTextColor(colMuted).
@@ -224,6 +235,9 @@ func (a *App) build() {
 		case tcell.KeyCtrlT:
 			a.listTables()
 			return nil
+		case tcell.KeyCtrlP:
+			a.showHistoryModal()
+			return nil
 		case tcell.KeyCtrlL:
 			a.app.SetFocus(a.connList)
 			return nil
@@ -296,6 +310,22 @@ func selectedText(r *model.Result, row, col int, wholeRow bool) (text, what stri
 		name = r.Columns[col]
 	}
 	return cells[col], fmt.Sprintf("%s of row %d", name, ri+1), nil
+}
+
+// logKeys writes the full key list to the log once at startup. The status bar
+// only has room for the busiest few, and the ones it leaves out — history,
+// focus cycling, the copy keys — are the ones nobody would guess.
+func (a *App) logKeys() {
+	keys := []struct{ key, what string }{
+		{"^R", "run"}, {"^K", "stop"}, {"^P", "history"}, {"^T", "tables"},
+		{"^E", "export"}, {"^O", "scripts"}, {"^L", "conns"},
+		{"Tab", "focus"}, {"y/Y", "copy cell/row"}, {"^Q", "quit"},
+	}
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = tagAccent + k.key + tagOff + " " + k.what
+	}
+	a.logf("keys: %s", strings.Join(parts, tagMuted+" · "+tagOff))
 }
 
 func (a *App) cycleFocus(d int) {
@@ -528,7 +558,26 @@ func (a *App) runQuery() {
 		a.logf(tagWarn + "nothing to run — type a query first")
 		return
 	}
+	// recorded before the run, not after: the query worth recalling is very
+	// often the one that just failed. Only what the user typed goes in —
+	// Ctrl+T's catalog query is the app's, not theirs.
+	for _, stmt := range stmts {
+		a.record(stmt)
+	}
 	a.run(stmts, tag)
+}
+
+// record puts a statement in the query history. A write failure is reported
+// once per session: a history that cannot be persisted still works for the
+// session, and a log line per query would be worse than the problem.
+func (a *App) record(stmt string) {
+	err := a.hist.add(a.active, stmt, time.Now())
+	if err == nil || a.histWarned {
+		return
+	}
+	a.histWarned = true
+	a.logf(tagWarn+"query history is not being saved: %s",
+		tview.Escape(serr.StringFromErr(err)))
 }
 
 // listTables runs the active driver's catalog query — the \dt of whichever

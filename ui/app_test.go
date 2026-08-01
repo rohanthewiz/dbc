@@ -257,6 +257,81 @@ func TestRunMultiStatementSelection(t *testing.T) {
 	}
 }
 
+// runAndWait executes one statement through the editor, the way a user does.
+func runAndWait(t *testing.T, a *App, sql string) {
+	t.Helper()
+	onUI(t, a, func() bool { a.lastRes = nil; return true })
+	setBuffer(t, a, sql, 0)
+	press(a, tcell.KeyCtrlR)
+	waitFor(t, a, sql, func() bool { return a.lastRes != nil })
+}
+
+func typeIn(a *App, s string) {
+	for _, r := range s {
+		pressRune(a, r)
+	}
+}
+
+// frontPage names the page on top — "main" when no modal is up. Call it from
+// the UI goroutine, or through waitFor.
+func frontPage(a *App) string {
+	name, _ := a.pages.GetFrontPage()
+	return name
+}
+
+// The whole point of the history: run something, lose it, get it back —
+// filtered down to the one you meant, and into the editor rather than
+// straight at the database.
+func TestHistoryRecallInsertsIntoTheEditor(t *testing.T) {
+	a := newTestApp(t)
+	runAndWait(t, a, "SELECT 1 AS a")
+	runAndWait(t, a, "SELECT name FROM cats ORDER BY id")
+
+	setBuffer(t, a, "", 0) // the scratchpad is gone
+	press(a, tcell.KeyCtrlP)
+	waitFor(t, a, "the history modal", func() bool { return frontPage(a) == "history" })
+	typeIn(a, "cats") // filter past the first query
+	press(a, tcell.KeyEnter)
+	waitFor(t, a, "the modal to close", func() bool { return frontPage(a) == "main" })
+
+	if got := onUI(t, a, func() string { return a.editor.GetText() }); got != "SELECT name FROM cats ORDER BY id" {
+		t.Errorf("editor holds %q, want the recalled query", got)
+	}
+	if !onUI(t, a, func() bool { return a.editor.HasFocus() }) {
+		t.Error("the focus did not come back to the editor")
+	}
+	// recalled, not run: the result is still the one from before
+	if got := onUI(t, a, func() string { return a.lastRes.Query }); got != "SELECT name FROM cats ORDER BY id" {
+		t.Errorf("last result is %q — recall should not have run anything", got)
+	}
+}
+
+// Each statement of a multi-statement run is recallable on its own, and the
+// app's own catalog query is not the user's to recall.
+func TestHistoryRecordsStatementsNotCatalogQueries(t *testing.T) {
+	a := newTestApp(t)
+	onUI(t, a, func() bool {
+		a.editor.SetText(threeStatements, false)
+		a.editor.Select(0, len(threeStatements))
+		return true
+	})
+	press(a, tcell.KeyCtrlR)
+	waitFor(t, a, "the selection to finish", func() bool { return a.lastRes != nil })
+
+	onUI(t, a, func() bool { a.lastRes = nil; return true })
+	press(a, tcell.KeyCtrlT)
+	waitFor(t, a, "the table listing", func() bool { return a.lastRes != nil })
+
+	got := make([]string, 0, 3)
+	for _, e := range onUI(t, a, func() []histEntry { return a.hist.recent() }) {
+		got = append(got, e.SQL)
+	}
+	want := []string{"SELECT 3 AS c", "SELECT 2 AS b", "SELECT 1 AS a"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("history holds %v, want %v", got, want)
+	}
+}
+
 // Ctrl+T lists the tables of whatever the active connection is, without the
 // editor buffer having anything to do with it.
 func TestCtrlTListsTables(t *testing.T) {

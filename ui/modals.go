@@ -65,6 +65,86 @@ func (a *App) showExportModal() {
 	a.app.SetFocus(form)
 }
 
+// showHistoryModal lists the statements run before, newest first, with a live
+// filter over them. Enter drops the chosen one into the editor at the cursor —
+// replacing the selection if there is one — rather than running it, so a
+// recalled query can be edited before it goes anywhere near the database.
+func (a *App) showHistoryModal() {
+	entries := a.hist.recent()
+	if len(entries) == 0 {
+		a.logf(tagWarn + "no query history yet — it fills up as you run queries")
+		return
+	}
+
+	list := tview.NewList().ShowSecondaryText(true)
+	list.SetMainTextColor(colFg).SetSecondaryTextColor(colMuted).
+		SetSelectedStyle(tcell.StyleDefault.
+			Background(colSel).Foreground(colFg).Bold(true))
+	list.SetHighlightFullLine(true)
+
+	// shown tracks what the list currently holds, so Enter picks the entry the
+	// user is looking at rather than the one at that index unfiltered
+	var shown []histEntry
+	fill := func(q string) {
+		shown = matchHistory(entries, q)
+		list.Clear()
+		for _, e := range shown {
+			list.AddItem(preview(e.SQL),
+				"  "+e.At.Local().Format("Jan 2 15:04")+" · "+e.Conn, 0, nil)
+		}
+	}
+	fill("")
+
+	filter := tview.NewInputField().SetLabel(" filter ").SetChangedFunc(fill)
+	filter.SetLabelColor(colMuted).
+		SetFieldBackgroundColor(colPanel2).
+		SetFieldTextColor(colFg)
+
+	// the filter keeps the focus the whole time — the arrows drive the list
+	// from here, so recall is one uninterrupted piece of typing
+	body := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(filter, 1, 0, true).
+		AddItem(list, 0, 1, false)
+	body.SetBorder(true)
+	body.SetTitle(" History (↑↓ pick · Enter inserts · Esc closes) ")
+	themeModal(body.Box)
+
+	// the capture belongs on the field, not on the flex around it: tview hands
+	// a key straight to the focused primitive, so a capture anywhere else in
+	// the modal would never see one
+	filter.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
+		switch ev.Key() {
+		case tcell.KeyDown, tcell.KeyCtrlN:
+			list.SetCurrentItem(list.GetCurrentItem() + 1)
+			return nil
+		case tcell.KeyUp, tcell.KeyCtrlP:
+			list.SetCurrentItem(list.GetCurrentItem() - 1)
+			return nil
+		case tcell.KeyEnter:
+			i := list.GetCurrentItem()
+			if i < 0 || i >= len(shown) {
+				return nil
+			}
+			a.pages.RemovePage("history")
+			a.insertInEditor(shown[i].SQL)
+			return nil
+		}
+		return ev
+	})
+
+	a.pages.AddPage("history", center(body, 76, 18), true, true)
+	a.app.SetFocus(filter)
+}
+
+// insertInEditor drops text in at the cursor, replacing the selection when
+// there is one, and leaves the focus in the editor ready to run it.
+func (a *App) insertInEditor(text string) {
+	_, start, end := a.editor.GetSelection()
+	a.editor.Replace(start, end, text)
+	a.app.SetFocus(a.editor)
+	a.logf(tagOk+"recalled — "+tagMuted+"%s", tview.Escape(preview(text)))
+}
+
 func (a *App) showScriptsModal() {
 	files, err := filepath.Glob(filepath.Join(a.cfg.ScriptsDir, "*.go"))
 	if err != nil || len(files) == 0 {

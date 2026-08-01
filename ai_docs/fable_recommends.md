@@ -64,8 +64,8 @@ robustness edges and a few small features.
 - **Persist the editor buffer across sessions** — losing the buffer on quit
   is the sharpest UX edge right now. Save to `~/.config/dbc/buffer.sql` on
   quit, restore on start.
-- **Query history** — even a minimal version (executed statements appended to
-  a file, a modal to recall one) transforms daily use.
+- ✅ *(done 2026-07-31)* **Query history** — even a minimal version (executed
+  statements appended to a file, a modal to recall one) transforms daily use.
 - ✅ *(done 2026-07-31)* **Honor `-f`/`-o` for headless scripts** —
   `runScriptHeadless` hardcodes text tables to stdout, so
   `./dbc -f csv script foo.go` silently ignores the flag. The `Show` callback

@@ -49,6 +49,7 @@ Layout: connections sidebar · SQL editor · results table · log pane · status
 | `Ctrl+K` | Stop the running query or script — same as the **■ Stop** button |
 | `Ctrl+E` | Export the last result (format + clipboard/file dialog) |
 | `Ctrl+O` | Pick and run a Go script from `scripts_dir` |
+| `Ctrl+P` | Query history — filter, then `Enter` to drop one in the editor |
 | `Ctrl+T` | List the tables and views on the active connection |
 | `Ctrl+L` | Jump to the connections list (`Enter` activates one) |
 | `y` / `Y` | *(results table)* Copy the selected cell / the whole row |
@@ -77,6 +78,22 @@ The interface wears a muted green theme — dark gray-green surfaces with a
 single green accent, shared with [cdx](https://github.com/rohanthewiz/cdx).
 The accent is the focus cue: the pane holding the keys is the one whose
 border and title are lit.
+
+### Query history
+
+Every statement you run is recorded. `Ctrl+P` opens the history newest first;
+type to filter it — over the SQL and the connection name — `↑`/`↓` to pick,
+and `Enter` drops the statement into the editor at the cursor. It is *not* run:
+a recalled query can be edited first, which is usually why you went looking
+for it.
+
+Each statement of a multi-statement run is recorded on its own, so any one of
+them is recallable. A statement identical to the one before it is not recorded
+twice, and the app's own catalog query (`Ctrl+T`) never is.
+
+History lives in `~/.config/dbc/history.jsonl` — one JSON object per line, so
+multi-line SQL comes back exactly as it was written — capped at the last 500
+entries and readable only by you. Delete the file to forget everything.
 
 ### Multi-statement buffers
 

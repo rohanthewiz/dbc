@@ -3,6 +3,7 @@
 package script
 
 import (
+	"fmt"
 	"reflect"
 
 	"github.com/traefik/yaegi/interp"
@@ -17,7 +18,7 @@ import (
 func Run(path string, s *sdb.S) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = serr.New("script panicked", "script", path, "panic", reflect.ValueOf(r).String())
+			err = serr.New("script panicked", "script", path, "panic", fmt.Sprint(r))
 		}
 	}()
 

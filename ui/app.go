@@ -27,13 +27,15 @@ import (
 )
 
 // keyHints is kept tight: with the Stop button taking the right edge, a long
-// hint line is the first thing an 80-column terminal truncates.
+// hint line is the first thing an 80-column terminal truncates. Tab-to-cycle-
+// focus gave up its slot to ^T — Tab is the guessable one of the two, and the
+// lit border already says where the keys are going.
 const keyHints = tagAccent + "^R" + tagOff + " run " +
 	tagAccent + "^K" + tagOff + " stop " +
 	tagAccent + "^E" + tagOff + " export " +
 	tagAccent + "^O" + tagOff + " scripts " +
 	tagAccent + "^L" + tagOff + " conns " +
-	tagAccent + "Tab" + tagOff + " focus " +
+	tagAccent + "^T" + tagOff + " tables " +
 	tagAccent + "^Q" + tagOff + " quit"
 
 // stopBtnWidth is the width the Stop button takes in the status row while
@@ -218,6 +220,9 @@ func (a *App) build() {
 			return nil
 		case tcell.KeyCtrlO:
 			a.showScriptsModal()
+			return nil
+		case tcell.KeyCtrlT:
+			a.listTables()
 			return nil
 		case tcell.KeyCtrlL:
 			a.app.SetFocus(a.connList)
@@ -523,6 +528,29 @@ func (a *App) runQuery() {
 		a.logf(tagWarn + "nothing to run — type a query first")
 		return
 	}
+	a.run(stmts, tag)
+}
+
+// listTables runs the active driver's catalog query — the \dt of whichever
+// database this is. It goes through the same path Ctrl+R uses, so it is
+// cancelable, lands in the results table, and exports like any other result.
+func (a *App) listTables() {
+	cc, ok := a.cfg.ConnByName(a.active)
+	if !ok {
+		a.logf(tagWarn + "no active connection — Ctrl+L then Enter to pick one")
+		return
+	}
+	q, err := db.TablesQuery(cc.Driver)
+	if err != nil {
+		a.logf(tagErr+"%s", tview.Escape(serr.StringFromErr(err)))
+		return
+	}
+	a.run([]string{q}, "list tables")
+}
+
+// run executes statements in order on the active connection's pinned session,
+// off the UI goroutine, and publishes the last result.
+func (a *App) run(stmts []string, tag string) {
 	if a.active == "" {
 		a.logf(tagWarn + "no active connection — Ctrl+L then Enter to pick one")
 		return

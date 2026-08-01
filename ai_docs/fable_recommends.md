@@ -70,8 +70,8 @@ robustness edges and a few small features.
   `runScriptHeadless` hardcodes text tables to stdout, so
   `./dbc -f csv script foo.go` silently ignores the flag. The `Show` callback
   could render via the chosen format.
-- **A "list tables" key** — a per-driver catalog query (`\dt` equivalent)
-  behind one keybinding.
+- ✅ *(done 2026-07-31)* **A "list tables" key** — a per-driver catalog query
+  (`\dt` equivalent) behind one keybinding.
 - ✅ *(done 2026-07-31)* **Style NULLs in the results table** — `Raw` already
   distinguishes `nil` from the string `"NULL"`; render real NULLs in the muted
   color.

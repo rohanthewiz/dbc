@@ -49,6 +49,7 @@ Layout: connections sidebar · SQL editor · results table · log pane · status
 | `Ctrl+K` | Stop the running query or script — same as the **■ Stop** button |
 | `Ctrl+E` | Export the last result (format + clipboard/file dialog) |
 | `Ctrl+O` | Pick and run a Go script from `scripts_dir` |
+| `Ctrl+T` | List the tables and views on the active connection |
 | `Ctrl+L` | Jump to the connections list (`Enter` activates one) |
 | `y` / `Y` | *(results table)* Copy the selected cell / the whole row |
 | `Tab` / `Shift+Tab` | Cycle focus: editor → results → connections |
@@ -60,6 +61,12 @@ Non-SELECT statements (INSERT/UPDATE/DDL…) run as exec and report rows
 affected. Results are truncated at `max_rows`. A real SQL `NULL` is drawn in
 the muted color, so it cannot be confused with a column holding the string
 `"NULL"`.
+
+`Ctrl+T` is the `\dt`: it runs the active driver's catalog query and drops the
+tables and views into the results table as `table_schema · table_name ·
+table_type` — the same three columns on Postgres, MySQL, and SQLite. It is an
+ordinary query, so it is cancelable and exportable like any other, and the
+editor buffer is left alone.
 
 The results table selects by cell, so the arrow keys walk a wide result in
 both directions. `y` copies the cell under the cursor to the system clipboard;

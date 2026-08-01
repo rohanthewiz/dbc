@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -253,6 +254,32 @@ func TestRunMultiStatementSelection(t *testing.T) {
 	}
 	if lg := logText(t, a); !strings.Contains(lg, "selection (3 statements)") {
 		t.Errorf("log does not name the multi-statement selection:\n%s", lg)
+	}
+}
+
+// Ctrl+T lists the tables of whatever the active connection is, without the
+// editor buffer having anything to do with it.
+func TestCtrlTListsTables(t *testing.T) {
+	a := newTestApp(t)
+	setBuffer(t, a, "SELECT 1 AS untouched", 0)
+
+	press(a, tcell.KeyCtrlT)
+	waitFor(t, a, "the table listing", func() bool { return a.lastRes != nil })
+
+	res := onUI(t, a, func() *model.Result { return a.lastRes })
+	names := make([]string, 0, len(res.Rows))
+	for _, row := range res.Rows {
+		names = append(names, row[1])
+	}
+	if !slices.Contains(names, "cats") {
+		t.Errorf("listing does not hold the seeded table: %v", names)
+	}
+	if lg := logText(t, a); !strings.Contains(lg, "list tables") {
+		t.Errorf("log does not name the run:\n%s", lg)
+	}
+	// the editor was not consulted, and not disturbed
+	if got := onUI(t, a, func() string { return a.editor.GetText() }); got != "SELECT 1 AS untouched" {
+		t.Errorf("editor buffer changed to %q", got)
 	}
 }
 

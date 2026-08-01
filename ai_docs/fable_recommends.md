@@ -75,8 +75,8 @@ robustness edges and a few small features.
 - ✅ *(done 2026-07-31)* **Style NULLs in the results table** — `Raw` already
   distinguishes `nil` from the string `"NULL"`; render real NULLs in the muted
   color.
-- **Copy row/cell from the results table** — the clipboard dep is already
-  there; a `y`-style key on the table.
+- ✅ *(done 2026-07-31)* **Copy row/cell from the results table** — the
+  clipboard dep is already there; a `y`-style key on the table.
 
 ## Performance
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/model"
 )
 
 // slowQuery spins in SQLite long enough that the test can always stop it
@@ -116,6 +117,10 @@ func waitFor(t *testing.T, a *App, what string, cond func() bool) {
 
 func press(a *App, key tcell.Key) {
 	a.app.QueueEvent(tcell.NewEventKey(key, 0, tcell.ModNone))
+}
+
+func pressRune(a *App, r rune) {
+	a.app.QueueEvent(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
 }
 
 // setBuffer loads the editor and puts the cursor at the given byte offset.
@@ -268,6 +273,72 @@ func TestNullCellsAreMuted(t *testing.T) {
 	}
 	if cells[1] != colFg {
 		t.Errorf(`the string "NULL" is %v, want the normal %v`, cells[1], colFg)
+	}
+}
+
+// selectedText decides what a copy key hands the clipboard, so it is where
+// the row/column arithmetic — table row 0 is the header — has to be right.
+func TestSelectedText(t *testing.T) {
+	res := &model.Result{
+		Columns: []string{"id", "name"},
+		Rows:    [][]string{{"1", "Whiskers"}, {"2", "Luna"}},
+	}
+	cases := []struct {
+		name     string
+		res      *model.Result
+		row, col int
+		wholeRow bool
+		want     string
+		wantWhat string
+		wantErr  string
+	}{
+		{name: "cell", res: res, row: 2, col: 1, want: "Luna", wantWhat: "name of row 2"},
+		{name: "first data row is table row 1", res: res, row: 1, col: 0, want: "1",
+			wantWhat: "id of row 1"},
+		{name: "whole row is tab separated", res: res, row: 1, wholeRow: true,
+			want: "1\tWhiskers", wantWhat: "row 1 (2 columns)"},
+		{name: "the header is not a row", res: res, row: 0, col: 0, wantErr: "no row selected"},
+		{name: "past the last row", res: res, row: 3, col: 0, wantErr: "no row selected"},
+		{name: "past the last column", res: res, row: 1, col: 2, wantErr: "no cell selected"},
+		{name: "no result at all", res: nil, row: 1, col: 0, wantErr: "nothing to copy"},
+		{name: "an empty result", res: &model.Result{}, row: 1, col: 0, wantErr: "nothing to copy"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, what, err := selectedText(c.res, c.row, c.col, c.wholeRow)
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Fatalf("err = %v, want one mentioning %q", err, c.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("selectedText: %v", err)
+			}
+			if got != c.want {
+				t.Errorf("text = %q, want %q", got, c.want)
+			}
+			if what != c.wantWhat {
+				t.Errorf("label = %q, want %q", what, c.wantWhat)
+			}
+		})
+	}
+}
+
+// The copy keys belong to the results table alone: in the editor a y is a y.
+func TestCopyKeysDoNotStealFromTheEditor(t *testing.T) {
+	a := newTestApp(t)
+	setBuffer(t, a, "", 0)
+	if !onUI(t, a, func() bool { return a.editor.HasFocus() }) {
+		t.Fatal("the editor does not start with the focus")
+	}
+
+	pressRune(a, 'y')
+	pressRune(a, 'Y')
+	drain(t, a)
+
+	if got := onUI(t, a, func() string { return a.editor.GetText() }); got != "yY" {
+		t.Errorf("editor holds %q, want the typed %q", got, "yY")
 	}
 }
 

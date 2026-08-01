@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
@@ -135,10 +136,13 @@ func (a *App) build() {
 	a.editor.SetBorder(true).SetTitle(" Query ")
 	pane(a.editor.Box, colBg)
 
-	a.table = tview.NewTable().SetFixed(1, 0).SetSelectable(true, false)
+	// cell selection rather than whole-row: it is what makes "copy this value"
+	// possible, and it gives the arrow keys somewhere to go on a result too
+	// wide for the pane
+	a.table = tview.NewTable().SetFixed(1, 0).SetSelectable(true, true)
 	a.table.SetSelectedStyle(tcell.StyleDefault.
 		Background(colSel).Foreground(colFg).Bold(true))
-	a.table.SetBorder(true).SetTitle(" Results ")
+	a.table.SetBorder(true).SetTitle(" Results (y/Y copy) ")
 	pane(a.table.Box, colBg)
 
 	a.logView = tview.NewTextView().SetDynamicColors(true).SetScrollable(true).
@@ -230,9 +234,63 @@ func (a *App) build() {
 		case tcell.KeyCtrlQ:
 			a.quit()
 			return nil
+		case tcell.KeyRune:
+			// only while the table holds the keys — in the editor a y is a y
+			if a.table.HasFocus() {
+				switch ev.Rune() {
+				case 'y':
+					a.copySelection(false)
+					return nil
+				case 'Y':
+					a.copySelection(true)
+					return nil
+				}
+			}
 		}
 		return ev
 	})
+}
+
+// copySelection puts the results table's selection on the system clipboard:
+// the cell under the cursor, or with wholeRow the entire row.
+func (a *App) copySelection(wholeRow bool) {
+	row, col := a.table.GetSelection()
+	text, what, err := selectedText(a.lastRes, row, col, wholeRow)
+	if err != nil {
+		a.logf(tagWarn+"%s", tview.Escape(serr.StringFromErr(err)))
+		return
+	}
+	if err = clipboard.WriteAll(text); err != nil {
+		a.logf(tagErr+"copy failed: %s", tview.Escape(serr.StringFromErr(err)))
+		return
+	}
+	a.logf(tagOk+"copied %s — "+tagMuted+"%s", what, tview.Escape(preview(text)))
+}
+
+// selectedText renders what a copy key should place on the clipboard. row and
+// col are table coordinates, so row 0 is the header and the first data row is
+// 1. A whole row is tab-separated, which pastes into a spreadsheet as cells
+// and into a terminal as a readable line. what names the copy for the log.
+func selectedText(r *model.Result, row, col int, wholeRow bool) (text, what string, err error) {
+	if r == nil || len(r.Rows) == 0 {
+		return "", "", serr.New("nothing to copy — run a query first")
+	}
+	ri := row - 1
+	if ri < 0 || ri >= len(r.Rows) {
+		return "", "", serr.New("no row selected")
+	}
+	cells := r.Rows[ri]
+	if wholeRow {
+		return strings.Join(cells, "\t"), fmt.Sprintf("row %d (%d columns)", ri+1, len(cells)), nil
+	}
+	if col < 0 || col >= len(cells) {
+		return "", "", serr.New("no cell selected")
+	}
+	name := fmt.Sprintf("column %d", col+1)
+	if col < len(r.Columns) {
+		name = r.Columns[col]
+	}
+	return cells[col], fmt.Sprintf("%s of row %d", name, ri+1), nil
 }
 
 func (a *App) cycleFocus(d int) {

@@ -50,6 +50,7 @@ Layout: connections sidebar · SQL editor · results table · log pane · status
 | `Ctrl+E` | Export the last result (format + clipboard/file dialog) |
 | `Ctrl+O` | Pick and run a Go script from `scripts_dir` |
 | `Ctrl+L` | Jump to the connections list (`Enter` activates one) |
+| `y` / `Y` | *(results table)* Copy the selected cell / the whole row |
 | `Tab` / `Shift+Tab` | Cycle focus: editor → results → connections |
 | `Esc` | Close a dialog |
 | `Ctrl+C` | Stop what's running; quit when idle |
@@ -59,6 +60,11 @@ Non-SELECT statements (INSERT/UPDATE/DDL…) run as exec and report rows
 affected. Results are truncated at `max_rows`. A real SQL `NULL` is drawn in
 the muted color, so it cannot be confused with a column holding the string
 `"NULL"`.
+
+The results table selects by cell, so the arrow keys walk a wide result in
+both directions. `y` copies the cell under the cursor to the system clipboard;
+`Y` copies the whole row, tab-separated, which pastes into a spreadsheet as
+cells. (`Ctrl+E` is still the way to export the whole result.)
 
 The interface wears a muted green theme — dark gray-green surfaces with a
 single green accent, shared with [cdx](https://github.com/rohanthewiz/cdx).

@@ -95,6 +95,9 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 	} else if cfg.Path != "" {
 		a.logf("loaded config from %s", cfg.Path)
 	}
+	for _, w := range cfg.Warnings {
+		a.logf(tagWarn+"%s", tview.Escape(w))
+	}
 
 	// the buffer from the last session beats the demo sample: a returning
 	// user gets their scratchpad back

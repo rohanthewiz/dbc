@@ -72,13 +72,23 @@ func main() {
 			fmt.Fprintln(os.Stderr, "usage: dbc script <file.go>")
 			os.Exit(2)
 		}
+		warnConfig(cfg)
 		runScriptHeadless(mgr, args[1])
 	case len(args) > 0:
+		warnConfig(cfg)
 		runQueryHeadless(cfg, mgr, args[0])
 	default:
 		if err = ui.Run(cfg, mgr); err != nil {
 			fail(err, "UI error")
 		}
+	}
+}
+
+// warnConfig prints load-time config warnings for the headless paths; the TUI
+// shows them in its log pane instead.
+func warnConfig(cfg *config.Config) {
+	for _, w := range cfg.Warnings {
+		fmt.Fprintln(os.Stderr, "warning: "+w)
 	}
 }
 

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -24,6 +25,10 @@ type Config struct {
 
 	Path string `toml:"-"` // file the config was loaded from ("" if none)
 	Demo bool   `toml:"-"` // true when running with the built-in demo connection
+
+	// Warnings are load-time findings worth telling the user about but not
+	// worth refusing to start over, e.g. a DSN referencing an unset env var.
+	Warnings []string `toml:"-"`
 }
 
 // Load reads the config from an explicit path, or searches ./dbc.toml then
@@ -65,8 +70,30 @@ func Load(explicit string) (*Config, error) {
 	if len(cfg.Connections) == 0 {
 		return nil, serr.New("config has no [[connection]] entries", "config_path", path)
 	}
+	seen := make(map[string]bool, len(cfg.Connections))
 	for i := range cfg.Connections {
-		cfg.Connections[i].DSN = os.ExpandEnv(cfg.Connections[i].DSN)
+		cn := &cfg.Connections[i]
+		if seen[cn.Name] {
+			return nil, serr.New("duplicate connection name — ConnByName would always pick the first",
+				"name", cn.Name, "config_path", path)
+		}
+		seen[cn.Name] = true
+		// expand env vars ourselves rather than via os.ExpandEnv, so a typo'd
+		// ${PGPASS} warns by name instead of silently becoming "" and
+		// surfacing later as a baffling auth failure
+		cn.DSN = os.Expand(cn.DSN, func(key string) string {
+			v, ok := os.LookupEnv(key)
+			if !ok {
+				cfg.Warnings = append(cfg.Warnings, fmt.Sprintf(
+					"connection %q: DSN references unset env var $%s (expanded to empty)",
+					cn.Name, key))
+			}
+			return v
+		})
+	}
+	if cfg.DefaultConnection != "" && !seen[cfg.DefaultConnection] {
+		return nil, serr.New("default_connection names no configured connection",
+			"default_connection", cfg.DefaultConnection, "config_path", path)
 	}
 	return cfg, nil
 }

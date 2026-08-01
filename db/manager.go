@@ -71,7 +71,11 @@ func (m *Manager) DB(name string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	dbh, err := sql.Open(drv, cc.DSN)
+	dsn := cc.DSN
+	if drv == "sqlite" {
+		dsn = sqliteDSN(dsn)
+	}
+	dbh, err := sql.Open(drv, dsn)
 	if err != nil {
 		return nil, serr.Wrap(err, "conn", name, "driver", drv)
 	}
@@ -91,6 +95,22 @@ func (m *Manager) DB(name string) (*sql.DB, error) {
 	}
 	m.conns[name] = dbh
 	return dbh, nil
+}
+
+// sqliteDSN gives a sqlite DSN a busy_timeout unless it already sets one.
+// Without it a locked database fails writers instantly ("database is
+// locked"); with it they wait for the lock. modernc's driver applies _pragma
+// DSN params to every new connection, busy_timeout before the others, and
+// accepts them with or without a file: prefix.
+func sqliteDSN(dsn string) string {
+	if strings.Contains(dsn, "busy_timeout") {
+		return dsn
+	}
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	return dsn + sep + "_pragma=busy_timeout(5000)"
 }
 
 // Close closes all open connections.

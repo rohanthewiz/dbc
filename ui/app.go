@@ -388,25 +388,39 @@ func (a *App) dropSession() {
 	a.dropSessionLocked()
 }
 
-// stmtToRun picks what Ctrl+R should execute: the selection when the user has
-// made one, otherwise the statement the cursor sits in. idx and total are the
-// statement's 1-based position in the buffer, or zero for a selection.
-func (a *App) stmtToRun() (stmt string, idx, total int) {
+// stmtsToRun picks what Ctrl+R should execute: the statements of the
+// selection when the user has made one, otherwise the statement the cursor
+// sits in. tag names the run for the status bar and log.
+func (a *App) stmtsToRun() (stmts []string, tag string) {
 	sel, cursor, _ := a.editor.GetSelection()
-	if s := strings.TrimSpace(sel); s != "" {
-		return s, 0, 0
+	if strings.TrimSpace(sel) != "" {
+		parts := sqlsplit.Split(sel)
+		if len(parts) == 0 {
+			return nil, "" // only comments or whitespace selected
+		}
+		stmts = make([]string, len(parts))
+		for i, p := range parts {
+			stmts[i] = p.Text
+		}
+		if len(stmts) == 1 {
+			return stmts, "selection"
+		}
+		return stmts, fmt.Sprintf("selection (%d statements)", len(stmts))
 	}
-	stmts := sqlsplit.Split(a.editor.GetText())
-	if len(stmts) == 0 {
-		return "", 0, 0
+	all := sqlsplit.Split(a.editor.GetText())
+	if len(all) == 0 {
+		return nil, ""
 	}
-	i := sqlsplit.IndexAt(stmts, cursor)
-	return stmts[i].Text, i + 1, len(stmts)
+	i := sqlsplit.IndexAt(all, cursor)
+	if len(all) == 1 {
+		return []string{all[i].Text}, "query"
+	}
+	return []string{all[i].Text}, fmt.Sprintf("statement %d/%d", i+1, len(all))
 }
 
 func (a *App) runQuery() {
-	stmt, idx, total := a.stmtToRun()
-	if stmt == "" {
+	stmts, tag := a.stmtsToRun()
+	if len(stmts) == 0 {
 		a.logf(tagWarn + "nothing to run — type a query first")
 		return
 	}
@@ -414,21 +428,28 @@ func (a *App) runQuery() {
 		a.logf(tagWarn + "no active connection — Ctrl+L then Enter to pick one")
 		return
 	}
-	tag := "query"
-	switch {
-	case idx == 0:
-		tag = "selection"
-	case total > 1:
-		tag = fmt.Sprintf("statement %d/%d", idx, total)
-	}
 	ctx, ok := a.beginRun(tag)
 	if !ok {
 		return
 	}
 	conn := a.active
-	a.logf("running %s on "+tagAccent+"%s"+tagOff+" — "+tagMuted+"%s", tag, conn, tview.Escape(preview(stmt)))
+	a.logf("running %s on "+tagAccent+"%s"+tagOff+" — "+tagMuted+"%s",
+		tag, conn, tview.Escape(preview(strings.Join(stmts, "; "))))
 	go func() {
-		res, err := a.runOnSession(ctx, conn, stmt)
+		// the statements run in order on the pinned session, stopping at the
+		// first failure — which is tagged with its position, as headless runs
+		// tag theirs
+		var res *model.Result
+		var err error
+		for i, stmt := range stmts {
+			res, err = a.runOnSession(ctx, conn, stmt)
+			if err != nil {
+				if len(stmts) > 1 {
+					err = serr.Wrap(err, "statement", fmt.Sprintf("%d/%d", i+1, len(stmts)))
+				}
+				break
+			}
+		}
 		a.app.QueueUpdateDraw(func() {
 			elapsed := a.endRun()
 			if err != nil {
@@ -438,6 +459,9 @@ func (a *App) runQuery() {
 			a.lastRes = res
 			a.renderResult(res)
 			a.setStatusFromResult(res)
+			if len(stmts) > 1 {
+				a.logf(tagOk+"%d statements completed — showing the last result", len(stmts))
+			}
 		})
 	}()
 }

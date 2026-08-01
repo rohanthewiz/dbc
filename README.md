@@ -64,7 +64,9 @@ border and title are lit.
 Keep a whole scratchpad of SQL in the editor and run one statement at a time:
 `Ctrl+R` executes only the statement the cursor sits in, and the log says
 which one (`running statement 2/4 …`). Select a region first and `Ctrl+R`
-runs exactly that instead.
+runs exactly that instead — a selection holding several statements runs them
+in order, stopping at the first failure, with the last result shown in the
+table.
 
 Statements are separated on semicolons, ignoring the ones inside strings,
 quoted identifiers, comments, and PostgreSQL `$$` bodies — so a function

@@ -229,6 +229,28 @@ func TestSessionStateCarriesAcrossRuns(t *testing.T) {
 	}
 }
 
+// TestRunMultiStatementSelection selects the whole three-statement buffer:
+// the statements must run in order, one per driver call, with the last
+// result landing in the table.
+func TestRunMultiStatementSelection(t *testing.T) {
+	a := newTestApp(t)
+	onUI(t, a, func() bool {
+		a.editor.SetText(threeStatements, false)
+		a.editor.Select(0, len(threeStatements))
+		return true
+	})
+
+	press(a, tcell.KeyCtrlR)
+	waitFor(t, a, "the selection to finish", func() bool { return a.lastRes != nil })
+
+	if got := onUI(t, a, func() string { return a.lastRes.Query }); got != "SELECT 3 AS c" {
+		t.Errorf("last result is %q, want the third statement", got)
+	}
+	if lg := logText(t, a); !strings.Contains(lg, "selection (3 statements)") {
+		t.Errorf("log does not name the multi-statement selection:\n%s", lg)
+	}
+}
+
 func TestCtrlKCancelsQuery(t *testing.T) {
 	a := newTestApp(t)
 	setBuffer(t, a, slowQuery, 0)

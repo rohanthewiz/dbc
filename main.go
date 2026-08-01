@@ -21,6 +21,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -156,6 +157,7 @@ func emit(results []*model.Result, f export.Format) {
 	if err != nil {
 		fail(err, "render failed")
 	}
+	warnTruncated(os.Stderr, results)
 	if *flagOut == "" {
 		fmt.Print(out)
 		return
@@ -172,6 +174,24 @@ func emit(results []*model.Result, f export.Format) {
 		return
 	}
 	fmt.Printf("wrote %d rows to %s\n", rows, *flagOut)
+}
+
+// warnTruncated notes on w (stderr) every result that hit the max_rows cap.
+// Multi-statement banners and JSON envelopes carry the flag themselves, but a
+// single-statement CSV/TSV/text export would otherwise look complete while
+// quietly missing rows — and stderr keeps the note out of the data stream.
+func warnTruncated(w io.Writer, results []*model.Result) {
+	for i, r := range results {
+		if !r.Truncated {
+			continue
+		}
+		pos := ""
+		if len(results) > 1 {
+			pos = fmt.Sprintf("statement %d/%d: ", i+1, len(results))
+		}
+		fmt.Fprintf(w, "note: %sresult truncated at %d rows — raise max_rows in config for more\n",
+			pos, len(r.Rows))
+	}
 }
 
 func runScriptHeadless(mgr *db.Manager, path string) {

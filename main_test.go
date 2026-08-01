@@ -10,6 +10,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
@@ -113,6 +114,31 @@ func TestRunStatementsStopsAtFirstError(t *testing.T) {
 	}
 	if results[0].Rows[0][0] != "1" {
 		t.Errorf("kept the wrong result: %v", results[0].Rows)
+	}
+}
+
+// A result that hit max_rows must announce itself on stderr — a truncated
+// export must not look complete.
+func TestWarnTruncated(t *testing.T) {
+	full := &model.Result{Rows: [][]string{{"a"}}}
+	cut := &model.Result{Rows: [][]string{{"a"}, {"b"}}, Truncated: true}
+
+	var sb strings.Builder
+	warnTruncated(&sb, []*model.Result{full})
+	if sb.Len() != 0 {
+		t.Errorf("untruncated result warned: %q", sb.String())
+	}
+
+	sb.Reset()
+	warnTruncated(&sb, []*model.Result{cut})
+	if got := sb.String(); !strings.Contains(got, "truncated at 2 rows") {
+		t.Errorf("single-result note = %q, want the row count", got)
+	}
+
+	sb.Reset()
+	warnTruncated(&sb, []*model.Result{full, cut})
+	if got := sb.String(); !strings.Contains(got, "statement 2/2") {
+		t.Errorf("multi-result note = %q, want the statement position", got)
 	}
 }
 

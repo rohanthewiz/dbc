@@ -55,6 +55,42 @@ dsn = "postgres://app:${DBC_TEST_NO_SUCH_VAR}@localhost/db"
 	}
 }
 
+// The row caps: absent means the defaults, an explicit 0 for the display cap
+// means "draw them all", and a negative is a typo, not an instruction.
+func TestLoadRowCaps(t *testing.T) {
+	conn := `
+[[connection]]
+name = "db"
+driver = "sqlite"
+dsn = "a.db"
+`
+	cases := []struct {
+		name                 string
+		body                 string
+		wantRows, wantScreen int
+	}{
+		{"absent", conn, defaultMaxRows, defaultMaxDisplayRows},
+		{"set", "max_rows = 50000\nmax_display_rows = 500\n" + conn, 50000, 500},
+		{"display cap off", "max_display_rows = 0\n" + conn, defaultMaxRows, 0},
+		{"negative", "max_rows = -1\nmax_display_rows = -5\n" + conn,
+			defaultMaxRows, defaultMaxDisplayRows},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, c.body))
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if cfg.MaxRows != c.wantRows {
+				t.Errorf("MaxRows = %d, want %d", cfg.MaxRows, c.wantRows)
+			}
+			if cfg.MaxDisplayRows != c.wantScreen {
+				t.Errorf("MaxDisplayRows = %d, want %d", cfg.MaxDisplayRows, c.wantScreen)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsDuplicateNames(t *testing.T) {
 	_, err := Load(writeConfig(t, `
 [[connection]]

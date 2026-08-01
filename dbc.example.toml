@@ -6,6 +6,11 @@ scripts_dir = "scripts"
 # Query results are truncated at this many rows in the client
 max_rows = 1000
 
+# ...and at most this many of them are drawn in the results table. Raise
+# max_rows for a bigger export without making the table crawl; the rows past
+# this cap are still fetched, and still exported. 0 draws all of them.
+max_display_rows = 2000
+
 # Connection activated at startup
 default_connection = "local-pg"
 

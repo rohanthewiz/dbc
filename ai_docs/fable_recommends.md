@@ -82,12 +82,12 @@ robustness edges and a few small features.
 
 Nothing pressing — the `max_rows` cap protects the TUI, rendering is all
 string-builder based, and connections are cached. Only latent item:
-`renderResult` materializes a tview cell for every value, so a very large
-`max_rows` (say 50k) would make the table sluggish; a separate display cap
-would decouple "rows fetched for export" from "rows rendered".
+✅ *(done 2026-07-31)* `renderResult` materializes a tview cell for every
+value, so a very large `max_rows` (say 50k) would make the table sluggish; a
+separate display cap would decouple "rows fetched for export" from "rows
+rendered".
 
 ## Status
 
-Done (2026-07-31): all robustness items (1–9) and editor-buffer persistence,
-one commit each. Remaining: the other feature items and the display-cap
-performance note above.
+Done (2026-07-31): everything on this list — the nine robustness items, all
+six features, and the display-cap performance note — one commit each.

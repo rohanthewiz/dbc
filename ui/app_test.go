@@ -257,6 +257,35 @@ func TestRunMultiStatementSelection(t *testing.T) {
 	}
 }
 
+// The display cap bounds what the table draws, not what was fetched: the rows
+// past it stay in the result, which is what an export renders from.
+func TestDisplayCapBoundsTheTableNotTheResult(t *testing.T) {
+	a := newTestApp(t)
+	onUI(t, a, func() bool { a.cfg.MaxDisplayRows = 3; return true })
+
+	runAndWait(t, a, "SELECT name FROM cats ORDER BY id")
+
+	if got := onUI(t, a, func() int { return len(a.lastRes.Rows) }); got != 8 {
+		t.Errorf("result holds %d rows, want all 8 — the cap is a display cap", got)
+	}
+	if got := onUI(t, a, func() int { return a.table.GetRowCount() }); got != 4 {
+		t.Errorf("table has %d rows, want 3 plus the header", got)
+	}
+	if st := statusText(t, a); !strings.Contains(st, "showing 3") {
+		t.Errorf("status does not say what is on screen: %q", st)
+	}
+	if lg := logText(t, a); !strings.Contains(lg, "showing the first 3 of 8 rows") {
+		t.Errorf("log does not explain the cap:\n%s", lg)
+	}
+
+	// and with the cap off, everything is drawn
+	onUI(t, a, func() bool { a.cfg.MaxDisplayRows = 0; return true })
+	runAndWait(t, a, "SELECT name FROM cats ORDER BY id DESC")
+	if got := onUI(t, a, func() int { return a.table.GetRowCount() }); got != 9 {
+		t.Errorf("table has %d rows, want all 8 plus the header", got)
+	}
+}
+
 // runAndWait executes one statement through the editor, the way a user does.
 func runAndWait(t *testing.T, a *App, sql string) {
 	t.Helper()

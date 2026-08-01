@@ -18,7 +18,8 @@ Copy `dbc.example.toml` to `./dbc.toml` (or `~/.config/dbc/config.toml`):
 
 ```toml
 scripts_dir        = "scripts"
-max_rows           = 1000
+max_rows           = 1000   # rows fetched from the server
+max_display_rows   = 2000   # rows the results table draws (0 = all)
 default_connection = "local-pg"
 
 [[connection]]
@@ -59,9 +60,14 @@ Layout: connections sidebar · SQL editor · results table · log pane · status
 | `Ctrl+Q` | Quit |
 
 Non-SELECT statements (INSERT/UPDATE/DDL…) run as exec and report rows
-affected. Results are truncated at `max_rows`. A real SQL `NULL` is drawn in
-the muted color, so it cannot be confused with a column holding the string
-`"NULL"`.
+affected. A real SQL `NULL` is drawn in the muted color, so it cannot be
+confused with a column holding the string `"NULL"`.
+
+Two caps, deliberately separate: `max_rows` is how many rows are fetched from
+the server, `max_display_rows` how many of those the table draws. Drawing
+costs a widget per value, so raising `max_rows` to 50k for an export would
+otherwise make scrolling crawl. The rows past the display cap are still in the
+result and still go into `Ctrl+E`; the status bar says how many are on screen.
 
 `Ctrl+T` is the `\dt`: it runs the active driver's catalog query and drops the
 tables and views into the results table as `table_schema · table_name ·

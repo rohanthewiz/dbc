@@ -709,7 +709,13 @@ func (a *App) renderResult(r *model.Result) {
 			SetAttributes(tcell.AttrBold).
 			SetSelectable(false))
 	}
-	for ri, row := range r.Rows {
+	shown := a.rowsShown(r)
+	if shown < len(r.Rows) {
+		a.logf(tagWarn+"showing the first %d of %d rows"+tagOff+
+			" — the rest are fetched, and go into an export (max_display_rows)",
+			shown, len(r.Rows))
+	}
+	for ri, row := range r.Rows[:shown] {
 		for ci, val := range row {
 			cell := tview.NewTableCell(" " + tview.Escape(val) + " ").
 				SetTextColor(colFg).
@@ -724,9 +730,22 @@ func (a *App) renderResult(r *model.Result) {
 		}
 	}
 	t.ScrollToBeginning()
-	if len(r.Rows) > 0 {
+	if shown > 0 {
 		t.Select(1, 0)
 	}
+}
+
+// rowsShown is how many of a result's rows the table materializes. Fetching is
+// capped by max_rows, which someone may raise so an export gets everything;
+// rendering is capped separately by max_display_rows, because a cell widget
+// per value is what turns a 50k-row result into a sluggish scroll. The rows
+// beyond the cap are still in the result, and still in an export.
+func (a *App) rowsShown(r *model.Result) int {
+	n := len(r.Rows)
+	if cap := a.cfg.MaxDisplayRows; cap > 0 && cap < n {
+		return cap
+	}
+	return n
 }
 
 // isNull reports whether the display value at (row, col) came from a real SQL
@@ -744,6 +763,9 @@ func (a *App) setStatusFromResult(r *model.Result) {
 	trunc := ""
 	if r.Truncated {
 		trunc = fmt.Sprintf(" "+tagWarn+"(truncated at %d)"+tagOff, a.cfg.MaxRows)
+	}
+	if shown := a.rowsShown(r); shown < len(r.Rows) {
+		trunc += fmt.Sprintf(" "+tagWarn+"(showing %d)"+tagOff, shown)
 	}
 	a.setStatusText(fmt.Sprintf(tagAccent+"%s"+tagOff+" │ %s in %s%s",
 		r.Conn, verb, r.Duration.Round(10*time.Microsecond), trunc))

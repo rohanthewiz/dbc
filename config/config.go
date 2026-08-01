@@ -9,6 +9,15 @@ import (
 	"github.com/rohanthewiz/serr"
 )
 
+const (
+	defaultMaxRows = 1000
+
+	// defaultMaxDisplayRows sits above defaultMaxRows on purpose: at the stock
+	// max_rows the display cap never bites, and it only starts doing anything
+	// once someone raises max_rows for an export.
+	defaultMaxDisplayRows = 2000
+)
+
 // Connection describes one database host connection.
 type Connection struct {
 	Name   string `toml:"name"`
@@ -18,8 +27,17 @@ type Connection struct {
 
 // Config is the application configuration.
 type Config struct {
-	ScriptsDir        string       `toml:"scripts_dir"`
-	MaxRows           int          `toml:"max_rows"`
+	ScriptsDir string `toml:"scripts_dir"`
+	MaxRows    int    `toml:"max_rows"` // rows fetched from the server
+
+	// MaxDisplayRows caps how many of those rows the TUI table renders. It is
+	// separate from MaxRows because the two are limited by different things:
+	// fetching more is a question of memory and patience, rendering more costs
+	// a widget per value and shows up as a sluggish scroll. Raising max_rows
+	// for the sake of an export should not make the table crawl. Zero means no
+	// display cap.
+	MaxDisplayRows int `toml:"max_display_rows"`
+
 	DefaultConnection string       `toml:"default_connection"`
 	Connections       []Connection `toml:"connection"`
 
@@ -35,7 +53,8 @@ type Config struct {
 // ~/.config/dbc/config.toml. With no config anywhere, it falls back to an
 // in-memory SQLite demo connection so the app is usable immediately.
 func Load(explicit string) (*Config, error) {
-	cfg := &Config{ScriptsDir: "scripts", MaxRows: 1000}
+	cfg := &Config{ScriptsDir: "scripts", MaxRows: defaultMaxRows,
+		MaxDisplayRows: defaultMaxDisplayRows}
 
 	path := explicit
 	if path == "" {
@@ -62,7 +81,10 @@ func Load(explicit string) (*Config, error) {
 	cfg.Path = path
 
 	if cfg.MaxRows <= 0 {
-		cfg.MaxRows = 1000
+		cfg.MaxRows = defaultMaxRows
+	}
+	if cfg.MaxDisplayRows < 0 {
+		cfg.MaxDisplayRows = defaultMaxDisplayRows
 	}
 	if cfg.ScriptsDir == "" {
 		cfg.ScriptsDir = "scripts"

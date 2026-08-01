@@ -14,6 +14,9 @@
 //	-c name        connection name for a one-off query
 //	-f format      headless output format: text|csv|tsv|markdown|html|json
 //	-o file        write headless output to a file instead of stdout
+//
+// -f and -o apply to scripts too: the results a script shows are rendered in
+// the chosen format, to the chosen destination.
 package main
 
 import (
@@ -73,15 +76,25 @@ func main() {
 			os.Exit(2)
 		}
 		warnConfig(cfg)
-		runScriptHeadless(mgr, args[1])
+		runScriptHeadless(mgr, args[1], outFormat())
 	case len(args) > 0:
 		warnConfig(cfg)
-		runQueryHeadless(cfg, mgr, args[0])
+		runQueryHeadless(cfg, mgr, args[0], outFormat())
 	default:
 		if err = ui.Run(cfg, mgr); err != nil {
 			fail(err, "UI error")
 		}
 	}
+}
+
+// outFormat resolves the -f flag, failing before any work starts when the name
+// is not one we render. Both headless paths render through it.
+func outFormat() export.Format {
+	f, err := export.ParseFormat(*flagFormat)
+	if err != nil {
+		fail(err, "bad -f format")
+	}
+	return f
 }
 
 // warnConfig prints load-time config warnings for the headless paths; the TUI
@@ -95,7 +108,7 @@ func warnConfig(cfg *config.Config) {
 // runQueryHeadless runs the SQL buffer given on the command line. It may hold
 // several statements: they run in order on one connection, stopping at the
 // first failure, and every result that made it is still rendered.
-func runQueryHeadless(cfg *config.Config, mgr *db.Manager, sql string) {
+func runQueryHeadless(cfg *config.Config, mgr *db.Manager, sql string, f export.Format) {
 	conn := *flagConn
 	if conn == "" {
 		conn = cfg.DefaultConnection
@@ -106,10 +119,6 @@ func runQueryHeadless(cfg *config.Config, mgr *db.Manager, sql string) {
 	if conn == "" {
 		fmt.Fprintln(os.Stderr, "multiple connections configured — pick one with -c <name>")
 		os.Exit(2)
-	}
-	f, err := export.ParseFormat(*flagFormat)
-	if err != nil {
-		fail(err, "bad -f format")
 	}
 	stmts := sqlsplit.Split(sql)
 	if len(stmts) == 0 {
@@ -204,25 +213,44 @@ func warnTruncated(w io.Writer, results []*model.Result) {
 	}
 }
 
-func runScriptHeadless(mgr *db.Manager, path string) {
+// runScriptHeadless runs a Go script. The results it pushes with s.Show are
+// collected and rendered together when it finishes, exactly as the statements
+// of a multi-statement query are — so -f json yields one array rather than a
+// run of separate documents, and -o writes one file.
+func runScriptHeadless(mgr *db.Manager, path string, f export.Format) {
 	ctx, stop := interruptible()
 	defer stop()
 
-	s := sdb.New(mgr,
-		func(r *model.Result) {
-			fmt.Printf("-- %s │ %d rows in %s\n", r.Conn, len(r.Rows), r.Duration)
-			fmt.Println(export.TextTable(r))
-		},
-		func(msg string) {
-			fmt.Println(msg)
-		}).WithContext(ctx)
+	var results []*model.Result
+	logOut := scriptLog(f)
 
-	if err := script.Run(path, s); err != nil {
+	s := sdb.New(mgr,
+		func(r *model.Result) { results = append(results, r) },
+		func(msg string) { fmt.Fprintln(logOut, msg) },
+	).WithContext(ctx)
+
+	err := script.Run(path, s)
+	// output first: a script that failed on its third query still showed two
+	if len(results) > 0 {
+		emit(results, f)
+	}
+	if err != nil {
 		if errors.Is(err, db.ErrCanceled) {
 			canceled("script")
 		}
 		fail(err, "script failed")
 	}
+}
+
+// scriptLog picks where a script's s.Print output goes. It is progress, not
+// data, so it streams as it happens — but it can only share stdout with the
+// results when they are a human-readable table. Interleaved in csv or json it
+// would corrupt the stream, so there it goes to stderr instead.
+func scriptLog(f export.Format) io.Writer {
+	if *flagOut == "" && f != export.Text {
+		return os.Stderr
+	}
+	return os.Stdout
 }
 
 // interruptible returns a context canceled by Ctrl+C or SIGTERM, so a long

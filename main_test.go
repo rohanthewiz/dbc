@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -10,6 +12,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/export"
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/sqlsplit"
 )
@@ -140,6 +143,66 @@ func TestWarnTruncated(t *testing.T) {
 	if got := sb.String(); !strings.Contains(got, "statement 2/2") {
 		t.Errorf("multi-result note = %q, want the statement position", got)
 	}
+}
+
+// A headless script must render through -f and land where -o says, not in the
+// hardcoded text table it once always printed.
+func TestScriptHeadlessHonorsFormatAndOutfile(t *testing.T) {
+	mgr := newTestManager(t)
+	out := filepath.Join(t.TempDir(), "cats.csv")
+	setFlag(t, flagOut, out)
+
+	runScriptHeadless(mgr, "testdata/show_two.go", export.CSV)
+
+	bs, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read -o file: %v", err)
+	}
+	got := string(bs)
+	// two shown results, each its own CSV block with a header row
+	if n := strings.Count(got, "name\n"); n != 2 {
+		t.Errorf("got %d header rows, want one per shown result:\n%s", n, got)
+	}
+	for _, want := range []string{"Whiskers", "Oliver", "Luna", "Milo"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output is missing %q:\n%s", want, got)
+		}
+	}
+	// and the script's Print output stayed out of the data
+	if strings.Contains(got, "->") {
+		t.Errorf("script log output leaked into the data stream:\n%s", got)
+	}
+}
+
+// scriptLog keeps s.Print off stdout only when it would corrupt what is
+// already there: a machine-readable format writing to stdout.
+func TestScriptLogDestination(t *testing.T) {
+	cases := []struct {
+		name    string
+		outFile string
+		format  export.Format
+		want    *os.File
+	}{
+		{"text to stdout shares it", "", export.Text, os.Stdout},
+		{"csv to stdout takes it", "", export.CSV, os.Stderr},
+		{"csv to a file frees stdout", "out.csv", export.CSV, os.Stdout},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			setFlag(t, flagOut, c.outFile)
+			if got := scriptLog(c.format); got != c.want {
+				t.Errorf("scriptLog = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// setFlag overrides a string flag for one test and restores it after.
+func setFlag(t *testing.T, f *string, v string) {
+	t.Helper()
+	old := *f
+	*f = v
+	t.Cleanup(func() { *f = old })
 }
 
 // A canceled run stays recognizable as a cancellation, so main exits 130

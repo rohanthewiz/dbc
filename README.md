@@ -176,6 +176,23 @@ Flags go before the SQL: `-config path`, `-c connection`, `-f format`, `-o outfi
 Use `--` before SQL that starts with a comment, so the flag parser leaves it
 alone. `Ctrl+C` cancels a running query or script and exits 130.
 
+### Scripts headless
+
+`-f` and `-o` apply to scripts too:
+
+```sh
+./dbc -f json script scripts/loop_params.go        # one JSON array on stdout
+./dbc -f csv -o report.csv script scripts/loop.go  # straight to a file
+```
+
+The results a script pushes with `s.Show` are collected and rendered together
+when it finishes, exactly as the statements of a multi-statement query are —
+so `-f json` yields one array rather than a run of separate documents.
+
+`s.Print` output is progress, not data, and streams as it happens. It shares
+stdout with a `text` table, but moves to stderr when a machine-readable format
+has stdout to itself, so `./dbc -f json script … | jq` parses.
+
 ### Multi-statement runs
 
 The SQL argument may hold several statements, split the same way the editor

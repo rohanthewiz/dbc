@@ -66,9 +66,10 @@ robustness edges and a few small features.
   quit, restore on start.
 - **Query history** — even a minimal version (executed statements appended to
   a file, a modal to recall one) transforms daily use.
-- **Honor `-f`/`-o` for headless scripts** — `runScriptHeadless` hardcodes
-  text tables to stdout, so `./dbc -f csv script foo.go` silently ignores the
-  flag. The `Show` callback could render via the chosen format.
+- ✅ *(done 2026-07-31)* **Honor `-f`/`-o` for headless scripts** —
+  `runScriptHeadless` hardcodes text tables to stdout, so
+  `./dbc -f csv script foo.go` silently ignores the flag. The `Show` callback
+  could render via the chosen format.
 - **A "list tables" key** — a per-driver catalog query (`\dt` equivalent)
   behind one keybinding.
 - **Style NULLs in the results table** — `Raw` already distinguishes `nil`

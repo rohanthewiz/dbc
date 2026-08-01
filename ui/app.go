@@ -38,6 +38,10 @@ const keyHints = tagAccent + "^R" + tagOff + " run " +
 // something is running. It is resized to zero the rest of the time.
 const stopBtnWidth = 10
 
+// logMaxLines bounds the log pane, so a chatty script in a long session
+// cannot grow it without limit. Old lines fall off the top.
+const logMaxLines = 2000
+
 type App struct {
 	cfg *config.Config
 	mgr *db.Manager
@@ -123,7 +127,8 @@ func (a *App) build() {
 	a.table.SetBorder(true).SetTitle(" Results ")
 	pane(a.table.Box, colBg)
 
-	a.logView = tview.NewTextView().SetDynamicColors(true).SetScrollable(true)
+	a.logView = tview.NewTextView().SetDynamicColors(true).SetScrollable(true).
+		SetMaxLines(logMaxLines)
 	a.logView.SetTextColor(colFg)
 	a.logView.SetBorder(true).SetTitle(" Log ")
 	pane(a.logView.Box, colPanel)

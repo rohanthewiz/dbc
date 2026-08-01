@@ -18,6 +18,7 @@ func TestTablesQueryPerDriver(t *testing.T) {
 		{"mariadb", "DATABASE()"},
 		{"sqlite", "sqlite_master"},
 		{"sqlite3", "sqlite_master"},
+		{"bytdb", "relkind"},
 	}
 	for _, c := range cases {
 		q, err := TablesQuery(c.driver)

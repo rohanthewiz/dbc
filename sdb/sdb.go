@@ -83,7 +83,7 @@ func (s *S) Conns() []string {
 
 // Query runs a statement with parameters on the named connection and
 // returns the result set. Use the placeholder style of the target driver
-// ($1 for postgres, ? for mysql/sqlite).
+// ($1 for postgres/bytdb, ? for mysql/sqlite).
 func (s *S) Query(conn, query string, args ...any) (*Result, error) {
 	return s.mgr.RunContext(s.Ctx(), conn, query, args...)
 }

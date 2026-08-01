@@ -21,7 +21,7 @@ const (
 // Connection describes one database host connection.
 type Connection struct {
 	Name   string `toml:"name"`
-	Driver string `toml:"driver"` // postgres | mysql | sqlite
+	Driver string `toml:"driver"` // postgres | mysql | sqlite | bytdb
 	DSN    string `toml:"dsn"`    // env vars are expanded, e.g. ${PGPASS}
 }
 

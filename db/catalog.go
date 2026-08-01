@@ -1,6 +1,9 @@
 package db
 
-import "github.com/rohanthewiz/serr"
+import (
+	bytdbdrv "github.com/rohanthewiz/bytdb/stdlib"
+	"github.com/rohanthewiz/serr"
+)
 
 // TablesQuery returns the statement that lists a driver's tables and views —
 // the `\dt` of whichever database this is. The shape is deliberately the same
@@ -35,6 +38,15 @@ ORDER BY table_name`, nil
 FROM sqlite_master
 WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'
 ORDER BY type, name`, nil
+	case bytdbdrv.DriverName:
+		// bytdb serves a Postgres-shaped catalog, but its
+		// information_schema.tables lists base tables only — views live in
+		// pg_class alone, so ask there and derive the type from relkind.
+		return `SELECT n.nspname AS table_schema, c.relname AS table_name,
+       CASE c.relkind WHEN 'v' THEN 'VIEW' ELSE 'BASE TABLE' END AS table_type
+FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r', 'v') AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+ORDER BY n.nspname, c.relname`, nil
 	}
 	return "", serr.New("no table listing for this driver", "driver", driver)
 }

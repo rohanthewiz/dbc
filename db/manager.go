@@ -15,6 +15,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 
+	bytdbdrv "github.com/rohanthewiz/bytdb/stdlib"
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/sqlsplit"
@@ -50,8 +51,10 @@ func driverFor(d string) (string, error) {
 		return "mysql", nil
 	case "sqlite", "sqlite3":
 		return "sqlite", nil
+	case "bytdb":
+		return bytdbdrv.DriverName, nil
 	}
-	return "", serr.New("unknown driver (use postgres, mysql, or sqlite)", "driver", d)
+	return "", serr.New("unknown driver (use postgres, mysql, sqlite, or bytdb)", "driver", d)
 }
 
 // DB returns the live *sql.DB for a named connection, opening and pinging

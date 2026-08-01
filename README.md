@@ -1,7 +1,8 @@
 # dbc — a TUI database client, scriptable in Go
 
-`dbc` is a terminal database client for Postgres, MySQL, and SQLite with a
-twist: instead of a bespoke macro language, you script it in **Go**. Drop a
+`dbc` is a terminal database client for Postgres, MySQL, SQLite, and
+[bytdb](https://github.com/rohanthewiz/bytdb) with a twist: instead of a
+bespoke macro language, you script it in **Go**. Drop a
 `.go` file in the scripts directory, loop over parameters, run queries against
 any configured connection, and export the results — CSV, Markdown, HTML,
 JSON — to a file or straight to the clipboard.
@@ -24,9 +25,31 @@ default_connection = "local-pg"
 
 [[connection]]
 name   = "local-pg"
-driver = "postgres"          # postgres | mysql | sqlite
+driver = "postgres"          # postgres | mysql | sqlite | bytdb
 dsn    = "postgres://postgres:${PGPASS}@localhost:5432/mydb?sslmode=disable"
 ```
+
+Two of the four drivers are embedded — there is no server to start, and the
+DSN is just a file:
+
+```toml
+[[connection]]
+name   = "scratch"
+driver = "sqlite"
+dsn    = "file:scratch.db"
+
+[[connection]]
+name   = "notes"
+driver = "bytdb"
+dsn    = "notes.bytdb"       # created on first open
+```
+
+[bytdb](https://github.com/rohanthewiz/bytdb) is an embedded relational store
+over an ordered key-value engine, with a Postgres-flavored dialect (`$1`
+placeholders, `pg_catalog` introspection) and serializable transactions. dbc
+opens it in-process, so `Ctrl+T`, cancellation, exports, and scripts work
+against it exactly as they do against the other three. Unlike SQLite it has no
+in-memory mode, so the DSN is always a real path.
 
 Env vars in DSNs are expanded, so secrets can stay out of the file. A DSN
 referencing an unset var warns by name at startup (a typo'd `${PGPASS}` will
@@ -71,7 +94,7 @@ result and still go into `Ctrl+E`; the status bar says how many are on screen.
 
 `Ctrl+T` is the `\dt`: it runs the active driver's catalog query and drops the
 tables and views into the results table as `table_schema · table_name ·
-table_type` — the same three columns on Postgres, MySQL, and SQLite. It is an
+table_type` — the same three columns on all four drivers. It is an
 ordinary query, so it is cancelable and exportable like any other, and the
 editor buffer is left alone.
 
@@ -129,7 +152,8 @@ any transaction it had open.
 While a query or script runs, the status bar shows a live elapsed time and a
 **■ Stop** button appears at its right edge. `Ctrl+K` or a click on the button
 cancels it: the statement is aborted on the server (Postgres, MySQL) or
-interrupted (SQLite), and the run is reported as stopped rather than failed.
+interrupted in process (SQLite, bytdb), and the run is reported as stopped
+rather than failed.
 
 A canceled script unwinds through its own error handling — the query in flight
 is aborted and every later `s.Query`/`s.Exec` fails immediately. A script that
@@ -193,7 +217,7 @@ Go module; dbc runs them regardless.
 
 `sdb.Result` gives you `Columns []string`, `Rows [][]string`, `Raw [][]any`,
 `Duration`, and `Affected`. Use the placeholder style of the target driver
-(`$1` postgres, `?` mysql/sqlite).
+(`$1` postgres/bytdb, `?` mysql/sqlite).
 
 Sample scripts live in [`scripts/`](scripts/): parameter loops, multi-host
 sweeps, and CSV/HTML report generation.

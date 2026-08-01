@@ -29,3 +29,10 @@ dsn    = "reporter:${MYSQL_PASS}@tcp(db.example.com:3306)/reports?parseTime=true
 name   = "scratch"
 driver = "sqlite"
 dsn    = "file:scratch.db"
+
+# bytdb is embedded like sqlite — the DSN is just the file, created on first
+# open. No in-memory mode, and no server to start.
+[[connection]]
+name   = "notes"
+driver = "bytdb"
+dsn    = "notes.bytdb"

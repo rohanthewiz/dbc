@@ -243,17 +243,34 @@ func jsonArr(r *model.Result) (string, error) {
 
 // rowMaps turns the typed rows into column-keyed objects.
 func rowMaps(r *model.Result) []map[string]any {
+	keys := jsonKeys(r.Columns)
 	out := make([]map[string]any, 0, len(r.Raw))
 	for _, row := range r.Raw {
-		m := make(map[string]any, len(r.Columns))
-		for i, col := range r.Columns {
+		m := make(map[string]any, len(keys))
+		for i, key := range keys {
 			if i < len(row) {
-				m[col] = row[i]
+				m[key] = row[i]
 			}
 		}
 		out = append(out, m)
 	}
 	return out
+}
+
+// jsonKeys returns the column names with duplicates suffixed (a, a_2, a_3),
+// so SELECT a, b AS a keeps both columns when a row becomes a JSON object.
+func jsonKeys(cols []string) []string {
+	used := make(map[string]bool, len(cols))
+	keys := make([]string, len(cols))
+	for i, c := range cols {
+		key := c
+		for n := 2; used[key]; n++ {
+			key = fmt.Sprintf("%s_%d", c, n)
+		}
+		used[key] = true
+		keys[i] = key
+	}
+	return keys
 }
 
 // jsonAll wraps each result of a multi-statement run in an envelope naming
@@ -270,7 +287,9 @@ func jsonAll(rs []*model.Result) (string, error) {
 		if r.IsExec {
 			m["rows_affected"] = r.Affected
 		} else {
-			m["columns"] = r.Columns
+			// the envelope's column list matches the row-object keys, so a
+			// duplicate SELECT column shows up suffixed here too
+			m["columns"] = jsonKeys(r.Columns)
 			m["rows"] = rowMaps(r)
 			if r.Truncated {
 				m["truncated"] = true

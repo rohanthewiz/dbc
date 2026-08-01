@@ -142,6 +142,48 @@ func TestRenderAllJSONEnvelopes(t *testing.T) {
 	}
 }
 
+// Duplicate SELECT columns must survive the trip into JSON objects — keying
+// by raw column name used to let `SELECT a, b AS a` silently drop a column.
+func TestJSONKeepsDuplicateColumns(t *testing.T) {
+	r := query("demo", "SELECT a, b AS a FROM t",
+		[]string{"a", "a"}, [][]string{{"1", "2"}})
+	out, err := Render(r, JSON)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	var rows []map[string]any
+	if err = json.Unmarshal([]byte(out), &rows); err != nil {
+		t.Fatalf("bad JSON: %v\n%s", err, out)
+	}
+	if len(rows) != 1 || rows[0]["a"] != "1" || rows[0]["a_2"] != "2" {
+		t.Errorf("rows = %v, want both columns (a, a_2)", rows)
+	}
+
+	// the multi-statement envelope must list the suffixed names it keys by
+	env, err := RenderAll([]*model.Result{r, r}, JSON)
+	if err != nil {
+		t.Fatalf("RenderAll: %v", err)
+	}
+	var envs []map[string]any
+	if err = json.Unmarshal([]byte(env), &envs); err != nil {
+		t.Fatalf("bad JSON: %v\n%s", err, env)
+	}
+	cols, _ := envs[0]["columns"].([]any)
+	if len(cols) != 2 || cols[0] != "a" || cols[1] != "a_2" {
+		t.Errorf("envelope columns = %v, want [a a_2]", cols)
+	}
+}
+
+func TestJSONKeys(t *testing.T) {
+	got := jsonKeys([]string{"a", "a", "a_2", "a"})
+	want := []string{"a", "a_2", "a_2_2", "a_3"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("jsonKeys = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestRenderAllHTMLSections(t *testing.T) {
 	out, err := RenderAll([]*model.Result{
 		query("demo", "SELECT id FROM cats", []string{"id"}, [][]string{{"1"}}),

@@ -86,4 +86,6 @@ would decouple "rows fetched for export" from "rows rendered".
 
 ## Status
 
-Being implemented first: robustness items 1–5 plus editor-buffer persistence.
+Done (2026-07-31): robustness items 1–5 and editor-buffer persistence, one
+commit each. Remaining: robustness 6–9 and the other feature/performance
+items above.

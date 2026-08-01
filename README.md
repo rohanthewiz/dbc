@@ -49,7 +49,8 @@ Layout: connections sidebar · SQL editor · results table · log pane · status
 | `Ctrl+L` | Jump to the connections list (`Enter` activates one) |
 | `Tab` / `Shift+Tab` | Cycle focus: editor → results → connections |
 | `Esc` | Close a dialog |
-| `Ctrl+Q` / `Ctrl+C` | Quit |
+| `Ctrl+C` | Stop what's running; quit when idle |
+| `Ctrl+Q` | Quit |
 
 Non-SELECT statements (INSERT/UPDATE/DDL…) run as exec and report rows
 affected. Results are truncated at `max_rows`.

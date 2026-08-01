@@ -330,6 +330,24 @@ func TestCtrlKCancelsScript(t *testing.T) {
 	}
 }
 
+// TestCtrlCCancelsWhenBusy: Ctrl+C during a run must stop the query, not the
+// app — the psql reflex.
+func TestCtrlCCancelsWhenBusy(t *testing.T) {
+	a := newTestApp(t)
+	setBuffer(t, a, slowQuery, 0)
+
+	press(a, tcell.KeyCtrlR)
+	waitFor(t, a, "the query to start", func() bool { return a.busy.Load() })
+
+	press(a, tcell.KeyCtrlC)
+	waitFor(t, a, "the query to stop", func() bool { return !a.busy.Load() })
+
+	// the app survived: the event loop still answers, and the stop is logged
+	if lg := logText(t, a); !strings.Contains(lg, "stopped") {
+		t.Errorf("log does not report the stop:\n%s", lg)
+	}
+}
+
 func TestBusyRefusesASecondRun(t *testing.T) {
 	a := newTestApp(t)
 	setBuffer(t, a, slowQuery, 0)

@@ -168,8 +168,17 @@ func (a *App) build() {
 	a.app.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
 		front, _ := a.pages.GetFrontPage()
 		if front != "main" {
-			if ev.Key() == tcell.KeyEsc {
+			switch ev.Key() {
+			case tcell.KeyEsc:
 				a.pages.RemovePage(front)
+				return nil
+			case tcell.KeyCtrlC:
+				// keep tview's default Ctrl+C from stopping the app without
+				// canceling what is in flight
+				a.interrupt()
+				return nil
+			case tcell.KeyCtrlQ:
+				a.quit()
 				return nil
 			}
 			return ev
@@ -196,7 +205,10 @@ func (a *App) build() {
 		case tcell.KeyBacktab:
 			a.cycleFocus(-1)
 			return nil
-		case tcell.KeyCtrlQ, tcell.KeyCtrlC:
+		case tcell.KeyCtrlC:
+			a.interrupt()
+			return nil
+		case tcell.KeyCtrlQ:
 			a.quit()
 			return nil
 		}
@@ -305,6 +317,16 @@ func (a *App) cancelRun() {
 	cancel()
 	a.logf(tagWarn+"stopping %s…", tag)
 	a.setStatusText(fmt.Sprintf(tagAccent+"%s"+tagOff+" │ "+tagWarn+"stopping %s…", a.active, tag))
+}
+
+// interrupt is Ctrl+C: stop the run in flight when there is one — psql muscle
+// memory — and quit only when idle.
+func (a *App) interrupt() {
+	if a.busy.Load() {
+		a.cancelRun()
+		return
+	}
+	a.quit()
 }
 
 // quit cancels anything in flight — so the server is told to abort rather

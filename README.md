@@ -56,7 +56,9 @@ Layout: connections sidebar · SQL editor · results table · log pane · status
 | `Ctrl+Q` | Quit |
 
 Non-SELECT statements (INSERT/UPDATE/DDL…) run as exec and report rows
-affected. Results are truncated at `max_rows`.
+affected. Results are truncated at `max_rows`. A real SQL `NULL` is drawn in
+the muted color, so it cannot be confused with a column holding the string
+`"NULL"`.
 
 The interface wears a muted green theme — dark gray-green surfaces with a
 single green accent, shared with [cdx](https://github.com/rohanthewiz/cdx).

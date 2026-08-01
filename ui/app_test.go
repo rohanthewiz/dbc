@@ -251,6 +251,33 @@ func TestRunMultiStatementSelection(t *testing.T) {
 	}
 }
 
+// A real NULL and a column holding the string "NULL" render as the same four
+// characters, so the color is the only thing that tells them apart.
+func TestNullCellsAreMuted(t *testing.T) {
+	a := newTestApp(t)
+	setBuffer(t, a, "SELECT NULL AS a, 'NULL' AS b", 0)
+
+	press(a, tcell.KeyCtrlR)
+	waitFor(t, a, "the query to finish", func() bool { return a.lastRes != nil })
+
+	cells := onUI(t, a, func() [2]tcell.Color {
+		return [2]tcell.Color{cellColor(a, 1, 0), cellColor(a, 1, 1)}
+	})
+	if cells[0] != colMuted {
+		t.Errorf("the real NULL is %v, want the muted %v", cells[0], colMuted)
+	}
+	if cells[1] != colFg {
+		t.Errorf(`the string "NULL" is %v, want the normal %v`, cells[1], colFg)
+	}
+}
+
+// cellColor reads a results cell's foreground. tview keeps it in the cell's
+// Style once that is initialized, leaving the legacy Color field at default.
+func cellColor(a *App, row, col int) tcell.Color {
+	fg, _, _ := a.table.GetCell(row, col).Style.Decompose()
+	return fg
+}
+
 func TestCtrlKCancelsQuery(t *testing.T) {
 	a := newTestApp(t)
 	setBuffer(t, a, slowQuery, 0)

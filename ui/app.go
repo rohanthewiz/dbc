@@ -576,15 +576,29 @@ func (a *App) renderResult(r *model.Result) {
 	}
 	for ri, row := range r.Rows {
 		for ci, val := range row {
-			t.SetCell(ri+1, ci, tview.NewTableCell(" "+tview.Escape(val)+" ").
+			cell := tview.NewTableCell(" " + tview.Escape(val) + " ").
 				SetTextColor(colFg).
-				SetMaxWidth(48))
+				SetMaxWidth(48)
+			if isNull(r, ri, ci) {
+				// a real NULL wears the muted color, so a column of missing
+				// values reads as absence at a glance — and so it cannot be
+				// mistaken for a column holding the string "NULL"
+				cell.SetTextColor(colMuted)
+			}
+			t.SetCell(ri+1, ci, cell)
 		}
 	}
 	t.ScrollToBeginning()
 	if len(r.Rows) > 0 {
 		t.Select(1, 0)
 	}
+}
+
+// isNull reports whether the display value at (row, col) came from a real SQL
+// NULL rather than from a column holding the string "NULL" — both render as
+// the same four characters, but Raw kept the typed value.
+func isNull(r *model.Result, row, col int) bool {
+	return row < len(r.Raw) && col < len(r.Raw[row]) && r.Raw[row][col] == nil
 }
 
 func (a *App) setStatusFromResult(r *model.Result) {

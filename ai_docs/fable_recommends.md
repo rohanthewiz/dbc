@@ -7,12 +7,12 @@ robustness edges and a few small features.
 
 ## Robustness
 
-1. **Garbled panic messages from scripts** — `script/engine.go` builds the
+1. ✅ *(done 2026-07-31)* **Garbled panic messages from scripts** — `script/engine.go` builds the
    panic message with `reflect.ValueOf(r).String()`. For any panic value that
    isn't a string (an `error`, an int, a struct) that returns literally
    `"<*errors.errorString Value>"`, not the message. `fmt.Sprint(r)` is the fix.
 
-2. **`BEGIN` in the TUI leaks transactions into the pool** — the editor's
+2. ✅ *(done 2026-07-31)* **`BEGIN` in the TUI leaks transactions into the pool** — the editor's
    Ctrl+R goes through `mgr.RunContext`, which grabs whichever pooled
    connection is free. Headless mode got a pinned `Session` for exactly this
    reason, but the TUI didn't: running `BEGIN`, then `UPDATE`, then `COMMIT`
@@ -21,41 +21,41 @@ robustness edges and a few small features.
    silently don't carry over. Pin one `db.Session` per active connection in
    the TUI.
 
-3. **A multi-statement selection runs as one statement** — `stmtToRun`
+3. ✅ *(done 2026-07-31)* **A multi-statement selection runs as one statement** — `stmtToRun`
    returns the raw selection text, so selecting two statements and hitting
    Ctrl+R sends both to the driver in one call, which errors on
    Postgres/MySQL. Run the selection through `sqlsplit.Split` and execute
    sequentially.
 
-4. **Ctrl+C quits even while a query runs** — anyone with psql muscle memory
+4. ✅ *(done 2026-07-31)* **Ctrl+C quits even while a query runs** — anyone with psql muscle memory
    pressing Ctrl+C to cancel a slow query loses the whole session. Make
    Ctrl+C cancel when busy, quit when idle. Related: when a modal is open the
    input capture passes Ctrl+C through to tview's default handler, which
    stops the app without going through `quit()`'s cancel.
 
-5. **Unbounded log pane** — the log view never trims, so a long session
+5. ✅ *(done 2026-07-31)* **Unbounded log pane** — the log view never trims, so a long session
    (especially chatty scripts) grows memory forever.
    `tview.TextView.SetMaxLines(n)` is a one-liner.
 
-6. **Silent truncation in headless single-statement output** — the
+6. ✅ *(done 2026-07-31)* **Silent truncation in headless single-statement output** — the
    `Truncated` flag only surfaces in multi-statement banners and JSON
    envelopes. `./dbc -f csv "SELECT …"` that hits `max_rows` produces a
    clean-looking, quietly incomplete file. A one-line note to stderr fixes it
    without polluting the data stream.
 
-7. **Unset env vars in DSNs expand to empty string** — `os.ExpandEnv` turns a
+7. ✅ *(done 2026-07-31)* **Unset env vars in DSNs expand to empty string** — `os.ExpandEnv` turns a
    typo'd `${PGPASS}` silently into `""` and yields a confusing auth failure.
    Check referenced vars and warn by name. Same neighborhood:
    `default_connection` naming a nonexistent connection and duplicate
    connection names are both accepted without complaint at load time.
 
-8. **File-based SQLite has no busy handling** — `mode=memory` is
+8. ✅ *(done 2026-07-31)* **File-based SQLite has no busy handling** — `mode=memory` is
    special-cased, but a file-backed SQLite gets a full connection pool with
    no `busy_timeout`, so a script doing concurrent writes hits
    `database is locked` immediately. Set `MaxOpenConns(1)` or a busy_timeout
    pragma for the sqlite driver generally.
 
-9. **JSON export drops duplicate columns** — `rowMaps` keys by column name,
+9. ✅ *(done 2026-07-31)* **JSON export drops duplicate columns** — `rowMaps` keys by column name,
    so `SELECT a, b AS a` loses a column. At least document it; suffixing
    duplicates (`a_2`) is the cheap fix.
 
@@ -86,6 +86,6 @@ would decouple "rows fetched for export" from "rows rendered".
 
 ## Status
 
-Done (2026-07-31): robustness items 1–5 and editor-buffer persistence, one
-commit each. Remaining: robustness 6–9 and the other feature/performance
-items above.
+Done (2026-07-31): all robustness items (1–9) and editor-buffer persistence,
+one commit each. Remaining: the other feature items and the display-cap
+performance note above.

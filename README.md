@@ -27,7 +27,10 @@ driver = "postgres"          # postgres | mysql | sqlite
 dsn    = "postgres://postgres:${PGPASS}@localhost:5432/mydb?sslmode=disable"
 ```
 
-Env vars in DSNs are expanded, so secrets can stay out of the file.
+Env vars in DSNs are expanded, so secrets can stay out of the file. A DSN
+referencing an unset var warns by name at startup (a typo'd `${PGPASS}` will
+not silently become an empty password). Duplicate connection names and a
+`default_connection` that names no connection are rejected at load.
 
 With **no config at all**, dbc starts with a built-in in-memory SQLite `demo`
 connection seeded with a `cats` table — so you can try everything immediately.
@@ -225,7 +228,10 @@ Each format keeps its own shape across statements:
 | `html` | one page, a section per statement |
 | `json` | an array of envelopes: `{"statement", "conn", "duration", "columns", "rows"}`, or `"rows_affected"` for a non-query |
 
-A single statement renders exactly as it always did, in every format.
+A single statement renders exactly as it always did, in every format. A
+result that hit `max_rows` is noted on stderr, so a truncated export cannot
+pass for the full set while the data stream stays clean. In `json`, duplicate
+column names are suffixed (`a`, `a_2`) rather than silently collapsed.
 
 ## Export formats
 

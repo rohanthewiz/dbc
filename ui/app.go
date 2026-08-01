@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -89,17 +90,27 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 	a.refreshConnList()
 
 	if cfg.Demo {
-		a.editor.SetText("SELECT id, name, breed, age, adopted FROM cats ORDER BY age", true)
 		a.logf("no config found — using the built-in " + tagAccent + "demo" + tagOff + " connection (see dbc.example.toml)")
 		a.logf("press " + tagWarn + "Ctrl+R" + tagOff + " to run the query")
 	} else if cfg.Path != "" {
 		a.logf("loaded config from %s", cfg.Path)
+	}
+
+	// the buffer from the last session beats the demo sample: a returning
+	// user gets their scratchpad back
+	if saved := loadBuffer(bufferFile()); strings.TrimSpace(saved) != "" {
+		a.editor.SetText(saved, true)
+	} else if cfg.Demo {
+		a.editor.SetText("SELECT id, name, breed, age, adopted FROM cats ORDER BY age", true)
 	}
 	a.setStatusText(fmt.Sprintf(tagAccent+"%s"+tagOff+" │ ready", a.active))
 
 	a.app.EnableMouse(true)
 	err := a.app.Run()
 	a.dropSession() // release the pinned connection before the pools close
+	if werr := saveBuffer(bufferFile(), a.editor.GetText()); werr != nil {
+		fmt.Fprintf(os.Stderr, "could not save the editor buffer: %v\n", werr)
+	}
 	return err
 }
 

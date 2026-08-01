@@ -62,6 +62,10 @@ border and title are lit.
 
 ### Multi-statement buffers
 
+The editor buffer persists across sessions: it is saved to
+`~/.config/dbc/buffer.sql` on quit and restored at the next launch, so the
+scratchpad is still there tomorrow.
+
 Keep a whole scratchpad of SQL in the editor and run one statement at a time:
 `Ctrl+R` executes only the statement the cursor sits in, and the log says
 which one (`running statement 2/4 …`). Select a region first and `Ctrl+R`

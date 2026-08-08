@@ -97,7 +97,18 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 	a.refreshConnList()
 
 	if cfg.Demo {
-		a.logf("no config found — using the built-in " + tagAccent + "demo" + tagOff + " connection (see dbc.example.toml)")
+		// name every demo that survived seeding, and mark the active one — the
+		// point of shipping two is that the user knows the other is there
+		names := make([]string, 0, len(cfg.Connections))
+		for _, c := range cfg.Connections {
+			n := tagAccent + c.Name + tagOff
+			if c.Name == a.active {
+				n += " (active)"
+			}
+			names = append(names, n)
+		}
+		a.logf("no config found — using the built-in demo connections: %s (see dbc.example.toml)",
+			strings.Join(names, ", "))
 		a.logf("press " + tagWarn + "Ctrl+R" + tagOff + " to run the query")
 	} else if cfg.Path != "" {
 		a.logf("loaded config from %s", cfg.Path)

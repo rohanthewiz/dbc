@@ -11,7 +11,13 @@ max_rows = 1000
 # this cap are still fetched, and still exported. 0 draws all of them.
 max_display_rows = 2000
 
-# Connection activated at startup
+# Connection activated at startup.
+#
+# With no config file at all, dbc instead starts on its two built-in demo
+# connections — "demo-bytdb" (bytdb, a file in the OS cache dir) and "demo"
+# (in-memory SQLite) — both seeded with the same cats table. bytdb is the
+# active one; `dbc -demo sqlite` or DBC_DEMO=sqlite flips that. Once this file
+# exists, default_connection below is what decides, and -demo does nothing.
 default_connection = "local-pg"
 
 [[connection]]

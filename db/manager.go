@@ -116,6 +116,19 @@ func sqliteDSN(dsn string) string {
 	return dsn + sep + "_pragma=busy_timeout(5000)"
 }
 
+// Drop closes a single cached connection and forgets it, so a later DB call
+// opens a fresh one. Used when a connection is known to be unusable — an
+// embedded engine whose file could not be initialized, say — where leaving the
+// handle in the pool would only hand it back to the next caller.
+func (m *Manager) Drop(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if dbh, ok := m.conns[name]; ok {
+		_ = dbh.Close()
+		delete(m.conns, name)
+	}
+}
+
 // Close closes all open connections.
 func (m *Manager) Close() {
 	m.mu.Lock()

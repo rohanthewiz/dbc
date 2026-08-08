@@ -14,9 +14,16 @@
 //	-c name        connection name for a one-off query
 //	-f format      headless output format: text|csv|tsv|markdown|html|json
 //	-o file        write headless output to a file instead of stdout
+//	-demo engine   which built-in demo starts active: bytdb (default) | sqlite
+//	               (also $DBC_DEMO; only applies when there is no config file)
 //
 // -f and -o apply to scripts too: the results a script shows are rendered in
 // the chosen format, to the chosen destination.
+//
+// With no config file, dbc starts on two seeded demo connections — demo-bytdb
+// (embedded bytdb, a file in the OS cache directory) and demo (in-memory
+// SQLite) — so the same query can be run against both engines. -demo picks
+// which one starts active; the other is still there in the connection list.
 package main
 
 import (
@@ -47,6 +54,8 @@ var (
 	flagConn   = flag.String("c", "", "connection name for a one-off query")
 	flagFormat = flag.String("f", "text", "headless output format: text|csv|tsv|markdown|html|json")
 	flagOut    = flag.String("o", "", "write headless output to file instead of stdout")
+	flagDemo   = flag.String("demo", os.Getenv("DBC_DEMO"),
+		"built-in demo connection to start on when no config exists: bytdb|sqlite")
 )
 
 func main() {
@@ -55,15 +64,22 @@ func main() {
 	logger.InitLog(logger.LogConfig{Formatter: "text", LogLevel: "warn"})
 	defer logger.CloseLog()
 
-	cfg, err := config.Load(*flagConfig)
+	demo, err := config.ParseDemoEngine(*flagDemo)
+	if err != nil {
+		fail(err, "bad -demo engine")
+	}
+	cfg, err := config.LoadDemo(*flagConfig, demo)
 	if err != nil {
 		fail(err, "could not load config")
 	}
 	mgr := db.NewManager(cfg)
 	defer mgr.Close()
 
+	// With no config the app runs on the built-in demos — one per embedded
+	// engine — and each gets the same seed data. SeedDemos prunes any that
+	// cannot be opened, so one bad demo does not stop the launch.
 	if cfg.Demo {
-		if err = db.SeedDemo(mgr, "demo"); err != nil {
+		if err = db.SeedDemos(mgr, cfg); err != nil {
 			fail(err, "could not seed demo data")
 		}
 	}

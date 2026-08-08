@@ -56,8 +56,24 @@ referencing an unset var warns by name at startup (a typo'd `${PGPASS}` will
 not silently become an empty password). Duplicate connection names and a
 `default_connection` that names no connection are rejected at load.
 
-With **no config at all**, dbc starts with a built-in in-memory SQLite `demo`
-connection seeded with a `cats` table — so you can try everything immediately.
+With **no config at all**, dbc starts on two built-in connections, one per
+embedded engine, each seeded with the same `cats` table — so you can try
+everything immediately, and compare the two engines on the same query:
+
+| Connection | Engine | Storage |
+| --- | --- | --- |
+| `demo-bytdb` | bytdb | `demo.bytdb` in the OS cache dir (`~/Library/Caches/dbc`, `~/.cache/dbc`) — persists between runs |
+| `demo` | SQLite | in-memory, fresh every run |
+
+`demo-bytdb` is the active one out of the box. `-demo sqlite` (or
+`DBC_DEMO=sqlite`) makes `demo` active instead; either way both are in the
+connections list, so `Ctrl+L` — or `-c demo` headless — switches between them.
+The flag is ignored once a config file exists, since a config names its own
+`default_connection`.
+
+If the bytdb demo cannot be opened — another dbc already holds the file, or the
+cache directory is not writable — it is dropped with a warning and dbc starts
+on the SQLite demo rather than failing.
 
 ## The TUI
 
@@ -234,7 +250,8 @@ Everything works without the TUI, for cron jobs and shell pipelines:
 ./dbc script scripts/loop_params.go              # run a Go script
 ```
 
-Flags go before the SQL: `-config path`, `-c connection`, `-f format`, `-o outfile`.
+Flags go before the SQL: `-config path`, `-c connection`, `-f format`,
+`-o outfile`, `-demo bytdb|sqlite`.
 Use `--` before SQL that starts with a comment, so the flag parser leaves it
 alone. `Ctrl+C` cancels a running query or script and exits 130.
 

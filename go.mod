@@ -9,7 +9,7 @@ require (
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/rivo/tview v0.42.0
-	github.com/rohanthewiz/bytdb v0.8.0
+	github.com/rohanthewiz/bytdb v0.9.1
 	github.com/rohanthewiz/element v0.6.0
 	github.com/rohanthewiz/logger v1.3.0
 	github.com/rohanthewiz/serr v1.4.0

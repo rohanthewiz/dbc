@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/atotto/clipboard"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
@@ -106,6 +105,10 @@ type App struct {
 	ttyWrite  func(string) error
 	identSent bool
 	identKey  string // the (connection, run tag) the title was last built from
+
+	// The screen dbc draws on, kept so the clipboard fallback can reach the
+	// terminal directly. See ui/clip.go.
+	scr tcell.Screen
 }
 
 // Run builds and runs the TUI. It blocks until the user quits.
@@ -158,8 +161,18 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 	}
 	a.setStatusText(fmt.Sprintf(tagAccent+"%s"+tagOff+" │ ready", a.active))
 
+	// The screen is created here rather than left to tview so the App holds a
+	// handle to it: the clipboard fallback needs one to emit OSC 52 (see
+	// ui/clip.go). tview would otherwise make one privately inside Run.
+	screen, err := tcell.NewScreen()
+	if err != nil {
+		return err
+	}
+	a.scr = screen
+	a.app.SetScreen(screen)
+
 	a.app.EnableMouse(true)
-	err := a.app.Run()
+	err = a.app.Run()
 	a.catsClose()   // hand the pane back before anything else can block
 	a.dropSession() // release the pinned connection before the pools close
 	if werr := saveBuffer(bufferFile(), a.editor.GetText()); werr != nil {
@@ -310,11 +323,12 @@ func (a *App) copySelection(wholeRow bool) {
 		a.logf(tagWarn+"%s", tview.Escape(serr.StringFromErr(err)))
 		return
 	}
-	if err = clipboard.WriteAll(text); err != nil {
+	dest, err := a.clipWrite(text)
+	if err != nil {
 		a.logf(tagErr+"copy failed: %s", tview.Escape(serr.StringFromErr(err)))
 		return
 	}
-	a.logf(tagOk+"copied %s — "+tagMuted+"%s", what, tview.Escape(preview(text)))
+	a.logf(tagOk+"copied %s to %s — "+tagMuted+"%s", what, dest, tview.Escape(preview(text)))
 }
 
 // selectedText renders what a copy key should place on the clipboard. row and

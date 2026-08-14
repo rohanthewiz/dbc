@@ -56,6 +56,7 @@ func newTestAppScreen(t *testing.T) (*App, tcell.SimulationScreen) {
 
 	screen := tcell.NewSimulationScreen("UTF-8")
 	screen.SetSize(120, 40)
+	a.scr = screen // as Run does, so the clipboard fallback has a terminal
 	a.app.SetScreen(screen)
 	a.app.EnableMouse(true)
 

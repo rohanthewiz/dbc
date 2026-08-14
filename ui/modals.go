@@ -39,9 +39,17 @@ func (a *App) showExportModal() {
 			a.logf(tagErr+"%s", tview.Escape(serr.StringFromErr(err)))
 			return
 		}
-		dest := "clipboard"
+		var dest string
 		if path == "" {
-			err = export.ToClipboard(a.lastRes, f)
+			// Rendered here rather than handed to export.ToClipboard, so the
+			// text can go out over the terminal when the local clipboard
+			// tool is unavailable — the SSH case (see ui/clip.go). The
+			// headless exporter keeps its own path, where there is no
+			// terminal to fall back to.
+			var text string
+			if text, err = export.Render(a.lastRes, f); err == nil {
+				dest, err = a.clipWrite(text)
+			}
 		} else {
 			err = export.ToFile(a.lastRes, f, path)
 			dest = path

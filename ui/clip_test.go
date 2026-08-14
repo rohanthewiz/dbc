@@ -132,3 +132,20 @@ func onUI2[A any, B any](t *testing.T, a *App, f func() (A, B)) (A, B) {
 	})
 	return p.a, p.b
 }
+
+// The screen handle comes from tview's before-draw hook, not from dbc handing
+// tview a screen of its own. That matters beyond tidiness: pre-creating the
+// screen meant calling EnableMouse on one whose Init error SetScreen silently
+// swallows, which panics on a nil writer instead of returning "cannot open
+// terminal". Found by launching the real binary where /dev/tty is not
+// available.
+func TestScreenHandleComesFromTheDrawHook(t *testing.T) {
+	a, screen := newTestAppScreen(t)
+
+	onUIDraw(t, a, func() { a.scr = nil })
+	if got := onUI(t, a, func() tcell.Screen { return a.scr }); got == nil {
+		t.Fatal("the before-draw hook did not capture the screen")
+	} else if got != screen {
+		t.Error("the captured screen is not the one being drawn on")
+	}
+}

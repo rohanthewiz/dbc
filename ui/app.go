@@ -112,8 +112,9 @@ type App struct {
 	identSent bool
 	identKey  string // the (connection, run tag) the title was last built from
 
-	// The screen dbc draws on, kept so the clipboard fallback can reach the
-	// terminal directly. See ui/clip.go.
+	// The screen dbc draws on, captured from tview's before-draw hook so the
+	// clipboard fallback can reach the terminal directly. Nil until the first
+	// draw, which is why clipWrite checks. See ui/clip.go.
 	scr tcell.Screen
 }
 
@@ -167,18 +168,8 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 	}
 	a.setStatusText(fmt.Sprintf(tagAccent+"%s"+tagOff+" │ ready", a.active))
 
-	// The screen is created here rather than left to tview so the App holds a
-	// handle to it: the clipboard fallback needs one to emit OSC 52 (see
-	// ui/clip.go). tview would otherwise make one privately inside Run.
-	screen, err := tcell.NewScreen()
-	if err != nil {
-		return err
-	}
-	a.scr = screen
-	a.app.SetScreen(screen)
-
 	a.app.EnableMouse(true)
-	err = a.app.Run()
+	err := a.app.Run()
 	a.catsClose()   // hand the pane back before anything else can block
 	a.dropSession() // release the pinned connection before the pools close
 	if werr := saveBuffer(bufferFile(), a.editor.GetText()); werr != nil {
@@ -249,6 +240,18 @@ func (a *App) build() {
 
 	a.pages = tview.NewPages().AddPage("main", a.root, true, true)
 	a.restyleLayout()
+
+	// Catch tview's screen on the way past. The clipboard fallback needs a
+	// screen handle to emit OSC 52 (ui/clip.go), and tview exposes one
+	// nowhere else: creating the screen here instead and handing it over
+	// would mean calling EnableMouse on a screen whose Init error SetScreen
+	// silently swallows — a nil-pointer panic in place of the clean "cannot
+	// open terminal" message Run returns on its own. Taking the screen from
+	// the draw also keeps it CURRENT, since tview may replace it.
+	a.app.SetBeforeDrawFunc(func(screen tcell.Screen) bool {
+		a.scr = screen
+		return false // draw normally
+	})
 	a.app.SetRoot(a.pages, true)
 
 	a.app.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {

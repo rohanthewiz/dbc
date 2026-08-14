@@ -81,6 +81,11 @@ type App struct {
 	sessMu   sync.Mutex
 	sess     *db.Session
 	sessName string // connection the session is pinned to
+
+	// Everything about the cats pane this may be running in. The zero value
+	// is "no host", which is what any terminal that is not cats produces —
+	// see ui/cats_glue.go.
+	cats catsState
 }
 
 // Run builds and runs the TUI. It blocks until the user quits.
@@ -95,6 +100,7 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 		a.active = cfg.Connections[0].Name
 	}
 	a.refreshConnList()
+	a.catsInit() // detect the cats host and claim the pane, if there is one
 
 	if cfg.Demo {
 		// name every demo that survived seeding, and mark the active one — the
@@ -129,6 +135,7 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 
 	a.app.EnableMouse(true)
 	err := a.app.Run()
+	a.catsClose()   // hand the pane back before anything else can block
 	a.dropSession() // release the pinned connection before the pools close
 	if werr := saveBuffer(bufferFile(), a.editor.GetText()); werr != nil {
 		fmt.Fprintf(os.Stderr, "could not save the editor buffer: %v\n", werr)
@@ -404,6 +411,7 @@ func (a *App) beginRun(tag string) (context.Context, bool) {
 	a.statusRow.ResizeItem(a.stopBtn, stopBtnWidth, 0)
 	a.setStatusText(a.runningStatus())
 	go a.tickElapsed(tick)
+	a.catsAfterTransition() // idle → working, with the tag as the host's status
 	return ctx, true
 }
 
@@ -424,6 +432,10 @@ func (a *App) endRun() time.Duration {
 
 	a.statusRow.ResizeItem(a.stopBtn, 0, 0)
 	a.busy.Store(false)
+	// working → idle, which is the edge cats turns into a "finished"
+	// notification. It reports after busy is cleared, so the state it
+	// publishes is the one that is now true.
+	a.catsAfterTransition()
 	return elapsed
 }
 
@@ -461,6 +473,9 @@ func (a *App) quit() {
 	if cancel != nil {
 		cancel()
 	}
+	// Stop accepting posts from cats goroutines before the loop stops
+	// draining them; catsClose does the rest once Run returns.
+	a.catsStopping()
 	a.app.Stop()
 }
 

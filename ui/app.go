@@ -86,6 +86,13 @@ type App struct {
 	// is "no host", which is what any terminal that is not cats produces —
 	// see ui/cats_glue.go.
 	cats catsState
+
+	// ttyWrite emits an escape sequence to the controlling terminal. Run
+	// installs the real one; it stays nil under test, so the suite never
+	// writes to the developer's terminal. See ui/hostident.go.
+	ttyWrite  func(string) error
+	identSent bool
+	identKey  string // the (connection, run tag) the title was last built from
 }
 
 // Run builds and runs the TUI. It blocks until the user quits.
@@ -100,7 +107,8 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 		a.active = cfg.Connections[0].Name
 	}
 	a.refreshConnList()
-	a.catsInit() // detect the cats host and claim the pane, if there is one
+	a.ttyWrite = ttyWriteReal // only the real app talks to /dev/tty
+	a.catsInit()              // detect the cats host and claim the pane, if there is one
 
 	if cfg.Demo {
 		// name every demo that survived seeding, and mark the active one — the
@@ -386,6 +394,7 @@ func (a *App) setActive(name string) {
 			a.refreshConnList()
 			a.logf(tagOk+"connected to %s", name)
 			a.setStatusText(fmt.Sprintf(tagAccent+"%s"+tagOff+" │ connected", name))
+			a.hostIdentSync() // the title names the connection, which just changed
 		})
 	}()
 }

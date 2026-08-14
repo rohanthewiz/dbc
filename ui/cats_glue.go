@@ -77,6 +77,10 @@ func (a *App) catsInit() {
 	// will be measured against.
 	a.catsReportNow()
 
+	// Independent of cats: the title and cwd are for whatever terminal this
+	// is, and cats is only the host that does the most with them.
+	a.hostIdentInit()
+
 	if !env.InCats || env.ControlSocket == "" {
 		return
 	}
@@ -189,6 +193,7 @@ func (a *App) catsReportNow() {
 // single seam is what keeps the two from drifting apart as sites are added.
 func (a *App) catsAfterTransition() {
 	a.catsReportNow()
+	a.hostIdentSync()
 }
 
 // catsAsking marks that dbc has raised a question the user did not ask for,

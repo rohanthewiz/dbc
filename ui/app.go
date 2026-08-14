@@ -30,13 +30,20 @@ import (
 // hint line is the first thing an 80-column terminal truncates. Tab-to-cycle-
 // focus gave up its slot to ^T — Tab is the guessable one of the two, and the
 // lit border already says where the keys are going.
-const keyHints = tagAccent + "^R" + tagOff + " run " +
-	tagAccent + "^K" + tagOff + " stop " +
-	tagAccent + "^E" + tagOff + " export " +
-	tagAccent + "^O" + tagOff + " scripts " +
-	tagAccent + "^L" + tagOff + " conns " +
-	tagAccent + "^T" + tagOff + " tables " +
-	tagAccent + "^Q" + tagOff + " quit"
+//
+// A var rather than a const, rebuilt by setPalette: the accent it is written
+// in can now arrive at runtime from the host's theme.
+var keyHints = buildKeyHints()
+
+func buildKeyHints() string {
+	return tagAccent + "^R" + tagOff + " run " +
+		tagAccent + "^K" + tagOff + " stop " +
+		tagAccent + "^E" + tagOff + " export " +
+		tagAccent + "^O" + tagOff + " scripts " +
+		tagAccent + "^L" + tagOff + " conns " +
+		tagAccent + "^T" + tagOff + " tables " +
+		tagAccent + "^Q" + tagOff + " quit"
+}
 
 // stopBtnWidth is the width the Stop button takes in the status row while
 // something is running. It is resized to zero the rest of the time.
@@ -59,6 +66,12 @@ type App struct {
 	status    *tview.TextView
 	statusRow *tview.Flex
 	stopBtn   *tview.Button
+
+	// The layout containers, kept only so a theme change can repaint them:
+	// they are what shows through between the panes.
+	root     *tview.Flex
+	mainRow  *tview.Flex
+	rightCol *tview.Flex
 
 	active  string // active connection name
 	lastRes *model.Result
@@ -99,6 +112,10 @@ type App struct {
 func Run(cfg *config.Config, mgr *db.Manager) error {
 	a := &App{cfg: cfg, mgr: mgr, app: tview.NewApplication()}
 	a.hist = loadHistory(historyFile())
+	// Before build: tview primitives copy the theme when they are
+	// constructed, so adopting the host's palette here is what makes the
+	// first frame already correct instead of a repaint.
+	catsThemeAtStartup()
 	a.build()
 
 	if _, ok := cfg.ConnByName(cfg.DefaultConnection); ok {
@@ -123,7 +140,7 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 		}
 		a.logf("no config found — using the built-in demo connections: %s (see dbc.example.toml)",
 			strings.Join(names, ", "))
-		a.logf("press " + tagWarn + "Ctrl+R" + tagOff + " to run the query")
+		a.log("press " + tagWarn + "Ctrl+R" + tagOff + " to run the query")
 	} else if cfg.Path != "" {
 		a.logf("loaded config from %s", cfg.Path)
 	}
@@ -161,38 +178,23 @@ func (a *App) build() {
 	}
 
 	a.connList = tview.NewList().ShowSecondaryText(true)
-	a.connList.SetMainTextColor(colFg).SetSecondaryTextColor(colMuted).
-		SetSelectedStyle(tcell.StyleDefault.
-			Background(colSel).Foreground(colFg).Bold(true))
 	a.connList.SetBorder(true).SetTitle(" Connections ")
-	pane(a.connList.Box, colPanel)
 
 	a.editor = tview.NewTextArea()
 	a.editor.SetPlaceholder("Type SQL here, then Ctrl+R to run…")
-	a.editor.SetTextStyle(tcell.StyleDefault.Background(colBg).Foreground(colFg))
-	a.editor.SetPlaceholderStyle(tcell.StyleDefault.Background(colBg).Foreground(colMuted))
-	a.editor.SetSelectedStyle(tcell.StyleDefault.Background(colSel).Foreground(colFg))
 	a.editor.SetBorder(true).SetTitle(" Query ")
-	pane(a.editor.Box, colBg)
 
 	// cell selection rather than whole-row: it is what makes "copy this value"
 	// possible, and it gives the arrow keys somewhere to go on a result too
 	// wide for the pane
 	a.table = tview.NewTable().SetFixed(1, 0).SetSelectable(true, true)
-	a.table.SetSelectedStyle(tcell.StyleDefault.
-		Background(colSel).Foreground(colFg).Bold(true))
 	a.table.SetBorder(true).SetTitle(" Results (y/Y copy) ")
-	pane(a.table.Box, colBg)
 
 	a.logView = tview.NewTextView().SetDynamicColors(true).SetScrollable(true).
 		SetMaxLines(logMaxLines)
-	a.logView.SetTextColor(colFg)
 	a.logView.SetBorder(true).SetTitle(" Log ")
-	pane(a.logView.Box, colPanel)
 
 	a.status = tview.NewTextView().SetDynamicColors(true)
-	a.status.SetTextColor(colMuted).SetBackgroundColor(colPanel2)
-	a.setStatusText("ready")
 
 	// The Stop button lives at the right edge of the status bar. It is only
 	// given width while a run is in flight, so it can neither be seen nor
@@ -201,30 +203,33 @@ func (a *App) build() {
 		a.cancelRun()
 		a.app.SetFocus(a.editor)
 	})
-	a.stopBtn.SetStyle(tcell.StyleDefault.
-		Background(colPanel2).Foreground(colErr).Bold(true))
-	a.stopBtn.SetActivatedStyle(tcell.StyleDefault.
-		Background(colErr).Foreground(colBg).Bold(true))
 
 	a.statusRow = tview.NewFlex().
 		AddItem(a.status, 0, 1, false).
 		AddItem(a.stopBtn, 0, 0, false)
-	a.statusRow.SetBackgroundColor(colPanel2)
 
-	right := tview.NewFlex().SetDirection(tview.FlexRow).
+	a.restyle() // every color the widgets above wear
+	a.setStatusText("ready")
+
+	// The layout containers are kept because they show through wherever a
+	// child does not cover them — a one-column gap beside a pane is still a
+	// cell that has to be painted from the palette, and they take their
+	// background from tview.Styles at construction like any other primitive.
+	a.rightCol = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(a.editor, 0, 3, true).
 		AddItem(a.table, 0, 7, false).
 		AddItem(a.logView, 7, 0, false)
 
-	main := tview.NewFlex().
+	a.mainRow = tview.NewFlex().
 		AddItem(a.connList, 28, 0, false).
-		AddItem(right, 0, 1, true)
+		AddItem(a.rightCol, 0, 1, true)
 
-	root := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(main, 0, 1, true).
+	a.root = tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(a.mainRow, 0, 1, true).
 		AddItem(a.statusRow, 1, 0, false)
 
-	a.pages = tview.NewPages().AddPage("main", root, true, true)
+	a.pages = tview.NewPages().AddPage("main", a.root, true, true)
+	a.restyleLayout()
 	a.app.SetRoot(a.pages, true)
 
 	a.app.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
@@ -455,7 +460,7 @@ func (a *App) cancelRun() {
 	a.runMu.Unlock()
 
 	if !a.busy.Load() || cancel == nil {
-		a.logf(tagWarn + "nothing is running")
+		a.log(tagWarn + "nothing is running")
 		return
 	}
 	cancel()
@@ -590,7 +595,7 @@ func (a *App) stmtsToRun() (stmts []string, tag string) {
 func (a *App) runQuery() {
 	stmts, tag := a.stmtsToRun()
 	if len(stmts) == 0 {
-		a.logf(tagWarn + "nothing to run — type a query first")
+		a.log(tagWarn + "nothing to run — type a query first")
 		return
 	}
 	// recorded before the run, not after: the query worth recalling is very
@@ -621,7 +626,7 @@ func (a *App) record(stmt string) {
 func (a *App) listTables() {
 	cc, ok := a.cfg.ConnByName(a.active)
 	if !ok {
-		a.logf(tagWarn + "no active connection — Ctrl+L then Enter to pick one")
+		a.log(tagWarn + "no active connection — Ctrl+L then Enter to pick one")
 		return
 	}
 	q, err := db.TablesQuery(cc.Driver)
@@ -636,7 +641,7 @@ func (a *App) listTables() {
 // off the UI goroutine, and publishes the last result.
 func (a *App) run(stmts []string, tag string) {
 	if a.active == "" {
-		a.logf(tagWarn + "no active connection — Ctrl+L then Enter to pick one")
+		a.log(tagWarn + "no active connection — Ctrl+L then Enter to pick one")
 		return
 	}
 	ctx, ok := a.beginRun(tag)
@@ -808,6 +813,15 @@ func (a *App) setStatusFromResult(r *model.Result) {
 
 func (a *App) setStatusText(left string) {
 	a.status.SetText(" " + left + " │ " + keyHints)
+}
+
+// log appends a line that is already complete. It exists because the color
+// tags became runtime values when the palette did: a message built by
+// concatenating them is no longer a constant format string, and handing one
+// to logf reads to vet as a formatting mistake waiting to happen. Anything
+// with a real format goes to logf.
+func (a *App) log(msg string) {
+	a.logf("%s", msg)
 }
 
 // logf appends a timestamped line to the log pane. Call from the UI

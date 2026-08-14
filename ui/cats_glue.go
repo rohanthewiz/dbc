@@ -35,6 +35,7 @@ type catsState struct {
 	caps     cats.Caps
 	client   *cats.Client   // nil below Tier 1
 	reporter *cats.Reporter // nil without a hook socket; independent of client
+	stream   *cats.Stream   // nil below Tier 1; the event subscription
 
 	// self is this pane's internal id, which control commands address panes
 	// by. The environment only carries the public handle, so it costs a
@@ -116,6 +117,7 @@ func (a *App) catsReady(caps cats.Caps, self uint32, selfOK bool) {
 	a.cats.client = cats.NewClient(caps.ControlSocket)
 	a.logf(tagOk+"cats: connected"+tagOff+" — pane %s, host %s",
 		caps.PaneHandle, caps.Service)
+	a.catsSubscribe()
 }
 
 // catsPost hands a closure to the UI goroutine. It is the ONLY way a cats
@@ -228,9 +230,14 @@ func (a *App) catsStopping() {
 
 // catsClose hands the pane back. Called after the event loop has returned.
 //
-// Release blocks briefly — it must, because the process is about to exit and
-// a goroutine posted here would be killed before it ever dialed.
+// Order is load-bearing: the stream stops FIRST, and Close waits for its
+// reader to be gone, so no callback is still in flight posting onto a loop
+// that has stopped. Only then is the pane released — which blocks briefly, as
+// it must, because the process is about to exit and a goroutine posted here
+// would be killed before it ever dialed.
 func (a *App) catsClose() {
 	a.catsStopping()
+	a.cats.stream.Close() // nil-safe
+	a.cats.stream = nil
 	a.cats.reporter.Release() // nil-safe
 }

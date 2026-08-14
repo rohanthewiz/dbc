@@ -25,7 +25,7 @@ func center(p tview.Primitive, w, h int) tview.Primitive {
 
 func (a *App) showExportModal() {
 	if a.lastRes == nil {
-		a.logf(tagWarn + "no result to export — run a query first")
+		a.log(tagWarn + "no result to export — run a query first")
 		return
 	}
 	var form *tview.Form
@@ -72,7 +72,7 @@ func (a *App) showExportModal() {
 func (a *App) showHistoryModal() {
 	entries := a.hist.recent()
 	if len(entries) == 0 {
-		a.logf(tagWarn + "no query history yet — it fills up as you run queries")
+		a.log(tagWarn + "no query history yet — it fills up as you run queries")
 		return
 	}
 

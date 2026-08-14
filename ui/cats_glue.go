@@ -2,6 +2,7 @@ package ui
 
 import (
 	"sync"
+	"time"
 
 	"github.com/rohanthewiz/dbc/cats"
 )
@@ -47,6 +48,11 @@ type catsState struct {
 	// asking holds the phrase for a question dbc raised that the user did
 	// NOT ask for. See catsAsking: it is deliberately empty today.
 	asking string
+
+	// The sibling panes and when they were last fetched. Cached because the
+	// agent picker is opened by a keystroke, which must not dial a socket.
+	panes   []cats.PaneInfo
+	panesAt time.Time
 
 	// The last report, so transitions are reported and steady state is not.
 	lastState, lastStatus string
@@ -117,7 +123,9 @@ func (a *App) catsReady(caps cats.Caps, self uint32, selfOK bool) {
 	a.cats.client = cats.NewClient(caps.ControlSocket)
 	a.logf(tagOk+"cats: connected"+tagOff+" — pane %s, host %s",
 		caps.PaneHandle, caps.Service)
+	a.log(tagMuted + "^G asks a sibling agent about the current statement")
 	a.catsSubscribe()
+	a.catsPollPanes(true)
 }
 
 // catsPost hands a closure to the UI goroutine. It is the ONLY way a cats

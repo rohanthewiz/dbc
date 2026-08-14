@@ -78,6 +78,12 @@ type App struct {
 	hist       *history // statements run, for Ctrl+P recall
 	histWarned bool     // a history write already failed and was reported
 
+	// What the last run failed with, so "ask an agent about this" can carry
+	// the error along with the query (ui/catsagents.go). Cleared by a run
+	// that succeeds, because a stale error attached to a working query is
+	// worse than none.
+	lastRunErr string
+
 	busy atomic.Bool // a query or script is running
 
 	runMu  sync.Mutex // guards the run state below
@@ -281,6 +287,9 @@ func (a *App) build() {
 			return nil
 		case tcell.KeyCtrlP:
 			a.showHistoryModal()
+			return nil
+		case tcell.KeyCtrlG:
+			a.showAgentModal()
 			return nil
 		case tcell.KeyCtrlL:
 			a.app.SetFocus(a.connList)
@@ -686,6 +695,7 @@ func (a *App) run(stmts []string, tag string) {
 				a.reportRunErr(conn, tag, err, elapsed)
 				return
 			}
+			a.lastRunErr = "" // this query works; nothing to explain
 			a.lastRes = res
 			a.renderResult(res)
 			a.setStatusFromResult(res)
@@ -733,6 +743,11 @@ func (a *App) runScript(path string) {
 
 // reportRunErr writes a failed or canceled run to the log and status bar.
 func (a *App) reportRunErr(conn, tag string, err error, elapsed time.Duration) {
+	// Remembered for "ask an agent about this". A cancellation is not a
+	// failure the user needs explained, so it does not become one.
+	if !errors.Is(err, db.ErrCanceled) {
+		a.lastRunErr = serr.StringFromErr(err)
+	}
 	if errors.Is(err, db.ErrCanceled) {
 		a.logf(tagWarn+"%s stopped after %s", tag, elapsed.Round(time.Millisecond))
 		a.setStatusText(fmt.Sprintf(tagAccent+"%s"+tagOff+" │ "+tagWarn+"stopped"+tagOff+" after %s",

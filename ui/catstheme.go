@@ -161,6 +161,14 @@ func (a *App) catsFrame(ev cats.Event) {
 			return
 		}
 		a.catsThemeArrived(t)
+
+	case cats.EventPaneAgent, cats.EventPaneNotify,
+		cats.EventPaneAdded, cats.EventPaneRemoved, cats.EventFocusChanged:
+		// The events that mean the cached pane list is out of date. The
+		// payloads are not read: they each name one pane, and refetching the
+		// whole list is one round trip that cannot drift from the host's own
+		// arbitration the way a patched-up local copy would.
+		a.catsPollPanes(false)
 	}
 }
 

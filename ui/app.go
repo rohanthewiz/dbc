@@ -253,6 +253,12 @@ func (a *App) build() {
 
 	a.app.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
 		front, _ := a.pages.GetFrontPage()
+		// First refusal, and on both paths: a ⌘ chord is a global vocabulary
+		// that must be answered — or swallowed — whether the keyboard
+		// belongs to the main page or to a modal. See ui/metakeys.go.
+		if a.metaAccelFire(ev, front == "main") {
+			return nil
+		}
 		if front != "main" {
 			switch ev.Key() {
 			case tcell.KeyEsc:

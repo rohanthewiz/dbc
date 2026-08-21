@@ -92,11 +92,16 @@ Layout: connections sidebar · SQL editor · results table · log pane · status
 | `Ctrl+P` | Query history — filter, then `Enter` to drop one in the editor |
 | `Ctrl+T` | List the tables and views on the active connection |
 | `Ctrl+L` | Jump to the connections list (`Enter` activates one) |
+| `Ctrl+G` | *(inside Cats)* Ask an agent about the selected SQL or statement under the cursor |
 | `y` / `Y` | *(results table)* Copy the selected cell / the whole row |
 | `Tab` / `Shift+Tab` | Cycle focus: editor → results → connections |
 | `Esc` | Close a dialog |
 | `Ctrl+C` | Stop what's running; quit when idle |
 | `Ctrl+Q` | Quit |
+
+In terminals that deliver the kitty keyboard protocol, `⌘E`, `⌘P`, and
+`⌘G` are equivalents for export, history, and asking an agent. They are also
+available in Cats. The control-key bindings remain the portable choice.
 
 Non-SELECT statements (INSERT/UPDATE/DDL…) run as exec and report rows
 affected. A real SQL `NULL` is drawn in the muted color, so it cannot be
@@ -117,12 +122,32 @@ editor buffer is left alone.
 The results table selects by cell, so the arrow keys walk a wide result in
 both directions. `y` copies the cell under the cursor to the system clipboard;
 `Y` copies the whole row, tab-separated, which pastes into a spreadsheet as
-cells. (`Ctrl+E` is still the way to export the whole result.)
+cells. Over SSH or in a container, dbc falls back to the terminal's clipboard
+protocol when no local clipboard tool is available. (`Ctrl+E` is still the way
+to export the whole result.)
 
 The interface wears a muted green theme — dark gray-green surfaces with a
 single green accent, shared with [cdx](https://github.com/rohanthewiz/cdx).
 The accent is the focus cue: the pane holding the keys is the one whose
 border and title are lit.
+
+### Cats integration
+
+When dbc runs inside [Cats](https://github.com/rohanthewiz/cats), it detects
+the host automatically; no dbc configuration is required. Its colors follow
+the active Cats theme, including live theme changes. Outside Cats — or if the
+host control socket is unavailable — dbc continues as the standalone client
+described above.
+
+Cats labels the dbc pane with its current state: **working** while a query or
+script runs and **idle** when it finishes. That lets Cats show its normal
+completion badge, toast, or notification for a long-running task.
+
+`Ctrl+G` (or `⌘G`) gathers the selected SQL, or the statement under the
+cursor, along with its connection, driver, and most recent error. Choose a
+sibling agent pane to stage the question there and switch to it; dbc never
+presses Enter on your behalf. The Cats chat panel is always available as an
+alternative and receives the question immediately.
 
 ### Query history
 

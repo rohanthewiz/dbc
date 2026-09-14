@@ -4,6 +4,7 @@
 //	dbc "SELECT * FROM cats"       run one query headless (uses -c / default conn)
 //	dbc "INSERT …; SELECT …"       run several statements in order, on one conn
 //	dbc script scripts/loop.go     run a Go script headless
+//	dbc migrate up                 apply pending migrations (see migrate.go)
 //
 // Headless runs are cancelable with Ctrl+C, which aborts the statement on the
 // server and exits 130.
@@ -16,6 +17,10 @@
 //	-o file        write headless output to a file instead of stdout
 //	-demo engine   which built-in demo starts active: bytdb (default) | sqlite
 //	               (also $DBC_DEMO; only applies when there is no config file)
+//	-driver name   with -dsn: run against an ad-hoc connection instead of a
+//	-dsn string    configured one (no config file needed)
+//	-dir path      migrations directory for `dbc migrate`
+//	-allow-missing let `migrate up` apply out-of-order migrations
 //
 // -f and -o apply to scripts too: the results a script shows are rendered in
 // the chosen format, to the chosen destination.
@@ -56,6 +61,10 @@ var (
 	flagOut    = flag.String("o", "", "write headless output to file instead of stdout")
 	flagDemo   = flag.String("demo", os.Getenv("DBC_DEMO"),
 		"built-in demo connection to start on when no config exists: bytdb|sqlite")
+	flagDriver  = flag.String("driver", "", "with -dsn: driver of an ad-hoc connection (postgres|mysql|sqlite|bytdb)")
+	flagDSN     = flag.String("dsn", "", "ad-hoc connection DSN, used instead of any configured connection")
+	flagDir     = flag.String("dir", "", "migrations directory for `dbc migrate` (default: connection's migrations, else .)")
+	flagMissing = flag.Bool("allow-missing", false, "let `migrate up` apply migrations older than the current version")
 )
 
 func main() {
@@ -72,6 +81,9 @@ func main() {
 	if err != nil {
 		fail(err, "could not load config")
 	}
+	if err = addAdHocConn(cfg); err != nil {
+		fail(err, "bad -dsn/-driver")
+	}
 	mgr := db.NewManager(cfg)
 	defer mgr.Close()
 
@@ -86,6 +98,9 @@ func main() {
 
 	args := flag.Args()
 	switch {
+	case len(args) > 0 && args[0] == "migrate":
+		warnConfig(cfg)
+		runMigrate(cfg, mgr, args[1:], outFormat())
 	case len(args) > 0 && args[0] == "script":
 		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, "usage: dbc script <file.go>")
@@ -125,17 +140,7 @@ func warnConfig(cfg *config.Config) {
 // several statements: they run in order on one connection, stopping at the
 // first failure, and every result that made it is still rendered.
 func runQueryHeadless(cfg *config.Config, mgr *db.Manager, sql string, f export.Format) {
-	conn := *flagConn
-	if conn == "" {
-		conn = cfg.DefaultConnection
-	}
-	if conn == "" && len(cfg.Connections) == 1 {
-		conn = cfg.Connections[0].Name
-	}
-	if conn == "" {
-		fmt.Fprintln(os.Stderr, "multiple connections configured — pick one with -c <name>")
-		os.Exit(2)
-	}
+	conn := pickConn(cfg)
 	stmts := sqlsplit.Split(sql)
 	if len(stmts) == 0 {
 		fmt.Fprintln(os.Stderr, "nothing to run — the SQL holds no statement")
@@ -163,6 +168,54 @@ func runQueryHeadless(cfg *config.Config, mgr *db.Manager, sql string, f export.
 		}
 		fail(runErr, "query failed")
 	}
+}
+
+// pickConn decides which connection a headless run uses: -c, else the
+// config default, else the only one there is. An ad-hoc -dsn connection is
+// the default whenever one was given, since typing a DSN is as explicit as a
+// name gets.
+func pickConn(cfg *config.Config) string {
+	conn := *flagConn
+	if conn == "" && *flagDSN != "" {
+		conn = adHocConnName
+	}
+	if conn == "" {
+		conn = cfg.DefaultConnection
+	}
+	if conn == "" && len(cfg.Connections) == 1 {
+		conn = cfg.Connections[0].Name
+	}
+	if conn == "" {
+		fmt.Fprintln(os.Stderr, "multiple connections configured — pick one with -c <name>")
+		os.Exit(2)
+	}
+	return conn
+}
+
+// adHocConnName is the connection -dsn registers under.
+const adHocConnName = "dsn"
+
+// addAdHocConn appends the -dsn/-driver connection to the config so it runs
+// through the same manager as configured ones. It exists so a CI job or a
+// fresh server can `dbc -driver postgres -dsn "$DATABASE_URL" migrate up`
+// with no config file — goose's whole command line, one flag longer.
+func addAdHocConn(cfg *config.Config) error {
+	if *flagDSN == "" && *flagDriver == "" {
+		return nil
+	}
+	if *flagDSN == "" || *flagDriver == "" {
+		return serr.New("-dsn and -driver go together")
+	}
+	if _, err := db.Driver(*flagDriver); err != nil {
+		return err
+	}
+	if _, taken := cfg.ConnByName(adHocConnName); taken {
+		return serr.New("a configured connection already uses the reserved name", "name", adHocConnName)
+	}
+	cfg.Connections = append(cfg.Connections, config.Connection{
+		Name: adHocConnName, Driver: *flagDriver, DSN: *flagDSN,
+	})
+	return nil
 }
 
 // runStatements executes stmts in order on one session, stopping at the first

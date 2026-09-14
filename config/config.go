@@ -63,6 +63,12 @@ type Connection struct {
 	Name   string `toml:"name"`
 	Driver string `toml:"driver"` // postgres | mysql | sqlite | bytdb
 	DSN    string `toml:"dsn"`    // env vars are expanded, e.g. ${PGPASS}
+
+	// Migrations is the directory `dbc migrate` reads for this connection,
+	// relative to the working directory. Per connection rather than global
+	// because a config typically lists several databases and each has its
+	// own schema. Empty means the -dir flag (or ".") decides.
+	Migrations string `toml:"migrations"`
 }
 
 // Config is the application configuration.

@@ -57,6 +57,13 @@ func driverFor(d string) (string, error) {
 	return "", serr.New("unknown driver (use postgres, mysql, sqlite, or bytdb)", "driver", d)
 }
 
+// Driver resolves a config driver name (postgres, pg, mysql, sqlite3, ...)
+// to the canonical database/sql driver name the manager opens it with, so
+// other packages can branch on engine without re-listing the aliases.
+func Driver(d string) (string, error) {
+	return driverFor(d)
+}
+
 // DB returns the live *sql.DB for a named connection, opening and pinging
 // it on first use.
 func (m *Manager) DB(name string) (*sql.DB, error) {

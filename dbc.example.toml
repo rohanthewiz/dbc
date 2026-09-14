@@ -25,6 +25,8 @@ name   = "local-pg"
 driver = "postgres"
 # Env vars are expanded — keep secrets out of the file
 dsn    = "postgres://postgres:${PGPASS}@localhost:5432/mydb?sslmode=disable"
+# Directory `dbc migrate` reads for this connection (else -dir, else ".")
+migrations = "db/migrate"
 
 [[connection]]
 name   = "reporting-mysql"

@@ -276,7 +276,8 @@ Everything works without the TUI, for cron jobs and shell pipelines:
 ```
 
 Flags go before the SQL: `-config path`, `-c connection`, `-f format`,
-`-o outfile`, `-demo bytdb|sqlite`.
+`-o outfile`, `-demo bytdb|sqlite`, and `-driver name -dsn string` for a
+one-off connection that is in no config file.
 Use `--` before SQL that starts with a comment, so the flag parser leaves it
 alone. `Ctrl+C` cancels a running query or script and exits 130.
 
@@ -353,6 +354,53 @@ A single statement renders exactly as it always did, in every format. A
 result that hit `max_rows` is noted on stderr, so a truncated export cannot
 pass for the full set while the data stream stays clean. In `json`, duplicate
 column names are suffixed (`a`, `a_2`) rather than silently collapsed.
+
+## Migrations
+
+`dbc migrate` applies versioned SQL migrations in the goose file format, with
+goose's `goose_db_version` table — so a database goose has been migrating
+carries straight over, and the goose binary stops being a thing to install.
+
+```sh
+./dbc -c local-pg migrate status                  # each file, applied or pending
+./dbc -c local-pg migrate up                      # apply everything pending
+./dbc -c local-pg migrate down                    # roll back the latest
+./dbc -c local-pg migrate create add_users_table  # new timestamped file
+./dbc -c local-pg -f json migrate version         # for scripts
+```
+
+Verbs: `status`, `version`, `up`, `up-by-one`, `up-to VERSION`, `down`,
+`down-to VERSION`, `redo`, `create NAME`.
+
+The migrations directory is `-dir`, else the connection's `migrations` setting
+in the config, else the working directory:
+
+```toml
+[[connection]]
+name       = "church-dev"
+driver     = "postgres"
+dsn        = "postgres://devuser:secret@localhost:5432/church_development?sslmode=disable"
+migrations = "db/migrate"
+```
+
+With no config file at all, `-driver` and `-dsn` name the database on the
+command line — goose's whole invocation, one flag longer:
+
+```sh
+./dbc -driver postgres -dsn "$DATABASE_URL" -dir db/migrate migrate up
+```
+
+A migration file is `NNN_name.sql` with `-- +goose Up` and `-- +goose Down`
+sections. Statements are split by the same scanner the editor uses, so a
+`$$`-quoted function body is one statement without help; the goose
+`StatementBegin`/`StatementEnd` block and `NO TRANSACTION` annotations are
+honored too. Each migration runs in a transaction with its version row, so a
+failure leaves neither behind. `up` refuses a pending migration older than the
+current version — the merge-of-two-branches case — unless `-allow-missing` is
+given, exactly as goose does.
+
+Works on all four engines. bytdb runs DDL outside transactions, so there each
+statement commits on its own.
 
 ## Export formats
 

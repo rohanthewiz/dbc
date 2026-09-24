@@ -183,3 +183,41 @@ explicit decision.
   silently, and everything else works without it.
 - **Data leaving the machine.** Rows are opt-in per connection and are
   visible in the transcript before and after sending.
+
+## Status (2026-09-24)
+
+All phases landed in the session that planned them.
+
+- **Phase 0**, `20be4e4`: `clip` + `export.HTMLFragment`.
+- **Phase 1**, `71281f6`: the `ai` package. A live handshake with the real
+  Copilot binary listed 25 models.
+- **Phases 2 and 3**, the `tui` package, now the default UI.
+
+Where the build departed from the plan, and why:
+
+- **A cell canvas instead of lipgloss joins.** Every frame is drawn into a
+  grid of cells and serialized once (`tui/canvas.go`). cats-todo's rule — one
+  layout description both draws and hit-tests — becomes structural: widgets
+  draw through clipped Surfaces, so a long value cannot shift a click target
+  in another pane, and overlays need no compositor. lipgloss is not a
+  dependency.
+- **Two plan items were folded or cut.** Column-border resize went to the
+  backlog (N-031). Chat archiving went too (N-027).
+- **Shared state moved, the old UI untouched.** History and buffer
+  persistence moved to `userdata/` for the new UI, with the same files on
+  disk. The host-palette mapping went to `theme.FromHost`. The classic UI keeps
+  its own copies until it is retired (N-025).
+- **`ai.StartPipes` and `ai/aitest` were added**, so UI tests drive a
+  scripted agent. The real one is never spawned by a test.
+
+Lessons for next time:
+
+- **Keep tests away from a live cats host.** A developer's terminal may itself
+  be a cats pane (this session's was), so the tui test harness clears the
+  `CATS_*` variables. Without that, tests report "dbc" states to the live pane
+  and dial its socket.
+- **pyte (used for pty screen checks) does not implement SU/SD** (`CSI n S`
+  / `CSI n T`). Bubble Tea's renderer scrolls regions with them, so an
+  unpatched pyte shows phantom boxes after a pane resize. The frame is
+  correct, as a forced repaint confirms. The pty driver used in this session
+  patches both.

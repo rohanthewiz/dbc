@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -144,6 +145,19 @@ func Start(agent Agent, opt Options) *Chat {
 	return startWith(agent, opt, dial)
 }
 
+// StartPipes runs a conversation over an existing connection to an agent —
+// r is what the agent writes, w is what it reads — instead of spawning a
+// process. It serves an agent reached some other way (a socket, a
+// container's stdio) and is how tests drive the Chat against a scripted one
+// (see package aitest). Closing the Chat closes w.
+func StartPipes(agent Agent, opt Options, r io.Reader, w io.Writer) *Chat {
+	return startWith(agent, opt, func(onNotify func(string, json.RawMessage),
+		onRequest func(string, json.RawMessage) (any, error),
+		onExit func(error)) (*rpcConn, error) {
+		return newRPCConn(r, w, onNotify, onRequest, onExit), nil
+	})
+}
+
 // startWith is Start with the transport injected.
 func startWith(agent Agent, opt Options, dial dialFunc) *Chat {
 	c := &Chat{
@@ -166,6 +180,11 @@ func (c *Chat) Agent() Agent { return c.agent }
 // EventExit nothing more is sent, and a reader that stops reading after Close
 // leaks nothing, because delivery gives up once Close has run.
 func (c *Chat) Events() <-chan Event { return c.events }
+
+// Done is closed by Close. A reader waiting on Events selects on it too, so
+// it stops waiting when the conversation it was reading is gone rather than
+// blocking forever on a channel nothing will write to again.
+func (c *Chat) Done() <-chan struct{} { return c.done }
 
 // emit delivers an event unless the chat has been closed.
 func (c *Chat) emit(e Event) {

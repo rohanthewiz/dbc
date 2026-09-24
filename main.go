@@ -1,6 +1,6 @@
 // dbc — a TUI database client with Go scripting.
 //
-//	dbc                            launch the TUI
+//	dbc                            launch the TUI (-ui classic for the tview one)
 //	dbc "SELECT * FROM cats"       run one query headless (uses -c / default conn)
 //	dbc "INSERT …; SELECT …"       run several statements in order, on one conn
 //	dbc script scripts/loop.go     run a Go script headless
@@ -21,6 +21,8 @@
 //	-dsn string    configured one (no config file needed)
 //	-dir path      migrations directory for `dbc migrate`
 //	-allow-missing let `migrate up` apply out-of-order migrations
+//	-ui name       interactive UI: tui (mouse-first, AI assistant) | classic
+//	               (also $DBC_UI)
 //
 // -f and -o apply to scripts too: the results a script shows are rendered in
 // the chosen format, to the chosen destination.
@@ -51,6 +53,7 @@ import (
 	"github.com/rohanthewiz/dbc/script"
 	"github.com/rohanthewiz/dbc/sdb"
 	"github.com/rohanthewiz/dbc/sqlsplit"
+	"github.com/rohanthewiz/dbc/tui"
 	"github.com/rohanthewiz/dbc/ui"
 )
 
@@ -65,6 +68,12 @@ var (
 	flagDSN     = flag.String("dsn", "", "ad-hoc connection DSN, used instead of any configured connection")
 	flagDir     = flag.String("dir", "", "migrations directory for `dbc migrate` (default: connection's migrations, else .)")
 	flagMissing = flag.Bool("allow-missing", false, "let `migrate up` apply migrations older than the current version")
+
+	// flagUI picks the interactive UI while two exist side by side: the
+	// Bubble Tea one (tui, the default) and the original tview one (classic).
+	// See ai_docs/plans/ui-revamp.md; classic stays until it is retired on
+	// purpose, as the way back if the new UI misbehaves somewhere.
+	flagUI = flag.String("ui", envOr("DBC_UI", "tui"), "interactive UI: tui (mouse-first, with the assistant) | classic (the original tview UI)")
 )
 
 func main() {
@@ -112,7 +121,16 @@ func main() {
 		warnConfig(cfg)
 		runQueryHeadless(cfg, mgr, args[0], outFormat())
 	default:
-		if err = ui.Run(cfg, mgr); err != nil {
+		run := tui.Run
+		switch *flagUI {
+		case "tui", "new", "":
+		case "classic", "tview":
+			run = ui.Run
+		default:
+			fmt.Fprintf(os.Stderr, "dbc: unknown -ui %q (use tui or classic)\n", *flagUI)
+			os.Exit(2)
+		}
+		if err = run(cfg, mgr); err != nil {
 			fail(err, "UI error")
 		}
 	}
@@ -338,4 +356,12 @@ func fail(err error, msg string) {
 	logger.LogErr(err, msg)
 	logger.CloseLog()
 	os.Exit(1)
+}
+
+// envOr returns the environment variable key, or def when it is unset or empty.
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }

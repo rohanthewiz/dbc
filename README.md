@@ -78,53 +78,148 @@ on the SQLite demo rather than failing.
 ## The TUI
 
 ```sh
-./dbc
+./dbc                 # the Bubble Tea UI: mouse-first, with the AI assistant
+./dbc -ui classic     # the original tview UI (also DBC_UI=classic)
 ```
 
-Layout: connections sidebar · SQL editor · results table · log pane · status bar.
+```
+ dbc  ▶ Run  ■ Stop  ⧉ Copy ▾  ⤓ Export  ⌕ History  ƒ Scripts  ▦ Tables  ✦ Ask     ● conn ▾
+╭ Connections ╮╭ Query ─────────────────────────────╮╭ ✦ Copilot · model ▾ ─ ⟲ new ✕ ╮
+│● local-pg   ││ 1  SELECT …                         ││ ❯ why is this slow?           │
+╰─────────────╯╰─────────────────────────────────────╯│ …                             │
+╭ Tables · 12 ╮╭ Results · 8 rows · 1.2ms ───────────╮│ ┌ sql ─── ⤓ insert  ⧉ copy ┐ │
+│ cats        ││  │ id │ name     │ …                 ││ [✓] with: query, 10 rows      │
+│ owners      │╰─────────────────────────────────────╯│ ask about the query…   ⏎ send │
+╰─────────────╯╭ Log ───────────────────────────────╮╰───────────────────────────────╯
+ ● conn │ 8 rows in 1.2ms                                ^R run  ^K stop  ^A ask  ^E export
+```
+
+A toolbar, a connections and tables sidebar, the SQL editor, the results
+grid, a log, and — when you open it — the AI assistant. Everything has a
+mouse gesture and every gesture has a key.
+
+### Mouse
+
+| Where | Gesture | Does |
+| --- | --- | --- |
+| anywhere | click | focuses that pane — the keyboard follows the mouse |
+| toolbar | click | Run, Stop, Copy ▾, Export, History, Scripts, Tables, Assistant; `● conn ▾` switches connection |
+| connections | click | connects |
+| tables | click / double-click / right-click | select / preview the first 100 rows / insert name, copy name |
+| editor | click, drag, double-, triple-click | caret, selection, word, line |
+| editor | right-click | run, copy, cut, select all, undo, history, ask the assistant |
+| results | click, drag, shift-click | cell, rectangular range, extend |
+| results | row number click | selects the row |
+| results | header click | sorts by that column (again: descending; again: result order) |
+| results | double-click | inspects the value in full (JSON is pretty-printed) |
+| results | right-click | copy cell / row / range / whole result as **HTML table**, Markdown, CSV, TSV, JSON; sort; export; ask the assistant |
+| any pane | wheel, shift+wheel | scrolls what is under the pointer, vertically / sideways |
+| scrollbars | click, drag | jump, drag |
+| pane borders | drag | resize the sidebar, the editor/results split, the log, the assistant |
+| assistant | `⤓ insert` on a code block | puts that SQL in the editor at the caret |
+
+Mouse reporting takes the terminal's own text selection away, so every pane
+that shows text has its own copy. To select raw terminal text anyway, hold
+**Shift** (most terminals) or **⌥ Option** (iTerm2, Terminal.app) while
+dragging.
+
+### Keys
 
 | Key | Action |
 | --- | --- |
-| `Ctrl+R` | Run the statement under the cursor (or the selection) |
-| `Ctrl+K` | Stop the running query or script — same as the **■ Stop** button |
-| `Ctrl+E` | Export the last result (format + clipboard/file dialog) |
+| `Ctrl+R` | Run the statement under the caret (or the selection); the gutter marks which |
+| `Ctrl+K` | Stop the running query or script — or the assistant's answer |
+| `Ctrl+A` | Open the assistant / move between it and the editor |
+| `Ctrl+E` | Export the result (format picker; file, or clipboard) |
 | `Ctrl+O` | Pick and run a Go script from `scripts_dir` |
-| `Ctrl+P` | Query history — filter, then `Enter` to drop one in the editor |
+| `Ctrl+P` | Query history — filter, then `Enter` inserts (never runs) |
 | `Ctrl+T` | List the tables and views on the active connection |
-| `Ctrl+L` | Jump to the connections list (`Enter` activates one) |
-| `Ctrl+G` | *(inside Cats)* Ask an agent about the selected SQL or statement under the cursor |
-| `y` / `Y` | *(results table)* Copy the selected cell / the whole row |
-| `Tab` / `Shift+Tab` | Cycle focus: editor → results → connections |
-| `Esc` | Close a dialog |
+| `Ctrl+L` | Jump to the connections list |
+| `Ctrl+G` | *(inside Cats)* Hand the statement to an agent in another pane |
+| `y` / `Y` / `c` | *(results)* Copy the cell or range / the row / open the copy menu |
+| `Enter` | *(results)* Inspect the value under the cursor |
+| `Tab` / `Shift+Tab` | Cycle focus through the panes |
+| `Esc` | Close a dialog or menu |
 | `Ctrl+C` | Stop what's running; quit when idle |
 | `Ctrl+Q` | Quit |
 
+The editor is a code editor, not a text box: it keeps the indent on
+`Enter`, highlights SQL (keywords, strings, numbers, comments, parameters —
+from the same scanner that splits statements, so what looks like a string is
+one), and undoes typing a word at a time (`Ctrl+Z`, redo `Alt+Z`). Long lines
+scroll sideways rather than wrap, so a click lands exactly where you point.
+
 In terminals that deliver the kitty keyboard protocol, `⌘E`, `⌘P`, and
-`⌘G` are equivalents for export, history, and asking an agent. They are also
-available in Cats. The control-key bindings remain the portable choice.
+`⌘G` are equivalents for export, history, and handing to an agent.
+
+### Copying results — including into Teams
+
+Right-click a result (or `⧉ Copy ▾`) and pick **Table for Teams / Outlook /
+Docs (HTML)**: dbc puts a real HTML table on the clipboard, with inline
+styles, so it pastes into Teams, Outlook, Slack or Google Docs as a formatted
+table rather than as markup. Markdown, CSV, TSV and JSON are one row down.
+The scope is the selected range when there is one, or the whole result.
+
+The rich copy needs the local clipboard (macOS, Windows, or Linux with
+`wl-copy`/`xclip`). Over SSH dbc falls back to the terminal's clipboard
+protocol, which carries plain text only, and says so in the log.
+
+### AI assistant
+
+`✦ Ask` (or `Ctrl+A`) opens a chat about the query in the editor and the
+result in the grid. It runs GitHub Copilot by default through its official
+language server, speaking the Agent Client Protocol, so dbc holds no
+credential: sign in to Copilot once from any editor that uses the language
+server (ced, VS Code, Neovim) and dbc uses the same sign-in.
+
+```sh
+npm install -g @github/copilot-language-server   # if you do not have it
+```
+
+**What is sent.** Each question carries the statement under the caret and,
+if its last run failed, the error. **Result rows are not sent unless the
+connection allows it** — rows are your data:
+
+```toml
+ai_context_rows = 10        # cap on rows per question (0 = none)
+
+[[connection]]
+name    = "scratch"
+ai_rows = true              # this connection may send result rows
+```
+
+Without `ai_rows` only the column names go. The chip above the input says
+what the next question will carry (click it to send the question alone), and
+the transcript records what each one did carry.
+
+The assistant can answer but not act: dbc declines every request from the
+agent to run a command or touch a file. SQL in an answer gets `⤓ insert`,
+which puts it in the editor for you to read and run — there is deliberately
+no run-it-for-me button. Click the title for the model picker (Copilot's
+premium multiplier is shown beside each model) or to switch assistant:
+`ai_agent = "claude"` uses Claude Code (`claude-code-acp`), `"gemini"` uses
+the Gemini CLI.
+
+### Everything else
 
 Non-SELECT statements (INSERT/UPDATE/DDL…) run as exec and report rows
-affected. A real SQL `NULL` is drawn in the muted color, so it cannot be
+affected. A real SQL `NULL` is drawn muted and italic, so it cannot be
 confused with a column holding the string `"NULL"`.
 
-Two caps, deliberately separate: `max_rows` is how many rows are fetched from
-the server, `max_display_rows` how many of those the table draws. Drawing
-costs a widget per value, so raising `max_rows` to 50k for an export would
-otherwise make scrolling crawl. The rows past the display cap are still in the
-result and still go into `Ctrl+E`; the status bar says how many are on screen.
+Queries run on a session pinned to the active connection, so `BEGIN` …
+`COMMIT`, `SET`, and temp tables carry across runs as they do in psql.
 
-`Ctrl+T` is the `\dt`: it runs the active driver's catalog query and drops the
-tables and views into the results table as `table_schema · table_name ·
-table_type` — the same three columns on all four drivers. It is an
-ordinary query, so it is cancelable and exportable like any other, and the
-editor buffer is left alone.
+`max_rows` is how many rows are fetched from the server; `max_display_rows`
+how many of those the grid shows. The grid is virtualized, so drawing is cheap
+either way, but the cap keeps both UIs showing the same thing; rows past it
+are still in the result and still go into an export or a whole-result copy.
 
-The results table selects by cell, so the arrow keys walk a wide result in
-both directions. `y` copies the cell under the cursor to the system clipboard;
-`Y` copies the whole row, tab-separated, which pastes into a spreadsheet as
-cells. Over SSH or in a container, dbc falls back to the terminal's clipboard
-protocol when no local clipboard tool is available. (`Ctrl+E` is still the way
-to export the whole result.)
+`Ctrl+T` is the `\dt`: it runs the active driver's catalog query and drops
+the tables and views into the results as `table_schema · table_name ·
+table_type` — the same three columns on all four drivers.
+
+The editor buffer and the query history persist between sessions under
+`~/.config/dbc`, shared by both UIs.
 
 The interface wears a muted green theme — dark gray-green surfaces with a
 single green accent, shared with [cdx](https://github.com/rohanthewiz/cdx).
@@ -427,6 +522,11 @@ statement commits on its own.
 `csv`, `tsv`, `markdown`, `html` (styled standalone page), `json`
 (array of objects), `text` (aligned table) — from the `Ctrl+E` dialog
 (clipboard or file), from scripts via `s.Export`, or headless via `-f`.
+
+To the **clipboard**, `html` is not the page but a self-styled `<table>`
+offered as the clipboard's HTML flavor, so it pastes into Teams, Outlook and
+Docs as a table (see *Copying results* above). That holds for a script's
+`s.Export(r, "html", "")` too.
 
 The HTML page wears the same muted green as the TUI, surface for surface.
 Both read the palette from [`theme/`](theme/theme.go), so a change to those

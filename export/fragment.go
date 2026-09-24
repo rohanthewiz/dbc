@@ -56,7 +56,7 @@ const (
 // fragment far outnumber any that choke on it.
 func HTMLFragment(r *model.Result) string {
 	esc := stdhtml.EscapeString
-	numeric := numericColumns(r)
+	numeric := NumericColumns(r)
 
 	var sb strings.Builder
 	sb.WriteString(`<meta charset="utf-8">`)
@@ -110,7 +110,7 @@ func fragCellStyle(bg, fg string, numeric []bool, col int) string {
 		";color:" + fg + ";text-align:" + align + ";vertical-align:top"
 }
 
-// numericColumns reports, per column, whether every non-NULL value in it is a
+// NumericColumns reports, per column, whether every non-NULL value in it is a
 // Go number. The typed Raw values decide rather than the display strings,
 // because "007" in a varchar column looks numeric and is not; a column of
 // nothing but NULLs is not numeric, since there is no evidence either way.
@@ -118,7 +118,7 @@ func fragCellStyle(bg, fg string, numeric []bool, col int) string {
 // MySQL hands every value back as bytes, which rawVal turns into strings, so
 // MySQL results stay left-aligned. That is the honest answer given what the
 // driver reports, and it costs only alignment.
-func numericColumns(r *model.Result) []bool {
+func NumericColumns(r *model.Result) []bool {
 	out := make([]bool, len(r.Columns))
 	for ci := range r.Columns {
 		seen := false

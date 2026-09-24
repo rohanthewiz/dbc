@@ -72,7 +72,7 @@ func TestHTMLFragmentCells(t *testing.T) {
 // Numbers right-align like a spreadsheet; the header cell of a numeric column
 // aligns with its values.
 func TestHTMLFragmentAlignsNumbers(t *testing.T) {
-	got := numericColumns(mixed())
+	got := NumericColumns(mixed())
 	want := []bool{true, false, false}
 	for i := range want {
 		if got[i] != want[i] {
@@ -86,7 +86,7 @@ func TestHTMLFragmentAlignsNumbers(t *testing.T) {
 
 	// a column of only NULLs is not evidence of anything
 	allNull := &model.Result{Columns: []string{"x"}, Rows: [][]string{{"NULL"}}, Raw: [][]any{{nil}}}
-	if numericColumns(allNull)[0] {
+	if NumericColumns(allNull)[0] {
 		t.Error("an all-NULL column should stay left-aligned")
 	}
 }

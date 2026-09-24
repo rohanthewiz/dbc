@@ -13,6 +13,11 @@ import (
 const (
 	defaultMaxRows = 1000
 
+	// DefaultAIContextRows mirrors ai.DefaultContextRows. It is repeated
+	// rather than imported so config stays a leaf package that every other
+	// one can depend on.
+	DefaultAIContextRows = 10
+
 	// defaultMaxDisplayRows sits above defaultMaxRows on purpose: at the stock
 	// max_rows the display cap never bites, and it only starts doing anything
 	// once someone raises max_rows for an export.
@@ -69,6 +74,14 @@ type Connection struct {
 	// because a config typically lists several databases and each has its
 	// own schema. Empty means the -dir flag (or ".") decides.
 	Migrations string `toml:"migrations"`
+
+	// AIRows lets the AI assistant see this connection's result ROWS (up to
+	// ai_context_rows of them). Off by default and per connection, because
+	// rows are the database's contents and sending them to a hosted model is
+	// a decision about that data: fine for a scratch database, not
+	// something a production connection should do because a global switch
+	// was flipped. The query text and errors go regardless — see package ai.
+	AIRows bool `toml:"ai_rows"`
 }
 
 // Config is the application configuration.
@@ -83,6 +96,15 @@ type Config struct {
 	// for the sake of an export should not make the table crawl. Zero means no
 	// display cap.
 	MaxDisplayRows int `toml:"max_display_rows"`
+
+	// The AI assistant (package ai). AIAgent picks the ACP backend —
+	// "copilot" (the default), "claude" or "gemini"; AIModel is a preferred
+	// model id, applied when the agent offers it. AIContextRows caps how many
+	// result rows go with a question on connections that allow rows at all
+	// (ai_rows); 0 sends none, and unset means ai.DefaultContextRows.
+	AIAgent       string `toml:"ai_agent"`
+	AIModel       string `toml:"ai_model"`
+	AIContextRows int    `toml:"ai_context_rows"`
 
 	DefaultConnection string       `toml:"default_connection"`
 	Connections       []Connection `toml:"connection"`
@@ -107,7 +129,7 @@ func Load(explicit string) (*Config, error) {
 // names its own default_connection.
 func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 	cfg := &Config{ScriptsDir: "scripts", MaxRows: defaultMaxRows,
-		MaxDisplayRows: defaultMaxDisplayRows}
+		MaxDisplayRows: defaultMaxDisplayRows, AIContextRows: DefaultAIContextRows}
 
 	path := explicit
 	if path == "" {
@@ -124,10 +146,16 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 		return cfg, nil
 	}
 
+	// The defaults above survive decoding for keys the file leaves out, which
+	// is what makes an explicit ai_context_rows = 0 ("send no rows")
+	// distinguishable from an absent key without a pointer field.
 	if _, err := toml.DecodeFile(path, cfg); err != nil {
 		return nil, serr.Wrap(err, "config_path", path)
 	}
 	cfg.Path = path
+	if cfg.AIContextRows < 0 {
+		cfg.AIContextRows = DefaultAIContextRows
+	}
 
 	if cfg.MaxRows <= 0 {
 		cfg.MaxRows = defaultMaxRows

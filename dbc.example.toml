@@ -11,6 +11,17 @@ max_rows = 1000
 # this cap are still fetched, and still exported. 0 draws all of them.
 max_display_rows = 2000
 
+# AI assistant. dbc runs an Agent Client Protocol agent as a subprocess and
+# never holds a credential itself: "copilot" (the default) is GitHub's
+# copilot-language-server, signed in once from any editor that uses it;
+# "claude" is claude-code-acp and "gemini" is the gemini CLI.
+ai_agent = "copilot"
+# Preferred model id; the agent's default when unset or no longer offered.
+# ai_model = "claude-sonnet-5"
+# The query and its error always go with a question. Result ROWS go only on
+# connections with ai_rows = true, and at most this many (0 = none).
+ai_context_rows = 10
+
 # Connection activated at startup.
 #
 # With no config file at all, dbc instead starts on its two built-in demo
@@ -37,6 +48,9 @@ dsn    = "reporter:${MYSQL_PASS}@tcp(db.example.com:3306)/reports?parseTime=true
 name   = "scratch"
 driver = "sqlite"
 dsn    = "file:scratch.db"
+# Let the AI assistant see up to ai_context_rows rows of results here. Off by
+# default: rows are your data, so each connection opts in on its own.
+ai_rows = true
 
 # bytdb is embedded like sqlite — the DSN is just the file, created on first
 # open. No in-memory mode, and no server to start.

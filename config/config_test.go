@@ -121,3 +121,63 @@ dsn = "a.db"
 		t.Errorf("err = %v, want a default_connection error", err)
 	}
 }
+
+// The AI keys: rows are off per connection unless it opts in, and an
+// explicit ai_context_rows = 0 survives as "no rows" rather than being
+// mistaken for an absent key.
+func TestLoadAIKeys(t *testing.T) {
+	body := `
+ai_agent = "claude"
+ai_model = "claude-sonnet-5"
+
+[[connection]]
+name = "scratch"
+driver = "sqlite"
+dsn = "a.db"
+ai_rows = true
+
+[[connection]]
+name = "prod"
+driver = "postgres"
+dsn = "postgres://x"
+`
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AIAgent != "claude" || cfg.AIModel != "claude-sonnet-5" {
+		t.Errorf("agent/model = %q/%q", cfg.AIAgent, cfg.AIModel)
+	}
+	if cfg.AIContextRows != DefaultAIContextRows {
+		t.Errorf("absent ai_context_rows = %d, want the default", cfg.AIContextRows)
+	}
+	if c, _ := cfg.ConnByName("scratch"); !c.AIRows {
+		t.Error("scratch opted in")
+	}
+	if c, _ := cfg.ConnByName("prod"); c.AIRows {
+		t.Error("prod did not opt in, so its rows must stay home")
+	}
+
+	for _, c := range []struct {
+		line string
+		want int
+	}{{"ai_context_rows = 0", 0}, {"ai_context_rows = 25", 25}, {"ai_context_rows = -3", DefaultAIContextRows}} {
+		cfg, err := Load(writeConfig(t, c.line+"\n"+body[strings.Index(body, "[[connection]]"):]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.AIContextRows != c.want {
+			t.Errorf("%s → %d, want %d", c.line, cfg.AIContextRows, c.want)
+		}
+	}
+
+	// the no-config demo gets the default too
+	isolateDemo(t)
+	demo, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if demo.AIContextRows != DefaultAIContextRows {
+		t.Errorf("demo AIContextRows = %d", demo.AIContextRows)
+	}
+}

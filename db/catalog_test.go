@@ -19,7 +19,7 @@ func TestTablesQueryPerDriver(t *testing.T) {
 		{"mariadb", "DATABASE()"},
 		{"sqlite", "sqlite_master"},
 		{"sqlite3", "sqlite_master"},
-		{"bytdb", "relkind"},
+		{"bytdb", "information_schema.tables"},
 	}
 	for _, c := range cases {
 		q, err := TablesQuery(c.driver)
@@ -218,7 +218,12 @@ func TestColumnsOnBytdb(t *testing.T) {
 	if _, err := mgr.Run("bd", "CREATE TABLE owners (id int PRIMARY KEY, email text)"); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	cols, err := mgr.Columns(context.Background(), "bd", []TableRef{{Schema: "public", Name: "cats"}})
+	if _, err := mgr.Run("bd", "CREATE VIEW old_cats AS SELECT id, name FROM cats WHERE age > 4"); err != nil {
+		t.Fatalf("create view: %v", err)
+	}
+	cols, err := mgr.Columns(context.Background(), "bd", []TableRef{
+		{Schema: "public", Name: "cats"}, {Schema: "public", Name: "old_cats", View: true},
+	})
 	if err != nil {
 		t.Fatalf("Columns: %v", err)
 	}
@@ -233,5 +238,9 @@ func TestColumnsOnBytdb(t *testing.T) {
 		if strings.HasSuffix(g, " ") {
 			t.Errorf("column without a type: %q", g)
 		}
+	}
+	// a view describes its output columns, as a table does
+	if len(cols[1]) != 2 || cols[1][0].Name != "id" || cols[1][1].Name != "name" {
+		t.Errorf("old_cats columns = %v", cols[1])
 	}
 }

@@ -11,7 +11,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/rivo/tview v0.42.0
 	github.com/rivo/uniseg v0.4.7
-	github.com/rohanthewiz/bytdb v0.9.1
+	github.com/rohanthewiz/bytdb v0.16.0
 	github.com/rohanthewiz/element v0.6.0
 	github.com/rohanthewiz/logger v1.3.0
 	github.com/rohanthewiz/serr v1.4.0

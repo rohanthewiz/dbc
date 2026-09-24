@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-032
+**Next ID:** N-033
 
 ## Open
 
@@ -93,12 +93,6 @@ ten session docs in `ai_docs/claude_sessions/`
   `theme.FromHost`), and N-007's lint items, which live only in `ui/`. The
   user's call, not a default — it is the way back if the new UI misbehaves.
 
-- **N-026** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` · value medium
-  Schema context for the assistant: send the columns (and types) of the
-  tables a question's query references, so generated SQL uses real column
-  names. Schema is not row data, so it can go without `ai_rows`; the catalog
-  query per driver is the starting point (`db/catalog.go`).
-
 - **N-027** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` · value low
   Keep assistant conversations: save each to `~/.config/dbc/chats/` and offer
   recent ones, as ced's `internal/chatstore` does (stdlib-only, portable).
@@ -110,11 +104,6 @@ ten session docs in `ai_docs/claude_sessions/`
   the language server in LSP mode (`signIn` → `workspace/executeCommand`).
   Contingent on someone using dbc without ced or another Copilot editor.
 
-- **N-029** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` · value medium
-  Verify the Windows rich clipboard (`clip/rich_windows.go`) on a real
-  Windows machine. It cross-compiles and vets, and its CF_HTML envelope is
-  unit-tested, but it has never pasted into Teams from Windows.
-
 - **N-030** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` · value low
   Linux rich copy offers text/html only (wl-copy/xclip set one type), so a
   terminal paste right after gets nothing or markup. Serving both needs
@@ -124,11 +113,24 @@ ten session docs in `ai_docs/claude_sessions/`
   Grid column resize by dragging a header border, and hiding columns. Widths
   are auto-sized (capped at 40 cells) and the inspector shows a full value.
 
+- **N-032** · raised `2026-0924-1458-assistant-schema-context` · value low
+  Run the assistant's schema lookup (`db.ColumnsQuery`) against a live
+  Postgres and MySQL. The Postgres query is the one bytdb runs in tests
+  (`pg_attribute` + `format_type`), and MySQL's reads
+  `information_schema.columns.column_type`, but neither has met a real
+  server. A failure is graceful — the transcript says the lookup failed and
+  the question goes without schema — so this is confidence, not a fix.
+
 ## Roadmap
 
 Wanted, but deliberately not next. Empty at seeding: the session docs never
 marked an item as deferred, so sorting Open items into here is the user's
 call.
+
+- **N-029** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` · value medium
+  Verify the Windows rich clipboard (`clip/rich_windows.go`) on a real
+  Windows machine. It cross-compiles and vets, and its CF_HTML envelope is
+  unit-tested, but it has never pasted into Teams from Windows.
 
 ## Non-goals
 
@@ -150,6 +152,9 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-026** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` ·
+  closed 2026-09-24, 2026-0924-1458-assistant-schema-context — schema context for the assistant. `db.TableIndex` word-matches the statement (lexed, so strings and comments don't count) and the question against the catalog the sidebar already holds; the chip forecasts "schema of …" live; on Enter `Manager.Columns` runs one catalog query per driver (`db.ColumnsQuery`: `pg_attribute`+`format_type` for Postgres and bytdb, `column_type` for MySQL, `pragma_table_info` for SQLite) and `ai.Build` sends one line per table, up to 8 tables and 80 columns each, without `ai_rows`. bytdb views have no `pg_attribute` rows, so they go without columns (bytdb's next list, N-017). Live-server check is N-032.
 
 - **N-024** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` ·
   closed 2026-09-24, 2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy — `tui` is the default; `-ui classic` / `DBC_UI=classic` keeps the tview UI. Retiring it is N-025.

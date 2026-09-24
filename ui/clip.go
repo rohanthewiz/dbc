@@ -2,6 +2,8 @@ package ui
 
 import (
 	"github.com/atotto/clipboard"
+
+	"github.com/rohanthewiz/dbc/clip"
 )
 
 // Getting a copy out of dbc and onto the user's clipboard, from wherever dbc
@@ -55,4 +57,40 @@ func (a *App) clipWrite(text string) (dest string, err error) {
 	}
 	a.scr.SetClipboard([]byte(text))
 	return "clipboard (via the terminal)", nil
+}
+
+// sysClipWriteRich is the local writer for a copy that carries an HTML flavor.
+// A var for the same reason as sysClipWrite: tests must not write the real
+// clipboard.
+var sysClipWriteRich = clip.Write
+
+// clipWriteContent is clipWrite for a copy that may carry an HTML flavor as
+// well as text — "copy as HTML" meant for pasting into Teams as a table.
+//
+// The destination it names is more specific than clipWrite's, because the
+// same keystroke can land three different ways and the user pastes into a
+// chat window expecting one of them:
+//
+//	local rich writer worked        → a table
+//	local tool took plain text only → the markup (e.g. no xclip on this box)
+//	no local clipboard (SSH)        → OSC 52, which is text-only by protocol
+//
+// Saying which in the log line is the difference between "why did Teams get
+// tags?" and knowing before pasting.
+func (a *App) clipWriteContent(c clip.Content) (dest string, err error) {
+	if c.HTML == "" {
+		return a.clipWrite(c.Text)
+	}
+	rich, localErr := sysClipWriteRich(c)
+	if localErr == nil {
+		if rich {
+			return "clipboard as a table", nil
+		}
+		return "clipboard as plain text (no HTML clipboard on this system)", nil
+	}
+	if a.scr == nil || len(c.Text) > clipMax {
+		return "", localErr
+	}
+	a.scr.SetClipboard([]byte(c.Text))
+	return "clipboard via the terminal, as HTML source (a table needs a local clipboard)", nil
 }

@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
+
+	"github.com/rohanthewiz/dbc/clip"
 )
 
 // failLocalClipboard makes the local tool unavailable, which is what SSH and
@@ -147,5 +149,67 @@ func TestScreenHandleComesFromTheDrawHook(t *testing.T) {
 		t.Fatal("the before-draw hook did not capture the screen")
 	} else if got != screen {
 		t.Error("the captured screen is not the one being drawn on")
+	}
+}
+
+// stubRichClipboard stands in for the local rich writer.
+func stubRichClipboard(t *testing.T, rich bool, err error, got *clip.Content) {
+	t.Helper()
+	prev := sysClipWriteRich
+	sysClipWriteRich = func(c clip.Content) (bool, error) { *got = c; return rich, err }
+	t.Cleanup(func() { sysClipWriteRich = prev })
+}
+
+// The log line must say HOW an HTML copy landed, since the user is about to
+// paste into a chat app and a table and a page of tags look very different.
+func TestClipWriteContentNamesHowItLanded(t *testing.T) {
+	c := clip.Content{Text: "<table/>", HTML: "<table/>"}
+	cases := []struct {
+		name     string
+		rich     bool
+		err      error
+		wantDest string
+		wantTerm string
+	}{
+		{"rich writer worked", true, nil, "as a table", ""},
+		{"plain only", false, nil, "as plain text", ""},
+		{"no local clipboard", false, errors.New("no pbcopy"), "via the terminal, as HTML source", "<table/>"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a, screen := newTestAppScreen(t)
+			var got clip.Content
+			stubRichClipboard(t, tc.rich, tc.err, &got)
+			dest, err := onUI2(t, a, func() (string, error) { return a.clipWriteContent(c) })
+			if err != nil {
+				t.Fatalf("clipWriteContent: %v", err)
+			}
+			if !strings.Contains(dest, tc.wantDest) {
+				t.Errorf("dest = %q, want it to mention %q", dest, tc.wantDest)
+			}
+			if got != c {
+				t.Errorf("the rich writer got %+v", got)
+			}
+			if term := string(screen.GetClipboardData()); term != tc.wantTerm {
+				t.Errorf("terminal got %q, want %q", term, tc.wantTerm)
+			}
+		})
+	}
+}
+
+// A copy with no HTML is the plain path, unchanged.
+func TestClipWriteContentPlainUsesClipWrite(t *testing.T) {
+	a, _ := newTestAppScreen(t)
+	var local string
+	captureLocalClipboard(t, &local)
+	var rich clip.Content
+	stubRichClipboard(t, true, nil, &rich)
+	if _, err := onUI2(t, a, func() (string, error) {
+		return a.clipWriteContent(clip.Content{Text: "a,b"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if local != "a,b" || rich != (clip.Content{}) {
+		t.Errorf("plain copy went local=%q rich=%+v", local, rich)
 	}
 }

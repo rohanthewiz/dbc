@@ -8,6 +8,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
+	"github.com/rohanthewiz/dbc/clip"
 	"github.com/rohanthewiz/dbc/export"
 	"github.com/rohanthewiz/serr"
 )
@@ -46,9 +47,12 @@ func (a *App) showExportModal() {
 			// tool is unavailable — the SSH case (see ui/clip.go). The
 			// headless exporter keeps its own path, where there is no
 			// terminal to fall back to.
-			var text string
-			if text, err = export.Render(a.lastRes, f); err == nil {
-				dest, err = a.clipWrite(text)
+			//
+			// ClipContent rather than Render: an HTML copy carries a real
+			// table for chat apps to paste, not just its markup.
+			var c clip.Content
+			if c, err = export.ClipContent(a.lastRes, f); err == nil {
+				dest, err = a.clipWriteContent(c)
 			}
 		} else {
 			err = export.ToFile(a.lastRes, f, path)

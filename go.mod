@@ -14,6 +14,7 @@ require (
 	github.com/rohanthewiz/logger v1.3.0
 	github.com/rohanthewiz/serr v1.4.0
 	github.com/traefik/yaegi v0.16.1
+	golang.org/x/sys v0.46.0
 	modernc.org/sqlite v1.54.0
 )
 
@@ -34,7 +35,6 @@ require (
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/tidwall/btype v0.3.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/term v0.37.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
 	modernc.org/libc v1.74.1 // indirect

@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/atotto/clipboard"
 	"github.com/rohanthewiz/element"
 	"github.com/rohanthewiz/serr"
 
+	"github.com/rohanthewiz/dbc/clip"
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/theme"
 )
@@ -167,16 +167,42 @@ func preview(stmt string) string {
 	return s
 }
 
-// ToClipboard renders the result and places it on the system clipboard.
+// ToClipboard renders the result and places it on the system clipboard. The
+// HTML format goes on as a real table (see ClipContent), so a script's
+// s.Export(r, "html", "") pastes into a chat app the way the TUI's copy does.
 func ToClipboard(r *model.Result, f Format) error {
-	out, err := Render(r, f)
+	c, err := ClipContent(r, f)
 	if err != nil {
 		return err
 	}
-	if err = clipboard.WriteAll(out); err != nil {
-		return serr.Wrap(err, "op", "clipboard")
+	_, err = clip.Write(c)
+	return err
+}
+
+// ClipContent is what a copy of r in format f should put on the clipboard.
+//
+// Every format but HTML is its rendered text and nothing else. HTML is the one
+// that means something different on a clipboard than in a file: whoever copies
+// "as HTML" is about to paste into Teams or a document and wants a TABLE, so
+// the HTML flavor is the inline-styled fragment (HTMLFragment), not the
+// full-page export with its <style> block that paste targets strip.
+//
+// The plain-text flavor of an HTML copy is the same fragment's source. A
+// developer pasting into an editor asked for HTML and gets HTML; everything
+// that understands the rich flavor never looks at it.
+func ClipContent(r *model.Result, f Format) (clip.Content, error) {
+	if r == nil {
+		return clip.Content{}, serr.New("no result to copy")
 	}
-	return nil
+	if f == HTML {
+		frag := HTMLFragment(r)
+		return clip.Content{Text: frag, HTML: frag}, nil
+	}
+	out, err := Render(r, f)
+	if err != nil {
+		return clip.Content{}, err
+	}
+	return clip.Content{Text: out}, nil
 }
 
 // ToFile renders the result and writes it to path.

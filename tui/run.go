@@ -30,7 +30,9 @@ import (
 //     whatever it left open. A pinned connection that has gone bad (a
 //     server idle timeout) is replaced once, transparently — unless the
 //     session held state (a BEGIN, a SET), in which case the run fails
-//     with db.ErrSessionLost rather than carry on without it.
+//     with db.ErrSessionLost rather than carry on without it, or the
+//     statement may already have reached the server, in which case its
+//     error stands rather than risk running it twice (db.Session.Classify).
 //   - CANCEL REACHES THE SERVER. Every run has a context; Ctrl+K, Ctrl+C
 //     and the Stop button cancel it, and the drivers turn that into a
 //     server-side cancel.
@@ -38,6 +40,7 @@ import (
 // Messages the run machinery sends to Update.
 type (
 	connectMsg struct {
+		gen    int // the connGen it was started under
 		name   string
 		err    error
 		tables *model.Result // the catalog, for the sidebar; nil if it failed
@@ -70,6 +73,16 @@ const tickEvery = 150 * time.Millisecond
 // connectCmd opens the connection and fetches its catalog for the sidebar.
 // The catalog goes through the pool, not the pinned session: it is the app's
 // query, and must not land inside a transaction the user has open.
+//
+// The connect runs under its own context, so Ctrl+K or Ctrl+C can abandon
+// it — without that, only connect_timeout bounds it, and with
+// connect_timeout = "0" an unreachable host would hold "connecting…" until
+// the OS gave up on the TCP connect, over a minute later. Starting a connect
+// cancels any still in flight: the user has changed their mind, and the older
+// one must not land after the newer one and switch the connection back.
+//
+//	pick A ──► connGen=1, dial A ───────────── (canceled) ──► connectMsg{gen 1} dropped
+//	pick B ──► connGen=2, cancel A, dial B ─► connectMsg{gen 2} installed
 func (m *Model) connectCmd(name string) tea.Cmd {
 	if name == "" {
 		return nil
@@ -78,19 +91,38 @@ func (m *Model) connectCmd(name string) tea.Cmd {
 	if cc, ok := m.cfg.ConnByName(name); ok {
 		driver = cc.Driver
 	}
+	if m.connCancel != nil {
+		m.connCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.connGen++
+	gen := m.connGen
+	m.connCancel, m.connName = cancel, name
 	mgr := m.mgr
 	return func() tea.Msg {
-		if _, err := mgr.DB(name); err != nil {
-			return connectMsg{name: name, err: err}
+		defer cancel() // releases the context; connected may already have
+		if _, err := mgr.DBContext(ctx, name); err != nil {
+			return connectMsg{gen: gen, name: name, err: err}
 		}
 		var tables *model.Result
 		if q, err := db.TablesQuery(driver); err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			tables, _ = mgr.RunContext(ctx, name, q)
-			cancel()
+			tctx, tcancel := context.WithTimeout(ctx, 10*time.Second)
+			tables, _ = mgr.RunContext(tctx, name, q)
+			tcancel()
 		}
-		return connectMsg{name: name, tables: tables}
+		return connectMsg{gen: gen, name: name, tables: tables}
 	}
+}
+
+// cancelConnect abandons the connect in flight. It reports false when there
+// is none.
+func (m *Model) cancelConnect() bool {
+	if m.connCancel == nil {
+		return false
+	}
+	m.connCancel()
+	m.logf(logWarn, "canceling connect to %s…", m.connName)
+	return true
 }
 
 // setActive switches to a connection.
@@ -104,6 +136,15 @@ func (m *Model) setActive(name string) tea.Cmd {
 
 // connected installs a connect's outcome.
 func (m *Model) connected(msg connectMsg) tea.Cmd {
+	if msg.gen != m.connGen {
+		return nil // superseded by a later connect, which canceled this one
+	}
+	m.connCancel = nil
+	if errors.Is(msg.err, db.ErrCanceled) {
+		m.logf(logWarn, "connect to %s canceled", msg.name)
+		m.setStatus("connect canceled")
+		return nil
+	}
 	if msg.err != nil {
 		m.logf(logErr, "connect failed: %s", serr.StringFromErr(msg.err))
 		return nil
@@ -173,20 +214,21 @@ func (m *Model) runOnSession(ctx context.Context, conn, stmt string) (*model.Res
 			m.sess, m.sessFor = sess, conn
 		}
 		res, err := m.sess.Run(ctx, stmt)
-		if err != nil && db.BadConn(err) {
-			// The pinned connection is dead. A session that never took on
-			// state is swapped for a fresh one and the statement retried,
-			// once — the user loses nothing. One that did is not: its
-			// transaction and settings died with it, so the statement is
-			// failed in words that say so, and the next run starts clean.
-			stateful := m.sess.Stateful()
+		// db.Session.Classify holds the rule; see the Fault constants.
+		// In short: retry only what never reached the server on a session
+		// that held nothing; fail loudly when a transaction or setting died
+		// with the connection; otherwise just stop using the dead session.
+		switch m.sess.Classify(err) {
+		case db.FaultRetry:
 			m.dropSessionLocked()
-			if stateful {
-				return nil, db.SessionLost(conn, err)
-			}
 			if !retried {
 				continue
 			}
+		case db.FaultDrop:
+			m.dropSessionLocked()
+		case db.FaultLost:
+			m.dropSessionLocked()
+			return nil, db.SessionLost(conn, err)
 		}
 		return res, err
 	}
@@ -424,6 +466,12 @@ func (m *Model) reportRunErr(conn, tag string, err error, elapsed time.Duration)
 	if errors.Is(err, db.ErrCanceled) {
 		m.logf(logWarn, "%s stopped after %s", tag, elapsed.Round(time.Millisecond))
 		m.setStatus(fmt.Sprintf("stopped after %s", elapsed.Round(time.Millisecond)))
+		// Stopping a statement can cost the connection (the driver may
+		// close it to abort the statement). When the session held state,
+		// that is worth more than "stopped" alone.
+		if errors.Is(err, db.ErrSessionLost) {
+			m.log(logWarn, "the session was lost with it — its open transaction, SET values and temp tables are gone")
+		}
 		return
 	}
 	m.lastErr = serr.StringFromErr(err)
@@ -435,7 +483,10 @@ func (m *Model) reportRunErr(conn, tag string, err error, elapsed time.Duration)
 // cancelRun is Ctrl+K and the Stop button.
 func (m *Model) cancelRun() tea.Cmd {
 	if !m.busy || m.cancel == nil {
-		m.log(logWarn, "nothing is running")
+		// no run, but a connect may be dialing — Ctrl+K stops that too
+		if !m.cancelConnect() {
+			m.log(logWarn, "nothing is running")
+		}
 		return nil
 	}
 	m.cancel()

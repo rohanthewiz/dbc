@@ -12,7 +12,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	pgxstdlib "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 
 	bytdbdrv "github.com/rohanthewiz/bytdb/stdlib"
@@ -442,6 +442,87 @@ func (s *Session) Run(ctx context.Context, stmt string, args ...any) (*model.Res
 	return res, err
 }
 
+// Fault says what a failed Run means for the session it ran on, so every
+// holder of a Session applies the same rule when a statement fails.
+type Fault int
+
+const (
+	// FaultNone: the statement failed (or did not), the session is fine.
+	FaultNone Fault = iota
+	// FaultRetry: the connection was dead before the statement reached the
+	// server (the driver said so with driver.ErrBadConn), and the session
+	// held no state. Drop it and run the statement again on a new one.
+	FaultRetry
+	// FaultDrop: the connection died, possibly with the statement already
+	// sent — it may have run. Drop the session but report the error as it
+	// stands; replaying a statement that may have run is not safe.
+	FaultDrop
+	// FaultLost: the connection died with session state on it. Drop the
+	// session and report SessionLost: whatever comes next must not run as if
+	// the transaction or settings were still there.
+	FaultLost
+)
+
+// Classify reads a Run error against the session's state:
+//
+//	err == nil or connection still alive ─────────────► FaultNone
+//	connection dead, session stateful ────────────────► FaultLost
+//	connection dead, stateless, driver.ErrBadConn ────► FaultRetry
+//	connection dead, stateless, anything else ────────► FaultDrop
+//
+// "Dead" is not only driver.ErrBadConn. A driver reports that only when it
+// knows the statement was never sent; a connection cut while the statement
+// was in flight comes back as the driver's own network error ("unexpected
+// EOF", "connection reset by peer"), and the connection is closed behind it.
+// So after any error the driver is asked directly whether the connection is
+// still usable — see alive.
+func (s *Session) Classify(err error) Fault {
+	if err == nil {
+		return FaultNone
+	}
+	badConn := BadConn(err)
+	if !badConn && s.alive() {
+		return FaultNone
+	}
+	switch {
+	case s.stateful:
+		return FaultLost
+	case badConn:
+		return FaultRetry
+	}
+	return FaultDrop
+}
+
+// alive asks the driver whether the session's connection can still be used.
+// Raw hands over the driver connection without touching the server; its
+// callback returns nil either way, so this check never closes anything.
+func (s *Session) alive() bool {
+	ok := true
+	err := s.conn.Raw(func(dc any) error {
+		ok = driverConnAlive(dc)
+		return nil
+	})
+	return err == nil && ok // ErrConnDone: the sql.Conn itself is closed
+}
+
+// driverConnAlive reports whether a driver connection is still usable.
+//
+// The MySQL, SQLite and bytdb drivers answer through driver.Validator, the
+// interface database/sql itself asks before pooling a connection. pgx's
+// stdlib adapter does not implement it, so pgx is asked directly: pgconn
+// closes the connection on any network error, and IsClosed says so. A driver
+// that offers neither is assumed alive, which is what database/sql assumes
+// too.
+func driverConnAlive(dc any) bool {
+	if pc, ok := dc.(*pgxstdlib.Conn); ok {
+		return !pc.Conn().IsClosed()
+	}
+	if v, ok := dc.(driver.Validator); ok {
+		return v.IsValid()
+	}
+	return true
+}
+
 // Close releases the session by closing its connection outright, so whatever
 // the session left open is gone on every engine: the server rolls back an
 // unfinished transaction when its connection ends, and SET values and temp
@@ -467,7 +548,7 @@ func (s *Session) Close() error {
 }
 
 // ErrSessionLost is returned when a pinned session's connection died after
-// the session had taken on state. The statement is not retried on a fresh
+// the session had taken on state (see FaultLost). The statement is not retried on a fresh
 // session: a COMMIT replayed there would find no transaction and "succeed",
 // and a statement after a lost SET would silently run under the defaults.
 var ErrSessionLost = errors.New("session lost")

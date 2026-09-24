@@ -100,6 +100,15 @@ type App struct {
 	sess     *db.Session
 	sessName string // connection the session is pinned to
 
+	// connect state: lets Ctrl+K / Ctrl+C abandon a connect that is still
+	// dialing, and lets a newer pick supersede an older one. Read and written
+	// only on the UI goroutine (setActive runs from the connection list's
+	// callback, the rest from key handlers and QueueUpdateDraw), so it needs
+	// no lock; the dialing goroutine captures what it needs up front.
+	connGen    int                // bumped per connect; an older connect's outcome is dropped
+	connCancel context.CancelFunc // cancels the connect in flight; nil when none is
+	connName   string             // what it is connecting to, for the log
+
 	// Everything about the cats pane this may be running in. The zero value
 	// is "no host", which is what any terminal that is not cats produces —
 	// see ui/cats_glue.go.
@@ -420,9 +429,28 @@ func (a *App) refreshConnList() {
 
 func (a *App) setActive(name string) {
 	a.logf("connecting to "+tagAccent+"%s"+tagOff+"…", name)
+	// A newer pick cancels an older connect still in flight: otherwise a slow
+	// host picked first would land after a fast one picked second and switch
+	// the connection back. The generation drops the canceled one's outcome.
+	if a.connCancel != nil {
+		a.connCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.connGen++
+	gen := a.connGen
+	a.connCancel, a.connName = cancel, name
 	go func() {
-		_, err := a.mgr.DB(name)
+		_, err := a.mgr.DBContext(ctx, name)
+		cancel()
 		a.app.QueueUpdateDraw(func() {
+			if gen != a.connGen {
+				return // superseded by a later connect
+			}
+			a.connCancel = nil
+			if errors.Is(err, db.ErrCanceled) {
+				a.logf(tagWarn+"connect to %s canceled", name)
+				return
+			}
 			if err != nil {
 				a.logf(tagErr+"connect failed: %s", tview.Escape(serr.StringFromErr(err)))
 				return
@@ -435,6 +463,19 @@ func (a *App) setActive(name string) {
 			go a.releaseSessionUnless(name)
 		})
 	}()
+}
+
+// cancelConnect abandons the connect in flight, if any, and reports whether
+// there was one. Without it only connect_timeout bounds a connect, and with
+// connect_timeout = "0" an unreachable host would hold it until the OS gave
+// up on the TCP connect. Call from the UI goroutine.
+func (a *App) cancelConnect() bool {
+	if a.connCancel == nil {
+		return false
+	}
+	a.connCancel()
+	a.logf(tagWarn+"canceling connect to %s…", a.connName)
+	return true
 }
 
 // releaseSessionUnless closes the session pinned to any connection other than
@@ -518,7 +559,10 @@ func (a *App) cancelRun() {
 	a.runMu.Unlock()
 
 	if !a.busy.Load() || cancel == nil {
-		a.log(tagWarn + "nothing is running")
+		// no run, but a connect may be dialing — Ctrl+K stops that too
+		if !a.cancelConnect() {
+			a.log(tagWarn + "nothing is running")
+		}
 		return
 	}
 	cancel()
@@ -533,6 +577,9 @@ func (a *App) interrupt() {
 		a.cancelRun()
 		return
 	}
+	if a.cancelConnect() {
+		return // a connect in flight is "something running": stop it, don't quit
+	}
 	a.quit()
 }
 
@@ -544,6 +591,9 @@ func (a *App) quit() {
 	a.runMu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if a.connCancel != nil {
+		a.connCancel() // a connect still dialing is abandoned with the run
 	}
 	// Stop accepting posts from cats goroutines before the loop stops
 	// draining them; catsClose does the rest once Run returns.
@@ -599,22 +649,23 @@ func (a *App) runOnSession(ctx context.Context, conn, stmt string) (*model.Resul
 			a.sess, a.sessName = sess, conn
 		}
 		res, err := a.sess.Run(ctx, stmt)
-		if err != nil && db.BadConn(err) {
-			// The pinned connection is dead. A session that never took on
-			// state is swapped for a fresh one and the statement retried,
-			// once — the user loses nothing. One that did is not: its
-			// transaction and settings died with it, and replaying a COMMIT
-			// on a fresh session would "succeed" with nothing to commit. So
-			// the statement fails in words that say so, and the next run
-			// starts clean.
-			stateful := a.sess.Stateful()
+		// db.Session.Classify holds the rule; see the Fault constants.
+		// In short: retry only what never reached the server on a session
+		// that held nothing; fail loudly when a transaction or setting died
+		// with the connection — replaying a COMMIT on a fresh session would
+		// "succeed" with nothing to commit; otherwise just stop using the
+		// dead session.
+		switch a.sess.Classify(err) {
+		case db.FaultRetry:
 			a.dropSessionLocked()
-			if stateful {
-				return nil, db.SessionLost(conn, err)
-			}
 			if !retried {
 				continue
 			}
+		case db.FaultDrop:
+			a.dropSessionLocked()
+		case db.FaultLost:
+			a.dropSessionLocked()
+			return nil, db.SessionLost(conn, err)
 		}
 		return res, err
 	}
@@ -801,6 +852,12 @@ func (a *App) reportRunErr(conn, tag string, err error, elapsed time.Duration) {
 		a.logf(tagWarn+"%s stopped after %s", tag, elapsed.Round(time.Millisecond))
 		a.setStatusText(fmt.Sprintf(tagAccent+"%s"+tagOff+" │ "+tagWarn+"stopped"+tagOff+" after %s",
 			conn, elapsed.Round(time.Millisecond)))
+		// Stopping a statement can cost the connection (the driver may
+		// close it to abort the statement). When the session held state,
+		// that is worth more than "stopped" alone.
+		if errors.Is(err, db.ErrSessionLost) {
+			a.log(tagWarn + "the session was lost with it — its open transaction, SET values and temp tables are gone")
+		}
 		return
 	}
 	a.logf(tagErr+"%s", tview.Escape(serr.StringFromErr(err)))

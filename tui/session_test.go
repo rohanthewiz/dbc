@@ -4,8 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
@@ -94,5 +99,115 @@ func TestSwitchingConnectionReleasesSession(t *testing.T) {
 	}
 	if res.Rows[0][0] == "0" {
 		t.Error("the DELETE survived: the open transaction was not rolled back")
+	}
+}
+
+// blackholeDSN is a postgres DSN for a loopback listener that accepts and
+// never answers, so a connect to it dials and then waits in the handshake
+// until something cancels it. The config sets no connect_timeout, which is
+// the case N-033 was about: only a cancel ends it.
+func blackholeDSN(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	var held []net.Conn
+	var mu sync.Mutex
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			held = append(held, c)
+			mu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		_ = ln.Close()
+		mu.Lock()
+		for _, c := range held {
+			_ = c.Close()
+		}
+		mu.Unlock()
+	})
+	return "postgres://u:p@" + ln.Addr().String() + "/x?sslmode=disable"
+}
+
+// runAsync runs a command on its own goroutine, as Bubble Tea would, and
+// returns a channel for its message.
+func runAsync(cmd tea.Cmd) <-chan tea.Msg {
+	ch := make(chan tea.Msg, 1)
+	go func() { ch <- cmd() }()
+	return ch
+}
+
+func await(t *testing.T, ch <-chan tea.Msg, what string) tea.Msg {
+	t.Helper()
+	select {
+	case msg := <-ch:
+		return msg
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		return nil
+	}
+}
+
+// Ctrl+K (and Ctrl+C) stop a connect that is still dialing, and Ctrl+C does
+// not quit while one is.
+func TestCancelConnect(t *testing.T) {
+	for _, key := range []string{"ctrl+k", "ctrl+c"} {
+		t.Run(key, func(t *testing.T) {
+			m := newTestModel(t)
+			m.cfg.Connections = append(m.cfg.Connections,
+				config.Connection{Name: "slow", Driver: "postgres", DSN: blackholeDSN(t)})
+
+			done := runAsync(m.setActive("slow"))
+			var cmd tea.Cmd
+			if key == "ctrl+k" {
+				cmd = m.cancelRun()
+			} else {
+				cmd = m.interrupt()
+			}
+			if cmd != nil {
+				t.Fatalf("%s returned a command (quit?) while a connect was in flight", key)
+			}
+			drive(t, m, await(t, done, "the canceled connect"))
+
+			if m.active != "demo" {
+				t.Errorf("active = %q, want demo: a canceled connect switched", m.active)
+			}
+			if m.connCancel != nil {
+				t.Error("connect still marked in flight")
+			}
+			if !strings.Contains(logText(m), "connect to slow canceled") {
+				t.Errorf("no cancel in the log:\n%s", logText(m))
+			}
+		})
+	}
+}
+
+// A newer pick supersedes a connect still in flight: the older one is
+// canceled, and its outcome — arriving last — does not switch back.
+func TestNewerConnectSupersedesOlder(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.Connections = append(m.cfg.Connections,
+		config.Connection{Name: "slow", Driver: "postgres", DSN: blackholeDSN(t)},
+		config.Connection{Name: "other", Driver: "sqlite",
+			DSN: fmt.Sprintf("file:tuitest%d?mode=memory&cache=shared", dbSeq.Add(1))})
+
+	slow := runAsync(m.setActive("slow"))
+	drive(t, m, nil, m.setActive("other"))
+	if m.active != "other" {
+		t.Fatalf("active = %q, want other", m.active)
+	}
+	drive(t, m, await(t, slow, "the superseded connect"))
+	if m.active != "other" {
+		t.Errorf("active = %q after the older connect landed, want other", m.active)
+	}
+	if strings.Contains(logText(m), "connect failed") {
+		t.Errorf("a superseded connect was reported as a failure:\n%s", logText(m))
 	}
 }

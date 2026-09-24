@@ -77,6 +77,13 @@ type Model struct {
 	sess    *db.Session
 	sessFor string
 
+	// connect state. A connect runs as a command so the UI stays live while
+	// it dials; these let Ctrl+K / Ctrl+C abandon it, and let a newer pick
+	// supersede an older one. Touched only on the Update goroutine.
+	connGen    int                // bumped per connect; a connectMsg from an older one is dropped
+	connCancel context.CancelFunc // cancels the connect in flight; nil when none is
+	connName   string             // what it is connecting to, for the log
+
 	// sizes the user can change by dragging a pane border
 	sideW  int
 	chatW  int
@@ -227,10 +234,14 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 
 // shutdown releases everything the session holds, in the order that keeps
 // each step from blocking on the next: stop the run, hand the pane back to
-// cats, stop the assistant, then release the pinned connection.
+// cats, stop the assistant, then release the pinned connection. A connect
+// still dialing is abandoned with the run.
 func (m *Model) shutdown() {
 	if m.cancel != nil {
 		m.cancel()
+	}
+	if m.connCancel != nil {
+		m.connCancel()
 	}
 	m.catsClose()
 	m.chat.close()
@@ -452,6 +463,9 @@ func (m *Model) paste(s string) tea.Cmd {
 func (m *Model) interrupt() tea.Cmd {
 	if m.busy {
 		return m.cancelRun()
+	}
+	if m.cancelConnect() {
+		return nil // a connect in flight is "something running": stop it, don't quit
 	}
 	if m.chat.busy() {
 		m.chatStop()

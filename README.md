@@ -22,7 +22,7 @@ scripts_dir        = "scripts"
 max_rows           = 1000   # rows fetched from the server
 max_display_rows   = 2000   # rows the results table draws (0 = all)
 conn_idle_timeout  = "1h"   # close pooled connections idle this long ("0" = never)
-connect_timeout    = "5s"   # give up opening a connection after this ("0" = no limit)
+connect_timeout    = "5s"   # give up opening a connection after this ("0" = no limit; Ctrl+K cancels)
 default_connection = "local-pg"
 
 [[connection]]
@@ -130,7 +130,7 @@ dragging.
 | Key | Action |
 | --- | --- |
 | `Ctrl+R` | Run the statement under the caret (or the selection); the gutter marks which |
-| `Ctrl+K` | Stop the running query or script — or the assistant's answer |
+| `Ctrl+K` | Stop the running query or script, a connect still dialing — or the assistant's answer |
 | `Ctrl+A` | Open the assistant / move between it and the editor |
 | `Ctrl+E` | Export the result (format picker; file, or clipboard) |
 | `Ctrl+O` | Pick and run a Go script from `scripts_dir` |
@@ -310,10 +310,13 @@ later one bracket a real transaction, and `SET`, `PRAGMA`, and temp tables
 persist between runs. Switching connections releases the session at once —
 along with any transaction it had open, which is rolled back, and a warning in
 the log if it had one. If the server drops the session's connection (an idle
-timeout, a restart), a session that has only run queries is quietly replaced;
-one that ran `BEGIN`, `SET`, or other statements is not, and the run fails with
-"session lost" so a `COMMIT` is never replayed on a fresh connection outside
-the transaction it was meant to end. Run again to continue on a new session.
+timeout, a restart), a session that ran `BEGIN`, `SET`, or other statements
+fails the run with "session lost", so a `COMMIT` is never replayed on a fresh
+connection outside the transaction it was meant to end. A session that has
+only run queries is quietly replaced and the statement retried — when the
+driver can tell it never reached the server; if it may have, its error is shown
+as-is rather than risk running it twice. Either way the next run starts on a
+new session.
 
 Other than the editor's pinned session, pooled connections that sit idle for
 `conn_idle_timeout` (default `"1h"`; `"0"` = never) are closed and reopened on

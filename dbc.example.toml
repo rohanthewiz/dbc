@@ -20,7 +20,8 @@ conn_idle_timeout = "1h"
 # How long opening a connection (dial, handshake, first ping) may take before
 # it is reported as failed — a wrong host or a down VPN shows up in seconds
 # rather than at the OS's minute-plus TCP timeout. "0" sets no limit of dbc's
-# own; a timeout in the DSN itself still applies, whichever is shorter.
+# own; a timeout in the DSN itself still applies, whichever is shorter. Either
+# way, Ctrl+K (or Ctrl+C) abandons a connect that is taking too long.
 connect_timeout = "5s"
 
 # AI assistant. dbc runs an Agent Client Protocol agent as a subprocess and

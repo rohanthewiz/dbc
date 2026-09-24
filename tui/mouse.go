@@ -38,6 +38,7 @@ const (
 	dragEditor
 	dragGrid
 	dragGridBar
+	dragGridCol // a header border: resizing a column
 	dragChatInput
 	dragModal
 )
@@ -185,6 +186,17 @@ func (m *Model) gridClick(x, y, n int, shift bool) tea.Cmd {
 	switch h.kind {
 	case hitHeader:
 		g.Sort(h.col)
+	case hitBorder:
+		// Double-click fits the column to its content, as in a spreadsheet.
+		// The first click of the pair already started a drag, but with no
+		// motion in between it changed nothing, so fitting on the second
+		// press needs nothing undone.
+		if n == 2 {
+			g.Fit(h.col)
+			return nil
+		}
+		g.startResize(h.col)
+		m.drag.kind = dragGridCol
 	case hitRowNum:
 		// a click on a row number selects the whole row, as in a spreadsheet
 		g.moveTo(h.row, 0, shift)
@@ -245,7 +257,7 @@ func (m *Model) mouseMotion(msg tea.MouseMotionMsg) tea.Cmd {
 
 	// hover feedback
 	m.hover = hoverState{}
-	m.grid.hover, m.grid.hoverH = cell2{-1, -1}, -1
+	m.grid.hover, m.grid.hoverH, m.grid.hoverB = cell2{-1, -1}, -1, -1
 	m.conns.hover, m.tables.hover = -1, -1
 	if m.menu != nil {
 		if i := m.menu.itemAt(y); m.menu.rect.Contains(x, y) && i >= 0 {
@@ -271,6 +283,8 @@ func (m *Model) mouseMotion(msg tea.MouseMotionMsg) tea.Cmd {
 		m.grid.hover = cell2{h.row, h.col}
 	case hitHeader:
 		m.grid.hoverH = h.col
+	case hitBorder:
+		m.grid.hoverB = h.col
 	}
 	m.conns.hover = m.conns.indexAt(x, y)
 	m.tables.hover = m.tables.indexAt(x, y)
@@ -300,6 +314,8 @@ func (m *Model) dragTo(x, y int) {
 		m.grid.dragTo(x, y)
 	case dragGridBar:
 		m.grid.vbarJump(y)
+	case dragGridCol:
+		m.grid.resizeTo(x)
 	case dragChatInput:
 		m.chat.input.Drag(x, y)
 	case dragModal:
@@ -407,8 +423,20 @@ func (m *Model) rightClick(x, y int) tea.Cmd {
 		m.openEditorMenu(x, y)
 	case l.results.Contains(x, y):
 		m.focus = focusGrid
-		if h := m.grid.hitAt(x, y); h.kind == hitCell && !m.grid.inSel(h.row, h.col) {
-			m.grid.moveTo(h.row, h.col, false)
+		g := m.grid
+		switch h := g.hitAt(x, y); {
+		case h.kind == hitCell && !g.inSel(h.row, h.col):
+			g.moveTo(h.row, h.col, false)
+		case h.kind == hitHeader || h.kind == hitBorder:
+			// a header's menu acts on that column ("Hide name"), so the
+			// cursor moves onto it — unless it is a column of the range,
+			// whose menu then hides the range's columns. The cursor is set
+			// directly rather than with moveTo, which does nothing on a
+			// zero-row result, where hiding a column still makes sense.
+			_, c0, _, c1 := g.bounds()
+			if !g.sel || h.col < c0 || h.col > c1 {
+				g.cur.col, g.sel = h.col, false
+			}
 		}
 		m.openGridMenu(x, y)
 	case l.tables.Contains(x, y):

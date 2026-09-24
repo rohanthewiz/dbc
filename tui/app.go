@@ -201,7 +201,7 @@ func (m *Model) startupLog() {
 		m.logf(logInfo, "loaded config from %s", m.cfg.Path)
 	}
 	m.log(logMuted, "keys: ^R run · ^K stop · ^A assistant · ^E export · ^P history · ^O scripts · "+
-		"^T tables · ^L conns · Tab focus · y/Y/c copy · Enter inspect · ^Q quit")
+		"^T tables · ^L conns · Tab focus · y/Y/c copy · Enter inspect · -/+ hide/show column · ^Q quit")
 	m.log(logMuted, "mouse: click to focus · drag to select · right-click for menus · "+
 		"drag borders to resize · hold Shift (⌥ on macOS) to select terminal text")
 	for _, w := range m.cfg.Warnings {
@@ -399,10 +399,25 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
-// gridKey handles the results grid's own keys: the copy keys, inspect, and
-// the context menu, then movement.
+// gridKey handles the results grid's own keys: the copy keys, inspect, the
+// context menu, and column width and visibility, then movement.
 func (m *Model) gridKey(k tea.KeyPressMsg) tea.Cmd {
 	switch k.String() {
+	case "<":
+		m.grid.Resize(m.grid.cur.col, -2)
+		return nil
+	case ">":
+		m.grid.Resize(m.grid.cur.col, 2)
+		return nil
+	case "=":
+		m.grid.Fit(m.grid.cur.col)
+		return nil
+	case "-":
+		m.hideColumns()
+		return nil
+	case "+":
+		m.showAllColumns()
+		return nil
 	case "y":
 		return m.copyGrid(copyText, false)
 	case "Y":
@@ -418,6 +433,36 @@ func (m *Model) gridKey(k tea.KeyPressMsg) tea.Cmd {
 	}
 	m.grid.HandleKey(k)
 	return nil
+}
+
+// hideColumns hides the columns of the range selection, or the cursor's
+// column, and says what it did — a column vanishing without a word would
+// read as a rendering bug.
+func (m *Model) hideColumns() {
+	g := m.grid
+	if g.Cols() == 0 {
+		m.log(logWarn, noResult)
+		return
+	}
+	_, c0, _, c1 := g.bounds()
+	what := g.colName(c0)
+	if c1 > c0 {
+		what = plural(c1-c0+1, "column")
+	}
+	if g.Hide(c0, c1) == 0 {
+		m.log(logWarn, "can't hide every column — show some first (+), or narrow the range")
+		return
+	}
+	m.logf(logInfo, "hid %s — + or the right-click menu shows it again; copies leave hidden columns out", what)
+}
+
+// showAllColumns brings back every hidden column.
+func (m *Model) showAllColumns() {
+	if n := m.grid.ShowAll(); n > 0 {
+		m.logf(logInfo, "showing %s again", plural(n, "hidden column"))
+		return
+	}
+	m.log(logInfo, "no columns are hidden")
 }
 
 // cycleFocus moves the keyboard to the next pane in focusOrder, skipping the

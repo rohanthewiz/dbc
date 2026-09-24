@@ -243,11 +243,20 @@ func (e *exportModal) run(m *Model, toClipboard bool) (tea.Cmd, bool) {
 		e.onPath = true
 		return nil, false
 	}
-	if err := export.ToFile(m.lastRes, f, path); err != nil {
+	// The file takes the same view of the result as the clipboard button
+	// beside it — every row, in display order, hidden columns left out — so
+	// the two ways out of this dialog never disagree about what "the
+	// result" is.
+	r, what := m.grid.Selected(true)
+	if r == nil {
+		m.log(logWarn, noResult)
+		return nil, false
+	}
+	if err := export.ToFile(r, f, path); err != nil {
 		m.logf(logErr, "export failed: %s", serr.StringFromErr(err))
 		return nil, false
 	}
-	m.logf(logOk, "exported %d rows as %s to %s", len(m.lastRes.Rows), f, path)
+	m.logf(logOk, "exported %s as %s to %s", what, f, path)
 	return nil, true
 }
 
@@ -470,7 +479,7 @@ func (in *inspectModal) size(w, h int) (int, int) {
 
 func (in *inspectModal) draw(m *Model, s Surface) *caret {
 	bg := m.st.panel
-	col := m.lastRes.Columns[in.col]
+	col := m.grid.colName(in.col)
 	head := fmt.Sprintf("%s · row %d", col, in.row+1)
 	if in.pretty {
 		head += " · JSON, formatted"
@@ -520,7 +529,7 @@ func (in *inspectModal) key(m *Model, k tea.KeyPressMsg) (tea.Cmd, bool) {
 
 func (in *inspectModal) copy(m *Model) tea.Cmd {
 	raw, _, _ := m.grid.value(in.row, in.col)
-	return m.copyString(raw, m.lastRes.Columns[in.col]+" of row "+itoa(in.row+1))
+	return m.copyString(raw, m.grid.colName(in.col)+" of row "+itoa(in.row+1))
 }
 
 func (in *inspectModal) click(m *Model, x, y, clicks int, shift bool) (tea.Cmd, bool) {
@@ -530,7 +539,7 @@ func (in *inspectModal) click(m *Model, x, y, clicks int, shift bool) (tea.Cmd, 
 	case in.copyBtn.Contains(x, y):
 		return in.copy(m), false
 	case in.askBtn.Contains(x, y):
-		col := m.lastRes.Columns[in.col]
+		col := m.grid.colName(in.col)
 		return m.askAbout(fmt.Sprintf("Explain the %s value in row %d of this result.", col, in.row+1)), true
 	}
 	return nil, false

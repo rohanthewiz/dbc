@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-036
+**Next ID:** N-037
 
 ## Open
 
@@ -91,10 +91,6 @@ ten session docs in `ai_docs/claude_sessions/`
   terminal paste right after gets nothing or markup. Serving both needs
   owning the selection; only worth it if a Linux user trips on it.
 
-- **N-031** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` · value low
-  Grid column resize by dragging a header border, and hiding columns. Widths
-  are auto-sized (capped at 40 cells) and the inspector shows a full value.
-
 - **N-032** · raised `2026-0924-1458-assistant-schema-context` · value low
   Run the assistant's schema lookup (`db.ColumnsQuery`) against a live
   Postgres and MySQL. The Postgres query is the one bytdb runs in tests
@@ -112,6 +108,14 @@ ten session docs in `ai_docs/claude_sessions/`
   paths behave (including `Session.Classify`'s pgx branch, which asks
   `pgx.Conn.IsClosed` and has no test without a live connection), and
   `conn_idle_timeout`/`connect_timeout`.
+
+- **N-036** · raised `2026-0924-1823-grid-column-resize-hide` · value low
+  The assistant's result context ignores hidden columns. "Ask the assistant
+  about this result" builds from `m.lastRes` (`tui/chat.go:400`), so it sends
+  every column, while copies and exports now leave hidden ones out. Either
+  is defensible: a hidden column may be noise, or it may be the key the
+  answer needs. Decide which, and say it in the chip if hidden columns are
+  dropped.
 
 ## Roadmap
 
@@ -144,6 +148,9 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-031** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` ·
+  closed 2026-09-24, 2026-0924-1823-grid-column-resize-hide — grid columns resize and hide. Drag a header border to resize (highlighted `┃` on hover), double-click it or `=` to fit to content past the 40-cell auto cap, `<`/`>` by keys. Hide from the right-click menu (the cursor's column or the range's) or `-`; the menu lists hidden columns by name to show again, `+` shows all; the last column cannot be hidden. The grid now works in display columns (`grid.cols`, like `order` for rows), so the cursor, hit-testing, copies and the file export take what is on screen; `║` in the header marks a gap, the strip counts hidden columns, and a whole-result copy's log line says how many were left out. Hidden columns and hand-set widths survive a re-run with identical columns. The file export now also follows the grid's sort order, as its clipboard button already did.
 
 - **N-005** · raised `2026-0728-2022-multi-statement-headless` ·
   closed 2026-09-24, 2026-0924-1810-cli-urfave-file-stdin-input — `-f`/`--file` reads the SQL from a file (`-f -` = stdin), and piped stdin with no SQL argument runs headless too; the output format moved to `-t`/`--format`. The CLI moved from Go's `flag` to `urfave/cli/v3`: every flag has a long name (`--conn`, `--out`, …), flags may follow the SQL or a subcommand, more than one SQL argument is an error, `-f` on `script`/`migrate` is refused, and `-f csv` points at `-t csv`.

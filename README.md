@@ -112,8 +112,10 @@ mouse gesture and every gesture has a key.
 | results | click, drag, shift-click | cell, rectangular range, extend |
 | results | row number click | selects the row |
 | results | header click | sorts by that column (again: descending; again: result order) |
+| results | header border drag / double-click | resizes the column / fits it to its content (past the 40-cell auto-size cap) |
+| results | header right-click | hide that column (or the selected range's); hidden ones are listed there to show again |
 | results | double-click | inspects the value in full (JSON is pretty-printed) |
-| results | right-click | copy cell / row / range / whole result as **HTML table**, Markdown, CSV, TSV, JSON; sort; export; ask the assistant |
+| results | right-click | copy cell / row / range / whole result as **HTML table**, Markdown, CSV, TSV, JSON; sort; hide, fit, show columns; export; ask the assistant |
 | any pane | wheel, shift+wheel | scrolls what is under the pointer, vertically / sideways |
 | scrollbars | click, drag | jump, drag |
 | pane borders | drag | resize the sidebar, the editor/results split, the log, the assistant |
@@ -138,6 +140,8 @@ dragging.
 | `Ctrl+L` | Jump to the connections list |
 | `Ctrl+G` | *(inside Cats)* Hand the statement to an agent in another pane |
 | `y` / `Y` / `c` | *(results)* Copy the cell or range / the row / open the copy menu |
+| `<` / `>` / `=` | *(results)* Narrow / widen the column / fit it to its content |
+| `-` / `+` | *(results)* Hide the column (or the range's columns) / show every hidden column |
 | `Enter` | *(results)* Inspect the value under the cursor |
 | `Tab` / `Shift+Tab` | Cycle focus through the panes |
 | `Esc` | Close a dialog or menu |
@@ -219,6 +223,13 @@ Queries run on a session pinned to the active connection, so `BEGIN` …
 how many of those the grid shows. The grid is virtualized, so drawing is cheap
 either way, but the cap keeps both UIs showing the same thing; rows past it
 are still in the result and still go into an export or a whole-result copy.
+
+Hidden columns are a view of the result, and copies and exports take that
+view: hide the noisy columns, then copy the table into Teams. The header
+marks where columns are hidden with `║`, the bottom strip counts them, and
+the copy's log line says how many were left out. Hidden columns and
+hand-set widths survive re-running a query with the same columns; any other
+result starts fresh.
 
 `Ctrl+T` is the `\dt`: it runs the active driver's catalog query and drops
 the tables and views into the results as `table_schema · table_name ·

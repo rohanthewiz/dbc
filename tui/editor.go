@@ -849,3 +849,12 @@ func itoa(n int) string {
 	}
 	return string(b[i:])
 }
+
+// plural is "1 column" / "3 columns" — English's regular plural, which is
+// all the UI's nouns need.
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return itoa(n) + " " + noun + "s"
+}

@@ -190,3 +190,112 @@ func TestGridHorizontalScroll(t *testing.T) {
 		t.Errorf("moving to the last column should scroll: leftCol=%d\n%s", g.leftCol, c.Text())
 	}
 }
+
+// Hiding works in display columns: the cursor, a copy and the header all see
+// the remaining columns, while the sort — kept by result column — is not
+// disturbed by the sorted column vanishing.
+func TestGridHideShowRemapsColumns(t *testing.T) {
+	g := newGrid()
+	g.SetResult(pets(), 0)
+	g.Sort(1)             // by name: Bella, luna, Whiskers
+	g.moveTo(0, 2, false) // age
+	if n := g.Hide(1, 1); n != 1 {
+		t.Fatalf("hid %d", n)
+	}
+	if g.Cols() != 2 || g.colName(1) != "age" || g.cur.col != 1 {
+		t.Errorf("cols = %v, cursor col %d (%s)", g.cols, g.cur.col, g.colName(g.cur.col))
+	}
+	if v, _, _ := g.value(0, 0); v != "10" {
+		t.Errorf("sort by the hidden name column should hold: first id = %s", v)
+	}
+	r, what := g.Selected(true)
+	if strings.Join(r.Columns, ",") != "id,age" || r.Raw[1][1] != nil {
+		t.Errorf("a whole copy takes the visible columns: %v %v", r.Columns, r.Raw)
+	}
+	if !strings.Contains(what, "1 column hidden") {
+		t.Errorf("what = %q", what)
+	}
+	c := drawGrid(g, 60, 8)
+	if strings.Contains(c.Line(0), "name") || !strings.Contains(c.Line(0), "║") {
+		t.Errorf("header should drop name and mark the gap: %q", c.Line(0))
+	}
+	if !strings.Contains(c.Text(), "1 hidden") {
+		t.Errorf("the strip should count hidden columns:\n%s", c.Text())
+	}
+
+	g.Show(1)
+	if g.Cols() != 3 || g.cur.col != 1 {
+		t.Errorf("Show puts the cursor on the returned column: cols %v cur %d", g.cols, g.cur.col)
+	}
+}
+
+// Every column cannot be hidden: nothing would be left to click to undo it.
+func TestGridRefusesToHideEverything(t *testing.T) {
+	g := newGrid()
+	g.SetResult(pets(), 0)
+	if g.Hide(0, 2) != 0 || g.Cols() != 3 {
+		t.Error("hiding all columns should be refused")
+	}
+	g.Hide(0, 0)
+	g.Hide(0, 0)
+	if g.Hide(0, 0) != 0 || g.Cols() != 1 || g.colName(0) != "age" {
+		t.Errorf("the last column must stay: %v", g.cols)
+	}
+	if g.ShowAll() != 2 || g.Cols() != 3 {
+		t.Error("ShowAll brings them all back")
+	}
+}
+
+// A range copy skips a hidden column inside it.
+func TestGridRangeCopySkipsHidden(t *testing.T) {
+	g := newGrid()
+	g.SetResult(pets(), 0)
+	g.Hide(1, 1)
+	g.moveTo(0, 0, false)
+	g.moveTo(1, 1, true)
+	r, _ := g.Selected(false)
+	if strings.Join(r.Columns, ",") != "id,age" || r.Rows[1][1] != "NULL" {
+		t.Errorf("range = %v %v", r.Columns, r.Rows)
+	}
+}
+
+// Keyboard resizing clamps; fit ignores the auto-size cap.
+func TestGridResizeAndFit(t *testing.T) {
+	long := strings.Repeat("z", 70)
+	r := &model.Result{Columns: []string{"a", "b"}, Rows: [][]string{{"x", long}}, Raw: [][]any{{"x", long}}}
+	g := newGrid()
+	g.SetResult(r, 0)
+	if g.colWidth(1) != maxColWidth {
+		t.Fatalf("auto width = %d, want the cap", g.colWidth(1))
+	}
+	g.Fit(1)
+	if g.colWidth(1) != 70 {
+		t.Errorf("fit = %d, want the whole value", g.colWidth(1))
+	}
+	g.Resize(0, -50)
+	if g.colWidth(0) != minColWidth {
+		t.Errorf("narrowed to %d, want the floor", g.colWidth(0))
+	}
+	c := drawGrid(g, 120, 6)
+	if !strings.Contains(c.Line(1), long) {
+		t.Errorf("a fitted column shows its value whole: %q", c.Line(1))
+	}
+}
+
+// Re-running a query with the same columns keeps hidden columns and hand-set
+// widths; a result with different columns starts fresh.
+func TestGridLayoutSurvivesARerun(t *testing.T) {
+	g := newGrid()
+	g.SetResult(pets(), 0)
+	g.Hide(0, 0) // a leading hidden column is what a stale cols would mis-map
+	g.Resize(0, 6)
+	w := g.colWidth(0)
+	g.SetResult(pets(), 0)
+	if g.Cols() != 2 || g.colWidth(0) != w {
+		t.Errorf("same columns: cols %v width %d, want 2 and %d", g.cols, g.colWidth(0), w)
+	}
+	g.SetResult(&model.Result{Columns: []string{"id", "name"}, Rows: [][]string{{"1", "a"}}, Raw: [][]any{{1, "a"}}}, 0)
+	if g.Cols() != 2 || g.HiddenCount() != 0 || g.userW[0] != 0 || g.cur.col != 0 {
+		t.Errorf("different columns reset the layout: cols %v cur %v", g.cols, g.cur)
+	}
+}

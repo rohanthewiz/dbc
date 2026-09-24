@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -374,5 +375,94 @@ func TestScriptRunsFromThePicker(t *testing.T) {
 	}
 	if m.lastRes == nil {
 		t.Error("the script's shown results should reach the grid")
+	}
+}
+
+// Drag a header border to widen a column; double-click it to fit.
+func TestDragHeaderBorderResizes(t *testing.T) {
+	m := newTestModel(t)
+	key(t, m, "ctrl+r")
+	c := frame(m)
+	_, hy := findText(t, c, "│ name")
+	line := c.Line(hy)
+	bx := cellIndex(line, "│ breed") // the border right of name
+	before := m.grid.colWidth(1)
+
+	drive(t, m, tea.MouseMotionMsg{X: bx, Y: hy})
+	if m.grid.hoverB != 1 {
+		t.Errorf("hovering the border should highlight it, hoverB = %d", m.grid.hoverB)
+	}
+	drive(t, m, tea.MouseClickMsg{X: bx, Y: hy, Button: tea.MouseLeft})
+	drive(t, m, tea.MouseMotionMsg{X: bx + 6, Y: hy, Button: tea.MouseLeft})
+	drive(t, m, tea.MouseReleaseMsg{X: bx + 6, Y: hy, Button: tea.MouseLeft})
+	if got := m.grid.colWidth(1); got != before+6 {
+		t.Errorf("width = %d, want %d", got, before+6)
+	}
+	if m.grid.sortCol != -1 {
+		t.Error("a border press must not sort")
+	}
+	// still hovered (no motion since the drop), so drawn heavy
+	if got := cellIndex(frame(m).Line(hy), "┃ breed"); got != bx+6 {
+		t.Errorf("the border should be drawn where it was dropped: %d, want %d", got, bx+6)
+	}
+
+	// double-click fits it back to its content
+	now = func() time.Time { return time.Unix(100, 0) }
+	t.Cleanup(func() { now = time.Now })
+	click(t, m, bx+6, hy)
+	click(t, m, bx+6, hy)
+	if got := m.grid.colWidth(1); got != m.grid.contentWidth(1) {
+		t.Errorf("double-click should fit: %d, want %d", got, m.grid.contentWidth(1))
+	}
+}
+
+// Right-click a header → Hide column; the copy leaves it out, and the menu
+// then offers it back by name.
+func TestRightClickHeaderHidesColumn(t *testing.T) {
+	m := newTestModel(t)
+	key(t, m, "ctrl+r")
+	x, y := findText(t, frame(m), "│ breed") // the header, not the query text
+	rightClick(t, m, x+2, y)
+	mx, my := findText(t, frame(m), "Hide column breed")
+	click(t, m, mx, my)
+	if m.grid.Cols() != 4 || strings.Contains(frame(m).Line(y), "breed") {
+		t.Fatalf("breed should be hidden: cols %v", m.grid.cols)
+	}
+	if !strings.Contains(logText(m), "hid breed") {
+		t.Errorf("log: %s", logText(m))
+	}
+
+	key(t, m, "Y") // the cursor's row, as text
+	if got := lastClip(t).Text; strings.Contains(got, "Tabby") {
+		t.Errorf("a row copy should leave the hidden column out: %q", got)
+	}
+
+	x, y = findText(t, frame(m), "Oliver")
+	rightClick(t, m, x, y)
+	mx, my = findText(t, frame(m), "Show breed")
+	click(t, m, mx, my)
+	if m.grid.Cols() != 5 {
+		t.Errorf("Show breed should bring it back: %v", m.grid.cols)
+	}
+}
+
+// - hides the cursor's column, + shows everything; the last column stays.
+func TestHideKeys(t *testing.T) {
+	m := newTestModel(t)
+	key(t, m, "ctrl+r")
+	m.focus = focusGrid
+	for range 4 {
+		typeText(t, m, "-")
+	}
+	if m.grid.Cols() != 1 {
+		t.Fatalf("cols = %v", m.grid.cols)
+	}
+	typeText(t, m, "-")
+	if m.grid.Cols() != 1 || !strings.Contains(logText(m), "can't hide every column") {
+		t.Errorf("the last column should stay, and say why: %s", logText(m))
+	}
+	typeText(t, m, "+")
+	if m.grid.Cols() != 5 || !strings.Contains(logText(m), "showing 4 hidden columns again") {
+		t.Errorf("cols %v log %s", m.grid.cols, logText(m))
 	}
 }

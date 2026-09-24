@@ -209,12 +209,57 @@ func (m *Model) openGridMenu(x, y int) {
 		heading(""),
 		menuItem{label: "Sort by this column", why: why,
 			act: func(m *Model) tea.Cmd { m.grid.Sort(m.grid.cur.col); return nil }},
+	)
+	items = append(items, columnItems(g, why)...)
+	items = append(items,
+		heading(""),
 		menuItem{label: "Export to file…", key: "^E", why: why,
 			act: func(m *Model) tea.Cmd { m.openExport(); return nil }},
 		menuItem{label: "✦ Ask the assistant about this result", key: "^A", why: why,
 			act: func(m *Model) tea.Cmd { return m.askAbout("Explain this result — anything notable in it?") }},
 	)
 	m.openMenu(x, y, items)
+}
+
+// maxShowItems bounds the per-column "Show …" rows, so hiding forty columns
+// of a wide table does not grow a menu taller than the screen; "Show all"
+// is always there for the rest.
+const maxShowItems = 8
+
+// columnItems are the grid menu's column rows: hide the cursor's column (or
+// the range's columns), fit its width, and bring hidden ones back — each by
+// name, since after hiding several the user remembers names, not positions.
+func columnItems(g *grid, why string) []menuItem {
+	_, c0, _, c1 := g.bounds()
+	hide := "Hide column " + g.colName(g.cur.col)
+	if g.sel && c1 > c0 {
+		hide = "Hide " + plural(c1-c0+1, "column")
+	}
+	hideWhy := why
+	if hideWhy == "" && c1-c0+1 >= g.Cols() {
+		hideWhy = "can't hide every column — at least one has to stay"
+	}
+	items := []menuItem{
+		{label: hide, key: "-", why: hideWhy,
+			act: func(m *Model) tea.Cmd { m.hideColumns(); return nil }},
+		{label: "Fit column to its content", key: "=", why: why,
+			act: func(m *Model) tea.Cmd { m.grid.Fit(m.grid.cur.col); return nil }},
+	}
+	hidden := g.HiddenCols()
+	if len(hidden) == 0 {
+		return items
+	}
+	items = append(items, heading("hidden columns"))
+	for i, rc := range hidden {
+		if i == maxShowItems {
+			items = append(items, menuItem{label: fmt.Sprintf("  … and %d more", len(hidden)-i), why: "use Show all"})
+			break
+		}
+		items = append(items, menuItem{label: "Show " + g.res.Columns[rc],
+			act: func(m *Model) tea.Cmd { m.grid.Show(rc); return nil }})
+	}
+	return append(items, menuItem{label: "Show all columns", key: "+",
+		act: func(m *Model) tea.Cmd { m.showAllColumns(); return nil }})
 }
 
 // openCopyMenu is the ⧉ Copy toolbar dropdown: the whole result, by format.

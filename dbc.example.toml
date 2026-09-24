@@ -11,6 +11,18 @@ max_rows = 1000
 # this cap are still fetched, and still exported. 0 draws all of them.
 max_display_rows = 2000
 
+# A pooled connection that sits unused this long is closed, and reopened the
+# next time it is needed — so a dbc left open overnight gives its server
+# connections back. Write a duration string ("30m", "2h"); "0" never closes
+# them. The editor's pinned session is always in use, so it is never expired.
+conn_idle_timeout = "1h"
+
+# How long opening a connection (dial, handshake, first ping) may take before
+# it is reported as failed — a wrong host or a down VPN shows up in seconds
+# rather than at the OS's minute-plus TCP timeout. "0" sets no limit of dbc's
+# own; a timeout in the DSN itself still applies, whichever is shorter.
+connect_timeout = "5s"
+
 # AI assistant. dbc runs an Agent Client Protocol agent as a subprocess and
 # never holds a credential itself: "copilot" (the default) is GitHub's
 # copilot-language-server, signed in once from any editor that uses it;

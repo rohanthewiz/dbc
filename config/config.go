@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/rohanthewiz/serr"
@@ -22,6 +23,27 @@ const (
 	// max_rows the display cap never bites, and it only starts doing anything
 	// once someone raises max_rows for an export.
 	defaultMaxDisplayRows = 2000
+
+	// DefaultConnIdleTimeout is how long a pooled connection may sit unused
+	// before the pool closes it (conn_idle_timeout). database/sql's own
+	// default is forever, which keeps server-side backends — their memory and
+	// a slot in the server's max_connections — alive for hours after the
+	// last query. An hour is long enough that interactive use (run, read,
+	// think, run again) never pays a reconnect, and short enough that a dbc
+	// left open overnight gives its connections back. It is a ceiling, not a
+	// keepalive: a server or proxy that cuts idle connections sooner still
+	// does, and the drivers' liveness checks on checkout replace those
+	// transparently. The editor's pinned session is checked out, never idle,
+	// so this never expires it.
+	DefaultConnIdleTimeout = time.Hour
+
+	// DefaultConnectTimeout bounds opening a connection (connect_timeout):
+	// the dial, the handshake and the first ping together. Without it an
+	// unreachable host fails only at the OS's TCP connect timeout — over a
+	// minute — while the UI shows "connecting…". Five seconds is ample for
+	// any reachable server, including one across a VPN, and short enough that
+	// a wrong host or a down VPN is reported while the user is still looking.
+	DefaultConnectTimeout = 5 * time.Second
 )
 
 // Names of the built-in demo connections. Both are registered when no config
@@ -106,6 +128,20 @@ type Config struct {
 	AIModel       string `toml:"ai_model"`
 	AIContextRows int    `toml:"ai_context_rows"`
 
+	// ConnIdleTimeout is how long a pooled connection may sit idle before it
+	// is closed; see DefaultConnIdleTimeout. Written as a duration string in
+	// the file ("30m", "2h"); 0 keeps idle connections open indefinitely, as
+	// database/sql does by default. It applies to every connection — it is a
+	// question of how long dbc sits idle, not of which database it talks to.
+	ConnIdleTimeout time.Duration `toml:"conn_idle_timeout"`
+
+	// ConnectTimeout caps opening a connection; see DefaultConnectTimeout.
+	// A duration string in the file ("10s"); 0 sets no limit of dbc's own,
+	// leaving it to the driver (a DSN's own connect_timeout, say) and the OS.
+	// A DSN-level timeout still applies either way — whichever is shorter
+	// wins. Global for the same reason as ConnIdleTimeout.
+	ConnectTimeout time.Duration `toml:"connect_timeout"`
+
 	DefaultConnection string       `toml:"default_connection"`
 	Connections       []Connection `toml:"connection"`
 
@@ -129,7 +165,8 @@ func Load(explicit string) (*Config, error) {
 // names its own default_connection.
 func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 	cfg := &Config{ScriptsDir: "scripts", MaxRows: defaultMaxRows,
-		MaxDisplayRows: defaultMaxDisplayRows, AIContextRows: DefaultAIContextRows}
+		MaxDisplayRows: defaultMaxDisplayRows, AIContextRows: DefaultAIContextRows,
+		ConnIdleTimeout: DefaultConnIdleTimeout, ConnectTimeout: DefaultConnectTimeout}
 
 	path := explicit
 	if path == "" {
@@ -163,6 +200,8 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 	if cfg.MaxDisplayRows < 0 {
 		cfg.MaxDisplayRows = defaultMaxDisplayRows
 	}
+	cfg.checkDuration("conn_idle_timeout", &cfg.ConnIdleTimeout, DefaultConnIdleTimeout)
+	cfg.checkDuration("connect_timeout", &cfg.ConnectTimeout, DefaultConnectTimeout)
 	if cfg.ScriptsDir == "" {
 		cfg.ScriptsDir = "scripts"
 	}
@@ -195,6 +234,26 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 			"default_connection", cfg.DefaultConnection, "config_path", path)
 	}
 	return cfg, nil
+}
+
+// checkDuration falls back to def, with a warning, for a duration setting
+// that cannot be what was meant. key is the TOML key, for the message.
+//
+// The TOML decoder reads a duration string with time.ParseDuration (a typo
+// there fails the load outright), but it reads a bare integer as nanoseconds:
+// conn_idle_timeout = 3600 is 3.6 microseconds, which would close every
+// connection the moment it went idle; connect_timeout = 5 is 5ns, which would
+// fail every connect. Neither setting has a sensible sub-second value, so
+// anything that short is taken as that mistake. A negative value is likewise
+// not a timeout at all. 0 is left alone: it is the documented "no limit".
+func (c *Config) checkDuration(key string, d *time.Duration, def time.Duration) {
+	if *d == 0 || *d >= time.Second {
+		return
+	}
+	c.Warnings = append(c.Warnings, fmt.Sprintf(
+		"%s = %s is not a usable timeout (write a duration string such as \"30s\" or \"1h\", or 0 for no limit); using %s",
+		key, *d, def))
+	*d = def
 }
 
 // demoFallback fills cfg with the built-in demo connections, used when there

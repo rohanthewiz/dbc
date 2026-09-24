@@ -274,6 +274,8 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 
 	case connectMsg:
 		return m.connected(msg)
+	case sessionReleasedMsg:
+		return m.sessionReleased(msg)
 	case runDoneMsg:
 		return m.runDone(msg)
 	case tickMsg:

@@ -28,7 +28,9 @@ import (
 //     tables carry across runs the way they do in psql. Switching
 //     connections closes the old session, deliberately rolling back
 //     whatever it left open. A pinned connection that has gone bad (a
-//     server idle timeout) is replaced once, transparently.
+//     server idle timeout) is replaced once, transparently — unless the
+//     session held state (a BEGIN, a SET), in which case the run fails
+//     with db.ErrSessionLost rather than carry on without it.
 //   - CANCEL REACHES THE SERVER. Every run has a context; Ctrl+K, Ctrl+C
 //     and the Stop button cancel it, and the drivers turn that into a
 //     server-side cancel.
@@ -53,6 +55,12 @@ type (
 	tickMsg        struct{ gen int }
 	scriptShowMsg  struct{ res *model.Result }
 	scriptPrintMsg struct{ text string }
+	// sessionReleasedMsg reports that switching connections closed the
+	// session pinned to the previous one, and whether it held state.
+	sessionReleasedMsg struct {
+		conn     string
+		stateful bool
+	}
 )
 
 // tickEvery is how often the status bar's elapsed time refreshes while a run
@@ -109,11 +117,44 @@ func (m *Model) connected(msg connectMsg) tea.Cmd {
 	}
 	m.refreshConns()
 	m.refreshTables()
+	m.catsAfterTransition()
 	if changed {
 		m.logf(logOk, "connected to %s", msg.name)
 		m.setStatus("connected")
+		return m.releaseSessionCmd(msg.name)
 	}
-	m.catsAfterTransition()
+	return nil
+}
+
+// releaseSessionCmd closes the session pinned to any connection other than
+// keep, so switching connections ends the old session — rolling back what it
+// left open — then and there, rather than holding its transaction and locks
+// open until the next run happens to replace it.
+//
+// It runs as a command, off the Update goroutine, because it takes sessMu,
+// which a run in flight holds for as long as its statement takes. It is issued
+// only after m.active has moved to keep, so a run started in the meantime is
+// already on keep and its session is left alone.
+func (m *Model) releaseSessionCmd(keep string) tea.Cmd {
+	return func() tea.Msg {
+		m.sessMu.Lock()
+		defer m.sessMu.Unlock()
+		if m.sess == nil || m.sessFor == keep {
+			return nil
+		}
+		msg := sessionReleasedMsg{conn: m.sessFor, stateful: m.sess.Stateful()}
+		m.dropSessionLocked()
+		return msg
+	}
+}
+
+// sessionReleased tells the user when a released session took state with it.
+// A session that only ever ran queries goes quietly: nothing was lost.
+func (m *Model) sessionReleased(msg sessionReleasedMsg) tea.Cmd {
+	if msg.stateful {
+		m.logf(logWarn, "left %s: its session was closed — any open transaction was rolled back, SET values and temp tables are gone",
+			msg.conn)
+	}
 	return nil
 }
 
@@ -132,9 +173,20 @@ func (m *Model) runOnSession(ctx context.Context, conn, stmt string) (*model.Res
 			m.sess, m.sessFor = sess, conn
 		}
 		res, err := m.sess.Run(ctx, stmt)
-		if err != nil && db.BadConn(err) && !retried {
+		if err != nil && db.BadConn(err) {
+			// The pinned connection is dead. A session that never took on
+			// state is swapped for a fresh one and the statement retried,
+			// once — the user loses nothing. One that did is not: its
+			// transaction and settings died with it, so the statement is
+			// failed in words that say so, and the next run starts clean.
+			stateful := m.sess.Stateful()
 			m.dropSessionLocked()
-			continue
+			if stateful {
+				return nil, db.SessionLost(conn, err)
+			}
+			if !retried {
+				continue
+			}
 		}
 		return res, err
 	}

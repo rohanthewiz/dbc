@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeConfig drops a config file in a temp dir and returns its path.
@@ -88,6 +89,110 @@ dsn = "a.db"
 				t.Errorf("MaxDisplayRows = %d, want %d", cfg.MaxDisplayRows, c.wantScreen)
 			}
 		})
+	}
+}
+
+func TestLoadConnIdleTimeout(t *testing.T) {
+	conn := `
+[[connection]]
+name = "db"
+driver = "sqlite"
+dsn = "a.db"
+`
+	cases := []struct {
+		name     string
+		body     string
+		want     time.Duration
+		wantWarn bool
+	}{
+		{"absent", conn, DefaultConnIdleTimeout, false},
+		{"set", `conn_idle_timeout = "15m"` + conn, 15 * time.Minute, false},
+		{"never", `conn_idle_timeout = "0"` + conn, 0, false},
+		{"integer zero", "conn_idle_timeout = 0" + conn, 0, false},
+		// a bare integer is nanoseconds to the decoder: 3600 is not an hour
+		{"bare seconds", "conn_idle_timeout = 3600" + conn, DefaultConnIdleTimeout, true},
+		{"negative", `conn_idle_timeout = "-5m"` + conn, DefaultConnIdleTimeout, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, c.body))
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if cfg.ConnIdleTimeout != c.want {
+				t.Errorf("ConnIdleTimeout = %s, want %s", cfg.ConnIdleTimeout, c.want)
+			}
+			warned := strings.Contains(strings.Join(cfg.Warnings, "\n"), "conn_idle_timeout")
+			if warned != c.wantWarn {
+				t.Errorf("warned = %v, want %v (warnings: %q)", warned, c.wantWarn, cfg.Warnings)
+			}
+		})
+	}
+
+	// a malformed duration string is a load error, not a silent default
+	if _, err := Load(writeConfig(t, `conn_idle_timeout = "an hour"`+conn)); err == nil {
+		t.Error("an unparseable conn_idle_timeout loaded without error")
+	}
+}
+
+// The demo config has no file to read the keys from, so it must still get the
+// defaults rather than the zero value's "no limit".
+func TestDemoTimeouts(t *testing.T) {
+	t.Chdir(t.TempDir()) // no ./dbc.toml
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !cfg.Demo {
+		t.Skip("a config file was found; not the demo path")
+	}
+	if cfg.ConnIdleTimeout != DefaultConnIdleTimeout {
+		t.Errorf("demo ConnIdleTimeout = %s, want %s", cfg.ConnIdleTimeout, DefaultConnIdleTimeout)
+	}
+	if cfg.ConnectTimeout != DefaultConnectTimeout {
+		t.Errorf("demo ConnectTimeout = %s, want %s", cfg.ConnectTimeout, DefaultConnectTimeout)
+	}
+}
+
+func TestLoadConnectTimeout(t *testing.T) {
+	conn := `
+[[connection]]
+name = "db"
+driver = "sqlite"
+dsn = "a.db"
+`
+	cases := []struct {
+		name     string
+		body     string
+		want     time.Duration
+		wantWarn bool
+	}{
+		{"absent", conn, DefaultConnectTimeout, false},
+		{"set", `connect_timeout = "12s"` + conn, 12 * time.Second, false},
+		{"no limit", `connect_timeout = "0"` + conn, 0, false},
+		// a bare integer is nanoseconds to the decoder: 5 is not 5 seconds
+		{"bare seconds", "connect_timeout = 5" + conn, DefaultConnectTimeout, true},
+		{"negative", `connect_timeout = "-1s"` + conn, DefaultConnectTimeout, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, c.body))
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if cfg.ConnectTimeout != c.want {
+				t.Errorf("ConnectTimeout = %s, want %s", cfg.ConnectTimeout, c.want)
+			}
+			warned := strings.Contains(strings.Join(cfg.Warnings, "\n"), "connect_timeout")
+			if warned != c.wantWarn {
+				t.Errorf("warned = %v, want %v (warnings: %q)", warned, c.wantWarn, cfg.Warnings)
+			}
+		})
+	}
+	if _, err := Load(writeConfig(t, `connect_timeout = "soon"`+conn)); err == nil {
+		t.Error("an unparseable connect_timeout loaded without error")
 	}
 }
 

@@ -22,16 +22,60 @@ import (
 	"github.com/rohanthewiz/serr"
 )
 
+// memSQLiteMaxOpen caps the pool of a shared in-memory SQLite database:
+// one anchor connection (see Manager.anchors) + one pinned Session (the
+// TUI's) + one for the pool, so neither the anchor nor the session can starve
+// a script or a catalog refresh.
+const memSQLiteMaxOpen = 3
+
 // Manager owns the pool of named database connections. Connections are
 // opened lazily on first use and cached for the life of the process.
+//
+// Opening a connection means a network dial and a ping, which against an
+// unreachable host takes the full ping timeout. mu is never held across that:
+// it guards only the maps, and a connection that is being opened is tracked in
+// opening, so concurrent callers for the same name wait for the one open in
+// progress (and can give up on it with their own ctx) while callers for any
+// other name are not held up at all.
+//
+//	DBContext("a") ──lock── cached? ─yes─► return
+//	                         │no
+//	                  opening["a"]? ─yes─► unlock, wait on call.done (or ctx)
+//	                         │no
+//	              opening["a"] = call, unlock
+//	              sql.Open + ping (no lock held)
+//	              lock, conns["a"] = dbh, delete opening["a"], unlock
+//	              close(call.done) ── wakes the waiters
 type Manager struct {
-	mu    sync.Mutex
-	conns map[string]*sql.DB
-	cfg   *config.Config
+	mu      sync.Mutex
+	conns   map[string]*sql.DB
+	opening map[string]*openCall
+	// anchors holds one connection open on each shared in-memory SQLite
+	// database. Such a database lives exactly as long as its last connection,
+	// so without an anchor it would vanish the moment the pool closed its
+	// last one — which a Session does on purpose when it is released (see
+	// Session.Close). The anchor is checked out and never used, so the pool
+	// can never close it.
+	anchors map[string]*sql.Conn
+	closed  bool
+	cfg     *config.Config
+}
+
+// openCall is one open-and-ping in progress. dbh and err are written before
+// done is closed and only read after, so they need no lock.
+type openCall struct {
+	done chan struct{}
+	dbh  *sql.DB
+	err  error
 }
 
 func NewManager(cfg *config.Config) *Manager {
-	return &Manager{conns: map[string]*sql.DB{}, cfg: cfg}
+	return &Manager{
+		conns:   map[string]*sql.DB{},
+		opening: map[string]*openCall{},
+		anchors: map[string]*sql.Conn{},
+		cfg:     cfg,
+	}
 }
 
 // Names returns the configured connection names in config order.
@@ -67,44 +111,137 @@ func Driver(d string) (string, error) {
 // DB returns the live *sql.DB for a named connection, opening and pinging
 // it on first use.
 func (m *Manager) DB(name string) (*sql.DB, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	return m.DBContext(context.Background(), name)
+}
 
-	if dbh, ok := m.conns[name]; ok {
-		return dbh, nil
+// DBContext is DB with a context: canceling ctx abandons the wait for a
+// connection being opened, and aborts the ping when this caller is the one
+// opening it. The open is additionally capped at connect_timeout
+// (config.ConnectTimeout).
+func (m *Manager) DBContext(ctx context.Context, name string) (*sql.DB, error) {
+	for {
+		m.mu.Lock()
+		if m.closed {
+			m.mu.Unlock()
+			return nil, serr.New("connection manager is closed", "conn", name)
+		}
+		if dbh, ok := m.conns[name]; ok {
+			m.mu.Unlock()
+			return dbh, nil
+		}
+		if call, ok := m.opening[name]; ok {
+			// Someone else is already opening this connection: wait for them
+			// rather than dial a second pool, which one of the two would only
+			// have to close again — and against a dead host, rather than pay
+			// a second ping timeout for the same answer.
+			m.mu.Unlock()
+			select {
+			case <-call.done:
+			case <-ctx.Done():
+				return nil, wrapRunErr(ctx, ctx.Err(), name, "op", "open")
+			}
+			// The opener's caller gave up, which says nothing about the
+			// database — this caller still wants it, so go round and open it.
+			if call.err != nil && errors.Is(call.err, ErrCanceled) && ctx.Err() == nil {
+				continue
+			}
+			return call.dbh, call.err
+		}
+		call := &openCall{done: make(chan struct{})}
+		m.opening[name] = call
+		m.mu.Unlock()
+
+		dbh, anchor, err := m.open(ctx, name)
+
+		m.mu.Lock()
+		delete(m.opening, name)
+		if err == nil && m.closed {
+			// Close ran while this was dialing: nobody will close this pool
+			// if it is cached now, so do not cache it.
+			closeOpened(dbh, anchor)
+			dbh, anchor = nil, nil
+			err = serr.New("connection manager is closed", "conn", name)
+		}
+		if err == nil {
+			m.conns[name] = dbh
+			if anchor != nil {
+				m.anchors[name] = anchor
+			}
+		}
+		m.mu.Unlock()
+
+		call.dbh, call.err = dbh, err
+		close(call.done)
+		return dbh, err
 	}
+}
+
+// open does the slow part of DBContext — sql.Open, pool settings, ping — with
+// no lock held. anchor is non-nil only for a shared in-memory SQLite database.
+func (m *Manager) open(ctx context.Context, name string) (dbh *sql.DB, anchor *sql.Conn, err error) {
 	cc, ok := m.cfg.ConnByName(name)
 	if !ok {
-		return nil, serr.New("unknown connection", "name", name)
+		return nil, nil, serr.New("unknown connection", "name", name)
 	}
 	drv, err := driverFor(cc.Driver)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	dsn := cc.DSN
 	if drv == "sqlite" {
 		dsn = sqliteDSN(dsn)
 	}
-	dbh, err := sql.Open(drv, dsn)
+	dbh, err = sql.Open(drv, dsn)
 	if err != nil {
-		return nil, serr.Wrap(err, "conn", name, "driver", drv)
+		return nil, nil, serr.Wrap(err, "conn", name, "driver", drv)
 	}
-	if drv == "sqlite" && strings.Contains(cc.DSN, "mode=memory") {
-		// A shared in-memory DB vanishes when its last conn closes; hold one
-		// open. Two are allowed so a pinned Session (the TUI's) cannot starve
+	// conn_idle_timeout: see config.DefaultConnIdleTimeout for why an idle
+	// pooled connection is closed at all. 0 means never, which is also
+	// database/sql's own meaning for it, so the value passes straight through.
+	dbh.SetConnMaxIdleTime(m.cfg.ConnIdleTimeout)
+	memory := drv == "sqlite" && strings.Contains(cc.DSN, "mode=memory")
+	if memory {
+		// A shared in-memory DB vanishes when its last conn closes; the
+		// anchor below holds one open. The cap leaves room for a pinned
+		// Session (the TUI's) and a pooled run beside it, so neither starves
 		// a script running on the pool.
-		dbh.SetMaxOpenConns(2)
+		dbh.SetMaxOpenConns(memSQLiteMaxOpen)
 		dbh.SetConnMaxIdleTime(0)
 		dbh.SetConnMaxLifetime(0)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err = dbh.PingContext(ctx); err != nil {
-		_ = dbh.Close()
-		return nil, serr.Wrap(err, "conn", name, "op", "ping")
+	// sql.Open only validates the DSN; the ping is where the dial and the
+	// handshake happen, so it is what connect_timeout bounds. 0 is "no limit
+	// of dbc's own": the ping then runs under the caller's ctx alone.
+	pctx, cancel := ctx, context.CancelFunc(func() {})
+	if t := m.cfg.ConnectTimeout; t > 0 {
+		pctx, cancel = context.WithTimeout(ctx, t)
 	}
-	m.conns[name] = dbh
-	return dbh, nil
+	defer cancel()
+	if err = dbh.PingContext(pctx); err != nil {
+		_ = dbh.Close()
+		// wrapRunErr sees the caller's ctx, not pctx: only the caller giving
+		// up counts as a cancel. A ping timeout is a plain connect failure.
+		return nil, nil, wrapRunErr(ctx, err, name, "op", "ping")
+	}
+	if memory {
+		if anchor, err = dbh.Conn(pctx); err != nil {
+			_ = dbh.Close()
+			return nil, nil, wrapRunErr(ctx, err, name, "op", "anchor")
+		}
+	}
+	return dbh, anchor, nil
+}
+
+// closeOpened closes a pool and its anchor. The anchor goes first: DB.Close
+// only closes idle connections, and a checked-out one — which the anchor
+// always is — would otherwise stay open until it was returned, i.e. never.
+func closeOpened(dbh *sql.DB, anchor *sql.Conn) {
+	if anchor != nil {
+		_ = anchor.Close()
+	}
+	if dbh != nil {
+		_ = dbh.Close()
+	}
 }
 
 // sqliteDSN gives a sqlite DSN a busy_timeout unless it already sets one.
@@ -131,18 +268,22 @@ func (m *Manager) Drop(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if dbh, ok := m.conns[name]; ok {
-		_ = dbh.Close()
+		closeOpened(dbh, m.anchors[name])
 		delete(m.conns, name)
+		delete(m.anchors, name)
 	}
 }
 
-// Close closes all open connections.
+// Close closes all open connections. A connection still being opened when
+// Close runs is closed by its opener instead of being cached (see closed).
 func (m *Manager) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.closed = true
 	for name, dbh := range m.conns {
-		_ = dbh.Close()
+		closeOpened(dbh, m.anchors[name])
 		delete(m.conns, name)
+		delete(m.anchors, name)
 	}
 }
 
@@ -170,7 +311,7 @@ func (m *Manager) Run(name, stmt string, args ...any) (*model.Result, error) {
 // The statement takes whichever pooled connection is free. Statements that
 // depend on session state — BEGIN/COMMIT, SET, temp tables — need a Session.
 func (m *Manager) RunContext(ctx context.Context, name, stmt string, args ...any) (*model.Result, error) {
-	dbh, err := m.DB(name)
+	dbh, err := m.DBContext(ctx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -253,16 +394,25 @@ func (m *Manager) run(ctx context.Context, ex execQuerier, name, stmt string, ar
 // Session is a run pinned to one connection from the pool, so a sequence of
 // statements shares a database session: BEGIN/COMMIT bracket the statements
 // between them, SET and temp tables outlive the statement that made them.
-// Close returns the connection to the pool.
+// Close discards the connection rather than returning it to the pool, so none
+// of that state can leak to the pool's next user.
+//
+// A Session is not safe for concurrent use; its holder serializes access.
 type Session struct {
 	m    *Manager
 	name string
 	conn *sql.Conn
+
+	// stateful is set once a non-query statement succeeds on the session.
+	// Only those can leave session state behind — BEGIN, SET, CREATE TEMP,
+	// LOCK TABLES — so a session that has only ever run SELECTs can be
+	// swapped for a fresh one without anyone losing anything.
+	stateful bool
 }
 
 // Session pins a connection on the named database. The caller must Close it.
 func (m *Manager) Session(ctx context.Context, name string) (*Session, error) {
-	dbh, err := m.DB(name)
+	dbh, err := m.DBContext(ctx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -273,16 +423,61 @@ func (m *Manager) Session(ctx context.Context, name string) (*Session, error) {
 	return &Session{m: m, name: name, conn: c}, nil
 }
 
+// Name is the connection the session is pinned to.
+func (s *Session) Name() string { return s.name }
+
+// Stateful reports whether the session may hold state a replacement session
+// would not have — an open transaction, SET values, temp tables. It errs on
+// the side of yes: any successful non-query statement counts, including
+// ones (an UPDATE outside a transaction) that leave nothing behind.
+func (s *Session) Stateful() bool { return s.stateful }
+
 // Run executes one statement on the pinned connection, as RunContext does on
 // the pool.
 func (s *Session) Run(ctx context.Context, stmt string, args ...any) (*model.Result, error) {
-	return s.m.run(ctx, s.conn, s.name, stmt, args...)
+	res, err := s.m.run(ctx, s.conn, s.name, stmt, args...)
+	if err == nil && res.IsExec {
+		s.stateful = true
+	}
+	return res, err
 }
 
-// Close releases the connection. An unfinished transaction on it is rolled
-// back by the driver when the connection is reset.
+// Close releases the session by closing its connection outright, so whatever
+// the session left open is gone on every engine: the server rolls back an
+// unfinished transaction when its connection ends, and SET values and temp
+// tables end with it.
+//
+// Handing the connection back to the pool instead would leave that to the
+// driver's session reset, and the drivers do not agree: pgx discards a
+// connection that is mid-transaction and bytdb rolls it back, but the MySQL
+// and SQLite drivers return it as-is — so the pool's next user (a catalog
+// refresh, a script's Query) would run inside the user's open transaction.
+// SET values and temp tables survive the reset on every driver. Sessions are
+// opened rarely, so the reconnect this costs is nothing.
+//
+// Raw with a callback that returns driver.ErrBadConn is database/sql's one
+// supported way to get a checked-out connection closed instead of pooled.
+// It also closes the sql.Conn, so there is no Conn.Close after it.
 func (s *Session) Close() error {
-	return s.conn.Close()
+	err := s.conn.Raw(func(any) error { return driver.ErrBadConn })
+	if err == nil || errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) {
+		return nil // discarded as asked, or already closed
+	}
+	return serr.Wrap(err, "conn", s.name, "op", "close session")
+}
+
+// ErrSessionLost is returned when a pinned session's connection died after
+// the session had taken on state. The statement is not retried on a fresh
+// session: a COMMIT replayed there would find no transaction and "succeed",
+// and a statement after a lost SET would silently run under the defaults.
+var ErrSessionLost = errors.New("session lost")
+
+// SessionLost wraps err (a BadConn error from a stateful session) as
+// ErrSessionLost, in words that tell the user what is gone and what to do.
+func SessionLost(name string, err error) error {
+	return serr.Wrap(fmt.Errorf("%w: %w", ErrSessionLost, err), "conn", name,
+		"detail", "connection lost; its open transaction, SET values and temp tables are gone"+
+			" — run again to continue on a new session")
 }
 
 // BadConn reports whether err means the connection the statement ran on is no

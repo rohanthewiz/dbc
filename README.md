@@ -21,6 +21,8 @@ Copy `dbc.example.toml` to `./dbc.toml` (or `~/.config/dbc/config.toml`):
 scripts_dir        = "scripts"
 max_rows           = 1000   # rows fetched from the server
 max_display_rows   = 2000   # rows the results table draws (0 = all)
+conn_idle_timeout  = "1h"   # close pooled connections idle this long ("0" = never)
+connect_timeout    = "5s"   # give up opening a connection after this ("0" = no limit)
 default_connection = "local-pg"
 
 [[connection]]
@@ -305,8 +307,17 @@ definition stays in one piece.
 Editor runs share one pinned database session per connection, just like a
 headless multi-statement buffer: `BEGIN` in one `Ctrl+R` and `COMMIT` in a
 later one bracket a real transaction, and `SET`, `PRAGMA`, and temp tables
-persist between runs. Switching connections releases the session — along with
-any transaction it had open.
+persist between runs. Switching connections releases the session at once —
+along with any transaction it had open, which is rolled back, and a warning in
+the log if it had one. If the server drops the session's connection (an idle
+timeout, a restart), a session that has only run queries is quietly replaced;
+one that ran `BEGIN`, `SET`, or other statements is not, and the run fails with
+"session lost" so a `COMMIT` is never replayed on a fresh connection outside
+the transaction it was meant to end. Run again to continue on a new session.
+
+Other than the editor's pinned session, pooled connections that sit idle for
+`conn_idle_timeout` (default `"1h"`; `"0"` = never) are closed and reopened on
+demand.
 
 ### Stopping a long query
 

@@ -432,8 +432,34 @@ func (a *App) setActive(name string) {
 			a.logf(tagOk+"connected to %s", name)
 			a.setStatusText(fmt.Sprintf(tagAccent+"%s"+tagOff+" │ connected", name))
 			a.hostIdentSync() // the title names the connection, which just changed
+			go a.releaseSessionUnless(name)
 		})
 	}()
+}
+
+// releaseSessionUnless closes the session pinned to any connection other than
+// keep, so switching connections ends the old session — rolling back what it
+// left open — then and there, rather than holding its transaction and locks
+// open until the next run happens to replace it.
+//
+// Call it on its own goroutine: it takes sessMu, which a run in flight holds
+// for as long as its statement takes. It is started only after a.active has
+// moved to keep, so a run begun in the meantime is already on keep and its
+// session is left alone. A session that only ever ran queries goes quietly.
+func (a *App) releaseSessionUnless(keep string) {
+	a.sessMu.Lock()
+	if a.sess == nil || a.sessName == keep {
+		a.sessMu.Unlock()
+		return
+	}
+	left, stateful := a.sessName, a.sess.Stateful()
+	a.dropSessionLocked()
+	a.sessMu.Unlock()
+	if stateful {
+		a.app.QueueUpdateDraw(func() {
+			a.logf(tagWarn+"left %s: its session was closed — any open transaction was rolled back, SET values and temp tables are gone", left)
+		})
+	}
 }
 
 // beginRun claims the single run slot, shows the Stop button, and returns the
@@ -558,7 +584,8 @@ func (a *App) runningStatus() string {
 // the way it does across the statements of a headless buffer. The session is
 // opened on first use, swapped when the connection changes (closing the old
 // one rolls back whatever it left open), and rebuilt once when the pinned
-// connection has gone bad, e.g. cut by a server-side idle timeout.
+// connection has gone bad, e.g. cut by a server-side idle timeout — but only
+// when the session held no state; see the comment in the loop.
 func (a *App) runOnSession(ctx context.Context, conn, stmt string) (*model.Result, error) {
 	a.sessMu.Lock()
 	defer a.sessMu.Unlock()
@@ -572,9 +599,22 @@ func (a *App) runOnSession(ctx context.Context, conn, stmt string) (*model.Resul
 			a.sess, a.sessName = sess, conn
 		}
 		res, err := a.sess.Run(ctx, stmt)
-		if err != nil && db.BadConn(err) && !retried {
+		if err != nil && db.BadConn(err) {
+			// The pinned connection is dead. A session that never took on
+			// state is swapped for a fresh one and the statement retried,
+			// once — the user loses nothing. One that did is not: its
+			// transaction and settings died with it, and replaying a COMMIT
+			// on a fresh session would "succeed" with nothing to commit. So
+			// the statement fails in words that say so, and the next run
+			// starts clean.
+			stateful := a.sess.Stateful()
 			a.dropSessionLocked()
-			continue
+			if stateful {
+				return nil, db.SessionLost(conn, err)
+			}
+			if !retried {
+				continue
+			}
 		}
 		return res, err
 	}

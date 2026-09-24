@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-033
+**Next ID:** N-036
 
 ## Open
 
@@ -62,7 +62,7 @@ ten session docs in `ai_docs/claude_sessions/`
 
 - **N-008** · raised `2026-0731-2200-dbc` · value medium
   `INSERT … RETURNING` (and `UPDATE`/`DELETE … RETURNING`) shows
-  `rows_affected`, not the returned rows. `isQuery` (`db/manager.go:156`)
+  `rows_affected`, not the returned rows. `isQuery` (`db/manager.go:297`)
   keys off the leading verb only, so this hits Postgres and bytdb alike. The
   fix is cross-driver: detect a `RETURNING` clause (via `sqlsplit`, so one in
   a string literal doesn't count) or fall back to Query when Exec is wrong.
@@ -75,7 +75,7 @@ ten session docs in `ai_docs/claude_sessions/`
 
 - **N-010** · raised `2026-0807-2148-bytdb-v0.9.1-and-dual-demo-defaults` · value low
   With no config, every headless invocation seeds both demos
-  (`db.SeedDemos`, `main.go:94`), so a bare `dbc "SELECT 1"` opens the bytdb
+  (`db.SeedDemos`, `main.go:103`), so a bare `dbc "SELECT 1"` opens the bytdb
   file. Lazy seeding on first use of a connection is the fix if it ever
   matters.
 
@@ -120,6 +120,31 @@ ten session docs in `ai_docs/claude_sessions/`
   `information_schema.columns.column_type`, but neither has met a real
   server. A failure is graceful — the transcript says the lookup failed and
   the question goes without schema — so this is confidence, not a fix.
+
+- **N-033** · raised `2026-0924-1725-conn-mgmt-session-discard-timeouts` · value low
+  Opening a connection from the sidebar can't be canceled. `tui/run.go`
+  `connectCmd` and the classic UI's `setActive` call `mgr.DB(name)`, which
+  uses a background context, so only `connect_timeout` bounds the wait. With
+  `connect_timeout = "0"`, an unreachable host leaves "connecting…" up until
+  the OS's TCP timeout (over a minute). Fix: give the connect a context that
+  Ctrl+K/Esc cancels, and pass it to `mgr.DBContext`.
+
+- **N-034** · raised `2026-0924-1725-conn-mgmt-session-discard-timeouts` · value low
+  When the server cuts a pinned session's connection, the first failure is
+  usually a plain network error (the statement had already been sent, so
+  pgx doesn't report `ErrBadConn`), not `db.ErrSessionLost`. That run fails
+  with the driver's own words, and "session lost" appears only on the run
+  after. Nothing is ever replayed, so this is about the wording, not
+  correctness. A fix would treat network errors on a stateful session as
+  lost too.
+
+- **N-035** · raised `2026-0924-1725-conn-mgmt-session-discard-timeouts` · value low
+  Test the session changes against a live MySQL and Postgres. The MySQL
+  driver's session reset leaving an open transaction on a pooled connection
+  was confirmed by reading `go-sql-driver/mysql` v1.10.0; the tests used
+  SQLite and bytdb only. Worth checking against real servers: that closing a
+  session ends its transaction, that the stateful and stateless dead-session
+  paths behave, and `conn_idle_timeout`/`connect_timeout`.
 
 ## Roadmap
 

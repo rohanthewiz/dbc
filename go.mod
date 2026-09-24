@@ -14,6 +14,7 @@ require (
 	github.com/rohanthewiz/logger v1.3.0
 	github.com/rohanthewiz/serr v1.4.0
 	github.com/traefik/yaegi v0.16.1
+	github.com/urfave/cli/v3 v3.13.0
 	golang.org/x/sys v0.46.0
 	modernc.org/sqlite v1.54.0
 )

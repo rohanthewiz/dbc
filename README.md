@@ -67,7 +67,7 @@ everything immediately, and compare the two engines on the same query:
 | `demo-bytdb` | bytdb | `demo.bytdb` in the OS cache dir (`~/Library/Caches/dbc`, `~/.cache/dbc`) — persists between runs |
 | `demo` | SQLite | in-memory, fresh every run |
 
-`demo-bytdb` is the active one out of the box. `-demo sqlite` (or
+`demo-bytdb` is the active one out of the box. `--demo sqlite` (or
 `DBC_DEMO=sqlite`) makes `demo` active instead; either way both are in the
 connections list, so `Ctrl+L` — or `-c demo` headless — switches between them.
 The flag is ignored once a config file exists, since a config names its own
@@ -402,34 +402,51 @@ Everything works without the TUI, for cron jobs and shell pipelines:
 
 ```sh
 ./dbc "SELECT * FROM cats"                       # aligned text table
-./dbc -c local-pg -f csv "SELECT * FROM users"   # any format to stdout
-./dbc -f html -o report.html "SELECT ..."        # straight to a file
+./dbc -c local-pg -t csv "SELECT * FROM users"   # any format to stdout
+./dbc -t html -o report.html "SELECT ..."        # straight to a file
 ./dbc "INSERT ...; SELECT ..."                   # several statements, in order
+./dbc -f report.sql                              # the SQL in a file
+./dbc -c local-pg < report.sql                   # … or piped to stdin
 ./dbc script scripts/loop_params.go              # run a Go script
 ```
 
-Flags go before the SQL: `-config path`, `-c connection`, `-f format`,
-`-o outfile`, `-demo bytdb|sqlite`, and `-driver name -dsn string` for a
-one-off connection that is in no config file.
-Use `--` before SQL that starts with a comment, so the flag parser leaves it
-alone. `Ctrl+C` cancels a running query or script and exits 130.
+| Flag | |
+| --- | --- |
+| `-f`, `--file FILE` | read the SQL from a file; `-f -` reads stdin |
+| `-t`, `--format FORMAT` | `text` (default), `csv`, `tsv`, `markdown`, `html`, `json` |
+| `-o`, `--out FILE` | write the output to a file instead of stdout |
+| `-c`, `--conn NAME` | which connection to run on |
+| `--config FILE` | config file (default `./dbc.toml`, then `~/.config/dbc/config.toml`) |
+| `--demo bytdb\|sqlite` | which demo starts active when there is no config (also `$DBC_DEMO`) |
+| `--driver NAME --dsn STRING` | a one-off connection that is in no config file |
+
+`dbc --help` lists them all. Long names take one dash or two (`-dsn` works),
+and flags may go before or after the SQL. With no SQL argument and no `-f`,
+dbc reads the SQL from stdin when stdin is a pipe or a file, and otherwise
+opens the TUI. Give the SQL as one quoted argument: more than one argument is
+an error rather than a silently shortened query. Use `--` before SQL that
+starts with a comment, so the flag parser leaves it alone. `Ctrl+C` cancels a
+running query or script and exits 130; bad usage exits 2.
+
+`-f` was the output format before it was the SQL file; `dbc -f csv …` now
+says to use `-t csv` rather than looking for a file named `csv`.
 
 ### Scripts headless
 
-`-f` and `-o` apply to scripts too:
+`-t` and `-o` apply to scripts too (`-f` does not: a script is its own input):
 
 ```sh
-./dbc -f json script scripts/loop_params.go        # one JSON array on stdout
-./dbc -f csv -o report.csv script scripts/loop.go  # straight to a file
+./dbc -t json script scripts/loop_params.go        # one JSON array on stdout
+./dbc -t csv -o report.csv script scripts/loop.go  # straight to a file
 ```
 
 The results a script pushes with `s.Show` are collected and rendered together
 when it finishes, exactly as the statements of a multi-statement query are —
-so `-f json` yields one array rather than a run of separate documents.
+so `-t json` yields one array rather than a run of separate documents.
 
 `s.Print` output is progress, not data, and streams as it happens. It shares
 stdout with a `text` table, but moves to stderr when a machine-readable format
-has stdout to itself, so `./dbc -f json script … | jq` parses.
+has stdout to itself, so `./dbc -t json script … | jq` parses.
 
 ### Multi-statement runs
 
@@ -499,13 +516,13 @@ carries straight over, and the goose binary stops being a thing to install.
 ./dbc -c local-pg migrate up                      # apply everything pending
 ./dbc -c local-pg migrate down                    # roll back the latest
 ./dbc -c local-pg migrate create add_users_table  # new timestamped file
-./dbc -c local-pg -f json migrate version         # for scripts
+./dbc -c local-pg -t json migrate version         # for scripts
 ```
 
 Verbs: `status`, `version`, `up`, `up-by-one`, `up-to VERSION`, `down`,
 `down-to VERSION`, `redo`, `create NAME`.
 
-The migrations directory is `-dir`, else the connection's `migrations` setting
+The migrations directory is `--dir`, else the connection's `migrations` setting
 in the config, else the working directory:
 
 ```toml
@@ -516,11 +533,11 @@ dsn        = "postgres://devuser:secret@localhost:5432/church_development?sslmod
 migrations = "db/migrate"
 ```
 
-With no config file at all, `-driver` and `-dsn` name the database on the
+With no config file at all, `--driver` and `--dsn` name the database on the
 command line — goose's whole invocation, one flag longer:
 
 ```sh
-./dbc -driver postgres -dsn "$DATABASE_URL" -dir db/migrate migrate up
+./dbc --driver postgres --dsn "$DATABASE_URL" --dir db/migrate migrate up
 ```
 
 A migration file is `NNN_name.sql` with `-- +goose Up` and `-- +goose Down`
@@ -529,7 +546,7 @@ sections. Statements are split by the same scanner the editor uses, so a
 `StatementBegin`/`StatementEnd` block and `NO TRANSACTION` annotations are
 honored too. Each migration runs in a transaction with its version row, so a
 failure leaves neither behind. `up` refuses a pending migration older than the
-current version — the merge-of-two-branches case — unless `-allow-missing` is
+current version — the merge-of-two-branches case — unless `--allow-missing` is
 given, exactly as goose does.
 
 Works on all four engines. bytdb runs DDL outside transactions, so there each
@@ -539,7 +556,7 @@ statement commits on its own.
 
 `csv`, `tsv`, `markdown`, `html` (styled standalone page), `json`
 (array of objects), `text` (aligned table) — from the `Ctrl+E` dialog
-(clipboard or file), from scripts via `s.Export`, or headless via `-f`.
+(clipboard or file), from scripts via `s.Export`, or headless via `-t`.
 
 To the **clipboard**, `html` is not the page but a self-styled `<table>`
 offered as the clipboard's HTML flavor, so it pastes into Teams, Outlook and

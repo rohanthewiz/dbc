@@ -36,18 +36,13 @@ ten session docs in `ai_docs/claude_sessions/`
 - **N-003** · raised `2026-0728-2022-multi-statement-headless` · value low
   Headless multi-statement output is collected and rendered at the end, not
   streamed per statement, so a long `text` run shows nothing until it
-  finishes. Still true (`main.go:286`); `-o` and the single-document HTML/JSON
+  finishes. Still true (`main.go:345`), and it now also covers a whole `-f`
+  file or piped stdin (N-005); `-o` and the single-document HTML/JSON
   formats want the collected shape, so streaming would be `text`-only.
 
 - **N-004** · raised `2026-0728-2022-multi-statement-headless` · value low
   Headless: no `-tx` flag to wrap the whole buffer in one transaction, and no
   continue-on-error mode. Neither exists today.
-
-- **N-005** · raised `2026-0728-2022-multi-statement-headless` · value medium
-  Headless SQL comes only from the argument — no SQL file and no stdin
-  (nothing in the tree reads `os.Stdin`). Note `-f` is already the output
-  format flag, so a file input needs another spelling (`-i file`, or `-`
-  meaning stdin). `dbc "$(cat f.sql)"` is the workaround.
 
 - **N-006** · raised `2026-0728-2022-multi-statement-headless` · value low
   A TUI "run all" key that runs the whole buffer through the multi-statement
@@ -69,7 +64,7 @@ ten session docs in `ai_docs/claude_sessions/`
 
 - **N-010** · raised `2026-0807-2148-bytdb-v0.9.1-and-dual-demo-defaults` · value low
   With no config, every headless invocation seeds both demos
-  (`db.SeedDemos`, `main.go:103`), so a bare `dbc "SELECT 1"` opens the bytdb
+  (`db.SeedDemos` in `setup`, `main.go:288`), so a bare `dbc "SELECT 1"` opens the bytdb
   file. Lazy seeding on first use of a connection is the fix if it ever
   matters.
 
@@ -149,6 +144,9 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-005** · raised `2026-0728-2022-multi-statement-headless` ·
+  closed 2026-09-24, 2026-0924-1810-cli-urfave-file-stdin-input — `-f`/`--file` reads the SQL from a file (`-f -` = stdin), and piped stdin with no SQL argument runs headless too; the output format moved to `-t`/`--format`. The CLI moved from Go's `flag` to `urfave/cli/v3`: every flag has a long name (`--conn`, `--out`, …), flags may follow the SQL or a subcommand, more than one SQL argument is an error, `-f` on `script`/`migrate` is refused, and `-f csv` points at `-t csv`.
 
 - **N-034** · raised `2026-0924-1725-conn-mgmt-session-discard-timeouts` ·
   closed 2026-09-24, 2026-0924-1744-conn-cancel-dead-sessions-retire-tview-ui — `Session.Classify` asks the driver whether the connection is still usable after any error (`driver.Validator` for MySQL/SQLite/bytdb, `IsClosed` for pgx, which has no Validator), so a connection cut mid-statement is caught at once: stateful → `ErrSessionLost`, `ErrBadConn` on a stateless session → retry once, possibly-sent on a stateless session → drop without retrying. Tested with a fake driver (`db/fault_test.go`); the pgx branch waits on N-035.

@@ -76,8 +76,9 @@ command = ["./bin/dbc"]
 # The static form, because dbc has no completion code of its own and its
 # surface is small: the two subcommands in first position (a bare first word is
 # otherwise a SQL string, which nothing could complete), and the flags wherever
-# a word starts with "-". Keep these in step with the flag block in main.go.
+# a word starts with "-". Keep these in step with the flags in main.go's newCLI.
 [[completions]]
 binary = "dbc"
 subcommands = ["script", "migrate"]
-flags = ["-config", "-c", "-f", "-o", "-demo", "-driver", "-dsn", "-dir", "-allow-missing"]
+flags = ["--config", "-c", "--conn", "-f", "--file", "-t", "--format", "-o", "--out",
+         "--demo", "--driver", "--dsn", "--dir", "--allow-missing", "--help"]

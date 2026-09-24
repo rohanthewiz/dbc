@@ -18,7 +18,7 @@ import (
 )
 
 // The migrate subcommand. Its verbs are goose's, so a hand used to
-// `goose postgres "$DSN" up` can type `dbc -driver postgres -dsn "$DSN" migrate up`
+// `goose postgres "$DSN" up` can type `dbc --driver postgres --dsn "$DSN" migrate up`
 // and nothing else changes — the files, the version table, the meaning.
 //
 //	dbc migrate status            every migration with its applied date
@@ -31,13 +31,13 @@ import (
 //	dbc migrate redo              down then up on the latest
 //	dbc migrate create NAME       write a timestamped empty migration file
 //
-// The connection comes from -c, -dsn/-driver, or the config default, as for
-// a headless query. The directory comes from -dir, else the connection's
+// The connection comes from -c, --dsn/--driver, or the config default, as for
+// a headless query. The directory comes from --dir, else the connection's
 // `migrations` setting in the config, else the working directory.
 //
-// `status` and `version` are results like any other: -f json works, so a
+// `status` and `version` are results like any other: -t json works, so a
 // deploy script can check the schema state without parsing text.
-const migrateUsage = `usage: dbc [-c conn | -driver d -dsn s] [-dir path] migrate <command>
+const migrateUsage = `usage: dbc [-c conn | --driver d --dsn s] [--dir path] migrate <command>
 
 commands:
   status           show each migration and when it was applied
@@ -128,8 +128,8 @@ func runMigrate(cfg *config.Config, mgr *db.Manager, args []string, f export.For
 // migrationsDir applies the precedence: flag, then the connection's config
 // entry, then the working directory (which is what goose defaults to).
 func migrationsDir(cfg *config.Config, conn string) string {
-	if *flagDir != "" {
-		return *flagDir
+	if flagDir != "" {
+		return flagDir
 	}
 	if cc, ok := cfg.ConnByName(conn); ok && cc.Migrations != "" {
 		return cc.Migrations
@@ -159,7 +159,7 @@ func openMigrator(mgr *db.Manager, cfg *config.Config, conn, dir string) *migrat
 		fail(err, "could not open connection")
 	}
 	m := migrate.NewWith(dbh, d, migs)
-	m.AllowMissing = *flagMissing
+	m.AllowMissing = flagMissing
 	m.Log = func(s string) { fmt.Println(s) }
 	return m
 }

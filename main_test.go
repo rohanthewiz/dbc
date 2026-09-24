@@ -5,10 +5,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/rohanthewiz/serr"
+	"github.com/urfave/cli/v3"
 
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
@@ -145,12 +147,12 @@ func TestWarnTruncated(t *testing.T) {
 	}
 }
 
-// A headless script must render through -f and land where -o says, not in the
+// A headless script must render through --format and land where -o says, not in the
 // hardcoded text table it once always printed.
 func TestScriptHeadlessHonorsFormatAndOutfile(t *testing.T) {
 	mgr := newTestManager(t)
 	out := filepath.Join(t.TempDir(), "cats.csv")
-	setFlag(t, flagOut, out)
+	setFlag(t, &flagOut, out)
 
 	runScriptHeadless(mgr, "testdata/show_two.go", export.CSV)
 
@@ -189,7 +191,7 @@ func TestScriptLogDestination(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			setFlag(t, flagOut, c.outFile)
+			setFlag(t, &flagOut, c.outFile)
 			if got := scriptLog(c.format); got != c.want {
 				t.Errorf("scriptLog = %v, want %v", got, c.want)
 			}
@@ -220,4 +222,137 @@ func TestRunStatementsCanceled(t *testing.T) {
 	if !errors.As(err, &se) || se.FieldsMap()["statement"] != "1/2" {
 		t.Errorf("error should name the statement that stopped: %v", err)
 	}
+}
+
+// sqlInput is the whole headless-or-TUI decision, so every row of its table
+// is pinned here: argument, --file, "-", piped stdin, nothing, and the
+// combinations that are refused.
+func TestSQLInput(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "q.sql")
+	if err := os.WriteFile(file, []byte("SELECT 1 FROM file"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	const piped = "SELECT 1 FROM stdin"
+
+	cases := []struct {
+		name         string
+		args         []string
+		file         string
+		stdinPiped   bool
+		wantSQL      string
+		wantHeadless bool
+		wantErr      string
+	}{
+		{"argument", []string{"SELECT 1"}, "", false, "SELECT 1", true, ""},
+		{"argument wins over piped stdin", []string{"SELECT 1"}, "", true, "SELECT 1", true, ""},
+		{"file", nil, file, false, "SELECT 1 FROM file", true, ""},
+		{"dash reads stdin", nil, "-", false, piped, true, ""},
+		{"piped stdin", nil, "", true, piped, true, ""},
+		{"nothing opens the TUI", nil, "", false, "", false, ""},
+		{"argument and file", []string{"SELECT 1"}, file, false, "", false, "not both"},
+		{"unquoted SQL", []string{"SELECT", "*", "FROM", "t"}, "", false, "", false, "4 arguments"},
+		{"missing file", nil, filepath.Join(dir, "nope.sql"), false, "", false, "no such file"},
+		{"old -f csv habit", nil, "csv", false, "", false, "use -t csv"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			sql, headless, err := sqlInput(c.args, c.file, strings.NewReader(piped), c.stdinPiped)
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Fatalf("err = %v, want one containing %q", err, c.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+			if sql != c.wantSQL || headless != c.wantHeadless {
+				t.Errorf("got (%q, %v), want (%q, %v)", sql, headless, c.wantSQL, c.wantHeadless)
+			}
+		})
+	}
+}
+
+// The cli wiring: short and long spellings land in the same variable, flags
+// may follow the SQL, root flags reach the subcommands (persistent), and the
+// migrate verbs arrive untouched. The actions are swapped for recorders so
+// nothing connects or exits.
+func TestCLIParsing(t *testing.T) {
+	type got struct {
+		action              string
+		args                []string
+		file, format, conn  string
+		out, dir, dsn, demo string
+		missing             bool
+	}
+	cases := []struct {
+		name string
+		argv []string
+		want got
+	}{
+		{"short flags after the SQL", []string{"SELECT 1", "-t", "csv", "-c", "pg"},
+			got{action: "root", args: []string{"SELECT 1"}, format: "csv", conn: "pg"}},
+		{"long flags", []string{"--file", "q.sql", "--format", "json", "--conn", "pg", "--out", "r.json"},
+			got{action: "root", file: "q.sql", format: "json", conn: "pg", out: "r.json"}},
+		{"single-dash long names still parse", []string{"-dsn", "x", "-demo", "sqlite", "SELECT 1"},
+			got{action: "root", args: []string{"SELECT 1"}, format: "text", dsn: "x", demo: "sqlite"}},
+		{"-f - is stdin, not the end of flags", []string{"-f", "-", "-t", "tsv"},
+			got{action: "root", file: "-", format: "tsv"}},
+		{"goose word order for migrate", []string{"--dir", "db/migrate", "--allow-missing", "migrate", "up"},
+			got{action: "migrate", args: []string{"up"}, format: "text", dir: "db/migrate", missing: true}},
+		{"root flags after the subcommand", []string{"migrate", "down-to", "0", "-t", "json"},
+			got{action: "migrate", args: []string{"down-to", "0"}, format: "json"}},
+		{"script", []string{"-o", "r.csv", "script", "s.go"},
+			got{action: "script", args: []string{"s.go"}, format: "text", out: "r.csv"}},
+		{"-- keeps a leading comment as SQL", []string{"--", "-- note\nSELECT 1"},
+			got{action: "root", args: []string{"-- note\nSELECT 1"}, format: "text"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			resetFlags(t)
+			var g got
+			record := func(name string) cli.ActionFunc {
+				return func(_ context.Context, cmd *cli.Command) error {
+					g = got{action: name, args: cmd.Args().Slice(), file: flagFile, format: flagFormat,
+						conn: flagConn, out: flagOut, dir: flagDir, dsn: flagDSN, demo: flagDemo,
+						missing: flagMissing}
+					if len(g.args) == 0 {
+						g.args = nil
+					}
+					return nil
+				}
+			}
+			app := newCLI()
+			app.Action = record("root")
+			for _, sub := range app.Commands {
+				sub.Action = record(sub.Name)
+			}
+			if err := app.Run(context.Background(), append([]string{"dbc"}, c.argv...)); err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			if c.want.format == "" {
+				c.want.format = "text"
+			}
+			if !reflect.DeepEqual(g, c.want) {
+				t.Errorf("got  %+v\nwant %+v", g, c.want)
+			}
+		})
+	}
+}
+
+// resetFlags zeroes the flag variables for one test and restores them after,
+// since newCLI writes into package globals. DBC_DEMO is cleared so the
+// environment cannot leak into --demo.
+func resetFlags(t *testing.T) {
+	t.Helper()
+	t.Setenv("DBC_DEMO", "")
+	ptrs := []*string{&flagConfig, &flagConn, &flagFile, &flagFormat, &flagOut,
+		&flagDemo, &flagDriver, &flagDSN, &flagDir}
+	for _, p := range ptrs {
+		setFlag(t, p, "")
+	}
+	old := flagMissing
+	flagMissing = false
+	t.Cleanup(func() { flagMissing = old })
 }

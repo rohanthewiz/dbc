@@ -2,8 +2,8 @@
 // warm dark gray-green surfaces with a single green accent.
 //
 // These hex strings are the one source of truth for every surface dbc paints.
-// The TUI turns them into tcell colors and tview color tags; the HTML export
-// drops them straight into its stylesheet. The package deliberately has no
+// The TUI turns them into terminal colors; the HTML export drops them
+// straight into its stylesheet. The package deliberately has no
 // dependencies so both sides can import it.
 package theme
 

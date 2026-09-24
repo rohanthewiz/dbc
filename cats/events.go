@@ -17,9 +17,9 @@
 //  1. NO READ DEADLINE once subscribed. Events are sparse — minutes can pass
 //     between them — so a deadline would turn an idle stream into a
 //     reconnect loop. The handshake IS bounded; only the pump is not.
-//  2. The callback runs on the READER goroutine and must not touch App
-//     state. It is expected to do exactly one thing: post a closure onto the
-//     UI goroutine. See ui/cats_glue.go.
+//  2. The callback runs on the READER goroutine and must not touch UI
+//     state. It is expected to do exactly one thing: hand the event to the UI
+//     goroutine (the TUI sends it as a message). See tui/cats.go.
 //  3. Close must interrupt a blocked read, which closing the connection is
 //     the only way to do. The live connection is therefore held under a
 //     mutex so Close can reach it.

@@ -80,8 +80,7 @@ on the SQLite demo rather than failing.
 ## The TUI
 
 ```sh
-./dbc                 # the Bubble Tea UI: mouse-first, with the AI assistant
-./dbc -ui classic     # the original tview UI (also DBC_UI=classic)
+./dbc                 # mouse-first, with the AI assistant
 ```
 
 ```

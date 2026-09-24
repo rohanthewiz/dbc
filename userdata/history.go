@@ -1,11 +1,9 @@
 // Package userdata is the state dbc keeps for the user between sessions:
 // the query history and the editor buffer, both under ~/.config/dbc.
 //
-// It started life inside the tview UI (package ui), which still carries its
-// own copy; the Bubble Tea UI (package tui) uses this one. The two are
-// byte-for-byte compatible on disk — same paths, same JSON-lines shape — so
-// switching UIs keeps both the history and the scratchpad. When ui is
-// retired its copy goes with it.
+// It started life inside the former tview UI (package ui, since removed),
+// and kept that UI's on-disk format — same paths, same JSON-lines shape — so
+// history and the scratchpad written by older dbc builds still load.
 package userdata
 
 import (

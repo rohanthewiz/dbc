@@ -13,7 +13,7 @@ import (
 	"github.com/rohanthewiz/dbc/cats"
 )
 
-// Fake cats sockets, as in the tview UI's tests: a hook socket that records
+// Fake cats sockets, as in the former tview UI's tests: a hook socket that records
 // one request per connection and never replies, and a control socket that
 // answers one request per connection. Paths are short on purpose — a
 // t.TempDir() path embeds the test name and overruns sun_path (104 bytes on

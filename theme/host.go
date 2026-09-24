@@ -17,9 +17,8 @@ package theme
 // synthesis: a palette half the host's and half dbc's looks like a bug, and
 // the built-in palette is a perfectly good answer.
 //
-// This is the Bubble Tea UI's copy of the mapping the tview UI keeps in
-// ui/catstheme.go (catsHostPalette); they are identical, and the tview copy
-// goes when that UI is retired.
+// The mapping was first written for the former tview UI (its
+// catsHostPalette); this is now its only copy.
 func FromHost(colors map[string]string) (Palette, bool) {
 	if len(colors) == 0 {
 		return Palette{}, false

@@ -16,9 +16,9 @@ import (
 // grid is the results table.
 //
 // It is VIRTUALIZED: only the rows and columns that fit are drawn each frame,
-// so a 50,000-row result costs the same to draw as a 50-row one. (The tview
-// table built a widget per cell up front, which is why max_display_rows
-// exists; the cap is still honored so the two UIs agree on what is shown.)
+// so a 50,000-row result costs the same to draw as a 50-row one. (The former
+// tview table built a widget per cell up front, which is why max_display_rows
+// exists; the cap is still honored, so the setting means what it always has.)
 //
 // COORDINATES. A "row" here is a DISPLAY row — an index into order, which is
 // the sorted view of the result's rows. Sorting permutes order and nothing

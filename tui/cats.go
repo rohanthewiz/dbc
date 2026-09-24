@@ -14,9 +14,10 @@ import (
 	"github.com/rohanthewiz/dbc/theme"
 )
 
-// The cats host integration, ported from the tview UI (ui/cats_glue.go,
-// catstheme.go, catsagents.go, metakeys.go, hostident.go). The behavior and
-// the reasons for it are unchanged; what changed is the plumbing:
+// The cats host integration, ported from the former tview UI (its
+// cats_glue.go, catstheme.go, catsagents.go, metakeys.go and hostident.go,
+// removed with it). The behavior and the reasons for it are unchanged; what
+// changed is the plumbing:
 //
 //	tview                               Bubble Tea
 //	a.catsPost(func(){…}) closure  →    a catsMsg delivered through m.send

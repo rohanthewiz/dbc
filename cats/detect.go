@@ -5,10 +5,10 @@
 //
 // It is stdlib only, and it obeys two house rules:
 //
-//   - NO UI STATE. Nothing in here touches the tview App. Background
-//     goroutines hand results to callbacks whose only job is to post a closure
-//     onto the UI goroutine (QueueUpdateDraw); that closure is the sole
-//     mutator. See ui/cats_glue.go.
+//   - NO UI STATE. Nothing in here touches the UI's model. Background
+//     goroutines hand results to callbacks whose only job is to post a
+//     message to the UI goroutine; the UI's Update is the sole mutator. See
+//     tui/cats.go.
 //   - SILENT DEGRADATION. Every failure — not inside cats, socket missing,
 //     socket dead, cats restarted, protocol mismatch — ends at Tier 0, where
 //     dbc behaves exactly as it does in any other terminal. No feature may

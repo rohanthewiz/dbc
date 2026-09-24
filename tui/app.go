@@ -31,7 +31,7 @@ import (
 // function Bubble Tea calls on its own goroutine) and reports back with a
 // message. The one exception is the database session, which a running
 // command uses while Update may be starting the next run's bookkeeping; it
-// has its own mutex (sessMu), exactly as the tview UI's did.
+// has its own mutex (sessMu), exactly as the former tview UI's did.
 //
 // It is a pointer receiver throughout: the model is large, and every Update
 // returning a copy of it would copy the editor buffer and the result on
@@ -67,7 +67,7 @@ type Model struct {
 	hist       *userdata.History
 	histWarned bool
 
-	// run state — one run at a time, as in the tview UI
+	// run state — one run at a time, as in the former tview UI
 	busy    bool
 	runGen  int // bumped per run; a late message from an older run is dropped
 	runTag  string

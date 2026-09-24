@@ -9,7 +9,7 @@ import (
 // Palette is the ten surfaces dbc paints, as hex strings. The constants above
 // are one instance of it — the built-in muted green — and Default returns
 // them; anything else is a palette handed in from outside, which today means
-// the colors of the cats host dbc is running inside (see ui/catstheme.go).
+// the colors of the cats host dbc is running inside (see FromHost in host.go).
 //
 // It is a struct rather than a map because these ten are the whole vocabulary:
 // a missing key would be a compile error rather than a black surface nobody

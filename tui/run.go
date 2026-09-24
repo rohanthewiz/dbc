@@ -18,8 +18,8 @@ import (
 	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
-// Running statements and scripts. The rules are the tview UI's, carried over
-// unchanged because they were each learned the hard way:
+// Running statements and scripts. The rules are the former tview UI's,
+// carried over unchanged because they were each learned the hard way:
 //
 //   - ONE RUN AT A TIME. A second Ctrl+R while one is in flight is refused
 //     in words, not queued: a queued DELETE behind a slow SELECT is a

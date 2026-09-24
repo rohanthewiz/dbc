@@ -54,12 +54,6 @@ ten session docs in `ai_docs/claude_sessions/`
   path. The TUI runs the statement under the cursor (or the selection) by
   design; this is contingent on that design changing.
 
-- **N-007** · raised `2026-0731-2016-feature-items-from-the-review-backlog` · value low
-  Linter modernizations: the `f := f` loop copy at `ui/modals.go:169` is
-  redundant under `go 1.26.1`, and the hand-rolled `min` (`h := n + 4; if h >
-  20 { h = 20 }`) is at `ui/modals.go:179` and now also
-  `ui/catsagents.go:199`.
-
 - **N-008** · raised `2026-0731-2200-dbc` · value medium
   `INSERT … RETURNING` (and `UPDATE`/`DELETE … RETURNING`) shows
   `rows_affected`, not the returned rows. `isQuery` (`db/manager.go:297`)
@@ -85,13 +79,6 @@ ten session docs in `ai_docs/claude_sessions/`
   church docs point at `go install github.com/rohanthewiz/dbc@latest` (which
   works today only as a pseudo-version of `main`). A `v0.1.0` tag would line
   the three up.
-
-- **N-025** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` · value low
-  Retire the classic tview UI (`ui/`, `-ui classic`) once the Bubble Tea UI
-  has earned it. Retiring it also removes the duplicates it keeps: history and
-  buffer (now in `userdata/`), the host-palette mapping (now
-  `theme.FromHost`), and N-007's lint items, which live only in `ui/`. The
-  user's call, not a default — it is the way back if the new UI misbehaves.
 
 - **N-027** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` · value low
   Keep assistant conversations: save each to `~/.config/dbc/chats/` and offer
@@ -121,30 +108,15 @@ ten session docs in `ai_docs/claude_sessions/`
   server. A failure is graceful — the transcript says the lookup failed and
   the question goes without schema — so this is confidence, not a fix.
 
-- **N-033** · raised `2026-0924-1725-conn-mgmt-session-discard-timeouts` · value low
-  Opening a connection from the sidebar can't be canceled. `tui/run.go`
-  `connectCmd` and the classic UI's `setActive` call `mgr.DB(name)`, which
-  uses a background context, so only `connect_timeout` bounds the wait. With
-  `connect_timeout = "0"`, an unreachable host leaves "connecting…" up until
-  the OS's TCP timeout (over a minute). Fix: give the connect a context that
-  Ctrl+K/Esc cancels, and pass it to `mgr.DBContext`.
-
-- **N-034** · raised `2026-0924-1725-conn-mgmt-session-discard-timeouts` · value low
-  When the server cuts a pinned session's connection, the first failure is
-  usually a plain network error (the statement had already been sent, so
-  pgx doesn't report `ErrBadConn`), not `db.ErrSessionLost`. That run fails
-  with the driver's own words, and "session lost" appears only on the run
-  after. Nothing is ever replayed, so this is about the wording, not
-  correctness. A fix would treat network errors on a stateful session as
-  lost too.
-
 - **N-035** · raised `2026-0924-1725-conn-mgmt-session-discard-timeouts` · value low
   Test the session changes against a live MySQL and Postgres. The MySQL
   driver's session reset leaving an open transaction on a pooled connection
   was confirmed by reading `go-sql-driver/mysql` v1.10.0; the tests used
   SQLite and bytdb only. Worth checking against real servers: that closing a
   session ends its transaction, that the stateful and stateless dead-session
-  paths behave, and `conn_idle_timeout`/`connect_timeout`.
+  paths behave (including `Session.Classify`'s pgx branch, which asks
+  `pgx.Conn.IsClosed` and has no test without a live connection), and
+  `conn_idle_timeout`/`connect_timeout`.
 
 ## Roadmap
 
@@ -177,6 +149,18 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-034** · raised `2026-0924-1725-conn-mgmt-session-discard-timeouts` ·
+  closed 2026-09-24, 2026-0924-1744-conn-cancel-dead-sessions-retire-tview-ui — `Session.Classify` asks the driver whether the connection is still usable after any error (`driver.Validator` for MySQL/SQLite/bytdb, `IsClosed` for pgx, which has no Validator), so a connection cut mid-statement is caught at once: stateful → `ErrSessionLost`, `ErrBadConn` on a stateless session → retry once, possibly-sent on a stateless session → drop without retrying. Tested with a fake driver (`db/fault_test.go`); the pgx branch waits on N-035.
+
+- **N-033** · raised `2026-0924-1725-conn-mgmt-session-discard-timeouts` ·
+  closed 2026-09-24, 2026-0924-1744-conn-cancel-dead-sessions-retire-tview-ui — each connect runs under its own context: Ctrl+K cancels one still dialing, Ctrl+C cancels instead of quitting, quitting abandons it; a newer pick cancels an older connect and a generation counter drops the older outcome, which could previously land last and switch the connection back.
+
+- **N-025** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` ·
+  closed 2026-09-24, 2026-0924-1744-conn-cancel-dead-sessions-retire-tview-ui — the classic tview UI is removed: `ui/` (~5,300 lines), the `-ui` flag, `DBC_UI` and `envOr`; `go mod tidy` dropped tview, tcell, `gdamore/encoding`, `x/term`. The history and buffer copies went with it (`userdata/` keeps the same on-disk format), as did its host-palette copy (`theme.FromHost` is the only one now).
+
+- **N-007** · raised `2026-0731-2016-feature-items-from-the-review-backlog` ·
+  closed 2026-09-24, 2026-0924-1744-conn-cancel-dead-sessions-retire-tview-ui — moot: every lint site (`ui/modals.go`, `ui/catsagents.go`) went with the classic UI (N-025).
 
 - **N-026** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` ·
   closed 2026-09-24, 2026-0924-1458-assistant-schema-context — schema context for the assistant. `db.TableIndex` word-matches the statement (lexed, so strings and comments don't count) and the question against the catalog the sidebar already holds; the chip forecasts "schema of …" live; on Enter `Manager.Columns` runs one catalog query per driver (`db.ColumnsQuery`: `pg_attribute`+`format_type` for Postgres and bytdb, `column_type` for MySQL, `pragma_table_info` for SQLite) and `ai.Build` sends one line per table, up to 8 tables and 80 columns each, without `ai_rows`. bytdb views went without columns until bytdb v0.16.0 (bytdb's N-017); dbc now pins v0.16.0, where they report their columns and `information_schema.tables` lists them, so `db.TablesQuery` uses the Postgres query for bytdb too. Live-server check is N-032.

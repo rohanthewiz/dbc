@@ -9,7 +9,7 @@
 # cats-native client.
 #
 # BEING A PLUGIN AND BEING A CATS-NATIVE CLIENT ARE ORTHOGONAL, and dbc is
-# both. The native side (cats/, ui/cats_glue.go) is what the TUI does once it
+# both. The native side (cats/, tui/cats.go) is what the TUI does once it
 # is running in a cats pane — working/idle hook reports, the host's theme, ⌘
 # accelerators, ^G handing a statement to a sibling agent — and it works the
 # same whether the pane was opened by this manifest, by `dbc` typed into a

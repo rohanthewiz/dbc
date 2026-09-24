@@ -17,8 +17,8 @@
 //     Gemini are registered below and differ only in the binary name.
 //
 // The package is UI-agnostic. A Chat reports everything that happens as
-// Events on a channel, so the tview UI and the Bubble Tea UI consume the same
-// thing.
+// Events on a channel, so any UI — today the Bubble Tea one in package tui —
+// consumes it the same way.
 package ai
 
 import "os/exec"

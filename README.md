@@ -149,6 +149,26 @@ sibling agent pane to stage the question there and switch to it; dbc never
 presses Enter on your behalf. The Cats chat panel is always available as an
 alternative and receives the question immediately.
 
+#### As a Cats plugin
+
+dbc is also a Cats plugin of type `db_client`, declared in
+[`cats-plugin.toml`](cats-plugin.toml):
+
+```sh
+catctl plugin install rohanthewiz/dbc   # or, from this checkout: catctl plugin link .
+catctl plugin run rohanthewiz.dbc       # opens the TUI in a new tab
+```
+
+Installing builds `bin/dbc` and links it as `~/.cats/bin/dbc`, so `dbc`
+typed in any shell is the same build the plugin launches. `catctl completion`
+picks up dbc's subcommands and flags as well.
+
+The plugin tab opens in your current directory, so a project's own
+`./dbc.toml` is used when there is one, otherwise
+`~/.config/dbc/config.toml`, otherwise the demo connections. The integration
+described above works the same either way. Its declared type is what keeps
+Cats from offering the dbc pane as a place to drop an agent prompt.
+
 ### Query history
 
 Every statement you run is recorded. `Ctrl+P` opens the history newest first;

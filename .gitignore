@@ -4,3 +4,4 @@ dbc.toml
 out_*.csv
 adopted_report.html
 .cats-todo/
+/bin/

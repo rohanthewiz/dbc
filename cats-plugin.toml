@@ -1,0 +1,83 @@
+# cats-plugin.toml registers dbc with the cats plugin host.
+#
+#   Install:            catctl plugin install rohanthewiz/dbc
+#   Local development:  catctl plugin link .   (from this checkout)
+#   Launch:             catctl plugin run rohanthewiz.dbc
+#
+# Written against ../cats-todo/cats-plugin.toml, the reference manifest, and
+# shaped like ../gonotes/cats-plugin.toml, the other plugin that is also a
+# cats-native client.
+#
+# BEING A PLUGIN AND BEING A CATS-NATIVE CLIENT ARE ORTHOGONAL, and dbc is
+# both. The native side (cats/, ui/cats_glue.go) is what the TUI does once it
+# is running in a cats pane — working/idle hook reports, the host's theme, ⌘
+# accelerators, ^G handing a statement to a sibling agent — and it works the
+# same whether the pane was opened by this manifest, by `dbc` typed into a
+# shell, or by nothing at all. This file answers a different question: how the
+# pane gets opened from the ⌘K palette instead of from a shell, and what kind of
+# tool cats should take it for once it is open.
+
+id = "rohanthewiz.dbc"
+name = "dbc"
+version = "0.1.0"
+description = "A terminal database client for Postgres, MySQL, SQLite and bytdb, scriptable in Go: run the statement under the cursor, browse tables, recall history, export results as CSV, Markdown, HTML or JSON, and drive whole query loops from a .go script."
+platforms = ["linux", "macos"]
+# What kind of tool this is. A database client is not an LLM agent, so cats
+# never offers its pane as a drop target for a prompt, even though dbc reports
+# working/idle over the hook API the way an agent does (that reporting is what
+# earns a long query its completion badge and toast). It also lets another
+# client find "the database tool" by plugin_type in pane.list without knowing
+# this id. A cats older than the key ignores it (unknown types are treated as
+# unset).
+type = "db_client"
+
+# Expose the built binary on the user's PATH. The host symlinks it into the cats
+# bin dir (~/.cats/bin/dbc -> <plugins-root>/<id>/bin/dbc), which `catctl
+# shellinit` and every cats pane put first on PATH, so `dbc "SELECT …"` typed in
+# a shell — or run by an agent — is the same build the action below launches,
+# rather than a hand-built copy that drifts. Top-level key, so it sits above the
+# [[build]] tables.
+bin = ["./bin/dbc"]
+
+# Build at install/link time, in the plugin root. dbc is pure Go (modernc
+# SQLite, bytdb, pgx, go-sql-driver — no cgo), so this needs nothing beyond a Go
+# toolchain.
+#
+# The output goes to bin/ rather than the repo root on purpose: /dbc is already
+# .gitignore'd as the hand-built binary, and giving the plugin host its own copy
+# means a `go build .` in a working tree cannot leave a half-built binary where
+# a plugin launch will find it.
+[[build]]
+command = ["sh", "-c", "mkdir -p bin && go build -o bin/dbc ."]
+
+# The TUI, first so a bare `plugin run` opens it.
+#
+# NO -config FLAG, DELIBERATELY. An action's argv[0] is anchored to the plugin
+# root, but the pane it opens in has the USER'S project as its cwd — and that
+# is exactly what dbc's config lookup wants: ./dbc.toml first, so a project
+# that keeps its connections next to its code gets them, then
+# ~/.config/dbc/config.toml for everything else. Pinning a path here would
+# throw the per-project half away. (Spelling it `-config ~/.config/…` would be
+# worse still: this argv is exec'd with no shell, so the tilde would not
+# expand.)
+#
+# With neither file present dbc starts on its two seeded demo connections, so a
+# fresh install is usable the moment it opens. History, the saved editor buffer
+# and the bytdb demo all live under the home directory, not the cwd, so they
+# are the same from every tab.
+[[actions]]
+id = "tui"
+title = "dbc — database client"
+command = ["./bin/dbc"]
+
+# Shell completion for the dbc command itself. `catctl completion <shell>`
+# reads this and registers dbc alongside catctl.
+#
+# The static form, because dbc has no completion code of its own and its
+# surface is small: the two subcommands in first position (a bare first word is
+# otherwise a SQL string, which nothing could complete), and the flags wherever
+# a word starts with "-". Keep these in step with the flag block in main.go.
+[[completions]]
+binary = "dbc"
+subcommands = ["script", "migrate"]
+flags = ["-config", "-c", "-f", "-o", "-demo", "-driver", "-dsn", "-dir", "-allow-missing"]

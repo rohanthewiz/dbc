@@ -58,11 +58,12 @@ type Model struct {
 	menu  *menu
 	modal modal
 
-	active     string        // active connection
-	tableRes   *model.Result // the active connection's catalog, for the sidebar
-	lastRes    *model.Result // the result in the grid
-	lastStmt   string        // the statement the last run executed
-	lastErr    string        // what it failed with, "" if it worked
+	active     string         // active connection
+	tableRes   *model.Result  // the active connection's catalog, for the sidebar
+	tableIdx   *db.TableIndex // the same catalog, indexed for the assistant's schema context
+	lastRes    *model.Result  // the result in the grid
+	lastStmt   string         // the statement the last run executed
+	lastErr    string         // what it failed with, "" if it worked
 	hist       *userdata.History
 	histWarned bool
 
@@ -289,6 +290,8 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 		return m.chatEvent(msg)
 	case chatModelSetMsg:
 		return m.chatModelSet(msg)
+	case chatSchemaMsg:
+		return m.chatSchema(msg)
 	case catsMsg:
 		return m.catsHandle(msg)
 	}

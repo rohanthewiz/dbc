@@ -237,3 +237,96 @@ func TestAgentMarkdownRendering(t *testing.T) {
 		t.Errorf("markers should be consumed:\n%s", joined)
 	}
 }
+
+// The columns of the tables the query names go with the question — without
+// ai_rows, since schema is not row data — and the note says so.
+func TestAssistantSendsTheQuerysSchema(t *testing.T) {
+	f := fakeAssistant(t, nil)
+	m := newTestModel(t)
+	key(t, m, "ctrl+r")
+	key(t, m, "ctrl+a")
+	pumpChat(t, m, func() bool { return m.chat.state == chatReady })
+
+	typeText(t, m, "add the owner")
+	key(t, m, "enter")
+	pumpChat(t, m, func() bool { return !m.chat.streaming })
+
+	p := lastPrompt(t, f)
+	if !strings.Contains(p, "- cats: id INTEGER, name TEXT, breed TEXT, age INTEGER, adopted BOOLEAN\n") {
+		t.Errorf("prompt should describe cats:\n%s", p)
+	}
+	if strings.Contains(p, "Whiskers") {
+		t.Error("schema must not bring rows with it")
+	}
+	if tr := m.chat.transcriptText(); !strings.Contains(tr, "sent: schema of cats, query") {
+		t.Errorf("the note should name the schema:\n%s", tr)
+	}
+}
+
+// With nothing in the editor, the question's own words pick the tables, and
+// the context chip forecasts them while the question is being typed.
+func TestAssistantFindsTablesNamedInTheQuestion(t *testing.T) {
+	f := fakeAssistant(t, nil)
+	m := newTestModel(t)
+	if _, err := m.mgr.Run("demo", "CREATE TABLE owners (id INTEGER PRIMARY KEY, cat_id INTEGER, email TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	drive(t, m, nil, m.connectCmd("demo")) // reload the catalog
+	m.editor.SetText("")
+	key(t, m, "ctrl+a")
+	pumpChat(t, m, func() bool { return m.chat.state == chatReady })
+
+	typeText(t, m, "join owners to cats")
+	if fr := frame(m).Text(); !strings.Contains(fr, "with: schema of owners, cats") {
+		t.Errorf("the chip should forecast the schema:\n%s", fr)
+	}
+	key(t, m, "enter")
+	pumpChat(t, m, func() bool { return !m.chat.streaming })
+	p := lastPrompt(t, f)
+	for _, want := range []string{"- owners: id INTEGER, cat_id INTEGER, email TEXT\n", "- cats: id INTEGER"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt is missing %q:\n%s", want, p)
+		}
+	}
+}
+
+// Context off means the question alone: no schema either.
+func TestAssistantContextOffSendsNoSchema(t *testing.T) {
+	f := fakeAssistant(t, nil)
+	m := newTestModel(t)
+	key(t, m, "ctrl+a")
+	pumpChat(t, m, func() bool { return m.chat.state == chatReady })
+	m.chat.attach = false
+	typeText(t, m, "about cats")
+	key(t, m, "enter")
+	pumpChat(t, m, func() bool { return !m.chat.streaming })
+	if p := lastPrompt(t, f); strings.Contains(p, "catalog") || !strings.HasSuffix(p, "editor.\n\nQuestion: about cats") {
+		t.Errorf("prompt = %q", p)
+	}
+}
+
+// A table the catalog listed at connect but can no longer describe (dropped
+// since) is left out, and the note does not claim its schema went.
+func TestAssistantSkipsATableThatIsGone(t *testing.T) {
+	f := fakeAssistant(t, nil)
+	m := newTestModel(t)
+	if _, err := m.mgr.Run("demo", "CREATE TABLE owners (id INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	drive(t, m, nil, m.connectCmd("demo"))
+	if _, err := m.mgr.Run("demo", "DROP TABLE owners"); err != nil {
+		t.Fatal(err)
+	}
+	m.editor.SetText("")
+	key(t, m, "ctrl+a")
+	pumpChat(t, m, func() bool { return m.chat.state == chatReady })
+	typeText(t, m, "who are the owners")
+	key(t, m, "enter")
+	pumpChat(t, m, func() bool { return !m.chat.streaming })
+	if p := lastPrompt(t, f); strings.Contains(p, "catalog") {
+		t.Errorf("a dropped table has no schema to send:\n%s", p)
+	}
+	if tr := m.chat.transcriptText(); !strings.Contains(tr, "sent: question only") {
+		t.Errorf("note should not mention schema:\n%s", tr)
+	}
+}

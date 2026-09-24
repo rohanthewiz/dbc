@@ -177,8 +177,13 @@ npm install -g @github/copilot-language-server   # if you do not have it
 ```
 
 **What is sent.** Each question carries the statement under the caret and,
-if its last run failed, the error. **Result rows are not sent unless the
-connection allows it** — rows are your data:
+if its last run failed, the error. It also carries the **schema** of the
+tables involved: every table the statement or the question names (up to
+eight) is described by its column names and declared types, read from the
+database's catalog when you press Enter, so the SQL that comes back uses
+your real columns. Schema is the table's shape, not its contents, so it goes
+on every connection. **Result rows are not sent unless the connection allows
+it** — rows are your data:
 
 ```toml
 ai_context_rows = 10        # cap on rows per question (0 = none)

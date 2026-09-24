@@ -103,6 +103,10 @@ func (m *Model) connected(msg connectMsg) tea.Cmd {
 	changed := msg.name != m.active
 	m.active = msg.name
 	m.tableRes = msg.tables
+	m.tableIdx = nil
+	if msg.tables != nil {
+		m.tableIdx = db.NewTableIndex(db.TableRefs(msg.tables.Rows))
+	}
 	m.refreshConns()
 	m.refreshTables()
 	if changed {

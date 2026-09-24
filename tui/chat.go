@@ -1,14 +1,17 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/rohanthewiz/dbc/ai"
+	"github.com/rohanthewiz/dbc/db"
 )
 
 // The assistant pane: a conversation with an ACP agent (Copilot by default)
@@ -29,9 +32,25 @@ import (
 // and a second of CPU for nothing.
 //
 // CONTEXT IS PER TURN and visible. The chip above the composer says what the
-// next question will carry (query, error, rows — per package ai's data rule)
-// and clicking it turns context off; each sent question is followed in the
-// transcript by the line saying what actually went.
+// next question will carry (schema, query, error, rows — per package ai's
+// data rule) and clicking it turns context off; each sent question is
+// followed in the transcript by the line saying what actually went.
+//
+// SCHEMA IS LOOKED UP AT SEND TIME. Which tables are involved is known as
+// the user types — a word match of the query and the composer against the
+// catalog the sidebar already holds, cheap enough to redo every frame — so
+// the chip can say "schema of cats" before anything is sent. Their COLUMNS
+// cost a database round trip, which a draw cannot make, so submitting runs
+// one catalog query first and sends when it answers:
+//
+//	enter ─► chatSubmit ── tables? ──no──────────────────► finishSubmit ─► agent
+//	                          │yes                              ▲
+//	                          └─► schemaCmd (pool, ≤3s) ─► chatSchemaMsg
+//
+// The turn counts as in flight from the enter, so a second question cannot
+// overtake the first while its lookup runs. The lookup is not cached:
+// columns change under ALTER TABLE, and one catalog query per question is
+// milliseconds against the seconds the model takes to answer.
 //
 // SQL IN ANSWERS IS ACTIONABLE. Every fenced code block gets ⤓ insert (drop
 // it into the editor at the caret) and ⧉ copy. There is no "run" button on
@@ -115,6 +134,26 @@ type chatEventMsg struct {
 	gen int
 	ev  ai.Event
 }
+
+// chatSchemaMsg delivers the columns looked up for a question, to be sent
+// with it. ctx is the context as it stood at the enter, so an editor change
+// during the lookup does not change what the question was about.
+type chatSchemaMsg struct {
+	gen      int
+	question string
+	ctx      ai.Context
+	cols     [][]db.Column // parallel to ctx.Tables; nil on error
+	err      error
+}
+
+// maxSchemaTables caps how many tables' columns go with one question. A
+// query joining more than this is rare; a question whose words happen to
+// name a dozen tables is not asking about all of them.
+const maxSchemaTables = 8
+
+// schemaLookupTimeout bounds the catalog query at send time. Past it the
+// question goes without columns rather than waiting on a busy database.
+const schemaLookupTimeout = 3 * time.Second
 
 // chatModelSetMsg reports a model switch.
 type chatModelSetMsg struct {
@@ -328,9 +367,14 @@ func (p *chatPane) modelName() string {
 // that is what the user is looking at. When it is the statement that last
 // ran, its result (or error) comes along; when the editor is empty, the last
 // run's statement stands in.
-func (m *Model) chatContext() ai.Context {
+//
+// question is the question being (or about to be) asked; its words, like
+// the statement's, pick which tables' schema goes along. The Tables come
+// back named but without columns — see chatSubmit for the lookup — and refs
+// is the same tables as the catalog knows them, for that lookup.
+func (m *Model) chatContext(question string) (ctx ai.Context, refs []db.TableRef) {
 	cc, _ := m.cfg.ConnByName(m.active)
-	ctx := ai.Context{Conn: m.active, Driver: cc.Driver, SendRows: cc.AIRows, MaxRows: m.cfg.AIContextRows}
+	ctx = ai.Context{Conn: m.active, Driver: cc.Driver, SendRows: cc.AIRows, MaxRows: m.cfg.AIContextRows}
 	cur := ""
 	if stmts, _ := m.stmtsToRun(); len(stmts) > 0 {
 		cur = stmts[len(stmts)-1]
@@ -339,17 +383,24 @@ func (m *Model) chatContext() ai.Context {
 		cur = m.lastStmt
 	}
 	ctx.Query = cur
+	if m.tableIdx != nil {
+		refs = m.tableIdx.Mentioned(cur, question)
+		refs = refs[:min(len(refs), maxSchemaTables)]
+		for _, r := range refs {
+			ctx.Tables = append(ctx.Tables, ai.Table{Name: m.tableIdx.Display(r), View: r.View})
+		}
+	}
 	if cur == "" || cur != m.lastStmt {
-		return ctx
+		return ctx, refs
 	}
 	if m.lastErr != "" {
 		ctx.Err = m.lastErr
-		return ctx
+		return ctx, refs
 	}
 	if r := m.lastRes; r != nil && !r.IsExec {
 		ctx.Columns, ctx.Rows, ctx.Truncated = r.Columns, r.Rows, r.Truncated
 	}
-	return ctx
+	return ctx, refs
 }
 
 // askAbout opens the assistant with a question drafted in the composer —
@@ -377,23 +428,87 @@ func (m *Model) chatSubmit() tea.Cmd {
 	}
 	p.input.SetText("")
 	p.add(roleUser, q)
-	ctx := ai.Context{}
+	p.follow = true
+	var ctx ai.Context
+	var refs []db.TableRef
 	if p.attach {
-		ctx = m.chatContext()
+		ctx, refs = m.chatContext(q)
 	}
-	prompt := ai.Build(q, ctx, p.first)
+
+	// ensureChat may start the agent, which bumps the generation; the
+	// lookup is tagged with the generation it will be sent on
+	cmd := m.ensureChat()
+	if len(refs) == 0 {
+		m.finishSubmit(q, ctx)
+		return cmd
+	}
+	// in flight from here, lookup included — see the diagram at the top
+	p.streaming = true
+	return tea.Batch(cmd, m.schemaCmd(p.gen, q, ctx, refs))
+}
+
+// schemaCmd looks up the columns of the tables a question involves.
+func (m *Model) schemaCmd(gen int, question string, ctx ai.Context, refs []db.TableRef) tea.Cmd {
+	mgr, conn := m.mgr, m.active
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(context.Background(), schemaLookupTimeout)
+		defer cancel()
+		cols, err := mgr.Columns(c, conn, refs)
+		return chatSchemaMsg{gen: gen, question: question, ctx: ctx, cols: cols, err: err}
+	}
+}
+
+// chatSchema lands a lookup and sends the question it was for.
+func (m *Model) chatSchema(msg chatSchemaMsg) tea.Cmd {
+	p := m.chat
+	if msg.gen != p.gen {
+		return nil // ⟲ new or an agent switch since: that conversation is gone
+	}
+	ctx := msg.ctx
+	if msg.err != nil {
+		// The question still goes, without schema, and the transcript says
+		// why rather than letting the model's guessed columns look like
+		// dbc's facts.
+		p.add(roleInfo, "schema lookup failed, sending without it: "+msg.err.Error())
+		ctx.Tables = nil
+	} else {
+		// Keep only what the catalog could describe, so the note lists
+		// exactly the tables whose columns went.
+		var tables []ai.Table
+		for i, t := range ctx.Tables {
+			if i < len(msg.cols) && len(msg.cols[i]) > 0 {
+				for _, c := range msg.cols[i] {
+					t.Columns = append(t.Columns, ai.Column{Name: c.Name, Type: c.Type})
+				}
+				tables = append(tables, t)
+			}
+		}
+		ctx.Tables = tables
+	}
+	if p.state == chatDead {
+		// the agent exited while the lookup ran; its exit is already in the
+		// transcript, and ⟲ new starts over
+		p.streaming = false
+		return nil
+	}
+	m.finishSubmit(msg.question, ctx)
+	return nil
+}
+
+// finishSubmit builds the prompt and hands it to the agent, or queues it
+// until the handshake completes.
+func (m *Model) finishSubmit(question string, ctx ai.Context) {
+	p := m.chat
+	prompt := ai.Build(question, ctx, p.first)
 	p.first = false
 	p.add(roleNote, "▤ "+prompt.Note)
 	p.follow = true
-
-	cmd := m.ensureChat()
 	if p.state != chatReady {
 		p.pending = prompt.Text
 		p.streaming = true
-		return cmd
+		return
 	}
 	m.chatSend(prompt.Text)
-	return cmd
 }
 
 // chatSend hands a prompt to the agent.
@@ -658,7 +773,8 @@ func (m *Model) drawChat(c *Canvas, r Rect) *caret {
 	// context chip
 	note := "context off — question only"
 	if p.attach {
-		note = strings.TrimPrefix(ai.Build("", m.chatContext(), false).Note, "sent: ")
+		ctx, _ := m.chatContext(p.input.Text())
+		note = strings.TrimPrefix(ai.Build("", ctx, false).Note, "sent: ")
 		note = "with: " + note
 	}
 	box := "[✓] "
@@ -687,7 +803,8 @@ func (m *Model) drawChat(c *Canvas, r Rect) *caret {
 		hint := []string{
 			"Ask about the query in the editor or the result in the grid.",
 			"",
-			"The query and any error go with each question. Result rows go only " +
+			"The query, any error, and the columns of the tables it or your question " +
+				"names go with each question. Result rows go only " +
 				"on connections with ai_rows = true (up to ai_context_rows of them).",
 			"",
 			"SQL in answers gets ⤓ insert, which puts it in the editor.",

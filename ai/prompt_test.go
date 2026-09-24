@@ -117,3 +117,55 @@ func TestBytdbIsDescribedAsPostgresDialect(t *testing.T) {
 		t.Errorf("text:\n%s", p.Text)
 	}
 }
+
+// Schema is not row data: it goes without ai_rows, one line per table, and
+// the note names the tables.
+func TestSchemaGoesWithoutAIRows(t *testing.T) {
+	p := Build("who owns whom?", Context{Conn: "prod", Driver: "postgres", Query: "SELECT * FROM cats",
+		Tables: []Table{
+			{Name: "cats", Columns: []Column{{"id", "integer"}, {"owner_id", "integer"}}},
+			{Name: "old_cats", View: true, Columns: []Column{{"id", "integer"}, {"expr", ""}}},
+		}}, false)
+	for _, want := range []string{
+		"from the database's catalog",
+		"- cats: id integer, owner_id integer\n",
+		"- old_cats (view): id integer, expr\n",
+	} {
+		if !strings.Contains(p.Text, want) {
+			t.Errorf("prompt is missing %q:\n%s", want, p.Text)
+		}
+	}
+	if p.Note != "sent: schema of cats, old_cats, query" {
+		t.Errorf("note = %q", p.Note)
+	}
+}
+
+// A table with no columns (not yet looked up, or not describable) is named
+// in the note — the chip's forecast — but adds nothing to the text.
+func TestSchemaWithoutColumnsIsOnlyNoted(t *testing.T) {
+	p := Build("q", Context{Tables: []Table{{Name: "cats"}}}, false)
+	if strings.Contains(p.Text, "catalog") {
+		t.Errorf("no columns means no schema text:\n%s", p.Text)
+	}
+	if p.Note != "sent: schema of cats" {
+		t.Errorf("note = %q", p.Note)
+	}
+}
+
+func TestSchemaIsCapped(t *testing.T) {
+	cols := make([]Column, maxSchemaColumns+5)
+	for i := range cols {
+		cols[i] = Column{Name: "c", Type: "int"}
+	}
+	var tables []Table
+	for _, n := range []string{"a", "b", "c", "d"} {
+		tables = append(tables, Table{Name: n, Columns: cols})
+	}
+	p := Build("q", Context{Tables: tables}, false)
+	if !strings.Contains(p.Text, ", … and 5 more\n") {
+		t.Errorf("a wide table should be cut with a count:\n%.300s", p.Text)
+	}
+	if p.Note != "sent: schema of 4 tables" {
+		t.Errorf("many tables are counted, not listed: %q", p.Note)
+	}
+}

@@ -16,10 +16,21 @@ import (
 // off, and every turn tells the user what went and, when rows did not, the
 // exact setting that would send them. Nothing is attached silently, in
 // either direction.
+//
+// SCHEMA IS NOT DATA. The names and declared types of the tables a question
+// mentions are the database's shape, not its contents — the same thing a
+// CREATE TABLE in the repo would show — so they go without ai_rows. They are
+// what turns "SELECT owner FROM cats" (a guessed column) into
+// "SELECT owner_id FROM cats" (the real one).
 
 // DefaultContextRows is how many result rows go with a question when the
 // connection allows rows and ai_context_rows is not set.
 const DefaultContextRows = 10
+
+// maxSchemaColumns caps how many columns of one table are described. A wide
+// table (hundreds of columns is not rare in a warehouse) would otherwise be
+// the whole prompt; the model is told how many were left out.
+const maxSchemaColumns = 80
 
 // maxCellRunes caps one value in the attached rows. A single JSON or TEXT
 // column can be megabytes; ten of them would crowd the question out of the
@@ -43,6 +54,28 @@ type Context struct {
 	// SendRows is the connection's ai_rows opt-in; MaxRows is ai_context_rows.
 	SendRows bool
 	MaxRows  int
+
+	// Tables are the catalog's tables the query or question mentions. A
+	// table with no Columns is still named in the Note — that is how the
+	// context chip forecasts "schema of cats" before the columns have been
+	// looked up — but is left out of the prompt text, so a caller building
+	// the real prompt drops the ones the lookup could not describe.
+	Tables []Table
+}
+
+// Table is one table's shape: its name as the user would write it, and its
+// columns in declared order.
+type Table struct {
+	Name    string
+	View    bool
+	Columns []Column
+}
+
+// Column is a column's name and declared type ("" when the database does
+// not say, as for a SQLite view's computed column).
+type Column struct {
+	Name string
+	Type string
 }
 
 // Prompt is a question ready to send, and the line the transcript shows about
@@ -73,6 +106,13 @@ func Build(question string, ctx Context, first bool) Prompt {
 	}
 	if ctx.Conn != "" {
 		fmt.Fprintf(&sb, "Connection %q uses the %s driver.\n\n", ctx.Conn, dialectName(ctx.Driver))
+	}
+	if len(ctx.Tables) > 0 {
+		if schema := schemaText(ctx.Tables); schema != "" {
+			sb.WriteString(schema)
+			sb.WriteString("\n")
+		}
+		sent = append(sent, schemaNote(ctx.Tables))
 	}
 	if q := strings.TrimSpace(ctx.Query); q != "" {
 		sb.WriteString("The SQL in question:\n```sql\n")
@@ -176,6 +216,60 @@ func markdownRows(cols []string, rows [][]string) string {
 		sb.WriteString("\n")
 	}
 	return sb.String()
+}
+
+// schemaText renders the tables' columns, one line per table:
+//
+//	Tables involved, from the database's catalog (columns in declared order):
+//	- cats: id integer, name text, owner_id integer
+//	- old_cats (view): id integer, name text
+//
+// One line each keeps a dozen tables to a dozen lines; the heading's "from
+// the catalog" is what tells the model these names are real, not a guess of
+// dbc's it may improve on.
+func schemaText(tables []Table) string {
+	var sb strings.Builder
+	for _, t := range tables {
+		if len(t.Columns) == 0 {
+			continue
+		}
+		if sb.Len() == 0 {
+			sb.WriteString("Tables involved, from the database's catalog (columns in declared order):\n")
+		}
+		sb.WriteString("- " + t.Name)
+		if t.View {
+			sb.WriteString(" (view)")
+		}
+		sb.WriteString(": ")
+		cols := t.Columns[:min(len(t.Columns), maxSchemaColumns)]
+		for i, c := range cols {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(c.Name)
+			if c.Type != "" {
+				sb.WriteString(" " + c.Type)
+			}
+		}
+		if n := len(t.Columns) - len(cols); n > 0 {
+			fmt.Fprintf(&sb, ", … and %d more", n)
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+// schemaNote names the tables for the transcript: by name while that stays
+// short, by count once a list would push the rest of the note off the chip.
+func schemaNote(tables []Table) string {
+	if len(tables) > 3 {
+		return fmt.Sprintf("schema of %d tables", len(tables))
+	}
+	names := make([]string, len(tables))
+	for i, t := range tables {
+		names[i] = t.Name
+	}
+	return "schema of " + strings.Join(names, ", ")
 }
 
 // dialectName names a driver the way a model knows the database. bytdb is

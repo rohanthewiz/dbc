@@ -29,7 +29,12 @@
   let again = false; // the plan has its own statement to explain again
 
   // ── tabs ───────────────────────────────────────────────────────────────
-  function showTab(name) {
+  // showTab switches the results pane between the grid and the plan, and
+  // tells the workbench which is up (onPlanPane) so the query tab can
+  // remember it across a reload. quiet skips that: reset flips to the
+  // grid while another query tab loads, which is not the user leaving
+  // that tab's plan.
+  function showTab(name, quiet) {
     for (const b of tabs.querySelectorAll(".rtab")) b.classList.toggle("on", b.dataset.rtab === name);
     panes.results.hidden = name !== "results";
     panes.plan.hidden = name !== "plan";
@@ -40,6 +45,7 @@
     } else {
       dbc.grid.focus();
     }
+    if (!quiet && dbc.cmd.onPlanPane) dbc.cmd.onPlanPane(planVisible());
   }
   const planVisible = () => !panes.plan.hidden && !!view;
 
@@ -169,7 +175,7 @@
     again = false;
     host.replaceChildren();
     $("plan-tab").hidden = true;
-    showTab("results");
+    showTab("results", true);
   }
 
   Object.assign(dbc.cmd, {

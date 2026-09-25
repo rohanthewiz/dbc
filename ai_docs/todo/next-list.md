@@ -62,11 +62,6 @@ ten session docs in `ai_docs/claude_sessions/`
   in both loses the earlier save (last write wins). The README says to edit
   a tab in one window at a time. A fix: a window claims the tabs it shows,
   and a second window gets fresh ones (or a read-only view).
-- **N-055** · raised `2026-0925-1641-dbc-web-phases-5-6` · value low
-  A query tab that was showing its plan reopens on the plan when switched
-  back to, but not after a reload: `planOpen` lives only in the page. Save
-  it with the tab (a layout key per tab, or a column) so a reload lands
-  where the user was.
 
 ## Roadmap
 
@@ -100,6 +95,19 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-055** · raised `2026-0925-1641-dbc-web-phases-5-6` ·
+  closed 2026-09-25 — a tab's `planOpen` is saved in one layout key,
+  `plans` (the keys of the query tabs showing their plan, comma-separated),
+  rather than a column: bytdb has no `ADD COLUMN IF NOT EXISTS`, and the
+  order and active tab already live in the layout. Rewritten whole, so a
+  closed tab drops out. `planview.js` reports each results/plan switch
+  (`dbc.cmd.onPlanPane`, silent during a tab switch's reset); `app.js`
+  writes the key when it changes, on a switch, and with the order. A
+  reload reattaches the same workspace, so its plan loads and reopens.
+  Also fixed along the way: a background run with a plain result kept the
+  tab on its old plan, where the foreground switches to the grid. Checked
+  in headless Chrome (reload on the plan, reload on the grid, a background
+  tab's plan across a reload, a background run, closing a flagged tab).
 - **N-052** · raised `2026-0925-1554-dbc-web-phases-3-4` ·
   closed 2026-09-25, 2026-0925-1708-numeric-column-widths — a numeric column (`export.NumericColumns`) is now sized
   from every row, by `workspace.WidestNumeric`: a `len()` per cell, since a

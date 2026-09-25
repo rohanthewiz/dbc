@@ -40,6 +40,8 @@
   //   {key, title, conn, buffer, ws, busy, done, failed, stateful, status, level, grid, planOpen}
   // key is the saved tab's id (web.bytdb); ws its workspace, "" until
   // first shown. buffer is kept only while the tab is in the background.
+  // planOpen: its results pane was on the plan — saved in the layout's
+  // "plans" key (see savePlans), so a reload lands back on it.
   let tabs = [];
   const tabOf = (ws) => tabs.find((t) => t.ws && t.ws === ws);
 
@@ -211,7 +213,13 @@
         t.done = true;
         t.status = d.status || (d.ok ? "done" : "failed");
         t.level = d.ok ? "" : d.stopped ? "warn" : "err";
-        t.planOpen = type === "explain" ? !!(d.ok && d.hasPlan) : t.planOpen || !!d.hasPlan;
+        // as the foreground would leave it: an explain shows its plan; a
+        // run shows a plan it produced, else its result (onEvent's "run"
+        // switches to the grid), else leaves the pane as it was
+        if (type === "explain") t.planOpen = !!(d.ok && d.hasPlan);
+        else if (d.hasPlan) t.planOpen = true;
+        else if (d.hasResult) t.planOpen = false;
+        savePlans();
         break;
       case "conn":
         t.conn = d.active;
@@ -279,7 +287,7 @@
     t.done = false;
     dbc.editor.useDoc(t.key, t.buffer || "");
     renderTabs();
-    saveLayout({ tab: t.key });
+    saveLayout(Object.assign({ tab: t.key }, plansChanged()));
     dbc.cmd.resetPlan();
     dbc.grid.clear();
     setBusy(false);
@@ -611,6 +619,48 @@
     api("PUT", "/api/v1/layout", values).catch((err) => log("warn", "layout not saved: " + err.message));
   }
 
+  // ── saving which tabs show their plan ──────────────────────────────────
+  // One layout key, "plans": the keys of the query tabs whose results pane
+  // was on the plan, comma-separated. A layout key rather than a column on
+  // the tabs table: bytdb has no ADD COLUMN IF NOT EXISTS, so a column
+  // would need a hand-rolled migration, and the order and the active tab
+  // already live in the layout. One key rather than one per tab: it is
+  // rewritten whole, so a closed tab drops out of it instead of leaving a
+  // key behind (the layout has no delete).
+  //
+  // Only the tab's wish is kept, not the plan: after a reload the page
+  // reattaches to the same workspace, whose plan onState reloads and, with
+  // planOpen set, shows. After a server restart the workspace is new and
+  // has no plan, so the flag is simply not acted on.
+  let savedPlans = null; // the value last sent; null before boot reads it
+
+  function plansValue() {
+    return tabs.filter((t) => t.planOpen).map((t) => t.key).join(",");
+  }
+
+  // plansChanged is {plans} when the value differs from the one last
+  // sent, else {} — for merging into another layout write.
+  function plansChanged() {
+    const v = plansValue();
+    if (savedPlans === null || v === savedPlans) return {};
+    savedPlans = v;
+    return { plans: v };
+  }
+
+  function savePlans() {
+    const v = plansChanged();
+    if (v.plans !== undefined) saveLayout(v);
+  }
+
+  // onPlanPane: the active tab's results pane switched between the grid
+  // and the plan (a click, p, an explain landing, a run's result).
+  dbc.cmd.onPlanPane = (open) => {
+    const t = state.tab;
+    if (!t || t.planOpen === open) return;
+    t.planOpen = open;
+    savePlans();
+  };
+
   dbc.editor.onChange(scheduleSave);
   window.addEventListener("pagehide", () => saveTab(state.tab, true));
 
@@ -752,8 +802,10 @@
     input.addEventListener("blur", () => finish(true));
   }
 
+  // saveOrder writes the strip's order — and the plans key with it, so a
+  // closed tab leaves that too.
   function saveOrder() {
-    saveLayout({ tabs: tabs.map((t) => t.key).join(",") });
+    saveLayout(Object.assign({ tabs: tabs.map((t) => t.key).join(",") }, plansChanged()));
   }
 
   function pickTab(n) {
@@ -834,11 +886,16 @@
       const byKey = new Map(saved.map((t) => [t.id, t]));
       const order = (layout.tabs || "").split(",").filter((k) => byKey.has(k));
       for (const t of saved) if (!order.includes(t.id)) order.push(t.id);
+      const plans = new Set((layout.plans || "").split(","));
       tabs = order.map((k) => {
         const t = byKey.get(k);
-        return { key: t.id, title: t.title || "Query", conn: t.conn, buffer: t.buffer, ws: "" };
+        return { key: t.id, title: t.title || "Query", conn: t.conn, buffer: t.buffer, ws: "", planOpen: plans.has(t.id) };
       });
-      if (!tabs.length) tabs = [{ key: "1", title: "Query 1", conn: "", buffer: "", ws: "" }];
+      // no saved tab: the first boot, or a reload before the first tab's
+      // save landed (its pagehide save can race this GET) — plans may
+      // already name it
+      if (!tabs.length) tabs = [{ key: "1", title: "Query 1", conn: "", buffer: "", ws: "", planOpen: plans.has("1") }];
+      savedPlans = layout.plans || "";
       activeAtBoot = tabs.find((t) => t.key === layout.tab) || tabs[0];
 
       // the window: this browser tab's, if the server still has it

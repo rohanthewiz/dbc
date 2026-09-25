@@ -95,6 +95,60 @@ func FirstKeyword(sql string) string {
 	return ""
 }
 
+// HasKeyword reports whether word (lowercase) appears as a bare keyword in
+// sql: a whole word, in any case, outside strings, quoted identifiers,
+// comments, and dollar-quoted bodies. So `RETURNING id` counts, while
+// 'returning' in a string literal, "returning" as a quoted column name, or
+// -- returning in a comment does not.
+//
+// Words that are plainly not keywords are skipped too: one right after a
+// '.' is part of a qualified name (t.returning), and one right after ':' or
+// '@' is a named parameter or variable (:returning, @returning). Past that it
+// is lexical like the rest of the package — a keyword used unquoted as an
+// identifier would still count, which the dialects dbc speaks mostly forbid
+// for reserved words anyway.
+func HasKeyword(sql, word string) bool {
+	i := 0
+	for i < len(sql) {
+		c := sql[i]
+		switch {
+		case isLineCommentAt(sql, i):
+			i = skipLineComment(sql, i)
+		case isBlockCommentAt(sql, i):
+			i = skipBlockComment(sql, i)
+		case c == '\'', c == '"', c == '`':
+			i = skipQuoted(sql, i, c)
+		case c == '$':
+			if tag, ok := dollarTag(sql, i); ok {
+				i = skipDollarQuoted(sql, i, tag)
+				continue
+			}
+			// a placeholder such as $1: step past its digits so they are
+			// not read as the start of a word
+			i++
+			for i < len(sql) && isDigit(sql[i]) {
+				i++
+			}
+		case isWordByte(c):
+			start := i
+			for i < len(sql) && isWordByte(sql[i]) {
+				i++
+			}
+			if start > 0 {
+				if p := sql[start-1]; p == '.' || p == ':' || p == '@' {
+					continue
+				}
+			}
+			if i-start == len(word) && strings.EqualFold(sql[start:i], word) {
+				return true
+			}
+		default:
+			i++
+		}
+	}
+	return false
+}
+
 func scan(sql string) []chunk {
 	var (
 		out     []chunk

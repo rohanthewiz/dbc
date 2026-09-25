@@ -206,3 +206,40 @@ func TestTablesQueryRunsOnBytdb(t *testing.T) {
 		}
 	}
 }
+
+// A write with RETURNING hands back rows; running it as an Exec showed
+// rows_affected and dropped the rows it was written to fetch (N-008).
+func TestBytdbReturning(t *testing.T) {
+	mgr := bytdbMgr(t)
+	if _, err := mgr.Run("bd", "CREATE TABLE cats (id int PRIMARY KEY, name text, age int)"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	res, err := mgr.Run("bd", "INSERT INTO cats VALUES (1, 'mia', 4), (2, 'otto', 7) RETURNING id, name")
+	if err != nil {
+		t.Fatalf("insert returning: %v", err)
+	}
+	if res.IsExec {
+		t.Fatal("INSERT … RETURNING reported as an exec")
+	}
+	if len(res.Rows) != 2 || res.Rows[0][1] != "mia" || res.Rows[1][1] != "otto" {
+		t.Errorf("insert rows = %v, want mia and otto", res.Rows)
+	}
+
+	res, err = mgr.Run("bd", "UPDATE cats SET age = age + 1 WHERE id = $1 RETURNING age", 2)
+	if err != nil {
+		t.Fatalf("update returning: %v", err)
+	}
+	if res.IsExec || len(res.Rows) != 1 || res.Rows[0][0] != "8" {
+		t.Errorf("update: exec=%v rows=%v, want [[8]]", res.IsExec, res.Rows)
+	}
+
+	// the word inside a string literal is data, not a clause
+	res, err = mgr.Run("bd", "INSERT INTO cats VALUES (3, 'returning', 1)")
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if !res.IsExec || res.Affected != 1 {
+		t.Errorf("plain insert: exec=%v affected=%d, want exec of 1", res.IsExec, res.Affected)
+	}
+}

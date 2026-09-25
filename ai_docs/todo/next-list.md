@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-039
+**Next ID:** N-040
 
 ## Open
 
@@ -48,13 +48,6 @@ ten session docs in `ai_docs/claude_sessions/`
   A TUI "run all" key that runs the whole buffer through the multi-statement
   path. The TUI runs the statement under the cursor (or the selection) by
   design; this is contingent on that design changing.
-
-- **N-008** · raised `2026-0731-2200-dbc` · value medium
-  `INSERT … RETURNING` (and `UPDATE`/`DELETE … RETURNING`) shows
-  `rows_affected`, not the returned rows. `isQuery` (`db/manager.go:297`)
-  keys off the leading verb only, so this hits Postgres and bytdb alike. The
-  fix is cross-driver: detect a `RETURNING` clause (via `sqlsplit`, so one in
-  a string literal doesn't count) or fall back to Query when Exec is wrong.
 
 - **N-009** · raised `2026-0807-2148-bytdb-v0.9.1-and-dual-demo-defaults` · value low
   The shipped scripts hard-code the connection name `demo` —
@@ -111,6 +104,13 @@ ten session docs in `ai_docs/claude_sessions/`
   A "Delete this conversation" row in the transcript's menu would remove its
   file and clear the pane without saving.
 
+- **N-039** · raised `2026-0924-2007-returning-rows-not-rows-affected` · value low
+  A `WITH … INSERT/UPDATE/DELETE` without `RETURNING` runs as a Query, since
+  `with` is on the read-verb list (`queryVerbs`, `db/manager.go`): it shows
+  an empty result instead of rows affected, and a `Session` does not mark
+  itself stateful after it (`isRead`). Telling it apart means finding the
+  verb after the CTE list, not just the first keyword.
+
 ## Roadmap
 
 Wanted, but deliberately not next. Empty at seeding: the session docs never
@@ -142,6 +142,20 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-008** · raised `2026-0731-2200-dbc` ·
+  closed 2026-09-24, 2026-0924-2007-returning-rows-not-rows-affected — a write
+  with `RETURNING` shows its returned rows, not `rows_affected`. `isQuery`
+  now also counts a statement whose leading verb is `insert`/`update`/
+  `delete`/`replace`/`merge` and that carries a bare `RETURNING`, found by the
+  new `sqlsplit.HasKeyword` (the word inside a string, a quoted identifier, a
+  comment, or a dollar-quoted body doesn't count, and neither does
+  `t.returning` or `:returning`). The fall-back-to-Query idea was dropped:
+  drivers run the write and discard the rows without complaint, and a retry
+  would run it twice. `Session` now marks itself stateful on any statement
+  that is not a plain read (`isRead`) instead of on `IsExec`, so an
+  `INSERT … RETURNING` in a transaction still counts. Tested on bytdb
+  (insert and update) and SQLite (session).
 
 - **N-027** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` ·
   closed 2026-09-24, 2026-0924-1958-assistant-conversation-archive — assistant conversations are kept. `userdata/chats.go` ports ced's `internal/chatstore` (stdlib + serr): one JSON file per conversation in `~/.config/dbc/chats/`, user-only, written via temp file + rename, newest-first listing that skips unreadable files, capped at the last 30. Each records the agent, model and active connection; the title is the first line of the first question. The TUI saves after every answer (and on an agent exit), on `⟲ new`, and on quit; a pane that was never asked anything saves nothing. The empty pane lists the five most recent as clickable rows (the time, message count and — when it differs from the active one — the connection, shed in that order on a narrow pane), with `all N recent…` and a right-click **Recent conversations…** list for the rest. Reopening saves the live one, starts a fresh agent session, reloads the transcript into the same file, and says in the transcript that the agent has no memory of it. Deleting a saved one: right-click its row (pane or list) → **Delete conversation**, or `d` twice on it in the list (the first press marks the row and says what the second will do; any other key, moving the cursor, or Esc disarms). The live conversation is never offered for deletion, since its next save would write it back.

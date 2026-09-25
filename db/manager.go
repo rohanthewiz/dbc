@@ -292,10 +292,38 @@ var queryVerbs = map[string]bool{
 	"describe": true, "desc": true, "pragma": true, "values": true, "table": true,
 }
 
-// isQuery reports whether a statement returns rows. Leading comments are
-// skipped, so an annotated SELECT is still recognized.
-func isQuery(stmt string) bool {
+// returningVerbs are the writes that can carry a RETURNING clause and so
+// hand back rows: INSERT/UPDATE/DELETE on Postgres, SQLite, and bytdb;
+// INSERT/DELETE/REPLACE on MariaDB and SQLite; MERGE on Postgres 17+.
+// Only these are checked, so DDL that merely mentions the word — a rule or
+// function body outside a dollar quote, say — stays an Exec.
+var returningVerbs = map[string]bool{
+	"insert": true, "update": true, "delete": true, "replace": true, "merge": true,
+}
+
+// isRead reports whether a statement is a plain read: its leading verb is one
+// that only fetches. Leading comments are skipped, so an annotated SELECT is
+// still recognized.
+func isRead(stmt string) bool {
 	return queryVerbs[sqlsplit.FirstKeyword(stmt)]
+}
+
+// isQuery reports whether a statement returns rows, and so must run as a
+// Query rather than an Exec. That is every read, plus a write with a
+// RETURNING clause: run as an Exec, `INSERT … RETURNING id` would report
+// rows_affected and drop the ids it was written to fetch.
+//
+// RETURNING is found lexically (sqlsplit.HasKeyword), so the word inside a
+// string literal, a quoted identifier, or a comment does not count. The
+// alternative — try Exec and fall back to Query when the driver objects —
+// was rejected: drivers do not object (they run the write and discard the
+// rows), and retrying a write that already ran would run it twice.
+func isQuery(stmt string) bool {
+	kw := sqlsplit.FirstKeyword(stmt)
+	if queryVerbs[kw] {
+		return true
+	}
+	return returningVerbs[kw] && sqlsplit.HasKeyword(stmt, "returning")
 }
 
 // Run executes a statement on the named connection, without cancellation.
@@ -403,9 +431,9 @@ type Session struct {
 	name string
 	conn *sql.Conn
 
-	// stateful is set once a non-query statement succeeds on the session.
-	// Only those can leave session state behind — BEGIN, SET, CREATE TEMP,
-	// LOCK TABLES — so a session that has only ever run SELECTs can be
+	// stateful is set once a statement other than a plain read succeeds on
+	// the session. Only those can leave session state behind — BEGIN, SET,
+	// CREATE TEMP, LOCK TABLES — so a session that has only ever run SELECTs can be
 	// swapped for a fresh one without anyone losing anything.
 	stateful bool
 }
@@ -428,15 +456,19 @@ func (s *Session) Name() string { return s.name }
 
 // Stateful reports whether the session may hold state a replacement session
 // would not have — an open transaction, SET values, temp tables. It errs on
-// the side of yes: any successful non-query statement counts, including
-// ones (an UPDATE outside a transaction) that leave nothing behind.
+// the side of yes: any successful statement that is not a plain read counts
+// (a write with RETURNING included), even ones (an UPDATE outside a
+// transaction) that leave nothing behind.
 func (s *Session) Stateful() bool { return s.stateful }
 
 // Run executes one statement on the pinned connection, as RunContext does on
 // the pool.
 func (s *Session) Run(ctx context.Context, stmt string, args ...any) (*model.Result, error) {
 	res, err := s.m.run(ctx, s.conn, s.name, stmt, args...)
-	if err == nil && res.IsExec {
+	// Keyed off the statement, not res.IsExec: an INSERT … RETURNING comes
+	// back as rows, yet it is a write like any other Exec — inside a BEGIN it
+	// is part of the transaction the session must not silently lose.
+	if err == nil && !isRead(stmt) {
 		s.stateful = true
 	}
 	return res, err

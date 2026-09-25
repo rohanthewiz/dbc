@@ -116,6 +116,33 @@ func TestIndexAtSkipsCommentOnlySpans(t *testing.T) {
 	}
 }
 
+func TestHasKeyword(t *testing.T) {
+	cases := map[string]bool{
+		"INSERT INTO t VALUES (1) RETURNING id":         true,
+		"insert into t values (1) returning *":          true,
+		"UPDATE t SET a = 1\nRETURNING\n*":              true,
+		"DELETE FROM t WHERE id = $1 RETURNING id":      true,
+		"INSERT INTO t VALUES (1)":                      false,
+		"INSERT INTO t VALUES ('returning')":            false,
+		`INSERT INTO t ("returning") VALUES (1)`:        false,
+		"INSERT INTO t VALUES (1) -- returning id":      false,
+		"INSERT INTO t VALUES (1) /* returning id */":   false,
+		"INSERT INTO t VALUES ($$ returning $$)":        false,
+		"INSERT INTO t VALUES ($q$ it's returning $q$)": false,
+		"UPDATE t SET a = s.returning FROM s":           false,
+		"INSERT INTO t VALUES (:returning)":             false,
+		"INSERT INTO t (returning_id) VALUES (1)":       false,
+		"INSERT INTO t VALUES ('it''s') RETURNING id":   true,
+		"INSERT INTO t VALUES ($1) RETURNING id":        true,
+		"":                                              false,
+	}
+	for in, want := range cases {
+		if got := HasKeyword(in, "returning"); got != want {
+			t.Errorf("HasKeyword(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestFirstKeyword(t *testing.T) {
 	cases := map[string]string{
 		"SELECT 1":                    "select",

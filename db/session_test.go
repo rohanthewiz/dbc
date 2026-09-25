@@ -154,6 +154,33 @@ func TestSessionStateful(t *testing.T) {
 	}
 }
 
+// A write with RETURNING comes back as rows, not as an exec, but it is still
+// a write: the session must count as stateful after it, or a dead connection
+// mid-transaction would be retried as if nothing were lost.
+func TestSessionStatefulAfterReturning(t *testing.T) {
+	mgr := fileSQLiteMgr(t)
+	ctx := context.Background()
+	if _, err := mgr.Run("f", "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	sess, err := mgr.Session(ctx, "f")
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	defer sess.Close()
+
+	res, err := sess.Run(ctx, "INSERT INTO t (v) VALUES ('a') RETURNING id")
+	if err != nil {
+		t.Fatalf("insert returning: %v", err)
+	}
+	if res.IsExec || len(res.Rows) != 1 || res.Rows[0][0] != "1" {
+		t.Errorf("exec=%v rows=%v, want [[1]] as rows", res.IsExec, res.Rows)
+	}
+	if !sess.Stateful() {
+		t.Error("not stateful after INSERT … RETURNING")
+	}
+}
+
 // blackhole listens on loopback and accepts connections without ever
 // answering, the way a firewalled or wedged server looks to a client: the TCP
 // dial succeeds and the postgres startup handshake then waits forever.

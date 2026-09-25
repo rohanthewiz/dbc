@@ -34,9 +34,11 @@ ten session docs in `ai_docs/claude_sessions/`
 ## Open
 
 - **N-030** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` · value low
-  Linux rich copy offers text/html only (wl-copy/xclip set one type), so a
-  terminal paste right after gets nothing or markup. Serving both needs
-  owning the selection; only worth it if a Linux user trips on it.
+  X11 rich copy (xclip) advertises only text/html, so a GTK/Qt terminal
+  paste right after gets nothing instead of the markup. Premise narrowed
+  2026-09-25: Wayland is fine (wl-copy adds text/plain etc. for any text/*
+  type), and xclip's -alt-text is unreleased. Fix is owning the X11
+  selection (pure-Go xgb, detached helper); only if an X11 user trips on it.
 
 ## Roadmap
 

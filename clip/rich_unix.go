@@ -14,13 +14,24 @@ import (
 // Linux and the BSDs: the HTML flavor through wl-copy (Wayland) or xclip
 // (X11), whichever the session has.
 //
-// A LIMITATION WORTH KNOWING. Both tools offer exactly one MIME type per
-// invocation, so the rich copy is text/html ONLY — a paste into a terminal
-// right after it finds no text/plain and pastes nothing (xclip) or the
-// markup (some Wayland compositors convert). Serving two types at once would
-// mean owning the selection ourselves, a long-lived X11/Wayland client, which
-// is far more than a copy key is worth. Rich copy is the thing the user asked
-// for when they pick "HTML", and the plain formats are one menu row away.
+// WHAT EACH TOOL ACTUALLY OFFERS. Neither takes two payloads, so c.Text is
+// never sent — which costs nothing today, because the one rich copy (HTML,
+// see export.ClipContent) has Text == HTML: a terminal paste is meant to get
+// the markup, as it does on macOS and Windows.
+//
+//   - wl-copy: given any text/* type it ALSO offers text/plain,
+//     text/plain;charset=utf-8, TEXT, STRING and UTF8_STRING, all carrying
+//     the same bytes (wl-copy.c, mime_type_is_text). A terminal paste gets
+//     the markup. No gap.
+//   - xclip: advertises only TARGETS and text/html. GTK and Qt clients read
+//     TARGETS first, find no text flavor, and paste NOTHING. This is the
+//     one real gap. xclip's -alt-text (adds a STRING target) exists only on
+//     its master branch, not in 0.13, the last release distros ship.
+//
+// Closing the X11 gap — or ever sending a Text that differs from HTML —
+// means owning the CLIPBOARD selection ourselves: a detached X11 client that
+// answers every target until another app takes the selection. Not built;
+// tracked as N-030 in ai_docs/todo/next-list.md.
 //
 // Wayland is checked first because XWayland makes $DISPLAY present on most
 // Wayland desktops too, and xclip there writes a clipboard native apps may

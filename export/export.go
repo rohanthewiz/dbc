@@ -282,6 +282,21 @@ func ClipContent(r *model.Result, f Format) (clip.Content, error) {
 	return clip.Content{Text: out}, nil
 }
 
+// PlainCells is the plain, keyboard-shortcut copy of r: one value alone, as
+// it is, or rows of tab-separated values without a header — what pastes
+// cleanly into a spreadsheet or back into a query. The TUI's y / Y and dbc
+// web's copy both use it.
+func PlainCells(r *model.Result) string {
+	if len(r.Rows) == 1 && len(r.Rows[0]) == 1 {
+		return r.Rows[0][0]
+	}
+	lines := make([]string, len(r.Rows))
+	for i, row := range r.Rows {
+		lines[i] = strings.Join(row, "\t")
+	}
+	return strings.Join(lines, "\n")
+}
+
 // ToFile renders the result and writes it to path.
 func ToFile(r *model.Result, f Format, path string) error {
 	out, err := Render(r, f)

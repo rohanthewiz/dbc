@@ -23,36 +23,56 @@ type Workbench struct {
 
 // Render returns the whole document.
 //
-//	┌ topbar: dbc · active connection · [session state] ·     ▶ Run  ▶▶ Run all  ■ Stop ┐
-//	├ sidebar ──────┬ editor (textarea) ─────────────────────────────────────────────────┤
-//	│ Connections   ├ ═ splitter (drag; the height is saved) ════════════════════════════┤
-//	│ Tables        │ results (a server-rendered table)                                   │
-//	│               ├ log ────────────────────────────────────────────────────────────────┤
-//	└ status bar ───┴─────────────────────────────────────────────────────────────────────┘
+//	┌ topbar: dbc · active connection · [session state] ·  ▶ Run  ▶▶ Run all  ■ Stop  ⟲ History ┐
+//	├ sidebar ──────┬ editor (textarea, upgraded to Monaco) ──────────────────────────────────────┤
+//	│ Connections   ├ ═ splitter (drag; the height is saved) ══════════════════════════════════════┤
+//	│ Tables        │ results bar: [Results] · 8 rows · sorted by name asc     ⧉ Copy ▾  ⤓ Export ▾ │
+//	│               │ the grid (virtualized; its rows are fetched a page at a time)                │
+//	│               ├ log ──────────────────────────────────────────────────────────────────────────┤
+//	└ status bar ───┴───────────────────────────────────────────────────────────────────────────────┘
+//
+// The body carries the asset version (data-ver) for the scripts that load
+// more files themselves — Monaco's loader versions every module with it.
 func (p Workbench) Render() string {
 	b := element.AcquireBuilder()
 	defer element.ReleaseBuilder(b)
 	b.Html("lang", "en").R(
 		head(b, "dbc web", p.Ver),
-		b.Body().R(
+		b.Body("data-ver", p.Ver).R(
 			b.DivClass("app").R(
 				p.topbar(b),
 				p.sidebar(b),
 				b.MainClass("work").R(
-					b.TextArea("id", "editor", "spellcheck", "false", "autocomplete", "off",
-						"autocapitalize", "off", "aria-label", "SQL editor",
-						"placeholder", "SELECT * FROM cats;").R(),
+					b.DivClass("editor-wrap", "id", "editor-wrap").R(
+						b.TextArea("id", "editor", "spellcheck", "false", "autocomplete", "off",
+							"autocapitalize", "off", "aria-label", "SQL editor",
+							"placeholder", "SELECT * FROM cats;").R(),
+						b.DivClass("monaco", "id", "monaco").R(),
+					),
 					b.DivClass("splitter", "id", "splitter", "role", "separator",
 						"aria-orientation", "horizontal", "title", "Drag to resize").R(),
-					b.SectionClass("results", "id", "results", "aria-live", "polite").R(
-						b.DivClass("empty").T("Ctrl+Enter runs the statement under the caret; "+
-							"Ctrl+Shift+Enter runs them all."),
+					b.SectionClass("results", "id", "results", "aria-label", "Results").R(
+						b.DivClass("rbar").R(
+							b.DivClass("rtabs", "id", "rtabs", "role", "tablist").R(
+								b.ButtonClass("rtab on", "type", "button", "role", "tab", "data-rtab", "results").T("▦ Results"),
+							),
+							b.SpanClass("grid-info", "id", "grid-info", "aria-live", "polite").R(),
+							b.DivClass("ractions").R(
+								b.Button("id", "copy-btn", "type", "button", "title", "Copy the result or the selection").T("⧉ Copy ▾"),
+								b.Button("id", "export-btn", "type", "button", "title", "Download the result (Ctrl+E)").T("⤓ Export ▾"),
+							),
+						),
+						b.DivClass("rpane", "id", "rpane-results").R(
+							b.DivClass("grid-msg", "id", "grid-msg").R(),
+							b.DivClass("grid", "id", "grid", "tabindex", "0", "hidden", "hidden",
+								"aria-label", "Result grid — arrows move, Shift extends, y copies, Enter inspects").R(),
+						),
 					),
 					b.SectionClass("log", "id", "log", "aria-label", "Log").R(),
 				),
 				b.FooterClass("statusbar").R(
 					b.Span("id", "status").T("starting…"),
-					b.SpanClass("keys").T("Ctrl+Enter run · Ctrl+Shift+Enter run all · Ctrl+K stop"),
+					b.SpanClass("keys").T("Ctrl+Enter run · Ctrl+Shift+Enter run all · Ctrl+K stop · Ctrl+P history · Ctrl+E export"),
 				),
 			),
 		),
@@ -73,6 +93,7 @@ func (p Workbench) topbar(b *element.Builder) any {
 			b.Button("id", "run", "type", "button", "title", "Run the statement under the caret (Ctrl+Enter)").T("▶ Run"),
 			b.Button("id", "run-all", "type", "button", "title", "Run every statement (Ctrl+Shift+Enter)").T("▶▶ Run all"),
 			b.Button("id", "stop", "type", "button", "disabled", "disabled", "title", "Stop the run or connect (Ctrl+K)").T("■ Stop"),
+			b.Button("id", "history-btn", "type", "button", "title", "Past statements, here and in the TUI (Ctrl+P)").T("⟲ History"),
 		),
 	)
 	return nil
@@ -88,7 +109,7 @@ func (p Workbench) sidebar(b *element.Builder) any {
 					cls += " active"
 				}
 				b.Li().R(
-					b.ButtonClass(cls, "type", "button", "data-conn", c.Name).R(
+					b.ButtonClass(cls, "type", "button", "data-conn", c.Name, "data-driver", c.Driver).R(
 						b.SpanClass("name").T(c.Name),
 						b.SpanClass("driver").T(c.Driver),
 					),
@@ -101,6 +122,10 @@ func (p Workbench) sidebar(b *element.Builder) any {
 	return nil
 }
 
+// scripts are the workbench's modules, in load order: core first (the
+// shared API, log and state), app last (boot, which uses all the others).
+var scripts = []string{"core.js", "ui.js", "editor.js", "grid.js", "app.js"}
+
 // head is the <head> every page shares: the theme as CSS variables, the
 // stylesheet, and the script (deferred, so it runs once the DOM is parsed).
 func head(b *element.Builder, title, ver string) any {
@@ -111,7 +136,13 @@ func head(b *element.Builder, title, ver string) any {
 		b.Link("rel", "icon", "href", "/favicon.ico").R(),
 		b.Link("rel", "stylesheet", "href", "/theme.css").R(),
 		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v="+ver).R(),
-		b.Script("src", "/static/js/app.js?v="+ver, "defer", "defer").R(),
+		b.Wrap(func() {
+			// deferred, so they run in this order once the DOM is parsed;
+			// see core.js for what each one hangs on window.dbc
+			for _, js := range scripts {
+				b.Script("src", "/static/js/"+js+"?v="+ver, "defer", "defer").R()
+			}
+		}),
 	)
 	return nil
 }

@@ -113,10 +113,12 @@ func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 		return Start{}, err
 	}
 	conn, gen := w.active, w.runGen
+	w.runStep, w.runSteps = 0, len(stmts)
 	job := func() Event {
 		var res *model.Result
 		var err error
 		for i, stmt := range stmts {
+			w.stepTo(gen, i+1)
 			res, err = w.runOnSession(ctx, conn, stmt)
 			if err != nil {
 				if len(stmts) > 1 {
@@ -167,6 +169,17 @@ func (w *Workspace) RunScript(path string) (Start, error) {
 	return Start{Tag: tag, Gen: gen, Job: job, Notes: []Note{notef(Info, "running %s", tag)}}, nil
 }
 
+// stepTo records that run gen has reached statement step, for the status
+// line and a UI's progress. A straggler (gen no longer current) writes
+// nothing: the slot belongs to a newer run.
+func (w *Workspace) stepTo(gen, step int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if gen == w.runGen {
+		w.runStep = step
+	}
+}
+
 // beginRunLocked claims the run slot, or refuses when a run is already in
 // flight.
 func (w *Workspace) beginRunLocked(tag string) (context.Context, error) {
@@ -175,6 +188,7 @@ func (w *Workspace) beginRunLocked(tag string) (context.Context, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	w.busy, w.cancel, w.runTag, w.runAt = true, cancel, tag, time.Now()
+	w.runStep, w.runSteps = 0, 0 // Run sets them for a list of statements
 	w.runGen++
 	return ctx, nil
 }
@@ -189,8 +203,15 @@ func (w *Workspace) endRunLocked() time.Duration {
 	return time.Since(w.runAt)
 }
 
+// runningStatusLocked is the status line of the run in flight: its tag and
+// elapsed time and, for several statements, which one is executing — "all
+// 4 statements · 2/4 1.3s" — so a long script shows it is moving.
 func (w *Workspace) runningStatusLocked() string {
-	return fmt.Sprintf("%s %s", w.runTag, time.Since(w.runAt).Round(100*time.Millisecond))
+	took := time.Since(w.runAt).Round(100 * time.Millisecond)
+	if w.runSteps > 1 && w.runStep > 0 {
+		return fmt.Sprintf("%s · %d/%d %s", w.runTag, w.runStep, w.runSteps, took)
+	}
+	return fmt.Sprintf("%s %s", w.runTag, took)
 }
 
 // landRun installs a run's outcome.

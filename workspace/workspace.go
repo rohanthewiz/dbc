@@ -107,6 +107,10 @@ type Workspace struct {
 	runTag string
 	runAt  time.Time
 	cancel context.CancelFunc
+	// progress through a multi-statement run: runStep is the statement
+	// executing now (1-based), runSteps how many the run holds. Both 0 for
+	// anything that is not a list of statements (a script, an explain).
+	runStep, runSteps int
 
 	// connect state. A newer connect supersedes an older one still dialing.
 	connGen    int                // bumped per connect; an older one's outcome is dropped
@@ -249,6 +253,18 @@ func (w *Workspace) RunningStatus() string {
 		return ""
 	}
 	return w.runningStatusLocked()
+}
+
+// RunProgress is how far a multi-statement run has got: the statement
+// executing now (1-based) and how many there are. steps is 0 when idle, and
+// for work that is not a list of statements.
+func (w *Workspace) RunProgress() (step, steps int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.busy {
+		return 0, 0
+	}
+	return w.runStep, w.runSteps
 }
 
 // Connecting reports whether a connect is in flight, and to what.

@@ -1,8 +1,6 @@
 package tui
 
 import (
-	"strings"
-
 	tea "charm.land/bubbletea/v2"
 	"github.com/rohanthewiz/serr"
 
@@ -105,7 +103,7 @@ func (m *Model) copyResult(r *model.Result, what string, f copyFormat) tea.Cmd {
 	var err error
 	switch f {
 	case copyText:
-		c.Text = plainCells(r)
+		c.Text = export.PlainCells(r)
 	case copyHTML:
 		c, err = export.ClipContent(r, export.HTML)
 	case copyMarkdown:
@@ -127,19 +125,6 @@ func (m *Model) copyResult(r *model.Result, what string, f copyFormat) tea.Cmd {
 		what += " as " + f.name()
 	}
 	return clipCmd(c, what)
-}
-
-// plainCells is the copyText rendering: one value alone, or rows of
-// tab-separated values without a header.
-func plainCells(r *model.Result) string {
-	if len(r.Rows) == 1 && len(r.Rows[0]) == 1 {
-		return r.Rows[0][0]
-	}
-	lines := make([]string, len(r.Rows))
-	for i, row := range r.Rows {
-		lines[i] = strings.Join(row, "\t")
-	}
-	return strings.Join(lines, "\n")
 }
 
 // copyString copies plain text.

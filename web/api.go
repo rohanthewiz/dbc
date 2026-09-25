@@ -6,7 +6,6 @@ import (
 	"github.com/rohanthewiz/rweb"
 
 	"github.com/rohanthewiz/dbc/model"
-	"github.com/rohanthewiz/dbc/web/pages"
 	"github.com/rohanthewiz/dbc/workspace"
 )
 
@@ -171,27 +170,6 @@ func (s *Server) handleEvents(ctx rweb.Context) error {
 	}
 	ctx.Response().SetHeader("Cache-Control", "no-store")
 	return t.sse.Handler(s.rw)(ctx)
-}
-
-// handleResult is the last result, as the table the page swaps in. It is
-// fetched after a "run" event says there is one, rather than carried in the
-// event: a result can be thousands of rows.
-func (s *Server) handleResult(ctx rweb.Context) error {
-	t, err := s.hub.get(ctx.Request().PathParam("id"))
-	if err != nil {
-		return fail(ctx, err)
-	}
-	r := t.ws.LastResult()
-	if r == nil {
-		return ok(ctx, map[string]any{"html": ""})
-	}
-	return ok(ctx, map[string]any{
-		"html":   pages.ResultTable(r, s.cfg.MaxDisplayRows),
-		"status": workspace.ResultStatus(r, s.cfg.MaxRows, s.shown(r)),
-		"conn":   r.Conn,
-		"rows":   len(r.Rows),
-		"cols":   len(r.Columns),
-	})
 }
 
 // shown is how many of a result's rows the page displays.

@@ -2,9 +2,9 @@
 
 Raised 2026-09-25. The ask: a web UI for dbc, started as `dbc web`.
 
-This is a plan. **Phases 1 (the `workspace` extraction) and 2 (the `dbc web`
-skeleton) are done** (2026-09-25); everything from Phase 3 on is not built
-yet.
+This is a plan. **Phases 1 (the `workspace` extraction), 2 (the `dbc web`
+skeleton) and 3 (the real editor and grid) are done** (2026-09-25);
+everything from Phase 4 on is not built yet.
 
 ## The one-paragraph version
 
@@ -440,7 +440,7 @@ buffer, 420 px has no horizontal scroll, console clean; SIGINT released the
 open session and exited; a second instance fell back to a free port and a
 memory-only store.
 
-### Phase 3 — the real editor and grid
+### Phase 3 — the real editor and grid — ✅ done 2026-09-25
 
 Monaco with SQL highlighting and the TUI's keys; the statement-under-caret
 marker; run all; multi-statement progress on SSE. The virtualized grid with
@@ -448,6 +448,64 @@ paging, sort, hide/show, resize, range select, inspect. Copy in every format
 (rich HTML via the Clipboard API), export as downloads, history picker,
 tables sidebar with preview. **Done when** the TUI's results-grid tests have
 browser equivalents (see *Testing*).
+
+*Outcome:*
+
+| Piece | Where | As built |
+|---|---|---|
+| Editor | `static/js/editor.js`, `scripts/vendor_monaco.sh` | Monaco 0.52.2 (gonotes' version), vendored **trimmed** to what a SQL editor loads — loader, `editor.main`, the editor worker, the codicon font, the sql/mysql/pgsql tokenizers: 4.2 MB, not 14. The textarea stays the source of truth (mirrored on every edit); if Monaco fails, the textarea stays and the log says so. Dialect follows the driver; palette from `/theme.css` |
+| Marker | `POST /api/v1/stmt` | the statement under the caret, found by the server's splitter (the one a run uses), in UTF-16 units; a gutter bar, debounced 150 ms |
+| Grid | `static/js/grid.js`, `web/grid.go` | virtualized both ways (rows and columns); pages of 200 fetched with the sort; sort / hide / show / resize / fit / range / inspect, the TUI's gestures and keys (`y` `Y` `-` `+` `=` `g` `G` `Enter`, arrows, Shift extends) and words; hidden columns and hand-set widths survive a rerun with the same columns |
+| Copy / export | `POST …/copy`, `GET …/export` | the page names the view (seq, sort, columns, rows); the server projects it and renders any export format. HTML goes on the clipboard as a real `text/html` flavor. A copy against a replaced result is a 409 |
+| History | `GET /api/v1/history?q=` | Ctrl+P: the shared file, newest first, filtered; Enter inserts at the caret, never runs |
+| Tables | `POST …/preview` | click selects, double-click / Enter previews `SELECT * … LIMIT 100` (recorded, editor untouched), right-click inserts or copies the name; the name must be one the catalog listed |
+| Progress | `workspace.RunProgress` | a multi-statement run's status reads "all 4 statements · 2/4 1.3s", on the tick events and in the TUI's status bar alike |
+
+Decisions and findings:
+
+- **The view's arithmetic is shared, the view is not.** `workspace.SortRows`
+  and `workspace.Project` are the TUI grid's sort and copy, moved; the TUI
+  grid now calls them, and so does `web/grid.go`. The sort, hidden columns
+  and range stay in each UI and travel with the request.
+- **Results are paged JSON now**, not server-rendered HTML
+  (`pages/results.go` is gone): the grid needs cells, the NULL flag (JSON
+  `null`, read from `Raw`) and widths, not markup.
+- **CSP: `style-src` gained `'unsafe-inline'`.** Monaco writes `<style>`
+  elements, and the grid (and Phase 4's plan view) place cells with style
+  attributes. `script-src` stays `'self'`, and the worker is a same-origin
+  bootstrap file rather than a `data:` shim, so no `worker-src data:`.
+- **Mac chords:** Monaco's `CtrlCmd` is ⌘, and macOS's emacs keys own the
+  real Ctrl (Ctrl+P is cursor-up, Ctrl+K kills the line), so every chord
+  is bound to both. Ctrl+X explains only with nothing selected; with a
+  selection it is cut.
+- **Double-clicks are counted by the grid**, per cell, not left to the
+  browser: a press redraws the rows under the pointer, and a click whose
+  press and release land on different nodes is no click to the browser.
+- **Found by the browser run, fixed:** the column-resize handle straddled
+  the header cell's clipped edge (half of it sorted instead); widths from a
+  canvas-measured character were short (canvas does not resolve
+  `ui-monospace`) — now measured in the grid's own font.
+- Deferred: "✦ ask the assistant about this result/value" (Phase 5, with
+  the chat pane).
+
+Verified: `web` tests for every endpoint above — sort (numbers as numbers,
+NULLs last both ways, the third state), pages and `max_display_rows` (the
+cap bounds drawing, not a whole copy), range copy in display order with
+`Raw` carried (NULL stays NULL) and a hidden column left out, the words
+("2×2 cells as CSV", "the result (5 rows, 1 column hidden) as Markdown"),
+the HTML flavor, stale seq → 409, bad requests → 400, export headers and
+content for every format, history filter, preview (and its refusal of a
+name the catalog did not list), the UTF-16 marker range, and the "· 2/3"
+progress on the stream; `workspace` tests for `SortRows`, `Project` and
+progress. All green, `-race` too. End to end in headless Chrome (go-rod):
+Monaco loads with a clean console under the CSP, the marker follows the
+caret, Ctrl+Enter from Monaco, header sort cycles, shift-click range →
+right-click → CSV on the real clipboard, `y` / `Y`, the HTML flavor holds a
+`<table>`, double-click inspects (JSON formatted), border drag resizes and
+double-click fits, hide from the header menu survives a rerun, `-` refuses
+the last column and `+` restores, Ctrl+P filters and inserts without
+running, table double-click previews, Ctrl+E → CSV downloads, 1,000 rows
+keep ~40 in the DOM, 420 px has no horizontal scroll.
 
 ### Phase 4 — explain, with everything the HTML plan page already does
 

@@ -1,7 +1,9 @@
 /* dbc web — the workbench's look. Colors come from /theme.css, which the
    server writes from the theme package, so the browser wears the TUI's
-   palette. No inline styles anywhere: the CSP forbids them, and the page's
-   script sizes panes through the CSSOM (element.style), which it allows. */
+   palette. The server's HTML carries no style attributes; the scripts size
+   and place things (grid cells, the plan's cards) inline, which the CSP
+   allows for styles only — Monaco needs it too, as it writes its own
+   <style> elements. */
 
 * { box-sizing: border-box; }
 
@@ -24,7 +26,7 @@ button {
 }
 button:hover:not(:disabled) { border-color: var(--accent); }
 button:disabled { color: var(--muted); cursor: default; opacity: .6; }
-button:focus-visible, textarea:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+button:focus-visible, textarea:focus-visible, li:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 
 [hidden] { display: none !important; }
 
@@ -107,6 +109,7 @@ button:focus-visible, textarea:focus-visible { outline: 1px solid var(--accent);
   cursor: pointer;
 }
 #tables li:hover { background: var(--sel); }
+#tables li.sel { background: var(--sel); box-shadow: inset 2px 0 var(--accent); outline: none; }
 #tables li .schema { color: var(--muted); }
 #tables li.view::after { content: " (view)"; color: var(--muted); }
 #tables li.none { color: var(--muted); cursor: default; font-family: inherit; }
@@ -118,10 +121,15 @@ button:focus-visible, textarea:focus-visible { outline: 1px solid var(--accent);
   min-width: 0;
   min-height: 0;
 }
-#editor {
+.editor-wrap {
   flex: 0 0 auto;
   height: 36%;
   min-height: 60px;
+  position: relative;
+}
+#editor {
+  width: 100%;
+  height: 100%;
   resize: none;
   border: 0;
   padding: 10px 12px;
@@ -130,6 +138,14 @@ button:focus-visible, textarea:focus-visible { outline: 1px solid var(--accent);
   font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   tab-size: 4;
 }
+/* Monaco takes the textarea's place once it loads; the textarea stays in
+   the DOM (hidden) as the source of truth — see editor.js */
+.monaco { position: absolute; inset: 0; display: none; }
+.editor-wrap.monaco-on .monaco { display: block; }
+.editor-wrap.monaco-on #editor { visibility: hidden; }
+/* the statement under the caret: a bar in the gutter, as the TUI marks it */
+.stmt-mark { background: var(--accent); width: 3px !important; margin-left: 3px; }
+
 .splitter {
   flex: 0 0 5px;
   cursor: row-resize;
@@ -139,44 +155,175 @@ button:focus-visible, textarea:focus-visible { outline: 1px solid var(--accent);
 
 .results {
   flex: 1 1 auto;
-  overflow: auto;
-  min-height: 40px;
+  display: flex;
+  flex-direction: column;
+  min-height: 60px;
   background: var(--bg);
 }
-.results .empty, .results .exec, .results .failed {
-  padding: 16px;
-  color: var(--muted);
+.rbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 8px;
+  background: var(--panel2);
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
 }
-.results .exec { color: var(--fg); }
-.results .failed { color: var(--err); white-space: pre-wrap; font-family: ui-monospace, monospace; }
-.results .more { margin: 6px 12px; color: var(--warn); }
+.rtabs { display: flex; gap: 2px; }
+.rtab { border: 0; background: none; padding: 2px 8px; color: var(--muted); border-radius: 3px; }
+.rtab.on { color: var(--accent); background: var(--sel); }
+.grid-info { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.ractions { display: flex; gap: 6px; }
+.ractions button { font-size: 12px; padding: 1px 8px; }
+.rpane { position: relative; flex: 1 1 auto; min-height: 0; display: flex; }
+.grid-msg { padding: 16px; color: var(--muted); }
+.grid-msg.exec { color: var(--fg); }
 
-table.grid {
-  border-collapse: collapse;
-  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+/* ── the grid ──────────────────────────────────────────────────────────────
+   #grid scrolls; .gh (header) sticks to its top and .rn (row numbers) to
+   its left edge. Rows and cells are placed absolutely by grid.js, which
+   draws only those in view. */
+.grid {
+  flex: 1 1 auto;
+  position: relative;
+  overflow: auto;
+  outline: none;
+  font: 12px/22px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  user-select: none;
 }
-table.grid th, table.grid td {
-  padding: 2px 10px;
-  border-right: 1px solid var(--line);
+.grid:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
+.gh { position: sticky; top: 0; height: 22px; z-index: 3; background: var(--panel2); border-bottom: 1px solid var(--line); }
+.gb { position: relative; }
+.gr { position: absolute; left: 0; right: 0; height: 22px; }
+.gr.odd { background: var(--panel); }
+.gr:hover { background: var(--sel); }
+.gc, .hc {
+  position: absolute;
+  top: 0;
+  height: 22px;
+  padding: 0 8px;
   white-space: pre;
-  max-width: 480px;
   overflow: hidden;
   text-overflow: ellipsis;
+  border-right: 1px solid var(--line);
+}
+.gc.num, .hc.num { text-align: right; }
+.gc.null { color: var(--muted); font-style: italic; }
+.gc.wait { color: var(--muted); }
+.gc.gap, .hc.gap { border-right: 3px double var(--muted); }
+.gc.in { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.gc.cur { box-shadow: inset 0 0 0 2px var(--accent); }
+.gc.cur.blur { box-shadow: inset 0 0 0 1px var(--muted); }
+.hc { color: var(--accent); font-weight: 600; cursor: pointer; }
+.hc:hover { background: var(--sel); }
+.hc.sorted { color: var(--fg); }
+.hc.in { background: color-mix(in srgb, var(--accent) 18%, var(--panel2)); }
+/* the resize handle sits INSIDE the cell's right edge: .hc clips its
+   overflow (for the ellipsis), so a handle straddling the border would be
+   half cut off and the half under the next column would sort it instead */
+.hc .rz { position: absolute; top: 0; right: 0; width: 7px; height: 100%; cursor: col-resize; z-index: 1; }
+.hc .rz:hover, .gh.resizing .rz { background: color-mix(in srgb, var(--accent) 50%, transparent); }
+.rn {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  height: 22px;
+  padding: 0 8px;
+  text-align: right;
+  color: var(--muted);
+  background: var(--panel2);
+  border-right: 1px solid var(--line);
+  cursor: pointer;
+}
+.hrn { cursor: default; }
+.grid .probe { position: absolute; visibility: hidden; white-space: pre; }
+
+/* ── menus and dialogs ─────────────────────────────────────────────────── */
+.menu {
+  position: fixed;
+  z-index: 50;
+  min-width: 220px;
+  max-height: 80vh;
+  overflow: auto;
+  padding: 4px 0;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .45);
+  font-size: 12.5px;
+}
+.mitem {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  padding: 3px 12px;
   text-align: left;
 }
-table.grid thead th {
-  position: sticky;
-  top: 0;
-  background: var(--panel2);
-  color: var(--accent);
-  font-weight: 600;
-  border-bottom: 1px solid var(--line);
+.mitem:hover, .mitem:focus { background: var(--sel); outline: none; }
+.mitem.off { color: var(--muted); }
+.mitem .mk { color: var(--muted); font-family: ui-monospace, monospace; }
+.mhead { padding: 6px 12px 2px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+.msep { margin: 4px 0; border-top: 1px solid var(--line); }
+
+.shade { position: fixed; inset: 0; z-index: 40; background: rgba(0, 0, 0, .45); display: grid; place-items: center; }
+.modal {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, .5);
 }
-table.grid tbody tr:nth-child(even) { background: var(--panel); }
-table.grid tbody tr:hover { background: var(--sel); }
-table.grid .rownum { color: var(--muted); text-align: right; }
-table.grid td.num { text-align: right; }
-table.grid td.null { color: var(--muted); font-style: italic; }
+.modal.wide { width: min(860px, calc(100vw - 32px)); }
+.mtitle { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); font-weight: 600; color: var(--accent); }
+.mclose { border: 0; background: none; color: var(--muted); padding: 0 4px; }
+.mfoot { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-top: 1px solid var(--line); }
+.mfoot .hint { margin-left: auto; }
+.hint { color: var(--muted); font-size: 12px; }
+button.primary { border-color: var(--accent); }
+
+.inspect { padding: 10px 12px; min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+.ihead { color: var(--accent); font-weight: 600; }
+.ival {
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  max-height: 60vh;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.ival.null { color: var(--muted); font-style: italic; }
+
+.history { display: flex; flex-direction: column; min-height: 0; padding: 10px 12px; gap: 8px; }
+.hfilter {
+  font: inherit;
+  padding: 5px 8px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.hfilter:focus { outline: 1px solid var(--accent); }
+.hlist { list-style: none; margin: 0; padding: 0; overflow: auto; max-height: 55vh; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.hlist li { display: flex; gap: 10px; padding: 1px 6px; cursor: pointer; border-radius: 3px; white-space: nowrap; }
+.hlist li:hover { background: var(--panel2); }
+.hlist li.cur { background: var(--sel); }
+.hwhen { color: var(--muted); flex: none; }
+.hconn { color: var(--accent); flex: none; }
+.hsql { overflow: hidden; text-overflow: ellipsis; }
+
+.offscreen { position: fixed; left: -9999px; top: 0; opacity: 0; }
 
 .log {
   flex: 0 0 130px;

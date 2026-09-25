@@ -179,13 +179,20 @@ func originOK(origin, host string) bool {
 }
 
 // securityHeaders go on every response. The CSP allows nothing but this
-// server's own files: no inline script, no inline style attribute, no
-// framing — the page holds database results, and nothing of it needs more.
+// server's own files — no inline or foreign script, no framing, no fetch
+// anywhere else: the page holds database results.
+//
+// Styles are the one relaxation: 'unsafe-inline' for style only. Monaco
+// writes its own <style> elements (its theme's token colors), and the grid
+// and the plan view place their cells and cards with style attributes. An
+// injected style cannot run code, and with script-src and connect-src at
+// 'self' it has nowhere to send what it could read; every value the page
+// shows is escaped on its way into the DOM regardless.
 func securityHeaders(ctx rweb.Context) {
 	h := ctx.Response()
 	h.SetHeader("Content-Security-Policy",
-		"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "+
-			"connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "+
+			"connect-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 	h.SetHeader("X-Content-Type-Options", "nosniff")
 	h.SetHeader("Referrer-Policy", "no-referrer")
 	h.SetHeader("X-Frame-Options", "DENY")

@@ -65,6 +65,13 @@ type tab struct {
 	// page a single order of events.
 	sendMu sync.Mutex
 
+	// the grid's cache of the last result and its sort order (grid.go);
+	// rvSeq numbers results, so a copy can tell it is still looking at
+	// the one the page drew
+	viewMu sync.Mutex
+	rv     resultView
+	rvSeq  int
+
 	// reaper state, guarded by hub.mu
 	idleSince time.Time // zero while a stream is attached
 	released  bool      // the idle release has run since the last attach
@@ -277,10 +284,14 @@ type connEvent struct {
 	Tables  []tabRef `json:"tables"`
 }
 
-// tabRef is a sidebar row for a table or view.
+// tabRef is a sidebar row for a table or view. QName is the name to put in
+// SQL: schema-qualified only when the catalog spans several schemas, the
+// TUI's rule (tui/sidebar.go) — "public.cats" is noise when there is only
+// public, and necessary when there is also audit.cats.
 type tabRef struct {
 	Schema string `json:"schema"`
 	Name   string `json:"name"`
+	QName  string `json:"qname"`
 	View   bool   `json:"view,omitempty"`
 }
 
@@ -355,9 +366,17 @@ func tables(ws *workspace.Workspace) []tabRef {
 		return []tabRef{}
 	}
 	refs := db.TableRefs(cat.Rows)
+	schemas := map[string]bool{}
+	for _, r := range refs {
+		schemas[r.Schema] = true
+	}
 	out := make([]tabRef, len(refs))
 	for i, r := range refs {
-		out[i] = tabRef{Schema: r.Schema, Name: r.Name, View: r.View}
+		q := r.Name
+		if len(schemas) > 1 && r.Schema != "" {
+			q = r.Schema + "." + r.Name
+		}
+		out[i] = tabRef{Schema: r.Schema, Name: r.Name, QName: q, View: r.View}
 	}
 	return out
 }

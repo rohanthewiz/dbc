@@ -175,13 +175,18 @@ func (s *Server) routes() {
 	r.Put("/api/v1/tabs/:id", s.handleSaveTab)
 	r.Get("/api/v1/layout", s.handleLayout)
 	r.Put("/api/v1/layout", s.handleSaveLayout)
+	r.Get("/api/v1/history", s.handleHistory)
+	r.Post("/api/v1/stmt", s.handleStmt)
 
 	r.Post("/api/v1/ws", s.handleOpen)
 	r.Get("/api/v1/ws/:id", s.handleState)
 	r.Get("/api/v1/ws/:id/events", s.handleEvents)
 	r.Get("/api/v1/ws/:id/result", s.handleResult)
+	r.Get("/api/v1/ws/:id/export", s.handleExport)
+	r.Post("/api/v1/ws/:id/copy", s.handleCopy)
 	r.Post("/api/v1/ws/:id/connect", s.handleConnect)
 	r.Post("/api/v1/ws/:id/run", s.handleRun)
+	r.Post("/api/v1/ws/:id/preview", s.handlePreview)
 	r.Post("/api/v1/ws/:id/cancel", s.handleCancel)
 }
 
@@ -318,6 +323,8 @@ func contentType(name string) string {
 		return "image/svg+xml"
 	case ".json":
 		return "application/json"
+	case ".ttf":
+		return "font/ttf" // Monaco's icon font
 	}
 	return "application/octet-stream"
 }

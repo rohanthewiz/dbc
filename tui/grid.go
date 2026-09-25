@@ -1,9 +1,7 @@
 package tui
 
 import (
-	"cmp"
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 
@@ -11,6 +9,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/export"
 	"github.com/rohanthewiz/dbc/model"
+	"github.com/rohanthewiz/dbc/workspace"
 )
 
 // grid is the results table.
@@ -263,59 +262,12 @@ func (g *grid) Sort(col int) {
 	g.applySort()
 }
 
-// applySort rebuilds order from the sort state. NULLs sort last in both
-// directions — "biggest first" should not start with a screen of nothing —
-// and a numeric column compares numbers, so 10 sorts after 9.
+// applySort rebuilds order from the sort state. The comparison — NULLs
+// last in both directions, numbers as numbers, text case-insensitively — is
+// workspace.SortRows, shared with dbc web so a sorted copy puts the same
+// rows in the same order from either UI.
 func (g *grid) applySort() {
-	for i := range g.order {
-		g.order[i] = i
-	}
-	if g.sortCol < 0 {
-		return
-	}
-	c, desc, num := g.sortCol, g.sortDesc, g.numeric[g.sortCol]
-	raw := func(ri int) any {
-		if ri < len(g.res.Raw) && c < len(g.res.Raw[ri]) {
-			return g.res.Raw[ri][c]
-		}
-		return nil
-	}
-	slices.SortStableFunc(g.order, func(a, b int) int {
-		ra, rb := raw(a), raw(b)
-		switch {
-		case ra == nil && rb == nil:
-			return 0
-		case ra == nil:
-			return 1
-		case rb == nil:
-			return -1
-		}
-		var r int
-		if num {
-			r = cmp.Compare(toFloat(ra), toFloat(rb))
-		} else {
-			r = cmp.Compare(strings.ToLower(g.res.Rows[a][c]), strings.ToLower(g.res.Rows[b][c]))
-		}
-		if desc {
-			r = -r
-		}
-		return r
-	})
-}
-
-// toFloat converts a Go number to float64 for comparison. Only called on
-// columns NumericColumns vouched for.
-func toFloat(v any) float64 {
-	rv := reflect.ValueOf(v)
-	switch rv.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return float64(rv.Int())
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return float64(rv.Uint())
-	case reflect.Float32, reflect.Float64:
-		return rv.Float()
-	}
-	return 0
+	workspace.SortRows(g.order, g.res, g.sortCol, g.sortDesc, g.numeric)
 }
 
 // ---------------------------------------------------------------------------
@@ -348,30 +300,12 @@ func (g *grid) inSel(row, col int) bool {
 // out: a copy takes what the user sees. That is what makes hiding useful
 // for sharing — hide the noisy columns, then copy the table for Teams.
 func (g *grid) sub(r0, c0, r1, c1 int) *model.Result {
-	src := g.res
-	rcs := g.cols[c0 : c1+1]
-	out := &model.Result{Conn: src.Conn, Query: src.Query, Duration: src.Duration}
-	for _, rc := range rcs {
-		out.Columns = append(out.Columns, src.Columns[rc])
+	r1 = min(r1, len(g.order)-1)
+	var rows []int
+	if r0 <= r1 {
+		rows = g.order[r0 : r1+1]
 	}
-	for row := r0; row <= r1 && row < len(g.order); row++ {
-		ri := g.order[row]
-		vals := make([]string, len(rcs))
-		for i, rc := range rcs {
-			vals[i] = src.Rows[ri][rc]
-		}
-		out.Rows = append(out.Rows, vals)
-		if ri < len(src.Raw) {
-			raws := make([]any, len(rcs))
-			for i, rc := range rcs {
-				if rc < len(src.Raw[ri]) {
-					raws[i] = src.Raw[ri][rc]
-				}
-			}
-			out.Raw = append(out.Raw, raws)
-		}
-	}
-	return out
+	return workspace.Project(g.res, rows, g.cols[c0:c1+1])
 }
 
 // Selected returns what a copy should take: the range selection, or with

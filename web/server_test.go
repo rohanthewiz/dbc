@@ -395,10 +395,9 @@ func TestRunShowsResult(t *testing.T) {
 		t.Fatalf("logs = %q, want the workspace's own words", logs)
 	}
 
-	res := decodeData[map[string]any](t, e.api("GET", "/api/v1/ws/"+id+"/result", "", 200))
-	html, _ := res["html"].(string)
-	if !strings.Contains(html, `<table class="grid">`) || !strings.Contains(html, "<th>name</th>") {
-		t.Fatalf("result html = %.300s", html)
+	pg := decodeData[resultPage](t, e.api("GET", "/api/v1/ws/"+id+"/result", "", 200))
+	if strings.Join(pg.Columns, ",") != "name,age" || pg.Total != 8 || len(pg.Cells) != 8 || *pg.Cells[0][0] != "Bella" {
+		t.Fatalf("result page = %+v", pg)
 	}
 }
 
@@ -411,9 +410,9 @@ func TestRunPicksStatementUnderCaret(t *testing.T) {
 	caret := len([]rune("SELECT 'é' AS first;\nSELECT")) // mid second statement
 	e.api("POST", "/api/v1/ws/"+id+"/run", runBody(buf, caret, false), 200)
 	s.await(t, "run")
-	html := decodeData[map[string]any](t, e.api("GET", "/api/v1/ws/"+id+"/result", "", 200))["html"].(string)
-	if !strings.Contains(html, "<th>second</th>") {
-		t.Fatalf("ran the wrong statement: %.200s", html)
+	pg := decodeData[resultPage](t, e.api("GET", "/api/v1/ws/"+id+"/result", "", 200))
+	if len(pg.Columns) != 1 || pg.Columns[0] != "second" {
+		t.Fatalf("ran the wrong statement: %v", pg.Columns)
 	}
 
 	e.api("POST", "/api/v1/ws/"+id+"/run", runBody(buf, 0, true), 200)

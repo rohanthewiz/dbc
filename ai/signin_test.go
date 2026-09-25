@@ -128,11 +128,20 @@ func TestSignInDeviceFlow(t *testing.T) {
 
 // The server's workspace/configuration gets one empty object per item it
 // asked for — the server waits on that answer.
+//
+// The flow here is a device flow the user never finishes, so the connection
+// stays open until the test closes it. An already-signed-in account would not
+// do: the client answers server requests on their own goroutine, and it
+// closes the connection as soon as signIn says AlreadySignedIn — which can
+// land before the answer is written, dropping it. Nothing needs the answer
+// then, so that is not a bug, but it made this test fail about half the time.
 func TestSignInAnswersConfigurationRequests(t *testing.T) {
-	f := &fakeLSP{signedIn: true}
-	if _, err := startFakeLSP(t, f); err != nil {
+	f := &fakeLSP{}
+	s, err := startFakeLSP(t, f)
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer s.Close()
 	select {
 	case raw := <-f.cfgResp:
 		if string(raw) != "[{},{}]" {

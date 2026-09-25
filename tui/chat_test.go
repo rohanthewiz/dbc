@@ -676,3 +676,58 @@ func modalTitles(t *testing.T, m *Model) string {
 	}
 	return strings.Join(out, ",")
 }
+
+// The transcript's menu deletes the live conversation: its file goes, the
+// pane clears without saving it back, and the next question starts a fresh
+// session that never saw it.
+func TestAssistantDeletesTheLiveConversation(t *testing.T) {
+	f := fakeAssistant(t, nil)
+	m := newTestModel(t)
+	dir := keepChats(t, m)
+	seedChats(t, dir, 1)
+	key(t, m, "ctrl+a")
+	pumpChat(t, m, func() bool { return m.chat.state == chatReady })
+
+	// with nothing on screen the row is offered but disabled, and says why
+	rightClick(t, m, m.chat.transcript.X+2, m.chat.transcript.Y+12)
+	mx, my := findText(t, frame(m), "Delete this conversation")
+	click(t, m, mx, my)
+	if !strings.Contains(logText(m), "no conversation to delete") || len(savedChats(t, dir)) != 1 {
+		t.Fatalf("an empty pane has nothing to delete:\n%s", logText(m))
+	}
+
+	typeText(t, m, "why is Oliver first?")
+	key(t, m, "enter")
+	pumpChat(t, m, func() bool { return !m.chat.streaming })
+	if got := savedTitles(t, dir); got != "why is Oliver first?,question 0" {
+		t.Fatalf("after one answer: %s", got)
+	}
+
+	rightClick(t, m, m.chat.transcript.X+2, m.chat.transcript.Y+2)
+	mx, my = findText(t, frame(m), "Delete this conversation")
+	click(t, m, mx, my)
+	if got := savedTitles(t, dir); got != "question 0" {
+		t.Errorf("only the live conversation should be deleted: %s", got)
+	}
+	if len(m.chat.msgs) != 0 || m.chat.archiveID != "" {
+		t.Errorf("the pane should clear and forget the file:\n%s", m.chat.transcriptText())
+	}
+	if lg := logText(m); !strings.Contains(lg, `deleted the conversation "why is Oliver first?"`) ||
+		strings.Contains(lg, "saved the assistant conversation") {
+		t.Errorf("the log should name the deletion and not claim a save:\n%s", lg)
+	}
+	findText(t, frame(m), "◷ question 0") // the empty pane offers the rest
+
+	// quitting now saves nothing, and a follow-up is a new session
+	pumpChat(t, m, func() bool { return m.chat.state == chatReady })
+	typeText(t, m, "and then?")
+	key(t, m, "enter")
+	pumpChat(t, m, func() bool { return !m.chat.streaming })
+	if p := lastPrompt(t, f); !strings.Contains(p, "SQL assistant inside dbc") {
+		t.Errorf("the next question should start a new session:\n%s", p)
+	}
+	m.shutdown()
+	if got := savedTitles(t, dir); got != "and then?,question 0" {
+		t.Errorf("the deleted conversation should stay gone: %s", got)
+	}
+}

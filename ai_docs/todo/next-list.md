@@ -75,13 +75,6 @@ ten session docs in `ai_docs/claude_sessions/`
   `pgx.Conn.IsClosed` and has no test without a live connection), and
   `conn_idle_timeout`/`connect_timeout`.
 
-- **N-038** · raised `2026-0924-1958-assistant-conversation-archive` · value low
-  No way to delete the live assistant conversation. Saved ones can be
-  deleted (right-click a row, or `d` twice in Recent conversations), but the
-  one on screen is never offered, since its next save would write it back.
-  A "Delete this conversation" row in the transcript's menu would remove its
-  file and clear the pane without saving.
-
 ## Roadmap
 
 Wanted, but deliberately not next. Empty at seeding: the session docs never
@@ -113,6 +106,16 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-038** · raised `2026-0924-1958-assistant-conversation-archive` ·
+  closed 2026-09-25 — the transcript's right-click menu has a **Delete this
+  conversation** row (disabled, saying why, on an empty pane). It removes
+  the live conversation's file if it has one, then clears the pane through
+  `resetChat` — the half of `newChat` after the save — so nothing writes the
+  file back, and the next question starts a fresh agent session rather than
+  one that still remembers the deleted conversation. A file that will not
+  delete leaves the pane untouched. As with saved conversations, the menu
+  row is the deliberate second step; there is no keyboard shortcut.
 
 - **N-006** · raised `2026-0728-2022-multi-statement-headless` ·
   closed 2026-09-25 — `Ctrl+Shift+R` (and `Alt+R`, since a terminal without

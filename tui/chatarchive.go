@@ -27,6 +27,9 @@ import (
 //
 //	right-click a saved row, or d d in the list ─► chatDelete ─► RemoveChat
 //
+//	transcript menu ─► Delete this conversation ─► chatDeleteLive
+//	    RemoveChat(live id), then resetChat — the clear that skips the save
+//
 // SAVED AFTER EVERY ANSWER, not only on ⟲ new or quit. A crash or a killed
 // terminal must cost at most the answer in flight: the transcript is the one
 // thing in the pane nothing else can rebuild, and one small file per answer
@@ -43,9 +46,9 @@ import (
 //
 // NOTHING IS DESTROYED, SO NOTHING CONFIRMS. ⟲ new saves first, and opening a
 // saved conversation saves the live one on its way out, so each gesture is
-// undone from the same list. The exception is deleting a saved conversation,
-// the one gesture that cannot be undone — so it is never one keypress (see
-// chatDelete).
+// undone from the same list. The exception is deleting a conversation —
+// saved, or the live one — the one gesture that cannot be undone, so it is
+// never one keypress (see chatDelete and chatDeleteLive).
 //
 // REOPENING CONTINUES THE SAME FILE. A conversation reopened and carried on is
 // one conversation; forking a copy would leave two rows that differ only in
@@ -129,10 +132,7 @@ func (m *Model) chatSave() bool {
 		p.archiveID = userdata.NewChatID(now)
 		p.archiveStart = now
 	}
-	msgs := make([]userdata.ChatMsg, 0, len(p.msgs))
-	for _, msg := range p.msgs {
-		msgs = append(msgs, userdata.ChatMsg{Role: chatRoleName(msg.role), Text: msg.text})
-	}
+	msgs := p.archiveMsgs()
 	name := p.agent.Name
 	if name == "" {
 		name = m.aiAgent.Name
@@ -151,6 +151,15 @@ func (m *Model) chatSave() bool {
 		m.logf(logWarn, "could not save the assistant conversation: %v", err)
 	}
 	return false
+}
+
+// archiveMsgs is the transcript in the archive's form.
+func (p *chatPane) archiveMsgs() []userdata.ChatMsg {
+	msgs := make([]userdata.ChatMsg, 0, len(p.msgs))
+	for _, msg := range p.msgs {
+		msgs = append(msgs, userdata.ChatMsg{Role: chatRoleName(msg.role), Text: msg.text})
+	}
+	return msgs
 }
 
 // chatLoadRecent refreshes the conversations the empty pane offers. Called
@@ -295,6 +304,7 @@ func (p *chatPane) otherRecent() []userdata.ChatMeta {
 //
 // The live conversation cannot be deleted this way: it is never offered in
 // the lists (see otherRecent), and its next save would only write it back.
+// chatDeleteLive is its own path.
 func (m *Model) chatDelete(id string) bool {
 	p := m.chat
 	title := id
@@ -311,6 +321,35 @@ func (m *Model) chatDelete(id string) bool {
 	p.hover = -1 // the rows below the deleted one move up under the mouse
 	m.logf(logOk, "deleted the saved conversation %q", title)
 	return true
+}
+
+// chatDeleteLive deletes the conversation on screen: its file, if it has
+// been saved, and then the pane, cleared WITHOUT the save newChat would do —
+// that save is exactly what would write the file back.
+//
+// The pane is cleared by a fresh agent session, not just an empty message
+// list: the old session still remembers the deleted conversation, and a
+// follow-up answered from that memory would bring it back in all but name.
+//
+// Like deleting a saved conversation from the mouse, the menu row is the
+// deliberate second step; there is no keyboard shortcut to hit by accident.
+//
+// A file that will not delete leaves the pane as it was, so what the log
+// says failed is still there to try again — clearing it anyway would leave a
+// file the user believes is gone and no longer sees.
+func (m *Model) chatDeleteLive() tea.Cmd {
+	p := m.chat
+	if err := userdata.RemoveChat(p.dir, p.archiveID); err != nil {
+		m.logf(logErr, "could not delete the conversation: %v", err)
+		return nil
+	}
+	title := userdata.ChatTitle(p.archiveMsgs())
+	if title == "" {
+		title = "(untitled)"
+	}
+	cmd := m.resetChat()
+	m.logf(logOk, "deleted the conversation %q", title)
+	return cmd
 }
 
 // openSavedChatMenu is the right-click menu of a saved conversation's row,

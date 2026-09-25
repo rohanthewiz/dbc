@@ -223,7 +223,8 @@ ones — click one to reopen it — and right-click the transcript for
 transcript, not the agent's memory: it starts a fresh session, so quote what
 matters in a follow-up. To delete one, right-click its row (in the pane or
 the list) and pick **Delete conversation**, or press `d` twice on it in the
-list.
+list; to delete the one on screen, right-click the transcript and pick
+**Delete this conversation** — the pane clears without saving it.
 
 ### Everything else
 

@@ -280,10 +280,18 @@ func (m *Model) ensureChat() tea.Cmd {
 // The conversation being ended is saved first, so ⟲ new never loses one; it
 // is then among the recent ones the empty pane offers.
 func (m *Model) newChat() tea.Cmd {
-	p := m.chat
 	if m.chatSave() {
 		m.log(logInfo, "saved the assistant conversation — reopen it from the empty pane or Recent conversations")
 	}
+	return m.resetChat()
+}
+
+// resetChat clears the pane and starts a fresh agent session, WITHOUT saving
+// what was there. newChat saves first; chatDeleteLive deliberately does not.
+// Forgetting the archive id is what keeps a later save from writing the old
+// conversation's file again.
+func (m *Model) resetChat() tea.Cmd {
+	p := m.chat
 	p.close()
 	p.c, p.state, p.streaming, p.pending = nil, chatIdle, false, ""
 	p.msgs, p.first, p.top, p.follow = nil, true, 0, true
@@ -725,12 +733,18 @@ func (m *Model) openChatMenu(x, y int) {
 	if last == "" {
 		noReply = "no reply to copy yet"
 	}
+	noConversation := ""
+	if len(p.msgs) == 0 && p.archiveID == "" {
+		noConversation = "no conversation to delete"
+	}
 	m.openMenu(x, y, []menuItem{
 		{label: "Copy last reply", why: noReply, act: func(m *Model) tea.Cmd { return m.copyString(last, "the reply") }},
 		{label: "Copy conversation", act: func(m *Model) tea.Cmd { return m.copyString(p.transcriptText(), "the conversation") }},
 		heading(""),
 		{label: "⟲ New conversation", act: func(m *Model) tea.Cmd { return m.newChat() }},
 		{label: "Recent conversations…", act: func(m *Model) tea.Cmd { m.openRecentChats(); return nil }},
+		{label: "Delete this conversation", why: noConversation,
+			act: func(m *Model) tea.Cmd { return m.chatDeleteLive() }},
 		{label: "Model and assistant…", act: func(m *Model) tea.Cmd { m.openModelMenu(x, y); return nil }},
 	})
 }

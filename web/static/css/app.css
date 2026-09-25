@@ -99,6 +99,11 @@ button:focus-visible, textarea:focus-visible, li:focus-visible { outline: 1px so
 .conn-item.active { background: var(--sel); box-shadow: inset 2px 0 var(--accent); }
 .conn-item.connecting .name::after { content: " …"; color: var(--warn); }
 .conn-item .driver { color: var(--muted); font-size: 11px; }
+/* added in the browser (kept in web.bytdb, removable): a small accent dot */
+.conn-item[data-saved] .driver::before { content: "● "; color: var(--accent); font-size: 8px; vertical-align: 1px; }
+.sidebar h2.hrow { display: flex; align-items: center; justify-content: space-between; }
+.hadd { border: 0; background: none; color: var(--muted); padding: 0 4px; font-size: 14px; line-height: 1; }
+.hadd:hover { color: var(--accent); }
 #tables li {
   padding: 1px 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -525,6 +530,27 @@ a.btnlink:hover { border-color: var(--accent); }
 .keyhelp dt { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg); white-space: nowrap; }
 .keyhelp dd { margin: 0; color: var(--muted); }
 .confirm { padding: 10px 14px; max-width: 460px; }
+
+/* the add-connection form: labels in one column, fields in the other */
+.connform { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; align-items: center; padding: 12px 14px 6px; }
+.connform label { color: var(--muted); }
+.connform input[type="text"], .connform select {
+  font: inherit;
+  padding: 5px 8px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  min-width: 0;
+}
+.connform input.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.connform input:focus, .connform select:focus { outline: 1px solid var(--accent); }
+.connform .full { grid-column: 2; }
+.connform .check { display: flex; gap: 6px; align-items: center; color: var(--fg); }
+.connresult { margin: 0 14px 10px; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--line); white-space: pre-wrap; word-break: break-word; }
+.connresult.ok { border-color: var(--accent); color: var(--accent); }
+.connresult.err { border-color: var(--err); color: var(--err); }
+.connresult.warn { border-color: var(--warn); color: var(--warn); }
 .errcode { color: var(--muted); font-weight: 400; margin-right: 6px; }
 
 /* the sign-in notice */

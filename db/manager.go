@@ -88,8 +88,9 @@ func NewManager(cfg *config.Config) *Manager {
 
 // Names returns the configured connection names in config order.
 func (m *Manager) Names() []string {
-	names := make([]string, 0, len(m.cfg.Connections))
-	for _, c := range m.cfg.Connections {
+	conns := m.cfg.Conns()
+	names := make([]string, 0, len(conns))
+	for _, c := range conns {
 		names = append(names, c.Name)
 	}
 	return names

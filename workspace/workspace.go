@@ -136,8 +136,8 @@ func New(cfg *config.Config, mgr *db.Manager, hist *userdata.History, opt Option
 	w := &Workspace{cfg: cfg, mgr: mgr, hist: hist, sink: opt.Sink}
 	if _, ok := cfg.ConnByName(cfg.DefaultConnection); ok {
 		w.active = cfg.DefaultConnection
-	} else if len(cfg.Connections) > 0 {
-		w.active = cfg.Connections[0].Name
+	} else if conns := cfg.Conns(); len(conns) > 0 {
+		w.active = conns[0].Name
 	}
 	return w
 }

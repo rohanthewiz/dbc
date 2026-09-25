@@ -140,7 +140,10 @@
   function onEvent(ev) {
     const d = ev.data;
     if (!ev.ws) {
-      if (ev.type.startsWith("chat.")) dbc.chat.onEvent(ev.type, d);
+      // window-level: the assistant's, or a connection added or removed
+      // (in this window or another — every window redraws its sidebar)
+      if (ev.type === "conns") dbc.conns.draw(d.conns);
+      else if (ev.type.startsWith("chat.")) dbc.chat.onEvent(ev.type, d);
       return;
     }
     const t = tabOf(ev.ws);
@@ -334,6 +337,9 @@
 
   async function resync() {
     reclaim(); // a long drop may have let another browser tab take ours
+    // a connection added or removed while the stream was down sent its
+    // "conns" event to nobody here
+    api("GET", "/api/v1/conns").then((r) => dbc.conns.draw(r.conns), () => {});
     const t = state.tab;
     try {
       const st = await api("GET", dbc.wsPath(""));
@@ -513,7 +519,7 @@
   }
 
   Object.assign(dbc.cmd, {
-    run, stop, history, preview, editorState, scripts, help, newTab, pickTab,
+    run, stop, history, preview, editorState, scripts, help, newTab, pickTab, connect,
     closeTab: () => closeTab(state.tab),
     exportMenu: () => dbc.grid.exportMenu(),
   });
@@ -938,6 +944,10 @@
     ]],
     ["Assistant", [
       ["Enter · Shift+Enter", "send · new line"], ["Ctrl+K", "stop the answer"], ["Esc", "back to the editor"],
+    ]],
+    ["Sidebar", [
+      ["click a connection", "switch this tab to it"], ["+ beside Connections", "add a connection"],
+      ["right-click a connection", "connect · remove one added here"],
     ]],
     ["Anywhere", [["F1 · ?", "this list"]]],
   ];

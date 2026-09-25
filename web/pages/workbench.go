@@ -131,15 +131,26 @@ func (p Workbench) topbar(b *element.Builder) any {
 
 func (p Workbench) sidebar(b *element.Builder) any {
 	b.AsideClass("sidebar").R(
-		b.H2().T("Connections"),
+		b.H2Class("hrow").R(
+			b.T("Connections"),
+			b.ButtonClass("hadd", "id", "conn-add", "type", "button",
+				"title", "Add a connection", "aria-label", "Add a connection").T("+"),
+		),
+		// app.js redraws this list when a connection is added or removed
+		// (drawConns): keep the two in step
 		b.Ul("id", "conns").R(
 			element.ForEach(p.Conns, func(c config.Connection) {
 				cls := "conn-item"
 				if c.Name == p.Active {
 					cls += " active"
 				}
+				attrs := []string{"type", "button", "data-conn", c.Name, "data-driver", c.Driver}
+				if c.Web {
+					// added in the browser: the one kind it may remove
+					attrs = append(attrs, "data-saved", "1", "title", c.Name+" — added here; right-click to remove")
+				}
 				b.Li().R(
-					b.ButtonClass(cls, "type", "button", "data-conn", c.Name, "data-driver", c.Driver).R(
+					b.ButtonClass(cls, attrs...).R(
 						b.SpanClass("name").T(c.Name),
 						b.SpanClass("driver").T(c.Driver),
 					),
@@ -181,7 +192,7 @@ func (p Workbench) chat(b *element.Builder) any {
 
 // scripts are the workbench's modules, in load order: core first (the
 // shared API, log and state), app last (boot, which uses all the others).
-var scripts = []string{"core.js", "ui.js", "editor.js", "grid.js", "plan.js", "planview.js", "chat.js", "app.js"}
+var scripts = []string{"core.js", "ui.js", "editor.js", "grid.js", "plan.js", "planview.js", "chat.js", "conns.js", "app.js"}
 
 // head is the <head> every page shares: the theme as CSS variables, the
 // stylesheet, and the script (deferred, so it runs once the DOM is parsed).

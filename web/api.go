@@ -31,17 +31,16 @@ func (s *Server) handleHealth(ctx rweb.Context) error {
 }
 
 // connInfo is what the browser learns about a connection: never its DSN.
+// Saved marks one added in the browser (conns.go), the only kind it may
+// remove.
 type connInfo struct {
 	Name   string `json:"name"`
 	Driver string `json:"driver"`
+	Saved  bool   `json:"saved,omitempty"`
 }
 
 func (s *Server) handleConns(ctx rweb.Context) error {
-	out := make([]connInfo, len(s.cfg.Connections))
-	for i, c := range s.cfg.Connections {
-		out[i] = connInfo{Name: c.Name, Driver: c.Driver}
-	}
-	return ok(ctx, map[string]any{"conns": out, "default": s.defaultConn()})
+	return ok(ctx, s.connList())
 }
 
 // ---------------------------------------------------------------------------

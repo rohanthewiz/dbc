@@ -18,7 +18,8 @@ import (
 )
 
 // Store keeps what only the browser UI has: its query tabs (the editor
-// buffer and the connection each one was on) and its layout (pane sizes).
+// buffer and the connection each one was on), its layout (pane sizes), and
+// the connections added in the browser (see SavedConn).
 // History and assistant conversations are not here — they stay in userdata,
 // shared with the TUI, so a query run in either shows up in both.
 //
@@ -42,6 +43,7 @@ type Store struct {
 	mu     sync.Mutex
 	tabs   map[string]Tab
 	layout map[string]string
+	conns  map[string]SavedConn
 }
 
 // Tab is one query tab as the browser left it.
@@ -51,6 +53,24 @@ type Tab struct {
 	Conn    string    `json:"conn"`   // the connection it was on; "" before any
 	Buffer  string    `json:"buffer"` // the editor's text
 	Updated time.Time `json:"updated"`
+}
+
+// SavedConn is a connection added in the browser. The config file's
+// connections stay the file's: dbc web never rewrites it (the TOML encoder
+// would drop the user's comments and layout), so what the browser adds is
+// kept here instead and merged into the config at startup.
+//
+// DSN is stored as typed — ${VAR} references unexpanded — so a password
+// kept in the environment never lands in this file; it is expanded each
+// time the connection is merged in (config.ExpandDSN), as the file's are.
+// A DSN typed with the password inline is stored as typed: the file is
+// the user's own, under ~/.config/dbc (created 0700), like config.toml.
+type SavedConn struct {
+	Name   string
+	Driver string
+	DSN    string
+	AIRows bool // config.Connection.AIRows: the assistant may see result rows
+	Added  time.Time
 }
 
 // StateFile is where the store lives, beside the history and the TUI's
@@ -77,6 +97,13 @@ var storeSchema = []string{
 		key   TEXT PRIMARY KEY,
 		value TEXT NOT NULL
 	)`,
+	`CREATE TABLE IF NOT EXISTS conns (
+		name    TEXT PRIMARY KEY,
+		driver  TEXT NOT NULL,
+		dsn     TEXT NOT NULL,
+		ai_rows BOOLEAN NOT NULL,
+		added   TIMESTAMPTZ NOT NULL
+	)`,
 }
 
 // OpenStore opens (creating it if needed) the store at path. path == ""
@@ -84,7 +111,8 @@ var storeSchema = []string{
 // by another dbc web, an unwritable directory — it returns a memory-only
 // store AND the error, so the caller can warn and carry on.
 func OpenStore(path string) (*Store, error) {
-	st := &Store{path: path, tabs: map[string]Tab{}, layout: map[string]string{}}
+	st := &Store{path: path, tabs: map[string]Tab{}, layout: map[string]string{},
+		conns: map[string]SavedConn{}}
 	if path == "" {
 		return st, nil
 	}
@@ -261,6 +289,77 @@ func (s *Store) SetLayout(values map[string]string) error {
 		}
 	}
 	return wrap(tx.Commit(), "op", "save layout")
+}
+
+// Conns lists the connections added in the browser, oldest first — the
+// order they were added, which is the order the sidebar shows them in,
+// after the config file's.
+func (s *Store) Conns() ([]SavedConn, error) {
+	if s.db == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		out := make([]SavedConn, 0, len(s.conns))
+		for _, c := range s.conns {
+			out = append(out, c)
+		}
+		slices.SortFunc(out, func(a, b SavedConn) int { return a.Added.Compare(b.Added) })
+		return out, nil
+	}
+	ctx, cancel := opCtx()
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, `SELECT name, driver, dsn, ai_rows, added FROM conns ORDER BY added, name`)
+	if err != nil {
+		return nil, serr.Wrap(err, "op", "list conns")
+	}
+	defer rows.Close()
+	var out []SavedConn
+	for rows.Next() {
+		var c SavedConn
+		if err = rows.Scan(&c.Name, &c.Driver, &c.DSN, &c.AIRows, &c.Added); err != nil {
+			return nil, serr.Wrap(err, "op", "scan conn")
+		}
+		out = append(out, c)
+	}
+	return out, wrap(rows.Err(), "op", "list conns")
+}
+
+// SaveConn adds a connection. Unlike SaveTab it does not replace one by the
+// same name: the caller has already checked the name against the config,
+// and a name here that the config did not know is one this store kept but
+// could not merge — replacing it silently would be a surprise.
+func (s *Store) SaveConn(c SavedConn) error {
+	if c.Added.IsZero() {
+		c.Added = time.Now().UTC()
+	}
+	if s.db == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if _, dup := s.conns[c.Name]; dup {
+			return serr.New("a saved connection by that name already exists", "name", c.Name)
+		}
+		s.conns[c.Name] = c
+		return nil
+	}
+	ctx, cancel := opCtx()
+	defer cancel()
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO conns (name, driver, dsn, ai_rows, added) VALUES ($1, $2, $3, $4, $5)`,
+		c.Name, c.Driver, c.DSN, c.AIRows, c.Added)
+	return wrap(err, "op", "save conn", "name", c.Name)
+}
+
+// DeleteConn forgets a saved connection. A missing one is success.
+func (s *Store) DeleteConn(name string) error {
+	if s.db == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.conns, name)
+		return nil
+	}
+	ctx, cancel := opCtx()
+	defer cancel()
+	_, err := s.db.ExecContext(ctx, `DELETE FROM conns WHERE name = $1`, name)
+	return wrap(err, "op", "delete conn", "name", name)
 }
 
 // opCtx bounds one store operation. The store is a local file, so this is a

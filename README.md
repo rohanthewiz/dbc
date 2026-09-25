@@ -575,6 +575,24 @@ is shown by one browser tab of dbc web at a time: a second browser tab gets
 the saved tabs the first is not showing, or a fresh one, with sessions of its
 own. Closing a browser tab frees its tabs for the next one opened.
 
+**Adding connections.** The **+** beside *Connections* opens a form: name,
+driver, DSN, and whether the assistant may see result rows (`ai_rows`).
+**Test connection** opens the DSN, pings it within `connect_timeout` and
+closes it again, so nothing is saved until you choose to. It reports how long
+the connect took, or the driver's error. For a SQLite or bytdb file that does
+not exist yet, it says so rather than creating one. **Save** adds the
+connection and switches the tab to it, whether or not it was tested. The
+connection is kept in `web.bytdb`, not in your config file, which dbc never
+rewrites. It is merged in each time `dbc web` starts, after the file's
+connections; if the file later defines the same name, the file's wins, with
+a warning. The TUI and headless runs read only the file, so they don't see
+these connections. A DSN is stored as typed: write `${PGPASS}` and the
+password stays in `dbc web`'s environment instead of the file. A DSN is never
+sent back to the browser. Connections added this way show a small dot. To
+remove one, right-click it and pick *Remove…*. A connection a tab is still on
+can't be removed until you switch that tab away. The file's connections are
+changed in the file.
+
 **Keys.** The TUI's, bent where a browser keeps the chord for itself:
 
 | Key | Does |

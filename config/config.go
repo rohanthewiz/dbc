@@ -1,10 +1,12 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -115,6 +117,13 @@ type Connection struct {
 	// per-connection flag rather than Config.Demo because a demo config can
 	// also carry the ad-hoc --dsn connection, which is the user's database.
 	Demo bool `toml:"-"`
+
+	// Web marks a connection added in dbc web's browser UI and kept in its
+	// store (web.bytdb), not in this file. Never read from a file — the
+	// store sets it when it merges its connections in — so dbc web can tell
+	// which ones it may remove: a file's connections are the file's to
+	// change.
+	Web bool `toml:"-"`
 }
 
 // Config is the application configuration.
@@ -153,8 +162,20 @@ type Config struct {
 	// wins. Global for the same reason as ConnIdleTimeout.
 	ConnectTimeout time.Duration `toml:"connect_timeout"`
 
-	DefaultConnection string       `toml:"default_connection"`
-	Connections       []Connection `toml:"connection"`
+	DefaultConnection string `toml:"default_connection"`
+
+	// Connections is written freely while the config is being built (Load,
+	// the demo pruning, an ad-hoc --dsn), when nothing else can see it. Once
+	// something may run beside a change — dbc web adding a connection while
+	// its tabs connect and run — the change goes through AddConn/RemoveConn
+	// and every reader through Conns/ConnByName, which take connMu.
+	//
+	// The writers are copy-on-write: AddConn and RemoveConn build a new
+	// slice rather than edit the old one in place, so a slice a reader got
+	// from Conns (or a range over the field that began before the change)
+	// never sees an element change under it.
+	Connections []Connection `toml:"connection"`
+	connMu      sync.RWMutex
 
 	Path string `toml:"-"` // file the config was loaded from ("" if none)
 	Demo bool   `toml:"-"` // true when running with the built-in demo connection
@@ -227,18 +248,9 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 				"name", cn.Name, "config_path", path)
 		}
 		seen[cn.Name] = true
-		// expand env vars ourselves rather than via os.ExpandEnv, so a typo'd
-		// ${PGPASS} warns by name instead of silently becoming "" and
-		// surfacing later as a baffling auth failure
-		cn.DSN = os.Expand(cn.DSN, func(key string) string {
-			v, ok := os.LookupEnv(key)
-			if !ok {
-				cfg.Warnings = append(cfg.Warnings, fmt.Sprintf(
-					"connection %q: DSN references unset env var $%s (expanded to empty)",
-					cn.Name, key))
-			}
-			return v
-		})
+		var warns []string
+		cn.DSN, warns = ExpandDSN(cn.Name, cn.DSN)
+		cfg.Warnings = append(cfg.Warnings, warns...)
 	}
 	if cfg.DefaultConnection != "" && !seen[cfg.DefaultConnection] {
 		return nil, serr.New("default_connection names no configured connection",
@@ -329,12 +341,83 @@ func DemoBytdbPath() (string, error) {
 
 // ConnByName finds a connection config by name.
 func (c *Config) ConnByName(name string) (Connection, bool) {
+	c.connMu.RLock()
+	defer c.connMu.RUnlock()
 	for _, cn := range c.Connections {
 		if cn.Name == name {
 			return cn, true
 		}
 	}
 	return Connection{}, false
+}
+
+// Conns is the connection list as it stands, for a reader that may run
+// beside AddConn/RemoveConn. The slice is the one the writers replace
+// wholesale, never edit, so it is safe to keep and range without the lock —
+// callers must not modify it.
+func (c *Config) Conns() []Connection {
+	c.connMu.RLock()
+	defer c.connMu.RUnlock()
+	return c.Connections
+}
+
+// ErrConnExists is AddConn refusing a name already in use: ConnByName would
+// always find the first of two, so the second could never be reached.
+var ErrConnExists = errors.New("a connection by that name already exists")
+
+// AddConn appends a connection at runtime. The name must be new.
+func (c *Config) AddConn(cn Connection) error {
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+	for _, x := range c.Connections {
+		if x.Name == cn.Name {
+			return serr.Wrap(ErrConnExists, "name", cn.Name)
+		}
+	}
+	// copy-on-write: see Connections. append alone could write into spare
+	// capacity a reader's slice shares.
+	next := make([]Connection, len(c.Connections), len(c.Connections)+1)
+	copy(next, c.Connections)
+	c.Connections = append(next, cn)
+	return nil
+}
+
+// RemoveConn drops a connection at runtime, reporting whether there was one
+// by that name. A default_connection naming it is left alone: the lookups
+// that honor it (workspace.New, dbc web's defaultConn) already fall back to
+// the first connection when it names nothing.
+func (c *Config) RemoveConn(name string) bool {
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+	next := make([]Connection, 0, len(c.Connections))
+	for _, x := range c.Connections {
+		if x.Name != name {
+			next = append(next, x)
+		}
+	}
+	if len(next) == len(c.Connections) {
+		return false
+	}
+	c.Connections = next
+	return true
+}
+
+// ExpandDSN expands ${VAR} and $VAR in a DSN from the environment, as Load
+// does for the file's connections. It does this itself rather than via
+// os.ExpandEnv so that a typo'd ${PGPASS} comes back as a warning naming it
+// instead of silently becoming "" and surfacing later as a baffling auth
+// failure. name is the connection's, for the warning.
+func ExpandDSN(name, dsn string) (string, []string) {
+	var warns []string
+	out := os.Expand(dsn, func(key string) string {
+		v, ok := os.LookupEnv(key)
+		if !ok {
+			warns = append(warns, fmt.Sprintf(
+				"connection %q: DSN references unset env var $%s (expanded to empty)", name, key))
+		}
+		return v
+	})
+	return out, warns
 }
 
 func searchPaths() []string {

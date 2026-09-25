@@ -153,6 +153,14 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) (*Server, error) {
 	s.rw = rweb.NewServer(rweb.ServerOptions{Address: addr, ReadyChan: s.ready})
 	s.rw.Use(s.guard)
 	s.routes()
+	// after the file's connections (Load) and the demos (db.openDemos), so a
+	// saved one never displaces either; see mergeSavedConns. Its warnings go
+	// to the terminal and join the config's, which a new window's page logs
+	// (handleOpen) — appending is safe here, as nothing is serving yet.
+	for _, w := range s.mergeSavedConns() {
+		opt.Logf("warning: %s", w)
+		cfg.Warnings = append(cfg.Warnings, w)
+	}
 	return s, nil
 }
 
@@ -192,6 +200,9 @@ func (s *Server) routes() {
 
 	r.Get("/api/v1/health", s.handleHealth)
 	r.Get("/api/v1/conns", s.handleConns)
+	r.Post("/api/v1/conns", s.handleConnAdd)
+	r.Post("/api/v1/conns/test", s.handleConnTest)
+	r.Delete("/api/v1/conns/:name", s.handleConnDelete)
 	r.Get("/api/v1/tabs", s.handleTabs)
 	r.Put("/api/v1/tabs/:id", s.handleSaveTab)
 	r.Delete("/api/v1/tabs/:id", s.handleDeleteTab)
@@ -298,7 +309,7 @@ func (s *Server) LoginURL() string { return s.URL() + "/login?s=" + string(s.aut
 func (s *Server) handlePage(ctx rweb.Context) error {
 	l, _ := s.store.Layout() // a store that cannot be read just means the defaults
 	return writePage(ctx, http.StatusOK, pages.Workbench{
-		Conns: s.cfg.Connections, Active: s.defaultConn(), Ver: s.ver, Theme: l["theme"],
+		Conns: s.cfg.Conns(), Active: s.defaultConn(), Ver: s.ver, Theme: l["theme"],
 	}.Render())
 }
 
@@ -308,8 +319,8 @@ func (s *Server) defaultConn() string {
 	if _, ok := s.cfg.ConnByName(s.cfg.DefaultConnection); ok {
 		return s.cfg.DefaultConnection
 	}
-	if len(s.cfg.Connections) > 0 {
-		return s.cfg.Connections[0].Name
+	if conns := s.cfg.Conns(); len(conns) > 0 {
+		return conns[0].Name
 	}
 	return ""
 }

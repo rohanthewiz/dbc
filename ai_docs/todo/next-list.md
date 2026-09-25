@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-042
+**Next ID:** N-043
 
 ## Open
 
@@ -45,14 +45,6 @@ ten session docs in `ai_docs/claude_sessions/`
   terminal paste right after gets nothing or markup. Serving both needs
   owning the selection; only worth it if a Linux user trips on it.
 
-- **N-032** · raised `2026-0924-1458-assistant-schema-context` · value low
-  Run the assistant's schema lookup (`db.ColumnsQuery`) against a live
-  Postgres and MySQL. The Postgres query is the one bytdb runs in tests
-  (`pg_attribute` + `format_type`), and MySQL's reads
-  `information_schema.columns.column_type`, but neither has met a real
-  server. A failure is graceful — the transcript says the lookup failed and
-  the question goes without schema — so this is confidence, not a fix.
-
 - **N-035** · raised `2026-0924-1725-conn-mgmt-session-discard-timeouts` · value low
   Test the session changes against a live MySQL and Postgres. The MySQL
   driver's session reset leaving an open transaction on a pooled connection
@@ -63,11 +55,13 @@ ten session docs in `ai_docs/claude_sessions/`
   `pgx.Conn.IsClosed` and has no test without a live connection), and
   `conn_idle_timeout`/`connect_timeout`.
 
-- **N-041** · raised `2026-0925-1111-rename-sqlite-demo-to-demo-sqlite` · value low
-  The README's multi-statement headless example (`### Multi-statement runs`)
-  shows `│ demo │` banners for a run with no `-c`, but with no config the
-  active demo is `demo-bytdb`, so the sample output was already stale before
-  the rename. Regenerate it from the binary.
+- **N-042** · raised `2026-0925-1145-readme-example-and-live-schema-lookup` · value low
+  Postgres materialized views never reach the sidebar or the assistant:
+  `db.TablesQuery` reads `information_schema.tables`, which does not list
+  them (checked on Postgres 17.11). `db.ColumnsQuery` already accepts
+  relkind `'m'`, so only the listing is missing — e.g. a `UNION ALL` over
+  `pg_matviews` with table_type `MATERIALIZED VIEW`, which `TableRefs` would
+  already read as a view.
 
 ## Roadmap
 
@@ -100,6 +94,23 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-032** · raised `2026-0924-1458-assistant-schema-context` ·
+  closed 2026-09-25, 2026-0925-1145-readme-example-and-live-schema-lookup — ran against Postgres 17.11 and MySQL 8.4.11 in
+  throwaway containers; no change needed. `db/live_test.go` keeps it
+  repeatable (opt-in: `DBC_LIVE_PG_DSN`, `DBC_LIVE_MYSQL_DSN`) and walks the
+  assistant's path — `TablesQuery` → `TableIndex.Mentioned` → `Columns` —
+  comparing types exactly: modifiers, `text[]`, a schema-qualified enum, a
+  dropped column, a view, a partitioned parent, quoted mixed case, one name in
+  two schemas; MySQL `int unsigned`, enum values, `decimal(5,2)`,
+  `datetime(3)`, `json`, a view. Found on the way: matviews are not listed
+  (N-042).
+
+- **N-041** · raised `2026-0925-1111-rename-sqlite-demo-to-demo-sqlite` ·
+  closed 2026-09-25, 2026-0925-1145-readme-example-and-live-schema-lookup — regenerated from the binary. The example was
+  broken, not just stale: its INSERT failed on `demo-bytdb` (no id given), and
+  the old output lacked the Bengal and Sphynx rows. It now inserts `id 9` and
+  orders `n DESC, breed`; both demos print the same.
 
 - **N-028** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` ·
   closed 2026-09-25, 2026-0925-1129-copilot-sign-in-from-dbc — Copilot sign-in from inside dbc. `ai/signin.go` runs

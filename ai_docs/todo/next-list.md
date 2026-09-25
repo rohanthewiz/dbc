@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-056
+**Next ID:** N-058
 
 ## Open
 
@@ -56,6 +56,16 @@ ten session docs in `ai_docs/claude_sessions/`
   web" action already launch it, and a `.app` is a second packaging path to
   keep building and signing. `/api/v1/health` is there for a wrapper to
   poll.
+- **N-056** · raised `2026-0925-1812-web-add-connection` · value low
+  Edit a browser-added connection in place (rename, change the DSN or
+  `ai_rows`). Today it is remove and add again, which means retyping the
+  DSN, since the browser never gets it back. An edit form would need a
+  "leave the DSN unchanged" path for the same reason.
+- **N-057** · raised `2026-0925-1812-web-add-connection` · value low
+  Connections added in `dbc web` are invisible to the TUI and headless runs,
+  which read only the config file. Sharing them needs somewhere both can
+  read. `web.bytdb` is locked by a running `dbc web`, so the TUI can't open
+  it alongside.
 
 ## Roadmap
 

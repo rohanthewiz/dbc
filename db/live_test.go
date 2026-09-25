@@ -29,17 +29,22 @@ import (
 // letter case, a name the index does not match) fails here too, not only a
 // query the server rejects.
 
-// liveMgr is a Manager on the one connection named by env, or a skip.
-func liveMgr(t *testing.T, env, driver string) *Manager {
+// liveMgr is a Manager on the one connection named by env, or a skip. tune,
+// if given, adjusts the config first — the timeout tests set theirs there.
+func liveMgr(t *testing.T, env, driver string, tune ...func(*config.Config)) *Manager {
 	t.Helper()
 	dsn := os.Getenv(env)
 	if dsn == "" {
 		t.Skipf("set %s to run against a live %s", env, driver)
 	}
-	mgr := NewManager(&config.Config{
+	cfg := &config.Config{
 		MaxRows:     1000,
 		Connections: []config.Connection{{Name: "live", Driver: driver, DSN: dsn}},
-	})
+	}
+	for _, f := range tune {
+		f(cfg)
+	}
+	mgr := NewManager(cfg)
 	t.Cleanup(mgr.Close)
 	return mgr
 }

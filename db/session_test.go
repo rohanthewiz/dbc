@@ -183,7 +183,8 @@ func TestSessionStatefulAfterReturning(t *testing.T) {
 
 // blackhole listens on loopback and accepts connections without ever
 // answering, the way a firewalled or wedged server looks to a client: the TCP
-// dial succeeds and the postgres startup handshake then waits forever.
+// dial succeeds and the handshake then waits forever — the postgres startup
+// reply, or the greeting a MySQL server sends first.
 // accepted receives once per connection taken.
 func blackhole(t *testing.T) (addr string, accepted <-chan struct{}) {
 	t.Helper()
@@ -319,30 +320,39 @@ func TestConnIdleTimeoutClosesIdleConns(t *testing.T) {
 
 // connect_timeout bounds the open: a host that accepts the TCP connection but
 // never answers fails once it has elapsed, as a connect failure rather than
-// as a cancel — the user did not stop anything.
+// as a cancel — the user did not stop anything. It works only if the driver
+// watches the ping's context through its handshake, so each driver that
+// dials a server is checked; both do.
 func TestConnectTimeoutBoundsOpen(t *testing.T) {
-	addr, _ := blackhole(t)
-	cfg := &config.Config{
-		MaxRows:        1000,
-		ConnectTimeout: 300 * time.Millisecond,
-		Connections: []config.Connection{{
-			Name: "slow", Driver: "postgres", DSN: "postgres://u:p@" + addr + "/x?sslmode=disable",
-		}},
-	}
-	mgr := NewManager(cfg)
-	defer mgr.Close()
+	for _, c := range []struct{ driver, dsn string }{
+		{"postgres", "postgres://u:p@%s/x?sslmode=disable"},
+		{"mysql", "u:p@tcp(%s)/x"},
+	} {
+		t.Run(c.driver, func(t *testing.T) {
+			addr, _ := blackhole(t)
+			cfg := &config.Config{
+				MaxRows:        1000,
+				ConnectTimeout: 300 * time.Millisecond,
+				Connections: []config.Connection{{
+					Name: "slow", Driver: c.driver, DSN: fmt.Sprintf(c.dsn, addr),
+				}},
+			}
+			mgr := NewManager(cfg)
+			defer mgr.Close()
 
-	start := time.Now()
-	_, err := mgr.DB("slow")
-	elapsed := time.Since(start)
-	if err == nil {
-		t.Fatal("opened a connection to a server that never answers")
-	}
-	if errors.Is(err, ErrCanceled) {
-		t.Errorf("err = %v, want a plain connect failure, not ErrCanceled", err)
-	}
-	if elapsed < 250*time.Millisecond || elapsed > 3*time.Second {
-		t.Errorf("open failed after %s, want about the 300ms connect_timeout", elapsed)
+			start := time.Now()
+			_, err := mgr.DB("slow")
+			elapsed := time.Since(start)
+			if err == nil {
+				t.Fatal("opened a connection to a server that never answers")
+			}
+			if errors.Is(err, ErrCanceled) {
+				t.Errorf("err = %v, want a plain connect failure, not ErrCanceled", err)
+			}
+			if elapsed < 250*time.Millisecond || elapsed > 3*time.Second {
+				t.Errorf("open failed after %s, want about the 300ms connect_timeout", elapsed)
+			}
+		})
 	}
 }
 

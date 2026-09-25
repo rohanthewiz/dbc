@@ -257,3 +257,20 @@ func TestMalformedOrderOnlyShrinks(t *testing.T) {
 		t.Errorf("note = %q", p.Note)
 	}
 }
+
+// A plan goes with the question on any connection — it is the database's
+// shape, like the schema — fenced, and named in the note.
+func TestBuildIncludesPlan(t *testing.T) {
+	ctx := Context{Conn: "pg", Driver: "postgres", Query: "SELECT * FROM orders WHERE user_id = 42",
+		Plan: "Plan · postgres · analyzed\n\nSeq Scan · orders  (user_id = 42)"}
+	p := Build("why is this slow?", ctx, false)
+	if !strings.Contains(p.Text, "Its query plan") || !strings.Contains(p.Text, "Seq Scan · orders") {
+		t.Errorf("prompt lacks the plan:\n%s", p.Text)
+	}
+	if !strings.Contains(p.Note, "plan") {
+		t.Errorf("note = %q", p.Note)
+	}
+	if strings.Contains(Build("q", Context{Query: "SELECT 1"}, false).Note, "plan") {
+		t.Error("no plan, no mention")
+	}
+}

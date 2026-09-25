@@ -1,0 +1,9 @@
+-> Sort: `sum(o.total)` DESC  (actual time=90.5..90.5 rows=5 loops=1)
+    -> Table scan on <temporary>  (actual time=90.4..90.4 rows=5 loops=1)
+        -> Aggregate using temporary table  (actual time=90.4..90.4 rows=5 loops=1)
+            -> Nested loop inner join  (cost=43501 rows=31881) (actual time=1.38..78.4 rows=36650 loops=1)
+                -> Filter: (o.user_id is not null)  (cost=10022 rows=95654) (actual time=1.27..32.2 rows=50000 loops=1)
+                    -> Index lookup on o using orders_status (status='paid')  (cost=10022 rows=95654) (actual time=1.27..29.6 rows=50000 loops=1)
+                -> Filter: (u.age > 30)  (cost=0.25 rows=0.333) (actual time=764e-6..813e-6 rows=0.733 loops=50000)
+                    -> Single-row index lookup on u using PRIMARY (id=o.user_id)  (cost=0.25 rows=1) (actual time=647e-6..668e-6 rows=1 loops=50000)
+

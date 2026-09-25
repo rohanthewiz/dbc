@@ -400,6 +400,11 @@ func isRead(stmt string) bool {
 	return true
 }
 
+// IsRead is isRead for other packages: whether running stmt could change
+// anything. The TUI asks it before an EXPLAIN ANALYZE, to say what will
+// happen before it does.
+func IsRead(stmt string) bool { return isRead(stmt) }
+
 // isQuery reports whether a statement returns rows, and so must run as a
 // Query rather than an Exec. That is every statement whose main verb is a
 // read, plus a write with a RETURNING clause: run as an Exec, `INSERT …

@@ -212,6 +212,10 @@ func (m *Model) openGridMenu(x, y int) {
 			act: func(m *Model) tea.Cmd { m.grid.Sort(m.grid.cur.col); return nil }},
 	)
 	items = append(items, columnItems(g, why)...)
+	if m.planv.plan != nil {
+		items = append(items, heading(""),
+			menuItem{label: "◈ Show the plan", key: "p", act: func(m *Model) tea.Cmd { m.resTab = tabPlan; return nil }})
+	}
 	items = append(items,
 		heading(""),
 		menuItem{label: "Export to file…", key: "^E", why: why,
@@ -309,6 +313,10 @@ func (m *Model) openEditorMenu(x, y int) {
 			act: func(m *Model) tea.Cmd { return m.runQuery() }},
 		{label: "▶ Run " + allLabel, key: "^⇧R", why: allWhy,
 			act: func(m *Model) tea.Cmd { return m.runAll() }},
+		{label: "◈ Explain " + orDefault(tag, "statement"), key: "^X", why: runWhy,
+			act: func(m *Model) tea.Cmd { return m.explainQuery(false) }},
+		{label: "◈ Explain analyze (runs it, timed)", key: "⌥X", why: runWhy,
+			act: func(m *Model) tea.Cmd { return m.explainQuery(true) }},
 		heading(""),
 		{label: "Copy", why: noSel, act: func(m *Model) tea.Cmd {
 			s, _, _ := m.editor.Selection()

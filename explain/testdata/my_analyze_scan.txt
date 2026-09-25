@@ -1,0 +1,5 @@
+-> Limit: 5 row(s)  (cost=20132 rows=5) (actual time=31.6..31.6 rows=5 loops=1)
+    -> Sort: orders.created_at DESC, limit input to 5 row(s) per chunk  (cost=20132 rows=199798) (actual time=31.6..31.6 rows=5 loops=1)
+        -> Filter: (orders.user_id = 42)  (cost=20132 rows=199798) (actual time=0.574..31.5 rows=10 loops=1)
+            -> Table scan on orders  (cost=20132 rows=199798) (actual time=0.175..24.9 rows=200000 loops=1)
+

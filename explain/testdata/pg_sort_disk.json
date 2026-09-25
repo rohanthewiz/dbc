@@ -1,0 +1,113 @@
+[
+  {
+    "Plan": {
+      "Node Type": "Gather Merge",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Startup Cost": 22008.27,
+      "Total Cost": 35537.68,
+      "Plan Rows": 117647,
+      "Plan Width": 27,
+      "Actual Startup Time": 72.455,
+      "Actual Total Time": 122.276,
+      "Actual Rows": 200000,
+      "Actual Loops": 1,
+      "Workers Planned": 1,
+      "Workers Launched": 1,
+      "Shared Hit Blocks": 1535,
+      "Shared Read Blocks": 0,
+      "Shared Dirtied Blocks": 0,
+      "Shared Written Blocks": 0,
+      "Local Hit Blocks": 0,
+      "Local Read Blocks": 0,
+      "Local Dirtied Blocks": 0,
+      "Local Written Blocks": 0,
+      "Temp Read Blocks": 3091,
+      "Temp Written Blocks": 3325,
+      "Plans": [
+        {
+          "Node Type": "Sort",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Startup Cost": 21008.26,
+          "Total Cost": 21302.38,
+          "Plan Rows": 117647,
+          "Plan Width": 27,
+          "Actual Startup Time": 69.554,
+          "Actual Total Time": 91.923,
+          "Actual Rows": 100000,
+          "Actual Loops": 2,
+          "Sort Key": ["total", "created_at"],
+          "Sort Method": "external merge",
+          "Sort Space Used": 4304,
+          "Sort Space Type": "Disk",
+          "Shared Hit Blocks": 1535,
+          "Shared Read Blocks": 0,
+          "Shared Dirtied Blocks": 0,
+          "Shared Written Blocks": 0,
+          "Local Hit Blocks": 0,
+          "Local Read Blocks": 0,
+          "Local Dirtied Blocks": 0,
+          "Local Written Blocks": 0,
+          "Temp Read Blocks": 3091,
+          "Temp Written Blocks": 3325,
+          "Workers": [
+            {
+              "Worker Number": 0,
+              "Sort Method": "external merge",
+              "Sort Space Used": 4024,
+              "Sort Space Type": "Disk"
+            }
+          ],
+          "Plans": [
+            {
+              "Node Type": "Seq Scan",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": true,
+              "Async Capable": false,
+              "Relation Name": "orders",
+              "Alias": "orders",
+              "Startup Cost": 0.00,
+              "Total Cost": 2647.47,
+              "Plan Rows": 117647,
+              "Plan Width": 27,
+              "Actual Startup Time": 0.009,
+              "Actual Total Time": 8.074,
+              "Actual Rows": 100000,
+              "Actual Loops": 2,
+              "Shared Hit Blocks": 1471,
+              "Shared Read Blocks": 0,
+              "Shared Dirtied Blocks": 0,
+              "Shared Written Blocks": 0,
+              "Local Hit Blocks": 0,
+              "Local Read Blocks": 0,
+              "Local Dirtied Blocks": 0,
+              "Local Written Blocks": 0,
+              "Temp Read Blocks": 0,
+              "Temp Written Blocks": 0,
+              "Workers": [
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "Planning": {
+      "Shared Hit Blocks": 122,
+      "Shared Read Blocks": 0,
+      "Shared Dirtied Blocks": 0,
+      "Shared Written Blocks": 0,
+      "Local Hit Blocks": 0,
+      "Local Read Blocks": 0,
+      "Local Dirtied Blocks": 0,
+      "Local Written Blocks": 0,
+      "Temp Read Blocks": 0,
+      "Temp Written Blocks": 0
+    },
+    "Planning Time": 0.408,
+    "Triggers": [
+    ],
+    "Execution Time": 130.689
+  }
+]

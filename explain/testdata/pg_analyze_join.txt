@@ -1,0 +1,29 @@
+Sort  (cost=3637.76..3637.77 rows=5 width=45) (actual time=26.654..26.657 rows=5 loops=1)
+  Sort Key: (sum(o.total)) DESC
+  Sort Method: quicksort  Memory: 25kB
+  Buffers: shared hit=1648
+  ->  HashAggregate  (cost=3637.64..3637.70 rows=5 width=45) (actual time=26.635..26.641 rows=5 loops=1)
+        Group Key: u.city
+        Batches: 1  Memory Usage: 24kB
+        Buffers: shared hit=1645
+        ->  Hash Join  (cost=1130.47..3347.87 rows=38636 width=11) (actual time=5.084..21.061 rows=36650 loops=1)
+              Hash Cond: (o.user_id = u.id)
+              Buffers: shared hit=1645
+              ->  Bitmap Heap Scan on orders o  (cost=554.73..2642.57 rows=49347 width=10) (actual time=1.034..7.211 rows=50000 loops=1)
+                    Recheck Cond: (status = 'paid'::text)
+                    Heap Blocks: exact=1471
+                    Buffers: shared hit=1515
+                    ->  Bitmap Index Scan on orders_status  (cost=0.00..542.40 rows=49347 width=0) (actual time=0.860..0.861 rows=50000 loops=1)
+                          Index Cond: (status = 'paid'::text)
+                          Buffers: shared hit=44
+              ->  Hash  (cost=380.00..380.00 rows=15659 width=9) (actual time=3.906..3.907 rows=15659 loops=1)
+                    Buckets: 16384  Batches: 1  Memory Usage: 788kB
+                    Buffers: shared hit=130
+                    ->  Seq Scan on users u  (cost=0.00..380.00 rows=15659 width=9) (actual time=0.014..1.591 rows=15659 loops=1)
+                          Filter: (age > 30)
+                          Rows Removed by Filter: 4341
+                          Buffers: shared hit=130
+Planning:
+  Buffers: shared hit=251
+Planning Time: 0.383 ms
+Execution Time: 26.788 ms

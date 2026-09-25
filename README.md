@@ -5,7 +5,10 @@
 bespoke macro language, you script it in **Go**. Drop a
 `.go` file in the scripts directory, loop over parameters, run queries against
 any configured connection, and export the results — CSV, Markdown, HTML,
-JSON — to a file or straight to the clipboard.
+JSON — to a file or straight to the clipboard. And when a query is slow,
+**explain it**: the plan as a tree or a flame graph, the step that costs, and
+what to do about it, on every engine — in the terminal or as an interactive
+page in the browser.
 
 ## Build
 
@@ -84,7 +87,7 @@ on the SQLite demo rather than failing.
 ```
 
 ```
- dbc  ▶ Run  ■ Stop  ⧉ Copy ▾  ⤓ Export  ⌕ History  ƒ Scripts  ▦ Tables  ✦ Ask     ● conn ▾
+ dbc  ▶ Run  ■ Stop  ◈ Explain  ⧉ Copy ▾  ⤓ Export  ⌕ History  ƒ Scripts  ▦ Tables  ✦ Ask  ● conn ▾
 ╭ Connections ╮╭ Query ─────────────────────────────╮╭ ✦ Copilot · model ▾ ─ ⟲ new ✕ ╮
 │● local-pg   ││ 1  SELECT …                         ││ ❯ why is this slow?           │
 ╰─────────────╯╰─────────────────────────────────────╯│ …                             │
@@ -104,7 +107,7 @@ mouse gesture and every gesture has a key.
 | Where | Gesture | Does |
 | --- | --- | --- |
 | anywhere | click | focuses that pane — the keyboard follows the mouse |
-| toolbar | click | Run, Stop, Copy ▾, Export, History, Scripts, Tables, Assistant; `● conn ▾` switches connection |
+| toolbar | click | Run, Stop, Explain, Copy ▾, Export, History, Scripts, Tables, Assistant; `● conn ▾` switches connection |
 | connections | click | connects |
 | tables | click / double-click / right-click | select / preview the first 100 rows / insert name, copy name |
 | editor | click, drag, double-, triple-click | caret, selection, word, line |
@@ -120,6 +123,12 @@ mouse gesture and every gesture has a key.
 | scrollbars | click, drag | jump, drag |
 | pane borders | drag | resize the sidebar, the editor/results split, the log, the assistant |
 | assistant | `⤓ insert` on a code block | puts that SQL in the editor at the caret |
+| results title | click `Results` / `◈ Plan` | switches the results pane between the grid and the plan |
+| plan | click / double-click / right-click | select a step (fold it) / step menu: copy, zoom the flame graph, ask the assistant |
+| plan | `▸`/`▾` beside a step | folds or unfolds it |
+| plan | chips | Tree · Flame · Insights, size by time / cost / rows, ▶ Analyze, ↗ Browser, ⧉ Copy |
+| flame graph | click / double-click | select a step / zoom into it (click the breadcrumb to zoom out) |
+| insights | `go to step` · `⧉ copy` · `⤓ insert` | show the step · copy the suggested SQL · put it at the end of the editor |
 
 Mouse reporting takes the terminal's own text selection away, so every pane
 that shows text has its own copy. To select raw terminal text anyway, hold
@@ -132,6 +141,8 @@ dragging.
 | --- | --- |
 | `Ctrl+R` | Run the statement under the caret (or the selection); the gutter marks which |
 | `Ctrl+Shift+R` / `Alt+R` | Run every statement in the buffer, in order |
+| `Ctrl+X` | Explain the statement under the caret (or the selected one) — the plan opens in the results pane |
+| `Alt+X` / `Ctrl+Shift+X` | Explain **analyze**: run it and measure every step (a write is rolled back or not run — see below) |
 | `Ctrl+K` | Stop the running query or script, a connect still dialing — or the assistant's answer |
 | `Ctrl+A` | Open the assistant / move between it and the editor |
 | `Ctrl+E` | Export the result (format picker; file, or clipboard) |
@@ -144,6 +155,8 @@ dragging.
 | `<` / `>` / `=` | *(results)* Narrow / widen the column / fit it to its content |
 | `-` / `+` | *(results)* Hide the column (or the range's columns) / show every hidden column |
 | `Enter` | *(results)* Inspect the value under the cursor |
+| `p` | *(results)* Switch between the result grid and the plan |
+| `z` | *(results)* Give the results pane the whole column / give it back |
 | `Tab` / `Shift+Tab` | Cycle focus through the panes |
 | `Esc` | Close a dialog or menu |
 | `Ctrl+C` | Stop what's running; quit when idle |
@@ -157,6 +170,71 @@ scroll sideways rather than wrap, so a click lands exactly where you point.
 
 In terminals that deliver the kitty keyboard protocol, `⌘E`, `⌘P`, and
 `⌘G` are equivalents for export, history, and handing to an agent.
+
+### Explaining a query
+
+`Ctrl+X` (or `◈ Explain`) asks the database how it will run the statement
+under the caret. The plan opens in a **◈ Plan** tab beside the results; the
+rows from the last run stay one click (or `p`) away.
+
+```
+╭─ Results · 5 rows │ ◈ Plan · 26.8 ms · ▲1 ─────────────────────────────────────────╮
+│ ◈ postgres · analyzed · execution 26.8 ms · planning 0.4 ms   was 131 ms → 26.8 ms ▼80% │
+│  Tree   Flame   Insights ▲1   size by  time  cost  rows       ▶ Analyze  ↗ Browser  ⧉ Copy │
+│ step                                   rows   self time    % share  │ ⋈ Hash Join       │
+│ ▾ ⇅ Sort  (sum(o.total)) DESC        5 rows       16 µs   0% ▏      │ time  9.9 ms total │
+│ └▾ Σ HashAggregate  u.city           5 rows      5.6 ms  21% ██▏    │ rows  36,650 · est │
+│    └▾ ⋈ Hash Join  (o.user_id…  36,650 rows      9.9 ms  37% ███▊   │ Hash Cond  (o.use… │
+│       ├─ ▤ Seq Scan · orders o ▲ 50,000 rows     6.4 ms  24% ██▍    │ ▲ Full scan of …   │
+```
+
+- **Tree** — every step with its rows, its *own* time (or cost) and share, a
+  heat bar from green to red, and a marker on each step with a finding. The
+  panel beside it shows everything the engine said about the selected step:
+  time total and self, loops, rows actual against estimated, rows a filter
+  threw away, buffers, spills, and every property in the engine's own words.
+- **Flame** — an icicle graph: each step's width is its subtree's share, so a
+  wide block with nothing under it is the step to look at. Double-click zooms
+  in.
+- **Insights** — findings in plain words, each with the step it is about, why
+  it costs, what to try, and — where there is one — the statement that does it
+  (`CREATE INDEX idx_orders_user_id ON orders (user_id);`), with `⧉ copy` and
+  `⤓ insert`. Nothing is run for you. The rules look for a full scan that keeps
+  a sliver of the table, a scan repeated inside a loop or a correlated
+  subquery, an index that fetches rows only to discard them, a planner
+  estimate off by ×10 or more (named where it starts, not everywhere it
+  cascades), a sort or hash that spilled to disk, a temporary index built on
+  every run, and where most of the time goes. Small tables stay quiet.
+
+Explain the statement again after adding an index and the headline compares
+the two runs: `was 131 ms → 26.8 ms ▼80%`.
+
+`Alt+X` explains **analyze**: the statement is run and every step measured.
+What that means depends on the engine, and on whether the statement writes:
+
+| Engine | Plan | Analyze a read | Analyze a write |
+| --- | --- | --- | --- |
+| Postgres | `EXPLAIN (FORMAT JSON)`; a `$1` statement gets a generic plan (16+) | per-step time, rows, loops, buffers | inside a transaction dbc **rolls back** — or a savepoint, if you have one open, so your own work survives |
+| MySQL | `EXPLAIN FORMAT=TREE`, else the classic table (MariaDB) | `EXPLAIN ANALYZE` (8.0.18+) | not run — the estimate, with a note |
+| SQLite | `EXPLAIN QUERY PLAN`, plus each table's size | the whole statement, timed | not run — the estimate, with a note |
+| bytdb | `EXPLAIN` | the whole statement, timed | not run — the estimate, with a note |
+
+The explain runs on the editor's pinned session, so your `SET`s, temp tables
+and open transaction shape the plan just as they would the next `Ctrl+R`.
+Engines that report no costs (SQLite, bytdb) are sized by a labeled heuristic,
+never by invented numbers.
+
+Already typed `EXPLAIN ANALYZE SELECT …`? `Ctrl+X` unwraps it (keeping the
+ANALYZE), and running an EXPLAIN with `Ctrl+R` opens its output in the Plan
+tab too, with the raw rows still in Results.
+
+`↗ Browser` (`b`) opens the plan as a self-contained **interactive page**: a
+zoomable, pannable graph of the steps with data-flow edges as thick as the
+rows through them, the flame graph, the insights with copy buttons, and the
+step detail. It works offline, and the file stays (its path is in the log), so
+it can be attached to a ticket. `y` copies the plan as text, `Y` the engine's
+own output. The assistant, asked about an explained statement, gets its plan
+and findings too.
 
 ### Copying results — including into Teams
 
@@ -420,6 +498,7 @@ Go module; dbc runs them regardless.
 | `s.Query(conn, sql, args...) (*sdb.Result, error)` | Run a query with params |
 | `s.Exec(conn, sql, args...) (int64, error)` | Run a statement, get rows affected |
 | `s.DB(conn) (*sql.DB, error)` | Raw `database/sql` handle — transactions, prepared stmts, anything |
+| `s.Explain(conn, sql, analyze) (*sdb.Plan, error)` | The plan, as `Ctrl+X` sees it: `p.Text(sdb.PlanText{Insights: true})`, `p.Insights`, `p.Root` — see [`scripts/plan_check.go`](scripts/plan_check.go) |
 | `s.Show(r)` | Push a result to the results table (stdout when headless) |
 | `s.Print(format, args...)` | Log to the TUI log pane (stdout when headless) |
 | `s.Export(r, format, path)` | Export a result; empty path → clipboard |
@@ -470,6 +549,27 @@ running query or script and exits 130; bad usage exits 2.
 
 `-f` was the output format before it was the SQL file; `dbc -f csv …` now
 says to use `-t csv` rather than looking for a file named `csv`.
+
+### Explain headless
+
+```sh
+./dbc explain "SELECT * FROM orders WHERE user_id = 42"   # tree + findings
+./dbc explain -a -f slow.sql                              # analyze
+./dbc -c pg explain -t json "SELECT …" | jq .insights     # for tooling
+./dbc explain -t html -o plan.html "SELECT …"             # the interactive page
+./dbc explain --open "SELECT …"                           # … straight into the browser
+```
+
+`--fail-on warn` (or `crit`) exits **3** when the plan has a finding that
+severe, which turns the findings into a CI gate: keep the queries that matter
+in a folder and fail the build when one of them starts scanning a big table.
+
+```sh
+for q in queries/*.sql; do ./dbc -c staging explain --fail-on warn -f "$q" || exit 1; done
+```
+
+`explain` takes one statement. `-t` is `text` (colored on a terminal, unless
+`NO_COLOR` is set), `markdown`, `json`, or `html`.
 
 ### Scripts headless
 

@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/rohanthewiz/dbc/explain"
 	"github.com/rohanthewiz/dbc/theme"
 )
 
@@ -38,6 +39,10 @@ type layout struct {
 	chat          Rect // zero when the assistant is closed
 	status        Rect
 
+	// the results pane's title tabs, as drawn (zero when there is no plan
+	// and the title is the plain one)
+	tabResults, tabPlan Rect
+
 	splitSide, splitChat, splitEd, splitLog Rect
 }
 
@@ -56,6 +61,7 @@ const (
 	btnNone btnID = iota
 	btnRun
 	btnStop
+	btnExplain
 	btnCopy
 	btnExport
 	btnHistory
@@ -76,6 +82,7 @@ type buttonSpec struct {
 var toolbarSpecs = []buttonSpec{
 	{btnRun, "▶ Run ^R", "▶ Run", "▶"},
 	{btnStop, "■ Stop ^K", "■ Stop", "■"},
+	{btnExplain, "◈ Explain ^X", "◈ Explain", "◈"},
 	{btnCopy, "⧉ Copy ▾", "⧉ Copy", "⧉"},
 	{btnExport, "⤓ Export ^E", "⤓ Export", "⤓"},
 	{btnHistory, "⌕ History ^P", "⌕ History", "⌕"},
@@ -134,9 +141,18 @@ func (m *Model) computeLayout() layout {
 		l.logR = Rect{x0, mainY + mainH - logH, cw, logH}
 		l.splitLog = Rect{x0, l.logR.Y, cw, 1}
 	}
+	if m.resZoom {
+		// z: the results pane takes the column; the editor keeps a few
+		// lines so the statement being studied stays in sight
+		logH = 0
+		l.logR, l.splitLog = Rect{}, Rect{}
+	}
 	above := mainH - logH
 	edH := int(m.edFrac * float64(above))
 	edH = max(minPaneH, min(edH, above-minPaneH))
+	if m.resZoom {
+		edH = minPaneH
+	}
 	l.editor = Rect{x0, mainY, cw, edH}
 	l.results = Rect{x0, mainY + edH, cw, above - edH}
 	l.splitEd = Rect{x0, mainY + edH - 1, cw, 1}
@@ -181,6 +197,8 @@ func (m *Model) layoutButtons(w int) []button {
 			b.enabled, b.hot = !m.busy, true
 		case btnStop:
 			b.enabled = m.busy
+		case btnExplain:
+			b.enabled = !m.busy
 		case btnCopy, btnExport:
 			b.enabled = m.lastRes != nil
 		case btnAssistant:
@@ -282,8 +300,13 @@ func (m *Model) render() (*Canvas, *caret) {
 		}
 	})
 	m.drawPane(c, l.results, m.resultsTitle(), focusGrid, m.st.base, func(s Surface) {
+		if m.resTab == tabPlan && m.planv.plan != nil {
+			m.planv.draw(s, m.st, m.focus == focusGrid)
+			return
+		}
 		m.grid.Draw(s, m.st, m.focus == focusGrid, "run a query with Ctrl+R or ▶ Run — results appear here")
 	})
+	m.drawResultsTabs(c, l.results)
 	if !l.logR.Empty() {
 		m.drawPane(c, l.logR, "Log", focusLog, m.st.base, func(s Surface) {
 			m.logp.draw(s, m.st, m.st.base)
@@ -342,6 +365,65 @@ func (m *Model) resultsTitle() string {
 	return t + " · right-click to copy"
 }
 
+// drawResultsTabs turns the results pane's title into two tabs once there is
+// a plan to show — the grid's title as it always was, and the plan's — drawn
+// over the border the title sits in, with their rects kept for clicks. With
+// no plan the plain title stands and no tab exists, so a user who never
+// explains anything never sees the difference.
+func (m *Model) drawResultsTabs(c *Canvas, r Rect) {
+	m.lay.tabResults, m.lay.tabPlan = Rect{}, Rect{}
+	p := m.planv.plan
+	if p == nil || r.W < 30 {
+		return
+	}
+	bg := m.st.base
+	focused := m.focus == focusGrid
+	on, off := onBg(m.st.title, bg).Bold(), onBg(m.st.muted, bg)
+	if focused {
+		on = onBg(m.st.titleFocus, bg)
+	}
+	planLabel := "◈ Plan"
+	if p.ExecutionMs > 0 {
+		planLabel += " · " + explain.FmtMs(p.ExecutionMs)
+	} else if p.Root.HasCost {
+		planLabel += " · cost " + explain.FmtCost(p.Root.TotalCost)
+	}
+	if crit, warn := countSev(p); crit+warn > 0 {
+		planLabel += " · " + pick(crit > 0, "✖", "▲") + itoa(crit+warn)
+	}
+	resLabel := m.resultsTitle()
+	if m.lastRes == nil {
+		resLabel = "Results"
+	}
+	maxRes := max(r.W-width(planLabel)-12, 8)
+	resLabel = truncate(resLabel, maxRes)
+
+	s := c.Sub(Rect{r.X, r.Y, r.W, 1})
+	border := onBg(m.st.border, bg)
+	if focused {
+		border = onBg(m.st.borderFocus, bg)
+	}
+	for x := 1; x < r.W-1; x++ {
+		s.Put(x, 0, "─", border)
+	}
+	x := 2
+	tab := func(label string, active bool) Rect {
+		sty := off
+		if active {
+			sty = on.Underline()
+		}
+		start := x
+		x = s.Put(x, 0, " "+label+" ", sty)
+		return Rect{r.X + start, r.Y, x - start, 1}
+	}
+	m.lay.tabResults = tab(resLabel, m.resTab == tabResults)
+	x = s.Put(x, 0, "│", border)
+	m.lay.tabPlan = tab(planLabel, m.resTab == tabPlan)
+	if hint := " p switches "; x+width(hint)+2 < r.W {
+		s.Put(x+1, 0, hint, off.Italic())
+	}
+}
+
 // drawToolbar draws the top bar: the badge, the buttons, the connection chip.
 func (m *Model) drawToolbar(s Surface) {
 	s.Fill(m.st.raised)
@@ -379,7 +461,7 @@ func (m *Model) drawStatus(s Surface) {
 	}
 	x = s.Put(x, 0, m.status, st)
 
-	hints := []string{"^R run", "^K stop", "^A ask", "^E export", "^P history", "^Q quit"}
+	hints := []string{"^R run", "^X explain", "^K stop", "^A ask", "^E export", "^P history", "^Q quit"}
 	for len(hints) > 0 {
 		h := strings.Join(hints, "  ") + " "
 		if s.W()-x-3 >= width(h) {

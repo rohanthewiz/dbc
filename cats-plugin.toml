@@ -20,7 +20,7 @@
 id = "rohanthewiz.dbc"
 name = "dbc"
 version = "0.1.0"
-description = "A terminal database client for Postgres, MySQL, SQLite and bytdb, scriptable in Go: run the statement under the cursor, browse tables, recall history, export results as CSV, Markdown, HTML or JSON, and drive whole query loops from a .go script."
+description = "A terminal database client for Postgres, MySQL, SQLite and bytdb, scriptable in Go: run the statement under the cursor, explain its plan (tree, flame graph, fixes), browse tables, recall history, export results as CSV, Markdown, HTML or JSON, and drive whole query loops from a .go script."
 platforms = ["linux", "macos"]
 # What kind of tool this is. A database client is not an LLM agent, so cats
 # never offers its pane as a drop target for a prompt, even though dbc reports
@@ -74,11 +74,12 @@ command = ["./bin/dbc"]
 # reads this and registers dbc alongside catctl.
 #
 # The static form, because dbc has no completion code of its own and its
-# surface is small: the two subcommands in first position (a bare first word is
+# surface is small: the subcommands in first position (a bare first word is
 # otherwise a SQL string, which nothing could complete), and the flags wherever
 # a word starts with "-". Keep these in step with the flags in main.go's newCLI.
 [[completions]]
 binary = "dbc"
-subcommands = ["script", "migrate"]
+subcommands = ["script", "migrate", "explain"]
 flags = ["--config", "-c", "--conn", "-f", "--file", "-t", "--format", "-o", "--out",
-         "--demo", "--driver", "--dsn", "--dir", "--allow-missing", "--help"]
+         "--demo", "--driver", "--dsn", "--dir", "--allow-missing",
+         "-a", "--analyze", "--open", "--fail-on", "--help"]

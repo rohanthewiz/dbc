@@ -47,6 +47,7 @@ type Model struct {
 	focus  focusID
 	editor *editor
 	grid   *grid
+	planv  *planView // the results pane's Plan tab
 	logp   *logPane
 	conns  *list
 	tables *list
@@ -62,6 +63,8 @@ type Model struct {
 	tableRes   *model.Result  // the active connection's catalog, for the sidebar
 	tableIdx   *db.TableIndex // the same catalog, indexed for the assistant's schema context
 	lastRes    *model.Result  // the result in the grid
+	resTab     resultsTab     // which tab the results pane shows: the grid or the plan
+	resZoom    bool           // the results pane has the whole centre column (z)
 	lastStmt   string         // the statement the last run executed
 	lastErr    string         // what it failed with, "" if it worked
 	hist       *userdata.History
@@ -140,6 +143,7 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Model {
 		st:     newStyles(theme.Default()),
 		editor: newEditor(false),
 		grid:   newGrid(),
+		planv:  newPlanView(),
 		logp:   newLogPane(),
 		conns:  newList(),
 		tables: newList(),
@@ -202,7 +206,7 @@ func (m *Model) startupLog() {
 	} else if m.cfg.Path != "" {
 		m.logf(logInfo, "loaded config from %s", m.cfg.Path)
 	}
-	m.log(logMuted, "keys: ^R run · ^⇧R/⌥R run all · ^K stop · ^A assistant · ^E export · ^P history · ^O scripts · "+
+	m.log(logMuted, "keys: ^R run · ^⇧R/⌥R run all · ^X explain · ⌥X explain analyze · ^K stop · ^A assistant · ^E export · ^P history · ^O scripts · "+
 		"^T tables · ^L conns · Tab focus · y/Y/c copy · Enter inspect · -/+ hide/show column · ^Q quit")
 	m.log(logMuted, "mouse: click to focus · drag to select · right-click for menus · "+
 		"drag borders to resize · hold Shift (⌥ on macOS) to select terminal text")
@@ -292,6 +296,8 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 		return m.sessionReleased(msg)
 	case runDoneMsg:
 		return m.runDone(msg)
+	case explainDoneMsg:
+		return m.explainDone(msg)
 	case tickMsg:
 		return m.tick(msg)
 	case scriptShowMsg:
@@ -357,6 +363,12 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		// kitty keyboard protocol; elsewhere it is plain Ctrl+R, so Alt+R is
 		// the door that works everywhere Option/Alt sends Meta.
 		return m.runAll()
+	case "ctrl+x":
+		return m.explainQuery(false)
+	case "alt+x", "ctrl+shift+x":
+		// as with run-all: Ctrl+Shift+X only where the terminal speaks the
+		// kitty protocol, Alt+X wherever Option/Alt sends Meta
+		return m.explainQuery(true)
 	case "ctrl+k":
 		if m.focus == focusChat && m.chat.busy() {
 			m.chatStop()
@@ -398,6 +410,13 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		m.editor.HandleKey(k)
 		m.drag.follow = true
 	case focusGrid:
+		if k.String() == "z" {
+			m.resZoom = !m.resZoom
+			return nil
+		}
+		if m.resTab == tabPlan && m.planv.plan != nil {
+			return m.planKey(k)
+		}
 		return m.gridKey(k)
 	case focusConns:
 		return m.listKey(m.conns, k, m.connPicked)
@@ -441,6 +460,13 @@ func (m *Model) gridKey(k tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case "enter":
 		m.openInspect()
+		return nil
+	case "p":
+		if m.planv.plan == nil {
+			m.log(logWarn, "no plan yet — Ctrl+X explains the statement under the caret")
+			return nil
+		}
+		m.resTab = tabPlan
 		return nil
 	}
 	m.grid.HandleKey(k)

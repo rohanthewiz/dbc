@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -9,9 +8,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/rohanthewiz/serr"
 
-	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/explain"
-	"github.com/rohanthewiz/dbc/model"
+	"github.com/rohanthewiz/dbc/workspace"
 )
 
 // Explaining from the TUI. An explain is a RUN like any other: it takes the
@@ -22,13 +20,14 @@ import (
 // Plan tab, beside the Results tab rather than instead of it, so the rows
 // from the last run stay one click away while the plan is studied.
 //
-//	Ctrl+X ─► explainQuery ─► beginRun ─► onSession(Session.Explain) ─► explainDoneMsg
+//	Ctrl+X ─► explainQuery ─► ws.ExplainEditor ─► Job: Session.Explain ─► *workspace.ExplainDone
 //	                                                                          │
 //	            results pane: [ Results ] [ ◈ Plan ]  ◄── planv.set, resTab = tabPlan
 //
 // A plan also arrives the other way: a user who types EXPLAIN themselves and
-// runs it gets a grid of plan text, which explain.Detect recognizes, so the
-// same view opens on it (see maybePlan).
+// runs it gets a grid of plan text, which the workspace recognizes (with
+// explain.Detect) and hands over as RunDone.Plan, so the same view opens on
+// it (see runDone).
 
 // resultsTab is which view the results pane shows.
 type resultsTab int
@@ -38,100 +37,33 @@ const (
 	tabPlan
 )
 
-// explainDoneMsg lands an explain's outcome.
-type explainDoneMsg struct {
-	gen  int
-	conn string
-	tag  string
-	stmt string
-	plan *explain.Plan
-	err  error
-}
-
 // explainQuery is Ctrl+X (estimate) and Alt+X (analyze): explain the
 // statement under the caret, or the selected one.
 func (m *Model) explainQuery(analyze bool) tea.Cmd {
-	stmts, where := m.stmtsToRun()
-	switch {
-	case len(stmts) == 0:
-		m.log(logWarn, "nothing to explain — type a query first")
-		return nil
-	case len(stmts) > 1:
-		m.logf(logWarn, "the selection holds %d statements — select one to explain, or put the caret in it", len(stmts))
-		return nil
-	}
-	return m.explainStmt(stmts[0], where, analyze)
+	return m.startRun(m.ws.ExplainEditor(m.editorState(), analyze))
 }
 
-// explainStmt explains one statement on the active connection.
+// explainStmt explains one statement on the active connection. The
+// workspace takes the run slot and warns before an analyze runs a write.
 func (m *Model) explainStmt(stmt, where string, analyze bool) tea.Cmd {
-	if m.active == "" {
-		m.log(logWarn, "no active connection — pick one in the sidebar")
-		return nil
-	}
-	tag := "explain"
-	if analyze {
-		tag = "explain analyze"
-	}
-	if where != "" && where != "query" {
-		tag += " (" + where + ")"
-	}
-	ctx, ok := m.beginRun(tag)
-	if !ok {
-		return nil
-	}
-	conn, gen := m.active, m.runGen
-	m.logf(logInfo, "%s on %s — %s", tag, conn, preview(stmt))
-	if analyze {
-		m.explainAnalyzeWarning(stmt)
-	}
-	work := func() tea.Msg {
-		var p *explain.Plan
-		err := m.onSession(ctx, conn, func(s *db.Session) (err error) {
-			p, err = s.Explain(ctx, stmt, db.ExplainOptions{Analyze: analyze})
-			return err
-		})
-		return explainDoneMsg{gen: gen, conn: conn, tag: tag, stmt: stmt, plan: p, err: err}
-	}
-	return tea.Batch(work, tickCmd(gen))
+	return m.startRun(m.ws.Explain(stmt, where, analyze))
 }
 
-// explainAnalyzeWarning says, before it happens, that an analyze runs the
-// statement — the one thing about EXPLAIN ANALYZE a user must not learn
-// from its side effects.
-func (m *Model) explainAnalyzeWarning(stmt string) {
-	inner, _, _ := explain.Strip(stmt)
-	cc, _ := m.cfg.ConnByName(m.active)
-	if db.IsRead(inner) {
-		m.log(logMuted, "analyze runs the statement to time it — Ctrl+K stops it")
-		return
-	}
-	if explain.Engine(cc.Driver) == explain.Postgres {
-		m.log(logWarn, "analyzing a write: it runs inside a transaction dbc rolls back, so no rows change")
-	}
-}
-
-// explainDone lands an explain.
-func (m *Model) explainDone(msg explainDoneMsg) tea.Cmd {
-	if msg.gen != m.runGen {
+// explainDone draws an explain, which the workspace has already landed —
+// the last error cleared or set, the plan remembered for the assistant.
+func (m *Model) explainDone(ev *workspace.ExplainDone) tea.Cmd {
+	if ev.Stale {
 		return nil
 	}
-	elapsed := m.endRun()
-	if msg.err != nil {
-		// remembered like a failed run's, so "✦ ask why" carries the error
-		// with the statement that caused it
-		m.lastStmt = msg.stmt
-		m.reportRunErr(msg.conn, msg.tag, msg.err, elapsed)
+	m.catsAfterTransition()
+	if ev.Err != nil {
+		m.notes(ev.Notes)
+		m.setStatus(ev.Status)
 		return nil
 	}
-	// A plan is not a result, so lastStmt stays the last RUN statement —
-	// otherwise the assistant would be sent the grid's rows as this
-	// statement's. Only an error this same statement left behind is cleared.
-	if msg.stmt == m.lastStmt {
-		m.lastErr = ""
-	}
-	m.showPlan(msg.plan)
-	m.logPlan(msg.plan, elapsed)
+	m.showPlan(ev.Plan)
+	m.logPlan(ev.Plan, ev.Elapsed)
+	m.notes(ev.Notes)
 	return nil
 }
 
@@ -185,22 +117,6 @@ func (m *Model) logPlan(p *explain.Plan, elapsed time.Duration) {
 	}
 }
 
-// maybePlan recognizes a result that is itself a plan — the output of an
-// EXPLAIN the user ran — and opens the Plan tab on it. The raw output stays
-// in the Results tab, one keypress (p) away.
-func (m *Model) maybePlan(r *model.Result) {
-	if r == nil {
-		return
-	}
-	cc, _ := m.cfg.ConnByName(r.Conn)
-	p, ok := explain.Detect(r, cc.Driver)
-	if !ok {
-		return
-	}
-	m.showPlan(p)
-	m.log(logAccent, "that result is a query plan — shown in the ◈ Plan tab (p switches back to the raw rows)")
-}
-
 // ---------------------------------------------------------------------------
 // Keys
 // ---------------------------------------------------------------------------
@@ -238,8 +154,8 @@ func (m *Model) reexplain(analyze bool) tea.Cmd {
 	if p == nil || p.Statement == "" {
 		return m.explainQuery(analyze)
 	}
-	if p.Conn != "" && p.Conn != m.active {
-		m.logf(logWarn, "this plan is from %s and %s is active — explaining on %s", p.Conn, m.active, m.active)
+	if active := m.ws.Active(); p.Conn != "" && p.Conn != active {
+		m.logf(logWarn, "this plan is from %s and %s is active — explaining on %s", p.Conn, active, active)
 	}
 	return m.explainStmt(p.Statement, "", analyze)
 }
@@ -436,65 +352,4 @@ func stepText(p *explain.Plan, n *explain.Node) string {
 		b.WriteString(pr.Key + ": " + pr.Value + "\n")
 	}
 	return b.String()
-}
-
-// planForChat is the plan text the assistant gets with a question — only
-// when the plan is of the statement being asked about, so a question about
-// a new query is not answered from an old one's plan.
-func (m *Model) planForChat(query string) string {
-	p := m.planv.plan
-	if p == nil || p.Statement == "" {
-		return ""
-	}
-	norm := func(s string) string {
-		s, _, _ = explain.Strip(strings.TrimSuffix(strings.TrimSpace(s), ";"))
-		return strings.ToLower(strings.Join(strings.Fields(s), " "))
-	}
-	if norm(p.Statement) != norm(query) {
-		return ""
-	}
-	if v := m.planv; v.chatFor != p {
-		v.chatText, v.chatFor = p.Text(explain.TextOptions{Width: 110, Insights: true}), p
-	}
-	return m.planv.chatText
-}
-
-// ---------------------------------------------------------------------------
-// Session plumbing
-// ---------------------------------------------------------------------------
-
-// onSession runs f on the session pinned to conn, opening or replacing it as
-// needed, under the same rules as a statement run — see runOnSession, which
-// is this with f = Session.Run. Called from a command goroutine.
-func (m *Model) onSession(ctx context.Context, conn string, f func(*db.Session) error) error {
-	m.sessMu.Lock()
-	defer m.sessMu.Unlock()
-	for retried := false; ; retried = true {
-		if m.sess == nil || m.sessFor != conn {
-			m.dropSessionLocked()
-			sess, err := m.mgr.Session(ctx, conn)
-			if err != nil {
-				return err
-			}
-			m.sess, m.sessFor = sess, conn
-		}
-		err := f(m.sess)
-		// db.Session.Classify holds the rule; see the Fault constants.
-		// In short: retry only what never reached the server on a session
-		// that held nothing; fail loudly when a transaction or setting died
-		// with the connection; otherwise just stop using the dead session.
-		switch m.sess.Classify(err) {
-		case db.FaultRetry:
-			m.dropSessionLocked()
-			if !retried {
-				continue
-			}
-		case db.FaultDrop:
-			m.dropSessionLocked()
-		case db.FaultLost:
-			m.dropSessionLocked()
-			return db.SessionLost(conn, err)
-		}
-		return err
-	}
 }

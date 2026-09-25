@@ -183,7 +183,7 @@ func copyItems(whole bool, why string) []menuItem {
 // openGridMenu is the results pane's context menu.
 func (m *Model) openGridMenu(x, y int) {
 	why := ""
-	if m.lastRes == nil {
+	if m.ws.LastResult() == nil {
 		why = noResult
 	}
 	g := m.grid
@@ -270,7 +270,7 @@ func columnItems(g *grid, why string) []menuItem {
 // openCopyMenu is the ⧉ Copy toolbar dropdown: the whole result, by format.
 func (m *Model) openCopyMenu(x, y int) {
 	why := ""
-	if m.lastRes == nil {
+	if m.ws.LastResult() == nil {
 		why = noResult
 	}
 	items := []menuItem{heading("copy result as")}
@@ -342,7 +342,7 @@ func (m *Model) openConnMenu(x, y int) {
 	for _, c := range m.cfg.Connections {
 		name := c.Name
 		label := "  " + name
-		if name == m.active {
+		if name == m.ws.Active() {
 			label = "● " + name
 		}
 		items = append(items, menuItem{label: label, key: c.Driver,

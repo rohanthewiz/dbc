@@ -204,8 +204,8 @@ func (m *Model) catsPollPanes(force bool) tea.Cmd {
 // something the user may walk away from and want to hear the end of.
 func (m *Model) catsSelfState() (state, status string) {
 	switch {
-	case m.busy:
-		return cats.StateWorking, m.runTag
+	case m.ws.Busy():
+		return cats.StateWorking, m.ws.RunTag()
 	case m.chat.streaming:
 		return cats.StateWorking, "assistant answering"
 	}
@@ -325,14 +325,14 @@ func (m *Model) catsQuestion() string {
 	}
 	sql := strings.Join(stmts, ";\n")
 	var b strings.Builder
-	if cc, ok := m.cfg.ConnByName(m.active); ok {
+	if cc, ok := m.cfg.ConnByName(m.ws.Active()); ok {
 		fmt.Fprintf(&b, "In dbc, on %s (%s):\n\n", cc.Name, cc.Driver)
 	} else {
 		b.WriteString("In dbc:\n\n")
 	}
 	b.WriteString("```sql\n" + sql + "\n```\n")
-	if m.lastErr != "" && sql == m.lastStmt {
-		b.WriteString("\nIt failed with: " + m.lastErr + "\n")
+	if m.ws.LastErr() != "" && sql == m.ws.LastStmt() {
+		b.WriteString("\nIt failed with: " + m.ws.LastErr() + "\n")
 	}
 	return b.String()
 }

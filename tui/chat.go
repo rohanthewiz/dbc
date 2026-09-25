@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -14,6 +13,7 @@ import (
 	"github.com/rohanthewiz/dbc/ai"
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/userdata"
+	"github.com/rohanthewiz/dbc/workspace"
 )
 
 // The assistant pane: a conversation with an ACP agent (Copilot by default)
@@ -174,10 +174,8 @@ type chatSchemaMsg struct {
 	err      error
 }
 
-// maxSchemaTables caps how many tables' columns go with one question. A
-// query joining more than this is rare; a question whose words happen to
-// name a dozen tables is not asking about all of them.
-const maxSchemaTables = 8
+// How many tables' columns go with one question is capped by
+// workspace.MaxSchemaTables, where the context is gathered.
 
 // schemaLookupTimeout bounds the catalog query at send time. Past it the
 // question goes without columns rather than waiting on a busy database.
@@ -437,65 +435,21 @@ func (p *chatPane) modelName() string {
 // Asking
 // ---------------------------------------------------------------------------
 
-// chatContext gathers what the next question may carry — see package ai for
-// what actually goes, which is decided by the connection's ai_rows.
-//
-// Which statement is "this query": the one under the editor's caret, since
-// that is what the user is looking at. When it is the statement that last
-// ran, its result (or error) comes along; when the editor is empty, the last
-// run's statement stands in.
-//
-// question is the question being (or about to be) asked; its words, like
-// the statement's, pick which tables' schema goes along. The Tables come
-// back named but without columns — see chatSubmit for the lookup — and refs
-// is the same tables as the catalog knows them, for that lookup.
+// chatContext gathers what the next question may carry — the rules (which
+// statement is "this query", when its result or error comes along, which
+// tables' schema goes) are workspace.ChatContext's, shared with the browser
+// UI so the two cannot send the assistant different things. What the TUI
+// adds is its grid's view of the result: hidden columns stay out, and a
+// header sort's order goes along.
 func (m *Model) chatContext(question string) (ctx ai.Context, refs []db.TableRef) {
-	cc, _ := m.cfg.ConnByName(m.active)
-	ctx = ai.Context{Conn: m.active, Driver: cc.Driver, SendRows: cc.AIRows, MaxRows: m.cfg.AIContextRows}
-	cur := ""
-	if stmts, _ := m.stmtsToRun(); len(stmts) > 0 {
-		cur = stmts[len(stmts)-1]
-	}
-	if cur == "" {
-		cur = m.lastStmt
-	}
-	ctx.Query = cur
-	ctx.Plan = m.planForChat(cur)
-	if m.tableIdx != nil {
-		refs = m.tableIdx.Mentioned(cur, question)
-		refs = refs[:min(len(refs), maxSchemaTables)]
-		for _, r := range refs {
-			ctx.Tables = append(ctx.Tables, ai.Table{Name: m.tableIdx.Display(r), View: r.View})
+	view := workspace.GridView{SortCol: -1}
+	if g := m.grid; g.res != nil {
+		view = workspace.GridView{
+			Result: g.res, Hidden: g.HiddenCols(),
+			SortCol: g.sortCol, SortDesc: g.sortDesc, Order: g.order,
 		}
 	}
-	if cur == "" || cur != m.lastStmt {
-		return ctx, refs
-	}
-	if m.lastErr != "" {
-		ctx.Err = m.lastErr
-		return ctx, refs
-	}
-	if r := m.lastRes; r != nil && !r.IsExec {
-		ctx.Columns, ctx.Rows, ctx.Truncated = r.Columns, r.Rows, r.Truncated
-		// Columns hidden in the grid are left out, as copies and exports
-		// leave them out — see package ai's HIDDEN COLUMNS for why. The
-		// guard makes sure hidden is indexed by this result's columns; the
-		// two are set together today, so it is belt and braces.
-		//
-		// A header sort goes too: rows are sent in the grid's order and the
-		// model is told so. Only the prefix of the order that could be sent
-		// is copied — this runs every frame for the chip — and it IS copied,
-		// because applySort rewrites order in place and a submit's context
-		// waits for its schema lookup before it is built into a prompt.
-		if g := m.grid; g.res == r {
-			ctx.Hidden = g.HiddenCols()
-			if g.sortCol >= 0 {
-				ctx.Order = slices.Clone(g.order[:min(len(g.order), max(ctx.MaxRows, 0))])
-				ctx.SortedBy, ctx.SortDesc = r.Columns[g.sortCol], g.sortDesc
-			}
-		}
-	}
-	return ctx, refs
+	return m.ws.ChatContext(question, m.editorState(), view)
 }
 
 // askAbout opens the assistant with a question drafted in the composer —
@@ -544,7 +498,7 @@ func (m *Model) chatSubmit() tea.Cmd {
 
 // schemaCmd looks up the columns of the tables a question involves.
 func (m *Model) schemaCmd(gen int, question string, ctx ai.Context, refs []db.TableRef) tea.Cmd {
-	mgr, conn := m.mgr, m.active
+	mgr, conn := m.mgr, m.ws.Active()
 	return func() tea.Msg {
 		c, cancel := context.WithTimeout(context.Background(), schemaLookupTimeout)
 		defer cancel()

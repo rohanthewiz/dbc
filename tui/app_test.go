@@ -16,8 +16,8 @@ import (
 func TestCtrlRRunsAndShowsTheResult(t *testing.T) {
 	m := newTestModel(t)
 	key(t, m, "ctrl+r")
-	if m.lastRes == nil || len(m.lastRes.Rows) != 8 {
-		t.Fatalf("result = %+v", m.lastRes)
+	if m.ws.LastResult() == nil || len(m.ws.LastResult().Rows) != 8 {
+		t.Fatalf("result = %+v", m.ws.LastResult())
 	}
 	c := frame(m)
 	findText(t, c, "Whiskers")
@@ -31,7 +31,7 @@ func TestRunButtonRunsToo(t *testing.T) {
 	m := newTestModel(t)
 	x, y := findText(t, frame(m), "▶ Run")
 	click(t, m, x, y)
-	if m.lastRes == nil {
+	if m.ws.LastResult() == nil {
 		t.Fatal("clicking ▶ Run should run the statement")
 	}
 }
@@ -47,8 +47,8 @@ func TestStatementUnderCaret(t *testing.T) {
 	}
 	findText(t, c, "Query · ^R runs statement 2/2")
 	key(t, m, "ctrl+r")
-	if m.lastRes.Columns[0] != "b" {
-		t.Errorf("ran %v, want the second statement", m.lastRes.Columns)
+	if m.ws.LastResult().Columns[0] != "b" {
+		t.Errorf("ran %v, want the second statement", m.ws.LastResult().Columns)
 	}
 }
 
@@ -61,11 +61,11 @@ func TestRunAllRunsTheWholeBuffer(t *testing.T) {
 			m.editor.SetText("CREATE TEMP TABLE ra (x INT);\nINSERT INTO ra VALUES (5);\nSELECT x AS y FROM ra;")
 			m.editor.move(pos{0, 0}, false) // caret on the first statement
 			key(t, m, chord)
-			if m.lastErr != "" {
-				t.Fatalf("lastErr = %s", m.lastErr)
+			if m.ws.LastErr() != "" {
+				t.Fatalf("lastErr = %s", m.ws.LastErr())
 			}
-			if m.lastRes == nil || m.lastRes.Columns[0] != "y" || m.lastRes.Rows[0][0] != "5" {
-				t.Fatalf("want the last statement's result, got %+v", m.lastRes)
+			if m.ws.LastResult() == nil || m.ws.LastResult().Columns[0] != "y" || m.ws.LastResult().Rows[0][0] != "5" {
+				t.Fatalf("want the last statement's result, got %+v", m.ws.LastResult())
 			}
 			log := logText(m)
 			if !strings.Contains(log, "running all 3 statements") ||
@@ -81,13 +81,13 @@ func TestRunAllStopsAtTheFirstFailure(t *testing.T) {
 	m := newTestModel(t)
 	m.editor.SetText("SELECT 1 AS a;\nSELEC nonsense;\nCREATE TEMP TABLE never (x INT);")
 	key(t, m, "ctrl+shift+r")
-	if !strings.Contains(m.lastErr, "2/3") {
-		t.Errorf("lastErr should name statement 2/3: %q", m.lastErr)
+	if !strings.Contains(m.ws.LastErr(), "2/3") {
+		t.Errorf("lastErr should name statement 2/3: %q", m.ws.LastErr())
 	}
 	m.editor.SetText("SELECT count(*) FROM temp.sqlite_master WHERE name = 'never'")
 	key(t, m, "ctrl+r")
-	if m.lastRes == nil || m.lastRes.Rows[0][0] != "0" {
-		t.Errorf("the statement after the failure ran: %+v", m.lastRes)
+	if m.ws.LastResult() == nil || m.ws.LastResult().Rows[0][0] != "0" {
+		t.Errorf("the statement after the failure ran: %+v", m.ws.LastResult())
 	}
 }
 
@@ -109,8 +109,8 @@ func TestEditorMenuRunAll(t *testing.T) {
 	rightClick(t, m, e.X+10, e.Y+1)
 	x, y = findText(t, frame(m), "▶ Run all 2 statements")
 	click(t, m, x, y)
-	if m.lastRes == nil || m.lastRes.Columns[0] != "b" {
-		t.Errorf("Run all should end on the second statement: %+v", m.lastRes)
+	if m.ws.LastResult() == nil || m.ws.LastResult().Columns[0] != "b" {
+		t.Errorf("Run all should end on the second statement: %+v", m.ws.LastResult())
 	}
 }
 
@@ -120,12 +120,12 @@ func TestSessionCarriesAcrossRuns(t *testing.T) {
 	for _, sql := range []string{"CREATE TEMP TABLE scratch (x INT)", "INSERT INTO scratch VALUES (7)", "SELECT x FROM scratch"} {
 		m.editor.SetText(sql)
 		key(t, m, "ctrl+r")
-		if m.lastErr != "" {
-			t.Fatalf("%s: %s", sql, m.lastErr)
+		if m.ws.LastErr() != "" {
+			t.Fatalf("%s: %s", sql, m.ws.LastErr())
 		}
 	}
-	if m.lastRes.Rows[0][0] != "7" {
-		t.Errorf("temp table did not survive between runs: %v", m.lastRes.Rows)
+	if m.ws.LastResult().Rows[0][0] != "7" {
+		t.Errorf("temp table did not survive between runs: %v", m.ws.LastResult().Rows)
 	}
 }
 
@@ -133,8 +133,8 @@ func TestErrorsAreLoggedAndOfferedToTheAssistant(t *testing.T) {
 	m := newTestModel(t)
 	m.editor.SetText("SELEC nonsense")
 	key(t, m, "ctrl+r")
-	if m.lastErr == "" || !strings.Contains(logText(m), "syntax error") {
-		t.Errorf("lastErr = %q\nlog: %s", m.lastErr, logText(m))
+	if m.ws.LastErr() == "" || !strings.Contains(logText(m), "syntax error") {
+		t.Errorf("lastErr = %q\nlog: %s", m.ws.LastErr(), logText(m))
 	}
 	if !strings.Contains(frame(m).Line(39), "ask the assistant why") {
 		t.Errorf("status should point at the assistant: %q", frame(m).Line(39))
@@ -312,10 +312,10 @@ func TestTablesSidebarPreview(t *testing.T) {
 	}
 	click(t, m, x, y)
 	click(t, m, x, y)
-	if m.lastRes == nil || !strings.Contains(m.lastRes.Query, "FROM cats LIMIT 100") {
-		t.Fatalf("preview did not run: %+v", m.lastRes)
+	if m.ws.LastResult() == nil || !strings.Contains(m.ws.LastResult().Query, "FROM cats LIMIT 100") {
+		t.Fatalf("preview did not run: %+v", m.ws.LastResult())
 	}
-	if m.editor.Text() == m.lastRes.Query {
+	if m.editor.Text() == m.ws.LastResult().Query {
 		t.Error("a preview must not overwrite the editor")
 	}
 }
@@ -429,13 +429,13 @@ func TestScriptRunsFromThePicker(t *testing.T) {
 		}
 	}
 	key(t, m, "enter")
-	if m.busy {
+	if m.ws.Busy() {
 		t.Fatal("the script should have finished")
 	}
 	if !strings.Contains(logText(m), "script loop_params.go completed") {
 		t.Errorf("log: %s", logText(m))
 	}
-	if m.lastRes == nil {
+	if m.ws.LastResult() == nil {
 		t.Error("the script's shown results should reach the grid")
 	}
 }

@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-045
+**Next ID:** N-049
 
 ## Open
 
@@ -38,6 +38,26 @@ ten session docs in `ai_docs/claude_sessions/`
   a GNOME/KDE terminal paste after an HTML copy gets the markup, Teams or
   LibreOffice gets the table, and a clipboard manager (Klipper, GPaste) does
   not keep a helper alive. Only Xvfb + xclip has exercised it so far.
+- **N-045** · raised `2026-0925-1425-workspace-extraction-web-phase1` · value medium
+  `dbc web` Phase 2 (`ai_docs/plans/web-ui.md`): the subcommand (`--listen`,
+  `--no-open`, `--secret`), rweb server, auth middleware (per-launch secret,
+  HMAC cookie, Host/Origin/CSRF checks), serr → envelope responder, element
+  shell, embedded assets, SSE hub running workspace Jobs, cleanup on Ctrl+C,
+  health endpoint, `web.bytdb` for tabs/layout; raise the in-memory SQLite
+  pool cap. Phase 1 (`workspace`) is done.
+- **N-046** · raised `2026-0925-1425-workspace-extraction-web-phase1` · value medium
+  `dbc web` Phase 4: the Plan tab with full parity with the HTML plan page —
+  lift `explain/assets/plan.html`'s script into one `plan.js` the standalone
+  page and the web both load, then tick the plan's Phase 4 checklist in
+  headless Chrome against the `explain/html_test.go` fixtures. The user asked
+  for every existing feature to carry over.
+- **N-047** · raised `2026-0925-1425-workspace-extraction-web-phase1` · value low
+  Opt-in live `workspace` tests on Postgres/MySQL (same `DBC_LIVE_*` DSNs):
+  retry-once, session lost, cancel mid-statement and connection switch through
+  the workspace, not just `db`. Its own tests use in-memory SQLite only.
+- **N-048** · raised `2026-0925-1425-workspace-extraction-web-phase1` · value low
+  `dbc web` Phases 3, 5, 6 (Monaco editor + virtualized grid + copy/export;
+  assistant and scripts on SSE; tabs, layout, packaging), per the plan.
 
 ## Roadmap
 

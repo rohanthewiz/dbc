@@ -2,7 +2,8 @@
 
 Raised 2026-09-25. The ask: a web UI for dbc, started as `dbc web`.
 
-This is a plan, not a record of work done. Nothing below is built yet.
+This is a plan. **Phase 1 (the `workspace` extraction) is done** (2026-09-25);
+everything from Phase 2 on is not built yet.
 
 ## The one-paragraph version
 
@@ -142,30 +143,52 @@ moves it.
 
 A `Workspace` is one person's working state against the databases: an active
 connection, its pinned session, the run in flight, the last statement, error,
-result and plan. It has no UI types in its API. Work is started with methods
-and outcomes arrive as **events on a channel**, which is the shape both UIs
-need: Bubble Tea wraps each event in a `tea.Msg`, the web layer writes each
-one to an SSE stream.
+result and plan. It has no UI types in its API.
+
+*As built (Phase 1), one change from the first draft:* work is not reported on
+a channel the workspace owns. A start method (`Run`, `Explain`, `Connect`,
+`RunScript`) does the immediate bookkeeping — claims the run slot, records
+history, bumps a generation — and returns a `Start{Notes, Job}`; the **Job** is
+the blocking half, which the caller runs wherever its UI runs blocking work.
+The Job **lands its own outcome** in the workspace (under the workspace's
+mutex) and returns an `Event` describing it. The TUI wraps a Job in a
+`tea.Cmd` and the event comes back to `Update` as the message; the web layer
+will run it on a goroutine and write the event to the SSE stream. Mid-run
+events (a script's `s.Show` / `s.Print`) go to an `Options.Sink` callback.
+Why: Bubble Tea already is an event loop with its own way of running blocking
+work, and the TUI's test harness drives it synchronously — a workspace running
+its own goroutines would have turned every TUI test into a race against a
+channel. Refusals ("busy — … (Ctrl+K stops it)") are a typed `*Refusal` error
+carrying a `Reason` (Busy → 409, the rest → 400) and the log line.
 
 ```go
-type Workspace struct { /* cfg, mgr, active, sess+sessMu, run slot, last*, history */ }
+type Workspace struct { /* cfg, mgr, hist; mu: active, catalog, run slot, last*, plan; sessMu: sess */ }
+type Editor struct { Text string; Caret int; Selection string }
+type Start struct { Tag string; Gen int; Notes []Note; Job Job }
+type Job func() Event // *Connected, *RunDone, *ExplainDone, *SessionReleased
 
-func New(cfg *config.Config, mgr *db.Manager, hist *userdata.History) *Workspace
-func (w *Workspace) Events() <-chan Event            // RunStarted, Tick, StmtDone, RunDone, Connected, Plan, ScriptPrint, …
+func New(cfg *config.Config, mgr *db.Manager, hist *userdata.History, opt Options) *Workspace // opt.Sink: ScriptShow, ScriptPrint
 
-func (w *Workspace) Connect(name string) error      // cancels a connect in flight; supersede by generation
-func (w *Workspace) Run(buffer string, caret int, sel [2]int, all bool) error // picks stmts as Ctrl+R / Ctrl+Shift+R do
-func (w *Workspace) Explain(buffer string, caret int, sel [2]int, analyze bool) error
-func (w *Workspace) RunScript(path string) error
-func (w *Workspace) Cancel() bool                    // run or connect
-func (w *Workspace) ChatContext(q string, view GridView) (ai.Context, []db.TableRef)
-func (w *Workspace) Close()                           // releases the pinned session
+func (w *Workspace) Switch(name string) Start / Connect(name string) Start // supersede by generation
+func (w *Workspace) RunEditor(ed Editor, all bool) (Start, error)            // Ctrl+R / Ctrl+Shift+R
+func (w *Workspace) RunStmts(stmts []string, tag string) (Start, error)      // record, then run
+func (w *Workspace) ListTables() (Start, error)
+func (w *Workspace) ExplainEditor(ed Editor, analyze bool) (Start, error) / Explain(stmt, where string, analyze bool)
+func (w *Workspace) RunScript(path string) (Start, error)
+func (w *Workspace) Cancel() (Note, string)          // run, else connect
+func (w *Workspace) ChatContext(q string, ed Editor, view GridView) (ai.Context, []db.TableRef)
+func (w *Workspace) Stop() / Close()                  // cancel in-flight work / also release the session
+// readers: Active, Catalog, TableIndex, Busy, RunTag, Ticking, LastStmt, LastErr, LastResult, Plan, Session, Connecting
+func Pick(ed Editor) / PickAll(text string) / StmtRange(text string, caret int) // pure statement picking
 ```
 
 The rules move with their comments intact — "ONE RUN AT A TIME", "A PINNED
 SESSION per active connection", "CANCEL REACHES THE SERVER" — and the TUI's
-existing tests become the safety net for the move: they must pass unchanged
-before any web code exists.
+existing tests became the safety net for the move. *As built:* every TUI
+assertion passes unchanged; the tests' reads of the moved fields became
+accessor calls (`m.lastRes` → `m.ws.LastResult()`), and the two tests that
+reached into the session itself (dead stateless session retried, dead
+stateful session lost) moved to `workspace`, which now owns that code.
 
 The grid's view of a result (sort order, hidden columns) stays with each UI —
 it is presentation — and is passed in where a rule needs it (the assistant's
@@ -316,7 +339,7 @@ never lost.
 
 Each phase ends shippable and tested.
 
-### Phase 1 — extract `workspace` (no UI change)
+### Phase 1 — extract `workspace` (no UI change) — ✅ done 2026-09-25
 
 Move the run slot, pinned session, connect, statement picking, history
 recording, last-result bookkeeping, explain and chat-context building from
@@ -324,6 +347,23 @@ recording, last-result bookkeeping, explain and chat-context building from
 of it. **Done when** every existing `tui` test passes unchanged and the live
 session tests (`db/live_*`) pass, with `workspace` unit tests for the rules
 themselves (straggler drop, busy refusal, cancel, session lost, retry once).
+
+*Outcome:* `workspace/` (connect, run, explain, session, chat context, events,
+statement picking) with 17 tests; `tui/run.go` is now glue (turn keys into
+calls, run Jobs as commands, draw events); `userdata.History` gained a mutex
+so several web workspaces can share one. All tests pass, also under `-race`.
+The live `db/live_*` tests pass against Postgres 17 and MySQL 8.4 (13/13).
+To run them:
+
+```sh
+docker run -d --rm --name dbc-live-pg -e POSTGRES_PASSWORD=pw -e POSTGRES_DB=dbc -p 55432:5432 postgres:17
+docker run -d --rm --name dbc-live-my -e MYSQL_ROOT_PASSWORD=pw -e MYSQL_DATABASE=dbc -p 53306:3306 mysql:8.4
+# wait until both accept connections, then:
+DBC_LIVE_PG_DSN='postgres://postgres:pw@127.0.0.1:55432/dbc?sslmode=disable' \
+DBC_LIVE_MYSQL_DSN='root:pw@tcp(127.0.0.1:53306)/dbc' \
+go test -count=1 ./db -run Live -v
+docker stop dbc-live-pg dbc-live-my
+```
 
 ### Phase 2 — `dbc web` skeleton
 
@@ -344,12 +384,45 @@ paging, sort, hide/show, resize, range select, inspect. Copy in every format
 tables sidebar with preview. **Done when** the TUI's results-grid tests have
 browser equivalents (see *Testing*).
 
-### Phase 4 — explain
+### Phase 4 — explain, with everything the HTML plan page already does
 
-A Plan tab beside Results, driven by `plan.js` (the existing page's code as a
-module). `Ctrl+X` / `Ctrl+Shift+X`, before/after comparison, insights with
-`⤓ insert` into the editor, open-as-standalone-page. Mostly assembly: the
-explain package and the page already exist.
+A Plan tab beside Results that is **the interactive plan page, feature for
+feature** — not a reduced view of it. The page's script
+(`explain/assets/plan.html`, ~600 lines of JS) is lifted into
+`plan.js`, a module that takes the Document JSON (`Plan.JSON()`) and a root
+element, so the standalone page (`Plan.HTML()`, `dbc explain --open`, the
+TUI's `b`) and the web UI run **the same code** and cannot drift. The
+standalone page keeps working offline and self-contained (its tests —
+`TestHTMLIsSelfContained`, `TestHTMLStatementCannotBreakOut` — stay green): it
+inlines the same module at build time via `go:embed`.
+
+Parity checklist — every item here exists in the page today and must exist
+in the web Plan tab:
+
+| Area | Feature |
+|---|---|
+| Header | headline; engine and connection; the analyzed / "estimated plan · measured run" / "estimated — not executed" chip; the EXPLAIN command dbc sent (truncated, full on hover); engine notes; the statement, SQL-highlighted, in a fold (open when short) |
+| Metrics | a button per metric the plan carries (time, cost, rows, …, and the "shape ≈" heuristic with its explanation), keys `1`–`4`; bars, colors and flame widths all follow it; the cool→hot legend ramp and "own share of …" label |
+| Graph | top-down tidy tree of step cards (glyph, op, target, the metric's value and share, heat color by own share); edges whose thickness is log(rows flowing up); "Outer"/"Inner" edge labels only where they mean something; drag to pan, wheel to zoom at the pointer, − / + / Fit (`f`); refit on resize until the user pans or zooms; big plans start folded below depth 5, Enter / click folds; the selected step's path to the root highlighted |
+| Keyboard | ←↑↓→ walk parent / first child / siblings (unfolding as needed), Enter folds, `f` fit, `g` graph, `1`–`4` metric, Esc zooms the flame back out |
+| Flame | icicle by inclusive weight within the zoom root; click a block to zoom into it, click the root to zoom out; breadcrumbs; falls back to counting steps when the metric is zero everywhere |
+| Step detail | time total / self with share bar; rows actual vs estimated with the misestimate factor; loops and parallel workers; rows removed by filter; cost startup → total and self with share bar; width; buffers hit / read; temp blocks; spill to disk; hash batches; workers planned / launched; table rows; share under shape/rows; every raw property; the step's own findings |
+| Insights | severity glyph, title, detail, suggested fix; the suggested SQL with a Copy button; click a finding to reveal and select its step; count in the heading ("· 5 (2 to act on)") |
+| Boot | opens on the step the most serious finding is about (else the root); `#flame` deep link opens the flame view |
+| Theme | dbc palette as CSS variables, light/dark toggle |
+
+What the web adds on top, because it is inside the workbench rather than a
+file: `Ctrl+X` / `Ctrl+Shift+X` from the editor; re-explain (`e` / `a`) and the
+**before/after comparison** the TUI logs ("vs the last plan of this
+statement: …"); `⤓ insert` a finding's SQL into the editor (never run it), next
+to Copy; "✦ ask the assistant about this step / plan"; copy plan as text and
+the engine's raw output; "↗ open as standalone page" (`/api/v1/ws/:id/plan.html`,
+the same page, savable and sendable); and a plan detected in a typed
+`EXPLAIN`'s result (`RunDone.Plan`) opens the tab just as in the TUI.
+
+**Done when** the checklist is ticked in a headless-Chrome run against the
+fixtures `explain/html_test.go` already renders (Postgres analyzed, MySQL,
+SQLite, bytdb), and the standalone page still passes its own tests.
 
 ### Phase 5 — the assistant and scripts
 

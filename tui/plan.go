@@ -66,11 +66,8 @@ type planView struct {
 	hoverNode  int // step under the mouse in the tree or flame graph, -1 none
 	hoverInsig int
 
-	// chatText caches the plan as the assistant is shown it: the chat's
-	// context chip rebuilds its context every frame, and the plan does not
-	// change between explains
-	chatText string
-	chatFor  *explain.Plan
+	// (The plan as the assistant is shown it is cached by the workspace,
+	// which builds the chat's context — see workspace.planForChatLocked.)
 }
 
 type planMode int

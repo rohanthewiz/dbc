@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rohanthewiz/serr"
@@ -41,7 +42,15 @@ type Entry struct {
 // JSON-lines file: one object per line carries the multi-line SQL that a
 // plain-text history would have to escape, and appending one entry costs one
 // write rather than a rewrite of the file.
+//
+// It is safe for concurrent use. The TUI touches it from one goroutine, but
+// `dbc web` gives every browser tab its own workspace over ONE shared
+// History (so a query run in any tab, or in the terminal's history file,
+// is recallable from all of them), and those tabs record from their own
+// request goroutines. mu also serializes the file appends, so two tabs
+// recording at once cannot interleave half-lines.
 type History struct {
+	mu      sync.Mutex
 	path    string
 	entries []Entry
 }
@@ -100,6 +109,8 @@ func (h *History) Add(conn, sql string, at time.Time) error {
 	if sql == "" {
 		return nil
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if n := len(h.entries); n > 0 && h.entries[n-1].SQL == sql {
 		return nil
 	}
@@ -152,6 +163,8 @@ func (h *History) rewrite() {
 
 // Recent returns the entries newest first — the order they are picked in.
 func (h *History) Recent() []Entry {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	out := make([]Entry, len(h.entries))
 	for i, e := range h.entries {
 		out[len(h.entries)-1-i] = e

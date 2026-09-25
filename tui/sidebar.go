@@ -19,7 +19,7 @@ func (m *Model) refreshConns() {
 	items := make([]listItem, 0, len(m.cfg.Connections))
 	for i, c := range m.cfg.Connections {
 		it := listItem{label: c.Name, sub: c.Driver, data: c.Name}
-		if c.Name == m.active {
+		if c.Name == m.ws.Active() {
 			it.mark = "●"
 			m.conns.cur = i
 		}
@@ -33,7 +33,7 @@ func (m *Model) refreshConns() {
 // Schema is shown only when the connection has more than one, since
 // "public." in front of every name says nothing.
 func (m *Model) refreshTables() {
-	r := m.tableRes
+	r := m.ws.Catalog()
 	if r == nil || len(r.Columns) < 2 {
 		m.tables.set(nil)
 		return
@@ -85,7 +85,6 @@ func (m *Model) tablePicked() tea.Cmd {
 		return nil
 	}
 	stmt := fmt.Sprintf("SELECT * FROM %s LIMIT 100", it.data.(string))
-	m.record(stmt)
 	m.focus = focusGrid
-	return m.run([]string{stmt}, "preview "+it.label)
+	return m.startRun(m.ws.RunStmts([]string{stmt}, "preview "+it.label)) // records it, then runs
 }

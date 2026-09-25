@@ -1,21 +1,18 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"strings"
-	"sync"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/rohanthewiz/dbc/ai"
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
-	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/theme"
 	"github.com/rohanthewiz/dbc/userdata"
+	"github.com/rohanthewiz/dbc/workspace"
 )
 
 // Model is the whole application state, and the Bubble Tea model.
@@ -29,9 +26,11 @@ import (
 // THE THREADING RULE. Only Update mutates the Model. Work that blocks — a
 // query, a connect, a clipboard write, the AI agent — runs as a tea.Cmd (a
 // function Bubble Tea calls on its own goroutine) and reports back with a
-// message. The one exception is the database session, which a running
-// command uses while Update may be starting the next run's bookkeeping; it
-// has its own mutex (sessMu), exactly as the former tview UI's did.
+// message. The database side of that — the active connection, the run slot,
+// the pinned session, the last statement, error, result and plan — is not
+// the Model's at all but the workspace's (ws), which the browser UI shares
+// and which guards itself with its own mutexes: a run's Job lands its
+// outcome there from the command goroutine, and Update draws the event.
 //
 // It is a pointer receiver throughout: the model is large, and every Update
 // returning a copy of it would copy the editor buffer and the result on
@@ -59,33 +58,14 @@ type Model struct {
 	menu  *menu
 	modal modal
 
-	active     string         // active connection
-	tableRes   *model.Result  // the active connection's catalog, for the sidebar
-	tableIdx   *db.TableIndex // the same catalog, indexed for the assistant's schema context
-	lastRes    *model.Result  // the result in the grid
-	resTab     resultsTab     // which tab the results pane shows: the grid or the plan
-	resZoom    bool           // the results pane has the whole centre column (z)
-	lastStmt   string         // the statement the last run executed
-	lastErr    string         // what it failed with, "" if it worked
-	hist       *userdata.History
-	histWarned bool
+	// ws is the database side: the active connection and its catalog, the
+	// run slot (one run at a time), the pinned session, connects, history,
+	// and the last statement, error, result and plan. The TUI reads it for
+	// drawing and calls it to start work; see package workspace.
+	ws *workspace.Workspace
 
-	// run state — one run at a time, as in the former tview UI
-	busy    bool
-	runGen  int // bumped per run; a late message from an older run is dropped
-	runTag  string
-	runAt   time.Time
-	cancel  context.CancelFunc
-	sessMu  sync.Mutex
-	sess    *db.Session
-	sessFor string
-
-	// connect state. A connect runs as a command so the UI stays live while
-	// it dials; these let Ctrl+K / Ctrl+C abandon it, and let a newer pick
-	// supersede an older one. Touched only on the Update goroutine.
-	connGen    int                // bumped per connect; a connectMsg from an older one is dropped
-	connCancel context.CancelFunc // cancels the connect in flight; nil when none is
-	connName   string             // what it is connecting to, for the log
+	resTab  resultsTab // which tab the results pane shows: the grid or the plan
+	resZoom bool       // the results pane has the whole centre column (z)
 
 	// sizes the user can change by dragging a pane border
 	sideW  int
@@ -157,18 +137,17 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Model {
 	m.editor.placeholder = "Type SQL here, then Ctrl+R (or ▶ Run) to run it…"
 	m.aiAgent, _ = ai.AgentByID(cfg.AIAgent)
 
-	if opt.NoPersist {
-		m.hist = userdata.LoadHistory("")
-	} else {
-		m.hist = userdata.LoadHistory(userdata.HistoryFile())
+	hist := userdata.LoadHistory("")
+	if !opt.NoPersist {
+		hist = userdata.LoadHistory(userdata.HistoryFile())
 		m.chat.dir = userdata.ChatsDir()
 	}
-
-	if _, ok := cfg.ConnByName(cfg.DefaultConnection); ok {
-		m.active = cfg.DefaultConnection
-	} else if len(cfg.Connections) > 0 {
-		m.active = cfg.Connections[0].Name
-	}
+	// The sink carries a script's s.Show / s.Print, which fire mid-run from
+	// the script's goroutine, to Update through m.send. It reads m.send when
+	// it fires, not now: Run installs Program.Send after New returns.
+	m.ws = workspace.New(cfg, mgr, hist, workspace.Options{
+		Sink: func(e workspace.Event) { m.send(e) },
+	})
 	m.refreshConns()
 
 	saved := ""
@@ -195,7 +174,7 @@ func (m *Model) startupLog() {
 		names := make([]string, 0, len(m.cfg.Connections))
 		for _, c := range m.cfg.Connections {
 			n := c.Name
-			if c.Name == m.active {
+			if c.Name == m.ws.Active() {
 				n += " (active)"
 			}
 			names = append(names, n)
@@ -217,7 +196,7 @@ func (m *Model) startupLog() {
 
 // Init starts the first connect, which also fills the tables sidebar.
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.connectCmd(m.active), m.catsInit())
+	return tea.Batch(m.connectCmd(m.ws.Active()), m.catsInit())
 }
 
 // Run builds the model and runs the program until the user quits.
@@ -243,16 +222,11 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 // cats, save and stop the assistant, then release the pinned connection. A
 // connect still dialing is abandoned with the run.
 func (m *Model) shutdown() {
-	if m.cancel != nil {
-		m.cancel()
-	}
-	if m.connCancel != nil {
-		m.connCancel()
-	}
+	m.ws.Stop() // the run and any connect still dialing
 	m.catsClose()
 	m.chatSave() // before close: quitting must not discard the conversation
 	m.chat.close()
-	m.dropSession()
+	m.ws.Close() // releases the pinned connection
 }
 
 // ---------------------------------------------------------------------------
@@ -290,22 +264,24 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 		m.hover = hoverState{}
 		return nil
 
-	case connectMsg:
+	// the workspace's events: a Job's outcome, already landed, or a
+	// script's mid-run output from the sink
+	case *workspace.Connected:
 		return m.connected(msg)
-	case sessionReleasedMsg:
+	case *workspace.SessionReleased:
 		return m.sessionReleased(msg)
-	case runDoneMsg:
+	case *workspace.RunDone:
 		return m.runDone(msg)
-	case explainDoneMsg:
+	case *workspace.ExplainDone:
 		return m.explainDone(msg)
+	case *workspace.ScriptShow:
+		m.showResult(msg.Result)
+		return nil
+	case *workspace.ScriptPrint:
+		m.log(logInfo, msg.Text)
+		return nil
 	case tickMsg:
 		return m.tick(msg)
-	case scriptShowMsg:
-		m.showResult(msg.res)
-		return nil
-	case scriptPrintMsg:
-		m.log(logInfo, msg.text)
-		return nil
 	case clipDoneMsg:
 		return m.clipDone(msg)
 	case chatEventMsg:
@@ -544,7 +520,7 @@ func (m *Model) paste(s string) tea.Cmd {
 // answer — and quit only when nothing is. psql muscle memory expects Ctrl+C
 // to cancel, and losing the session to it would be a nasty surprise.
 func (m *Model) interrupt() tea.Cmd {
-	if m.busy {
+	if m.ws.Busy() {
 		return m.cancelRun()
 	}
 	if m.cancelConnect() {
@@ -559,9 +535,7 @@ func (m *Model) interrupt() tea.Cmd {
 
 // quitCmd cancels anything in flight and ends the program.
 func (m *Model) quitCmd() tea.Cmd {
-	if m.cancel != nil {
-		m.cancel()
-	}
+	m.ws.Stop()
 	m.quit = true
 	return nil
 }

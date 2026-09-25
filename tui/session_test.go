@@ -1,8 +1,6 @@
 package tui
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -13,58 +11,12 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/rohanthewiz/dbc/config"
-	"github.com/rohanthewiz/dbc/db"
 )
 
-// killSession closes the pinned session's connection behind the model's back,
-// the way a server-side idle timeout would: m.sess still points at it, and the
-// next statement on it fails as a bad connection.
-func killSession(t *testing.T, m *Model) {
-	t.Helper()
-	if m.sess == nil {
-		t.Fatal("no session to kill")
-	}
-	if err := m.sess.Close(); err != nil {
-		t.Fatalf("kill: %v", err)
-	}
-}
-
-// A dead session that only ever ran queries is replaced and the statement
-// retried: nothing was lost, so the user need not hear about it.
-func TestDeadStatelessSessionIsReplaced(t *testing.T) {
-	m := newTestModel(t)
-	ctx := context.Background()
-	if _, err := m.runOnSession(ctx, "demo-sqlite", "SELECT 1"); err != nil {
-		t.Fatalf("select: %v", err)
-	}
-	killSession(t, m)
-	if _, err := m.runOnSession(ctx, "demo-sqlite", "SELECT 2"); err != nil {
-		t.Fatalf("retry on a fresh session failed: %v", err)
-	}
-}
-
-// A dead session that held state is not: replaying the statement on a fresh
-// session would run it outside the transaction the user thinks is open.
-func TestDeadStatefulSessionFailsLoudly(t *testing.T) {
-	m := newTestModel(t)
-	ctx := context.Background()
-	if _, err := m.runOnSession(ctx, "demo-sqlite", "BEGIN"); err != nil {
-		t.Fatalf("begin: %v", err)
-	}
-	killSession(t, m)
-
-	_, err := m.runOnSession(ctx, "demo-sqlite", "COMMIT")
-	if !errors.Is(err, db.ErrSessionLost) {
-		t.Fatalf("err = %v, want ErrSessionLost", err)
-	}
-	if m.sess != nil {
-		t.Error("the dead session is still pinned")
-	}
-	// the next run starts clean
-	if _, err = m.runOnSession(ctx, "demo-sqlite", "SELECT 1"); err != nil {
-		t.Fatalf("run after a lost session: %v", err)
-	}
-}
+// The pinned session's own rules — a dead stateless session replaced and
+// retried, a dead stateful one failing loudly with ErrSessionLost — are the
+// workspace's, and are tested there (workspace/session_test.go). What stays
+// here is what the TUI shows of them.
 
 // Switching connections closes the old session at once — its open
 // transaction rolled back — and says so, rather than leaving it open until
@@ -75,20 +27,21 @@ func TestSwitchingConnectionReleasesSession(t *testing.T) {
 		Name: "other", Driver: "sqlite",
 		DSN: fmt.Sprintf("file:tuitest%d?mode=memory&cache=shared", dbSeq.Add(1)),
 	})
-	ctx := context.Background()
 	for _, stmt := range []string{"BEGIN", "DELETE FROM cats"} {
-		if _, err := m.runOnSession(ctx, "demo-sqlite", stmt); err != nil {
-			t.Fatalf("%s: %v", stmt, err)
+		m.editor.SetText(stmt)
+		key(t, m, "ctrl+r")
+		if m.ws.LastErr() != "" {
+			t.Fatalf("%s: %s", stmt, m.ws.LastErr())
 		}
 	}
 
 	drive(t, m, nil, m.setActive("other"))
 
-	if m.active != "other" {
-		t.Fatalf("active = %q, want other", m.active)
+	if m.ws.Active() != "other" {
+		t.Fatalf("active = %q, want other", m.ws.Active())
 	}
-	if m.sess != nil {
-		t.Errorf("session on %q still pinned after switching away", m.sessFor)
+	if conn, _ := m.ws.Session(); conn != "" {
+		t.Errorf("session on %q still pinned after switching away", conn)
 	}
 	if !strings.Contains(logText(m), "left demo") {
 		t.Errorf("no warning that the demo session's state was dropped; log:\n%s", logText(m))
@@ -176,10 +129,10 @@ func TestCancelConnect(t *testing.T) {
 			}
 			drive(t, m, await(t, done, "the canceled connect"))
 
-			if m.active != "demo-sqlite" {
-				t.Errorf("active = %q, want demo-sqlite: a canceled connect switched", m.active)
+			if m.ws.Active() != "demo-sqlite" {
+				t.Errorf("active = %q, want demo-sqlite: a canceled connect switched", m.ws.Active())
 			}
-			if m.connCancel != nil {
+			if _, connecting := m.ws.Connecting(); connecting {
 				t.Error("connect still marked in flight")
 			}
 			if !strings.Contains(logText(m), "connect to slow canceled") {
@@ -200,12 +153,12 @@ func TestNewerConnectSupersedesOlder(t *testing.T) {
 
 	slow := runAsync(m.setActive("slow"))
 	drive(t, m, nil, m.setActive("other"))
-	if m.active != "other" {
-		t.Fatalf("active = %q, want other", m.active)
+	if m.ws.Active() != "other" {
+		t.Fatalf("active = %q, want other", m.ws.Active())
 	}
 	drive(t, m, await(t, slow, "the superseded connect"))
-	if m.active != "other" {
-		t.Errorf("active = %q after the older connect landed, want other", m.active)
+	if m.ws.Active() != "other" {
+		t.Errorf("active = %q after the older connect landed, want other", m.ws.Active())
 	}
 	if strings.Contains(logText(m), "connect failed") {
 		t.Errorf("a superseded connect was reported as a failure:\n%s", logText(m))

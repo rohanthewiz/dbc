@@ -104,7 +104,7 @@ type exportModal struct {
 }
 
 func (m *Model) openExport() {
-	if m.lastRes == nil {
+	if m.ws.LastResult() == nil {
 		m.log(logWarn, "no result to export — run a query first")
 		return
 	}
@@ -277,7 +277,7 @@ type historyModal struct {
 }
 
 func (m *Model) openHistory() {
-	entries := m.hist.Recent()
+	entries := m.ws.History().Recent()
 	if len(entries) == 0 {
 		m.log(logWarn, "no query history yet — it fills up as you run queries")
 		return

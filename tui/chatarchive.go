@@ -139,7 +139,7 @@ func (m *Model) chatSave() bool {
 	}
 	err := userdata.SaveChat(p.dir, userdata.Chat{
 		ID: p.archiveID, Title: userdata.ChatTitle(msgs),
-		Agent: name, Model: p.modelName(), Conn: m.active,
+		Agent: name, Model: p.modelName(), Conn: m.ws.Active(),
 		Started: p.archiveStart, Updated: now, Msgs: msgs,
 	})
 	switch {
@@ -259,7 +259,7 @@ func (m *Model) chatRowDetails(c userdata.ChatMeta) [][]string {
 	when := chatWhen(c.Updated, chatNow())
 	count := fmt.Sprintf("%d msg%s", c.Count, pick(c.Count == 1, "", "s"))
 	conn := ""
-	if c.Conn != "" && c.Conn != m.active {
+	if c.Conn != "" && c.Conn != m.ws.Active() {
 		conn = c.Conn
 	}
 	nonEmpty := func(parts ...string) []string {

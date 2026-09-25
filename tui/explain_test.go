@@ -21,7 +21,7 @@ func explainModel(t *testing.T) *Model {
 		`WITH RECURSIVE g(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM g WHERE n < 20000)
 		 INSERT INTO orders SELECT n, 1+n%500, n%300, CASE n%4 WHEN 0 THEN 'paid' ELSE 'new' END FROM g`,
 	} {
-		if _, err := m.mgr.Run(m.active, s); err != nil {
+		if _, err := m.mgr.Run(m.ws.Active(), s); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -116,7 +116,7 @@ func TestExplainAnalyzeWriteDoesNotRun(t *testing.T) {
 	if p == nil || p.Measured || len(p.Notes) == 0 || !strings.Contains(p.Notes[0], "not analyzed") {
 		t.Fatalf("plan=%v\n%s", p, logText(m))
 	}
-	res, err := m.mgr.Run(m.active, "SELECT count(*) FROM orders WHERE total = -1")
+	res, err := m.mgr.Run(m.ws.Active(), "SELECT count(*) FROM orders WHERE total = -1")
 	if err != nil || res.Rows[0][0] != "0" {
 		t.Fatalf("the UPDATE ran: %v %v", res, err)
 	}
@@ -233,14 +233,14 @@ func TestInsightSQLInsertsWithoutRunning(t *testing.T) {
 	if hit.insertSQL.Empty() {
 		t.Fatalf("no insert chip:\n%s", frame(m).Text())
 	}
-	ran := m.lastRes
+	ran := m.ws.LastResult()
 	click(t, m, hit.insertSQL.X+1, hit.insertSQL.Y)
 	text := m.editor.Text()
 	if !strings.HasSuffix(text, "CREATE INDEX idx_orders_user_id ON orders (user_id);") ||
 		!strings.HasPrefix(text, "SELECT o.id") || m.focus != focusEditor {
 		t.Fatalf("editor:\n%s", text)
 	}
-	if m.lastRes != ran || m.busy {
+	if m.ws.LastResult() != ran || m.ws.Busy() {
 		t.Error("inserting must not run anything")
 	}
 
@@ -288,7 +288,7 @@ func TestUserExplainResultShowsAsPlan(t *testing.T) {
 	if m.resTab != tabPlan || m.planv.plan == nil || m.planv.plan.Statement != "SELECT * FROM orders WHERE total > 5" {
 		t.Fatalf("tab=%v\n%s", m.resTab, logText(m))
 	}
-	if m.lastRes == nil || m.lastRes.Columns[3] != "detail" {
+	if m.ws.LastResult() == nil || m.ws.LastResult().Columns[3] != "detail" {
 		t.Error("the raw EXPLAIN rows should still be the result")
 	}
 	// an ordinary query does not

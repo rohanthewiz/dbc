@@ -164,7 +164,7 @@ func (m *Model) computeLayout() layout {
 // layoutButtons places the toolbar chips after the "dbc" badge, choosing the
 // widest tier that leaves room for the connection chip on the right.
 func (m *Model) layoutButtons(w int) []button {
-	connLabel := "● " + m.active + " ▾"
+	connLabel := "● " + m.ws.Active() + " ▾"
 	connW := width(connLabel) + 2
 	avail := w - 6 - connW // " dbc " badge and a gap
 	tiers := []func(buttonSpec) string{
@@ -194,13 +194,13 @@ func (m *Model) layoutButtons(w int) []button {
 		b := button{id: s.id, r: Rect{x, 0, bw, 1}, label: label, enabled: true}
 		switch s.id {
 		case btnRun:
-			b.enabled, b.hot = !m.busy, true
+			b.enabled, b.hot = !m.ws.Busy(), true
 		case btnStop:
-			b.enabled = m.busy
+			b.enabled = m.ws.Busy()
 		case btnExplain:
-			b.enabled = !m.busy
+			b.enabled = !m.ws.Busy()
 		case btnCopy, btnExport:
-			b.enabled = m.lastRes != nil
+			b.enabled = m.ws.LastResult() != nil
 		case btnAssistant:
 			b.hot = m.chat.open
 		}
@@ -252,9 +252,9 @@ func rgb(h string) color.Color {
 // The running tag leads: read from a tab bar, the question a title answers
 // is "is this still going?", and the connection is its context.
 func (m *Model) windowTitle() string {
-	conn, tag := titleSafe(m.active), ""
-	if m.busy {
-		tag = titleSafe(m.runTag)
+	conn, tag := titleSafe(m.ws.Active()), ""
+	if m.ws.Busy() {
+		tag = titleSafe(m.ws.RunTag())
 	}
 	switch {
 	case tag != "" && conn != "":
@@ -351,7 +351,7 @@ func (m *Model) editorTitle() string {
 }
 
 func (m *Model) resultsTitle() string {
-	r := m.lastRes
+	r := m.ws.LastResult()
 	if r == nil {
 		return "Results"
 	}
@@ -392,7 +392,7 @@ func (m *Model) drawResultsTabs(c *Canvas, r Rect) {
 		planLabel += " · " + pick(crit > 0, "✖", "▲") + itoa(crit+warn)
 	}
 	resLabel := m.resultsTitle()
-	if m.lastRes == nil {
+	if m.ws.LastResult() == nil {
 		resLabel = "Results"
 	}
 	maxRes := max(r.W-width(planLabel)-12, 8)
@@ -450,11 +450,11 @@ func (m *Model) drawStatus(s Surface) {
 	bar := m.st.raised.WithFg(m.st.muted.Fg)
 	s.Fill(bar)
 	x := s.Put(0, 0, " ● ", bar.WithFg(m.st.accent.Fg))
-	x = s.Put(x, 0, m.active, bar.WithFg(m.st.accent.Fg).Bold())
+	x = s.Put(x, 0, m.ws.Active(), bar.WithFg(m.st.accent.Fg).Bold())
 	x = s.Put(x, 0, " │ ", bar)
 	st := bar.WithFg(m.st.base.Fg)
 	switch {
-	case m.busy:
+	case m.ws.Busy():
 		st = bar.WithFg(m.st.warn.Fg)
 	case strings.HasPrefix(m.status, "error"):
 		st = bar.WithFg(m.st.err.Fg)

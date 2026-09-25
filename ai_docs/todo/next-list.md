@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-051
+**Next ID:** N-053
 
 ## Open
 
@@ -38,19 +38,15 @@ ten session docs in `ai_docs/claude_sessions/`
   a GNOME/KDE terminal paste after an HTML copy gets the markup, Teams or
   LibreOffice gets the table, and a clipboard manager (Klipper, GPaste) does
   not keep a helper alive. Only Xvfb + xclip has exercised it so far.
-- **N-046** · raised `2026-0925-1425-workspace-extraction-web-phase1` · value medium
-  `dbc web` Phase 4: the Plan tab with full parity with the HTML plan page —
-  lift `explain/assets/plan.html`'s script into one `plan.js` the standalone
-  page and the web both load, then tick the plan's Phase 4 checklist in
-  headless Chrome against the `explain/html_test.go` fixtures. The user asked
-  for every existing feature to carry over.
 - **N-047** · raised `2026-0925-1425-workspace-extraction-web-phase1` · value low
   Opt-in live `workspace` tests on Postgres/MySQL (same `DBC_LIVE_*` DSNs):
   retry-once, session lost, cancel mid-statement and connection switch through
   the workspace, not just `db`. Its own tests use in-memory SQLite only.
 - **N-048** · raised `2026-0925-1425-workspace-extraction-web-phase1` · value low
-  `dbc web` Phases 3, 5, 6 (Monaco editor + virtualized grid + copy/export;
-  assistant and scripts on SSE; tabs, layout, packaging), per the plan.
+  `dbc web` Phases 5 and 6 (assistant and scripts on SSE — including the
+  "✦ ask the assistant about this step / plan / result / value" actions
+  Phases 3 and 4 left for the chat pane; tabs, layout, packaging), per the
+  plan. Phase 3 is done.
 
 - **N-049** · raised `2026-0925-1451-dbc-web-phase2-skeleton` · value medium
   bytdb (v0.16.0) takes no file lock, so two dbc processes — two TUIs, or a
@@ -65,6 +61,17 @@ ten session docs in `ai_docs/claude_sessions/`
   (caught by `-race` in `web`). dbc works around it with a per-tab send
   mutex (`web/hub.go`, `tab.sendMu`); fix it in rweb (atomic counter or the
   write lock), then the mutex can go.
+- **N-051** · raised `2026-0925-1554-dbc-web-phases-3-4` · value low
+  Commit the `dbc web` browser checks as an opt-in test (go-rod against a
+  built binary, skipped unless asked for, like the `db/live_*` tests). Phases
+  2–4 were verified by throwaway scratch programs (283 checks for Phase 4
+  alone) that are gone after the session, so a regression in the page's
+  JavaScript is caught only by hand.
+- **N-052** · raised `2026-0925-1554-dbc-web-phases-3-4` · value low
+  Column auto-widths are measured from the first 500 rows (TUI grid and web
+  grid alike), so a numeric column that widens later shows "10…" at row
+  1,000. For numeric columns the widest value is cheap to know (min/max);
+  size those from every row.
 
 ## Roadmap
 
@@ -97,6 +104,17 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-046** · raised `2026-0925-1425-workspace-extraction-web-phase1` ·
+  closed 2026-09-25, 2026-0925-1554-dbc-web-phases-3-4 — the plan page's script is now
+  `explain/assets/plan.js` (`DbcPlan.mount`, scoped, per-mount state) with
+  `plan.css` under `.dbc-plan`; the standalone page inlines both and dbc
+  web's Plan tab loads the same files. The parity checklist passed in
+  headless Chrome on the fixture pages and on live Postgres, MySQL, SQLite
+  and bytdb plans in the web tab, plus the web's extras (explain from the
+  editor, again with before/after, copy text/raw, open/save the page,
+  insert a finding's SQL). Phase 3 (Monaco, virtualized grid, copy/export,
+  history, preview) shipped in the same session.
 
 - **N-045** · raised `2026-0925-1425-workspace-extraction-web-phase1` ·
   closed 2026-09-25, 2026-0925-1451-dbc-web-phase2-skeleton — `dbc web`

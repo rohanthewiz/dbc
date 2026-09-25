@@ -13,6 +13,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/ai"
 	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/userdata"
 )
 
 // The assistant pane: a conversation with an ACP agent (Copilot by default)
@@ -57,6 +58,9 @@ import (
 // it into the editor at the caret) and ⧉ copy. There is no "run" button on
 // purpose: a statement the model wrote should pass through the editor, where
 // the user reads it, before it goes anywhere near the database.
+//
+// CONVERSATIONS ARE KEPT. Each is saved as it goes and the recent ones are
+// offered back when the pane is empty — see chatarchive.go.
 
 // chatState is where the agent connection is.
 type chatState int
@@ -102,6 +106,13 @@ type chatPane struct {
 
 	input *editor
 
+	// the conversation archive — see chatarchive.go
+	dir          string              // where conversations are saved; "" keeps them in memory only
+	archiveID    string              // the live conversation's file; "" until its first save
+	archiveStart time.Time           // when the live conversation was first saved
+	recent       []userdata.ChatMeta // saved conversations, newest first, as last listed
+	saveErr      string              // the last save failure logged, so it is logged once
+
 	// transcript scroll, in visual rows
 	top    int
 	follow bool
@@ -127,6 +138,8 @@ const (
 	targetInsert targetKind = iota
 	targetCopyCode
 	targetCopyReply
+	targetOpenSaved // a saved conversation offered in the empty pane; text is its id
+	targetAllSaved  // "all recent…" under those rows
 )
 
 // chatEventMsg carries one ai.Event to Update, tagged with the connection
@@ -211,7 +224,17 @@ func (m *Model) toggleChat() tea.Cmd {
 	}
 	m.chat.open = true
 	m.focus = focusChat
+	m.chatOpened()
 	return m.ensureChat()
+}
+
+// chatOpened refreshes the saved conversations an empty pane offers. The
+// list is read when the pane opens rather than once at startup, so a
+// conversation saved by another dbc since is offered too.
+func (m *Model) chatOpened() {
+	if len(m.chat.msgs) == 0 {
+		m.chatLoadRecent()
+	}
 }
 
 // toggleChatFocus is Ctrl+A: open the assistant and put the keyboard in it,
@@ -221,7 +244,10 @@ func (m *Model) toggleChatFocus() tea.Cmd {
 		m.focus = focusEditor
 		return nil
 	}
-	m.chat.open = true
+	if !m.chat.open {
+		m.chat.open = true
+		m.chatOpened()
+	}
 	m.focus = focusChat
 	return m.ensureChat()
 }
@@ -250,11 +276,19 @@ func (m *Model) ensureChat() tea.Cmd {
 
 // newChat ends the conversation and starts a fresh one — which also resets
 // the agent's own memory of it, since that lives in the agent's session.
+//
+// The conversation being ended is saved first, so ⟲ new never loses one; it
+// is then among the recent ones the empty pane offers.
 func (m *Model) newChat() tea.Cmd {
 	p := m.chat
+	if m.chatSave() {
+		m.log(logInfo, "saved the assistant conversation — reopen it from the empty pane or Recent conversations")
+	}
 	p.close()
 	p.c, p.state, p.streaming, p.pending = nil, chatIdle, false, ""
 	p.msgs, p.first, p.top, p.follow = nil, true, 0, true
+	p.archiveID, p.archiveStart = "", time.Time{}
+	m.chatLoadRecent()
 	return m.ensureChat()
 }
 
@@ -306,6 +340,7 @@ func (m *Model) chatEvent(msg chatEventMsg) tea.Cmd {
 		case e.StopReason == "cancelled":
 			p.add(roleInfo, "— stopped")
 		}
+		m.chatSave()
 		m.catsAfterTransition()
 	case ai.EventExit:
 		p.streaming = false
@@ -314,6 +349,7 @@ func (m *Model) chatEvent(msg chatEventMsg) tea.Cmd {
 			p.add(roleErr, e.Err.Error())
 			p.add(roleInfo, "click ⟲ new to try again")
 		}
+		m.chatSave() // an answer cut off by the exit is still worth keeping
 		m.catsAfterTransition()
 		return nil // nothing more will come from this connection
 	}
@@ -621,6 +657,11 @@ func (m *Model) chatTargetPress(t chatTarget) tea.Cmd {
 		return m.copyString(t.text, "the code block")
 	case targetCopyReply:
 		return m.copyString(t.text, "the reply")
+	case targetOpenSaved:
+		return m.chatOpenSaved(t.text)
+	case targetAllSaved:
+		m.openRecentChats()
+		return nil
 	}
 	return nil
 }
@@ -689,6 +730,7 @@ func (m *Model) openChatMenu(x, y int) {
 		{label: "Copy conversation", act: func(m *Model) tea.Cmd { return m.copyString(p.transcriptText(), "the conversation") }},
 		heading(""),
 		{label: "⟲ New conversation", act: func(m *Model) tea.Cmd { return m.newChat() }},
+		{label: "Recent conversations…", act: func(m *Model) tea.Cmd { m.openRecentChats(); return nil }},
 		{label: "Model and assistant…", act: func(m *Model) tea.Cmd { m.openModelMenu(x, y); return nil }},
 	})
 }
@@ -854,6 +896,9 @@ func (m *Model) drawChat(c *Canvas, r Rect) *caret {
 				"Esc returns to the editor",
 		}
 		y := 1
+		// Saved conversations come first when there are any: a returning
+		// user reaches for them, and the hint below is for someone new.
+		y = p.drawRecent(m, ts2, y, W-1)
 		for _, h := range hint {
 			for _, line := range wrap(h, W-3) {
 				ts2.Put(1, y, line, st.muted)
@@ -887,6 +932,77 @@ func (m *Model) drawChat(c *Canvas, r Rect) *caret {
 		return &caret{cx, cy}
 	}
 	return nil
+}
+
+// drawRecent offers the most recent saved conversations in the empty pane,
+// as clickable rows starting at row y, and returns the row after them.
+//
+//	recent conversations
+//	◷ why is this slow?               15:04 · 4 msgs
+//	◷ count adoptions by month       Sep 21 · 6 msgs
+//	  all 12 recent…
+//
+// Rows below the pane's bottom are neither drawn nor made clickable, so a
+// short pane cannot leave a target where nothing is visible.
+func (p *chatPane) drawRecent(m *Model, s Surface, y, w int) int {
+	chats := p.otherRecent()
+	if len(chats) == 0 {
+		return y
+	}
+	st := m.st
+	h := s.H()
+	put := func(x int, text string, style Style) {
+		if y < h {
+			s.Put(x, y, text, style)
+		}
+	}
+	// target registers a clickable span on row y. The hover fill is laid
+	// down before the row's text, which then draws over it — so the whole
+	// span lights up, as a transcript chip does.
+	target := func(x0, x1 int, kind targetKind, text string) {
+		if y >= h || x1 <= x0 {
+			return
+		}
+		if len(p.targets) == p.hover {
+			s.Sub(Rect{x0, y, x1 - x0, 1}).Fill(st.buttonHover)
+		}
+		abs := Rect{s.Rect().X + x0, s.Rect().Y + y, x1 - x0, 1}
+		p.targets = append(p.targets, chatTarget{r: abs, kind: kind, text: text})
+	}
+	put(1, "recent conversations", st.accent.Bold())
+	y++
+	for _, c := range chats[:min(len(chats), recentInPane)] {
+		// The title gets what the detail leaves, less "◷ " before it and a
+		// gap after. The detail sheds parts until the title keeps at least
+		// minTitle columns — see chatRowDetails for the order.
+		const minTitle = 12
+		var detail string
+		room := w - 3
+		for _, parts := range m.chatRowDetails(c) {
+			detail = strings.Join(parts, " · ")
+			room = w - 3
+			if detail != "" {
+				room -= width(detail) + 1
+			}
+			if room >= minTitle {
+				break
+			}
+		}
+		title := truncate(chatRowTitle(c), room)
+		target(1, w, targetOpenSaved, c.ID)
+		put(1, "◷ "+title, st.chatUser)
+		if detail != "" {
+			put(w-width(detail), detail, st.muted)
+		}
+		y++
+	}
+	if len(chats) > recentInPane {
+		label := fmt.Sprintf("  all %d recent…", len(chats))
+		target(1, 1+width(label), targetAllSaved, "")
+		put(1, label, st.muted)
+		y++
+	}
+	return y + 1
 }
 
 // layoutRows turns the transcript into visual rows for a width.

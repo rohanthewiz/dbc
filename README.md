@@ -214,6 +214,16 @@ premium multiplier is shown beside each model) or to switch assistant:
 `ai_agent = "claude"` uses Claude Code (`claude-code-acp`), `"gemini"` uses
 the Gemini CLI.
 
+**Conversations are kept.** Each one is saved to `~/.config/dbc/chats/` (one
+JSON file per conversation, readable only by you, the last 30 kept) after
+every answer, on `⟲ new`, and on quit. The empty pane lists the most recent
+ones — click one to reopen it — and right-click the transcript for
+**Recent conversations…** to see them all. A reopened conversation is the
+transcript, not the agent's memory: it starts a fresh session, so quote what
+matters in a follow-up. To delete one, right-click its row (in the pane or
+the list) and pick **Delete conversation**, or press `d` twice on it in the
+list.
+
 ### Everything else
 
 Non-SELECT statements (INSERT/UPDATE/DDL…) run as exec and report rows
@@ -240,8 +250,8 @@ result starts fresh.
 the tables and views into the results as `table_schema · table_name ·
 table_type` — the same three columns on all four drivers.
 
-The editor buffer and the query history persist between sessions under
-`~/.config/dbc`, shared by both UIs.
+The editor buffer, the query history and the assistant's conversations
+persist between sessions under `~/.config/dbc`.
 
 The interface wears a muted green theme — dark gray-green surfaces with a
 single green accent, shared with [cdx](https://github.com/rohanthewiz/cdx).

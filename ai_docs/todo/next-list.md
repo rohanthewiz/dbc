@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-038
+**Next ID:** N-039
 
 ## Open
 
@@ -75,11 +75,6 @@ ten session docs in `ai_docs/claude_sessions/`
   works today only as a pseudo-version of `main`). A `v0.1.0` tag would line
   the three up.
 
-- **N-027** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` · value low
-  Keep assistant conversations: save each to `~/.config/dbc/chats/` and offer
-  recent ones, as ced's `internal/chatstore` does (stdlib-only, portable).
-  Today ⟲ new and quitting discard the transcript.
-
 - **N-028** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` · value low
   Copilot sign-in from inside dbc. Today an unsigned-in user is told to sign
   in from another editor; ced shows the device-flow code itself by running
@@ -108,6 +103,13 @@ ten session docs in `ai_docs/claude_sessions/`
   paths behave (including `Session.Classify`'s pgx branch, which asks
   `pgx.Conn.IsClosed` and has no test without a live connection), and
   `conn_idle_timeout`/`connect_timeout`.
+
+- **N-038** · raised `2026-0924-1958-assistant-conversation-archive` · value low
+  No way to delete the live assistant conversation. Saved ones can be
+  deleted (right-click a row, or `d` twice in Recent conversations), but the
+  one on screen is never offered, since its next save would write it back.
+  A "Delete this conversation" row in the transcript's menu would remove its
+  file and clear the pane without saving.
 
 ## Roadmap
 
@@ -140,6 +142,9 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-027** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` ·
+  closed 2026-09-24, 2026-0924-1958-assistant-conversation-archive — assistant conversations are kept. `userdata/chats.go` ports ced's `internal/chatstore` (stdlib + serr): one JSON file per conversation in `~/.config/dbc/chats/`, user-only, written via temp file + rename, newest-first listing that skips unreadable files, capped at the last 30. Each records the agent, model and active connection; the title is the first line of the first question. The TUI saves after every answer (and on an agent exit), on `⟲ new`, and on quit; a pane that was never asked anything saves nothing. The empty pane lists the five most recent as clickable rows (the time, message count and — when it differs from the active one — the connection, shed in that order on a narrow pane), with `all N recent…` and a right-click **Recent conversations…** list for the rest. Reopening saves the live one, starts a fresh agent session, reloads the transcript into the same file, and says in the transcript that the agent has no memory of it. Deleting a saved one: right-click its row (pane or list) → **Delete conversation**, or `d` twice on it in the list (the first press marks the row and says what the second will do; any other key, moving the cursor, or Esc disarms). The live conversation is never offered for deletion, since its next save would write it back.
 
 - **N-037** · raised `2026-0924-1908-assistant-hidden-columns-grid-sort` ·
   closed 2026-09-24, 2026-0924-1908-assistant-hidden-columns-grid-sort — the assistant gets rows in the grid's order after a header sort, as copies do. `ai.Context` gained `Order` (the grid's permutation, only the prefix that could be sent, cloned, since `applySort` rewrites it in place and a submit's context waits on its schema lookup), `SortedBy` and `SortDesc`. The prompt says "The user sorted the result in the grid by age, descending (NULLs last), so the rows below are in that order, not the query's", so the model does not read the order into the SQL. The note reads `3 of 8 rows (sorted by age desc, 1 column hidden)`. With no rows sent, the sort is not mentioned.

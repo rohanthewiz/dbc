@@ -453,7 +453,7 @@ func (m *Model) rightClick(x, y int) tea.Cmd {
 		m.openLogMenu(x, y)
 	case l.chat.Contains(x, y):
 		m.focus = focusChat
-		m.openChatMenu(x, y)
+		m.chatRightClick(x, y)
 	}
 	return nil
 }

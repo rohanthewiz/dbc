@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/ai"
 	"github.com/rohanthewiz/dbc/ai/aitest"
+	"github.com/rohanthewiz/dbc/userdata"
 )
 
 // fakeAssistant makes the assistant start a scripted agent instead of a real
@@ -412,4 +414,265 @@ func TestAssistantSkipsATableThatIsGone(t *testing.T) {
 	if tr := m.chat.transcriptText(); !strings.Contains(tr, "sent: question only") {
 		t.Errorf("note should not mention schema:\n%s", tr)
 	}
+}
+
+// keepChats points the assistant's archive at a temp dir for one test.
+func keepChats(t *testing.T, m *Model) string {
+	t.Helper()
+	m.chat.dir = t.TempDir()
+	return m.chat.dir
+}
+
+func savedChats(t *testing.T, dir string) []userdata.ChatMeta {
+	t.Helper()
+	metas, err := userdata.ListChats(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return metas
+}
+
+// A conversation is saved as it goes, survives ⟲ new, is offered back in the
+// empty pane, and reopens into a fresh session that says it remembers
+// nothing — carrying on in the same file rather than a copy.
+func TestAssistantKeepsConversations(t *testing.T) {
+	f := fakeAssistant(t, nil)
+	m := newTestModel(t)
+	dir := keepChats(t, m)
+	key(t, m, "ctrl+a")
+	pumpChat(t, m, func() bool { return m.chat.state == chatReady })
+	typeText(t, m, "why is Oliver first?")
+	key(t, m, "enter")
+	pumpChat(t, m, func() bool { return !m.chat.streaming })
+
+	saved := savedChats(t, dir)
+	if len(saved) != 1 || saved[0].Title != "why is Oliver first?" || saved[0].Conn != "demo" {
+		t.Fatalf("after one answer, saved = %+v", saved)
+	}
+	id := saved[0].ID
+
+	x, y := findText(t, frame(m), "⟲ new")
+	click(t, m, x+1, y)
+	if len(m.chat.msgs) != 0 {
+		t.Fatalf("⟲ new should clear the pane:\n%s", m.chat.transcriptText())
+	}
+	if !strings.Contains(logText(m), "saved the assistant conversation") {
+		t.Error("⟲ new should say the conversation was kept")
+	}
+	c := frame(m)
+	findText(t, c, "recent conversations")
+	x, y = findText(t, c, "◷ why is Oliver first?")
+
+	click(t, m, x+2, y)
+	tr := m.chat.transcriptText()
+	if !strings.Contains(tr, "> why is Oliver first?") || !strings.Contains(tr, "echo: Question: why is Oliver first?") {
+		t.Errorf("the saved transcript should be back:\n%s", tr)
+	}
+	if !strings.Contains(tr, "reopened conversation") || !strings.Contains(tr, "no memory of it") {
+		t.Errorf("the pane should say the agent does not remember it:\n%s", tr)
+	}
+	if m.chat.archiveID != id {
+		t.Errorf("reopened conversation should continue file %s, has %q", id, m.chat.archiveID)
+	}
+
+	// the follow-up opens a fresh session, so it carries the preamble again
+	pumpChat(t, m, func() bool { return m.chat.state == chatReady })
+	typeText(t, m, "and then?")
+	key(t, m, "enter")
+	pumpChat(t, m, func() bool { return !m.chat.streaming })
+	if p := lastPrompt(t, f); !strings.Contains(p, "SQL assistant inside dbc") {
+		t.Errorf("a reopened conversation's first question should start a new session:\n%s", p)
+	}
+	saved = savedChats(t, dir)
+	if len(saved) != 1 || saved[0].ID != id || saved[0].Count <= 4 {
+		t.Errorf("the reopened conversation should be saved back to the same file: %+v", saved)
+	}
+}
+
+// Quitting saves the conversation, even with an answer still in flight.
+func TestAssistantSavesOnQuit(t *testing.T) {
+	fakeAssistant(t, nil)
+	m := newTestModel(t)
+	dir := keepChats(t, m)
+	key(t, m, "ctrl+a")
+	pumpChat(t, m, func() bool { return m.chat.state == chatReady })
+	typeText(t, m, "SLOW question")
+	key(t, m, "enter")
+	if len(savedChats(t, dir)) != 0 {
+		t.Fatal("nothing should be saved before the answer")
+	}
+	m.shutdown()
+	saved := savedChats(t, dir)
+	if len(saved) != 1 || saved[0].Title != "SLOW question" {
+		t.Errorf("quitting should save the conversation: %+v", saved)
+	}
+}
+
+// A pane that was opened but never asked anything leaves nothing behind.
+func TestAssistantDoesNotSaveAnEmptyConversation(t *testing.T) {
+	fakeAssistant(t, nil)
+	m := newTestModel(t)
+	dir := keepChats(t, m)
+	key(t, m, "ctrl+a")
+	pumpChat(t, m, func() bool { return m.chat.state == chatReady })
+	drive(t, m, nil, m.newChat())
+	m.shutdown()
+	if saved := savedChats(t, dir); len(saved) != 0 {
+		t.Errorf("saved %+v", saved)
+	}
+}
+
+// Past the few the empty pane shows, the rest are in the Recent
+// conversations list, which the transcript's menu also opens.
+func TestAssistantRecentConversationsList(t *testing.T) {
+	fakeAssistant(t, nil)
+	m := newTestModel(t)
+	dir := keepChats(t, m)
+	base := time.Now().Add(-time.Hour)
+	for i := range 7 {
+		at := base.Add(time.Duration(i) * time.Minute)
+		q := fmt.Sprintf("question %d", i)
+		err := userdata.SaveChat(dir, userdata.Chat{ID: userdata.NewChatID(at), Updated: at,
+			Title: q, Conn: "other", Msgs: []userdata.ChatMsg{{Role: "user", Text: q}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	key(t, m, "ctrl+a")
+	c := frame(m)
+	findText(t, c, "◷ question 6")
+	findText(t, c, "other") // a conversation about another connection says so
+	x, y := findText(t, c, "all 7 recent…")
+	click(t, m, x, y)
+	if _, ok := m.modal.(*recentChatsModal); !ok {
+		t.Fatalf("modal = %T", m.modal)
+	}
+	key(t, m, "esc")
+
+	rightClick(t, m, m.chat.transcript.X+2, m.chat.transcript.Y+12)
+	mx, my := findText(t, frame(m), "Recent conversations…")
+	click(t, m, mx, my)
+	key(t, m, "down")
+	key(t, m, "enter")
+	if m.modal != nil || !strings.Contains(m.chat.transcriptText(), "> question 5") {
+		t.Errorf("picking the second row should open question 5:\n%s", m.chat.transcriptText())
+	}
+}
+
+// seedChats saves n conversations "question 0" … "question n-1", newest last.
+func seedChats(t *testing.T, dir string, n int) {
+	t.Helper()
+	base := time.Now().Add(-time.Hour)
+	for i := range n {
+		at := base.Add(time.Duration(i) * time.Minute)
+		q := fmt.Sprintf("question %d", i)
+		err := userdata.SaveChat(dir, userdata.Chat{ID: userdata.NewChatID(at), Updated: at,
+			Title: q, Conn: "demo", Msgs: []userdata.ChatMsg{{Role: "user", Text: q}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func savedTitles(t *testing.T, dir string) string {
+	t.Helper()
+	var out []string
+	for _, c := range savedChats(t, dir) {
+		out = append(out, c.Title)
+	}
+	return strings.Join(out, ",")
+}
+
+// In the list, d arms the row and d again deletes it; any other key between
+// the two disarms, and Esc disarms before it closes.
+func TestRecentConversationsDeleteTakesTwoPresses(t *testing.T) {
+	fakeAssistant(t, nil)
+	m := newTestModel(t)
+	dir := keepChats(t, m)
+	seedChats(t, dir, 3)
+	key(t, m, "ctrl+a")
+	m.openRecentChats()
+
+	key(t, m, "d")
+	findText(t, frame(m), "delete? press d again")
+	key(t, m, "down") // moving disarms
+	key(t, m, "d")
+	key(t, m, "esc") // disarms, does not close
+	if m.modal == nil {
+		t.Fatal("Esc with a delete armed should only disarm")
+	}
+	if got := savedTitles(t, dir); got != "question 2,question 1,question 0" {
+		t.Fatalf("nothing should be deleted yet: %s", got)
+	}
+
+	key(t, m, "d")
+	key(t, m, "d")
+	if got := savedTitles(t, dir); got != "question 2,question 0" {
+		t.Errorf("d d on the second row should delete question 1: %s", got)
+	}
+	if !strings.Contains(logText(m), `deleted the saved conversation "question 1"`) {
+		t.Errorf("the log should name what was deleted:\n%s", logText(m))
+	}
+	if got := modalTitles(t, m); got != "question 2,question 0" {
+		t.Errorf("the deleted row should leave the list: %s", got)
+	}
+
+	// deleting the last ones closes the list
+	key(t, m, "d")
+	key(t, m, "d")
+	key(t, m, "d")
+	key(t, m, "d")
+	if m.modal != nil || len(savedChats(t, dir)) != 0 {
+		t.Errorf("modal=%T left=%d", m.modal, len(savedChats(t, dir)))
+	}
+}
+
+// Right-clicking a row, in the list or in the empty pane, offers Delete.
+func TestRecentConversationsDeleteFromMenus(t *testing.T) {
+	fakeAssistant(t, nil)
+	m := newTestModel(t)
+	dir := keepChats(t, m)
+	seedChats(t, dir, 3)
+	key(t, m, "ctrl+a")
+
+	x, y := findText(t, frame(m), "◷ question 2")
+	rightClick(t, m, x+2, y)
+	mx, my := findText(t, frame(m), "Delete conversation")
+	click(t, m, mx, my)
+	if got := savedTitles(t, dir); got != "question 1,question 0" {
+		t.Fatalf("pane row delete: %s", got)
+	}
+	if strings.Contains(frame(m).Text(), "◷ question 2") {
+		t.Error("the pane should stop offering the deleted conversation")
+	}
+
+	m.openRecentChats()
+	frame(m)
+	lv := m.modal.(*recentChatsModal).lst.view
+	rightClick(t, m, lv.X+2, lv.Y+1) // the second row: question 0
+	if got := modalTitles(t, m); got != "question 1,question 0" {
+		t.Fatalf("list rows: %s", got)
+	}
+	mx, my = findText(t, frame(m), "Delete conversation")
+	click(t, m, mx, my)
+	if got := savedTitles(t, dir); got != "question 1" {
+		t.Fatalf("list row delete: %s", got)
+	}
+	if got := modalTitles(t, m); got != "question 1" {
+		t.Errorf("the list should stay open with the rest: %s", got)
+	}
+}
+
+// modalTitles lists the rows of the open Recent conversations list.
+func modalTitles(t *testing.T, m *Model) string {
+	t.Helper()
+	rc, ok := m.modal.(*recentChatsModal)
+	if !ok {
+		t.Fatalf("modal = %T, want the Recent conversations list", m.modal)
+	}
+	var out []string
+	for _, it := range rc.lst.items {
+		out = append(out, it.label)
+	}
+	return strings.Join(out, ",")
 }

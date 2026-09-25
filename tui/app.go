@@ -126,8 +126,9 @@ var focusOrder = []focusID{focusEditor, focusGrid, focusConns, focusTables, focu
 
 // Options configure New beyond what the config holds.
 type Options struct {
-	// NoPersist keeps the history and buffer off disk — tests, which must not
-	// read or clobber the developer's real ~/.config/dbc.
+	// NoPersist keeps the history, buffer and conversations off disk —
+	// tests, which must not read or clobber the developer's real
+	// ~/.config/dbc.
 	NoPersist bool
 }
 
@@ -156,6 +157,7 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Model {
 		m.hist = userdata.LoadHistory("")
 	} else {
 		m.hist = userdata.LoadHistory(userdata.HistoryFile())
+		m.chat.dir = userdata.ChatsDir()
 	}
 
 	if _, ok := cfg.ConnByName(cfg.DefaultConnection); ok {
@@ -234,8 +236,8 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 
 // shutdown releases everything the session holds, in the order that keeps
 // each step from blocking on the next: stop the run, hand the pane back to
-// cats, stop the assistant, then release the pinned connection. A connect
-// still dialing is abandoned with the run.
+// cats, save and stop the assistant, then release the pinned connection. A
+// connect still dialing is abandoned with the run.
 func (m *Model) shutdown() {
 	if m.cancel != nil {
 		m.cancel()
@@ -244,6 +246,7 @@ func (m *Model) shutdown() {
 		m.connCancel()
 	}
 	m.catsClose()
+	m.chatSave() // before close: quitting must not discard the conversation
 	m.chat.close()
 	m.dropSession()
 }

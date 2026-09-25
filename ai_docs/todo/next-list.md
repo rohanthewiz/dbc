@@ -108,7 +108,7 @@ Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
 - **N-038** · raised `2026-0924-1958-assistant-conversation-archive` ·
-  closed 2026-09-25 — the transcript's right-click menu has a **Delete this
+  closed 2026-09-25, 2026-0925-1058-delete-live-assistant-conversation — the transcript's right-click menu has a **Delete this
   conversation** row (disabled, saying why, on an empty pane). It removes
   the live conversation's file if it has one, then clears the pane through
   `resetChat` — the half of `newChat` after the save — so nothing writes the

@@ -228,13 +228,88 @@ Already typed `EXPLAIN ANALYZE SELECT …`? `Ctrl+X` unwraps it (keeping the
 ANALYZE), and running an EXPLAIN with `Ctrl+R` opens its output in the Plan
 tab too, with the raw rows still in Results.
 
-`↗ Browser` (`b`) opens the plan as a self-contained **interactive page**: a
-zoomable, pannable graph of the steps with data-flow edges as thick as the
-rows through them, the flame graph, the insights with copy buttons, and the
-step detail. It works offline, and the file stays (its path is in the log), so
-it can be attached to a ticket. `y` copies the plan as text, `Y` the engine's
-own output. The assistant, asked about an explained statement, gets its plan
-and findings too.
+`y` copies the plan as text, `Y` the engine's own output. The assistant, asked
+about an explained statement, gets its plan and findings too.
+
+#### The plan in your browser
+
+Every plan can also be opened as an **interactive web page** — a bigger canvas
+than a terminal pane, and a file you can send to someone.
+
+**Opening it**
+
+| From | How |
+| --- | --- |
+| the TUI | `↗ Browser` in the Plan tab, `b`, or right-click ▸ **Open in browser (interactive)** |
+| the shell | `dbc explain --open "SELECT …"` — explain and open in one step |
+| the shell, to keep | `dbc explain -t html -o plan.html "SELECT …"` — write the page, open it yourself |
+
+The TUI and `--open` save the page as `plan-<connection>-<date-time>.html`
+in a `dbc-plans` folder in the system temp directory, and the log (or, for
+`--open`, the terminal) says exactly where. The file is readable only by
+you, since a plan quotes your SQL.
+
+**What you see**
+
+- **Header** — the engine, how the plan was obtained (estimated or analyzed),
+  execution and planning time, the EXPLAIN dbc sent, any notes (a rolled-back
+  write, JIT time), and your statement, collapsible, with SQL highlighting.
+- **Graph** (the default tab) — one card per step, laid out as a tree from
+  the final result at the top to the table reads at the bottom. Each card
+  shows the step, the table and index, its key condition, its rows, a
+  `×N↑`/`×N↓` badge where the estimate was off, and its own time (or cost)
+  with a share bar. Card color runs from green to red with that share, so the
+  expensive step is the one that stands out. Edges get thicker with the rows
+  flowing through them and are labeled with the join side (Outer/Inner) or
+  subplan. A step with a finding carries a severity mark; a step that never
+  ran is dashed.
+- **Flame** — the same plan as an icicle: each block's width is its share of
+  the total including everything under it, so a wide block with nothing below
+  it is where the time goes.
+- **Side panel** — everything about the selected step: time total and self,
+  loops, rows actual against estimated, rows thrown away by a filter, cost,
+  buffers, spills, every property in the engine's own words, and the findings
+  about it.
+- **Insights** — the same findings as the TUI, most serious first, each with
+  its fix and, where there is one, the SQL with a **Copy** button. Click a
+  finding to jump to its step.
+
+The page opens on the step behind the most serious finding.
+
+**Using it**
+
+| Action | Does |
+| --- | --- |
+| click a card | select it and show it in the side panel |
+| double-click a card, or its chevron | fold / unfold the steps under it |
+| hover a card | highlight its path up to the result |
+| drag the background | pan |
+| mouse wheel | zoom toward the pointer (− / + / **Fit** buttons do the same) |
+| **Time · Cost · Rows · Shape ≈** | choose what colors, bars and flame widths measure |
+| click a flame block | select it and, if it has steps under it, zoom into it; click the top block again, or a step in the breadcrumb above, to zoom back out |
+| ◐ (top right) | switch between dark and light |
+
+| Key | Does |
+| --- | --- |
+| `↑` / `↓` | parent / first child |
+| `←` / `→` | previous / next sibling |
+| `Enter` | fold / unfold the selected step |
+| `1`–`4` | size by time, cost, rows, shape (as available) |
+| `f` | fit the graph to the window |
+| `g` | back to the graph tab |
+| `Esc` | zoom the flame graph back out |
+
+**Good to know**
+
+- The page is one self-contained file: no server, no internet, nothing loaded
+  from anywhere. Attach it to a ticket or a chat and it opens the same for
+  whoever receives it.
+- `Shape ≈` appears for SQLite and bytdb, which report no costs or timings;
+  it sizes steps by a labeled rough estimate, not measured numbers.
+- A very large plan (over 120 steps) opens folded below the fifth level, so
+  the first view is a map; unfold what interests you.
+- Add `#flame` to the file's URL to open straight on the flame view.
+- It looks like dbc wherever it is opened, whatever your terminal's theme.
 
 ### Copying results — including into Teams
 

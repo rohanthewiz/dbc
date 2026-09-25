@@ -18,7 +18,9 @@ import (
 )
 
 // The assistant pane's server half: one conversation with an ACP agent per
-// browser tab, as the TUI has one per window.
+// browser window, as the TUI has one per window. It asks about the ACTIVE
+// query tab — the one the page names in each request — as the TUI's asks
+// about the editor on screen.
 //
 // WHAT IS SHARED WITH THE TUI, AND WHAT IS NOT. The rules that decide what
 // reaches a hosted model are shared, so the two UIs cannot send different
@@ -84,7 +86,7 @@ type chatLine struct {
 // assistant is one tab's conversation.
 type assistant struct {
 	srv *Server
-	t   *tab
+	w   *window
 
 	mu        sync.Mutex
 	c         *ai.Chat
@@ -108,11 +110,16 @@ type assistant struct {
 	archiveID    string
 	archiveStart time.Time
 	saveErr      string // the last save failure logged, so it is logged once
+	conn         string // the connection of the query tab last asked from, for the archive
 }
 
-func newAssistant(s *Server, t *tab) *assistant {
-	return &assistant{srv: s, t: t, state: chatIdle, first: true}
+func newAssistant(s *Server, w *window) *assistant {
+	return &assistant{srv: s, w: w, state: chatIdle, first: true}
 }
+
+// send puts one of the assistant's events on the window's stream. They
+// belong to no query tab, so they carry no ws.
+func (a *assistant) send(typ string, data any) { a.w.send(typ, "", data) }
 
 // ---------------------------------------------------------------------------
 // What the page sees
@@ -188,11 +195,11 @@ func (a *assistant) snapshot() chatSnapshot {
 	return s
 }
 
-func (a *assistant) sendStateLocked() { a.t.send("chat.state", a.viewLocked()) }
+func (a *assistant) sendStateLocked() { a.send("chat.state", a.viewLocked()) }
 
 func (a *assistant) addLocked(role, text string) {
 	a.msgs = append(a.msgs, chatLine{Role: role, Text: text})
-	a.t.send("chat.msg", map[string]any{"i": len(a.msgs) - 1, "role": role, "text": text})
+	a.send("chat.msg", map[string]any{"i": len(a.msgs) - 1, "role": role, "text": text})
 }
 
 // appendAgentLocked adds a streamed chunk to the answer being written,
@@ -200,7 +207,7 @@ func (a *assistant) addLocked(role, text string) {
 func (a *assistant) appendAgentLocked(text string) {
 	if n := len(a.msgs); n > 0 && a.msgs[n-1].Role == "agent" && a.streaming {
 		a.msgs[n-1].Text += text
-		a.t.send("chat.text", map[string]any{"i": n - 1, "text": text})
+		a.send("chat.text", map[string]any{"i": n - 1, "text": text})
 		return
 	}
 	a.addLocked("agent", text)
@@ -346,14 +353,15 @@ func errStillAnswering() error {
 	return conflict("the assistant is still answering — Ctrl+K (or ■ stop) stops it")
 }
 
-// ask starts a turn. ctx and refs are the context gathered for it (empty
-// when the user turned context off).
-func (a *assistant) ask(q string, ctx ai.Context, refs []db.TableRef) error {
+// ask starts a turn from query tab t. ctx and refs are the context
+// gathered for it (empty when the user turned context off).
+func (a *assistant) ask(t *tab, q string, ctx ai.Context, refs []db.TableRef) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.streaming {
 		return errStillAnswering()
 	}
+	a.conn = t.ws.Active()
 	a.addLocked("user", q)
 	// ensureLocked may start the agent, which bumps the generation; the
 	// lookup is tagged with the generation it will be sent on
@@ -364,7 +372,7 @@ func (a *assistant) ask(q string, ctx ai.Context, refs []db.TableRef) error {
 	}
 	a.streaming = true // in flight from here, lookup included
 	a.sendStateLocked()
-	gen, ws := a.gen, a.t.ws
+	gen, ws := a.gen, t.ws
 	go func() {
 		cols, err := ws.LookupColumns(refs)
 		a.schemaLanded(gen, q, ctx, cols, err)
@@ -509,7 +517,7 @@ func (a *assistant) resetLocked() {
 	a.msgs, a.first, a.models, a.modelID = nil, true, nil, ""
 	a.archiveID, a.archiveStart = "", time.Time{}
 	a.ensureLocked()
-	a.t.send("chat.reset", nil)
+	a.send("chat.reset", nil)
 	a.sendStateLocked()
 }
 
@@ -538,7 +546,7 @@ func (a *assistant) saveLocked() bool {
 	}
 	err := userdata.SaveChat(dir, userdata.Chat{
 		ID: a.archiveID, Title: userdata.ChatTitle(msgs),
-		Agent: a.agentLocked().Name, Model: a.modelNameLocked(), Conn: a.t.ws.Active(),
+		Agent: a.agentLocked().Name, Model: a.modelNameLocked(), Conn: a.conn,
 		Started: a.archiveStart, Updated: now, Msgs: msgs,
 	})
 	switch {
@@ -547,7 +555,7 @@ func (a *assistant) saveLocked() bool {
 		return true
 	case err.Error() != a.saveErr:
 		a.saveErr = err.Error()
-		a.t.send("log", logLine{Level: "warn", Text: "could not save the assistant conversation: " + err.Error()})
+		a.send("log", logLine{Level: "warn", Text: "could not save the assistant conversation: " + err.Error()})
 	}
 	return false
 }
@@ -578,7 +586,7 @@ func (a *assistant) openSaved(id string) error {
 	}
 	a.msgs = append(a.msgs, chatLine{Role: "info", Text: c.RestoreNote()})
 	// one reset for the whole transcript rather than an event per message
-	a.t.send("chat.reset", nil)
+	a.send("chat.reset", nil)
 	a.sendStateLocked()
 	return nil
 }
@@ -826,7 +834,7 @@ func (s *Server) tabChat(ctx rweb.Context) (*tab, *assistant, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return t, t.chat, nil
+	return t, t.win.chat, nil
 }
 
 func (s *Server) handleChat(ctx rweb.Context) error {
@@ -876,7 +884,7 @@ func (s *Server) handleChatAsk(ctx rweb.Context) error {
 			return fail(ctx, err)
 		}
 	}
-	if err = a.ask(q, c, refs); err != nil {
+	if err = a.ask(t, q, c, refs); err != nil {
 		return fail(ctx, err)
 	}
 	return ok(ctx, nil)
@@ -1051,7 +1059,7 @@ func (s *Server) handleChats(ctx rweb.Context) error {
 	live := ""
 	if id := ctx.Request().QueryParam("ws"); id != "" {
 		if t, err := s.hub.get(id); err == nil {
-			live = t.chat.liveID()
+			live = t.win.chat.liveID()
 		}
 	}
 	for _, m := range metas {

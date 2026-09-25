@@ -93,6 +93,7 @@
   // and losing the layout on every run would make hiding not worth doing.
   async function load() {
     let d;
+    const ws = dbc.state.ws;
     try {
       d = await query(0, g.seq ? g.sort : -1, g.desc);
       if (d && d.seq !== g.seq && d.sort !== -1) d = await query(0, -1, false); // a new result starts unsorted
@@ -100,6 +101,7 @@
       dbc.log("err", "could not load the result: " + e.message);
       return;
     }
+    if (ws !== dbc.state.ws) return; // the user switched query tabs meanwhile
     if (!d) { clear(); return; }
     if (d.seq === g.seq) {
       g.pages.clear();
@@ -143,6 +145,44 @@
   // assistant's context chip forecasts from.
   const viewFns = [];
   const viewChanged = () => { for (const f of viewFns) f(); };
+
+  // ── query tabs ─────────────────────────────────────────────────────────
+  // The grid shows one query tab's result at a time. Switching away takes a
+  // snapshot of its view — sort, hidden columns, hand-set widths, cursor,
+  // scroll — and switching back restores it, if the result is still the one
+  // the snapshot was of (its seq): a result that changed in the background
+  // starts fresh, as any new result does.
+  function snapshot() {
+    if (!g.seq) return null;
+    return { seq: g.seq, sort: g.sort, desc: g.desc, hidden: [...g.hidden], userW: [...g.userW],
+      cur: Object.assign({}, g.cur), top: root.scrollTop, left: root.scrollLeft };
+  }
+
+  async function restore(snap) {
+    clear();
+    const ws = dbc.state.ws;
+    let d;
+    try {
+      d = await query(0, snap ? snap.sort : -1, snap ? snap.desc : false);
+      if (d && (!snap || d.seq !== snap.seq) && d.sort !== -1) d = await query(0, -1, false);
+    } catch (e) {
+      dbc.log("err", "could not load the result: " + e.message);
+      return;
+    }
+    if (ws !== dbc.state.ws) return;
+    if (!d) { clear(); return; }
+    adopt(d);
+    if (snap && d.seq === snap.seq && d.columns.length) {
+      Object.assign(g, { sort: snap.sort, desc: snap.desc, hidden: new Set(snap.hidden), userW: new Map(snap.userW) });
+      g.cur = { row: Math.min(snap.cur.row, Math.max(g.total - 1, 0)), col: snap.cur.col };
+      g.anc = Object.assign({}, g.cur);
+      rebuildVis();
+      render();
+      root.scrollTop = snap.top;
+      root.scrollLeft = snap.left;
+    }
+    viewChanged();
+  }
 
   function clear() {
     Object.assign(g, { seq: 0, cols: [], vis: [], total: 0, rows: 0, pages: new Map() });
@@ -743,7 +783,7 @@
   document.getElementById("export-btn").addEventListener("click", (e) => exportMenuAt(...under(e.currentTarget)));
 
   dbc.grid = {
-    load, clear,
+    load, clear, snapshot, restore,
     focus: () => { if (!root.hidden) root.focus(); },
     hasResult: () => !!g.seq,
     onView: (fn) => viewFns.push(fn),

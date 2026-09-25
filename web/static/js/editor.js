@@ -38,6 +38,13 @@
   let lang = "sql";
   const changeFns = [];
 
+  // ONE DOCUMENT PER QUERY TAB. With Monaco, each tab gets its own model,
+  // so switching tabs keeps each one's undo history, cursor and scroll —
+  // swapping the text in and out of one model would throw all three away.
+  // The plain textarea has no such state to keep, so it just swaps text.
+  const docs = new Map(); // tab key → {model, view}
+  let docKey = "";
+
   // ── the API the rest of the page uses ─────────────────────────────────
   const api = {
     text: () => (ed ? ed.getValue() : ta.value),
@@ -108,6 +115,38 @@
     height: () => wrap.getBoundingClientRect().height,
     isMonaco: () => !!ed,
     element: wrap,
+    // useDoc shows query tab key's document, creating it with text the
+    // first time. It fires no change: switching tabs edits nothing.
+    useDoc(key, text) {
+      if (key === docKey) return;
+      if (!ed) {
+        ta.value = text;
+        docKey = key;
+        return;
+      }
+      const cur = docs.get(docKey);
+      if (cur) cur.view = ed.saveViewState();
+      let d = docs.get(key);
+      if (!d) {
+        d = { model: monaco.editor.createModel(text, lang), view: null };
+        docs.set(key, d);
+      }
+      docKey = key;
+      monaco.editor.setModelLanguage(d.model, lang);
+      ed.setModel(d.model);
+      if (d.view) ed.restoreViewState(d.view);
+      ta.value = ed.getValue();
+      scheduleMark();
+    },
+    // dropDoc forgets a closed tab's document.
+    dropDoc(key) {
+      const d = docs.get(key);
+      if (d && key !== docKey) { d.model.dispose(); docs.delete(key); }
+    },
+    // retheme re-reads the palette after the page's light/dark switch.
+    retheme() {
+      if (ed) { defineTheme(); monaco.editor.setTheme("dbc"); }
+    },
   };
   dbc.editor = api;
 
@@ -188,8 +227,11 @@
   const hex = (n) => cssVar(n).replace("#", "");
 
   function defineTheme() {
+    // the base follows the page's light/dark, so Monaco's own widgets
+    // (the find box, hovers) match the palette laid over them
+    const light = document.documentElement.dataset.theme === "light";
     monaco.editor.defineTheme("dbc", {
-      base: "vs-dark", inherit: true,
+      base: light ? "vs" : "vs-dark", inherit: true,
       rules: [
         { token: "keyword", foreground: hex("accent"), fontStyle: "bold" },
         { token: "operator", foreground: hex("accent") },
@@ -251,6 +293,13 @@
     bind(K.Shift, C.KeyX, explain(true));
     ed.addCommand(K.Alt | C.KeyX, explain(true)); // the TUI's Alt+X
     bind(0, C.KeyI, () => dbc.cmd.assistant());
+    // query tabs (Alt: the browser keeps Ctrl+T/W/1…9) and the key list —
+    // Monaco's own, or it would type "†" for Alt+T on a Mac and open its
+    // command palette on F1 (still in its right-click menu)
+    ed.addCommand(K.Alt | C.KeyT, () => dbc.cmd.newTab());
+    ed.addCommand(K.Alt | C.KeyW, () => dbc.cmd.closeTab());
+    for (let n = 1; n <= 9; n++) ed.addCommand(K.Alt | C["Digit" + n], () => dbc.cmd.pickTab(n - 1));
+    ed.addCommand(C.F1, () => dbc.cmd.help());
     bind(0, C.KeyO, () => dbc.cmd.scripts());
     // the TUI's editor menu row, in Monaco's own right-click menu
     ed.addAction({
@@ -262,8 +311,11 @@
   function start() {
     defineTheme();
     ed = monaco.editor.create(host, {
-      value: ta.value,
-      language: lang,
+      // The model is made here, not by the editor from a value: a model
+      // the editor made itself is disposed when it switches to another
+      // (see useDoc), which would lose the first query tab's document —
+      // undo history, cursor and all — on the first tab switch.
+      model: monaco.editor.createModel(ta.value, lang),
       theme: "dbc",
       automaticLayout: true, // the splitter resizes the pane; Monaco follows
       minimap: { enabled: false },
@@ -283,9 +335,16 @@
       // popup that fires on every letter is noise here. Ctrl+Space asks.
       quickSuggestions: false,
       suggestOnTriggerCharacters: false,
+      // Off, and not for looks: Monaco's word highlighter (the same word
+      // marked elsewhere as the caret rests) disposes a pending delay when
+      // the editor switches models — every query tab switch — and rejects
+      // a promise nobody holds, an "Uncaught (in promise) Canceled" in the
+      // console each time. The TUI has no such highlight to match anyway.
+      occurrencesHighlight: "off",
       contextmenu: true,
     });
     decos = ed.createDecorationsCollection();
+    if (docKey) docs.set(docKey, { model: ed.getModel(), view: null });
     // keep the caret where it was in the textarea
     const pos = ed.getModel().getPositionAt(ta.selectionStart);
     ed.setPosition(pos);

@@ -196,6 +196,21 @@ func (s *Store) SaveTab(t Tab) error {
 	return wrap(err, "op", "save tab", "tab", t.ID)
 }
 
+// DeleteTab forgets a saved tab. A missing one is success: the caller
+// wanted it gone.
+func (s *Store) DeleteTab(id string) error {
+	if s.db == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.tabs, id)
+		return nil
+	}
+	ctx, cancel := opCtx()
+	defer cancel()
+	_, err := s.db.ExecContext(ctx, `DELETE FROM tabs WHERE id = $1`, id)
+	return wrap(err, "op", "delete tab", "tab", id)
+}
+
 // Layout returns every saved layout value (pane sizes and the like), keyed
 // by the name the page gave it. The values are opaque here: the page owns
 // their meaning.

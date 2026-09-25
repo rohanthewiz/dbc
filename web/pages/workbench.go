@@ -9,6 +9,8 @@
 package pages
 
 import (
+	"strconv"
+
 	"github.com/rohanthewiz/element"
 
 	"github.com/rohanthewiz/dbc/config"
@@ -19,17 +21,19 @@ type Workbench struct {
 	Conns  []config.Connection // names and drivers are shown; a DSN never leaves the server
 	Active string              // the connection a new workspace starts on
 	Ver    string              // asset version, for cache busting (?v=)
+	Theme  string              // "light", or "" for the dark default
 }
 
 // Render returns the whole document.
 //
-//	┌ topbar: dbc · connection · [session state] · ▶ Run ▶▶ Run all ◈ Explain ■ Stop ⟲ History ▷ Scripts ✦ ┐
-//	├ sidebar ──────┬ editor (textarea, upgraded to Monaco) ───────────────┬┬ assistant (Ctrl+I) ──────┤
+//	┌ topbar: dbc · connection · [session state] · ▶ Run ▶▶ Run all ◈ Explain ■ Stop ⟲ History ▷ Scripts ✦ ◐ ┐
+//	├ sidebar ──────┬ [Query 1][Query 2 ●][+]   query tabs ────────────────┬┬ assistant (Ctrl+I) ──────┤
+//	│               ├ editor (textarea, upgraded to Monaco) ────────────────┤│                          │
 //	│ Connections   ├ ═ splitter (drag; the height is saved) ═══════════════┤│ ✦ Copilot · model ▾  ⟲ ✕ │
 //	│ Tables        │ results bar: [Results][◈ Plan] · 8 rows   ⧉ Copy ⤓ Export ││ transcript               │
 //	│               │ the grid (virtualized) — or the plan view             ││ [✓] with: query, …       │
 //	│               ├ log ──────────────────────────────────────────────────┤│ composer          ⏎ send │
-//	└ status bar ───┴───────────────────────────────────────────────────────┴┴──────────────────────────┘
+//	└ status bar ──────────────────────────────────────────────── keys · ⌨ keys ┴──────────────────────────┘
 //
 // The assistant pane is hidden until opened; ║ on its left edge drags its
 // width. Opening it and its width are saved with the layout.
@@ -39,13 +43,21 @@ type Workbench struct {
 func (p Workbench) Render() string {
 	b := element.AcquireBuilder()
 	defer element.ReleaseBuilder(b)
-	b.Html("lang", "en").R(
+	theme := "dark"
+	if p.Theme == "light" {
+		theme = "light"
+	}
+	b.Html("lang", "en", "data-theme", theme).R(
 		head(b, "dbc web", p.Ver),
 		b.Body("data-ver", p.Ver).R(
 			b.DivClass("app").R(
 				p.topbar(b),
 				p.sidebar(b),
 				b.MainClass("work").R(
+					// the query tabs; app.js draws them from the saved ones
+					b.DivClass("qtabs", "id", "qtabs", "role", "tablist", "aria-label", "Query tabs").R(
+						b.ButtonClass("qnew", "id", "qnew", "type", "button", "title", "New query tab (Alt+T)").T("+"),
+					),
 					b.DivClass("editor-wrap", "id", "editor-wrap").R(
 						b.TextArea("id", "editor", "spellcheck", "false", "autocomplete", "off",
 							"autocapitalize", "off", "aria-label", "SQL editor",
@@ -84,7 +96,8 @@ func (p Workbench) Render() string {
 				p.chat(b),
 				b.FooterClass("statusbar").R(
 					b.Span("id", "status").T("starting…"),
-					b.SpanClass("keys").T("Ctrl+Enter run · Ctrl+Shift+Enter all · Ctrl+X explain · Ctrl+K stop · Ctrl+P history · Ctrl+E export · Ctrl+O scripts · Ctrl+I assistant"),
+					b.SpanClass("keys").T("Ctrl+Enter run · Ctrl+X explain · Ctrl+K stop · Ctrl+P history · Ctrl+I assistant · Alt+T new tab"),
+					b.ButtonClass("help-btn", "id", "help-btn", "type", "button", "title", "Every key (F1 or ?)").T("⌨ keys"),
 				),
 			),
 		),
@@ -110,6 +123,7 @@ func (p Workbench) topbar(b *element.Builder) any {
 			b.Button("id", "history-btn", "type", "button", "title", "Past statements, here and in the TUI (Ctrl+P)").T("⟲ History"),
 			b.Button("id", "scripts-btn", "type", "button", "title", "Run a Go script from scripts_dir (Ctrl+O)").T("▷ Scripts"),
 			b.Button("id", "chat-btn", "type", "button", "title", "The assistant: ask about the query or result (Ctrl+I)").T("✦ Assistant"),
+			b.ButtonClass("iconbtn", "id", "theme-btn", "type", "button", "title", "Switch light / dark", "aria-label", "Switch light / dark").T("◐"),
 		),
 	)
 	return nil
@@ -212,6 +226,31 @@ func SignIn(ver string) string {
 				b.P().R(
 					b.T("Restarted dbc web? Every restart signs browsers out; the new link is in the terminal."),
 				),
+			),
+		),
+	)
+	return b.String()
+}
+
+// Error is the page for a request that went nowhere (404) or failed (500):
+// the status, what happened, and the way back to the workbench.
+func Error(ver string, status int, title, msg string) string {
+	b := element.AcquireBuilder()
+	defer element.ReleaseBuilder(b)
+	b.Html("lang", "en").R(
+		b.Head().R(
+			b.Meta("charset", "utf-8").R(),
+			b.Meta("name", "viewport", "content", "width=device-width, initial-scale=1").R(),
+			b.Title().T("dbc web — "+title),
+			b.Link("rel", "icon", "href", "/favicon.ico").R(),
+			b.Link("rel", "stylesheet", "href", "/theme.css").R(),
+			b.Link("rel", "stylesheet", "href", "/static/css/app.css?v="+ver).R(),
+		),
+		b.Body().R(
+			b.DivClass("signin").R(
+				b.H1().R(b.SpanClass("errcode").T(strconv.Itoa(status)), b.T(" "+title)),
+				b.P().T(msg),
+				b.P().R(b.A("href", "/").T("← back to the workbench")),
 			),
 		),
 	)

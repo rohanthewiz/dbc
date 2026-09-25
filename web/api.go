@@ -83,6 +83,14 @@ func (s *Server) handleSaveTab(ctx rweb.Context) error {
 	return ok(ctx, nil)
 }
 
+// handleDeleteTab forgets a saved query tab — the page closed it.
+func (s *Server) handleDeleteTab(ctx rweb.Context) error {
+	if err := s.store.DeleteTab(ctx.Request().PathParam("id")); err != nil {
+		return fail(ctx, err)
+	}
+	return ok(ctx, nil)
+}
+
 func (s *Server) handleLayout(ctx rweb.Context) error {
 	l, err := s.store.Layout()
 	if err != nil {
@@ -113,6 +121,7 @@ func (s *Server) handleSaveLayout(ctx rweb.Context) error {
 // open, and after a reload reattaches to a workspace that already exists.
 type wsState struct {
 	ID         string   `json:"id"`
+	Win        string   `json:"win"` // the window (browser tab) it belongs to
 	Active     string   `json:"active"`
 	Connected  bool     `json:"connected"` // its catalog has loaded
 	Connecting string   `json:"connecting,omitempty"`
@@ -127,7 +136,7 @@ type wsState struct {
 
 func (s *Server) state(t *tab) wsState {
 	st := wsState{
-		ID: t.id, Active: t.ws.Active(), Connected: t.ws.Catalog() != nil,
+		ID: t.id, Win: t.win.id, Active: t.ws.Active(), Connected: t.ws.Catalog() != nil,
 		Busy: t.ws.Busy(), Status: t.ws.RunningStatus(),
 		HasResult: t.ws.LastResult() != nil, HasPlan: t.planState().plan != nil, Tables: tables(t.ws),
 	}
@@ -143,14 +152,71 @@ func (s *Server) state(t *tab) wsState {
 	return st
 }
 
-// handleOpen makes a workspace for a new browser tab. The config's load
-// warnings (a demo that could not be opened, say) ride along, for the
-// page's log — the terminal printed them too, but the user is looking here.
+type openReq struct {
+	Win string `json:"win"` // the window to open a query tab in; "" opens a new window
+}
+
+// handleOpen makes a workspace: a query tab in the window the body names,
+// or the first query tab of a new window (a new browser tab). A new
+// window's response carries the config's load warnings (a demo that could
+// not be opened, say), for the page's log — the terminal printed them too,
+// but the user is looking here.
 func (s *Server) handleOpen(ctx rweb.Context) error {
-	t := s.hub.open()
+	var req openReq
+	if err := decode(ctx, &req); err != nil {
+		return fail(ctx, err)
+	}
+	t, err := s.hub.open(req.Win)
+	if err != nil {
+		return fail(ctx, err)
+	}
 	st := s.state(t)
-	st.Warnings = s.cfg.Warnings
+	if req.Win == "" {
+		st.Warnings = s.cfg.Warnings
+	}
 	return ok(ctx, st)
+}
+
+// handleClose closes a query tab: its run stopped and its session released
+// — an open transaction rolled back, as switching connections does. The
+// page asks first when the tab's session may hold state.
+func (s *Server) handleClose(ctx rweb.Context) error {
+	t, err := s.hub.close(ctx.Request().PathParam("id"))
+	if err != nil {
+		return fail(ctx, err)
+	}
+	return ok(ctx, map[string]any{"closed": t.id})
+}
+
+// winState is a window as a reloading page needs it: which query tabs it
+// still holds, so each can reattach to its workspace.
+type winState struct {
+	ID   string   `json:"id"`
+	Tabs []string `json:"tabs"`
+}
+
+func (s *Server) handleWindow(ctx rweb.Context) error {
+	w, err := s.hub.window(ctx.Request().PathParam("id"))
+	if err != nil {
+		return fail(ctx, err)
+	}
+	st := winState{ID: w.id, Tabs: []string{}}
+	for _, t := range s.hub.tabsOf(w) {
+		st.Tabs = append(st.Tabs, t.id)
+	}
+	return ok(ctx, st)
+}
+
+// handleWindowEvents attaches the page's EventSource to its window's
+// stream. The SSE hub registers the client and unregisters it when the
+// connection drops, which is what the idle reaper counts.
+func (s *Server) handleWindowEvents(ctx rweb.Context) error {
+	w, err := s.hub.window(ctx.Request().PathParam("id"))
+	if err != nil {
+		return fail(ctx, err)
+	}
+	ctx.Response().SetHeader("Cache-Control", "no-store")
+	return w.sse.Handler(s.rw)(ctx)
 }
 
 func (s *Server) handleState(ctx rweb.Context) error {
@@ -161,16 +227,17 @@ func (s *Server) handleState(ctx rweb.Context) error {
 	return ok(ctx, s.state(t))
 }
 
-// handleEvents attaches the page's EventSource to the tab's stream. The
-// SSE hub registers the client and unregisters it when the connection
-// drops, which is what the idle reaper counts.
+// handleEvents attaches an EventSource to a query tab's WINDOW stream —
+// the same stream handleWindowEvents serves, reached by a query tab's id
+// for a client that has only that (a script, the tests). Its events are
+// every query tab's in the window, each tagged with its ws.
 func (s *Server) handleEvents(ctx rweb.Context) error {
 	t, err := s.hub.get(ctx.Request().PathParam("id"))
 	if err != nil {
 		return fail(ctx, err)
 	}
 	ctx.Response().SetHeader("Cache-Control", "no-store")
-	return t.sse.Handler(s.rw)(ctx)
+	return t.win.sse.Handler(s.rw)(ctx)
 }
 
 // shown is how many of a result's rows the page displays.

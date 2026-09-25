@@ -149,7 +149,7 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) (*Server, error) {
 	s.hub = newHub(func(sink func(workspace.Event)) *workspace.Workspace {
 		return workspace.New(cfg, mgr, opt.History, workspace.Options{Sink: sink})
 	}, cfg.ConnIdleTimeout)
-	s.hub.newChat = func(t *tab) *assistant { return newAssistant(s, t) }
+	s.hub.newChat = func(w *window) *assistant { return newAssistant(s, w) }
 	s.rw = rweb.NewServer(rweb.ServerOptions{Address: addr, ReadyChan: s.ready})
 	s.rw.Use(s.guard)
 	s.routes()
@@ -194,6 +194,7 @@ func (s *Server) routes() {
 	r.Get("/api/v1/conns", s.handleConns)
 	r.Get("/api/v1/tabs", s.handleTabs)
 	r.Put("/api/v1/tabs/:id", s.handleSaveTab)
+	r.Delete("/api/v1/tabs/:id", s.handleDeleteTab)
 	r.Get("/api/v1/layout", s.handleLayout)
 	r.Put("/api/v1/layout", s.handleSaveLayout)
 	r.Get("/api/v1/history", s.handleHistory)
@@ -202,8 +203,12 @@ func (s *Server) routes() {
 	r.Delete("/api/v1/chats/:id", s.handleChatDelete)
 	r.Get("/api/v1/scripts", s.handleScripts)
 
+	r.Get("/api/v1/win/:id", s.handleWindow)
+	r.Get("/api/v1/win/:id/events", s.handleWindowEvents)
+
 	r.Post("/api/v1/ws", s.handleOpen)
 	r.Get("/api/v1/ws/:id", s.handleState)
+	r.Delete("/api/v1/ws/:id", s.handleClose)
 	r.Get("/api/v1/ws/:id/events", s.handleEvents)
 	r.Get("/api/v1/ws/:id/result", s.handleResult)
 	r.Get("/api/v1/ws/:id/export", s.handleExport)
@@ -284,9 +289,14 @@ func (s *Server) LoginURL() string { return s.URL() + "/login?s=" + string(s.aut
 // Pages and assets
 // ---------------------------------------------------------------------------
 
+// handlePage serves the workbench. The saved theme is rendered into the
+// page rather than applied by script once the layout loads: a light-mode
+// user would otherwise see a dark flash on every load, and the CSP allows
+// no inline script to apply it earlier.
 func (s *Server) handlePage(ctx rweb.Context) error {
+	l, _ := s.store.Layout() // a store that cannot be read just means the defaults
 	return writePage(ctx, http.StatusOK, pages.Workbench{
-		Conns: s.cfg.Connections, Active: s.defaultConn(), Ver: s.ver,
+		Conns: s.cfg.Connections, Active: s.defaultConn(), Ver: s.ver, Theme: l["theme"],
 	}.Render())
 }
 
@@ -311,13 +321,25 @@ func writePage(ctx rweb.Context, status int, html string) error {
 // signInPage is the notice for a browser with no session.
 func signInPage() string { return pages.SignIn(assetVersion()) }
 
-// handleTheme serves the palette as CSS variables — the theme package is
-// the one source of truth for dbc's colors, in the terminal and here.
+// handleTheme serves the palettes as CSS variables — the theme package is
+// the one source of truth for dbc's colors, in the terminal and here. Dark
+// (the TUI's) is the root's; light applies under data-theme="light" on the
+// root element, which the page's ◐ toggle sets and the layout remembers.
+// color-scheme follows, so the browser's own scrollbars and form controls
+// match.
 func handleTheme(ctx rweb.Context) error {
-	p := theme.Default()
-	css := fmt.Sprintf(":root{--bg:%s;--panel:%s;--panel2:%s;--sel:%s;--line:%s;"+
-		"--fg:%s;--muted:%s;--accent:%s;--warn:%s;--err:%s}\n",
-		p.Bg, p.Panel, p.Panel2, p.Sel, p.Line, p.Fg, p.Muted, p.Accent, p.Warn, p.Err)
+	vars := func(p theme.Palette) string {
+		return fmt.Sprintf("--bg:%s;--panel:%s;--panel2:%s;--sel:%s;--line:%s;"+
+			"--fg:%s;--muted:%s;--accent:%s;--warn:%s;--err:%s",
+			p.Bg, p.Panel, p.Panel2, p.Sel, p.Line, p.Fg, p.Muted, p.Accent, p.Warn, p.Err)
+	}
+	// The plan view keeps a toggle of its own (◐ in its header), so both
+	// palettes are also scoped to it: in a light workbench, a plan flipped
+	// to dark must get dark values, not inherit the root's light ones.
+	css := ":root{" + vars(theme.Default()) + ";color-scheme:dark}\n" +
+		`:root[data-theme="light"]{` + vars(theme.Light()) + ";color-scheme:light}\n" +
+		`.dbc-plan[data-theme="dark"]{` + vars(theme.Default()) + "}\n" +
+		`.dbc-plan[data-theme="light"]{` + vars(theme.Light()) + "}\n"
 	ctx.Response().SetHeader("Content-Type", "text/css; charset=utf-8")
 	ctx.Response().SetHeader("Cache-Control", "no-cache")
 	return ctx.WriteString(css)

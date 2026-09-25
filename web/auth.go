@@ -9,8 +9,11 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/rohanthewiz/logger"
 	"github.com/rohanthewiz/rweb"
 	"github.com/rohanthewiz/serr"
+
+	"github.com/rohanthewiz/dbc/web/pages"
 )
 
 // Access control. dbc web is a local tool for the person who started it, so
@@ -114,7 +117,7 @@ func (s *Server) guard(ctx rweb.Context) error {
 		return plain(ctx, http.StatusForbidden, "forbidden: cross-site request")
 	}
 	if publicPath(req.Path()) || s.authed(ctx) {
-		return ctx.Next()
+		return errorPages(ctx, ctx.Next())
 	}
 	if strings.HasPrefix(req.Path(), "/api/") {
 		return writeJSON(ctx, http.StatusUnauthorized, envelope{Error: "not signed in — open the URL dbc web printed"})
@@ -196,6 +199,30 @@ func securityHeaders(ctx rweb.Context) {
 	h.SetHeader("X-Content-Type-Options", "nosniff")
 	h.SetHeader("Referrer-Policy", "no-referrer")
 	h.SetHeader("X-Frame-Options", "DENY")
+}
+
+// errorPages fills in what a request that went nowhere gets. rweb answers a
+// path no route matches with a bare 404 and an empty body; a browser that
+// followed a stale link deserves a page saying where to go, and a script
+// calling a wrong endpoint deserves the API's envelope, not nothing. A
+// handler error that reached here (every API handler answers through fail,
+// so only a page's could) is logged once and shown as a page.
+func errorPages(ctx rweb.Context, err error) error {
+	path := ctx.Request().Path()
+	api := strings.HasPrefix(path, "/api/")
+	if err != nil && !api {
+		logger.LogErr(serr.Wrap(err, "route", path), "page failed")
+		return writePage(ctx, http.StatusInternalServerError, pages.Error(assetVersion(), http.StatusInternalServerError,
+			"Something went wrong", "dbc web could not draw this page. The details are in the terminal it was started from."))
+	}
+	if err != nil || ctx.Response().Status() != http.StatusNotFound || len(ctx.Response().Body()) > 0 {
+		return err
+	}
+	if api {
+		return writeJSON(ctx, http.StatusNotFound, envelope{Error: "no such endpoint: " + ctx.Request().Method() + " " + path})
+	}
+	return writePage(ctx, http.StatusNotFound, pages.Error(assetVersion(), http.StatusNotFound,
+		"Not found", "There is nothing at "+path+" — dbc web serves one page, the workbench."))
 }
 
 func plain(ctx rweb.Context, status int, msg string) error {

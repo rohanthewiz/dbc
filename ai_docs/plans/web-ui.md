@@ -2,9 +2,10 @@
 
 Raised 2026-09-25. The ask: a web UI for dbc, started as `dbc web`.
 
-This is a plan. **Phases 1 (the `workspace` extraction), 2 (the `dbc web`
-skeleton), 3 (the real editor and grid), 4 (explain) and 5 (the assistant
-and scripts) are done** (2026-09-25); Phase 6 is not built yet.
+This is a plan. **All six phases are done** (2026-09-25): the `workspace`
+extraction, the `dbc web` skeleton, the real editor and grid, explain, the
+assistant and scripts, and polish and packaging. What was left out is under
+Phase 6's outcome and in `ai_docs/todo/next-list.md`.
 
 ## The one-paragraph version
 
@@ -657,11 +658,69 @@ Monaco's menu, the plan header and a step; Ctrl+I both ways; scripts from
 ▷ Scripts with output in the log and grid; delete this conversation;
 1400 / 900 / 420 px with no horizontal scroll; a clean console.
 
-### Phase 6 — polish and packaging
+### Phase 6 — polish and packaging — ✅ done 2026-09-25
 
 Multiple query tabs per window, layout persistence, keyboard help overlay,
 light/dark, error pages, a cats plugin action ("dbc — web") beside the TUI's,
 and optionally a macOS app wrapper the way gonotes has one. README section.
+
+*Outcome:*
+
+| Piece | Where | As built |
+|---|---|---|
+| Windows and query tabs | `web/hub.go`, `web/api.go` | a browser tab is a **window** — one SSE stream, one assistant, one idle clock — holding **query tabs**, each a workspace with its own session, run slot, result and plan. `POST /api/v1/ws {win}` opens a tab in a window (none: a new window); `DELETE /api/v1/ws/:id` closes one, releasing its session; `GET /api/v1/win/:id` lists a window's tabs for a reload; `GET /api/v1/win/:id/events` is its stream (…`/ws/:id/events` still reaches it by a tab's id). Every event is `{type, ws, data}`, sent raw through rweb's `BroadcastRaw` |
+| The strip | `static/js/app.js`, `pages/workbench.go` | `[Query 1][Query 2 ●][+]`: click switches, double-click renames, × / middle-click / Alt+W closes (a tab whose session may hold state asks first), + / Alt+T opens, Alt+1…9 picks; ● running, • finished in the background (red: failed), ◆ session state. A background tab's log lines are prefixed with its title. A tab's workspace opens on its first showing, so saved tabs cost nothing until used |
+| Per-tab views | `editor.js` (`useDoc`), `grid.js` (`snapshot`/`restore`), `planview.js` (`reset`) | a Monaco model per tab (undo, cursor and scroll kept); the grid's sort, hidden columns, widths, cursor and scroll restored when the result is still the one left; the plan reopened if it was showing |
+| Layout | `web.bytdb` layout keys | tab order and the active tab (`tabs`, `tab`), editor height, assistant open and width, theme — the tabs' text, title and connection as before; `DELETE /api/v1/tabs/:id` forgets a closed one |
+| Light / dark | `theme.Light`, `/theme.css`, ◐ | both palettes from the theme package, the light one under `:root[data-theme=light]`, both also scoped to `.dbc-plan` so the plan's own toggle works in either; the saved choice is rendered into `<html>` by the server (no dark flash); Monaco's base theme follows |
+| Key list | F1, `?` (not while typing), ⌨ keys | grouped: editor, query tabs, grid, plan, assistant. Monaco's F1 palette gives way (still in its right-click menu) |
+| Error pages | `web/auth.go` `errorPages`, `pages.Error` | a path no route serves gets a page with the way back (404), an unknown API path the envelope; a page handler's error is logged once and shown as a 500 page |
+| cats | `cats-plugin.toml` | a **dbc — web** action beside the TUI's; `web` and its flags in the completions |
+| README | `README.md` | *The browser workbench: `dbc web`* |
+
+Decisions and findings:
+
+- **One stream per window, not per query tab**: a browser allows about six
+  HTTP/1.1 connections per host and an EventSource holds one for good; a
+  stream per tab would let the seventh starve every fetch.
+- **Tabs are on Alt** (T, W, 1–9, by `e.code`, since Alt+T types "†" on a
+  Mac): a page cannot take Ctrl+T, Ctrl+W or Ctrl+1…9 from the browser.
+  Monaco binds the same chords, or it would type the character.
+- **Closing a tab with session state asks first**, because it rolls the
+  transaction back; the last tab cannot be closed.
+- **Two browser tabs are two windows over the same saved tabs**, each with
+  its own sessions; the last save of a tab's text wins. Recorded, not
+  solved: locking a saved tab to one window is more machinery than a local
+  tool's second browser tab warrants.
+- **The macOS app wrapper was left out** — optional in the plan, and a
+  second way to launch something `dbc web` and the cats action already
+  launch. On the Next list's roadmap.
+- **Found by the browser run, fixed:** Monaco disposes a model it made
+  itself (`value:`) when the editor switches models, which lost the first
+  tab's document on the first switch — the first model is now made
+  explicitly; Monaco's word highlighter rejects a promise nobody holds on
+  every model switch ("Uncaught (in promise) Canceled") — turned off
+  (`occurrencesHighlight`), which the TUI never had; a double-click on a
+  background tab started a rename that the tab's activation then redrew
+  away — the strip is not redrawn under an open rename.
+
+Verified: `web` tests — two query tabs of one window run at once with
+events tagged by tab and a BEGIN not leaking; closing a tab releases its
+session and leaves the window; an idle window releases every tab's session
+and is later forgotten with them; the assistant asks about the tab named;
+a saved tab deleted; the error pages (page 404 with CSP, API 404 envelope,
+a handler's own 404 kept, 401 before 404); both palettes in `/theme.css`
+and the saved one rendered into the page. All green, `-race` too. In
+headless Chrome, 53 checks: Alt+T opens an empty tab (no "†"), connected;
+BEGIN marks only that tab; Alt+1 restores the first tab's text, sort and
+hidden column; a run left going in the background marks its tab, while the
+other tab runs; its log lines are named; a real double-click renames; a
+reload restores tabs, order, titles, the active tab and its session; Alt+W
+on a stateful tab asks, then releases; light mode (palette, Monaco, the
+plan view) survives a reload with no flash; F1 in Monaco opens the key list
+(not Monaco's palette); `?` in the composer is typed, on the grid opens
+help; the 404 page; 900 and 420 px with no horizontal scroll; a clean
+console. The Phase 5 suite (63 checks) passes on the tab-aware page.
 
 ## Testing
 

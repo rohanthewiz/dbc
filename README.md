@@ -8,7 +8,8 @@ any configured connection, and export the results — CSV, Markdown, HTML,
 JSON — to a file or straight to the clipboard. And when a query is slow,
 **explain it**: the plan as a tree or a flame graph, the step that costs, and
 what to do about it, on every engine — in the terminal or as an interactive
-page in the browser.
+page in the browser. And when you would rather have a browser than a
+terminal, `dbc web` serves the whole workbench there.
 
 ## Build
 
@@ -457,6 +458,10 @@ The plugin tab opens in your current directory, so a project's own
 described above works the same either way. Its declared type is what keeps
 Cats from offering the dbc pane as a place to drop an agent prompt.
 
+The palette also has **dbc — web**, which runs `dbc web` (below) in a pane
+of its own: the pane is the server's console, and closing it stops the
+server.
+
 ### Query history
 
 Every statement you run is recorded. `Ctrl+P` opens the history newest first;
@@ -534,6 +539,76 @@ if err != nil {
 	return err
 }
 ```
+
+## The browser workbench: `dbc web`
+
+```sh
+dbc web                      # serve on 127.0.0.1:8450 and open the browser
+dbc web --no-open            # print the sign-in link instead
+dbc web --listen 127.0.0.1:9000
+```
+
+`dbc web` is the TUI's workbench in a browser: connections and tables on
+the left, a Monaco SQL editor, the results grid, the plan view, the log, and
+the AI assistant. It runs statements through the same code the TUI does, so
+the run slot, pinned sessions, cancel, history, explain and the assistant's
+data rules behave the same in both.
+
+**Access.** It listens on loopback, and only a browser holding this launch's
+secret can use it: dbc opens `…/login?s=<secret>` (and prints it), which
+trades the secret for a session cookie. A restart signs every browser out;
+use the new link. Scripts can send `Authorization: Bearer <secret>` (set it
+with `--secret` or `DBC_WEB_SECRET`). A `--listen` address off loopback is
+allowed, with a warning — it is a local tool, not a team server. The port is
+8450, or a free one when 8450 is taken.
+
+**Query tabs.** Each tab is its own workspace with its own pinned session,
+so a `BEGIN` in one does not leak into another. `Alt+T` opens a tab, `Alt+W`
+closes it (asking first when its session may hold a transaction, since
+closing rolls it back), `Alt+1`…`Alt+9` switch, and a double-click renames.
+A tab keeps its result, its grid view (sort, hidden columns, widths) and its
+plan while another is on screen; a run left going in the background marks
+its tab (● running, • done) and names its log lines. Tabs, their text and
+connection, the pane sizes and light/dark are saved in
+`~/.config/dbc/web.bytdb`; a reload keeps every tab's session. Two browser
+tabs of dbc web are two windows over the same saved tabs, each with its own
+sessions — edit a given tab's text in one of them at a time.
+
+**Keys.** The TUI's, bent where a browser keeps the chord for itself:
+
+| Key | Does |
+|---|---|
+| `Ctrl+Enter` (`Ctrl+R`) | run the statement under the caret, or the selection |
+| `Ctrl+Shift+Enter` | run every statement |
+| `Ctrl+X` (nothing selected) · `Ctrl+Shift+X` | explain · explain analyze |
+| `Ctrl+K` | stop the run (in the assistant: stop the answer) |
+| `Ctrl+P` · `Ctrl+E` · `Ctrl+O` | history · export · scripts |
+| `Ctrl+I` | the assistant, and back (`Ctrl+A` stays select-all) |
+| `Alt+T` · `Alt+W` · `Alt+1`…`9` | new tab · close tab · go to tab |
+| `F1` or `?` | every key |
+
+On a Mac, `⌘` works wherever `Ctrl` is listed.
+
+**What a browser adds.** Copy puts a real HTML table on the clipboard (the
+browser writes `text/html` itself, so "copy for Teams" works over SSH too);
+exports are downloads; the plan view is the interactive page's own, with
+before/after comparison when you explain again; findings' SQL goes into the
+editor with ⤓ Insert.
+
+**The assistant** (`Ctrl+I`, or ✦ Assistant) is the TUI's: the same agent,
+the same data rule — rows only on connections with `ai_rows = true`, in the
+grid's sort order, without its hidden columns — and the same conversation
+archive, so a conversation had in either is offered in both. "✦ Ask" in the
+grid's menu, the value inspector, the editor's right-click menu and the plan
+drafts a question about what you are looking at. Copilot sign-in runs in the
+pane: dbc shows the device code, with buttons to copy it and open GitHub's
+page.
+
+**Scripts** (`Ctrl+O`, or ▷ Scripts) run from `scripts_dir`; `s.Print`
+lines reach the log and `s.Show` results the grid as they happen.
+
+`Ctrl+C` in the terminal stops the server; every tab's run is stopped and
+its session released — anything left open is rolled back.
 
 ## Scripting in Go
 

@@ -5,32 +5,50 @@
 // The server owns the rules and the rendering; the page owns only what must
 // be live. The flow:
 //
-//   boot ─► workspace: reattach (id kept in sessionStorage, so a reload
-//           keeps the same pinned session) or open a new one
-//        ─► EventSource on /api/v1/ws/<id>/events
-//        ─► on the first open: connect to the tab's saved connection
+//   boot ─► the saved query tabs (web.bytdb), in their saved order
+//        ─► the window: reattach (ids kept in sessionStorage, so a reload
+//           keeps every tab's pinned session) or open a new one
+//        ─► EventSource on /api/v1/win/<id>/events — ONE per window, for
+//           every query tab (see web/hub.go for why)
+//        ─► on the first open: activate the saved active tab
 //
-//   Run ─► POST …/run {buffer, caret, selection, all}
+//   activate(tab) ─► its editor document; its workspace opened on first
+//                    use (lazily: a saved tab costs nothing until shown);
+//                    its state, result (the grid's view restored) and plan
+//
+//   Run ─► POST /api/v1/ws/<active ws>/run {buffer, caret, selection, all}
 //          409/400 → refused; the server has already logged why
 //          200     → notes, ticks and the outcome arrive as events:
 //                    "busy" … "tick"* … "run" {hasResult} ─► grid.load()
 //
-// Every event on the stream is {type, data} (rweb's SSE hub wraps them so),
-// handled by one switch in onEvent; the assistant's (chat.*) go to chat.js.
+// Every event on the stream is {type, ws, data}, handled by one switch in
+// onEvent: the active query tab's are drawn; a background tab's mark its
+// tab (busy, done) and prefix their log lines with its title; the
+// assistant's (no ws, chat.*) go to chat.js.
 (function () {
   "use strict";
 
   const dbc = window.dbc;
   const { api, log, setStatus, state, el } = dbc;
 
-  const TAB_ID = "1"; // one query tab until Phase 6's tabs
-  const WS_KEY = "dbc.ws";
+  // sessionStorage keys: the window, and each query tab's workspace. Per
+  // browser tab, so two browser tabs of dbc web are two windows.
+  const WIN_KEY = "dbc.win";
+  const wsKey = (key) => "dbc.ws." + key;
+
+  // tabs are the query tabs, in strip order:
+  //   {key, title, conn, buffer, ws, busy, done, failed, stateful, status, level, grid, planOpen}
+  // key is the saved tab's id (web.bytdb); ws its workspace, "" until
+  // first shown. buffer is kept only while the tab is in the background.
+  let tabs = [];
+  const tabOf = (ws) => tabs.find((t) => t.ws && t.ws === ws);
 
   const $ = (id) => document.getElementById(id);
   const els = {
     conns: $("conns"), tables: $("tables"), tableCount: $("table-count"),
     active: $("active-conn"), stateful: $("stateful"), busy: $("busy"),
     run: $("run"), runAll: $("run-all"), stop: $("stop"), history: $("history-btn"), scripts: $("scripts-btn"),
+    qtabs: $("qtabs"), theme: $("theme-btn"), help: $("help-btn"),
     splitter: $("splitter"), work: document.querySelector(".work"),
   };
 
@@ -114,6 +132,13 @@
   // ── the event stream ───────────────────────────────────────────────────
   function onEvent(ev) {
     const d = ev.data;
+    if (!ev.ws) {
+      if (ev.type.startsWith("chat.")) dbc.chat.onEvent(ev.type, d);
+      return;
+    }
+    const t = tabOf(ev.ws);
+    if (!t) return; // a tab closed since
+    if (t !== state.tab) { onBackground(t, ev.type, d); return; }
     switch (ev.type) {
       case "log":
         log(d.level, d.text);
@@ -148,20 +173,56 @@
         break;
       case "conn":
         state.active = d.active;
+        t.conn = d.active;
         markActive(d.active, "");
         showTables(d.tables || []);
         if (d.status) setStatus(d.status);
         else if (!state.busy) setStatus("ready on " + d.active);
-        if (d.changed) saveTab();
+        if (d.changed) saveTab(t);
         dbc.chat.refresh(); // another catalog: other tables' schema
         break;
-      default:
-        if (ev.type.startsWith("chat.")) dbc.chat.onEvent(ev.type, d);
     }
+    trackTab(t, ev.type, d);
+  }
+
+  // trackTab keeps a tab's strip marks in step with its events: busy while
+  // it runs, the session-state mark after each run.
+  function trackTab(t, type, d) {
+    const was = [t.busy, t.stateful, t.done].join();
+    if (type === "busy" || type === "tick") t.busy = true;
+    else if (type === "run" || type === "explain") {
+      t.busy = false;
+      t.stateful = !!d.stateful;
+      t.failed = !d.ok && !d.stopped;
+    }
+    if ([t.busy, t.stateful, t.done].join() !== was) renderTabs();
+  }
+
+  // onBackground handles a query tab's event while another is on screen:
+  // its log lines go to the one log, named; its outcome marks the tab; the
+  // rest (its result, its plan) is fetched when the tab is shown.
+  function onBackground(t, type, d) {
+    switch (type) {
+      case "log":
+        log(d.level, "[" + t.title + "] " + d.text);
+        break;
+      case "run":
+      case "explain":
+        t.done = true;
+        t.status = d.status || (d.ok ? "done" : "failed");
+        t.level = d.ok ? "" : d.stopped ? "warn" : "err";
+        t.planOpen = type === "explain" ? !!(d.ok && d.hasPlan) : t.planOpen || !!d.hasPlan;
+        break;
+      case "conn":
+        t.conn = d.active;
+        if (d.changed) saveTab(t);
+        break;
+    }
+    trackTab(t, type, d);
   }
 
   function attach() {
-    const src = new EventSource(dbc.wsPath("/events"));
+    const src = new EventSource("/api/v1/win/" + state.win + "/events");
     state.source = src;
     src.onmessage = (e) => {
       try { onEvent(JSON.parse(e.data)); } catch (err) { console.error("bad event", e.data, err); }
@@ -169,7 +230,7 @@
     src.onopen = () => {
       if (!state.attached) {
         state.attached = true;
-        firstAttach();
+        activate(activeAtBoot);
       } else {
         resync(); // back after a drop: catch up on anything missed
       }
@@ -177,14 +238,14 @@
     src.onerror = async () => {
       setStatus("disconnected — reconnecting…", "warn");
       // EventSource retries by itself, but not past a 404 or 401: find out
-      // which it is. A workspace the server no longer has (a restart)
-      // means starting over; a lost session means signing in again.
+      // which it is. A window the server no longer has (a restart) means
+      // starting over; a lost session means signing in again.
       try {
-        await api("GET", dbc.wsPath(""));
+        await api("GET", "/api/v1/win/" + state.win);
       } catch (e) {
         if (e.status === 404) {
           src.close();
-          sessionStorage.removeItem(WS_KEY);
+          forgetSession();
           location.reload();
         } else if (e.status === 401) {
           src.close();
@@ -194,36 +255,103 @@
     };
   }
 
-  // firstAttach runs once the stream is open, so the connect's events have
-  // somewhere to go. A reattached workspace already has its connection.
-  async function firstAttach() {
-    const st = await api("GET", dbc.wsPath(""));
+  function forgetSession() {
+    sessionStorage.removeItem(WIN_KEY);
+    for (const t of tabs) sessionStorage.removeItem(wsKey(t.key));
+  }
+
+  // activate puts query tab t on screen: its document in the editor, its
+  // workspace (opened now if this is its first showing), its connection,
+  // tables, badge and status, its result with the grid's view as it was
+  // left, its plan. Each await re-checks that t is still the one wanted —
+  // a quick Alt+2 Alt+3 must end on tab 3, not on whichever answered last.
+  let activeAtBoot = null;
+  async function activate(t) {
+    const prev = state.tab;
+    if (prev && prev !== t) {
+      prev.buffer = dbc.editor.text();
+      prev.grid = dbc.grid.snapshot();
+      prev.planOpen = dbc.cmd.planOpen();
+      saveTab(prev);
+    }
+    state.tab = t;
+    state.ws = t.ws;
+    t.done = false;
+    dbc.editor.useDoc(t.key, t.buffer || "");
+    renderTabs();
+    saveLayout({ tab: t.key });
+    dbc.cmd.resetPlan();
+    dbc.grid.clear();
+    setBusy(false);
+    els.stateful.hidden = true;
+    dbc.editor.focus();
+
+    let st = null;
+    if (t.ws) {
+      try { st = await api("GET", "/api/v1/ws/" + t.ws); } catch (_) { st = null; } // forgotten: open anew
+    }
+    if (state.tab !== t) return;
+    if (!st) {
+      try {
+        st = await api("POST", "/api/v1/ws", { win: state.win });
+      } catch (e) {
+        log("err", "could not open a workspace for " + t.title + ": " + e.message);
+        return;
+      }
+      t.ws = st.id;
+      sessionStorage.setItem(wsKey(t.key), t.ws);
+    }
+    if (state.tab !== t) return;
+    state.ws = t.ws;
     if (st.connected || st.connecting) {
-      applyState(st);
+      applyState(st, true);
       return;
     }
     dbc.chat.onState(st);
-    const want = savedTab.conn && [...els.conns.querySelectorAll(".conn-item")]
-      .some((b) => b.dataset.conn === savedTab.conn) ? savedTab.conn : st.active;
-    connect(want);
+    const known = (name) => [...els.conns.querySelectorAll(".conn-item")].some((b) => b.dataset.conn === name);
+    connect(t.conn && known(t.conn) ? t.conn : state.active && known(state.active) ? state.active : st.active);
   }
 
   async function resync() {
+    const t = state.tab;
     try {
-      applyState(await api("GET", dbc.wsPath("")));
-    } catch (_) { /* onerror handles a lost workspace */ }
+      const st = await api("GET", dbc.wsPath(""));
+      if (state.tab === t) applyState(st, false);
+    } catch (_) { /* onerror handles a lost window */ }
+    // a background tab may have finished while the stream was down
+    for (const b of tabs) {
+      if (b === state.tab || !b.ws) continue;
+      try {
+        const st = await api("GET", "/api/v1/ws/" + b.ws);
+        b.busy = st.busy;
+        b.stateful = st.stateful;
+      } catch (_) { b.ws = ""; }
+    }
+    renderTabs();
   }
 
-  function applyState(st) {
+  // applyState draws a workspace's state. fresh: the tab just came on
+  // screen, so its result is restored with the grid's view as it was left
+  // (and its plan reopened if it was showing); otherwise the view on screen
+  // is kept (a reattach after a dropped stream).
+  function applyState(st, fresh) {
+    const t = state.tab;
     state.active = st.active;
+    t.conn = st.active;
     markActive(st.active, st.connecting || "");
     showTables(st.tables || []);
     setBusy(st.busy);
-    if (!st.busy) els.stateful.hidden = !st.stateful;
-    setStatus(st.busy ? st.status : "ready on " + st.active, st.busy ? "warn" : "");
-    if (st.hasResult) dbc.grid.load();
-    if (dbc.cmd.onState) dbc.cmd.onState(st);
+    t.busy = st.busy;
+    if (!st.busy) { els.stateful.hidden = !st.stateful; t.stateful = st.stateful; }
+    if (st.busy) setStatus(st.status, "warn");
+    else if (fresh && t.status) setStatus(t.status, t.level);
+    else setStatus("ready on " + st.active, "");
+    if (st.hasResult) {
+      if (fresh) dbc.grid.restore(t.grid); else dbc.grid.load();
+    }
+    if (dbc.cmd.onState) dbc.cmd.onState(Object.assign({}, st, { openPlan: fresh && t.planOpen }));
     dbc.chat.onState(st);
+    renderTabs();
   }
 
   // ── commands ───────────────────────────────────────────────────────────
@@ -364,7 +492,8 @@
   }
 
   Object.assign(dbc.cmd, {
-    run, stop, history, preview, editorState, scripts,
+    run, stop, history, preview, editorState, scripts, help, newTab, pickTab,
+    closeTab: () => closeTab(state.tab),
     exportMenu: () => dbc.grid.exportMenu(),
   });
 
@@ -375,6 +504,20 @@
   // (editor.js) and marks the event handled, so they do not fire twice.
   document.addEventListener("keydown", (e) => {
     if (e.defaultPrevented || dbc.modal.isOpen() || dbc.menu.isOpen()) return;
+    // Query tabs are on Alt: a page cannot have Ctrl+T, Ctrl+W or
+    // Ctrl+1…9 — the browser keeps its own tabs' keys. e.code, not e.key:
+    // on a Mac, Alt+T types "†".
+    if (e.altKey && !e.ctrlKey && !e.metaKey) {
+      if (e.code === "KeyT") { e.preventDefault(); newTab(); return; }
+      if (e.code === "KeyW") { e.preventDefault(); closeTab(state.tab); return; }
+      const n = /^Digit([1-9])$/.exec(e.code);
+      if (n) { e.preventDefault(); pickTab(+n[1] - 1); return; }
+    }
+    if (e.key === "F1" || (e.key === "?" && !typing(e.target))) {
+      e.preventDefault();
+      help();
+      return;
+    }
     const mod = e.ctrlKey || e.metaKey;
     if (!mod) return;
     const k = e.key.toLowerCase();
@@ -404,6 +547,10 @@
       dbc.cmd.explain(e.shiftKey);
     }
   });
+
+  // typing is whether a key is going into text — where "?" is a character,
+  // not a request for help.
+  const typing = (t) => t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
 
   els.run.addEventListener("click", () => run(false));
   els.runAll.addEventListener("click", () => run(true));
@@ -440,52 +587,282 @@
     dbc.editor.setHeight(Math.max(60, Math.min(px, max)));
   }
 
-  // ── saving the tab: the buffer and connection survive a restart ────────
-  let savedTab = { conn: "" };
+  // ── saving tabs: every tab's buffer, title and connection survive a restart
   let saveTimer = 0;
 
   function scheduleSave() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(saveTab, 600);
+    saveTimer = setTimeout(() => saveTab(state.tab), 600);
   }
 
-  function saveTab(keepalive) {
-    clearTimeout(saveTimer);
-    const body = JSON.stringify({ title: "Query 1", conn: state.active, buffer: dbc.editor.text() });
+  function saveTab(t, keepalive) {
+    if (!t) return;
+    if (t === state.tab) clearTimeout(saveTimer);
+    const active = t === state.tab;
+    const body = JSON.stringify({ title: t.title, conn: (active ? state.active : t.conn) || "",
+      buffer: active ? dbc.editor.text() : t.buffer || "" });
     // keepalive lets the last save outlive the page when it is closing
-    return fetch("/api/v1/tabs/" + TAB_ID, {
+    return fetch("/api/v1/tabs/" + encodeURIComponent(t.key), {
       method: "PUT", headers: { "Content-Type": "application/json" }, body, keepalive: !!keepalive,
     }).catch(() => { /* best effort: the next edit saves again */ });
   }
 
+  function saveLayout(values) {
+    api("PUT", "/api/v1/layout", values).catch((err) => log("warn", "layout not saved: " + err.message));
+  }
+
   dbc.editor.onChange(scheduleSave);
-  window.addEventListener("pagehide", () => saveTab(true));
+  window.addEventListener("pagehide", () => saveTab(state.tab, true));
+
+  // ── the query tab strip ────────────────────────────────────────────────
+  //   [Query 1 ●][Query 2 •][Query 3 ×] [+]
+  // ● running · • finished while in the background (red when it failed) ·
+  // ◆ the session may hold state (a transaction, SET values, temp tables).
+  // Click switches; double-click renames; × (or Alt+W) closes; + (Alt+T)
+  // opens one; Alt+1…9 picks by position. The order and the active tab
+  // are saved with the layout.
+  // renaming is the tab whose title is being edited. The strip is not
+  // redrawn under it — a double-click on a background tab starts the rename
+  // while that tab's activation is still loading, and its redraw would
+  // throw the field away mid-word — but once the rename ends.
+  let renaming = null;
+
+  function renderTabs() {
+    if (renaming) return;
+    const plus = $("qnew");
+    els.qtabs.replaceChildren();
+    tabs.forEach((t, i) => {
+      const marks = el("span", "qmark");
+      if (t.busy) marks.append(el("span", { class: "qbusy", title: "running" }, "●"));
+      else if (t.done) marks.append(el("span", { class: t.failed ? "qfail" : "qdone", title: "finished in the background" }, "•"));
+      if (t.stateful) marks.append(el("span", { class: "qstate", title: "its session may hold a transaction, SET values or temp tables" }, "◆"));
+      const b = el("div", { class: "qtab" + (t === state.tab ? " on" : ""), role: "tab", tabindex: "-1",
+        "aria-selected": t === state.tab ? "true" : "false", "data-key": t.key,
+        title: t.title + (i < 9 ? " (Alt+" + (i + 1) + ")" : "") + " — double-click renames" },
+      el("span", "qt", t.title), marks,
+      tabs.length > 1 ? el("button", { type: "button", class: "qx", title: "Close (Alt+W)", "data-close": t.key }, "×") : null);
+      els.qtabs.append(b);
+    });
+    els.qtabs.append(plus);
+  }
+
+  els.qtabs.addEventListener("click", (e) => {
+    const x = e.target.closest("[data-close]");
+    if (x) { closeTab(tabs.find((t) => t.key === x.dataset.close)); return; }
+    const b = e.target.closest(".qtab");
+    if (b && !b.querySelector("input")) {
+      const t = tabs.find((x) => x.key === b.dataset.key);
+      if (t && t !== state.tab) activate(t);
+    }
+  });
+  els.qtabs.addEventListener("dblclick", (e) => {
+    const b = e.target.closest(".qtab");
+    if (b && !e.target.closest("[data-close]")) rename(tabs.find((x) => x.key === b.dataset.key));
+  });
+  els.qtabs.addEventListener("auxclick", (e) => { // middle-click closes, as in a browser
+    const b = e.target.closest(".qtab");
+    if (b && e.button === 1) closeTab(tabs.find((x) => x.key === b.dataset.key));
+  });
+  els.qtabs.addEventListener("contextmenu", (e) => {
+    const b = e.target.closest(".qtab");
+    if (!b) return;
+    e.preventDefault();
+    const t = tabs.find((x) => x.key === b.dataset.key);
+    dbc.menu.open(e.clientX, e.clientY, [
+      { head: t.title },
+      { label: "Rename…", act: () => rename(t) },
+      { label: "Close tab", key: "Alt+W", why: tabs.length > 1 ? "" : "the last tab stays — clear its editor instead",
+        act: () => closeTab(t) },
+      { head: "" },
+      { label: "New query tab", key: "Alt+T", act: newTab },
+    ]);
+  });
+  $("qnew").addEventListener("click", newTab);
+
+  // newTab opens a query tab on the active tab's connection. Its title is
+  // the lowest "Query N" not in use; its key sorts after the saved ones.
+  function newTab() {
+    const used = new Set(tabs.map((t) => t.title));
+    let n = 1;
+    while (used.has("Query " + n)) n++;
+    const t = { key: Date.now().toString(36), title: "Query " + n, conn: state.active, buffer: "", ws: "" };
+    tabs.splice(tabs.indexOf(state.tab) + 1, 0, t);
+    saveOrder();
+    saveTab(t);
+    activate(t);
+  }
+
+  // closeTab closes a query tab and releases its session. A session that
+  // may hold state — an open transaction — is asked about first: closing
+  // rolls it back, which is not a thing to do by a stray click.
+  function closeTab(t) {
+    if (!t) return;
+    if (tabs.length === 1) { log("warn", "the last tab stays — clear its editor instead"); return; }
+    if (!t.stateful) { reallyClose(t); return; }
+    const yes = el("button", { type: "button", class: "primary" }, "Close and release");
+    const no = el("button", { type: "button" }, "Keep it");
+    yes.addEventListener("click", () => { dbc.modal.close(); reallyClose(t); });
+    no.addEventListener("click", () => dbc.modal.close());
+    dbc.modal.open({
+      title: "Close " + t.title + "?", focus: no,
+      body: el("div", "confirm", el("p", null, t.title + "'s session may hold a transaction, SET values or temp tables. " +
+        "Closing the tab releases the session — an open transaction is rolled back.")),
+      foot: el("div", "mfoot", yes, no),
+    });
+  }
+
+  async function reallyClose(t) {
+    const i = tabs.indexOf(t);
+    if (i < 0) return;
+    tabs.splice(i, 1);
+    if (t === state.tab) activate(tabs[Math.min(i, tabs.length - 1)]);
+    else renderTabs();
+    saveOrder();
+    sessionStorage.removeItem(wsKey(t.key));
+    dbc.editor.dropDoc(t.key);
+    if (t.ws) api("DELETE", "/api/v1/ws/" + t.ws).catch(() => { /* already gone */ });
+    api("DELETE", "/api/v1/tabs/" + encodeURIComponent(t.key)).catch(() => {});
+    log("info", "closed " + t.title + (t.ws ? " — its session was released" : ""));
+  }
+
+  function rename(t) {
+    if (!t) return;
+    const b = els.qtabs.querySelector('.qtab[data-key="' + t.key + '"]');
+    if (!b) return;
+    const input = el("input", { class: "qrename", value: t.title, maxlength: "40", "aria-label": "Tab name", spellcheck: "false" });
+    const label = b.querySelector(".qt");
+    label.replaceWith(input);
+    input.select();
+    renaming = t;
+    let done = false;
+    const finish = (keep) => {
+      if (done) return;
+      done = true;
+      renaming = null;
+      const v = input.value.trim();
+      if (keep && v && v !== t.title) { t.title = v; saveTab(t); }
+      renderTabs();
+      if (t === state.tab) dbc.editor.focus();
+    };
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") { e.preventDefault(); finish(true); }
+      else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener("blur", () => finish(true));
+  }
+
+  function saveOrder() {
+    saveLayout({ tabs: tabs.map((t) => t.key).join(",") });
+  }
+
+  function pickTab(n) {
+    const t = tabs[n];
+    if (t && t !== state.tab) activate(t);
+  }
+
+  // ── light and dark ─────────────────────────────────────────────────────
+  // The palettes are /theme.css's (the theme package's); the choice is the
+  // root's data-theme, rendered into the page by the server so a reload
+  // does not flash the other one.
+  function toggleTheme() {
+    const t = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+    document.documentElement.dataset.theme = t;
+    dbc.editor.retheme();
+    dbc.cmd.planTheme(t);
+    saveLayout({ theme: t });
+  }
+  els.theme.addEventListener("click", toggleTheme);
+
+  // ── keyboard help ──────────────────────────────────────────────────────
+  // F1, ?, or the ⌨ button. Grouped by where the keys work; the chords
+  // bent to fit a browser (Ctrl+I, Alt+T, …) are the ones listed.
+  const KEYS = [
+    ["Editor", [
+      ["Ctrl+Enter · Ctrl+R", "run the statement under the caret (or the selection)"],
+      ["Ctrl+Shift+Enter · Ctrl+Shift+R", "run every statement"],
+      ["Ctrl+X (nothing selected)", "explain the statement"],
+      ["Ctrl+Shift+X · Alt+X", "explain analyze — runs it to time each step"],
+      ["Ctrl+K", "stop the run or the connect"],
+      ["Ctrl+P", "history — insert a past statement"],
+      ["Ctrl+E", "export the result"],
+      ["Ctrl+O", "scripts — run a Go script from scripts_dir"],
+      ["Ctrl+I", "the assistant — and back"],
+    ]],
+    ["Query tabs", [
+      ["Alt+T", "new tab"], ["Alt+W", "close the tab"], ["Alt+1 … Alt+9", "go to tab N"],
+      ["double-click a tab", "rename it"],
+    ]],
+    ["Results grid", [
+      ["arrows · Shift+arrows", "move · extend the range"], ["g · G", "first · last row"],
+      ["Enter · double-click", "inspect the value"], ["y · Y", "copy the value or range · the row"],
+      ["- · + · =", "hide the column · show all · fit it"], ["click a header", "sort: asc, desc, off"],
+      ["p", "the plan, when there is one"],
+    ]],
+    ["Plan", [
+      ["←↑↓→ · Enter", "walk the steps · fold"], ["1–4", "the metric"], ["f · g", "fit · graph"],
+      ["e · a", "explain again · analyze"], ["y · Y", "copy as text · the engine's output"],
+      ["b", "open as a page"], ["p", "back to the results"],
+    ]],
+    ["Assistant", [
+      ["Enter · Shift+Enter", "send · new line"], ["Ctrl+K", "stop the answer"], ["Esc", "back to the editor"],
+    ]],
+    ["Anywhere", [["F1 · ?", "this list"]]],
+  ];
+
+  function help() {
+    const body = el("div", "keyhelp");
+    for (const [group, rows] of KEYS) {
+      const dl = el("dl");
+      for (const [k, what] of rows) dl.append(el("dt", null, k), el("dd", null, what));
+      body.append(el("section", null, el("h3", null, group), dl));
+    }
+    dbc.modal.open({ title: "Keys", cls: "wide", body,
+      foot: el("div", "mfoot", el("span", "hint", "On a Mac, ⌘ works wherever Ctrl is listed.")) });
+  }
+  els.help.addEventListener("click", help);
 
   // ── boot ───────────────────────────────────────────────────────────────
   async function boot() {
     try {
-      const [tabs, layout] = await Promise.all([api("GET", "/api/v1/tabs"), api("GET", "/api/v1/layout")]);
-      const t = tabs.find((x) => x.id === TAB_ID);
-      if (t) {
-        savedTab = t;
-        dbc.editor.setText(t.buffer);
-      }
+      const [saved, layout] = await Promise.all([api("GET", "/api/v1/tabs"), api("GET", "/api/v1/layout")]);
       if (layout.editorHeight) setEditorHeight(Number(layout.editorHeight));
       dbc.chat.boot(layout);
 
-      let st = null;
-      const kept = sessionStorage.getItem(WS_KEY);
-      if (kept) {
-        try { st = await api("GET", "/api/v1/ws/" + kept); } catch (_) { st = null; }
+      // the saved tabs, in the saved order; any the order does not name
+      // (saved by an older page) after them
+      const byKey = new Map(saved.map((t) => [t.id, t]));
+      const order = (layout.tabs || "").split(",").filter((k) => byKey.has(k));
+      for (const t of saved) if (!order.includes(t.id)) order.push(t.id);
+      tabs = order.map((k) => {
+        const t = byKey.get(k);
+        return { key: t.id, title: t.title || "Query", conn: t.conn, buffer: t.buffer, ws: "" };
+      });
+      if (!tabs.length) tabs = [{ key: "1", title: "Query 1", conn: "", buffer: "", ws: "" }];
+      activeAtBoot = tabs.find((t) => t.key === layout.tab) || tabs[0];
+
+      // the window: this browser tab's, if the server still has it
+      let win = sessionStorage.getItem(WIN_KEY) || "", live = [];
+      if (win) {
+        try { live = (await api("GET", "/api/v1/win/" + win)).tabs; } catch (_) { win = ""; }
       }
-      if (!st) {
-        st = await api("POST", "/api/v1/ws");
+      for (const t of tabs) {
+        const ws = sessionStorage.getItem(wsKey(t.key));
+        if (ws && live.includes(ws)) t.ws = ws;
+      }
+      if (!win) {
+        forgetSession();
+        const st = await api("POST", "/api/v1/ws", {});
         for (const w of st.warnings || []) log("warn", w);
+        win = st.win;
+        activeAtBoot.ws = st.id;
+        sessionStorage.setItem(wsKey(activeAtBoot.key), st.id);
       }
-      state.ws = st.id;
-      sessionStorage.setItem(WS_KEY, st.id);
-      attach();
-      dbc.editor.focus();
+      state.win = win;
+      sessionStorage.setItem(WIN_KEY, win);
+      state.tab = null;
+      renderTabs();
+      attach(); // its first open activates activeAtBoot
     } catch (e) {
       setStatus(e.message, "err");
       log("err", "could not start: " + e.message);

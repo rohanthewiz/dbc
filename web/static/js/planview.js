@@ -66,15 +66,19 @@
   // ── the view ───────────────────────────────────────────────────────────
   async function load(open) {
     let p;
+    const ws = dbc.state.ws;
     try {
       p = await api("GET", dbc.wsPath("/plan"));
     } catch (e) {
       log("err", "could not load the plan: " + e.message);
       return;
     }
-    if (!p) return;
+    if (!p || ws !== dbc.state.ws) return; // nothing, or the user switched query tabs meanwhile
     if (p.seq !== planSeq || !view) {
       if (view) view.destroy();
+      // a new view starts in the workbench's light or dark; its own ◐
+      // still flips it alone
+      host.dataset.theme = document.documentElement.dataset.theme || "dark";
       planSeq = p.seq;
       again = p.again;
       view = DbcPlan.mount(host, p.doc, {
@@ -155,7 +159,24 @@
 
   $("explain-btn").addEventListener("click", (e) => explain(e.shiftKey, false));
 
+  // reset drops the view — another query tab is coming on screen, whose
+  // plan (if it has one) onState loads. Plan seqs are per query tab, so a
+  // kept view could be mistaken for the next tab's plan of the same number.
+  function reset() {
+    if (view) view.destroy();
+    view = null;
+    planSeq = 0;
+    again = false;
+    host.replaceChildren();
+    $("plan-tab").hidden = true;
+    showTab("results");
+  }
+
   Object.assign(dbc.cmd, {
+    resetPlan: reset,
+    planOpen: () => planVisible(),
+    // the workbench switched light/dark: the plan follows
+    planTheme: (t) => { if (view) host.dataset.theme = t; },
     explain: (analyze) => explain(analyze, false),
     hasPlan: () => !!view,
     showPlan: () => { if (view) showTab("plan"); else log("warn", "no plan yet — Ctrl+X explains the statement under the caret"); },
@@ -173,7 +194,8 @@
     },
     // a run whose result is itself a plan (an EXPLAIN typed and run)
     onRunPlan(d) { if (d.hasPlan) load(true); },
-    // a reattach: the workspace may already hold a plan
-    onState(st) { if (st.hasPlan) load(false); },
+    // a reattach or a query tab coming on screen: its workspace may hold
+    // a plan — shown again if it was on screen when the tab was left
+    onState(st) { if (st.hasPlan) load(!!st.openPlan); },
   });
 })();

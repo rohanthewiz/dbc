@@ -42,6 +42,18 @@ func Default() Palette {
 	}
 }
 
+// Light is the palette's daylight variant: the same muted green on paper
+// instead of on slate, for dbc web's light mode (a terminal brings its own
+// background, so the TUI never needs one). The values are the ones the
+// standalone plan page's light toggle uses (explain/assets/plan.css), so a
+// plan opened from a light workbench looks like the workbench it came from.
+func Light() Palette {
+	return Palette{
+		Bg: "#f6f8f6", Panel: "#ffffff", Panel2: "#eef2ee", Sel: "#d7e8dc", Line: "#d3dbd4",
+		Fg: "#1f2a22", Muted: "#5f7066", Accent: "#2e8f5f", Warn: "#b7791f", Err: "#c53d3d",
+	}
+}
+
 // Blend mixes fg over bg at the given alpha (0 = bg, 1 = fg) and returns the
 // result as "#rrggbb". Both inputs must parse; anything else returns bg
 // unchanged, so a caller that is already refusing non-hex input gets a

@@ -66,7 +66,7 @@ func (e *testEnv) transcript(id string) chatSnapshot {
 func (e *testEnv) runQuery(id string, s *stream, sql string) int {
 	e.t.Helper()
 	e.api("POST", "/api/v1/ws/"+id+"/run", runBody(sql, 0, false), 200)
-	s.await(e.t, "run")
+	s.awaitFrom(e.t, id, "run")
 	return decodeData[resultPage](e.t, e.api("GET", "/api/v1/ws/"+id+"/result?n=1", "", 200)).Seq
 }
 

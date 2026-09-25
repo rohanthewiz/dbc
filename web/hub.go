@@ -3,6 +3,7 @@ package web
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -14,67 +15,77 @@ import (
 	"github.com/rohanthewiz/dbc/workspace"
 )
 
-// Each browser tab is a WORKSPACE: its own workspace.Workspace — active
-// connection, pinned session, run slot, last result — and its own SSE
-// stream. So a BEGIN in one tab does not leak into another, exactly as two
-// TUI windows behave.
+// A browser tab is a WINDOW holding one or more QUERY TABS. Each query tab
+// is a workspace: its own workspace.Workspace — active connection, pinned
+// session, run slot, last result, plan — so a BEGIN in one query tab does
+// not leak into another, exactly as two TUI windows behave. The window owns
+// what there is one of per browser tab: the event stream, the assistant,
+// and the idle clock.
 //
-// A tab's life:
+//	window ─┬─ SSE stream (one EventSource)      events carry "ws": the query tab
+//	        ├─ assistant (chat.go)               asks about the active query tab
+//	        ├─ query tab 1 ── Workspace (session A)
+//	        └─ query tab 2 ── Workspace (session B)
 //
-//	POST /api/v1/ws ──► open: new Workspace + SSE hub, id → the page
-//	GET  …/events   ──► stream attached (the page's EventSource)
-//	  commands (POST …/run, …/cancel) start Jobs; their events go out on it
-//	stream detached (tab closed, laptop asleep) ── idle clock starts
-//	  a new stream within the grace period reattaches: same session, same
-//	  open transaction (a reload keeps the id in sessionStorage)
-//	idle > releaseAfter (conn_idle_timeout) ──► Close: run stopped, session
-//	  released (its transaction rolled back); the workspace stays usable
-//	idle > forgetAfter (a day) ──► forgotten; its id now answers 404 and the
-//	  page opens a new one
+// WHY ONE STREAM PER WINDOW, NOT PER QUERY TAB: a browser allows about six
+// HTTP/1.1 connections per host, and an EventSource holds one for good. A
+// stream per query tab would let the seventh query tab — or three windows
+// of three — starve every fetch the page makes. So every event goes out on
+// the window's stream as {"type", "ws", "data"}, and the page routes it by
+// ws: the active query tab draws it; a background one marks its tab busy or
+// done and prefixes its log lines.
+//
+// A window's life:
+//
+//	POST /api/v1/ws        ──► a new window and its first query tab
+//	POST /api/v1/ws {win}  ──► another query tab in that window
+//	GET  /api/v1/win/:id/events ──► the window's stream attached
+//	  commands (POST /api/v1/ws/:id/run, …/cancel) start Jobs; their events
+//	  go out on the window's stream, tagged with the query tab
+//	DELETE /api/v1/ws/:id  ──► a query tab closed: its session released
+//	stream detached (browser tab closed, laptop asleep) ── idle clock starts
+//	  a new stream within the grace period reattaches: same sessions, same
+//	  open transactions (a reload keeps the ids in sessionStorage)
+//	idle > releaseAfter (conn_idle_timeout) ──► every query tab's session
+//	  released (transactions rolled back); the workspaces stay usable
+//	idle > forgetAfter (a day) ──► the window and its query tabs forgotten;
+//	  their ids now answer 404 and the page opens new ones
 //
 // Why a clock rather than closing on disconnect: EventSource drops and
 // reconnects on its own — a flaky network, a sleeping laptop, a reload —
 // and a transaction the user left open must survive that.
 
-// forgetAfter is how long a tab with no stream is kept at all.
+// forgetAfter is how long a window with no stream is kept at all.
 const forgetAfter = 24 * time.Hour
 
-// hub owns the open tabs.
+// hub owns the open windows and their query tabs.
 type hub struct {
 	mu   sync.Mutex
-	tabs map[string]*tab
+	wins map[string]*window
+	tabs map[string]*tab // every window's query tabs, by id
 
-	// newWorkspace builds a tab's workspace, wired to send its mid-run
-	// events (a script's output) to the tab's stream.
+	// newWorkspace builds a query tab's workspace, wired to send its mid-run
+	// events (a script's output) to the window's stream.
 	newWorkspace func(sink func(workspace.Event)) *workspace.Workspace
-	// newChat builds a tab's assistant (chat.go). It starts nothing: the
+	// newChat builds a window's assistant (chat.go). It starts nothing: the
 	// agent is spawned when the pane is first opened.
-	newChat func(t *tab) *assistant
+	newChat func(w *window) *assistant
 
-	releaseAfter time.Duration // 0: never release an idle tab's session
+	releaseAfter time.Duration // 0: never release an idle window's sessions
 	forgetAfter  time.Duration
 }
 
-// tab is one browser tab's workspace and stream.
-type tab struct {
+// window is one browser tab: its stream, its assistant, its idle clock.
+type window struct {
 	id  string
-	ws  *workspace.Workspace
 	sse *rweb.SSEHub
 
 	// sendMu serializes sends to sse. rweb's SSEHub (v0.1.31) updates each
 	// client's drop counter under its READ lock, so two broadcasts at once
-	// race on it — and a tab has several senders: the request handler, the
-	// run's ticker, the Job's goroutine. One lock per tab also gives the
-	// page a single order of events.
+	// race on it — and a window has many senders: request handlers, each
+	// run's ticker, each Job's goroutine, the assistant. One lock per window
+	// also gives the page a single order of events.
 	sendMu sync.Mutex
-
-	// the grid's cache of the last result and its sort order (grid.go);
-	// rvSeq numbers results, so a copy can tell it is still looking at
-	// the one the page drew
-	viewMu sync.Mutex
-	rv     resultView
-	rvSeq  int
-	ps     planState // the Plan tab's plan and its "before" (plan.go)
 
 	chat *assistant // the assistant pane's conversation (chat.go)
 
@@ -83,38 +94,67 @@ type tab struct {
 	released  bool      // the idle release has run since the last attach
 }
 
+// tab is one query tab: a workspace and the page's views of it.
+type tab struct {
+	id  string
+	win *window
+	ws  *workspace.Workspace
+
+	// the grid's cache of the last result and its sort order (grid.go);
+	// rvSeq numbers results, so a copy can tell it is still looking at
+	// the one the page drew
+	viewMu sync.Mutex
+	rv     resultView
+	rvSeq  int
+	ps     planState // the Plan tab's plan and its "before" (plan.go)
+}
+
 func newHub(newWS func(sink func(workspace.Event)) *workspace.Workspace, releaseAfter time.Duration) *hub {
 	return &hub{
-		tabs: map[string]*tab{}, newWorkspace: newWS,
+		wins: map[string]*window{}, tabs: map[string]*tab{}, newWorkspace: newWS,
 		releaseAfter: releaseAfter, forgetAfter: forgetAfter,
 	}
 }
 
-// open makes a new tab. The workspace does no IO yet: the page asks for a
-// connect once its stream is attached, so that connect's events have
-// somewhere to go.
-func (h *hub) open() *tab {
-	t := &tab{id: newID(), idleSince: time.Now()}
-	t.sse = rweb.NewSSEHub(rweb.SSEHubOptions{
-		// A run's events come in bursts (notes, then the outcome); 256
-		// absorbs any burst a browser tab could fall behind on. A client
-		// that stays full through 3 sends is gone, and is dropped; its
-		// EventSource reconnects if it was merely slow.
-		ChannelSize: 256,
-		MaxDropped:  3,
-		// a comment line every 20 s keeps an idle stream from being cut by
-		// anything in between, and lets a dead peer be noticed
-		HeartbeatInterval: 20 * time.Second,
-	})
+// open makes a query tab: in window winID when it is given, else in a new
+// window. The workspace does no IO yet: the page asks for a connect once
+// the window's stream is attached, so that connect's events have somewhere
+// to go.
+func (h *hub) open(winID string) (*tab, error) {
+	var w *window
+	if winID != "" {
+		var err error
+		if w, err = h.window(winID); err != nil {
+			return nil, err
+		}
+	} else {
+		w = &window{id: newID(), idleSince: time.Now()}
+		w.sse = rweb.NewSSEHub(rweb.SSEHubOptions{
+			// A run's events come in bursts (notes, then the outcome); 256
+			// absorbs any burst a browser tab could fall behind on. A client
+			// that stays full through 3 sends is gone, and is dropped; its
+			// EventSource reconnects if it was merely slow.
+			ChannelSize: 256,
+			MaxDropped:  3,
+			// a comment line every 20 s keeps an idle stream from being cut
+			// by anything in between, and lets a dead peer be noticed
+			HeartbeatInterval: 20 * time.Second,
+		})
+		w.chat = h.newChat(w)
+	}
+	t := &tab{id: newID(), win: w}
 	t.ws = h.newWorkspace(t.sink)
-	t.chat = h.newChat(t)
 	h.mu.Lock()
+	defer h.mu.Unlock()
+	if winID != "" && h.wins[winID] != w {
+		return nil, notFound("no window %q — it was forgotten meanwhile", winID)
+	}
+	h.wins[w.id] = w
 	h.tabs[t.id] = t
-	h.mu.Unlock()
-	return t
+	return t, nil
 }
 
-// get finds a tab by id.
+// get finds a query tab by id.
 func (h *hub) get(id string) (*tab, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -125,60 +165,129 @@ func (h *hub) get(id string) (*tab, error) {
 	return t, nil
 }
 
-// reap applies the idle rules to every tab; run periodically. Releasing
-// waits on the session (a statement still returning from its cancel), so it
-// runs off the lock, on its own goroutine per tab.
-func (h *hub) reap(now time.Time) {
-	var release, forget []*tab
+// window finds a window by id.
+func (h *hub) window(id string) (*window, error) {
 	h.mu.Lock()
-	for id, t := range h.tabs {
-		if t.sse.ClientCount() > 0 {
-			t.idleSince, t.released = time.Time{}, false
+	defer h.mu.Unlock()
+	w, ok := h.wins[id]
+	if !ok {
+		return nil, notFound("no window %q — it was forgotten or dbc web restarted", id)
+	}
+	return w, nil
+}
+
+// tabsOf lists a window's query tabs.
+func (h *hub) tabsOf(w *window) []*tab {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.tabsOfLocked(w)
+}
+
+func (h *hub) tabsOfLocked(w *window) []*tab {
+	var out []*tab
+	for _, t := range h.tabs {
+		if t.win == w {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// close closes one query tab: its run stopped, its session released — the
+// transaction it held rolled back — and its id forgotten. The window and
+// its other query tabs are untouched. Releasing waits for a statement to
+// return from its cancel, so it runs on its own goroutine.
+func (h *hub) close(id string) (*tab, error) {
+	h.mu.Lock()
+	t, ok := h.tabs[id]
+	delete(h.tabs, id)
+	h.mu.Unlock()
+	if !ok {
+		return nil, notFound("no workspace %q — it was closed or dbc web restarted", id)
+	}
+	t.ws.Stop()
+	go t.ws.Close()
+	return t, nil
+}
+
+// reap applies the idle rules to every window; run periodically. Releasing
+// waits on the sessions (a statement still returning from its cancel), so
+// it runs off the lock, on its own goroutine per query tab.
+func (h *hub) reap(now time.Time) {
+	var release []*tab
+	var forget []*window
+	var forgetTabs [][]*tab
+	h.mu.Lock()
+	for id, w := range h.wins {
+		if w.sse.ClientCount() > 0 {
+			w.idleSince, w.released = time.Time{}, false
 			continue
 		}
-		if t.idleSince.IsZero() {
-			t.idleSince = now
+		if w.idleSince.IsZero() {
+			w.idleSince = now
 		}
-		idle := now.Sub(t.idleSince)
+		idle := now.Sub(w.idleSince)
 		switch {
 		case idle >= h.forgetAfter:
-			delete(h.tabs, id)
-			forget = append(forget, t)
-		case h.releaseAfter > 0 && idle >= h.releaseAfter && !t.released:
-			t.released = true
-			release = append(release, t)
+			ts := h.tabsOfLocked(w)
+			for _, t := range ts {
+				delete(h.tabs, t.id)
+			}
+			delete(h.wins, id)
+			forget, forgetTabs = append(forget, w), append(forgetTabs, ts)
+		case h.releaseAfter > 0 && idle >= h.releaseAfter && !w.released:
+			w.released = true
+			release = append(release, h.tabsOfLocked(w)...)
 		}
 	}
 	h.mu.Unlock()
 	for _, t := range release {
 		go t.ws.Close()
 	}
-	for _, t := range forget {
-		go func() { t.chat.close(); t.ws.Close(); t.sse.Close() }()
+	for i, w := range forget {
+		go func() {
+			w.chat.close()
+			for _, t := range forgetTabs[i] {
+				t.ws.Close()
+			}
+			w.sse.Close()
+		}()
 	}
 }
 
-// closeAll stops and releases every tab's workspace — the shutdown path.
-// Each Close waits for its statement to return from the cancel, so they run
-// in parallel, and the whole thing gives up after grace: a driver that
-// never answers its cancel must not keep dbc from exiting.
+// closeAll stops and releases every query tab's workspace — the shutdown
+// path. Each Close waits for its statement to return from the cancel, so
+// they run in parallel, and the whole thing gives up after grace: a driver
+// that never answers its cancel must not keep dbc from exiting.
 func (h *hub) closeAll(grace time.Duration) (timedOut bool) {
 	h.mu.Lock()
 	tabs := make([]*tab, 0, len(h.tabs))
 	for _, t := range h.tabs {
 		tabs = append(tabs, t)
 	}
+	wins := make([]*window, 0, len(h.wins))
+	for _, w := range h.wins {
+		wins = append(wins, w)
+	}
 	h.mu.Unlock()
 
 	var wg sync.WaitGroup
 	for _, t := range tabs {
 		t.ws.Stop() // cancel everything first, so no Close waits on another's run
+	}
+	for _, t := range tabs {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			t.chat.close() // saved, as quitting the TUI saves
 			t.ws.Close()
-			t.sse.Close()
+		}()
+	}
+	for _, w := range wins {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w.chat.close() // saved, as quitting the TUI saves
+			w.sse.Close()
 		}()
 	}
 	done := make(chan struct{})
@@ -192,24 +301,24 @@ func (h *hub) closeAll(grace time.Duration) (timedOut bool) {
 }
 
 // liveChat reports whether a saved conversation is the live one of some
-// tab's assistant — which must not be deleted from the list, since that
-// tab's next save would write it straight back.
+// window's assistant — which must not be deleted from the list, since that
+// window's next save would write it straight back.
 func (h *hub) liveChat(id string) bool {
 	h.mu.Lock()
-	tabs := make([]*tab, 0, len(h.tabs))
-	for _, t := range h.tabs {
-		tabs = append(tabs, t)
+	wins := make([]*window, 0, len(h.wins))
+	for _, w := range h.wins {
+		wins = append(wins, w)
 	}
 	h.mu.Unlock()
-	for _, t := range tabs {
-		if t.chat.liveID() == id {
+	for _, w := range wins {
+		if w.chat.liveID() == id {
 			return true
 		}
 	}
 	return false
 }
 
-// count is the number of open tabs, for the health check.
+// count is the number of open query tabs, for the health check.
 func (h *hub) count() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -217,16 +326,32 @@ func (h *hub) count() int {
 }
 
 // ---------------------------------------------------------------------------
-// Sending to a tab
+// Sending
 // ---------------------------------------------------------------------------
 
-// send puts one event on the tab's stream as {"type": typ, "data": data},
-// the SSE hub's JSON wrapping, so the page has a single onmessage switch.
-func (t *tab) send(typ string, data any) {
-	t.sendMu.Lock()
-	defer t.sendMu.Unlock()
-	t.sse.BroadcastAny(typ, data)
+// wireEvent is one event as the page reads it. WS names the query tab it
+// belongs to; "" is the window's own (the assistant's).
+type wireEvent struct {
+	Type string `json:"type"`
+	WS   string `json:"ws,omitempty"`
+	Data any    `json:"data"`
 }
+
+// send puts one event on the window's stream. It is the JSON rweb's
+// BroadcastAny would write, plus "ws" — sent raw, as a "message" event, so
+// the page keeps its single onmessage switch.
+func (w *window) send(typ, ws string, data any) {
+	b, err := json.Marshal(wireEvent{Type: typ, WS: ws, Data: data})
+	if err != nil {
+		return // every event type here is plain data; this cannot happen
+	}
+	w.sendMu.Lock()
+	defer w.sendMu.Unlock()
+	w.sse.BroadcastRaw(rweb.SSEvent{Type: "message", Data: string(b)})
+}
+
+// send puts one of this query tab's events on its window's stream.
+func (t *tab) send(typ string, data any) { t.win.send(typ, t.id, data) }
 
 // logLine is a log event's data.
 type logLine struct {

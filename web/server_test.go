@@ -143,6 +143,7 @@ func decodeData[T any](t *testing.T, env testEnvelope) T {
 // sseEvent is one {type, data} event off a tab's stream.
 type sseEvent struct {
 	Type string          `json:"type"`
+	WS   string          `json:"ws"` // the query tab; "" for the window's own
 	Data json.RawMessage `json:"data"`
 }
 
@@ -182,7 +183,7 @@ func (e *testEnv) open() (id string, s *stream) {
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		t, _ := e.srv.hub.get(st.ID)
-		if t.sse.ClientCount() > 0 {
+		if t.win.sse.ClientCount() > 0 {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -509,7 +510,7 @@ func TestIdleTabReleasedThenForgotten(t *testing.T) {
 		t.Fatal("no open transaction to release")
 	}
 	_ = s.body.Close()
-	for deadline := time.Now().Add(3 * time.Second); tb.sse.ClientCount() > 0; {
+	for deadline := time.Now().Add(3 * time.Second); tb.win.sse.ClientCount() > 0; {
 		if time.Now().After(deadline) {
 			t.Fatal("the stream never detached")
 		}

@@ -8,7 +8,7 @@
 //   grid.js    dbc.grid                             (the virtualized results grid)
 //   plan.js    DbcPlan                              (the plan view, shared with the standalone page)
 //   chat.js    dbc.chat                             (the assistant pane)
-//   app.js     boot, the event stream, commands, keys
+//   app.js     boot, query tabs, the event stream, commands, keys
 //
 // dbc.cmd is the command table (run, stop, explain, history, …). app.js
 // fills it; the editor's key bindings and the menus call through it, so a
@@ -20,7 +20,9 @@
   const $ = (id) => document.getElementById(id);
 
   dbc.state = {
-    ws: "",          // the workspace id
+    win: "",         // the window (this browser tab): its stream and assistant
+    tab: null,       // the active query tab (app.js); its workspace is ws
+    ws: "",          // the active query tab's workspace id
     active: "",      // the active connection
     driver: "",      // its driver, for the editor's SQL dialect
     busy: false,
@@ -70,10 +72,13 @@
     log.scrollTop = log.scrollHeight;
   };
 
+  // setStatus writes the status bar — the active query tab's — and keeps
+  // it with the tab, so switching back shows what it last said.
   dbc.setStatus = function (text, level) {
     const s = $("status");
     s.textContent = text;
     s.className = level || "";
+    if (dbc.state.tab) Object.assign(dbc.state.tab, { status: text, level: level || "" });
   };
 
   // el builds an element: el("div", "cls", "text") or el("div", {class, title, …}, child…)

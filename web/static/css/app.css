@@ -348,7 +348,6 @@ button.primary { border-color: var(--accent); }
 .statusbar {
   grid-area: foot;
   display: flex;
-  justify-content: space-between;
   gap: 12px;
   padding: 3px 12px;
   background: var(--panel2);
@@ -356,6 +355,8 @@ button.primary { border-color: var(--accent); }
   color: var(--muted);
   font-size: 12px;
 }
+#status { margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.statusbar .keys { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 #status.err { color: var(--err); }
 #status.warn { color: var(--warn); }
 
@@ -468,6 +469,60 @@ a.btnlink:hover { border-color: var(--accent); }
   .chat { top: 0; bottom: 0; width: 100vw; }
   .chat-split { display: none; }
 }
+
+/* ── query tabs ─────────────────────────────────────────────────────────── */
+.qtabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  padding: 4px 6px 0;
+  background: var(--panel2);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.qtab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 200px;
+  padding: 3px 6px 3px 10px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 5px 5px 0 0;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+.qtab:hover { color: var(--fg); background: var(--panel); }
+.qtab.on { color: var(--fg); background: var(--bg); border-color: var(--line); margin-bottom: -1px; }
+.qtab .qt { overflow: hidden; text-overflow: ellipsis; }
+.qmark { display: flex; gap: 3px; font-size: 10px; }
+.qbusy { color: var(--warn); animation: pulse 1s ease-in-out infinite; }
+.qdone { color: var(--accent); font-size: 16px; line-height: 10px; }
+.qfail { color: var(--err); font-size: 16px; line-height: 10px; }
+.qstate { color: var(--warn); }
+.qx { border: 0; background: none; padding: 0 3px; color: var(--muted); line-height: 1; }
+.qx:hover { color: var(--err); }
+.qnew { border: 0; background: none; color: var(--muted); padding: 0 10px; font-size: 15px; }
+.qnew:hover { color: var(--accent); }
+.qrename { width: 120px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--accent); border-radius: 3px; padding: 0 4px; }
+
+.iconbtn { padding: 3px 8px; }
+.statusbar .help-btn { border: 0; background: none; color: var(--muted); font-size: 12px; padding: 0 0 0 10px; white-space: nowrap; }
+.statusbar .help-btn:hover { color: var(--accent); }
+
+/* the key list (F1) */
+.keyhelp { padding: 8px 14px 12px; overflow: auto; max-height: 70vh; columns: 2 300px; column-gap: 28px; }
+.keyhelp section { break-inside: avoid; margin-bottom: 10px; }
+.keyhelp h3 { margin: 6px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--accent); }
+.keyhelp dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; }
+.keyhelp dt { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg); white-space: nowrap; }
+.keyhelp dd { margin: 0; color: var(--muted); }
+.confirm { padding: 10px 14px; max-width: 460px; }
+.errcode { color: var(--muted); font-weight: 400; margin-right: 6px; }
 
 /* the sign-in notice */
 .signin { max-width: 520px; margin: 12vh auto; padding: 0 16px; }

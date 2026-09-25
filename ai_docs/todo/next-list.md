@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-043
+**Next ID:** N-044
 
 ## Open
 
@@ -45,16 +45,6 @@ ten session docs in `ai_docs/claude_sessions/`
   terminal paste right after gets nothing or markup. Serving both needs
   owning the selection; only worth it if a Linux user trips on it.
 
-- **N-035** · raised `2026-0924-1725-conn-mgmt-session-discard-timeouts` · value low
-  Test the session changes against a live MySQL and Postgres. The MySQL
-  driver's session reset leaving an open transaction on a pooled connection
-  was confirmed by reading `go-sql-driver/mysql` v1.10.0; the tests used
-  SQLite and bytdb only. Worth checking against real servers: that closing a
-  session ends its transaction, that the stateful and stateless dead-session
-  paths behave (including `Session.Classify`'s pgx branch, which asks
-  `pgx.Conn.IsClosed` and has no test without a live connection), and
-  `conn_idle_timeout`/`connect_timeout`.
-
 - **N-042** · raised `2026-0925-1145-readme-example-and-live-schema-lookup` · value low
   Postgres materialized views never reach the sidebar or the assistant:
   `db.TablesQuery` reads `information_schema.tables`, which does not list
@@ -62,6 +52,16 @@ ten session docs in `ai_docs/claude_sessions/`
   relkind `'m'`, so only the listing is missing — e.g. a `UNION ALL` over
   `pg_matviews` with table_type `MATERIALIZED VIEW`, which `TableRefs` would
   already read as a view.
+
+- **N-043** · raised `2026-0925-1203-live-session-and-timeout-tests` · value low
+  pgx pings a pooled connection before reuse only when it has sat idle more
+  than 1s since its last checkout (stdlib `ResetSession`, v5.10.0). So a
+  Postgres connection the server cuts and dbc reuses within that second
+  fails its first statement once, instead of being replaced quietly as
+  `config.DefaultConnIdleTimeout`'s comment says. MySQL checks on every
+  checkout. Interactive use doesn't reuse that fast; `stdlib.OptionShouldPing`
+  (ping on every checkout, one round trip each) would close it if a script or
+  refresh ever trips on it.
 
 ## Roadmap
 
@@ -94,6 +94,9 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-035** · raised `2026-0924-1725-conn-mgmt-session-discard-timeouts` ·
+  closed 2026-09-25, 2026-0925-1203-live-session-and-timeout-tests — ran against Postgres 17.11 and MySQL 8.4.11 in throwaway containers; no product change needed. `db/live_session_test.go` (opt-in, same DSN variables) checks: Close ends the transaction, row lock, SET and temp table, and the server drops the connection; the drivers' own pool reset keeps SET/temp tables on both, and MySQL keeps an open transaction (the reason Close discards); killed and idle-timed-out sessions classify Drop/Lost, then Retry/Lost, with the pgx `IsClosed` branch doing the catching; an SQL error keeps the session; `conn_idle_timeout` closes idle pooled connections and spares a session; `connect_timeout` spares long statements. `TestConnectTimeoutBoundsOpen` now covers MySQL too. Raised N-043.
 
 - **N-032** · raised `2026-0924-1458-assistant-schema-context` ·
   closed 2026-09-25, 2026-0925-1145-readme-example-and-live-schema-lookup — ran against Postgres 17.11 and MySQL 8.4.11 in

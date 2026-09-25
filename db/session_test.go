@@ -345,3 +345,75 @@ func TestConnectTimeoutBoundsOpen(t *testing.T) {
 		t.Errorf("open failed after %s, want about the 300ms connect_timeout", elapsed)
 	}
 }
+
+// A WITH is judged by the verb after its CTE list, and by what its CTEs do:
+// whether it runs as a Query (isQuery) and whether it leaves the session
+// stateful (isRead negated).
+func TestIsQueryIsReadWith(t *testing.T) {
+	cases := []struct {
+		stmt        string
+		query, read bool
+	}{
+		{"WITH x AS (SELECT 1) SELECT * FROM x", true, true},
+		{"WITH x AS (SELECT 1) UPDATE t SET a = 1", false, false},
+		{"WITH x AS (SELECT 1) DELETE FROM t WHERE id IN (SELECT * FROM x)", false, false},
+		{"WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x", false, false},
+		{"WITH x AS (SELECT 1) DELETE FROM t RETURNING id", true, false},
+		// a write in a CTE returns rows to the statement, not to the caller
+		{"WITH d AS (DELETE FROM t RETURNING id) INSERT INTO log SELECT id FROM d", false, false},
+		// a SELECT that writes: rows back, but not a read
+		{"WITH d AS (DELETE FROM t RETURNING *) SELECT count(*) FROM d", true, false},
+		// unchanged for everything that is not a WITH
+		{"SELECT 1", true, true},
+		{"INSERT INTO t VALUES (1) RETURNING id", true, false},
+		{"UPDATE t SET a = 1", false, false},
+	}
+	for _, c := range cases {
+		if got := isQuery(c.stmt); got != c.query {
+			t.Errorf("isQuery(%q) = %v, want %v", c.stmt, got, c.query)
+		}
+		if got := isRead(c.stmt); got != c.read {
+			t.Errorf("isRead(%q) = %v, want %v", c.stmt, got, c.read)
+		}
+	}
+}
+
+// A write behind a CTE list reports rows affected — it used to run as a
+// Query and show an empty result — and leaves the session stateful, as any
+// other write does. With RETURNING it hands back its rows.
+func TestSessionWithWrite(t *testing.T) {
+	mgr := fileSQLiteMgr(t)
+	ctx := context.Background()
+	for _, s := range []string{
+		"CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)",
+		"INSERT INTO t (v) VALUES ('a'), ('b'), ('c')",
+	} {
+		if _, err := mgr.Run("f", s); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	sess, err := mgr.Session(ctx, "f")
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	defer sess.Close()
+
+	res, err := sess.Run(ctx, "WITH old AS (SELECT id FROM t WHERE id < 3) UPDATE t SET v = 'x' WHERE id IN (SELECT id FROM old)")
+	if err != nil {
+		t.Fatalf("with update: %v", err)
+	}
+	if !res.IsExec || res.Affected != 2 {
+		t.Errorf("exec=%v affected=%d rows=%v, want 2 rows affected", res.IsExec, res.Affected, res.Rows)
+	}
+	if !sess.Stateful() {
+		t.Error("not stateful after WITH … UPDATE")
+	}
+
+	res, err = sess.Run(ctx, "WITH gone AS (SELECT 3 AS id) DELETE FROM t WHERE id IN (SELECT id FROM gone) RETURNING v")
+	if err != nil {
+		t.Fatalf("with delete returning: %v", err)
+	}
+	if res.IsExec || len(res.Rows) != 1 || res.Rows[0][0] != "c" {
+		t.Errorf("exec=%v rows=%v, want [[c]] as rows", res.IsExec, res.Rows)
+	}
+}

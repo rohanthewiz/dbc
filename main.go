@@ -160,7 +160,11 @@ func rootAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		usage(err.Error())
 	}
-	cfg, mgr := setup()
+	demos := demoForRun
+	if !headless {
+		demos = demoAll
+	}
+	cfg, mgr := setup(demos)
 	defer mgr.Close()
 
 	if !headless {
@@ -179,7 +183,9 @@ func scriptAction(ctx context.Context, cmd *cli.Command) error {
 	if cmd.Args().Len() != 1 {
 		usage("usage: dbc script <file.go>")
 	}
-	cfg, mgr := setup()
+	// A script names its own connections, so nothing is opened for it up
+	// front: each demo it uses seeds on first use.
+	cfg, mgr := setup(demoLazy)
 	defer mgr.Close()
 	warnConfig(cfg)
 	runScriptHeadless(mgr, cmd.Args().First(), outFormat())
@@ -188,7 +194,7 @@ func scriptAction(ctx context.Context, cmd *cli.Command) error {
 
 func migrateAction(ctx context.Context, cmd *cli.Command) error {
 	refuseFile("migrate")
-	cfg, mgr := setup()
+	cfg, mgr := setup(demoForRun)
 	defer mgr.Close()
 	warnConfig(cfg)
 	runMigrate(cfg, mgr, cmd.Args().Slice(), outFormat())
@@ -264,10 +270,31 @@ func refuseFile(sub string) {
 	}
 }
 
-// setup loads the config, builds the connection manager and seeds the demos.
-// It runs inside the actions, not before cli parsing, so `dbc --help` and a
-// usage error cost nothing and touch no database. The caller owns mgr.Close.
-func setup() (*config.Config, *db.Manager) {
+// demoOpen is how much of the built-in demo a command opens up front, when
+// there is no config and the app runs on the demos. Opening a demo seeds it
+// (db.Manager seeds a demo on first open), so this is also how much seeding a
+// launch pays for — and the bytdb demo is a file, so opening it is a write to
+// the cache directory that a run which never uses it should not make.
+type demoOpen int
+
+const (
+	// demoAll opens every demo, dropping any that cannot be opened. The TUI
+	// lists every connection, so it has to know up front which ones work.
+	demoAll demoOpen = iota
+	// demoForRun opens only the active demo, and only when the run will use
+	// it (no -c, no --dsn); if it cannot be opened the other demo takes over
+	// as the default, with a warning, as it does in the TUI. A run that names
+	// a connection opens just that one, on first use.
+	demoForRun
+	// demoLazy opens nothing: every demo seeds on first use, if at all.
+	demoLazy
+)
+
+// setup loads the config, builds the connection manager and opens as much of
+// the built-in demo as demos asks for (see demoOpen). It runs inside the
+// actions, not before cli parsing, so `dbc --help` and a usage error cost
+// nothing and touch no database. The caller owns mgr.Close.
+func setup(demos demoOpen) (*config.Config, *db.Manager) {
 	demo, err := config.ParseDemoEngine(flagDemo)
 	if err != nil {
 		fail(err, "bad --demo engine")
@@ -280,15 +307,23 @@ func setup() (*config.Config, *db.Manager) {
 		fail(err, "bad --dsn/--driver")
 	}
 	mgr := db.NewManager(cfg)
+	if !cfg.Demo {
+		return cfg, mgr
+	}
 
 	// With no config the app runs on the built-in demos — one per embedded
-	// engine — and each gets the same seed data. SeedDemos prunes any that
-	// cannot be opened, so one bad demo does not stop the launch.
-	if cfg.Demo {
-		if err = db.SeedDemos(mgr, cfg); err != nil {
-			mgr.Close()
-			fail(err, "could not seed demo data")
-		}
+	// engine — and each gets the same seed data, when it is first opened.
+	// Both open paths below prune a demo that cannot be opened, so one bad
+	// demo does not stop the launch.
+	switch {
+	case demos == demoAll:
+		err = db.SeedDemos(mgr, cfg)
+	case demos == demoForRun && flagConn == "" && flagDSN == "":
+		err = db.OpenDefaultDemo(mgr, cfg)
+	}
+	if err != nil {
+		mgr.Close()
+		fail(err, "could not open the demo connection")
 	}
 	return cfg, mgr
 }

@@ -1,6 +1,10 @@
 package sqlsplit
 
-import "testing"
+import (
+	"reflect"
+	"strings"
+	"testing"
+)
 
 func texts(stmts []Stmt) []string {
 	out := make([]string, len(stmts))
@@ -158,6 +162,52 @@ func TestFirstKeyword(t *testing.T) {
 	for in, want := range cases {
 		if got := FirstKeyword(in); got != want {
 			t.Errorf("FirstKeyword(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestVerbs(t *testing.T) {
+	cases := []struct {
+		in   string
+		main string
+		ctes []string
+	}{
+		{"SELECT 1", "select", nil},
+		{"-- note\nINSERT INTO t VALUES (1)", "insert", nil},
+		{"", "", nil},
+		// the verb after the CTE list is the statement's
+		{"WITH x AS (SELECT 1) SELECT * FROM x", "select", []string{"select"}},
+		{"WITH x AS (SELECT id FROM s) DELETE FROM t WHERE id IN (SELECT id FROM x)", "delete", []string{"select"}},
+		{"with x as (select 1) update t set a = 1", "update", []string{"select"}},
+		{"WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x", "insert", []string{"select"}},
+		{"WITH RECURSIVE n(i) AS (VALUES (1) UNION ALL SELECT i+1 FROM n WHERE i < 3) SELECT i FROM n",
+			"select", []string{"values"}},
+		{"WITH a AS (SELECT 1), b (c) AS NOT MATERIALIZED (SELECT 2) MERGE INTO t USING a ON true WHEN MATCHED THEN DELETE",
+			"merge", []string{"select", "select"}},
+		{"WITH a AS MATERIALIZED (SELECT 1) SELECT 1", "select", []string{"select"}},
+		// a CTE body that writes (Postgres)
+		{"WITH d AS (DELETE FROM t RETURNING *) SELECT count(*) FROM d", "select", []string{"delete"}},
+		{"WITH d AS (\n  -- gone\n  (DELETE FROM t RETURNING id)\n) INSERT INTO log SELECT id FROM d", "insert", []string{"delete"}},
+		// verbs inside strings, quoted names and comments are not verbs
+		{`WITH "update" AS (SELECT 'delete') /* insert */ SELECT * FROM "update"`, "select", []string{"select"}},
+		{"WITH `x` AS (SELECT 1) -- update\nDELETE FROM t", "delete", []string{"select"}},
+		{"WITH x AS (SELECT $$ update $$) UPDATE t SET a = $1", "update", []string{"select"}},
+		// Postgres SEARCH/CYCLE clauses use SET, which is not a main verb
+		{"WITH RECURSIVE r AS (SELECT 1) CYCLE id SET is_cycle USING path SELECT * FROM r", "select", []string{"select"}},
+		// a parenthesized main statement, and a WITH nested in it
+		{"WITH x AS (SELECT 1) (SELECT * FROM x)", "select", []string{"select"}},
+		{"(WITH x AS (SELECT 1) SELECT * FROM x)", "select", []string{"select"}},
+		// malformed: no main verb to find, so it stays a "with"
+		{"WITH x AS (SELECT 1)", "with", []string{"select"}},
+	}
+	for _, c := range cases {
+		got := Verbs(c.in)
+		if got.Main != c.main || !reflect.DeepEqual(got.CTEs, c.ctes) {
+			t.Errorf("Verbs(%q) = %q %q, want %q %q", c.in, got.Main, got.CTEs, c.main, c.ctes)
+			continue
+		}
+		if c.main != "" && !strings.EqualFold(c.in[got.MainAt:got.MainAt+len(c.main)], c.main) {
+			t.Errorf("Verbs(%q).MainAt = %d, points at %q", c.in, got.MainAt, c.in[got.MainAt:])
 		}
 	}
 }

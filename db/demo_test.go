@@ -1,6 +1,7 @@
 package db
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,8 +17,8 @@ func demoCfg(t *testing.T) *config.Config {
 		MaxRows: 1000,
 		Demo:    true,
 		Connections: []config.Connection{
-			{Name: config.DemoBytdb, Driver: "bytdb", DSN: filepath.Join(t.TempDir(), "demo.bytdb")},
-			{Name: config.DemoSQLite, Driver: "sqlite", DSN: "file:seedtest?mode=memory&cache=shared"},
+			{Name: config.DemoBytdb, Driver: "bytdb", DSN: filepath.Join(t.TempDir(), "demo.bytdb"), Demo: true},
+			{Name: config.DemoSQLite, Driver: "sqlite", DSN: "file:" + memName(t) + "?mode=memory&cache=shared", Demo: true},
 		},
 		DefaultConnection: config.DemoBytdb,
 	}
@@ -118,5 +119,146 @@ func TestSeedDemosFailsWhenNothingSeeds(t *testing.T) {
 
 	if err := SeedDemos(mgr, cfg); err == nil {
 		t.Fatal("no demo could be seeded, so SeedDemos should fail")
+	}
+}
+
+// memName is a shared in-memory SQLite name private to one test. Such a
+// database lives as long as any connection to it, so a fixed name would let
+// one test's rows leak into the next while an earlier Manager is still open.
+func memName(t *testing.T) string {
+	return "seedtest_" + strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
+}
+
+// opened reports whether the manager has a live pool for name — whether
+// anything so far has opened that connection.
+func opened(m *Manager, name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.conns[name]
+	return ok
+}
+
+// A demo seeds itself on first use, with nothing called up front, and a demo
+// nobody uses is never opened: the bytdb file is not even created.
+func TestDemoSeedsOnFirstUse(t *testing.T) {
+	cfg := demoCfg(t)
+	mgr := NewManager(cfg)
+	t.Cleanup(mgr.Close)
+
+	res, err := mgr.Run(config.DemoSQLite, "SELECT name FROM cats ORDER BY id")
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if len(res.Rows) != 8 || res.Rows[0][0] != "Whiskers" {
+		t.Errorf("rows = %v, want the 8 seeded cats", res.Rows)
+	}
+	if opened(mgr, config.DemoBytdb) {
+		t.Error("the bytdb demo was opened, but nothing used it")
+	}
+	if _, err = os.Stat(cfg.Connections[0].DSN); !os.IsNotExist(err) {
+		t.Errorf("bytdb demo file exists (stat err %v), want it untouched", err)
+	}
+}
+
+// Seeding happens once per open, not once per use: rows written after the
+// first use survive the next statement. Reseeding there would wipe the
+// user's demo edits mid-session.
+func TestDemoSeedsOncePerOpen(t *testing.T) {
+	cfg := demoCfg(t)
+	mgr := NewManager(cfg)
+	t.Cleanup(mgr.Close)
+
+	if _, err := mgr.Run(config.DemoBytdb,
+		"INSERT INTO cats (id, name, breed, age, adopted) VALUES (9, 'Zed', 'Tabby', 1, false)"); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	res, err := mgr.Run(config.DemoBytdb, "SELECT id FROM cats")
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if len(res.Rows) != 9 {
+		t.Errorf("%d rows, want the 8 seeded plus the one inserted", len(res.Rows))
+	}
+}
+
+// The ad-hoc --dsn connection rides along in a demo config, and it is the
+// user's database: opening the demos must not open it, and using it must not
+// seed it. Seeding runs DELETE FROM cats, so getting this wrong deletes the
+// user's rows in any table that happens to be called cats.
+func TestDemoSeedingLeavesUserConnectionAlone(t *testing.T) {
+	cfg := demoCfg(t)
+	userDSN := "file:" + filepath.Join(t.TempDir(), "user.db")
+	cfg.Connections = append(cfg.Connections,
+		config.Connection{Name: "dsn", Driver: "sqlite", DSN: userDSN})
+
+	// the user's own cats table, with a row the seed script would delete
+	setup := NewManager(cfg)
+	for _, s := range []string{
+		"CREATE TABLE cats (id INTEGER PRIMARY KEY, name TEXT, breed TEXT, age INTEGER, adopted BOOLEAN)",
+		"INSERT INTO cats VALUES (99, 'Mine', 'Tabby', 1, false)",
+	} {
+		if _, err := setup.Run("dsn", s); err != nil {
+			t.Fatalf("user db: %v", err)
+		}
+	}
+	setup.Close()
+
+	mgr := NewManager(cfg)
+	t.Cleanup(mgr.Close)
+	if err := SeedDemos(mgr, cfg); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if opened(mgr, "dsn") {
+		t.Error("SeedDemos opened the user's connection")
+	}
+	if len(cfg.Connections) != 3 {
+		t.Errorf("connections = %+v, want both demos and the user's kept", cfg.Connections)
+	}
+	res, err := mgr.Run("dsn", "SELECT name FROM cats")
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if len(res.Rows) != 1 || res.Rows[0][0] != "Mine" {
+		t.Errorf("user's cats = %v, want only their own row", res.Rows)
+	}
+}
+
+// A headless run on the active demo opens that demo alone.
+func TestOpenDefaultDemoOpensOnlyTheActiveDemo(t *testing.T) {
+	cfg := demoCfg(t)
+	mgr := NewManager(cfg)
+	t.Cleanup(mgr.Close)
+
+	if err := OpenDefaultDemo(mgr, cfg); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if !opened(mgr, config.DemoBytdb) || opened(mgr, config.DemoSQLite) {
+		t.Errorf("opened bytdb=%v sqlite=%v, want only the active bytdb demo",
+			opened(mgr, config.DemoBytdb), opened(mgr, config.DemoSQLite))
+	}
+	if len(cfg.Connections) != 2 || cfg.DefaultConnection != config.DemoBytdb {
+		t.Errorf("config changed: default %q, connections %+v", cfg.DefaultConnection, cfg.Connections)
+	}
+}
+
+// When the active demo cannot be opened — the bytdb file held by a running
+// TUI, say — a headless run falls back to the other one, as the TUI does.
+func TestOpenDefaultDemoFallsBack(t *testing.T) {
+	cfg := demoCfg(t)
+	cfg.Connections[0].DSN = t.TempDir() // a directory: bytdb cannot open it
+	mgr := NewManager(cfg)
+	t.Cleanup(mgr.Close)
+
+	if err := OpenDefaultDemo(mgr, cfg); err != nil {
+		t.Fatalf("open should fall back to the sqlite demo: %v", err)
+	}
+	if cfg.DefaultConnection != config.DemoSQLite {
+		t.Errorf("default = %q, want the sqlite demo", cfg.DefaultConnection)
+	}
+	if len(cfg.Warnings) != 1 || !strings.Contains(cfg.Warnings[0], config.DemoBytdb) {
+		t.Errorf("warnings = %v, want one naming the dropped demo", cfg.Warnings)
+	}
+	if _, err := mgr.Run(config.DemoSQLite, "SELECT id FROM cats"); err != nil {
+		t.Errorf("sqlite demo: %v", err)
 	}
 }

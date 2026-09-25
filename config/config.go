@@ -104,6 +104,14 @@ type Connection struct {
 	// something a production connection should do because a global switch
 	// was flipped. The query text and errors go regardless — see package ai.
 	AIRows bool `toml:"ai_rows"`
+
+	// Demo marks a built-in demo connection, the only kind db.Manager seeds
+	// with the demo cats table when it opens it. Set by demoFallback alone,
+	// never read from a file: seeding runs CREATE TABLE and DELETE FROM cats,
+	// so it must not be possible to switch on for a real database. It is a
+	// per-connection flag rather than Config.Demo because a demo config can
+	// also carry the ad-hoc --dsn connection, which is the user's database.
+	Demo bool `toml:"-"`
 }
 
 // Config is the application configuration.
@@ -275,7 +283,7 @@ func (c *Config) demoFallback(demo DemoEngine) {
 
 	sqliteConn := Connection{
 		Name: DemoSQLite, Driver: "sqlite",
-		DSN: "file:dbcdemo?mode=memory&cache=shared",
+		DSN: "file:dbcdemo?mode=memory&cache=shared", Demo: true,
 	}
 
 	path, err := DemoBytdbPath()
@@ -286,7 +294,7 @@ func (c *Config) demoFallback(demo DemoEngine) {
 		c.DefaultConnection = DemoSQLite
 		return
 	}
-	bytdbConn := Connection{Name: DemoBytdb, Driver: "bytdb", DSN: path}
+	bytdbConn := Connection{Name: DemoBytdb, Driver: "bytdb", DSN: path, Demo: true}
 
 	// active connection first: several call sites treat Connections[0] as the
 	// stand-in when a default cannot be resolved, and the TUI lists them in

@@ -75,7 +75,135 @@ func IndexAt(stmts []Stmt, offset int) int {
 // any leading comments, whitespace, and open parens skipped. It returns ""
 // when the statement holds no keyword.
 func FirstKeyword(sql string) string {
-	i := 0
+	return wordAt(sql, keywordAt(sql, 0))
+}
+
+// StmtVerbs is the shape of a statement's verbs: what it does at the top
+// level, and — for a WITH — what each of its CTEs does.
+type StmtVerbs struct {
+	// Main is the leading keyword of the main statement, lowercased. For a
+	// WITH it is the verb after the CTE list (`WITH x AS (…) DELETE …` is a
+	// "delete"); when that verb cannot be found it stays "with".
+	Main string
+	// MainAt is the byte offset in sql where Main starts, so a caller can
+	// look for a clause (RETURNING, say) in the main statement alone and not
+	// pick it up from a CTE body.
+	MainAt int
+	// CTEs holds the leading keyword of each CTE body, in order. Only
+	// Postgres lets a CTE be a write (`WITH d AS (DELETE … RETURNING *)
+	// SELECT …`), and that is what this is for: a SELECT that writes.
+	CTEs []string
+}
+
+// withMainVerbs are the words that can start the statement a CTE list
+// introduces. Any of them at the top level of a WITH, outside the CTE bodies,
+// is the main statement: none is a word the CTE list itself uses (AS,
+// RECURSIVE, [NOT] MATERIALIZED, Postgres's SEARCH … SET and CYCLE … USING),
+// and as reserved words none can be an unquoted CTE or column name.
+var withMainVerbs = map[string]bool{
+	"select": true, "insert": true, "update": true, "delete": true,
+	"merge": true, "values": true, "table": true,
+}
+
+// Verbs finds the verbs of a statement: the leading keyword, and for a WITH
+// the verb of the main statement past the CTE list and the verb of each CTE
+// body. Like the rest of the package it is lexical, not a parse: a WITH is
+// walked word by word at paren depth 0, skipping strings, quoted identifiers,
+// comments and everything inside parentheses.
+//
+//	WITH [RECURSIVE] name [(cols)] AS [NOT MATERIALIZED] ( body ) , … main
+//	                               │                     │              │
+//	                  prev word "as" / "materialized"  '(' → CTE verb   │
+//	          first withMainVerbs word at depth 0 ─────────────────────┘
+//
+// A '(' at depth 0 right after a ')' is neither a column list (which follows
+// a name) nor a CTE body (which follows AS): it is a parenthesized main
+// statement, `WITH x AS (…) (SELECT …)`, and its verb is read inside it.
+func Verbs(sql string) StmtVerbs {
+	at := keywordAt(sql, 0)
+	kw := wordAt(sql, at)
+	if kw != "with" {
+		return StmtVerbs{Main: kw, MainAt: at}
+	}
+	v := StmtVerbs{Main: kw, MainAt: at}
+	var (
+		depth      int
+		prevWord   string // the last depth-0 word, "" once any other token follows it
+		afterClose bool   // the last depth-0 token was a ')'
+	)
+	i := at + len(kw)
+	for i < len(sql) {
+		c := sql[i]
+		switch {
+		case isSpace(c):
+			i++
+			continue // whitespace does not change what came before
+		case isLineCommentAt(sql, i):
+			i = skipLineComment(sql, i)
+			continue
+		case isBlockCommentAt(sql, i):
+			i = skipBlockComment(sql, i)
+			continue
+		case c == '\'', c == '"', c == '`':
+			i = skipQuoted(sql, i, c)
+		case c == '$':
+			if tag, ok := dollarTag(sql, i); ok {
+				i = skipDollarQuoted(sql, i, tag)
+			} else {
+				i++
+			}
+		case c == '(':
+			if depth == 0 {
+				switch {
+				case prevWord == "as" || prevWord == "materialized":
+					body := keywordAt(sql, i+1)
+					v.CTEs = append(v.CTEs, wordAt(sql, body))
+				case afterClose:
+					// a parenthesized main statement; a nested WITH in it
+					// has its own CTE list, so read it the same way
+					inner := Verbs(sql[i:])
+					v.Main, v.MainAt = inner.Main, i+inner.MainAt
+					v.CTEs = append(v.CTEs, inner.CTEs...)
+					return v
+				}
+			}
+			depth++
+			i++
+		case c == ')':
+			depth--
+			i++
+			if depth == 0 {
+				prevWord, afterClose = "", true
+				continue
+			}
+		case isWordByte(c):
+			start := i
+			for i < len(sql) && isWordByte(sql[i]) {
+				i++
+			}
+			if depth == 0 {
+				w := strings.ToLower(sql[start:i])
+				if withMainVerbs[w] {
+					v.Main, v.MainAt = w, start
+					return v
+				}
+				prevWord, afterClose = w, false
+				continue
+			}
+		default:
+			i++
+		}
+		if depth == 0 {
+			prevWord, afterClose = "", false
+		}
+	}
+	return v
+}
+
+// keywordAt returns the offset of the first keyword at or after i, skipping
+// whitespace, comments and open parens as FirstKeyword does; len(sql) when
+// there is none.
+func keywordAt(sql string, i int) int {
 	for i < len(sql) {
 		switch {
 		case isSpace(sql[i]), sql[i] == '(':
@@ -85,14 +213,19 @@ func FirstKeyword(sql string) string {
 		case isBlockCommentAt(sql, i):
 			i = skipBlockComment(sql, i)
 		default:
-			start := i
-			for i < len(sql) && isWordByte(sql[i]) {
-				i++
-			}
-			return strings.ToLower(sql[start:i])
+			return i
 		}
 	}
-	return ""
+	return len(sql)
+}
+
+// wordAt returns the word starting at i, lowercased ("" when there is none).
+func wordAt(sql string, i int) string {
+	end := i
+	for end < len(sql) && isWordByte(sql[end]) {
+		end++
+	}
+	return strings.ToLower(sql[i:end])
 }
 
 // HasKeyword reports whether word (lowercase) appears as a bare keyword in

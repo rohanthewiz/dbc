@@ -229,6 +229,20 @@ func (m *Manager) open(ctx context.Context, name string) (dbh *sql.DB, anchor *s
 			return nil, nil, wrapRunErr(ctx, err, name, "op", "anchor")
 		}
 	}
+	// A built-in demo is seeded here, on its first open, rather than up front
+	// for every demo at launch: a headless run then touches only the demo it
+	// uses, and the bytdb demo's file is not opened (and rewritten) by a run
+	// that never asked for it. Seeding before the pool is cached means every
+	// caller — including ones waiting on this open — sees a seeded database,
+	// and since open runs once per name per Manager, a demo is never reseeded
+	// under the user's edits mid-session. The caller's ctx, not pctx, bounds
+	// it: connect_timeout is a limit on dialing, not on running statements.
+	if cc.Demo {
+		if err = seedDB(ctx, dbh, name); err != nil {
+			closeOpened(dbh, anchor)
+			return nil, nil, err
+		}
+	}
 	return dbh, anchor, nil
 }
 
@@ -287,6 +301,11 @@ func (m *Manager) Close() {
 	}
 }
 
+// queryVerbs are the leading verbs of a statement that returns rows. "with"
+// is here only as the fallback for a WITH whose main verb sqlsplit.Verbs could
+// not find — a statement malformed enough to fail either way — which keeps it
+// on the Query path it always took; a well-formed WITH is judged by the verb
+// after its CTE list instead.
 var queryVerbs = map[string]bool{
 	"select": true, "with": true, "show": true, "explain": true,
 	"describe": true, "desc": true, "pragma": true, "values": true, "table": true,
@@ -296,34 +315,57 @@ var queryVerbs = map[string]bool{
 // hand back rows: INSERT/UPDATE/DELETE on Postgres, SQLite, and bytdb;
 // INSERT/DELETE/REPLACE on MariaDB and SQLite; MERGE on Postgres 17+.
 // Only these are checked, so DDL that merely mentions the word — a rule or
-// function body outside a dollar quote, say — stays an Exec.
+// function body outside a dollar quote, say — stays an Exec. They double as
+// the list of writes a CTE body can be (see isRead).
 var returningVerbs = map[string]bool{
 	"insert": true, "update": true, "delete": true, "replace": true, "merge": true,
 }
 
-// isRead reports whether a statement is a plain read: its leading verb is one
-// that only fetches. Leading comments are skipped, so an annotated SELECT is
-// still recognized.
+// isRead reports whether a statement is a plain read: its main verb is one
+// that only fetches, and — for a WITH — none of its CTEs is a write. Leading
+// comments are skipped, so an annotated SELECT is still recognized.
+//
+// The main verb of a WITH is the one after its CTE list, so `WITH x AS (…)
+// UPDATE …` is a write. A CTE body is checked too because Postgres lets one
+// write: `WITH d AS (DELETE … RETURNING *) SELECT count(*) FROM d` returns
+// rows like a SELECT, yet it deleted them.
 func isRead(stmt string) bool {
-	return queryVerbs[sqlsplit.FirstKeyword(stmt)]
+	v := sqlsplit.Verbs(stmt)
+	if !queryVerbs[v.Main] {
+		return false
+	}
+	for _, cte := range v.CTEs {
+		if returningVerbs[cte] {
+			return false
+		}
+	}
+	return true
 }
 
 // isQuery reports whether a statement returns rows, and so must run as a
-// Query rather than an Exec. That is every read, plus a write with a
-// RETURNING clause: run as an Exec, `INSERT … RETURNING id` would report
-// rows_affected and drop the ids it was written to fetch.
+// Query rather than an Exec. That is every statement whose main verb is a
+// read, plus a write with a RETURNING clause: run as an Exec, `INSERT …
+// RETURNING id` would report rows_affected and drop the ids it was written to
+// fetch. For a WITH the main verb is the one after the CTE list
+// (sqlsplit.Verbs), so `WITH x AS (…) DELETE …` is an Exec that reports rows
+// affected, where going by its leading "with" made it a Query with an empty
+// result.
 //
 // RETURNING is found lexically (sqlsplit.HasKeyword), so the word inside a
-// string literal, a quoted identifier, or a comment does not count. The
-// alternative — try Exec and fall back to Query when the driver objects —
-// was rejected: drivers do not object (they run the write and discard the
-// rows), and retrying a write that already ran would run it twice.
+// string literal, a quoted identifier, or a comment does not count — and it
+// is looked for in the main statement only, from Verbs' MainAt, so a CTE body
+// that returns rows to the statement (`WITH d AS (DELETE … RETURNING id)
+// INSERT INTO log SELECT id FROM d`) does not make the statement itself one
+// that returns rows. The alternative — try Exec and fall back to Query when
+// the driver objects — was rejected: drivers do not object (they run the
+// write and discard the rows), and retrying a write that already ran would
+// run it twice.
 func isQuery(stmt string) bool {
-	kw := sqlsplit.FirstKeyword(stmt)
-	if queryVerbs[kw] {
+	v := sqlsplit.Verbs(stmt)
+	if queryVerbs[v.Main] {
 		return true
 	}
-	return returningVerbs[kw] && sqlsplit.HasKeyword(stmt, "returning")
+	return returningVerbs[v.Main] && sqlsplit.HasKeyword(stmt[v.MainAt:], "returning")
 }
 
 // Run executes a statement on the named connection, without cancellation.

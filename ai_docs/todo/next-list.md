@@ -55,12 +55,6 @@ ten session docs in `ai_docs/claude_sessions/`
   `testdata/show_two.go` — which is why the SQLite demo keeps the name `demo`
   instead of a symmetric `demo-sqlite`. Only matters if that rename is wanted.
 
-- **N-010** · raised `2026-0807-2148-bytdb-v0.9.1-and-dual-demo-defaults` · value low
-  With no config, every headless invocation seeds both demos
-  (`db.SeedDemos` in `setup`, `main.go:288`), so a bare `dbc "SELECT 1"` opens the bytdb
-  file. Lazy seeding on first use of a connection is the fix if it ever
-  matters.
-
 - **N-011** · raised `2026-0913-2158-dbc-migrate-replaces-goose` · value medium
   Tag a release. The push half of this item is done (N-019). The repo has no
   tags at all, while `cats-plugin.toml` declares `version = "0.1.0"`, and the
@@ -104,13 +98,6 @@ ten session docs in `ai_docs/claude_sessions/`
   A "Delete this conversation" row in the transcript's menu would remove its
   file and clear the pane without saving.
 
-- **N-039** · raised `2026-0924-2007-returning-rows-not-rows-affected` · value low
-  A `WITH … INSERT/UPDATE/DELETE` without `RETURNING` runs as a Query, since
-  `with` is on the read-verb list (`queryVerbs`, `db/manager.go`): it shows
-  an empty result instead of rows affected, and a `Session` does not mark
-  itself stateful after it (`isRead`). Telling it apart means finding the
-  verb after the CTE list, not just the first keyword.
-
 ## Roadmap
 
 Wanted, but deliberately not next. Empty at seeding: the session docs never
@@ -142,6 +129,43 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-039** · raised `2026-0924-2007-returning-rows-not-rows-affected` ·
+  closed 2026-09-24, 2026-0924-2029-lazy-demo-seeding-with-main-verb — a
+  `WITH … INSERT/UPDATE/DELETE` now runs as an Exec and reports rows
+  affected. New `sqlsplit.Verbs` walks a WITH at paren depth 0
+  (lexically, like the rest of the package) and returns the verb after the
+  CTE list (`Main`), where that verb starts (`MainAt`), and the leading
+  verb of each CTE body (`CTEs`). A parenthesized main statement, a nested
+  WITH, `[NOT] MATERIALIZED` and Postgres `SEARCH`/`CYCLE … SET` are
+  handled. If it cannot find a main verb, `Main` stays `with`, which keeps
+  the old Query path. `isQuery` goes by `Main` and looks for `RETURNING`
+  only in the main statement, so a CTE's own `RETURNING` does not turn an
+  `INSERT … SELECT` into a Query. `isRead` is false when `Main` is a write
+  or when any CTE body writes. That covers Postgres's
+  `WITH d AS (DELETE … RETURNING *) SELECT …`, which marks the session
+  stateful even though it comes back as rows. `FirstKeyword` now uses
+  `Verbs`' helpers. Tested on SQLite (session, and headless through the
+  binary). bytdb itself rejects a write after a CTE list (its parser wants
+  `SELECT` there), so it is a bytdb limit, not a dbc one.
+
+- **N-010** · raised `2026-0807-2148-bytdb-v0.9.1-and-dual-demo-defaults` ·
+  closed 2026-09-24, 2026-0924-2029-lazy-demo-seeding-with-main-verb — a
+  built-in demo is seeded on its first open, by `Manager.open`, not up front.
+  `config.Connection.Demo` (`toml:"-"`, set only by `demoFallback`) marks
+  the demos. `setup` now takes a `demoOpen` mode. The TUI opens every demo
+  (`SeedDemos`: prune and fall back, as before). A headless query or
+  migrate with no `-c`/`--dsn` opens only the active demo
+  (`OpenDefaultDemo`: the other demo is tried only if that one fails, so the
+  fallback survives). `dbc script` opens nothing up front. So
+  `--demo sqlite` and `-c demo` runs no longer touch the bytdb file. The bare
+  default run still opens it, because bytdb is the default demo. Found on
+  the way, and the bigger fix: with no config, `SeedDemos` seeded every
+  connection, including the ad-hoc `--dsn` one. So `dbc --driver … --dsn …`
+  ran `CREATE TABLE IF NOT EXISTS cats` and `DELETE FROM cats` on the
+  user's database. This was reproduced against a scratch SQLite file, which
+  lost its row. Only `Demo` connections are opened or seeded now
+  (`TestDemoSeedingLeavesUserConnectionAlone`).
 
 - **N-008** · raised `2026-0731-2200-dbc` ·
   closed 2026-09-24, 2026-0924-2007-returning-rows-not-rows-affected — a write

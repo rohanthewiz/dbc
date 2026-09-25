@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -399,6 +400,23 @@ func (m *Model) chatContext(question string) (ctx ai.Context, refs []db.TableRef
 	}
 	if r := m.lastRes; r != nil && !r.IsExec {
 		ctx.Columns, ctx.Rows, ctx.Truncated = r.Columns, r.Rows, r.Truncated
+		// Columns hidden in the grid are left out, as copies and exports
+		// leave them out — see package ai's HIDDEN COLUMNS for why. The
+		// guard makes sure hidden is indexed by this result's columns; the
+		// two are set together today, so it is belt and braces.
+		//
+		// A header sort goes too: rows are sent in the grid's order and the
+		// model is told so. Only the prefix of the order that could be sent
+		// is copied — this runs every frame for the chip — and it IS copied,
+		// because applySort rewrites order in place and a submit's context
+		// waits for its schema lookup before it is built into a prompt.
+		if g := m.grid; g.res == r {
+			ctx.Hidden = g.HiddenCols()
+			if g.sortCol >= 0 {
+				ctx.Order = slices.Clone(g.order[:min(len(g.order), max(ctx.MaxRows, 0))])
+				ctx.SortedBy, ctx.SortDesc = r.Columns[g.sortCol], g.sortDesc
+			}
+		}
 	}
 	return ctx, refs
 }
@@ -767,10 +785,13 @@ func (m *Model) drawChat(c *Canvas, r Rect) *caret {
 	// composer, sized to its content (1–6 rows)
 	inH := max(1, min(len(p.input.lines), 6))
 	composerY := in.H() - inH
-	chipY := composerY - 1
-	p.transcript = Rect{in.Rect().X, in.Rect().Y + 1, W, max(chipY-1, 0)}
 
-	// context chip
+	// context chip. It wraps onto a second row rather than truncating: the
+	// end of the note is where "(1 column hidden)" and the ai_rows hint
+	// sit, and a chip that cuts off what is left out of the context would
+	// defeat the chip. Two rows at most, the second truncated, so a long
+	// schema list cannot eat the transcript; the continuation is indented
+	// under the note, clear of the checkbox.
 	note := "context off — question only"
 	if p.attach {
 		ctx, _ := m.chatContext(p.input.Text())
@@ -781,7 +802,26 @@ func (m *Model) drawChat(c *Canvas, r Rect) *caret {
 	if !p.attach {
 		box = "[ ] "
 	}
-	p.attachChip = chip(in, 0, chipY, truncate(box+note, W), st.muted)
+	chipLines := wrap(note, W-width(box))
+	if len(chipLines) > 2 {
+		chipLines = []string{chipLines[0], strings.Join(chipLines[1:], "")}
+	}
+	chipY := composerY - len(chipLines)
+	p.transcript = Rect{in.Rect().X, in.Rect().Y + 1, W, max(chipY-1, 0)}
+	p.attachChip = Rect{}
+	for i, line := range chipLines {
+		lead := box
+		if i > 0 {
+			lead = strings.Repeat(" ", width(box))
+		}
+		r := chip(in, 0, chipY+i, truncate(lead+strings.TrimRight(line, " "), W), st.muted)
+		if i == 0 {
+			p.attachChip = r
+		} else { // the click target covers every row the chip spans
+			p.attachChip.W = max(p.attachChip.W, r.W)
+			p.attachChip.H++
+		}
+	}
 
 	inputS := in.Sub(Rect{0, composerY, W - 8, inH})
 	p.inputR = inputS.Rect()
@@ -805,7 +845,8 @@ func (m *Model) drawChat(c *Canvas, r Rect) *caret {
 			"",
 			"The query, any error, and the columns of the tables it or your question " +
 				"names go with each question. Result rows go only " +
-				"on connections with ai_rows = true (up to ai_context_rows of them).",
+				"on connections with ai_rows = true (up to ai_context_rows of them), " +
+				"in the grid's sort order and without its hidden columns.",
 			"",
 			"SQL in answers gets ⤓ insert, which puts it in the editor.",
 			"",

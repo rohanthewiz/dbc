@@ -22,6 +22,24 @@ import (
 // CREATE TABLE in the repo would show — so they go without ai_rows. They are
 // what turns "SELECT owner FROM cats" (a guessed column) into
 // "SELECT owner_id FROM cats" (the real one).
+//
+// HIDDEN COLUMNS STAY HIDDEN. A column hidden in the grid is left out of the
+// result the model sees, as it is left out of every copy and export: hiding
+// is how a user says "not this one", and a salary or email column is
+// exactly what gets hidden before a result is shared. Hiding it and then
+// seeing it go to a hosted model would be a surprise, while the opposite
+// mistake costs one keypress (+ shows all, ask again). The hidden columns'
+// NAMES still go, since names are schema: the model can then say "the
+// answer is probably in api_key, which you hid" instead of reasoning as if
+// the column did not exist.
+//
+// ROWS GO IN THE GRID'S ORDER. After a header sort, "the first 10 rows" the
+// user sees are the top 10 by that column, and "why is the top one so
+// high?" is about the top one on screen. So the rows sent follow the grid's
+// sort, as copies do, and the model is told the order is the grid's, not
+// the query's: otherwise it would read "sorted by price" into the SQL's
+// ORDER BY (or its absence) and explain an ordering the query never asked
+// for.
 
 // DefaultContextRows is how many result rows go with a question when the
 // connection allows rows and ai_context_rows is not set.
@@ -50,6 +68,23 @@ type Context struct {
 	Columns   []string
 	Rows      [][]string
 	Truncated bool // the fetch hit max_rows, so len(Rows) is not the table's size
+
+	// Hidden lists the result columns (indices into Columns, ascending)
+	// hidden in the grid. Build leaves their values out and names them. The
+	// full rows are passed rather than a projected copy because the context
+	// chip builds a Context every frame, and Build only projects the handful
+	// of rows it actually sends.
+	Hidden []int
+
+	// Order is the grid's row order after a header sort: Order[i] is the
+	// result row shown i-th. It may hold only a prefix — the rows that
+	// could be sent — since the chip builds a Context every frame and a
+	// full copy of a 10,000-row permutation per frame buys nothing. nil
+	// means the result's own order. SortedBy names the sorted column (""
+	// when unsorted) and SortDesc its direction.
+	Order    []int
+	SortedBy string
+	SortDesc bool
 
 	// SendRows is the connection's ai_rows opt-in; MaxRows is ai_context_rows.
 	SendRows bool
@@ -130,17 +165,44 @@ func Build(question string, ctx Context, first bool) Prompt {
 	withheld := ""
 	if ctx.Columns != nil && ctx.Err == "" {
 		n := rowsToSend(ctx)
+		shown, hidden := splitHidden(ctx)
 		switch {
 		case n > 0:
+			picked := pickRows(ctx, n)
+			n = len(picked) // a malformed Order can only shrink it
+			if ctx.SortedBy != "" {
+				sb.WriteString(sortText(ctx))
+			}
 			fmt.Fprintf(&sb, "%s:\n", rowsHeading(n, ctx))
-			sb.WriteString(markdownRows(ctx.Columns, ctx.Rows[:n]))
+			sb.WriteString(markdownRows(names(ctx.Columns, shown), project(picked, shown)))
 			sb.WriteString("\n")
-			sent = append(sent, fmt.Sprintf("%d of %s rows", n, totalRows(ctx)))
+			sb.WriteString(hiddenText(ctx.Columns, hidden))
+
+			// the parenthetical says how the rows differ from the query's
+			// own result; its wording matches the copy log's —
+			// "the result (8 rows, 1 column hidden)"
+			var how []string
+			if ctx.SortedBy != "" {
+				how = append(how, "sorted by "+ctx.SortedBy+" "+pick(ctx.SortDesc, "desc", "asc"))
+			}
+			if len(hidden) > 0 {
+				how = append(how, fmt.Sprintf("%d column%s hidden", len(hidden), pluralS(len(hidden))))
+			}
+			rows := fmt.Sprintf("%d of %s rows", n, totalRows(ctx))
+			if len(how) > 0 {
+				rows += " (" + strings.Join(how, ", ") + ")"
+			}
+			sent = append(sent, rows)
 		default:
 			// Column names are schema, not contents, so they go even when
-			// rows do not: "why is price a string?" needs them.
+			// rows do not: "why is price a string?" needs them. No values
+			// go here, so hiding changes nothing the chip need mention;
+			// the model is still told which columns the user hid, to read
+			// the question the way the user sees the grid. A sort is not
+			// mentioned: with no rows sent, there is no order to explain.
 			fmt.Fprintf(&sb, "Its result has the columns: %s (%s rows; the values are not shared).\n\n",
-				strings.Join(ctx.Columns, ", "), totalRows(ctx))
+				strings.Join(names(ctx.Columns, shown), ", "), totalRows(ctx))
+			sb.WriteString(hiddenText(ctx.Columns, hidden))
 			sent = append(sent, "column names")
 			if !ctx.SendRows && len(ctx.Rows) > 0 {
 				withheld = fmt.Sprintf("rows not sent — set ai_rows = true on connection %q to include them",
@@ -186,6 +248,115 @@ func totalRows(ctx Context) string {
 		return fmt.Sprintf("%d+", len(ctx.Rows))
 	}
 	return fmt.Sprint(len(ctx.Rows))
+}
+
+// pickRows returns the first n rows in the grid's order, or the result's
+// when there is no Order. Entries of Order that are out of range are
+// skipped rather than trusted, and an Order shorter than n yields fewer
+// rows, not result-order ones mixed in.
+func pickRows(ctx Context, n int) [][]string {
+	if ctx.Order == nil {
+		return ctx.Rows[:n]
+	}
+	out := make([][]string, 0, n)
+	for _, ri := range ctx.Order {
+		if len(out) == n {
+			break
+		}
+		if ri >= 0 && ri < len(ctx.Rows) {
+			out = append(out, ctx.Rows[ri])
+		}
+	}
+	return out
+}
+
+// sortText tells the model the rows are in the grid's order. NULLs last
+// is said because it holds in both directions, which is not what every
+// database does with ORDER BY … DESC.
+func sortText(ctx Context) string {
+	return fmt.Sprintf("The user sorted the result in the grid by %s, %s (NULLs last), "+
+		"so the rows below are in that order, not the query's.\n",
+		ctx.SortedBy, pick(ctx.SortDesc, "descending", "ascending"))
+}
+
+// maxHiddenNames caps how many hidden columns are named. Hiding most of a
+// warehouse table's 300 columns is a reasonable thing to do, and naming all
+// of them would be the prompt.
+const maxHiddenNames = 40
+
+// splitHidden divides the result's columns into the shown and the hidden,
+// both as ascending indices into ctx.Columns. Out-of-range or repeated
+// entries in ctx.Hidden are ignored rather than trusted. Hiding every column
+// is treated as hiding none: the grid refuses to, and a result reduced to
+// nothing would read to the model as an empty one.
+func splitHidden(ctx Context) (shown, hidden []int) {
+	isHidden := make([]bool, len(ctx.Columns))
+	for _, c := range ctx.Hidden {
+		if c >= 0 && c < len(isHidden) {
+			isHidden[c] = true
+		}
+	}
+	for c, h := range isHidden {
+		if h {
+			hidden = append(hidden, c)
+		} else {
+			shown = append(shown, c)
+		}
+	}
+	if len(shown) == 0 {
+		return hidden, nil
+	}
+	return shown, hidden
+}
+
+// names picks the column names at idx.
+func names(cols []string, idx []int) []string {
+	out := make([]string, len(idx))
+	for i, c := range idx {
+		out[i] = cols[c]
+	}
+	return out
+}
+
+// project cuts rows down to the columns at idx. A short row (fewer values
+// than columns) gets "" rather than a panic.
+func project(rows [][]string, idx []int) [][]string {
+	out := make([][]string, len(rows))
+	for r, row := range rows {
+		vals := make([]string, len(idx))
+		for i, c := range idx {
+			if c < len(row) {
+				vals[i] = row[c]
+			}
+		}
+		out[r] = vals
+	}
+	return out
+}
+
+// hiddenText tells the model which columns the user hid, so it does not
+// take the result above for the whole of it; "" when none are.
+func hiddenText(cols []string, hidden []int) string {
+	if len(hidden) == 0 {
+		return ""
+	}
+	ns := names(cols, hidden[:min(len(hidden), maxHiddenNames)])
+	list := strings.Join(ns, ", ")
+	if n := len(hidden) - len(ns); n > 0 {
+		list += fmt.Sprintf(", … and %d more", n)
+	}
+	return fmt.Sprintf("The user hid %s in the grid, so %s left out above: %s.\n\n",
+		pick(len(hidden) == 1, "this column", "these columns"),
+		pick(len(hidden) == 1, "it is", "they are"), list)
+}
+
+func pluralS(n int) string { return pick(n == 1, "", "s") }
+
+func pick(c bool, a, b string) string {
+	if c {
+		return a
+	}
+	return b
 }
 
 // markdownRows renders rows as a compact Markdown table, which models read

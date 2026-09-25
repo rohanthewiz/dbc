@@ -198,7 +198,11 @@ name    = "scratch"
 ai_rows = true              # this connection may send result rows
 ```
 
-Without `ai_rows` only the column names go. The chip above the input says
+Without `ai_rows` only the column names go. The rows the assistant gets are
+the grid's view, as a copy's are: in the header sort's order (and it is told
+the order is yours, not the query's), without the hidden columns. It is
+still told the hidden columns' names, so it can point out that the answer
+may be in a column you hid. The chip above the input says
 what the next question will carry (click it to send the question alone), and
 the transcript records what each one did carry.
 
@@ -225,7 +229,8 @@ either way, but the cap keeps both UIs showing the same thing; rows past it
 are still in the result and still go into an export or a whole-result copy.
 
 Hidden columns are a view of the result, and copies and exports take that
-view: hide the noisy columns, then copy the table into Teams. The header
+view (so does the assistant): hide the noisy columns, then copy the table
+into Teams. The header
 marks where columns are hidden with `║`, the bottom strip counts them, and
 the copy's log line says how many were left out. Hidden columns and
 hand-set widths survive re-running a query with the same columns; any other

@@ -169,3 +169,91 @@ func TestSchemaIsCapped(t *testing.T) {
 		t.Errorf("many tables are counted, not listed: %q", p.Note)
 	}
 }
+
+// Hidden columns: their values stay out of the rows, their names are said,
+// and the note counts them.
+func TestHiddenColumnsAreLeftOut(t *testing.T) {
+	cols := []string{"id", "email", "name", "ssn"}
+	rows := [][]string{{"1", "a@x", "Ann", "111"}, {"2", "b@x", "Bob", "222"}}
+	p := Build("q", Context{Conn: "c", Columns: cols, Rows: rows, Hidden: []int{1, 3},
+		SendRows: true, MaxRows: 10}, false)
+	if strings.Contains(p.Text, "a@x") || strings.Contains(p.Text, "111") {
+		t.Errorf("hidden values leaked:\n%s", p.Text)
+	}
+	for _, want := range []string{"| id | name |", "| 1 | Ann |",
+		"The user hid these columns in the grid, so they are left out above: email, ssn."} {
+		if !strings.Contains(p.Text, want) {
+			t.Errorf("text is missing %q:\n%s", want, p.Text)
+		}
+	}
+	if p.Note != "sent: 2 of 2 rows (2 columns hidden)" {
+		t.Errorf("note = %q", p.Note)
+	}
+
+	// without ai_rows only names go, so the note need not mention hiding,
+	// but the model still hears which columns the user hid
+	p = Build("q", Context{Conn: "c", Columns: cols, Rows: rows, Hidden: []int{1}, MaxRows: 10}, false)
+	if !strings.Contains(p.Text, "columns: id, name, ssn (2 rows") ||
+		!strings.Contains(p.Text, "left out above: email.") {
+		t.Errorf("text:\n%s", p.Text)
+	}
+	if strings.Contains(p.Note, "hidden") {
+		t.Errorf("note = %q", p.Note)
+	}
+}
+
+// Nonsense in Hidden is ignored, and hiding everything is read as hiding
+// nothing rather than sending an empty result.
+func TestHiddenColumnsEdgeCases(t *testing.T) {
+	cols, rows := result(1)
+	p := Build("q", Context{Columns: cols, Rows: rows, Hidden: []int{-1, 5, 1, 1},
+		SendRows: true, MaxRows: 10}, false)
+	if !strings.Contains(p.Text, "| id |\n") || !strings.Contains(p.Note, "(1 column hidden)") {
+		t.Errorf("text:\n%s\nnote: %q", p.Text, p.Note)
+	}
+	p = Build("q", Context{Columns: cols, Rows: rows, Hidden: []int{0, 1},
+		SendRows: true, MaxRows: 10}, false)
+	if !strings.Contains(p.Text, "| id | name |") || strings.Contains(p.Text, "hid") {
+		t.Errorf("all hidden:\n%s", p.Text)
+	}
+}
+
+// After a header sort the rows go in the grid's order, the model is told
+// the order is the grid's, and the note says so beside any hidden columns.
+func TestRowsFollowTheGridSort(t *testing.T) {
+	cols := []string{"name", "age"}
+	rows := [][]string{{"Ann", "3"}, {"Bob", "9"}, {"Cy", "5"}}
+	p := Build("q", Context{Columns: cols, Rows: rows, Order: []int{1, 2},
+		SortedBy: "age", SortDesc: true, Hidden: []int{0}, SendRows: true, MaxRows: 2}, false)
+	if !strings.Contains(p.Text, "| 9 |\n| 5 |\n") {
+		t.Errorf("rows should be in the grid's order:\n%s", p.Text)
+	}
+	if !strings.Contains(p.Text, "sorted the result in the grid by age, descending (NULLs last), "+
+		"so the rows below are in that order, not the query's.") {
+		t.Errorf("text:\n%s", p.Text)
+	}
+	if p.Note != "sent: 2 of 3 rows (sorted by age desc, 1 column hidden)" {
+		t.Errorf("note = %q", p.Note)
+	}
+
+	// no rows sent, no order to explain
+	p = Build("q", Context{Conn: "c", Columns: cols, Rows: rows, Order: []int{1},
+		SortedBy: "age", MaxRows: 2}, false)
+	if strings.Contains(p.Text, "sorted") || strings.Contains(p.Note, "sorted") {
+		t.Errorf("sort mentioned without rows:\n%s\nnote: %q", p.Text, p.Note)
+	}
+}
+
+// A malformed Order drops rows rather than panicking or mixing in rows in
+// result order, and the counts follow what was actually sent.
+func TestMalformedOrderOnlyShrinks(t *testing.T) {
+	cols, rows := result(5)
+	p := Build("q", Context{Columns: cols, Rows: rows, Order: []int{9, 4, -1},
+		SortedBy: "id", SendRows: true, MaxRows: 3}, false)
+	if strings.Count(p.Text, "| cat |") != 1 || !strings.Contains(p.Text, "| 4 | cat |") {
+		t.Errorf("text:\n%s", p.Text)
+	}
+	if !strings.HasPrefix(p.Note, "sent: 1 of 5 rows") {
+		t.Errorf("note = %q", p.Note)
+	}
+}

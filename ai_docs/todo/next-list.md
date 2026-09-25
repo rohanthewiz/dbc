@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-037
+**Next ID:** N-038
 
 ## Open
 
@@ -109,14 +109,6 @@ ten session docs in `ai_docs/claude_sessions/`
   `pgx.Conn.IsClosed` and has no test without a live connection), and
   `conn_idle_timeout`/`connect_timeout`.
 
-- **N-036** · raised `2026-0924-1823-grid-column-resize-hide` · value low
-  The assistant's result context ignores hidden columns. "Ask the assistant
-  about this result" builds from `m.lastRes` (`tui/chat.go:400`), so it sends
-  every column, while copies and exports now leave hidden ones out. Either
-  is defensible: a hidden column may be noise, or it may be the key the
-  answer needs. Decide which, and say it in the chip if hidden columns are
-  dropped.
-
 ## Roadmap
 
 Wanted, but deliberately not next. Empty at seeding: the session docs never
@@ -148,6 +140,12 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-037** · raised `2026-0924-1908-assistant-hidden-columns-grid-sort` ·
+  closed 2026-09-24, 2026-0924-1908-assistant-hidden-columns-grid-sort — the assistant gets rows in the grid's order after a header sort, as copies do. `ai.Context` gained `Order` (the grid's permutation, only the prefix that could be sent, cloned, since `applySort` rewrites it in place and a submit's context waits on its schema lookup), `SortedBy` and `SortDesc`. The prompt says "The user sorted the result in the grid by age, descending (NULLs last), so the rows below are in that order, not the query's", so the model does not read the order into the SQL. The note reads `3 of 8 rows (sorted by age desc, 1 column hidden)`. With no rows sent, the sort is not mentioned.
+
+- **N-036** · raised `2026-0924-1823-grid-column-resize-hide` ·
+  closed 2026-09-24, 2026-0924-1908-assistant-hidden-columns-grid-sort — decided: hidden columns stay out of what the assistant gets, as they stay out of copies and exports. Hiding is how a user says "not this one", and a sensitive column is what gets hidden before sharing. Getting it wrong the other way costs one `+`. The hidden columns' names still go ("The user hid these columns in the grid, so they are left out above: …"), since names are schema. `ai.Context.Hidden` carries the grid's hidden result columns; `ai.Build` leaves them out of the rows it sends and of the column-names line. The note (chip and transcript) says `3 of 8 rows (1 column hidden)`, worded like the copy log. The context chip now wraps to a second row instead of truncating, since the end of the note was cut off at the default pane width.
 
 - **N-031** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` ·
   closed 2026-09-24, 2026-0924-1823-grid-column-resize-hide — grid columns resize and hide. Drag a header border to resize (highlighted `┃` on hover), double-click it or `=` to fit to content past the 40-cell auto cap, `<`/`>` by keys. Hide from the right-click menu (the cursor's column or the range's) or `-`; the menu lists hidden columns by name to show again, `+` shows all; the last column cannot be hidden. The grid now works in display columns (`grid.cols`, like `order` for rows), so the cursor, hit-testing, copies and the file export take what is on screen; `║` in the header marks a gap, the strip counts hidden columns, and a whole-result copy's log line says how many were left out. Hidden columns and hand-set widths survive a re-run with identical columns. The file export now also follows the grid's sort order, as its clipboard button already did.

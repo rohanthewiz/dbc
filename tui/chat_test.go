@@ -105,6 +105,89 @@ func TestAssistantSendsRowsWhenTheConnectionOptsIn(t *testing.T) {
 	}
 }
 
+// A column hidden in the grid is left out of the rows the assistant gets, as
+// copies leave it out; the model is told its name, and the chip says a
+// column is missing before anything is sent.
+func TestAssistantLeavesHiddenColumnsOut(t *testing.T) {
+	f := fakeAssistant(t, nil)
+	m := newTestModel(t)
+	m.cfg.Connections[0].AIRows = true
+	m.cfg.AIContextRows = 3
+	key(t, m, "ctrl+r")
+	if m.grid.Hide(2, 2) != 1 || m.grid.colName(2) != "age" { // breed
+		t.Fatal("setup: breed should be hidden")
+	}
+	key(t, m, "ctrl+a")
+	pumpChat(t, m, func() bool { return m.chat.state == chatReady })
+	// the chip wraps rather than cutting the end of its note off
+	findText(t, frame(m), "(1 column hidden)")
+
+	typeText(t, m, "summarize")
+	key(t, m, "enter")
+	pumpChat(t, m, func() bool { return !m.chat.streaming })
+	p := lastPrompt(t, f)
+	for _, leak := range []string{"Tabby", "Siamese", "Sphynx", "| breed |"} {
+		if strings.Contains(p, leak) {
+			t.Errorf("hidden column's %q went to the agent:\n%s", leak, p)
+		}
+	}
+	if tr := m.chat.transcriptText(); !strings.Contains(tr, "3 of 8 rows (1 column hidden)") {
+		t.Errorf("transcript should say what went:\n%s", tr)
+	}
+	for _, want := range []string{"| id | name | age | adopted |",
+		"The user hid this column in the grid, so it is left out above: breed."} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt is missing %q:\n%s", want, p)
+		}
+	}
+
+	// shown again, it goes again
+	m.grid.ShowAll()
+	typeText(t, m, "and now?")
+	key(t, m, "enter")
+	pumpChat(t, m, func() bool { return !m.chat.streaming })
+	if p := lastPrompt(t, f); !strings.Contains(p, "| breed |") || strings.Contains(p, "The user hid") {
+		t.Errorf("after show all:\n%s", p)
+	}
+}
+
+// After a header sort the assistant gets the rows the user sees at the top,
+// and hears that the order is the grid's.
+func TestAssistantFollowsTheGridSort(t *testing.T) {
+	f := fakeAssistant(t, nil)
+	m := newTestModel(t)
+	m.cfg.Connections[0].AIRows = true
+	m.cfg.AIContextRows = 3
+	key(t, m, "ctrl+r") // … ORDER BY age: Oliver, Luna, Cleo first
+	m.grid.Sort(3)
+	m.grid.Sort(3) // age, descending
+	key(t, m, "ctrl+a")
+	pumpChat(t, m, func() bool { return m.chat.state == chatReady })
+	findText(t, frame(m), "(sorted by age desc)")
+
+	typeText(t, m, "why are these the oldest?")
+	key(t, m, "enter")
+	pumpChat(t, m, func() bool { return !m.chat.streaming })
+	p := lastPrompt(t, f)
+	milo, simba, bella := strings.Index(p, "Milo"), strings.Index(p, "Simba"), strings.Index(p, "Bella")
+	if milo < 0 || !(milo < simba && simba < bella) || strings.Contains(p, "Oliver") {
+		t.Errorf("rows should be the grid's top 3 (Milo, Simba, Bella):\n%s", p)
+	}
+	if !strings.Contains(p, "sorted the result in the grid by age, descending") {
+		t.Errorf("prompt should say the order is the grid's:\n%s", p)
+	}
+
+	// A context taken before a re-sort keeps its order: applySort rewrites
+	// the grid's order in place, and a submitted question's context waits
+	// on its schema lookup before it becomes a prompt. (The harness runs
+	// that lookup synchronously, so this is checked on the context itself.)
+	ctx, _ := m.chatContext("")
+	m.grid.Sort(3) // back to the query's order
+	if q := ai.Build("", ctx, false).Text; strings.Index(q, "Milo") < 0 || strings.Contains(q, "Oliver") {
+		t.Errorf("a re-sort reached into an earlier context:\n%s", q)
+	}
+}
+
 // A question typed before the handshake finishes waits for it, not lost.
 func TestAssistantQueuesAQuestionDuringTheHandshake(t *testing.T) {
 	f := fakeAssistant(t, nil)

@@ -45,16 +45,6 @@ ten session docs in `ai_docs/claude_sessions/`
   terminal paste right after gets nothing or markup. Serving both needs
   owning the selection; only worth it if a Linux user trips on it.
 
-- **N-043** · raised `2026-0925-1203-live-session-and-timeout-tests` · value low
-  pgx pings a pooled connection before reuse only when it has sat idle more
-  than 1s since its last checkout (stdlib `ResetSession`, v5.10.0). So a
-  Postgres connection the server cuts and dbc reuses within that second
-  fails its first statement once, instead of being replaced quietly as
-  `config.DefaultConnIdleTimeout`'s comment says. MySQL checks on every
-  checkout. Interactive use doesn't reuse that fast; `stdlib.OptionShouldPing`
-  (ping on every checkout, one round trip each) would close it if a script or
-  refresh ever trips on it.
-
 ## Roadmap
 
 Wanted, but deliberately not next. Empty at seeding: the session docs never
@@ -86,6 +76,9 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-043** · raised `2026-0925-1203-live-session-and-timeout-tests` ·
+  closed 2026-09-25, 2026-0925-1252-pgx-ping-cut-pooled-conns — Postgres pools are now opened through `pgxstdlib.OpenDB` with `OptionShouldPing(pgShouldPing)` (`db/manager.go`). pgx's 1s rule stays. On top of it, a non-blocking `MSG_PEEK` on the socket (`db/sockpeek_unix.go`, the same check go-sql-driver/mysql runs, minus consuming the byte) asks for a ping when bytes or a FIN arrived while the connection was idle. There is no extra round trip. It was not always-ping, because that would cost a round trip per pooled statement, which is heavy for a script on a remote server. `TestLiveCutPooledConnReplaced` now reuses the killed connection both at once and after 1s. Against Postgres 17 the at-once case failed 3/3 without the option (57P01) and passed 5/5 with it. MySQL 8.4 passes both. `TestSockQuiet` covers the peek on loopback TCP. A malformed DSN now fails at parse, still with the password masked.
 
 - **N-042** · raised `2026-0925-1145-readme-example-and-live-schema-lookup` ·
   closed 2026-09-25, 2026-0925-1212-postgres-matviews-in-catalog — `TablesQuery` for Postgres adds `pg_matviews` rows with `UNION ALL`, typed `MATERIALIZED VIEW`, and filtered by `has_table_privilege(..., 'SELECT')` so they follow the same rule as `information_schema.tables`. bytdb has no `pg_matviews`, so it gets its own case with the old query. `TestLiveColumnsPostgres` now covers a matview; ran against Postgres 17.

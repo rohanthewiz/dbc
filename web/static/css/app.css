@@ -504,6 +504,9 @@ a.btnlink:hover { border-color: var(--accent); }
 .qdone { color: var(--accent); font-size: 16px; line-height: 10px; }
 .qfail { color: var(--err); font-size: 16px; line-height: 10px; }
 .qstate { color: var(--warn); }
+/* a tab another browser tab of dbc web now holds: its copy here is not saved */
+.qlost { color: var(--err); }
+.qtab.lost .qt { font-style: italic; }
 .qx { border: 0; background: none; padding: 0 3px; color: var(--muted); line-height: 1; }
 .qx:hover { color: var(--err); }
 .qnew { border: 0; background: none; color: var(--muted); padding: 0 10px; font-size: 15px; }

@@ -209,7 +209,9 @@ func (s *Store) DeleteTab(id string) error {
 
 // Layout returns every saved layout value (pane sizes and the like), keyed
 // by the name the page gave it. The values are opaque here: the page owns
-// their meaning.
+// their meaning. (The one exception is above the store: a write of "tabs"
+// or "plans", which list saved-tab keys, is merged with the keys other
+// windows hold before it gets here — see mergeTabKeys in claims.go.)
 func (s *Store) Layout() (map[string]string, error) {
 	out := map[string]string{}
 	if s.db == nil {

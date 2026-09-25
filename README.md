@@ -570,9 +570,10 @@ A tab keeps its result, its grid view (sort, hidden columns, widths) and its
 plan while another is on screen; a run left going in the background marks
 its tab (● running, • done) and names its log lines. Tabs, their text and
 connection, the pane sizes and light/dark are saved in
-`~/.config/dbc/web.bytdb`; a reload keeps every tab's session. Two browser
-tabs of dbc web are two windows over the same saved tabs, each with its own
-sessions — edit a given tab's text in one of them at a time.
+`~/.config/dbc/web.bytdb`; a reload keeps every tab's session. A saved tab
+is shown by one browser tab of dbc web at a time: a second browser tab gets
+the saved tabs the first is not showing, or a fresh one, with sessions of its
+own. Closing a browser tab frees its tabs for the next one opened.
 
 **Keys.** The TUI's, bent where a browser keeps the chord for itself:
 

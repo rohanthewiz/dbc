@@ -64,30 +64,49 @@ func (s *Server) handleTabs(ctx rweb.Context) error {
 // on every keystroke pause.
 const maxBuffer = 4 << 20
 
+// handleSaveTab is PUT /api/v1/tabs/:id?win=<window>. The window is the
+// claim check (claims.go): a tab another live window holds is refused with
+// a 409, so two browser tabs cannot overwrite each other's text.
 func (s *Server) handleSaveTab(ctx rweb.Context) error {
 	var t Tab
 	if err := decode(ctx, &t); err != nil {
 		return fail(ctx, err)
 	}
 	t.ID = ctx.Request().PathParam("id")
-	if t.ID == "" || len(t.ID) > 64 {
-		return fail(ctx, badRequest("a tab id is 1 to 64 characters"))
-	}
-	if len(t.Buffer) > maxBuffer {
-		return fail(ctx, badRequest("the editor holds %d MB; tabs save up to %d MB", len(t.Buffer)>>20, maxBuffer>>20))
-	}
-	t.Updated = time.Now().UTC()
-	if err := s.store.SaveTab(t); err != nil {
+	if err := s.saveTab(ctx.Request().QueryParam("win"), t); err != nil {
 		return fail(ctx, err)
 	}
 	return ok(ctx, nil)
 }
 
-// handleDeleteTab forgets a saved query tab — the page closed it.
+// saveTab checks, claims for window winID and writes one saved tab — a PUT,
+// or the last save riding on a window's release.
+func (s *Server) saveTab(winID string, t Tab) error {
+	if t.ID == "" || len(t.ID) > 64 {
+		return badRequest("a tab id is 1 to 64 characters")
+	}
+	if len(t.Buffer) > maxBuffer {
+		return badRequest("the editor holds %d MB; tabs save up to %d MB", len(t.Buffer)>>20, maxBuffer>>20)
+	}
+	if err := s.hub.claimOne(winID, t.ID); err != nil {
+		return err
+	}
+	t.Updated = time.Now().UTC()
+	return s.store.SaveTab(t)
+}
+
+// handleDeleteTab forgets a saved query tab — the page closed it. With
+// ?win=, a tab another live window holds is refused: the page closing is
+// only closing its stale copy, and the other window's tab stays saved.
 func (s *Server) handleDeleteTab(ctx rweb.Context) error {
-	if err := s.store.DeleteTab(ctx.Request().PathParam("id")); err != nil {
+	id := ctx.Request().PathParam("id")
+	if err := s.hub.claimOne(ctx.Request().QueryParam("win"), id); err != nil {
 		return fail(ctx, err)
 	}
+	if err := s.store.DeleteTab(id); err != nil {
+		return fail(ctx, err)
+	}
+	s.hub.unclaim(id)
 	return ok(ctx, nil)
 }
 
@@ -106,6 +125,25 @@ func (s *Server) handleSaveLayout(ctx rweb.Context) error {
 	}
 	if len(l) > 64 {
 		return fail(ctx, badRequest("too many layout keys"))
+	}
+	// "tabs" (the strip's order) and "plans" list saved-tab keys, and a
+	// window lists only its own: keep the ones other windows hold (see
+	// mergeTabKeys). Only when another window holds any — the usual single
+	// window writes its values as they are, with no read first.
+	_, hasTabs := l["tabs"]
+	_, hasPlans := l["plans"]
+	if hasTabs || hasPlans {
+		if elsewhere := s.hub.heldElsewhere(ctx.Request().QueryParam("win")); len(elsewhere) > 0 {
+			old, err := s.store.Layout()
+			if err != nil {
+				return fail(ctx, err)
+			}
+			for _, k := range []string{"tabs", "plans"} {
+				if v, given := l[k]; given {
+					l[k] = mergeTabKeys(v, old[k], elsewhere)
+				}
+			}
+		}
 	}
 	if err := s.store.SetLayout(l); err != nil {
 		return fail(ctx, err)

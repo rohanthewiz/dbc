@@ -5,9 +5,11 @@
 // The server owns the rules and the rendering; the page owns only what must
 // be live. The flow:
 //
-//   boot ─► the saved query tabs (web.bytdb), in their saved order
-//        ─► the window: reattach (ids kept in sessionStorage, so a reload
+//   boot ─► the window: reattach (ids kept in sessionStorage, so a reload
 //           keeps every tab's pinned session) or open a new one
+//        ─► claim the saved query tabs (web.bytdb) no other browser tab of
+//           dbc web holds, and show them in their saved order — or, when
+//           another holds them all, a fresh tab (see web/claims.go)
 //        ─► EventSource on /api/v1/win/<id>/events — ONE per window, for
 //           every query tab (see web/hub.go for why)
 //        ─► on the first open: activate the saved active tab
@@ -37,11 +39,14 @@
   const wsKey = (key) => "dbc.ws." + key;
 
   // tabs are the query tabs, in strip order:
-  //   {key, title, conn, buffer, ws, busy, done, failed, stateful, status, level, grid, planOpen}
+  //   {key, title, conn, buffer, ws, busy, done, failed, stateful, status, level, grid, planOpen, lost}
   // key is the saved tab's id (web.bytdb); ws its workspace, "" until
   // first shown. buffer is kept only while the tab is in the background.
   // planOpen: its results pane was on the plan — saved in the layout's
   // "plans" key (see savePlans), so a reload lands back on it.
+  // lost: another browser tab of dbc web took this tab over (the server
+  // refused a save, or a reclaim, with "held"), so its copy here is no
+  // longer saved — see markLost.
   let tabs = [];
   const tabOf = (ws) => tabs.find((t) => t.ws && t.ws === ws);
 
@@ -263,9 +268,16 @@
     };
   }
 
+  // forgetSession drops the window and every workspace id this browser tab
+  // kept. By prefix rather than by the strip's keys: at boot the strip is
+  // not built yet, and a duplicated browser tab's copied ids name tabs it
+  // may never show.
   function forgetSession() {
     sessionStorage.removeItem(WIN_KEY);
-    for (const t of tabs) sessionStorage.removeItem(wsKey(t.key));
+    for (let i = sessionStorage.length - 1; i >= 0; i--) {
+      const k = sessionStorage.key(i);
+      if (k && k.startsWith(wsKey(""))) sessionStorage.removeItem(k);
+    }
   }
 
   // activate puts query tab t on screen: its document in the editor, its
@@ -321,6 +333,7 @@
   }
 
   async function resync() {
+    reclaim(); // a long drop may have let another browser tab take ours
     const t = state.tab;
     try {
       const st = await api("GET", dbc.wsPath(""));
@@ -603,20 +616,78 @@
     saveTimer = setTimeout(() => saveTab(state.tab), 600);
   }
 
+  // tabBody is what a save sends for t: the editor's text when it is on
+  // screen, else the buffer kept for it.
+  function tabBody(t) {
+    const active = t === state.tab;
+    return { title: t.title, conn: (active ? state.active : t.conn) || "",
+      buffer: active ? dbc.editor.text() : t.buffer || "" };
+  }
+
+  // winQuery names this window on a save, a delete or a layout write: the
+  // server checks it against the tab's claim (web/claims.go).
+  const winQuery = () => "?win=" + encodeURIComponent(state.win);
+
   function saveTab(t, keepalive) {
     if (!t) return;
     if (t === state.tab) clearTimeout(saveTimer);
-    const active = t === state.tab;
-    const body = JSON.stringify({ title: t.title, conn: (active ? state.active : t.conn) || "",
-      buffer: active ? dbc.editor.text() : t.buffer || "" });
+    if (t.lost) return; // not ours to save any more
     // keepalive lets the last save outlive the page when it is closing
-    return fetch("/api/v1/tabs/" + encodeURIComponent(t.key), {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body, keepalive: !!keepalive,
+    return fetch("/api/v1/tabs/" + encodeURIComponent(t.key) + winQuery(), {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tabBody(t)),
+      keepalive: !!keepalive,
+    }).then((res) => {
+      if (res.status === 409) markLost(t); // another browser tab holds it
     }).catch(() => { /* best effort: the next edit saves again */ });
   }
 
   function saveLayout(values) {
-    api("PUT", "/api/v1/layout", values).catch((err) => log("warn", "layout not saved: " + err.message));
+    api("PUT", "/api/v1/layout" + winQuery(), values).catch((err) => log("warn", "layout not saved: " + err.message));
+  }
+
+  // ── claims: which browser tab of dbc web shows which saved tab ─────────
+  // A saved tab is shown — and saved — by one window at a time; the server
+  // keeps the claims (web/claims.go). Boot claims the free ones; a save
+  // claims a new one; the page's goodbye (pagehide) releases them all, so a
+  // browser tab opened next, or this one reloading, takes them.
+
+  // markLost: another window holds t now (this one's stream was gone long
+  // enough for it to be taken). Its copy here stays usable — its session
+  // may hold a transaction to finish — but is no longer saved: saving it
+  // would overwrite the other window's edits, the very loss claims exist
+  // to prevent.
+  function markLost(t) {
+    if (!t || t.lost) return;
+    t.lost = true;
+    log("warn", t.title + " is open in another browser tab of dbc web — edits to it here are no longer saved " +
+      "(close it here, or reload this page once that one is closed)");
+    renderTabs();
+  }
+
+  // reclaim re-asserts this window's claims after the stream was away (or
+  // the page came back from the back-forward cache, after its pagehide let
+  // them go). A tab another window took meanwhile is marked lost. Lost tabs
+  // are not asked for again: their text here may be older than the saved.
+  async function reclaim() {
+    if (!state.win) return;
+    const keys = tabs.filter((t) => !t.lost).map((t) => t.key);
+    try {
+      const got = await api("POST", "/api/v1/win/" + state.win + "/tabs", { keys });
+      for (const k of got.held) markLost(tabs.find((t) => t.key === k));
+    } catch (_) { /* a lost window: the stream's onerror starts over */ }
+  }
+
+  // release is the page's goodbye: the active tab's last save and the
+  // window's claims let go, in one request, so the save cannot land after
+  // the release and claim the tab straight back.
+  function release() {
+    if (!state.win) return;
+    const t = state.tab;
+    clearTimeout(saveTimer);
+    const save = t && !t.lost ? Object.assign({ id: t.key }, tabBody(t)) : undefined;
+    fetch("/api/v1/win/" + encodeURIComponent(state.win) + "/release", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ save }), keepalive: true,
+    }).catch(() => { /* the claims lapse on their own after the grace */ });
   }
 
   // ── saving which tabs show their plan ──────────────────────────────────
@@ -662,7 +733,8 @@
   };
 
   dbc.editor.onChange(scheduleSave);
-  window.addEventListener("pagehide", () => saveTab(state.tab, true));
+  window.addEventListener("pagehide", release);
+  window.addEventListener("pageshow", (e) => { if (e.persisted) reclaim(); });
 
   // ── the query tab strip ────────────────────────────────────────────────
   //   [Query 1 ●][Query 2 •][Query 3 ×] [+]
@@ -686,7 +758,8 @@
       if (t.busy) marks.append(el("span", { class: "qbusy", title: "running" }, "●"));
       else if (t.done) marks.append(el("span", { class: t.failed ? "qfail" : "qdone", title: "finished in the background" }, "•"));
       if (t.stateful) marks.append(el("span", { class: "qstate", title: "its session may hold a transaction, SET values or temp tables" }, "◆"));
-      const b = el("div", { class: "qtab" + (t === state.tab ? " on" : ""), role: "tab", tabindex: "-1",
+      if (t.lost) marks.append(el("span", { class: "qlost", title: "open in another browser tab of dbc web — not saved here" }, "⊘"));
+      const b = el("div", { class: "qtab" + (t === state.tab ? " on" : "") + (t.lost ? " lost" : ""), role: "tab", tabindex: "-1",
         "aria-selected": t === state.tab ? "true" : "false", "data-key": t.key,
         title: t.title + (i < 9 ? " (Alt+" + (i + 1) + ")" : "") + " — double-click renames" },
       el("span", "qt", t.title), marks,
@@ -729,13 +802,18 @@
   });
   $("qnew").addEventListener("click", newTab);
 
+  // newKey mints a saved tab's key: it sorts after the saved ones. Unique
+  // enough — one person, one click at a time.
+  const newKey = () => Date.now().toString(36);
+
   // newTab opens a query tab on the active tab's connection. Its title is
-  // the lowest "Query N" not in use; its key sorts after the saved ones.
+  // the lowest "Query N" not in use; its first save claims it for this
+  // window.
   function newTab() {
     const used = new Set(tabs.map((t) => t.title));
     let n = 1;
     while (used.has("Query " + n)) n++;
-    const t = { key: Date.now().toString(36), title: "Query " + n, conn: state.active, buffer: "", ws: "" };
+    const t = { key: newKey(), title: "Query " + n, conn: state.active, buffer: "", ws: "" };
     tabs.splice(tabs.indexOf(state.tab) + 1, 0, t);
     saveOrder();
     saveTab(t);
@@ -771,7 +849,9 @@
     sessionStorage.removeItem(wsKey(t.key));
     dbc.editor.dropDoc(t.key);
     if (t.ws) api("DELETE", "/api/v1/ws/" + t.ws).catch(() => { /* already gone */ });
-    api("DELETE", "/api/v1/tabs/" + encodeURIComponent(t.key)).catch(() => {});
+    // a lost tab's saved copy is the other window's: closing it here
+    // leaves that alone
+    if (!t.lost) api("DELETE", "/api/v1/tabs/" + encodeURIComponent(t.key) + winQuery()).catch(() => {});
     log("info", "closed " + t.title + (t.ws ? " — its session was released" : ""));
   }
 
@@ -877,12 +957,44 @@
   // ── boot ───────────────────────────────────────────────────────────────
   async function boot() {
     try {
-      const [saved, layout] = await Promise.all([api("GET", "/api/v1/tabs"), api("GET", "/api/v1/layout")]);
+      const layout = await api("GET", "/api/v1/layout");
       if (layout.editorHeight) setEditorHeight(Number(layout.editorHeight));
       dbc.chat.boot(layout);
 
-      // the saved tabs, in the saved order; any the order does not name
-      // (saved by an older page) after them
+      // the window: this browser tab's, if the server still has it — and
+      // if it is not being shown by another browser tab right now, which
+      // is what a duplicated tab (sessionStorage copied) looks like. The
+      // boot claim tells: 409 for a copy, which then opens its own window.
+      // The window comes first because the claim is made in its name.
+      let win = sessionStorage.getItem(WIN_KEY) || "", live = [], first = "", claim = null;
+      if (win) {
+        try { live = (await api("GET", "/api/v1/win/" + win)).tabs; } catch (_) { win = ""; }
+      }
+      if (win) {
+        try {
+          claim = await api("POST", "/api/v1/win/" + win + "/tabs", { boot: true });
+        } catch (e) {
+          if (e.status !== 409) throw e;
+          log("info", "this browser tab is a copy of another one of dbc web — it gets a window (and sessions) of its own");
+          win = "";
+          live = [];
+        }
+      }
+      if (!win) {
+        forgetSession();
+        const st = await api("POST", "/api/v1/ws", {});
+        for (const w of st.warnings || []) log("warn", w);
+        win = st.win;
+        first = st.id;
+        claim = await api("POST", "/api/v1/win/" + win + "/tabs", { boot: true });
+      }
+      state.win = win;
+      sessionStorage.setItem(WIN_KEY, win);
+
+      // the claimed tabs, in the saved order; any the order does not name
+      // (saved by an older page) after them. The order may name tabs
+      // another window holds; they are skipped.
+      const saved = claim.tabs;
       const byKey = new Map(saved.map((t) => [t.id, t]));
       const order = (layout.tabs || "").split(",").filter((k) => byKey.has(k));
       for (const t of saved) if (!order.includes(t.id)) order.push(t.id);
@@ -891,32 +1003,29 @@
         const t = byKey.get(k);
         return { key: t.id, title: t.title || "Query", conn: t.conn, buffer: t.buffer, ws: "", planOpen: plans.has(t.id) };
       });
-      // no saved tab: the first boot, or a reload before the first tab's
-      // save landed (its pagehide save can race this GET) — plans may
-      // already name it
-      if (!tabs.length) tabs = [{ key: "1", title: "Query 1", conn: "", buffer: "", ws: "", planOpen: plans.has("1") }];
+      // no tab to show: the first boot, or every saved tab is open in
+      // another browser tab of dbc web — this one starts a fresh tab of
+      // its own. Its key is new, never "1": a key another window holds
+      // would be refused on the first save.
+      if (!tabs.length) {
+        tabs = [{ key: newKey(), title: "Query 1", conn: "", buffer: "", ws: "", planOpen: false }];
+      }
+      if (claim.held.length) {
+        log("info", dbc.plural(claim.held.length, "saved query tab") + " open in another browser tab of dbc web " +
+          (claim.held.length === 1 ? "stays" : "stay") + " there — this one shows " +
+          (saved.length ? "the rest" : "a fresh tab"));
+      }
       savedPlans = layout.plans || "";
       activeAtBoot = tabs.find((t) => t.key === layout.tab) || tabs[0];
 
-      // the window: this browser tab's, if the server still has it
-      let win = sessionStorage.getItem(WIN_KEY) || "", live = [];
-      if (win) {
-        try { live = (await api("GET", "/api/v1/win/" + win)).tabs; } catch (_) { win = ""; }
-      }
       for (const t of tabs) {
         const ws = sessionStorage.getItem(wsKey(t.key));
         if (ws && live.includes(ws)) t.ws = ws;
       }
-      if (!win) {
-        forgetSession();
-        const st = await api("POST", "/api/v1/ws", {});
-        for (const w of st.warnings || []) log("warn", w);
-        win = st.win;
-        activeAtBoot.ws = st.id;
-        sessionStorage.setItem(wsKey(activeAtBoot.key), st.id);
+      if (first) {
+        activeAtBoot.ws = first;
+        sessionStorage.setItem(wsKey(activeAtBoot.key), first);
       }
-      state.win = win;
-      sessionStorage.setItem(WIN_KEY, win);
       state.tab = null;
       renderTabs();
       attach(); // its first open activates activeAtBoot

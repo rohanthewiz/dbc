@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rohanthewiz/rweb"
@@ -39,6 +40,8 @@ import (
 //
 //	POST /api/v1/ws        ──► a new window and its first query tab
 //	POST /api/v1/ws {win}  ──► another query tab in that window
+//	POST /api/v1/win/:id/tabs ──► the saved tabs it will show claimed, so
+//	  no other window shows (and saves over) them — see claims.go
 //	GET  /api/v1/win/:id/events ──► the window's stream attached
 //	  commands (POST /api/v1/ws/:id/run, …/cancel) start Jobs; their events
 //	  go out on the window's stream, tagged with the query tab
@@ -63,6 +66,11 @@ type hub struct {
 	mu   sync.Mutex
 	wins map[string]*window
 	tabs map[string]*tab // every window's query tabs, by id
+
+	// claims: saved tab key (web.bytdb) → the window showing it; see
+	// claims.go. A window's claims stand only while it is live.
+	claims     map[string]*window
+	claimGrace time.Duration
 
 	// newWorkspace builds a query tab's workspace, wired to send its mid-run
 	// events (a script's output) to the window's stream.
@@ -91,6 +99,14 @@ type window struct {
 	// reaper state, guarded by hub.mu
 	idleSince time.Time // zero while a stream is attached
 	released  bool      // the idle release has run since the last attach
+
+	// claim state (claims.go). detached is when the last stream went away
+	// (unix nanos; the window's birth before any did) — set from the SSE
+	// hub's disconnect hook, under that hub's lock, hence atomic. handedOff,
+	// guarded by hub.mu: the page said goodbye (pagehide), so its claims
+	// are gone and a page booting on this window is its reload, not a copy.
+	detached  atomic.Int64
+	handedOff bool
 }
 
 // tab is one query tab: a workspace and the page's views of it.
@@ -111,6 +127,7 @@ type tab struct {
 func newHub(newWS func(sink func(workspace.Event)) *workspace.Workspace, releaseAfter time.Duration) *hub {
 	return &hub{
 		wins: map[string]*window{}, tabs: map[string]*tab{}, newWorkspace: newWS,
+		claims: map[string]*window{}, claimGrace: claimGrace,
 		releaseAfter: releaseAfter, forgetAfter: forgetAfter,
 	}
 }
@@ -128,6 +145,7 @@ func (h *hub) open(winID string) (*tab, error) {
 		}
 	} else {
 		w = &window{id: newID(), idleSince: time.Now()}
+		w.detached.Store(time.Now().UnixNano()) // claims.go: its grace runs from birth until a stream attaches
 		w.sse = rweb.NewSSEHub(rweb.SSEHubOptions{
 			// A run's events come in bursts (notes, then the outcome); 256
 			// absorbs any burst a browser tab could fall behind on. A client
@@ -138,6 +156,8 @@ func (h *hub) open(winID string) (*tab, error) {
 			// a comment line every 20 s keeps an idle stream from being cut
 			// by anything in between, and lets a dead peer be noticed
 			HeartbeatInterval: 20 * time.Second,
+			// a detached stream starts the window's claim grace (claims.go)
+			OnDisconnect: w.onDetach,
 		})
 		w.chat = h.newChat(w)
 	}
@@ -233,6 +253,7 @@ func (h *hub) reap(now time.Time) {
 				delete(h.tabs, t.id)
 			}
 			delete(h.wins, id)
+			h.dropClaimsLocked(w)
 			forget, forgetTabs = append(forget, w), append(forgetTabs, ts)
 		case h.releaseAfter > 0 && idle >= h.releaseAfter && !w.released:
 			w.released = true

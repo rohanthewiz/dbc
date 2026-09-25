@@ -205,6 +205,8 @@ func (s *Server) routes() {
 
 	r.Get("/api/v1/win/:id", s.handleWindow)
 	r.Get("/api/v1/win/:id/events", s.handleWindowEvents)
+	r.Post("/api/v1/win/:id/tabs", s.handleClaim)
+	r.Post("/api/v1/win/:id/release", s.handleRelease)
 
 	r.Post("/api/v1/ws", s.handleOpen)
 	r.Get("/api/v1/ws/:id", s.handleState)

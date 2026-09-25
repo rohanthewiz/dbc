@@ -56,12 +56,6 @@ ten session docs in `ai_docs/claude_sessions/`
   web" action already launch it, and a `.app` is a second packaging path to
   keep building and signing. `/api/v1/health` is there for a wrapper to
   poll.
-- **N-054** · raised `2026-0925-1641-dbc-web-phases-5-6` · value low
-  Two browser tabs of `dbc web` are two windows over the same saved query
-  tabs (`web.bytdb`), each with its own sessions, so editing one tab's text
-  in both loses the earlier save (last write wins). The README says to edit
-  a tab in one window at a time. A fix: a window claims the tabs it shows,
-  and a second window gets fresh ones (or a read-only view).
 
 ## Roadmap
 
@@ -95,6 +89,21 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-054** · raised `2026-0925-1641-dbc-web-phases-5-6` ·
+  closed 2026-09-25, 2026-0925-1728-N-054-tab-claims — a window claims the saved tabs it shows
+  (`web/claims.go`; the hub keeps key → window). Boot claims every free
+  tab (`POST /api/v1/win/:id/tabs`); a second browser tab gets the rest, or
+  a fresh tab of its own. Saves, deletes and layout writes carry `?win=`, and
+  a tab another live window holds is refused with a 409. A claim lasts while
+  its window is live: a stream attached, or detached less than 15 s ago (a
+  reload, a reconnect). pagehide sends one `…/release` carrying the last
+  save, so a closed browser tab frees its tabs at once. A duplicated browser
+  tab (sessionStorage copied, so the same window id) is refused at boot and
+  opens its own window. A tab taken while its window was away is marked ⊘
+  and no longer saved there. Layout writes keep the `tabs` order and `plans`
+  keys of tabs another window holds. Tested in `web/claims_test.go`, and
+  end to end in headless Chrome (two windows, a reload, a duplicate, a close
+  and reopen, a lost tab).
 - **N-055** · raised `2026-0925-1641-dbc-web-phases-5-6` ·
   closed 2026-09-25 — a tab's `planOpen` is saved in one layout key,
   `plans` (the keys of the query tabs showing their plan, comma-separated),

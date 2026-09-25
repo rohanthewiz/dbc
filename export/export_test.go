@@ -246,3 +246,48 @@ func TestRenderAllUnknownFormat(t *testing.T) {
 		t.Fatal("expected an error for an unknown format")
 	}
 }
+
+// The streaming primitive and the collected document must agree: every block
+// format's RenderAll is its RenderBlock outputs joined by BlockSep, so a
+// caller writing blocks as results arrive produces the same bytes.
+func TestRenderBlockJoinsToRenderAll(t *testing.T) {
+	rs := []*model.Result{
+		query("demo", "SELECT id FROM cats", []string{"id"}, [][]string{{"1"}, {"2"}}),
+		exec("demo", "DELETE FROM cats", 3),
+		query("demo", "SELECT name FROM cats", []string{"name"}, [][]string{{"Luna"}}),
+	}
+	for _, f := range []Format{CSV, TSV, Markdown, Text} {
+		if !Streamable(f) {
+			t.Errorf("%s: want Streamable", f)
+		}
+		blocks := make([]string, len(rs))
+		for i, r := range rs {
+			b, err := RenderBlock(r, f, i+1, len(rs))
+			if err != nil {
+				t.Fatalf("RenderBlock(%s): %v", f, err)
+			}
+			blocks[i] = b
+		}
+		want, err := RenderAll(rs, f)
+		if err != nil {
+			t.Fatalf("RenderAll(%s): %v", f, err)
+		}
+		if got := strings.Join(blocks, BlockSep); got != want {
+			t.Errorf("%s: joined blocks differ from RenderAll:\n%s\n---\n%s", f, got, want)
+		}
+	}
+}
+
+// HTML and JSON wrap every result in one document, so they cannot stream
+// and RenderBlock refuses them rather than emit a fragment.
+func TestRenderBlockRefusesDocumentFormats(t *testing.T) {
+	r := query("demo", "SELECT 1", []string{"n"}, [][]string{{"1"}})
+	for _, f := range []Format{HTML, JSON} {
+		if Streamable(f) {
+			t.Errorf("%s: want not Streamable", f)
+		}
+		if _, err := RenderBlock(r, f, 1, 2); err == nil {
+			t.Errorf("%s: RenderBlock should refuse a document format", f)
+		}
+	}
+}

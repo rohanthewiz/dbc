@@ -29,16 +29,9 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-040
+**Next ID:** N-041
 
 ## Open
-
-- **N-003** · raised `2026-0728-2022-multi-statement-headless` · value low
-  Headless multi-statement output is collected and rendered at the end, not
-  streamed per statement, so a long `text` run shows nothing until it
-  finishes. Still true (`main.go:345`), and it now also covers a whole `-f`
-  file or piped stdin (N-005); `-o` and the single-document HTML/JSON
-  formats want the collected shape, so streaming would be `text`-only.
 
 - **N-004** · raised `2026-0728-2022-multi-statement-headless` · value low
   Headless: no `-tx` flag to wrap the whole buffer in one transaction, and no
@@ -98,6 +91,13 @@ ten session docs in `ai_docs/claude_sessions/`
   A "Delete this conversation" row in the transcript's menu would remove its
   file and clear the pane without saving.
 
+- **N-040** · raised `2026-0925-headless-streaming` · value low
+  A headless `dbc script` still collects what it `s.Show`s and renders it
+  at the end, while its `s.Print` lines stream to stdout in `text` — so the
+  log runs ahead of the results it describes. Streaming them (N-003's
+  `blockStream`) needs a banner that does not know the total, since a
+  script's result count is not known up front (`#2` instead of `2/5`).
+
 ## Roadmap
 
 Wanted, but deliberately not next. Empty at seeding: the session docs never
@@ -129,6 +129,23 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-003** · raised `2026-0728-2022-multi-statement-headless` ·
+  closed 2026-09-25 — a headless multi-statement query streams: each result
+  is written to stdout as its statement finishes. It streams in every block
+  format (text, markdown, csv, tsv), not only `text` — their multi-result
+  document is just the blocks joined by a blank line, so writing them one
+  at a time gives the same bytes. HTML and JSON (one document around every
+  result), `-o` (one file, a "wrote N rows" total) and a single statement
+  (renders bare, no banner) still collect. `export.RenderBlock` renders one
+  block and `RenderAll` is now built from it, so the two shapes cannot
+  drift. `runStatements` takes an `onResult` callback; `blockStream`
+  (`main.go`) writes each block and its truncation note together. One
+  visible difference when a statement fails: streamed banners count against
+  every statement (`2/5`), where the collected shape counts only the ones
+  that ran (`2/2`). Checked through the binary with a 1.7s recursive CTE as
+  statement 2: block 1 printed at once, block 2 when it finished; `-t json`
+  still printed at the end. Scripts still collect (N-040).
 
 - **N-039** · raised `2026-0924-2007-returning-rows-not-rows-affected` ·
   closed 2026-09-24, 2026-0924-2029-lazy-demo-seeding-with-main-verb — a

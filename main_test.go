@@ -64,7 +64,7 @@ func TestRunStatementsInOrder(t *testing.T) {
 	if len(stmts) != 3 {
 		t.Fatalf("split gave %d statements, want 3", len(stmts))
 	}
-	results, err := runStatements(context.Background(), sess, stmts)
+	results, err := runStatements(context.Background(), sess, stmts, nil)
 	if err != nil {
 		t.Fatalf("runStatements: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestRunStatementsShareOneTransaction(t *testing.T) {
 		ROLLBACK;
 		SELECT count(*) AS n FROM cats WHERE name = 'Ghost';
 	`)
-	results, err := runStatements(context.Background(), sess, stmts)
+	results, err := runStatements(context.Background(), sess, stmts, nil)
 	if err != nil {
 		t.Fatalf("runStatements: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestRunStatementsShareOneTransaction(t *testing.T) {
 func TestRunStatementsStopsAtFirstError(t *testing.T) {
 	sess := newTestSession(t)
 	stmts := sqlsplit.Split(`SELECT 1 AS n; SELECT * FROM no_such_table; SELECT 3 AS n`)
-	results, err := runStatements(context.Background(), sess, stmts)
+	results, err := runStatements(context.Background(), sess, stmts, nil)
 	if err == nil {
 		t.Fatal("expected an error from the missing table")
 	}
@@ -144,6 +144,133 @@ func TestWarnTruncated(t *testing.T) {
 	warnTruncated(&sb, []*model.Result{full, cut})
 	if got := sb.String(); !strings.Contains(got, "statement 2/2") {
 		t.Errorf("multi-result note = %q, want the statement position", got)
+	}
+}
+
+// A streamed run must write exactly the document the collected shape would
+// have rendered, in every block format — streaming changes when the output
+// appears, never what it says.
+func TestBlockStreamMatchesCollected(t *testing.T) {
+	for _, f := range []export.Format{export.Text, export.Markdown, export.CSV, export.TSV} {
+		t.Run(string(f), func(t *testing.T) {
+			sess := newTestSession(t)
+			stmts := sqlsplit.Split(`
+				SELECT name FROM cats ORDER BY name LIMIT 2;
+				UPDATE cats SET age = age WHERE name = 'Luna';
+				SELECT count(*) AS n FROM cats;
+			`)
+			var out, notes strings.Builder
+			st := &blockStream{out: &out, notes: &notes, f: f, total: len(stmts)}
+			results, err := runStatements(context.Background(), sess, stmts, st.add)
+			if err != nil {
+				t.Fatalf("runStatements: %v", err)
+			}
+			want, err := export.RenderAll(results, f)
+			if err != nil {
+				t.Fatalf("RenderAll: %v", err)
+			}
+			if out.String() != want {
+				t.Errorf("streamed output differs from collected:\n%s\n---\n%s", out.String(), want)
+			}
+		})
+	}
+}
+
+// When a statement fails, the blocks before it are already out, and their
+// banners count against the whole run — the stream could not know it would
+// stop early. The failing statement writes nothing.
+func TestBlockStreamStopsAtFailure(t *testing.T) {
+	sess := newTestSession(t)
+	stmts := sqlsplit.Split(`SELECT 1 AS n; SELECT 2 AS n; SELECT * FROM no_such_table`)
+	var out, notes strings.Builder
+	st := &blockStream{out: &out, notes: &notes, f: export.Text, total: len(stmts)}
+
+	_, err := runStatements(context.Background(), sess, stmts, st.add)
+	if err == nil || !strings.Contains(err.Error(), "no_such_table") {
+		t.Fatalf("err = %v, want the missing table", err)
+	}
+	if st.err != nil {
+		t.Errorf("a statement failure was recorded as a stream failure: %v", st.err)
+	}
+	got := out.String()
+	for _, want := range []string{"-- 1/3 │", "-- 2/3 │"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("streamed output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "3/3") {
+		t.Errorf("the failed statement wrote a block:\n%s", got)
+	}
+}
+
+// A render failure stops the run before the next statement and is kept on
+// the stream, so the caller reports it as a render failure, not a query one.
+func TestBlockStreamRenderFailureStopsRun(t *testing.T) {
+	sess := newTestSession(t)
+	stmts := sqlsplit.Split(`SELECT 1 AS n; SELECT 2 AS n`)
+	var out, notes strings.Builder
+	// HTML is not a block format, so RenderBlock refuses it
+	st := &blockStream{out: &out, notes: &notes, f: export.HTML, total: len(stmts)}
+
+	results, err := runStatements(context.Background(), sess, stmts, st.add)
+	if err == nil || st.err == nil || err != st.err {
+		t.Fatalf("err = %v, stream err = %v, want the same render failure", err, st.err)
+	}
+	if len(results) != 1 {
+		t.Errorf("ran %d statements, want the run stopped after the first", len(results))
+	}
+	if out.Len() != 0 {
+		t.Errorf("wrote %q after a render failure", out.String())
+	}
+}
+
+// The truncation note for a streamed block goes out with that block, naming
+// its position in the whole run.
+func TestBlockStreamNotesTruncation(t *testing.T) {
+	var out, notes strings.Builder
+	st := &blockStream{out: &out, notes: &notes, f: export.Text, total: 3}
+	full := &model.Result{Columns: []string{"n"}, Rows: [][]string{{"1"}}}
+	cut := &model.Result{Columns: []string{"n"}, Rows: [][]string{{"1"}, {"2"}}, Truncated: true}
+
+	if err := st.add(0, full); err != nil {
+		t.Fatal(err)
+	}
+	if notes.Len() != 0 {
+		t.Errorf("untruncated block warned: %q", notes.String())
+	}
+	if err := st.add(1, cut); err != nil {
+		t.Fatal(err)
+	}
+	if got := notes.String(); !strings.Contains(got, "statement 2/3: result truncated at 2 rows") {
+		t.Errorf("note = %q, want the block's position in the run", got)
+	}
+}
+
+// Streaming is for a multi-statement run in a block format on stdout; every
+// other shape still collects.
+func TestStreamsResults(t *testing.T) {
+	cases := []struct {
+		name    string
+		outFile string
+		format  export.Format
+		stmts   int
+		want    bool
+	}{
+		{"text, many, stdout", "", export.Text, 3, true},
+		{"csv, many, stdout", "", export.CSV, 2, true},
+		{"markdown, many, stdout", "", export.Markdown, 2, true},
+		{"one statement renders bare", "", export.Text, 1, false},
+		{"-o writes one file", "out.txt", export.Text, 3, false},
+		{"json is one array", "", export.JSON, 3, false},
+		{"html is one document", "", export.HTML, 3, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			setFlag(t, &flagOut, c.outFile)
+			if got := streamsResults(c.format, c.stmts); got != c.want {
+				t.Errorf("streamsResults = %v, want %v", got, c.want)
+			}
+		})
 	}
 }
 
@@ -214,7 +341,7 @@ func TestRunStatementsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := runStatements(ctx, sess, sqlsplit.Split("SELECT 1; SELECT 2"))
+	_, err := runStatements(ctx, sess, sqlsplit.Split("SELECT 1; SELECT 2"), nil)
 	if !errors.Is(err, db.ErrCanceled) {
 		t.Fatalf("err = %v, want ErrCanceled", err)
 	}

@@ -357,6 +357,13 @@ func warnConfig(cfg *config.Config) {
 // runQueryHeadless runs the SQL buffer given on the command line. It may hold
 // several statements: they run in order on one connection, stopping at the
 // first failure, and every result that made it is still rendered.
+//
+// Rendering takes one of two shapes (see streamsResults):
+//
+//	streamed   each result is written to stdout as its statement finishes,
+//	           so a long run shows progress — block formats on stdout only
+//	collected  every result is held until the run ends and rendered as one
+//	           document — HTML, JSON, -o, and any single statement
 func runQueryHeadless(cfg *config.Config, mgr *db.Manager, sql string, f export.Format) {
 	conn := pickConn(cfg)
 	stmts := sqlsplit.Split(sql)
@@ -374,9 +381,20 @@ func runQueryHeadless(cfg *config.Config, mgr *db.Manager, sql string, f export.
 	}
 	defer sess.Close()
 
-	results, runErr := runStatements(ctx, sess, stmts)
-	// output first: a failing statement 3 does not invalidate results 1 and 2
-	if len(results) > 0 {
+	var stream *blockStream
+	var onResult func(i int, r *model.Result) error
+	if streamsResults(f, len(stmts)) {
+		stream = &blockStream{out: os.Stdout, notes: os.Stderr, f: f, total: len(stmts)}
+		onResult = stream.add
+	}
+	results, runErr := runStatements(ctx, sess, stmts, onResult)
+	if stream != nil && stream.err != nil {
+		// the run stopped because output did, not because a statement failed
+		fail(stream.err, "render failed")
+	}
+	// output first: a failing statement 3 does not invalidate results 1 and 2.
+	// A streamed run already wrote them, one at a time.
+	if stream == nil && len(results) > 0 {
 		emit(results, f)
 	}
 	if runErr != nil {
@@ -438,8 +456,14 @@ func addAdHocConn(cfg *config.Config) error {
 // failure. It returns the results that completed and the error that stopped
 // it, so the caller can still report the work that got done. A failure in a
 // multi-statement run is tagged with the statement's position.
-func runStatements(ctx context.Context, sess *db.Session,
-	stmts []sqlsplit.Stmt) ([]*model.Result, error) {
+//
+// onResult, when not nil, is handed each result (with its 0-based index) as
+// soon as its statement finishes, which is what lets a headless run stream.
+// An error from it stops the run before the next statement and comes back
+// as is — it is the caller's failure, not the statement's, so it is not
+// tagged with a position.
+func runStatements(ctx context.Context, sess *db.Session, stmts []sqlsplit.Stmt,
+	onResult func(i int, r *model.Result) error) ([]*model.Result, error) {
 
 	results := make([]*model.Result, 0, len(stmts))
 	for i, st := range stmts {
@@ -451,8 +475,68 @@ func runStatements(ctx context.Context, sess *db.Session,
 			return results, err
 		}
 		results = append(results, res)
+		if onResult != nil {
+			if err = onResult(i, res); err != nil {
+				return results, err
+			}
+		}
 	}
 	return results, nil
+}
+
+// streamsResults decides whether a headless query writes each result as it
+// arrives rather than all of them at the end. All three must hold:
+//
+//   - more than one statement: a single result has nothing to stream ahead
+//     of, and it renders bare (no banner), which a stream could not know to
+//     do until the run was over
+//   - stdout, not -o: the file is written whole, and its "wrote N rows" line
+//     is a total
+//   - a block format (export.Streamable): HTML and JSON are one document
+//     wrapped around every result, so they cannot close until the last one
+//
+// A streamed document is byte for byte what the collected one would be for a
+// run that succeeds. When a statement fails, the banners already written
+// count against every statement ("2/5"), where the collected shape counts
+// only the ones that made it ("2/2") — the stream could not know yet.
+func streamsResults(f export.Format, stmts int) bool {
+	return stmts > 1 && flagOut == "" && export.Streamable(f)
+}
+
+// blockStream writes the results of a multi-statement run one block at a
+// time, as export.RenderAll would lay them out: a banner (where the format
+// has one) and the result, blocks joined by export.BlockSep. Each write goes
+// straight to out — os.Stdout is unbuffered — so a block shows as soon as its
+// statement finishes. The truncation note for a block goes to notes (stderr)
+// right after it, so it lands next to the result it is about.
+type blockStream struct {
+	out, notes io.Writer
+	f          export.Format
+	total      int // statements in the run; the banners count against it
+	wrote      int // blocks written so far, to know when a separator is due
+	// err is the render or write failure that stopped the stream, kept so the
+	// caller can tell it from the statement failure runStatements returns
+	err error
+}
+
+// add writes result i (0-based). Its signature fits runStatements' onResult.
+func (b *blockStream) add(i int, r *model.Result) error {
+	pos := fmt.Sprintf("%d/%d", i+1, b.total)
+	block, err := export.RenderBlock(r, b.f, i+1, b.total)
+	if err != nil {
+		b.err = serr.Wrap(err, "statement", pos)
+		return b.err
+	}
+	if b.wrote > 0 {
+		block = export.BlockSep + block
+	}
+	b.wrote++
+	if _, err = io.WriteString(b.out, block); err != nil {
+		b.err = serr.Wrap(err, "statement", pos)
+		return b.err
+	}
+	noteTruncated(b.notes, r, pos)
+	return nil
 }
 
 // emit renders the results to stdout, or to the --out file when one was given.
@@ -486,16 +570,25 @@ func emit(results []*model.Result, f export.Format) {
 // quietly missing rows — and stderr keeps the note out of the data stream.
 func warnTruncated(w io.Writer, results []*model.Result) {
 	for i, r := range results {
-		if !r.Truncated {
-			continue
-		}
 		pos := ""
 		if len(results) > 1 {
-			pos = fmt.Sprintf("statement %d/%d: ", i+1, len(results))
+			pos = fmt.Sprintf("%d/%d", i+1, len(results))
 		}
-		fmt.Fprintf(w, "note: %sresult truncated at %d rows — raise max_rows in config for more\n",
-			pos, len(r.Rows))
+		noteTruncated(w, r, pos)
 	}
+}
+
+// noteTruncated writes warnTruncated's note for one result, if it hit the
+// cap. pos is the statement's "i/n", or "" for a lone result.
+func noteTruncated(w io.Writer, r *model.Result, pos string) {
+	if !r.Truncated {
+		return
+	}
+	if pos != "" {
+		pos = "statement " + pos + ": "
+	}
+	fmt.Fprintf(w, "note: %sresult truncated at %d rows — raise max_rows in config for more\n",
+		pos, len(r.Rows))
 }
 
 // runScriptHeadless runs a Go script. The results it pushes with s.Show are

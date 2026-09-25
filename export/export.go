@@ -89,18 +89,18 @@ func RenderAll(rs []*model.Result, f Format) (string, error) {
 		return Render(rs[0], f)
 	}
 	switch f {
-	case CSV:
-		return joinBlocks(rs, func(r *model.Result) (string, error) { return delimited(r, ',') })
-	case TSV:
-		return joinBlocks(rs, func(r *model.Result) (string, error) { return delimited(r, '\t') })
-	case Markdown:
-		return joinBlocks(rs, func(r *model.Result) (string, error) {
-			return mdBanner(r, position(rs, r)) + markdown(r), nil
-		})
-	case Text:
-		return joinBlocks(rs, func(r *model.Result) (string, error) {
-			return textBanner(r, position(rs, r)) + TextTable(r), nil
-		})
+	case CSV, TSV, Markdown, Text:
+		// Block formats go through RenderBlock, the same call a streaming
+		// caller makes one result at a time, so the two can never drift.
+		blocks := make([]string, 0, len(rs))
+		for i, r := range rs {
+			b, err := RenderBlock(r, f, i+1, len(rs))
+			if err != nil {
+				return "", err
+			}
+			blocks = append(blocks, b)
+		}
+		return strings.Join(blocks, BlockSep), nil
 	case HTML:
 		return htmlDocAll(rs), nil
 	case JSON:
@@ -109,28 +109,42 @@ func RenderAll(rs []*model.Result, f Format) (string, error) {
 	return "", serr.New("unknown format", "format", string(f))
 }
 
-// joinBlocks renders every result and separates the blocks by a blank line.
-// Each renderer ends its block with a newline, so one more makes the gap.
-func joinBlocks(rs []*model.Result, render func(*model.Result) (string, error)) (string, error) {
-	blocks := make([]string, 0, len(rs))
-	for _, r := range rs {
-		b, err := render(r)
-		if err != nil {
-			return "", err
-		}
-		blocks = append(blocks, b)
+// BlockSep goes between two blocks of a multi-result document in a block
+// format. Each block already ends with a newline, so one more makes the
+// blank line that keeps CSV blocks apart and gives the banners air.
+const BlockSep = "\n"
+
+// Streamable reports whether a multi-result document in f is nothing but its
+// blocks joined by BlockSep. Such a document can be written a block at a
+// time, as each result arrives, and still come out exactly as RenderAll
+// would make it. HTML and JSON wrap the blocks in one document (a <html>
+// shell, a JSON array), so they have to wait for the last result.
+func Streamable(f Format) bool {
+	switch f {
+	case CSV, TSV, Markdown, Text:
+		return true
 	}
-	return strings.Join(blocks, "\n"), nil
+	return false
 }
 
-// position returns the 1-based place of r in rs, by identity.
-func position(rs []*model.Result, r *model.Result) string {
-	for i, x := range rs {
-		if x == r {
-			return fmt.Sprintf("%d/%d", i+1, len(rs))
-		}
+// RenderBlock renders r as block i (1-based) of n in a multi-result document
+// in a Streamable format: its banner, where the format has one, then the
+// result itself. CSV and TSV carry no banner — it would not be data. n is
+// what the banner counts against; a streaming caller passes the number of
+// statements it means to run, since it cannot know how many will succeed.
+func RenderBlock(r *model.Result, f Format, i, n int) (string, error) {
+	pos := fmt.Sprintf("%d/%d", i, n)
+	switch f {
+	case CSV:
+		return delimited(r, ',')
+	case TSV:
+		return delimited(r, '\t')
+	case Markdown:
+		return mdBanner(r, pos) + markdown(r), nil
+	case Text:
+		return textBanner(r, pos) + TextTable(r), nil
 	}
-	return ""
+	return "", serr.New("format is not a block format", "format", string(f))
 }
 
 // summary describes what a statement did, for the multi-result banners. The

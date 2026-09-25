@@ -1,0 +1,402 @@
+# `dbc web`: a browser UI for dbc
+
+Raised 2026-09-25. The ask: a web UI for dbc, started as `dbc web`.
+
+This is a plan, not a record of work done. Nothing below is built yet.
+
+## The one-paragraph version
+
+`dbc web` starts a local web server and opens the browser on it. The page is
+the TUI's workbench, rearranged for a bigger canvas: connections and tables on
+the left, a SQL editor, a results grid, the plan view, the log, and the
+assistant. It is built the way the author's other Go web apps are (gonotes,
+herdr-web — see *House conventions*): **rweb** for HTTP and SSE, **element**
+for server-side HTML, vanilla JavaScript and CSS embedded in the binary with
+`go:embed`, **serr** for errors, and nothing fetched from the network at run
+time. Most of the work is not the web
+layer. It is **pulling the TUI's application logic out of `tui.Model` into a
+UI-agnostic `workspace` package**, so the terminal and the browser share one
+set of rules for running statements, pinned sessions, cancellation, history,
+explain and the assistant, rather than two copies that drift.
+
+## Goals
+
+- **Everything the TUI does, in a browser.** Run the statement under the
+  caret, run all, cancel, pinned sessions (`BEGIN` … `COMMIT` across runs),
+  multi-statement runs, the results grid (sort, hide, resize, inspect),
+  copy and export, history, tables, explain (tree, flame, insights), scripts,
+  and the AI assistant with its data rules.
+- **Things a browser does better.** A real rich-HTML clipboard everywhere (the
+  Clipboard API writes `text/html` itself, so "copy for Teams" works over SSH
+  too), file downloads for exports, several query tabs side by side, a larger
+  plan graph, and links you can bookmark (`/q/<tab>`).
+- **Local and safe by default.** It listens on loopback, and only a browser
+  holding the launch token can use it. Nothing is exposed to the network
+  unless asked for explicitly.
+- **One binary, offline.** No Node toolchain to build, no CDN at run time; the
+  plan page already proves the pattern.
+
+## Non-goals (for this plan)
+
+- A multi-user, hosted service with accounts and roles. `dbc web` is a local
+  tool for the person running it. Serving a team is a later, separate design
+  (see *Later*).
+- Replacing the TUI. Both stay first-class; the `workspace` extraction exists
+  precisely so neither is second-class.
+- A JavaScript framework or a build step (React, Vite, npm). The house style
+  is server-rendered HTML with small vanilla modules, and dbc's UI is a
+  handful of panes, not an app platform.
+
+## Decisions to take to the user
+
+These are the forks where the choice changes the work. The recommendation is
+first in each row.
+
+| Fork | Recommended | Alternatives |
+|---|---|---|
+| Who it serves | **One user, on loopback, protected by a per-launch secret** (herdr-web's model) | LAN/team server with logins — a much larger security design |
+| Shared logic | **Extract a `workspace` package the TUI and web both use** | Re-implement the run/session rules in `web/` (fast now, drifts forever) |
+| Live updates | **SSE for server→browser streams + JSON `POST`s for commands** | One WebSocket per tab carrying both directions |
+| SQL editor | **Monaco, vendored and embedded, the `<textarea>` kept as source of truth** — gonotes' pattern, so one editor stack across the author's apps | CodeMirror 6 (~170 KB gz against Monaco's ~4 MB, but a second editor to know); a bare `<textarea>` with a highlight overlay |
+| Web-only state (tabs, layout) | **bytdb store at `~/.config/dbc/web.bytdb`**; history and chats keep using `userdata` so TUI and web share them | Everything in `userdata` JSON files; or everything in bytdb (then the TUI must migrate) |
+| Default port | **Fixed default `127.0.0.1:8450`, falling back to a free port** (clear of gonotes' 8444 and herdr-web's 8421) | Always a random port (bookmarks break every launch) |
+
+## House conventions (from gonotes and herdr-web)
+
+The author's two rweb apps were surveyed so `dbc web` looks like a sibling,
+not a stranger. Taken from them:
+
+| Convention | Source | In dbc web |
+|---|---|---|
+| Pages are structs with `Render() string`, panels are `element.Component`s rendered with `element.RenderComponents` | gonotes `web/pages/landing/*` | `web/pages/workbench/{page,sidebar,editor,results,plan,chat,log,status}.go` |
+| Assets under `//go:embed all:static`, served at `/static/*` by extension, `?v=N` cache busting, long cache for `vendor/` | gonotes `web/static.go` | same |
+| Vanilla JS as small IIFE modules, one `app.js` core with a central `apiRequest` wrapper | gonotes `web/static/js/` | same — plus an SSE client in `app.js` |
+| JSON API under `/api/v1/…`, REST-ish, literal paths before `:id`, `{success, data, error}` envelope | gonotes `web/routes.go`, `web/api/notes.go` | same envelope; `error` carries serr's user message, never the DSN |
+| Monaco loaded lazily, vendored by `scripts/vendor_monaco.sh`, the `<textarea>` the source of truth | gonotes `monaco_editor.js` | same, but **no CDN fallback** (dbc works offline, and the CSP stays `'self'`) |
+| A generated per-launch secret, an HMAC-signed `HttpOnly` `SameSite=Strict` session cookie, `Authorization: Bearer` for headless clients, a same-origin `Origin` check | herdr-web `internal/gwauth` | the auth design below |
+| `/api/v1/health` reporting the data dir | gonotes | same — a macOS wrapper (Phase 6) polls it |
+| Integration tests against a real server: `ReadyChan`, `Address: "localhost:"`, `GetListenPort()` | gonotes `web/api/notes_test.go` | the web test harness |
+| Cleanup after `s.Run()` returns, relying on rweb's own SIGINT handling | gonotes `main.go` | release sessions, close chats, save state after `Run` returns |
+
+Two deliberate departures: gonotes binds every interface with CORS `*` and
+keeps its JWT in `localStorage` — right for its multi-user sync server, wrong
+for a tool holding database credentials. `dbc web` binds loopback, sends no
+CORS headers, and keeps its session in an `HttpOnly` cookie script cannot read.
+
+## What already exists and carries over
+
+dbc is in good shape for this: most of its logic already lives outside the
+TUI, and the TUI's drawing is cleanly separated from its data.
+
+| Package | Reused as-is by the web UI |
+|---|---|
+| `config` | connections, limits, AI settings; gains a `[web]` table |
+| `db` | `Manager`, `Session` (pinned sessions, `Classify` fault rules), `Explain`, catalog (`TablesQuery`, `TableIndex`, `Columns`) |
+| `sqlsplit` | statement splitting and the statement at a caret offset — the browser sends the caret, the server picks the statement, exactly as the TUI does |
+| `export` | every format; `ClipContent` / `HTMLFragment` feed the browser clipboard; `ToFile` becomes a download |
+| `explain` | plans, insights, `Text`, `JSON`, and the whole interactive plan page (`HTML`) |
+| `ai` | `Chat` is already UI-agnostic: `Events()` becomes an SSE stream; `BeginSignIn` (device flow) is natural in a browser |
+| `userdata` | history, saved buffer, conversation archive — shared with the TUI |
+| `script`, `sdb` | scripts run unchanged; `s.Show` / `s.Print` callbacks become SSE events |
+| `theme` | the palette becomes CSS custom properties, as the plan page already does |
+
+What does **not** carry over is the logic that lives on `tui.Model` today —
+the rules, not the drawing:
+
+- the run slot: one run at a time, `runGen` stragglers dropped, cancel
+  (`beginRun`, `endRun`, `cancelRun`, `run`, `runDone`)
+- the pinned session per active connection, retry-once / session-lost rules
+  (`onSession`, `runOnSession`, `releaseSessionCmd`, `dropSession`)
+- connect with cancel and supersede (`connectCmd`, `connGen`)
+- what `Ctrl+R` runs: caret statement, selection, run all (`stmtsToRun`,
+  `allStmts`) and history recording
+- `lastStmt` / `lastErr` / `lastRes` bookkeeping, and the assistant's context
+  built from them (`chatContext`, the data rule, hidden columns, sort order)
+- explain (`explainStmt`, `maybePlan`, `planForChat`)
+
+That is roughly 1,500 lines across `tui/run.go`, `tui/explain.go`,
+`tui/chat.go` and `tui/app.go`, entangled with Bubble Tea messages. Phase 1
+moves it.
+
+## Architecture
+
+```
+            browser tab (one "workspace")                          dbc web process
+┌──────────────────────────────────────────────┐        ┌──────────────────────────────────────────┐
+│ page shell (element, server-rendered)         │  GET   │ web/                                      │
+│ ├ editor (textarea → Monaco)                  │◄──────►│  routes, auth middleware, SSR pages       │
+│ ├ grid (virtualized, vanilla JS)              │  POST  │  JSON handlers ─┐                         │
+│ ├ plan (the explain page's JS, as a module)   │  JSON  │  SSE streams ◄──┤                         │
+│ ├ assistant                                   │        │                 ▼                         │
+│ └ log                                         │  SSE   │ workspace/  (NEW — shared with the TUI)   │
+│                                               │◄───────│  Workspace: run slot, pinned session,     │
+└──────────────────────────────────────────────┘        │  connect, history, explain, chat context  │
+                                                         │        │           │            │         │
+            terminal                                      │        ▼           ▼            ▼         │
+┌──────────────────────────────────────────────┐        │     db/ explain/ export/ ai/ userdata/    │
+│ tui/ (Bubble Tea) ── also a Workspace client  │───────►│                                           │
+└──────────────────────────────────────────────┘        └──────────────────────────────────────────┘
+```
+
+### The `workspace` package
+
+A `Workspace` is one person's working state against the databases: an active
+connection, its pinned session, the run in flight, the last statement, error,
+result and plan. It has no UI types in its API. Work is started with methods
+and outcomes arrive as **events on a channel**, which is the shape both UIs
+need: Bubble Tea wraps each event in a `tea.Msg`, the web layer writes each
+one to an SSE stream.
+
+```go
+type Workspace struct { /* cfg, mgr, active, sess+sessMu, run slot, last*, history */ }
+
+func New(cfg *config.Config, mgr *db.Manager, hist *userdata.History) *Workspace
+func (w *Workspace) Events() <-chan Event            // RunStarted, Tick, StmtDone, RunDone, Connected, Plan, ScriptPrint, …
+
+func (w *Workspace) Connect(name string) error      // cancels a connect in flight; supersede by generation
+func (w *Workspace) Run(buffer string, caret int, sel [2]int, all bool) error // picks stmts as Ctrl+R / Ctrl+Shift+R do
+func (w *Workspace) Explain(buffer string, caret int, sel [2]int, analyze bool) error
+func (w *Workspace) RunScript(path string) error
+func (w *Workspace) Cancel() bool                    // run or connect
+func (w *Workspace) ChatContext(q string, view GridView) (ai.Context, []db.TableRef)
+func (w *Workspace) Close()                           // releases the pinned session
+```
+
+The rules move with their comments intact — "ONE RUN AT A TIME", "A PINNED
+SESSION per active connection", "CANCEL REACHES THE SERVER" — and the TUI's
+existing tests become the safety net for the move: they must pass unchanged
+before any web code exists.
+
+The grid's view of a result (sort order, hidden columns) stays with each UI —
+it is presentation — and is passed in where a rule needs it (the assistant's
+data rule, "copy what you see").
+
+### The `web` package
+
+```
+web/
+  server.go         NewServer(cfg, mgr, opts), routes.go: rweb server and every route
+  auth.go           per-launch secret, HMAC session cookie, Bearer, Host/Origin checks
+  hub.go            workspaces by ID; idle reaping; one SSE stream per workspace
+  respond.go        the {success, data, error} envelope and the serr → HTTP mapping
+  pages/workbench/  element page + components: sidebar, editor, results, plan, chat, log, status
+  api/              run.go, result.go, ai.go, meta.go — JSON handlers
+  static/           css/app.css, js/*.js, vendor/monaco (embedded, vendored by script)
+```
+
+Routes, all under the token middleware:
+
+| Route | Does |
+|---|---|
+| `GET /` | the page shell (server-rendered with element) |
+| `GET /login`, `POST /login` | the secret, for a browser that did not come in through the launch URL |
+| `GET /api/v1/health` | liveness and data dir (unauthenticated, reveals nothing else) |
+| `GET /api/v1/ws/:id/events` | the workspace's SSE stream: run progress, results, log lines, chat tokens |
+| `POST /api/v1/ws` | open a workspace (a browser tab) → id |
+| `POST /api/v1/ws/:id/connect` | switch connection |
+| `POST /api/v1/ws/:id/run` | `{buffer, caret, sel, all}` → accepted; progress on SSE |
+| `POST /api/v1/ws/:id/explain` | `{…, analyze}` |
+| `POST /api/v1/ws/:id/cancel` | Ctrl+K |
+| `GET /api/v1/ws/:id/result?from=&n=&sort=&hide=` | a page of rows — the grid is virtualized, so 50,000 rows never cross the wire at once |
+| `POST /api/v1/ws/:id/copy` | `{scope, format}` → `{text, html}` for `navigator.clipboard.write` |
+| `GET /api/v1/ws/:id/export?format=` | a file download (`Content-Disposition`) |
+| `GET /api/v1/ws/:id/plan.html` | the plan as the existing interactive page |
+| `POST /api/v1/ws/:id/chat` … `/stop`, `/model`, `/signin` | the assistant |
+| `GET /api/v1/conns`, `/tables`, `/history?q=`, `/chats` | sidebars and pickers |
+
+Every JSON response is `{success, data, error}`. A refusal that is not a
+failure — "busy: statement 2/4 is still running" — is `409` with the reason in
+`error`, the same words the TUI logs.
+
+### Why SSE plus POST, not a WebSocket
+
+Every live update flows one way — server to browser: tick, statement done,
+result ready, log line, chat token. Commands are discrete requests with a
+clear success or refusal ("busy — Ctrl+K stops it"), which is what HTTP
+status codes are for. SSE reconnects by itself, passes through proxies,
+is trivially testable with `httptest`, and rweb's `SSEHub` already does the
+fan-out and heartbeats. A WebSocket would earn its keep only for
+keystroke-level collaboration, which is a non-goal.
+
+### Sessions, tabs and connections
+
+Each browser tab is a **workspace** with its own pinned DB session — so a
+`BEGIN` in one tab does not leak into another, exactly as two TUI windows
+behave today. Idle workspaces release their session after
+`conn_idle_timeout` (the setting that already exists) and are forgotten
+after a day; a closed tab's SSE disconnect starts that clock.
+
+Two resource limits this touches, both real today:
+
+- **In-memory SQLite** caps its pool at `memSQLiteMaxOpen = 3` (anchor +
+  one pinned session + one pooled). Two tabs pinning sessions would starve
+  the pool. `dbc web` raises the cap (it is a constant for the TUI's shape,
+  not a law) and says so in a comment.
+- **bytdb** holds a file lock, so `dbc web` and a TUI cannot both open the
+  same bytdb file (the demo included) — the same limit two TUIs have. The
+  second process gets the existing "dropped with a warning" behavior; the
+  web log says which connection is unavailable and why.
+
+## Security
+
+A page that runs arbitrary SQL with stored credentials must not be
+reachable by anything but its owner's browser.
+
+- **Loopback only by default** (`127.0.0.1`). `--listen 0.0.0.0:8450` is
+  allowed but prints a warning, and refuses without TLS
+  (`[web] tls_cert`/`tls_key`) unless `--insecure` is also given.
+- **A per-launch secret, herdr-web's scheme.** `dbc web` generates a secret
+  with `crypto/rand` (or takes `--secret` / `DBC_WEB_SECRET`) and opens
+  `http://127.0.0.1:8450/login?s=<secret>`. The login trades it for a
+  stateless HMAC-signed session cookie — `HttpOnly`, `SameSite=Strict`,
+  `Secure` under TLS, a 24 h TTL — and redirects to `/`, so the secret leaves
+  the address bar at once. The signing key lives only in the process: a
+  restart signs everyone out and nothing is written to disk. A browser that
+  lost the cookie gets `/login`, which accepts the secret the terminal
+  printed; `curl` and scripts send `Authorization: Bearer <secret>`,
+  compared in constant time.
+- **DNS-rebinding guard.** The `Host` header must be the bound address or
+  `localhost`; anything else is 403 — a malicious page cannot rename itself
+  onto 127.0.0.1.
+- **CSRF.** `SameSite=Strict` already withholds the cookie cross-site; as a
+  second lock, state-changing requests must carry an `X-DBC-CSRF` header
+  (from a `<meta>` in the shell) and a same-origin `Origin`, which a
+  cross-site form cannot forge. No CORS headers are ever sent.
+- **No new secret storage.** DSNs stay in the config file, env-expanded as
+  today. The browser never receives a DSN, only connection names and drivers.
+- **CSP** on every page: `default-src 'self'`, no inline script except the
+  shell's JSON data block (hashed), `connect-src 'self'`, and
+  `worker-src blob: data:` for Monaco's workers (gonotes needed the same).
+
+## Errors and logging
+
+Errors follow dbc's existing rule, which is serr's: **wrap with context at
+every frame, log once at the top.**
+
+- Every layer wraps with `serr.Wrap(err, "key", value, …)` — `workspace`
+  adds `conn`, `statement` (`2/4`) and `tag`; `db` already adds `conn`, `op`
+  and `driver_err`; handlers add `route` and `ws`. Nothing below the handler
+  logs.
+- One place turns an error into a response (`web/respond.go`). It logs it
+  with `logger.LogErr(err, "request failed")` — every accumulated field in
+  one structured line — and answers with the envelope. The browser gets
+  `serr.UserMsgFromErr(err, …)`: the user message where a layer set one with
+  `SetUserMsg`, otherwise the same text the TUI shows in its log
+  (`serr.StringFromErr` without the frame context), never raw fields a DSN
+  could hide in.
+- Status comes from the error, not the handler: `db.ErrCanceled` → `200` with
+  `stopped: true` in the envelope (a stop is the user's choice, shown as
+  stopped, not failed), a busy run slot → `409`,
+  a bad request → `400`, an unknown workspace → `404`, anything else → `500`.
+  A test pins the mapping.
+- Errors on the SSE stream carry the same user message, so a failed statement
+  reads the same whether it arrived as a response or an event.
+
+## The frontend
+
+Server-rendered with element: the shell, sidebars, dialogs and empty states
+arrive as HTML. JavaScript owns only what has to be live — the editor, the
+grid, the plan graph, the chat stream. Small IIFE modules, no bundler, as in
+gonotes:
+
+| Module | Responsibility |
+|---|---|
+| `app.js` | boot, the SSE connection, the command bus, keyboard map (the TUI's keys: `Ctrl+R`, `Ctrl+Shift+R`, `Ctrl+X`, `Ctrl+K`, `Ctrl+E`, `Ctrl+P` …, with browser-safe fallbacks noted where the browser reserves a chord) |
+| `editor.js` | the `<textarea>`, upgraded to Monaco (SQL mode) once it loads; reports caret and selection offsets with each run; marks the statement that will run, as the TUI's gutter does |
+| `grid.js` | virtualized rows fetched by page; sort, hide, resize, select a range; double-click inspects |
+| `plan.js` | the explain page's graph, flame and insights, refactored out of `explain/assets/plan.html` into a module that page and the web UI both load |
+| `chat.js` | transcript, streaming answer, `⤓ insert` into the editor, the context chip |
+| `clip.js` | `navigator.clipboard.write` with both `text/plain` and `text/html` |
+
+The look is the TUI's: the `theme` palette as CSS variables, the same
+glyphs, the same layout — so a user moving between terminal and browser is
+never lost.
+
+## Phases
+
+Each phase ends shippable and tested.
+
+### Phase 1 — extract `workspace` (no UI change)
+
+Move the run slot, pinned session, connect, statement picking, history
+recording, last-result bookkeeping, explain and chat-context building from
+`tui` into `workspace`, behind the event API above. The TUI becomes a client
+of it. **Done when** every existing `tui` test passes unchanged and the live
+session tests (`db/live_*`) pass, with `workspace` unit tests for the rules
+themselves (straggler drop, busy refusal, cancel, session lost, retry once).
+
+### Phase 2 — `dbc web` skeleton
+
+The subcommand (`--listen`, `--no-open`, `--secret`), the rweb server, the
+security middleware, the serr → envelope responder, the element shell,
+embedded assets, the SSE hub, cleanup on Ctrl+C, the health endpoint, and a
+`web.bytdb` store for tabs and layout.
+A run returns a plain HTML table. **Done when** you can pick a connection,
+type a query, run it, cancel a slow one, and the auth tests (no token → 401,
+bad Host → 403, cross-site POST → 403) pass.
+
+### Phase 3 — the real editor and grid
+
+Monaco with SQL highlighting and the TUI's keys; the statement-under-caret
+marker; run all; multi-statement progress on SSE. The virtualized grid with
+paging, sort, hide/show, resize, range select, inspect. Copy in every format
+(rich HTML via the Clipboard API), export as downloads, history picker,
+tables sidebar with preview. **Done when** the TUI's results-grid tests have
+browser equivalents (see *Testing*).
+
+### Phase 4 — explain
+
+A Plan tab beside Results, driven by `plan.js` (the existing page's code as a
+module). `Ctrl+X` / `Ctrl+Shift+X`, before/after comparison, insights with
+`⤓ insert` into the editor, open-as-standalone-page. Mostly assembly: the
+explain package and the page already exist.
+
+### Phase 5 — the assistant and scripts
+
+The chat pane on SSE (`ai.Chat.Events()` → stream), stop, model picker,
+conversation archive shared with the TUI, the device-flow sign-in in the page
+itself. The data rule, hidden columns and sort order exactly as the TUI sends
+them — through `workspace.ChatContext`, so they cannot differ. Scripts:
+picker, run, `s.Print` lines to the log and `s.Show` results to the grid.
+
+### Phase 6 — polish and packaging
+
+Multiple query tabs per window, layout persistence, keyboard help overlay,
+light/dark, error pages, a cats plugin action ("dbc — web") beside the TUI's,
+and optionally a macOS app wrapper the way gonotes has one. README section.
+
+## Testing
+
+- **`workspace`**: unit tests for every rule, using the in-memory SQLite and
+  bytdb managers the `db` and `tui` tests already build, plus the existing
+  opt-in live tests against Postgres and MySQL.
+- **`web` handlers**: integration tests against a real rweb server, gonotes'
+  way — `rweb.ServerOptions{Address: "localhost:", ReadyChan: ready}`, the
+  port from `GetListenPort()`, a `request(method, path, body)` helper that
+  decodes the envelope. Auth (no cookie → 401, bad Host → 403, cross-site
+  POST → 403, Bearer works), routing, the serr → status mapping, SSE event
+  order for a multi-statement run, cancel mid-run, download headers, CSP
+  present on every page.
+- **Browser**: a small set of end-to-end checks with headless Chrome (already
+  used to verify the plan page): load, run, see rows, copy, explain. go-rod
+  is in `~/projs/go/rod` if scripted interaction is wanted; screenshots for
+  layout regressions at desktop and 420 px widths.
+
+## Risks
+
+| Risk | Handling |
+|---|---|
+| The `workspace` extraction breaks subtle TUI behavior | Phase 1 changes no behavior and ships alone; the TUI's 109 tests are the contract |
+| Browser shortcuts collide (`Ctrl+R` reloads, `Ctrl+P` prints, `Ctrl+E` focuses the URL bar in some browsers) | `preventDefault` where the browser allows it; documented alternates (`Ctrl+Enter` to run, `Ctrl+Shift+Enter` run all) that are the de-facto web SQL keys |
+| A long result floods the browser | server-side paging; the grid fetches only visible rows; `max_display_rows` still applies |
+| A tab left open holds a transaction open | idle release after `conn_idle_timeout`, and a visible "transaction open" badge per tab |
+| Someone exposes it on a network | loopback default, TLS required off-loopback, token always on |
+| Monaco is a large vendored blob (~4 MB in the binary) | pinned version via `scripts/vendor_monaco.sh`, license beside it, lazy-loaded; the `<textarea>` stays the source of truth, so the page works before (or without) it |
+| rweb has no graceful shutdown for open SSE streams | after `Run` returns: cancel every workspace's run, close chats, release sessions, save tabs — herdr-web's short grace period before exit if streams hang |
+
+## Later (out of scope here)
+
+- A team server: logins (OIDC), per-user connection grants, audit log,
+  read-only roles. A different trust model, and a separate plan.
+- Shared, linkable result snapshots and plans.
+- Collaborative editing of a query buffer.

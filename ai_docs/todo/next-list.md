@@ -33,13 +33,6 @@ ten session docs in `ai_docs/claude_sessions/`
 
 ## Open
 
-- **N-011** · raised `2026-0913-2158-dbc-migrate-replaces-goose` · value medium
-  Tag a release. The push half of this item is done (N-019). The repo has no
-  tags at all, while `cats-plugin.toml` declares `version = "0.1.0"`, and the
-  church docs point at `go install github.com/rohanthewiz/dbc@latest` (which
-  works today only as a pseudo-version of `main`). A `v0.1.0` tag would line
-  the three up.
-
 - **N-030** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` · value low
   Linux rich copy offers text/html only (wl-copy/xclip set one type), so a
   terminal paste right after gets nothing or markup. Serving both needs
@@ -76,6 +69,14 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-011** · raised `2026-0913-2158-dbc-migrate-replaces-goose` ·
+  closed 2026-09-25, 2026-0925-1330-tag-v0.1.0-release — Tag a release. Annotated tag `v0.1.0` on `aec93c8`
+  (main, even with `origin/main`) is pushed, matching `version = "0.1.0"` in
+  `cats-plugin.toml`. Before it was pushed, build, vet and the full test suite
+  passed, and go.mod has no `replace` directives. `go list -m
+  github.com/rohanthewiz/dbc@latest` now resolves to `v0.1.0` rather than a
+  pseudo-version of `main`. When `cats-plugin.toml`'s version changes, tag to match.
 
 - **N-043** · raised `2026-0925-1203-live-session-and-timeout-tests` ·
   closed 2026-09-25, 2026-0925-1252-pgx-ping-cut-pooled-conns — Postgres pools are now opened through `pgxstdlib.OpenDB` with `OptionShouldPing(pgShouldPing)` (`db/manager.go`). pgx's 1s rule stays. On top of it, a non-blocking `MSG_PEEK` on the socket (`db/sockpeek_unix.go`, the same check go-sql-driver/mysql runs, minus consuming the byte) asks for a ping when bytes or a FIN arrived while the connection was idle. There is no extra round trip. It was not always-ping, because that would cost a round trip per pooled statement, which is heavy for a script on a remote server. `TestLiveCutPooledConnReplaced` now reuses the killed connection both at once and after 1s. Against Postgres 17 the at-once case failed 3/3 without the option (57P01) and passed 5/5 with it. MySQL 8.4 passes both. `TestSockQuiet` covers the peek on loopback TCP. A malformed DSN now fails at parse, still with the password masked.

@@ -200,38 +200,15 @@ func (m *Model) sessionReleased(msg sessionReleasedMsg) tea.Cmd {
 }
 
 // runOnSession executes one statement on the session pinned to conn,
-// opening or replacing it as needed. Called from a command goroutine.
+// opening or replacing it as needed (see onSession, in explain.go, which an
+// explain shares). Called from a command goroutine.
 func (m *Model) runOnSession(ctx context.Context, conn, stmt string) (*model.Result, error) {
-	m.sessMu.Lock()
-	defer m.sessMu.Unlock()
-	for retried := false; ; retried = true {
-		if m.sess == nil || m.sessFor != conn {
-			m.dropSessionLocked()
-			sess, err := m.mgr.Session(ctx, conn)
-			if err != nil {
-				return nil, err
-			}
-			m.sess, m.sessFor = sess, conn
-		}
-		res, err := m.sess.Run(ctx, stmt)
-		// db.Session.Classify holds the rule; see the Fault constants.
-		// In short: retry only what never reached the server on a session
-		// that held nothing; fail loudly when a transaction or setting died
-		// with the connection; otherwise just stop using the dead session.
-		switch m.sess.Classify(err) {
-		case db.FaultRetry:
-			m.dropSessionLocked()
-			if !retried {
-				continue
-			}
-		case db.FaultDrop:
-			m.dropSessionLocked()
-		case db.FaultLost:
-			m.dropSessionLocked()
-			return nil, db.SessionLost(conn, err)
-		}
-		return res, err
-	}
+	var res *model.Result
+	err := m.onSession(ctx, conn, func(s *db.Session) (err error) {
+		res, err = s.Run(ctx, stmt)
+		return err
+	})
+	return res, err
 }
 
 func (m *Model) dropSessionLocked() {
@@ -455,6 +432,7 @@ func (m *Model) runDone(msg runDoneMsg) tea.Cmd {
 	}
 	m.lastErr = ""
 	m.showResult(msg.res)
+	m.maybePlan(msg.res)
 	if len(msg.stmts) > 1 {
 		m.logf(logOk, "%d statements completed — showing the last result", len(msg.stmts))
 	}
@@ -462,11 +440,14 @@ func (m *Model) runDone(msg runDoneMsg) tea.Cmd {
 }
 
 // showResult puts a result in the grid and describes it in the status bar.
+// A new result turns the results pane back to its grid: what just ran is
+// what the user wants to see, even if a plan was on screen.
 func (m *Model) showResult(r *model.Result) {
 	if r == nil {
 		return
 	}
 	m.lastRes = r
+	m.resTab = tabResults
 	m.grid.SetResult(r, m.cfg.MaxDisplayRows)
 	if m.grid.Rows() < len(r.Rows) {
 		m.logf(logWarn, "showing the first %d of %d rows — the rest are fetched, and go into an export (max_display_rows)",

@@ -1,0 +1,225 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/charmbracelet/x/term"
+	"github.com/urfave/cli/v3"
+
+	"github.com/rohanthewiz/dbc/config"
+	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/explain"
+	"github.com/rohanthewiz/dbc/export"
+	"github.com/rohanthewiz/dbc/sqlsplit"
+	"github.com/rohanthewiz/dbc/tui"
+)
+
+// The explain subcommand: how the database will run a statement, headless.
+//
+//	dbc explain "SELECT …"                  the plan as a tree, with findings
+//	dbc explain -a "SELECT …"               run it and measure (ANALYZE)
+//	dbc explain -t json -f q.sql            the plan as JSON, for tooling
+//	dbc explain -t html -o plan.html "…"    the interactive page, to a file
+//	dbc explain --open "SELECT …"           … or straight into the browser
+//	dbc explain --fail-on warn -f q.sql     exit 3 when a finding is that bad
+//
+// The SQL comes the way a headless query's does — the argument, -f, or piped
+// stdin — and must be ONE statement: a plan is of a statement, and a buffer of
+// several has no single plan to show. A statement already written as an
+// EXPLAIN is unwrapped (its ANALYZE honored), so pasting psql habit works.
+//
+// --fail-on makes the findings a gate. A CI job can keep a folder of the
+// queries that matter and fail the build when one of them starts scanning a
+// big table — a plan regression caught before it reaches production:
+//
+//	for q in queries/*.sql; do dbc -c staging explain --fail-on warn -f "$q" || exit 1; done
+//
+// Exit status: 0 fine, 1 the explain failed, 2 bad usage, 3 a finding at or
+// above --fail-on, 130 Ctrl+C.
+
+var (
+	flagAnalyze bool
+	flagOpen    bool
+	flagFailOn  string
+)
+
+// exitFindings is the status for "the plan has a finding at --fail-on or
+// worse" — distinct from 1 (the explain itself failed) so a CI script can tell
+// "this query got slower" from "this query is broken".
+const exitFindings = 3
+
+func explainCommand() *cli.Command {
+	return &cli.Command{
+		Name:      "explain",
+		Usage:     "show how the database runs a statement: its plan, where the time goes, what to fix",
+		ArgsUsage: `["SQL"]`,
+		Description: "Explains one statement (the argument, --file, or piped stdin) on the connection -c names. " +
+			"--format text (default) draws the plan as a tree with findings; json is the plan for tooling; " +
+			"html is an interactive page. --analyze runs the statement to measure it — on Postgres a write is " +
+			"run inside a transaction that is rolled back; on the other engines a write is not run at all.",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "analyze", Aliases: []string{"a"},
+				Usage: "run the statement and measure it (EXPLAIN ANALYZE)", Destination: &flagAnalyze},
+			&cli.BoolFlag{Name: "open",
+				Usage: "write the interactive HTML plan to a temp file and open it in the browser", Destination: &flagOpen},
+			&cli.StringFlag{Name: "fail-on",
+				Usage: "exit 3 when a finding is at least this `SEVERITY`: warn|crit", Destination: &flagFailOn},
+		},
+		Action: explainAction,
+	}
+}
+
+func explainAction(ctx context.Context, cmd *cli.Command) error {
+	if flagTx || flagKeep {
+		usage("--tx and --keep-going are for running statements; explain does not run a buffer")
+	}
+	failOn, err := parseFailOn(flagFailOn)
+	if err != nil {
+		usage(err.Error())
+	}
+	f := outFormat()
+	if f != export.Text && f != export.JSON && f != export.HTML && f != export.Markdown {
+		usage(fmt.Sprintf("explain renders text, markdown, json or html — not %s", f))
+	}
+	sql, ok, err := sqlInput(cmd.Args().Slice(), flagFile, os.Stdin, stdinHasInput())
+	if err != nil {
+		usage(err.Error())
+	}
+	if !ok {
+		usage(`usage: dbc explain [-a] [-c conn] ["SQL" | -f file]`)
+	}
+	stmts := sqlsplit.Split(sql)
+	switch len(stmts) {
+	case 0:
+		usage("nothing to explain — the SQL holds no statement")
+	case 1:
+	default:
+		usage(fmt.Sprintf("explain takes one statement; this SQL holds %d", len(stmts)))
+	}
+
+	cfg, mgr := setup(demoForRun)
+	defer mgr.Close()
+	warnConfig(cfg)
+	p := explainHeadless(cfg, mgr, stmts[0].Text)
+
+	// the plan's notes are part of every rendering (the text's header, the
+	// JSON's "notes", the page's callouts), so they are not repeated here
+	out, err := renderPlan(p, f, planColor(), termWidth())
+	if err != nil {
+		fail(err, "render failed")
+	}
+	if flagOpen {
+		openPlan(p)
+	}
+	if flagOut != "" {
+		if err = os.WriteFile(flagOut, []byte(out), 0o644); err != nil {
+			fail(err, "write failed")
+		}
+		fmt.Printf("wrote the plan (%s) to %s\n", f, flagOut)
+	} else if !flagOpen || f != export.HTML {
+		fmt.Print(out)
+	}
+	if n := findingsAtLeast(p, failOn); n > 0 {
+		fmt.Fprintf(os.Stderr, "%d finding(s) at or above --fail-on %s\n", n, failOn)
+		os.Exit(exitFindings)
+	}
+	return nil
+}
+
+// explainHeadless runs the explain, exiting the way every headless path does
+// on failure or Ctrl+C.
+func explainHeadless(cfg *config.Config, mgr *db.Manager, stmt string) *explain.Plan {
+	conn := pickConn(cfg)
+	ctx, stop := interruptible()
+	defer stop()
+	p, err := mgr.Explain(ctx, conn, stmt, db.ExplainOptions{Analyze: flagAnalyze})
+	if err != nil {
+		if errors.Is(err, db.ErrCanceled) {
+			canceled("explain")
+		}
+		fail(err, "explain failed")
+	}
+	return p
+}
+
+// renderPlan renders a plan in a headless format. Markdown is the text tree in
+// a code fence, with the statement above it, which is how a plan is pasted
+// into a pull request or a wiki.
+func renderPlan(p *explain.Plan, f export.Format, color bool, width int) (string, error) {
+	opt := explain.TextOptions{Width: width, Color: color, Insights: true}
+	switch f {
+	case export.JSON:
+		b, err := p.JSON()
+		return string(b) + "\n", err
+	case export.HTML:
+		return p.HTML()
+	case export.Markdown:
+		opt.Color = false
+		var b strings.Builder
+		if p.Statement != "" {
+			b.WriteString("```sql\n" + p.Statement + "\n```\n\n")
+		}
+		b.WriteString("```\n" + p.Text(opt) + "```\n")
+		return b.String(), nil
+	}
+	return p.Text(opt), nil
+}
+
+// parseFailOn reads --fail-on.
+func parseFailOn(s string) (explain.Severity, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "":
+		return "", nil
+	case "warn", "warning":
+		return explain.SevWarn, nil
+	case "crit", "critical":
+		return explain.SevCrit, nil
+	}
+	return "", fmt.Errorf("--fail-on takes warn or crit, not %q", s)
+}
+
+// findingsAtLeast counts the plan's findings at severity least or worse.
+func findingsAtLeast(p *explain.Plan, least explain.Severity) int {
+	if least == "" {
+		return 0
+	}
+	n := 0
+	for _, in := range p.Insights {
+		if in.Severity == explain.SevCrit || (least == explain.SevWarn && in.Severity == explain.SevWarn) {
+			n++
+		}
+	}
+	return n
+}
+
+// planColor decides whether the text tree gets ANSI colors: only for a
+// terminal on stdout, never for a file or a pipe, and never under NO_COLOR
+// (https://no-color.org).
+func planColor() bool {
+	if flagOut != "" || os.Getenv("NO_COLOR") != "" {
+		return false
+	}
+	return term.IsTerminal(os.Stdout.Fd())
+}
+
+// termWidth is the terminal's width, or 100 when stdout is not one.
+func termWidth() int {
+	if w, _, err := term.GetSize(os.Stdout.Fd()); err == nil && w >= 60 {
+		return w
+	}
+	return 100
+}
+
+// openPlan writes the interactive page to a temp file and opens it.
+func openPlan(p *explain.Plan) {
+	path, err := p.WriteHTML(explain.PlanDir())
+	if err != nil {
+		fail(err, "could not save the plan")
+	}
+	tui.OpenURL("file://" + path)
+	fmt.Fprintln(os.Stderr, "opened the plan in your browser — saved as "+path)
+}

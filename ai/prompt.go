@@ -90,6 +90,14 @@ type Context struct {
 	SendRows bool
 	MaxRows  int
 
+	// Plan is the query plan the user explained for Query, rendered as text
+	// with dbc's findings ("" when there is none). A plan is how the
+	// database will run the statement — table and index names, row counts
+	// and timings — not what the rows hold, so like the schema it goes on
+	// every connection. The literals it quotes in its conditions are the
+	// user's own, from the SQL that is sent anyway.
+	Plan string
+
 	// Tables are the catalog's tables the query or question mentions. A
 	// table with no Columns is still named in the Note — that is how the
 	// context chip forecasts "schema of cats" before the columns have been
@@ -154,6 +162,13 @@ func Build(question string, ctx Context, first bool) Prompt {
 		sb.WriteString(q)
 		sb.WriteString("\n```\n\n")
 		sent = append(sent, "query")
+	}
+	if pl := strings.TrimSpace(ctx.Plan); pl != "" {
+		sb.WriteString("Its query plan, as dbc summarized it (each step's own share of the time or cost, " +
+			"with dbc's automatic findings after it):\n```\n")
+		sb.WriteString(pl)
+		sb.WriteString("\n```\n\n")
+		sent = append(sent, "plan")
 	}
 	if e := strings.TrimSpace(ctx.Err); e != "" {
 		sb.WriteString("Running it failed with:\n```\n")

@@ -8,6 +8,7 @@
 //	dbc < report.sql               … or from stdin, when it is a pipe or a file
 //	dbc script scripts/loop.go     run a Go script headless
 //	dbc migrate up                 apply pending migrations (see migrate.go)
+//	dbc explain -a "SELECT …"      show a statement's plan and findings (see explain.go)
 //
 // Headless runs are cancelable with Ctrl+C, which aborts the statement on the
 // server and exits 130.
@@ -154,6 +155,7 @@ func newCLI() *cli.Command {
 				ArgsUsage: "<file.go>",
 				Action:    scriptAction,
 			},
+			explainCommand(),
 			{
 				Name:      "migrate",
 				Usage:     "apply or inspect goose-format migrations (dbc migrate help)",

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/explain"
 	"github.com/rohanthewiz/dbc/export"
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/serr"
@@ -22,6 +23,14 @@ import (
 
 // Result is the tabular result type scripts receive from Query.
 type Result = model.Result
+
+// Plan is an explained statement: its steps (Root, Nodes), what it cost or
+// took, and dbc's findings about it (Insights). See package explain.
+type Plan = explain.Plan
+
+// PlanText shapes Plan.Text: width, the metric bars are sized by, color,
+// and whether the findings are appended.
+type PlanText = explain.TextOptions
 
 // S is the session handle passed to a script's Run function.
 type S struct {
@@ -95,6 +104,19 @@ func (s *S) Exec(conn, stmt string, args ...any) (int64, error) {
 		return 0, err
 	}
 	return r.Affected, nil
+}
+
+// Explain describes how conn's database runs stmt, as the TUI's Ctrl+X and
+// `dbc explain` do. analyze runs the statement to measure it: on Postgres a
+// write is analyzed inside a transaction that is rolled back; on the other
+// engines a write is explained but not run. It runs on its own session, not
+// one the script shares with Query.
+//
+//	p, err := s.Explain("pg", "SELECT * FROM orders WHERE user_id = 42", true)
+//	s.Print("%s", p.Text(sdb.PlanText{Insights: true}))
+//	for _, in := range p.Insights { if in.Severity != "info" { … } }
+func (s *S) Explain(conn, stmt string, analyze bool) (*Plan, error) {
+	return s.mgr.Explain(s.Ctx(), conn, stmt, db.ExplainOptions{Analyze: analyze})
 }
 
 // DB exposes the raw *database/sql.DB for a connection — the escape hatch

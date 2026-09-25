@@ -1,0 +1,9 @@
+-> Sort: sum(o.total) DESC
+    -> Table scan on <temporary>
+        -> Aggregate using temporary table
+            -> Nested loop inner join  (cost=43501 rows=31881)
+                -> Filter: (o.user_id is not null)  (cost=10022 rows=95654)
+                    -> Index lookup on o using orders_status (status='paid')  (cost=10022 rows=95654)
+                -> Filter: (u.age > 30)  (cost=0.25 rows=0.333)
+                    -> Single-row index lookup on u using PRIMARY (id=o.user_id)  (cost=0.25 rows=1)
+

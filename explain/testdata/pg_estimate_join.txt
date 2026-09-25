@@ -1,0 +1,13 @@
+Sort  (cost=3637.76..3637.77 rows=5 width=45)
+  Sort Key: (sum(o.total)) DESC
+  ->  HashAggregate  (cost=3637.64..3637.70 rows=5 width=45)
+        Group Key: u.city
+        ->  Hash Join  (cost=1130.47..3347.87 rows=38636 width=11)
+              Hash Cond: (o.user_id = u.id)
+              ->  Bitmap Heap Scan on orders o  (cost=554.73..2642.57 rows=49347 width=10)
+                    Recheck Cond: (status = 'paid'::text)
+                    ->  Bitmap Index Scan on orders_status  (cost=0.00..542.40 rows=49347 width=0)
+                          Index Cond: (status = 'paid'::text)
+              ->  Hash  (cost=380.00..380.00 rows=15659 width=9)
+                    ->  Seq Scan on users u  (cost=0.00..380.00 rows=15659 width=9)
+                          Filter: (age > 30)

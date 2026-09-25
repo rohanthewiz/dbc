@@ -1,0 +1,7 @@
+-> Filter: (u.id < 50)  (cost=10.1 rows=49) (actual time=0.0364..0.211 rows=49 loops=1)
+    -> Index range scan on u using PRIMARY over (id < 50)  (cost=10.1 rows=49) (actual time=0.0344..0.127 rows=49 loops=1)
+-> Select #2 (subquery in projection; dependent)
+    -> Aggregate: max(o.total)  (cost=4148 rows=1) (actual time=29.8..29.8 rows=1 loops=49)
+        -> Filter: (o.user_id = u.id)  (cost=2150 rows=19980) (actual time=1.65..29.8 rows=10 loops=49)
+            -> Table scan on o  (cost=2150 rows=199798) (actual time=0.481..19.7 rows=200000 loops=49)
+

@@ -145,6 +145,10 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 		m.drag.kind = k
 		return nil
 	}
+	if t, ok := m.resultsTabAt(x, y); ok {
+		m.resTab, m.focus = t, focusGrid
+		return nil
+	}
 
 	switch {
 	case l.editor.Contains(x, y):
@@ -155,6 +159,9 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 		}
 	case l.results.Contains(x, y):
 		m.focus = focusGrid
+		if m.resTab == tabPlan && m.planv.plan != nil {
+			return m.planClick(x, y, n)
+		}
 		return m.gridClick(x, y, n, shift)
 	case l.conns.Contains(x, y):
 		m.focus = focusConns
@@ -278,13 +285,17 @@ func (m *Model) mouseMotion(msg tea.MouseMotionMsg) tea.Cmd {
 		return nil
 	}
 	m.hover.split = m.splitterAt(x, y)
-	switch h := m.grid.hitAt(x, y); h.kind {
-	case hitCell:
-		m.grid.hover = cell2{h.row, h.col}
-	case hitHeader:
-		m.grid.hoverH = h.col
-	case hitBorder:
-		m.grid.hoverB = h.col
+	if m.resTab == tabPlan && m.planv.plan != nil {
+		m.planv.hover(x, y)
+	} else {
+		switch h := m.grid.hitAt(x, y); h.kind {
+		case hitCell:
+			m.grid.hover = cell2{h.row, h.col}
+		case hitHeader:
+			m.grid.hoverH = h.col
+		case hitBorder:
+			m.grid.hoverB = h.col
+		}
 	}
 	m.conns.hover = m.conns.indexAt(x, y)
 	m.tables.hover = m.tables.indexAt(x, y)
@@ -358,6 +369,10 @@ func (m *Model) mouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 	case l.editor.Contains(x, y):
 		m.editor.Scroll(dy, dx*4)
 	case l.results.Contains(x, y):
+		if m.resTab == tabPlan && m.planv.plan != nil {
+			m.planv.wheel(x, y, dy)
+			return nil
+		}
 		m.grid.Scroll(dy, dx)
 	case l.logR.Contains(x, y):
 		m.logp.scroll(dy)
@@ -391,6 +406,8 @@ func (m *Model) pressButton(b button) tea.Cmd {
 		return m.runQuery()
 	case btnStop:
 		return m.cancelRun()
+	case btnExplain:
+		return m.explainQuery(false)
 	case btnCopy:
 		m.openCopyMenu(b.r.X, b.r.Y+1)
 	case btnExport:
@@ -421,6 +438,10 @@ func (m *Model) rightClick(x, y int) tea.Cmd {
 			m.editor.Click(x, y, 1, false)
 		}
 		m.openEditorMenu(x, y)
+	case l.results.Contains(x, y) && m.resTab == tabPlan && m.planv.plan != nil:
+		m.focus = focusGrid
+		m.planv.selectAt(x, y) // the menu acts on the step clicked, as the grid's does on its cell
+		m.openPlanMenu(x, y)
 	case l.results.Contains(x, y):
 		m.focus = focusGrid
 		g := m.grid

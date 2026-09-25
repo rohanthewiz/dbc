@@ -9,6 +9,7 @@ import (
 	"github.com/traefik/yaegi/interp"
 	"github.com/traefik/yaegi/stdlib"
 
+	"github.com/rohanthewiz/dbc/explain"
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/sdb"
 	"github.com/rohanthewiz/serr"
@@ -30,6 +31,8 @@ func Run(path string, s *sdb.S) (err error) {
 		"github.com/rohanthewiz/dbc/sdb/sdb": {
 			"S":          reflect.ValueOf((*sdb.S)(nil)),
 			"Result":     reflect.ValueOf((*model.Result)(nil)),
+			"Plan":       reflect.ValueOf((*explain.Plan)(nil)),
+			"PlanText":   reflect.ValueOf((*explain.TextOptions)(nil)),
 			"IsCanceled": reflect.ValueOf(sdb.IsCanceled),
 		},
 	}); err != nil {

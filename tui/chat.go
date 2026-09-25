@@ -460,6 +460,7 @@ func (m *Model) chatContext(question string) (ctx ai.Context, refs []db.TableRef
 		cur = m.lastStmt
 	}
 	ctx.Query = cur
+	ctx.Plan = m.planForChat(cur)
 	if m.tableIdx != nil {
 		refs = m.tableIdx.Mentioned(cur, question)
 		refs = refs[:min(len(refs), maxSchemaTables)]

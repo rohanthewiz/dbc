@@ -1,7 +1,9 @@
 package workspace
 
 import (
+	"context"
 	"slices"
+	"time"
 
 	"github.com/rohanthewiz/dbc/ai"
 	"github.com/rohanthewiz/dbc/db"
@@ -88,4 +90,53 @@ func (w *Workspace) ChatContext(question string, ed Editor, view GridView) (ctx 
 		}
 	}
 	return ctx, refs
+}
+
+// SchemaLookupTimeout bounds the catalog query a question's tables cost at
+// send time. Past it the question goes without columns rather than waiting
+// on a busy database: the model answering a little less precisely beats the
+// user watching a spinner for a lookup they never asked for.
+const SchemaLookupTimeout = 3 * time.Second
+
+// LookupColumns fetches the columns of the tables a question involves (the
+// refs ChatContext returned) on the active connection, under
+// SchemaLookupTimeout. It blocks for a catalog round trip, so a UI calls it
+// off its event loop; the result goes to AttachColumns.
+//
+// It runs on the POOL, not the pinned session: the session may be mid-run,
+// and a question about a slow query must not wait for that query to end.
+func (w *Workspace) LookupColumns(refs []db.TableRef) ([][]db.Column, error) {
+	w.mu.Lock()
+	conn := w.active
+	w.mu.Unlock()
+	c, cancel := context.WithTimeout(context.Background(), SchemaLookupTimeout)
+	defer cancel()
+	return w.mgr.Columns(c, conn, refs)
+}
+
+// AttachColumns puts a lookup's columns into the context a question was
+// asked with. Only the tables the catalog could describe are kept, so the
+// transcript's "sent: schema of …" names exactly the tables whose columns
+// went. A failed lookup drops the schema entirely and returns the line the
+// transcript shows about it: the question still goes, and the user is told
+// why the model may be guessing column names rather than reading dbc's.
+//
+// Both UIs call this, so the rule for what a failed or partial lookup sends
+// cannot differ between the terminal and the browser.
+func AttachColumns(ctx ai.Context, cols [][]db.Column, err error) (ai.Context, string) {
+	if err != nil {
+		ctx.Tables = nil
+		return ctx, "schema lookup failed, sending without it: " + err.Error()
+	}
+	var tables []ai.Table
+	for i, t := range ctx.Tables {
+		if i < len(cols) && len(cols[i]) > 0 {
+			for _, c := range cols[i] {
+				t.Columns = append(t.Columns, ai.Column{Name: c.Name, Type: c.Type})
+			}
+			tables = append(tables, t)
+		}
+	}
+	ctx.Tables = tables
+	return ctx, ""
 }

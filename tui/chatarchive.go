@@ -207,14 +207,8 @@ func (m *Model) chatOpenSaved(id string) tea.Cmd {
 }
 
 // restoreNote tells the user what they got back — and what they did not.
-func restoreNote(c userdata.Chat) string {
-	when := ""
-	if !c.Updated.IsZero() {
-		when = " from " + c.Updated.Local().Format("Jan 2 15:04")
-	}
-	return "— reopened conversation" + when + ". This is the saved transcript, not a resumed " +
-		"session: the assistant has no memory of it, so quote what matters in a follow-up."
-}
+// The words are userdata's, shared with the browser UI.
+func restoreNote(c userdata.Chat) string { return c.RestoreNote() }
 
 // chatWhen renders a save time for a list row: the clock for today, the date
 // before that, and the year once it is not this one. A row is scanned, not

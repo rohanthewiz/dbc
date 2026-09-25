@@ -36,7 +36,7 @@ func webCommand() *cli.Command {
 		Usage: "open the workbench in a browser (a local web server)",
 		Description: "Serves dbc's workbench on loopback and opens the browser on it. Only a browser that " +
 			"opened the printed link (or a client sending the secret as a Bearer token) can use it. " +
-			"Tabs and layout are kept in ~/.config/dbc/web.bytdb; query history is shared with the TUI.",
+			"Tabs and layout are kept in ~/.config/dbc/web.bytdb; query history and assistant conversations are shared with the TUI.",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "listen", Usage: "`ADDR` to listen on (default " + web.DefaultListen +
 				", or a free port when it is taken)", Destination: &flagListen},
@@ -76,6 +76,8 @@ func webAction(ctx context.Context, cmd *cli.Command) error {
 		Secret:  flagSecret,
 		Store:   store,
 		History: userdata.LoadHistory(userdata.HistoryFile()),
+		// the TUI's archive, so a conversation had in either is offered in both
+		ChatsDir: userdata.ChatsDir(),
 		Ready: func(login string) {
 			fmt.Fprintf(os.Stderr, "dbc web is serving — open this link to sign in:\n\n  %s\n\nCtrl+C stops it.\n", login)
 			if !flagNoOpen {

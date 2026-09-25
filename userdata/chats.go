@@ -273,3 +273,17 @@ func pruneChats(dir string) {
 		_ = RemoveChat(dir, m.ID)
 	}
 }
+
+// RestoreNote is the transcript line shown when a saved conversation is
+// reopened: what the user got back, and what they did not. A reopened
+// conversation is a transcript, not a resumed agent session, and silence
+// about that would let a follow-up get a confidently unrelated answer from
+// a model that never saw the conversation. Both UIs show these words.
+func (c Chat) RestoreNote() string {
+	when := ""
+	if !c.Updated.IsZero() {
+		when = " from " + c.Updated.Local().Format("Jan 2 15:04")
+	}
+	return "— reopened conversation" + when + ". This is the saved transcript, not a resumed " +
+		"session: the assistant has no memory of it, so quote what matters in a follow-up."
+}

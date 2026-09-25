@@ -38,6 +38,7 @@ import (
 	"github.com/rohanthewiz/rweb"
 	"github.com/rohanthewiz/serr"
 
+	"github.com/rohanthewiz/dbc/ai"
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/explain"
@@ -78,6 +79,18 @@ type Options struct {
 	// Logf receives the server's own messages (shutdown progress). nil
 	// discards them.
 	Logf func(format string, args ...any)
+
+	// ChatsDir is where assistant conversations are kept — the TUI's
+	// archive (userdata.ChatsDir), so a conversation had in either is
+	// offered in both. "" keeps them in memory only.
+	ChatsDir string
+	// StartChat starts an assistant conversation; nil is ai.Start. Tests
+	// hand in a scripted agent (package aitest): the real one would need
+	// installing and signing in, and would spend Copilot requests.
+	StartChat func(ai.Agent, ai.Options) *ai.Chat
+	// BeginSignIn starts the agent's device-flow sign-in; nil is
+	// ai.BeginSignIn. Tests hand in a scripted server for the same reason.
+	BeginSignIn func(ai.Agent, string) (*ai.SignIn, error)
 }
 
 // Server is a running (or ready-to-run) dbc web.
@@ -119,6 +132,12 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) (*Server, error) {
 	if opt.Logf == nil {
 		opt.Logf = func(string, ...any) {}
 	}
+	if opt.StartChat == nil {
+		opt.StartChat = ai.Start
+	}
+	if opt.BeginSignIn == nil {
+		opt.BeginSignIn = ai.BeginSignIn
+	}
 	addr, err := resolveListen(opt.Listen)
 	if err != nil {
 		return nil, err
@@ -130,6 +149,7 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) (*Server, error) {
 	s.hub = newHub(func(sink func(workspace.Event)) *workspace.Workspace {
 		return workspace.New(cfg, mgr, opt.History, workspace.Options{Sink: sink})
 	}, cfg.ConnIdleTimeout)
+	s.hub.newChat = func(t *tab) *assistant { return newAssistant(s, t) }
 	s.rw = rweb.NewServer(rweb.ServerOptions{Address: addr, ReadyChan: s.ready})
 	s.rw.Use(s.guard)
 	s.routes()
@@ -178,6 +198,9 @@ func (s *Server) routes() {
 	r.Put("/api/v1/layout", s.handleSaveLayout)
 	r.Get("/api/v1/history", s.handleHistory)
 	r.Post("/api/v1/stmt", s.handleStmt)
+	r.Get("/api/v1/chats", s.handleChats)
+	r.Delete("/api/v1/chats/:id", s.handleChatDelete)
+	r.Get("/api/v1/scripts", s.handleScripts)
 
 	r.Post("/api/v1/ws", s.handleOpen)
 	r.Get("/api/v1/ws/:id", s.handleState)
@@ -193,6 +216,21 @@ func (s *Server) routes() {
 	r.Get("/api/v1/ws/:id/plan/text", s.handlePlanText)
 	r.Get("/api/v1/ws/:id/plan.html", s.handlePlanPage)
 	r.Post("/api/v1/ws/:id/cancel", s.handleCancel)
+	r.Post("/api/v1/ws/:id/script", s.handleScript)
+
+	// the assistant pane (chat.go)
+	r.Get("/api/v1/ws/:id/chat", s.handleChat)
+	r.Post("/api/v1/ws/:id/chat/open", s.handleChatOpen)
+	r.Post("/api/v1/ws/:id/chat/ask", s.handleChatAsk)
+	r.Post("/api/v1/ws/:id/chat/context", s.handleChatContext)
+	r.Post("/api/v1/ws/:id/chat/stop", s.handleChatStop)
+	r.Post("/api/v1/ws/:id/chat/new", s.handleChatNew)
+	r.Post("/api/v1/ws/:id/chat/model", s.handleChatModel)
+	r.Post("/api/v1/ws/:id/chat/agent", s.handleChatAgent)
+	r.Post("/api/v1/ws/:id/chat/load", s.handleChatLoad)
+	r.Post("/api/v1/ws/:id/chat/delete", s.handleChatDeleteLive)
+	r.Post("/api/v1/ws/:id/chat/signin", s.handleChatSignIn)
+	r.Post("/api/v1/ws/:id/chat/signin/cancel", s.handleChatSignInCancel)
 }
 
 // Run listens and serves until Ctrl+C (rweb handles SIGINT and SIGTERM

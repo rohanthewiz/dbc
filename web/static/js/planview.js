@@ -90,7 +90,9 @@
           { label: "⧉ Engine", title: "Copy the engine's own output (Y)", act: () => copyPlan("raw") },
           { label: "↗ Page", title: "Open as the standalone page, to keep or send (b)", act: openPage },
           { label: "⤓ Save", title: "Download the standalone page", act: savePage },
+          { label: "✦ Ask", title: "Ask the assistant where the time goes and what to change", act: askPlan },
         ],
+        onAsk: (title) => dbc.cmd.askAbout("In this plan, what is the \"" + title + "\" step doing, and is it a problem?"),
       });
     }
     $("plan-tab").hidden = false;
@@ -119,6 +121,14 @@
     const p = api("GET", dbc.wsPath("/plan/text?what=" + what + "&metric=" + encodeURIComponent(metric)));
     dbc.clip.copy(p, false).then(async () => log("ok", "copied " + (await p).what),
       (e) => log("err", "copy failed: " + e.message));
+  }
+
+  // askPlan drafts the TUI's plan question in the assistant's composer —
+  // drafted, not sent, so the user can add to it. The plan itself goes
+  // with the question (workspace.ChatContext attaches it when the editor's
+  // statement is the plan's).
+  function askPlan() {
+    dbc.cmd.askAbout("Explain this query plan: where does the time go, and what would you change?");
   }
 
   function openPage() {

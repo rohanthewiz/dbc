@@ -25,6 +25,9 @@
 //   compare   {text, good}: this plan against the last one of the statement
 //   actions   [{label, title, act}] buttons for the header (the host's
 //             re-explain, copy, open-as-page …)
+//   onAsk(title)       offer "✦ Ask" on the selected step's detail: the
+//                      host opens its assistant with a question drafted
+//                      about the step (title is the TUI's Node.Title)
 //
 // The standalone page inlines this file in a script element, so
 // it must never contain the characters that close one.
@@ -623,12 +626,15 @@
       if (m === "shape" || m === "rows") add("Share", (m === "rows" ? fmtRows(selfW(n, m)) + " · " : "") + Math.round(share(n, m) * 100) + "%" + bar(share(n, m)));
       const props = (n.props || []).map(p => '<div><span class="k">' + esc(p.key) + '</span><span class="v mono">' + esc(p.value) + "</span></div>").join("");
       const ins = (BY_NODE[n.id] || []).map(i => insightHTML(i, INSIGHTS.indexOf(i))).join("");
+      const ask = opts.onAsk ? '<button class="copy dask" data-ask="1" title="Ask the assistant what this step is doing">✦ Ask</button>' : "";
       el.innerHTML =
-        '<div class="dtitle"><span class="glyph">' + glyph(n) + "</span>" + esc(n.op) + "</div>" +
+        '<div class="dtitle"><span class="glyph">' + glyph(n) + "</span>" + esc(n.op) + ask + "</div>" +
         '<div class="dsub">' + esc([target(n), n.kind, n.relationship].filter(Boolean).join(" · ")) + "</div>" +
         (rows.length ? '<dl class="stats">' + rows.join("") + "</dl>" : "") +
         (props ? '<div class="props">' + props + "</div>" : "") +
         (ins ? '<div class="dins">' + ins + "</div>" : "");
+      const askBtn = el.querySelector("[data-ask]");
+      if (askBtn) askBtn.addEventListener("click", () => opts.onAsk(target(n) ? n.op + " · " + target(n) : n.op));
       bindInsights(el);
     }
 

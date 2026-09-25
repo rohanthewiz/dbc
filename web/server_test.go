@@ -32,7 +32,9 @@ type testEnv struct {
 	hc   *http.Client
 }
 
-func newTestEnv(t *testing.T) *testEnv {
+// newTestEnv starts a server; tweaks adjust the config and options first
+// (a scripted assistant, a chats or scripts directory).
+func newTestEnv(t *testing.T, tweaks ...func(*config.Config, *Options)) *testEnv {
 	t.Helper()
 	name := "demo-sqlite"
 	cfg := &config.Config{
@@ -47,10 +49,14 @@ func newTestEnv(t *testing.T) *testEnv {
 		t.Fatalf("seed: %v", err)
 	}
 	ready := make(chan string, 1)
-	srv, err := New(cfg, mgr, Options{
+	opt := Options{
 		Listen: "127.0.0.1:0", Secret: testSecret,
 		Ready: func(login string) { ready <- login },
-	})
+	}
+	for _, tw := range tweaks {
+		tw(cfg, &opt)
+	}
+	srv, err := New(cfg, mgr, opt)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}

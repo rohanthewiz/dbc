@@ -3,8 +3,8 @@
 Raised 2026-09-25. The ask: a web UI for dbc, started as `dbc web`.
 
 This is a plan. **Phases 1 (the `workspace` extraction), 2 (the `dbc web`
-skeleton), 3 (the real editor and grid) and 4 (explain) are done**
-(2026-09-25); everything from Phase 5 on is not built yet.
+skeleton), 3 (the real editor and grid), 4 (explain) and 5 (the assistant
+and scripts) are done** (2026-09-25); Phase 6 is not built yet.
 
 ## The one-paragraph version
 
@@ -596,13 +596,66 @@ inline script runs under the hash-only CSP with a clean console, a typed
 `EXPLAIN QUERY PLAN` opening the tab, 420 px with no horizontal scroll, and
 a clean console throughout.
 
-### Phase 5 — the assistant and scripts
+### Phase 5 — the assistant and scripts — ✅ done 2026-09-25
 
 The chat pane on SSE (`ai.Chat.Events()` → stream), stop, model picker,
 conversation archive shared with the TUI, the device-flow sign-in in the page
 itself. The data rule, hidden columns and sort order exactly as the TUI sends
 them — through `workspace.ChatContext`, so they cannot differ. Scripts:
 picker, run, `s.Print` lines to the log and `s.Show` results to the grid.
+
+*Outcome:*
+
+| Piece | Where | As built |
+|---|---|---|
+| The conversation | `web/chat.go` | one `assistant` per tab (as the TUI has one per window): the agent started lazily on the pane's first open, the transcript, the turn (schema lookup included), stop, model and agent switch, ⟲ new, the archive, the device-flow sign-in. Events `chat.msg {i}`, `chat.text {i}`, `chat.state`, `chat.reset`; a page that sees an index it did not expect fetches the whole transcript |
+| Routes | `web/server.go` | `GET …/chat`; `POST …/chat/{open,ask,context,stop,new,model,agent,load,delete,signin,signin/cancel}`; `GET /api/v1/chats?ws=`, `DELETE /api/v1/chats/:id` |
+| Shared rules | `workspace.LookupColumns`, `workspace.AttachColumns`, `userdata.Chat.RestoreNote` | the send-time schema lookup, what a failed or partial one sends, and the "reopened conversation" words, moved out of the TUI (`tui/chat.go`, `tui/chatarchive.go` now call them) |
+| The pane | `static/js/chat.js`, `pages/workbench.go` | a third column (drag its left edge; open and width saved with the layout), floating over the work area below 1000 px. Header chip → models and assistants; ■ stop; ⟲ new; the transcript drawn with the DOM only (fences with ⤓ insert / ⧉ copy, paragraphs, lists, `code`, **bold**); the sign-in row (⎆ sign in, then the code with ⧉ copy code, ↗ open page, ✕ cancel); the context chip's forecast (`POST …/chat/context`, the same code as a send); the composer. Recent conversations in the empty pane and in a list; the transcript's right-click menu is the TUI's |
+| ✦ ask | `grid.js`, `planview.js`, `plan.js` (`onAsk`), `editor.js` | the grid menu ("about this result"), the inspector ("the value in row N"), Monaco's context menu ("this query"), the Plan header and each step's detail — each drafts the TUI's question in the composer, never sends it |
+| Scripts | `web/scripts.go`, `app.js` | `GET /api/v1/scripts`, `POST …/script {name}`; ▷ Scripts / Ctrl+O lists `scripts_dir`, Enter runs; `s.Print` → log, `s.Show` → grid, as they happen (the Phase 2 sink); the outcome's status is the last shown result's |
+
+Decisions:
+
+- **The assistant is Ctrl+I, not Ctrl+A.** In a browser Ctrl+A selects all,
+  in every text field, and taking it would break the one chord they all
+  share. Ctrl+I is the assistant's key in editors that have one. Ctrl+K
+  with the keyboard in the pane stops the answer rather than the run.
+- **The transcript lives on the server**, so a reload finds the
+  conversation (mid-answer too), and saving after every answer happens
+  where the file is.
+- **A stale grid view with hidden columns is refused (409)**, not dropped:
+  dropping it would send exactly the columns the user hid. The page
+  reloads its grid and asks again, once.
+- **The page names a script, never a path**: the name is checked against
+  the listing at run time, so no request reaches a `.go` file outside
+  `scripts_dir`.
+- **The sign-in code is not copied, nor a browser opened, by the server**:
+  the page is the browser, and a clipboard write needs the user's click.
+  ⧉ copy code and ↗ open page are that click.
+- **Model and agent state machine are per UI**, like `tui/run.go` and
+  `web/hub.go`: what reaches the model (`ChatContext`, `ai.Build`, the
+  lookup rules) is shared; the event loop around it is not.
+
+Verified: `web` tests against the scripted agent (`aitest.Fake`): rows
+withheld without `ai_rows` and the note saying so; with it, rows in the
+grid's order without the hidden column's values, the column named; a stale
+view with hidden columns → 409; the chip's forecast; busy → 409, stop →
+"— stopped"; the schema of a table the question names; ⟲ new, list (the
+live one left out, and refused for deletion), reopen as a transcript,
+delete; sign-in with the queued question going out after it; model and
+agent switches; a script listed, refused by path, run with its print, show
+and outcome in order. All green under `-race`. In headless Chrome (go-rod)
+against a fake ACP agent binary on `PATH`, 63 checks: the pane opens and
+the agent starts; hide a column and sort → the chip says so, and the prompt
+the agent received holds the rows in that order without the hidden values;
+the answer streams and renders (markup stays text); ⤓ insert (nothing
+runs) and ⧉ copy on the real clipboard; the model menu; Ctrl+K in the pane
+stops the answer, not the run; a reload keeps pane and transcript; ⟲ new
+then reopen from the empty pane; ✦ ask from the grid menu, inspector,
+Monaco's menu, the plan header and a step; Ctrl+I both ways; scripts from
+▷ Scripts with output in the log and grid; delete this conversation;
+1400 / 900 / 420 px with no horizontal scroll; a clean console.
 
 ### Phase 6 — polish and packaging
 

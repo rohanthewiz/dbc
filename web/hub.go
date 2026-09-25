@@ -47,6 +47,9 @@ type hub struct {
 	// newWorkspace builds a tab's workspace, wired to send its mid-run
 	// events (a script's output) to the tab's stream.
 	newWorkspace func(sink func(workspace.Event)) *workspace.Workspace
+	// newChat builds a tab's assistant (chat.go). It starts nothing: the
+	// agent is spawned when the pane is first opened.
+	newChat func(t *tab) *assistant
 
 	releaseAfter time.Duration // 0: never release an idle tab's session
 	forgetAfter  time.Duration
@@ -72,6 +75,8 @@ type tab struct {
 	rv     resultView
 	rvSeq  int
 	ps     planState // the Plan tab's plan and its "before" (plan.go)
+
+	chat *assistant // the assistant pane's conversation (chat.go)
 
 	// reaper state, guarded by hub.mu
 	idleSince time.Time // zero while a stream is attached
@@ -102,6 +107,7 @@ func (h *hub) open() *tab {
 		HeartbeatInterval: 20 * time.Second,
 	})
 	t.ws = h.newWorkspace(t.sink)
+	t.chat = h.newChat(t)
 	h.mu.Lock()
 	h.tabs[t.id] = t
 	h.mu.Unlock()
@@ -148,7 +154,7 @@ func (h *hub) reap(now time.Time) {
 		go t.ws.Close()
 	}
 	for _, t := range forget {
-		go func() { t.ws.Close(); t.sse.Close() }()
+		go func() { t.chat.close(); t.ws.Close(); t.sse.Close() }()
 	}
 }
 
@@ -170,6 +176,7 @@ func (h *hub) closeAll(grace time.Duration) (timedOut bool) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			t.chat.close() // saved, as quitting the TUI saves
 			t.ws.Close()
 			t.sse.Close()
 		}()
@@ -182,6 +189,24 @@ func (h *hub) closeAll(grace time.Duration) (timedOut bool) {
 	case <-time.After(grace):
 		return true
 	}
+}
+
+// liveChat reports whether a saved conversation is the live one of some
+// tab's assistant — which must not be deleted from the list, since that
+// tab's next save would write it straight back.
+func (h *hub) liveChat(id string) bool {
+	h.mu.Lock()
+	tabs := make([]*tab, 0, len(h.tabs))
+	for _, t := range h.tabs {
+		tabs = append(tabs, t)
+	}
+	h.mu.Unlock()
+	for _, t := range tabs {
+		if t.chat.liveID() == id {
+			return true
+		}
+	}
+	return false
 }
 
 // count is the number of open tabs, for the health check.
@@ -351,6 +376,16 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 			// the raw rows stay in the Results tab, one keypress (p) away
 			t.send("log", logLine{Level: "accent",
 				Text: "that result is a query plan — shown in the ◈ Plan tab (p switches back to the raw rows)"})
+		}
+		if ev.Script && ev.Err == nil {
+			// a script's results reached the grid as it showed them (the
+			// sink's "result" events); its outcome's status is that of the
+			// last one shown, as in the TUI, or just that it completed
+			out.Status = fmt.Sprintf("%s completed in %s", ev.Tag, ev.Elapsed.Round(time.Millisecond))
+			if r := t.ws.LastResult(); r != nil {
+				out.HasResult = true
+				out.Status = workspace.ResultStatus(r, s.cfg.MaxRows, s.shown(r))
+			}
 		}
 		if r := ev.Result; r != nil {
 			shown := s.shown(r)

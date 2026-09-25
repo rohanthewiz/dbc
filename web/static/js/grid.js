@@ -108,6 +108,7 @@
       return;
     }
     adopt(d);
+    viewChanged();
   }
 
   function adopt(d) {
@@ -137,8 +138,15 @@
     render();
   }
 
+  // viewFns hear about every change to the grid's view of its result — a
+  // new result, a sort, a column hidden or shown — which is what the
+  // assistant's context chip forecasts from.
+  const viewFns = [];
+  const viewChanged = () => { for (const f of viewFns) f(); };
+
   function clear() {
     Object.assign(g, { seq: 0, cols: [], vis: [], total: 0, rows: 0, pages: new Map() });
+    viewChanged();
     showMsg("Ctrl+Enter runs the statement under the caret; Ctrl+Shift+Enter runs them all.", "");
     info.textContent = "";
   }
@@ -362,6 +370,7 @@
     g.pages = new Map();
     g.pending = new Set();
     render();
+    viewChanged();
   }
 
   // hide hides display columns c0…c1. It refuses to hide every visible
@@ -379,6 +388,7 @@
     g.sel = false; // the range spanned what just vanished; a shrunken one would mislead
     rebuildVis();
     render();
+    viewChanged();
     dbc.log("info", "hid " + what + " — + or the right-click menu shows it again; copies leave hidden columns out");
   }
 
@@ -391,6 +401,7 @@
     g.sel = false;
     ensureVisible();
     render();
+    viewChanged();
   }
 
   function showAll() {
@@ -399,6 +410,7 @@
     g.hidden.clear();
     rebuildVis();
     render();
+    viewChanged();
     dbc.log("info", "showing " + dbc.plural(n, "hidden column") + " again");
   }
 
@@ -498,9 +510,15 @@
     const cp = el("button", { type: "button", class: "primary" }, "⧉ Copy value");
     const doCopy = () => dbc.clip.copyText(v === null ? "NULL" : v, col + " of row " + (row + 1));
     cp.addEventListener("click", doCopy);
+    // the TUI inspector's question; the row number is the one on screen
+    const ask = el("button", { type: "button", title: "Draft a question about this value in the assistant" }, "✦ Ask");
+    ask.addEventListener("click", () => {
+      dbc.modal.close();
+      dbc.cmd.askAbout("Explain the " + col + " value in row " + (row + 1) + " of this result.");
+    });
     const bodyEl = el("div", "inspect",
       el("div", "ihead", col + " · row " + (row + 1) + (pretty ? " · JSON, formatted" : "")), pre);
-    const foot = el("div", "mfoot", cp, el("span", "hint", "y copies · Esc closes"));
+    const foot = el("div", "mfoot", cp, ask, el("span", "hint", "y copies · Esc closes"));
     dbc.modal.open({
       title: "Inspect", body: bodyEl, foot, focus: cp, cls: "wide",
       onKey: (e) => {
@@ -533,7 +551,9 @@
     if (dbc.cmd.showPlan && dbc.cmd.hasPlan && dbc.cmd.hasPlan()) {
       items.push({ head: "" }, { label: "◈ Show the plan", key: "p", act: dbc.cmd.showPlan });
     }
-    items.push({ head: "" }, { label: "Export to file…", key: "^E", why: why(), act: () => exportMenuAt(x, y) });
+    items.push({ head: "" }, { label: "Export to file…", key: "^E", why: why(), act: () => exportMenuAt(x, y) },
+      { label: "✦ Ask the assistant about this result", key: "^I", why: why(),
+        act: () => dbc.cmd.askAbout("Explain this result — anything notable in it?") });
     dbc.menu.open(x, y, items);
   }
 
@@ -726,8 +746,9 @@
     load, clear,
     focus: () => { if (!root.hidden) root.focus(); },
     hasResult: () => !!g.seq,
+    onView: (fn) => viewFns.push(fn),
     exportMenu: () => exportMenuAt(...under(document.getElementById("export-btn"))),
-    // the view, for tests and for the assistant's context later (Phase 5)
+    // the view, for tests and for the assistant's context (chat.js)
     view: () => ({ seq: g.seq, sort: g.sort, desc: g.desc, hidden: [...g.hidden], vis: g.vis.slice(),
       cur: Object.assign({}, g.cur), sel: g.sel, bounds: bounds(), widths: g.vis.map(widthOf) }),
   };

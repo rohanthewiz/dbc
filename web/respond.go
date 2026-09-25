@@ -41,6 +41,13 @@ func notFound(format string, args ...any) error {
 	return &reqError{status: http.StatusNotFound, msg: fmt.Sprintf(format, args...)}
 }
 
+// conflict is a request that raced something that moved under it — the
+// result it was about was replaced, the assistant is still answering — and
+// can be made again once the page has caught up.
+func conflict(format string, args ...any) error {
+	return &reqError{status: http.StatusConflict, msg: fmt.Sprintf(format, args...)}
+}
+
 // ok answers 200 with data.
 func ok(ctx rweb.Context, data any) error {
 	return writeJSON(ctx, http.StatusOK, envelope{Success: true, Data: data})

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -175,11 +174,8 @@ type chatSchemaMsg struct {
 }
 
 // How many tables' columns go with one question is capped by
-// workspace.MaxSchemaTables, where the context is gathered.
-
-// schemaLookupTimeout bounds the catalog query at send time. Past it the
-// question goes without columns rather than waiting on a busy database.
-const schemaLookupTimeout = 3 * time.Second
+// workspace.MaxSchemaTables, where the context is gathered; the lookup's
+// timeout is workspace.SchemaLookupTimeout.
 
 // chatModelSetMsg reports a model switch.
 type chatModelSetMsg struct {
@@ -496,13 +492,12 @@ func (m *Model) chatSubmit() tea.Cmd {
 	return tea.Batch(cmd, m.schemaCmd(p.gen, q, ctx, refs))
 }
 
-// schemaCmd looks up the columns of the tables a question involves.
+// schemaCmd looks up the columns of the tables a question involves —
+// workspace.LookupColumns, the lookup the browser UI makes too.
 func (m *Model) schemaCmd(gen int, question string, ctx ai.Context, refs []db.TableRef) tea.Cmd {
-	mgr, conn := m.mgr, m.ws.Active()
+	ws := m.ws
 	return func() tea.Msg {
-		c, cancel := context.WithTimeout(context.Background(), schemaLookupTimeout)
-		defer cancel()
-		cols, err := mgr.Columns(c, conn, refs)
+		cols, err := ws.LookupColumns(refs)
 		return chatSchemaMsg{gen: gen, question: question, ctx: ctx, cols: cols, err: err}
 	}
 }
@@ -513,26 +508,13 @@ func (m *Model) chatSchema(msg chatSchemaMsg) tea.Cmd {
 	if msg.gen != p.gen {
 		return nil // ⟲ new or an agent switch since: that conversation is gone
 	}
-	ctx := msg.ctx
-	if msg.err != nil {
-		// The question still goes, without schema, and the transcript says
-		// why rather than letting the model's guessed columns look like
-		// dbc's facts.
-		p.add(roleInfo, "schema lookup failed, sending without it: "+msg.err.Error())
-		ctx.Tables = nil
-	} else {
-		// Keep only what the catalog could describe, so the note lists
-		// exactly the tables whose columns went.
-		var tables []ai.Table
-		for i, t := range ctx.Tables {
-			if i < len(msg.cols) && len(msg.cols[i]) > 0 {
-				for _, c := range msg.cols[i] {
-					t.Columns = append(t.Columns, ai.Column{Name: c.Name, Type: c.Type})
-				}
-				tables = append(tables, t)
-			}
-		}
-		ctx.Tables = tables
+	// The question still goes when the lookup failed, without schema, and
+	// the transcript says why rather than letting the model's guessed
+	// columns look like dbc's facts. The rule is workspace.AttachColumns',
+	// shared with the browser UI.
+	ctx, failed := workspace.AttachColumns(msg.ctx, msg.cols, msg.err)
+	if failed != "" {
+		p.add(roleInfo, failed)
 	}
 	if p.state == chatDead {
 		// the agent exited while the lookup ran; its exit is already in the

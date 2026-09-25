@@ -135,6 +135,7 @@
 .dbc-plan .copy { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; font-size: 12px; padding: 4px 8px; white-space: nowrap; }
 .dbc-plan .copy:hover { border-color: var(--accent); } .dbc-plan .copy.done { color: var(--accent); border-color: var(--accent); }
 .dbc-plan .dtitle { display: flex; gap: 8px; align-items: center; font-weight: 600; font-size: 15px; }
+.dbc-plan .dtitle .dask { margin-left: auto; font-weight: 400; }
 .dbc-plan .dsub { color: var(--muted); font-size: 12.5px; margin: 3px 0 10px; }
 .dbc-plan .stats { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 12.5px; margin-bottom: 10px; }
 .dbc-plan .stats dt { color: var(--muted); } .dbc-plan .stats dd { margin: 0; }

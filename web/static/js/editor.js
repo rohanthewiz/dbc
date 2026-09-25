@@ -224,6 +224,11 @@
   // (WinCtrl, in Monaco's names) as well as ⌘. Elsewhere WinCtrl is the
   // Windows key, so it is left alone.
   //
+  // THE ASSISTANT IS Ctrl+I, not the TUI's Ctrl+A: in a browser Ctrl+A
+  // selects all, in the editor and out of it, and taking it would break
+  // the one chord every text field shares. Ctrl+I is the assistant's key in
+  // the editors that have one (VS Code's inline chat). Scripts keep Ctrl+O.
+  //
   // Ctrl+X explains only with NOTHING selected: with a selection it is
   // cut, as everywhere else in a browser — the TUI's chord bent to fit,
   // not the browser's.
@@ -245,6 +250,13 @@
     bind(0, C.KeyX, explain(false), "!editorHasSelection");
     bind(K.Shift, C.KeyX, explain(true));
     ed.addCommand(K.Alt | C.KeyX, explain(true)); // the TUI's Alt+X
+    bind(0, C.KeyI, () => dbc.cmd.assistant());
+    bind(0, C.KeyO, () => dbc.cmd.scripts());
+    // the TUI's editor menu row, in Monaco's own right-click menu
+    ed.addAction({
+      id: "dbc.ask", label: "✦ Ask the assistant about this query", contextMenuGroupId: "navigation",
+      contextMenuOrder: 0, run: () => dbc.cmd.askAbout("Explain this query."),
+    });
   }
 
   function start() {

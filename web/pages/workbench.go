@@ -23,13 +23,16 @@ type Workbench struct {
 
 // Render returns the whole document.
 //
-//	┌ topbar: dbc · connection · [session state] · ▶ Run ▶▶ Run all ◈ Explain ■ Stop ⟲ History ┐
-//	├ sidebar ──────┬ editor (textarea, upgraded to Monaco) ──────────────────────────────────────┤
-//	│ Connections   ├ ═ splitter (drag; the height is saved) ══════════════════════════════════════┤
-//	│ Tables        │ results bar: [Results][◈ Plan] · 8 rows · sorted by name asc  ⧉ Copy ▾ ⤓ Export ▾ │
-//	│               │ the grid (virtualized; rows fetched a page at a time) — or the plan view      │
-//	│               ├ log ──────────────────────────────────────────────────────────────────────────┤
-//	└ status bar ───┴───────────────────────────────────────────────────────────────────────────────┘
+//	┌ topbar: dbc · connection · [session state] · ▶ Run ▶▶ Run all ◈ Explain ■ Stop ⟲ History ▷ Scripts ✦ ┐
+//	├ sidebar ──────┬ editor (textarea, upgraded to Monaco) ───────────────┬┬ assistant (Ctrl+I) ──────┤
+//	│ Connections   ├ ═ splitter (drag; the height is saved) ═══════════════┤│ ✦ Copilot · model ▾  ⟲ ✕ │
+//	│ Tables        │ results bar: [Results][◈ Plan] · 8 rows   ⧉ Copy ⤓ Export ││ transcript               │
+//	│               │ the grid (virtualized) — or the plan view             ││ [✓] with: query, …       │
+//	│               ├ log ──────────────────────────────────────────────────┤│ composer          ⏎ send │
+//	└ status bar ───┴───────────────────────────────────────────────────────┴┴──────────────────────────┘
+//
+// The assistant pane is hidden until opened; ║ on its left edge drags its
+// width. Opening it and its width are saved with the layout.
 //
 // The body carries the asset version (data-ver) for the scripts that load
 // more files themselves — Monaco's loader versions every module with it.
@@ -78,9 +81,10 @@ func (p Workbench) Render() string {
 					),
 					b.SectionClass("log", "id", "log", "aria-label", "Log").R(),
 				),
+				p.chat(b),
 				b.FooterClass("statusbar").R(
 					b.Span("id", "status").T("starting…"),
-					b.SpanClass("keys").T("Ctrl+Enter run · Ctrl+Shift+Enter all · Ctrl+X explain · Ctrl+K stop · Ctrl+P history · Ctrl+E export"),
+					b.SpanClass("keys").T("Ctrl+Enter run · Ctrl+Shift+Enter all · Ctrl+X explain · Ctrl+K stop · Ctrl+P history · Ctrl+E export · Ctrl+O scripts · Ctrl+I assistant"),
 				),
 			),
 		),
@@ -104,6 +108,8 @@ func (p Workbench) topbar(b *element.Builder) any {
 				"title", "Explain the statement under the caret (Ctrl+X with nothing selected; Ctrl+Shift+X analyzes)").T("◈ Explain"),
 			b.Button("id", "stop", "type", "button", "disabled", "disabled", "title", "Stop the run or connect (Ctrl+K)").T("■ Stop"),
 			b.Button("id", "history-btn", "type", "button", "title", "Past statements, here and in the TUI (Ctrl+P)").T("⟲ History"),
+			b.Button("id", "scripts-btn", "type", "button", "title", "Run a Go script from scripts_dir (Ctrl+O)").T("▷ Scripts"),
+			b.Button("id", "chat-btn", "type", "button", "title", "The assistant: ask about the query or result (Ctrl+I)").T("✦ Assistant"),
 		),
 	)
 	return nil
@@ -132,9 +138,36 @@ func (p Workbench) sidebar(b *element.Builder) any {
 	return nil
 }
 
+// chat is the assistant pane. Everything in it but the chrome is drawn by
+// chat.js from the server's transcript, so it arrives empty.
+func (p Workbench) chat(b *element.Builder) any {
+	b.AsideClass("chat", "id", "chat", "hidden", "hidden", "aria-label", "Assistant").R(
+		b.DivClass("chat-split", "id", "chat-split", "role", "separator", "aria-orientation", "vertical",
+			"title", "Drag to resize").R(),
+		b.DivClass("cbar").R(
+			b.ButtonClass("cmodel", "id", "chat-model", "type", "button", "title", "Model and assistant").T("✦ Assistant ▾"),
+			b.ButtonClass("cstop", "id", "chat-stop", "type", "button", "hidden", "hidden", "title", "Stop the answer (Ctrl+K)").T("■ stop"),
+			b.Button("id", "chat-new", "type", "button", "title", "Save this conversation and start a new one").T("⟲ new"),
+			b.ButtonClass("mclose", "id", "chat-close", "type", "button", "title", "Close the pane (the conversation stays)").T("✕"),
+		),
+		b.DivClass("ctrans", "id", "chat-trans", "tabindex", "-1", "aria-live", "polite").R(),
+		b.DivClass("csign", "id", "chat-sign", "hidden", "hidden").R(),
+		b.LabelClass("cctx", "title", "What goes with the next question — click to send the question alone").R(
+			b.Input("type", "checkbox", "id", "chat-attach", "checked", "checked").R(),
+			b.Span("id", "chat-ctx").T("with: …"),
+		),
+		b.DivClass("ccomp").R(
+			b.TextArea("id", "chat-input", "rows", "2", "spellcheck", "true", "aria-label", "Ask the assistant",
+				"placeholder", "ask about the query or result…").R(),
+			b.Button("id", "chat-send", "type", "button", "title", "Send (Enter; Shift+Enter adds a line)").T("⏎ send"),
+		),
+	)
+	return nil
+}
+
 // scripts are the workbench's modules, in load order: core first (the
 // shared API, log and state), app last (boot, which uses all the others).
-var scripts = []string{"core.js", "ui.js", "editor.js", "grid.js", "plan.js", "planview.js", "app.js"}
+var scripts = []string{"core.js", "ui.js", "editor.js", "grid.js", "plan.js", "planview.js", "chat.js", "app.js"}
 
 // head is the <head> every page shares: the theme as CSS variables, the
 // stylesheet, and the script (deferred, so it runs once the DOM is parsed).

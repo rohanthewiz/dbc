@@ -7,6 +7,7 @@
 //   editor.js  dbc.editor                           (textarea → Monaco)
 //   grid.js    dbc.grid                             (the virtualized results grid)
 //   plan.js    DbcPlan                              (the plan view, shared with the standalone page)
+//   chat.js    dbc.chat                             (the assistant pane)
 //   app.js     boot, the event stream, commands, keys
 //
 // dbc.cmd is the command table (run, stop, explain, history, …). app.js

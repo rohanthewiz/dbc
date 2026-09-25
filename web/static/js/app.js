@@ -16,7 +16,7 @@
 //                    "busy" … "tick"* … "run" {hasResult} ─► grid.load()
 //
 // Every event on the stream is {type, data} (rweb's SSE hub wraps them so),
-// handled by one switch in onEvent.
+// handled by one switch in onEvent; the assistant's (chat.*) go to chat.js.
 (function () {
   "use strict";
 
@@ -30,7 +30,7 @@
   const els = {
     conns: $("conns"), tables: $("tables"), tableCount: $("table-count"),
     active: $("active-conn"), stateful: $("stateful"), busy: $("busy"),
-    run: $("run"), runAll: $("run-all"), stop: $("stop"), history: $("history-btn"),
+    run: $("run"), runAll: $("run-all"), stop: $("stop"), history: $("history-btn"), scripts: $("scripts-btn"),
     splitter: $("splitter"), work: document.querySelector(".work"),
   };
 
@@ -132,9 +132,11 @@
           if (dbc.cmd.showResults) dbc.cmd.showResults();
         }
         if (dbc.cmd.onRunPlan) dbc.cmd.onRunPlan(d);
+        dbc.chat.refresh(); // the last statement, error or result moved
         break;
       case "result": // a script's s.Show, mid-run
         dbc.grid.load();
+        if (dbc.cmd.showResults) dbc.cmd.showResults();
         break;
       case "explain":
         setBusy(false);
@@ -151,7 +153,10 @@
         if (d.status) setStatus(d.status);
         else if (!state.busy) setStatus("ready on " + d.active);
         if (d.changed) saveTab();
+        dbc.chat.refresh(); // another catalog: other tables' schema
         break;
+      default:
+        if (ev.type.startsWith("chat.")) dbc.chat.onEvent(ev.type, d);
     }
   }
 
@@ -197,6 +202,7 @@
       applyState(st);
       return;
     }
+    dbc.chat.onState(st);
     const want = savedTab.conn && [...els.conns.querySelectorAll(".conn-item")]
       .some((b) => b.dataset.conn === savedTab.conn) ? savedTab.conn : st.active;
     connect(want);
@@ -217,6 +223,7 @@
     setStatus(st.busy ? st.status : "ready on " + st.active, st.busy ? "warn" : "");
     if (st.hasResult) dbc.grid.load();
     if (dbc.cmd.onState) dbc.cmd.onState(st);
+    dbc.chat.onState(st);
   }
 
   // ── commands ───────────────────────────────────────────────────────────
@@ -315,8 +322,49 @@
     fetchList();
   }
 
+  // scripts is Ctrl+O: the Go scripts in scripts_dir (the TUI's picker).
+  // Picking one runs it — its s.Print lines reach the log and its s.Show
+  // results the grid as they happen; Ctrl+K stops it like any run.
+  async function scripts() {
+    let got;
+    try {
+      got = await api("GET", "/api/v1/scripts");
+    } catch (e) { log("err", "scripts: " + e.message); return; }
+    if (!got.scripts.length) {
+      log("warn", "no scripts found in " + got.dir + " — add .go files with func Run(s *sdb.S) error");
+      return;
+    }
+    let cur = 0;
+    const list = el("ul", { class: "hlist", role: "listbox" });
+    const draw = () => {
+      list.replaceChildren(...got.scripts.map((n, i) => el("li", { class: i === cur ? "cur" : "", role: "option", "data-i": String(i) },
+        el("span", "hsql", n), el("span", "hwhen", "▶ run"))));
+      const c = list.children[cur];
+      if (c) c.scrollIntoView({ block: "nearest" });
+    };
+    const runIt = async (i) => {
+      dbc.modal.close();
+      try {
+        await api("POST", dbc.wsPath("/script"), { name: got.scripts[i] });
+      } catch (e) { setStatus(e.message, e.status === 409 ? "warn" : "err"); }
+    };
+    list.addEventListener("click", (e) => { const li = e.target.closest("li[data-i]"); if (li) runIt(+li.dataset.i); });
+    draw();
+    dbc.modal.open({
+      title: "Scripts · Enter or click runs", body: el("div", "history", list),
+      foot: el("div", "mfoot", el("span", "hint", got.dir)),
+      onKey: (e) => {
+        if (e.key === "ArrowDown") { cur = Math.min(cur + 1, got.scripts.length - 1); draw(); return true; }
+        if (e.key === "ArrowUp") { cur = Math.max(cur - 1, 0); draw(); return true; }
+        if (e.key === "Enter") { runIt(cur); return true; }
+        return false;
+      },
+      onClose: () => dbc.editor.focus(),
+    });
+  }
+
   Object.assign(dbc.cmd, {
-    run, stop, history, preview, editorState,
+    run, stop, history, preview, editorState, scripts,
     exportMenu: () => dbc.grid.exportMenu(),
   });
 
@@ -342,6 +390,12 @@
     } else if (k === "e") {
       e.preventDefault();
       dbc.grid.exportMenu();
+    } else if (k === "i" && !e.shiftKey) {
+      e.preventDefault();
+      dbc.cmd.assistant();
+    } else if (k === "o" && !e.shiftKey) {
+      e.preventDefault();
+      scripts();
     } else if (k === "x" && (e.shiftKey || !dbc.editor.selection())) {
       // explain; with a selection and no Shift it is cut, as ever (the
       // plain editor's path — Monaco binds these itself, see editor.js)
@@ -355,6 +409,7 @@
   els.runAll.addEventListener("click", () => run(true));
   els.stop.addEventListener("click", stop);
   els.history.addEventListener("click", history);
+  els.scripts.addEventListener("click", scripts);
 
   els.conns.addEventListener("click", (e) => {
     const b = e.target.closest(".conn-item");
@@ -416,6 +471,7 @@
         dbc.editor.setText(t.buffer);
       }
       if (layout.editorHeight) setEditorHeight(Number(layout.editorHeight));
+      dbc.chat.boot(layout);
 
       let st = null;
       const kept = sessionStorage.getItem(WS_KEY);

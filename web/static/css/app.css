@@ -362,13 +362,111 @@ button.primary { border-color: var(--accent); }
 /* narrow screens: the sidebar goes above the work column */
 @media (max-width: 700px) {
   .app {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto 1fr auto;
     grid-template-areas: "top" "side" "work" "foot";
   }
   .topbar { flex-wrap: wrap; gap: 6px 10px; }
+  .actions { flex-wrap: wrap; margin-left: 0; }
   .sidebar { max-height: 30vh; border-right: 0; border-bottom: 1px solid var(--line); }
   .statusbar .keys { display: none; }
+}
+
+/* ── the assistant pane ───────────────────────────────────────────────────
+   A third column when open (.app.chat-on), its width a variable the drag
+   handle on its left edge sets. Below 1000px there is no room for three
+   columns, so it floats over the work area from the right instead. */
+.app.chat-on {
+  grid-template-columns: 230px minmax(0, 1fr) var(--chat-w, 380px);
+  grid-template-areas:
+    "top  top  top"
+    "side work chat"
+    "foot foot foot";
+}
+.chat {
+  grid-area: chat;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+}
+.chat-split { position: absolute; left: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 5; }
+.chat-split:hover, .chat-split.dragging { background: var(--accent); }
+.cbar { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-bottom: 1px solid var(--line); background: var(--panel2); }
+.cbar button { font-size: 12px; padding: 1px 8px; }
+.cmodel { border: 0; background: none; color: var(--accent); font-weight: 600; margin-right: auto;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; padding-left: 2px !important; }
+.cstop { border-color: var(--warn); color: var(--warn); }
+.ctrans { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 10px; outline: none; }
+.cmsg { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cmsg.user { color: var(--fg); font-weight: 600; margin-top: 12px; }
+.cmsg.user .cprompt { color: var(--accent); }
+.cmsg.note, .cmsg.tool, .cmsg.info { color: var(--muted); font-size: 12px; }
+.cmsg.error { color: var(--err); font-size: 12px; }
+.cmsg.agent { white-space: normal; }
+.answer p { margin: 0 0 8px; white-space: pre-wrap; }
+.answer p.ahead { font-weight: 600; color: var(--accent); }
+.answer ul, .answer ol { margin: 0 0 8px; padding-left: 20px; }
+.answer code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--panel2); padding: 0 3px; border-radius: 3px; }
+.cblock { margin: 0 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); }
+.chead3 { display: flex; align-items: center; gap: 10px; padding: 2px 8px; border-bottom: 1px solid var(--line); font-size: 11px; }
+.clang { color: var(--muted); margin-right: auto; }
+.cblock pre { margin: 0; padding: 6px 8px; overflow: auto; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.cfoot { margin-top: -2px; }
+button.linkish { border: 0; background: none; padding: 0; color: var(--accent); font-size: 12px; }
+button.linkish:hover { text-decoration: underline; }
+.cempty .hint { margin: 0 0 10px; }
+.chead2 { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
+.crecent { display: flex; width: 100%; gap: 8px; border: 0; border-radius: 3px; background: none; padding: 2px 4px; text-align: left; }
+.crecent:hover { background: var(--sel); }
+.crecent .ct { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crecent .cd { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.cempty > .linkish { margin: 2px 4px 12px; }
+.clist { max-height: 55vh; overflow: auto; }
+.csign { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-top: 1px solid var(--line); }
+.ccode { font: 600 15px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent); letter-spacing: 1px; }
+a.btnlink { color: var(--fg); text-decoration: none; border: 1px solid var(--line); border-radius: 4px; padding: 3px 10px; background: var(--panel2); }
+a.btnlink:hover { border-color: var(--accent); }
+.cctx { display: flex; gap: 6px; align-items: flex-start; padding: 4px 10px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); cursor: pointer; }
+.cctx input { margin: 2px 0 0; accent-color: var(--accent); }
+.ccomp { display: flex; gap: 6px; align-items: flex-end; padding: 4px 8px 8px; }
+#chat-input {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  line-height: 20px;
+}
+#chat-input:focus { outline: 1px solid var(--accent); }
+#chat-btn.on { border-color: var(--accent); color: var(--accent); }
+
+@media (max-width: 1000px) {
+  .app.chat-on {
+    grid-template-columns: 230px minmax(0, 1fr);
+    grid-template-areas: "top top" "side work" "foot foot";
+  }
+  .chat {
+    position: fixed;
+    right: 0;
+    top: 40px;
+    bottom: 26px;
+    width: min(var(--chat-w, 380px), 100vw);
+    z-index: 30;
+    box-shadow: -6px 0 18px rgba(0, 0, 0, .35);
+  }
+}
+@media (max-width: 700px) {
+  .app.chat-on { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "side" "work" "foot"; }
+  .chat { top: 0; bottom: 0; width: 100vw; }
+  .chat-split { display: none; }
 }
 
 /* the sign-in notice */

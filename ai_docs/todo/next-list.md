@@ -45,14 +45,6 @@ ten session docs in `ai_docs/claude_sessions/`
   terminal paste right after gets nothing or markup. Serving both needs
   owning the selection; only worth it if a Linux user trips on it.
 
-- **N-042** · raised `2026-0925-1145-readme-example-and-live-schema-lookup` · value low
-  Postgres materialized views never reach the sidebar or the assistant:
-  `db.TablesQuery` reads `information_schema.tables`, which does not list
-  them (checked on Postgres 17.11). `db.ColumnsQuery` already accepts
-  relkind `'m'`, so only the listing is missing — e.g. a `UNION ALL` over
-  `pg_matviews` with table_type `MATERIALIZED VIEW`, which `TableRefs` would
-  already read as a view.
-
 - **N-043** · raised `2026-0925-1203-live-session-and-timeout-tests` · value low
   pgx pings a pooled connection before reuse only when it has sat idle more
   than 1s since its last checkout (stdlib `ResetSession`, v5.10.0). So a
@@ -94,6 +86,9 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-042** · raised `2026-0925-1145-readme-example-and-live-schema-lookup` ·
+  closed 2026-09-25, 2026-0925-1212-postgres-matviews-in-catalog — `TablesQuery` for Postgres adds `pg_matviews` rows with `UNION ALL`, typed `MATERIALIZED VIEW`, and filtered by `has_table_privilege(..., 'SELECT')` so they follow the same rule as `information_schema.tables`. bytdb has no `pg_matviews`, so it gets its own case with the old query. `TestLiveColumnsPostgres` now covers a matview; ran against Postgres 17.
 
 - **N-035** · raised `2026-0924-1725-conn-mgmt-session-discard-timeouts` ·
   closed 2026-09-25, 2026-0925-1203-live-session-and-timeout-tests — ran against Postgres 17.11 and MySQL 8.4.11 in throwaway containers; no product change needed. `db/live_session_test.go` (opt-in, same DSN variables) checks: Close ends the transaction, row lock, SET and temp table, and the server drops the connection; the drivers' own pool reset keeps SET/temp tables on both, and MySQL keeps an open transaction (the reason Close discards); killed and idle-timed-out sessions classify Drop/Lost, then Retry/Lost, with the pgx `IsClosed` branch doing the catching; an SQL error keeps the session; `conn_idle_timeout` closes idle pooled connections and spares a session; `connect_timeout` spares long statements. `TestConnectTimeoutBoundsOpen` now covers MySQL too. Raised N-043.

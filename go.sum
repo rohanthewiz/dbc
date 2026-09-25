@@ -72,8 +72,8 @@ github.com/rohanthewiz/element v0.6.0 h1:YS7I69mKKjtMa1ezr1ZQKm+XmrhQzKiE9vOSPxd
 github.com/rohanthewiz/element v0.6.0/go.mod h1:YZnKqWX2lSsR+zi06x3vhViYVoOSx8xHQjUMTmM/FLo=
 github.com/rohanthewiz/logger v1.3.0 h1:cJoocqUvv5wsHcjlW7wupMTruyBCUHuu8J380u5fyFs=
 github.com/rohanthewiz/logger v1.3.0/go.mod h1:aPgQ2SY+8fjgyUVcHpWBT9gGHaqKU4cfWjJ7Gkt+Eb0=
-github.com/rohanthewiz/rweb v0.1.31 h1:FdJWpyWVfY8nEUHievuUEKEXlaLa2DDrh4krUItXZiA=
-github.com/rohanthewiz/rweb v0.1.31/go.mod h1:byJnPYevT7h4eqAlEQjlH124J0VPFmrP3Cp34wnQNqk=
+github.com/rohanthewiz/rweb v0.1.32 h1:EC4IQlcul97gAjgERf7j+jzmDPrxNIEBVTgF/ODeOrc=
+github.com/rohanthewiz/rweb v0.1.32/go.mod h1:byJnPYevT7h4eqAlEQjlH124J0VPFmrP3Cp34wnQNqk=
 github.com/rohanthewiz/serr v1.4.0 h1:twQnnRRB3+orPJBrdVBaxaYScNE+Dk9MxSLtEabvoGA=
 github.com/rohanthewiz/serr v1.4.0/go.mod h1:l01AbjXw1zP0kxe5tX5s/sADHiBbl0Rwfo/igde4b88=
 github.com/sirupsen/logrus v1.9.4 h1:TsZE7l11zFCLZnZ+teH4Umoq5BhEIfIzfRDZ1Uzql2w=

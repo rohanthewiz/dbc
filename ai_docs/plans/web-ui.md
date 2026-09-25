@@ -428,7 +428,8 @@ real thing:
 - **Found on the way:** rweb v0.1.31's `SSEHub` updates each client's drop
   counter under its *read* lock, so concurrent broadcasts race (`-race`
   caught it). Worked around with a per-tab send mutex; the fix belongs in
-  rweb. And bytdb takes no file lock (see *Sessions, tabs and
+  rweb. (Fixed in rweb v0.1.32 — an atomic counter — and the mutex removed;
+  N-050.) And bytdb takes no file lock (see *Sessions, tabs and
   connections*); `web.bytdb` has its own flock/`LockFileEx` on
   `web.bytdb.lock`, and a second instance runs memory-only with a warning.
   (Since bytdb v0.18.0, bytdb takes that lock itself and `lock_*.go` is

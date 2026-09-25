@@ -77,15 +77,14 @@ type hub struct {
 
 // window is one browser tab: its stream, its assistant, its idle clock.
 type window struct {
-	id  string
-	sse *rweb.SSEHub
+	id string
 
-	// sendMu serializes sends to sse. rweb's SSEHub (v0.1.31) updates each
-	// client's drop counter under its READ lock, so two broadcasts at once
-	// race on it — and a window has many senders: request handlers, each
-	// run's ticker, each Job's goroutine, the assistant. One lock per window
-	// also gives the page a single order of events.
-	sendMu sync.Mutex
+	// sse is safe for concurrent sends, which matters: a window has many
+	// senders — request handlers, each run's ticker, each Job's goroutine,
+	// the assistant. (rweb before v0.1.32 raced on a per-client drop counter
+	// here, and a per-window send mutex worked around it.) Each send is one
+	// channel send per stream, so every stream still sees one order of events.
+	sse *rweb.SSEHub
 
 	chat *assistant // the assistant pane's conversation (chat.go)
 
@@ -345,8 +344,6 @@ func (w *window) send(typ, ws string, data any) {
 	if err != nil {
 		return // every event type here is plain data; this cannot happen
 	}
-	w.sendMu.Lock()
-	defer w.sendMu.Unlock()
 	w.sse.BroadcastRaw(rweb.SSEvent{Type: "message", Data: string(b)})
 }
 

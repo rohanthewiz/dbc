@@ -42,12 +42,6 @@ ten session docs in `ai_docs/claude_sessions/`
   Opt-in live `workspace` tests on Postgres/MySQL (same `DBC_LIVE_*` DSNs):
   retry-once, session lost, cancel mid-statement and connection switch through
   the workspace, not just `db`. Its own tests use in-memory SQLite only.
-- **N-050** · raised `2026-0925-1451-dbc-web-phase2-skeleton` · value low
-  rweb v0.1.31: `SSEHub.broadcastToClients` bumps each client's `dropped`
-  counter under the hub's READ lock, so concurrent `Broadcast` calls race
-  (caught by `-race` in `web`). dbc works around it with a per-tab send
-  mutex (`web/hub.go`, `tab.sendMu`); fix it in rweb (atomic counter or the
-  write lock), then the mutex can go.
 - **N-051** · raised `2026-0925-1554-dbc-web-phases-3-4` · value low
   Commit the `dbc web` browser checks as an opt-in test (go-rod against a
   built binary, skipped unless asked for, like the `db/live_*` tests). Phases
@@ -110,6 +104,17 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-050** · raised `2026-0925-1451-dbc-web-phase2-skeleton` ·
+  closed 2026-09-25, 2026-0925-1656-rweb-ssehub-race — rweb's `SSEHub` bumped each
+  client's drop counter under its read lock, so concurrent broadcasts
+  raced. Fixed in rweb v0.1.32 (`3169f85`): the counter is an
+  `atomic.Int32`, keeping broadcasts parallel rather than serializing them
+  on the write lock; `TestSSEHubConcurrentBroadcast` fails under `-race`
+  without it. dbc upgraded and dropped the per-window `sendMu` from
+  `web/hub.go` (the item said `tab.sendMu`; it lived on `window`). On
+  v0.1.31 without the mutex `web`'s tests race; on v0.1.32 the full suite
+  is clean under `-race`.
 
 - **N-049** · raised `2026-0925-1451-dbc-web-phase2-skeleton` ·
   closed 2026-09-25, 2026-0925-1651-bytdb-file-lock — two dbc processes

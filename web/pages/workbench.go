@@ -136,8 +136,8 @@ func (p Workbench) sidebar(b *element.Builder) any {
 			b.ButtonClass("hadd", "id", "conn-add", "type", "button",
 				"title", "Add a connection", "aria-label", "Add a connection").T("+"),
 		),
-		// app.js redraws this list when a connection is added or removed
-		// (drawConns): keep the two in step
+		// conns.js redraws this list when a connection is added, edited or
+		// removed (draw): keep the two in step
 		b.Ul("id", "conns").R(
 			element.ForEach(p.Conns, func(c config.Connection) {
 				cls := "conn-item"
@@ -146,8 +146,12 @@ func (p Workbench) sidebar(b *element.Builder) any {
 				}
 				attrs := []string{"type", "button", "data-conn", c.Name, "data-driver", c.Driver}
 				if c.Web {
-					// added in the browser: the one kind it may remove
-					attrs = append(attrs, "data-saved", "1", "title", c.Name+" — added here; right-click to remove")
+					// added in the browser: the one kind it may edit or remove
+					attrs = append(attrs, "data-saved", "1", "title", c.Name+" — added here; right-click to edit or remove")
+				}
+				if c.AIRows {
+					// the edit form's checkbox starts from this
+					attrs = append(attrs, "data-airows", "1")
 				}
 				b.Li().R(
 					b.ButtonClass(cls, attrs...).R(

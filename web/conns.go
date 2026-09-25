@@ -33,11 +33,17 @@ import (
 //
 //	POST   /api/v1/conns/test ─► db.Probe: open, ping, close; nothing saved
 //	POST   /api/v1/conns ──────► cfg.AddConn, store.SaveConn, "conns" to every window
+//	PUT    /api/v1/conns/:name ► an edit (rename, driver, DSN, ai_rows); all but an
+//	                             ai_rows change refused while a query tab is on it;
+//	                             cfg.ReplaceConn, store.UpdateConn, mgr.Drop, "conns"
 //	DELETE /api/v1/conns/:name ► refused while a query tab is on it; else
 //	                             cfg.RemoveConn, mgr.Drop, store.DeleteConn, "conns"
 //
-// A DSN never goes back to the browser: the list says name, driver and
-// whether it was added here — enough to draw the sidebar and offer Remove.
+// A DSN never goes back to the browser: the list says name, driver, ai_rows
+// and whether it was added here — enough to draw the sidebar, fill the edit
+// form and offer Edit and Remove. So the edit form cannot show the DSN it
+// would change; it sends an empty one for "leave it as it is" and the
+// server takes the stored one (keepDSN).
 
 // maxConnName bounds a connection name. It is shown in the sidebar, the
 // topbar and every history row: a name that long is a paste gone wrong.
@@ -76,17 +82,47 @@ func (s *Server) connList() map[string]any {
 	conns := s.cfg.Conns()
 	out := make([]connInfo, len(conns))
 	for i, c := range conns {
-		out[i] = connInfo{Name: c.Name, Driver: c.Driver, Saved: c.Web}
+		out[i] = connInfo{Name: c.Name, Driver: c.Driver, Saved: c.Web, AIRows: c.AIRows}
 	}
 	return map[string]any{"conns": out, "default": s.defaultConn()}
 }
 
-// connForm is the add-connection form, for a test or a save.
+// connForm is the add- or edit-connection form, for a test or a save.
 type connForm struct {
 	Name   string `json:"name"`
 	Driver string `json:"driver"`
 	DSN    string `json:"dsn"`
 	AIRows bool   `json:"ai_rows"`
+	// From is, on a test from the edit form, the connection being edited:
+	// an empty DSN then means its stored one (keepDSN). An edit's save names
+	// the connection in its path instead.
+	From string `json:"from,omitempty"`
+}
+
+// keepDSN fills an empty DSN in f with the one stored for the saved
+// connection from — the edit form's "leave the DSN unchanged", which exists
+// because the browser never has the DSN to send back. It is the DSN as
+// typed, ${VAR}s and all, so a kept DSN expands as it always did.
+//
+// A kept DSN goes only with its own driver: a postgres URL handed to the
+// mysql driver cannot work, so changing the driver asks for a DSN to match.
+// A DSN that is typed is left alone for check to judge as any other.
+func (s *Server) keepDSN(f *connForm, from string) error {
+	if strings.TrimSpace(f.DSN) != "" {
+		return nil
+	}
+	sc, found, err := s.store.Conn(from)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return notFound("no saved connection named %q", from)
+	}
+	if drv := strings.TrimSpace(f.Driver); drv != sc.Driver {
+		return badRequest("%q's DSN is a %s one — type a %s DSN to change the driver", from, sc.Driver, drv)
+	}
+	f.DSN = sc.DSN
+	return nil
 }
 
 // check trims the form and turns away what could never work. needName: a
@@ -124,6 +160,11 @@ func (s *Server) handleConnTest(ctx rweb.Context) error {
 	var f connForm
 	if err := decode(ctx, &f); err != nil {
 		return fail(ctx, err)
+	}
+	if f.From != "" {
+		if err := s.keepDSN(&f, f.From); err != nil {
+			return fail(ctx, err)
+		}
 	}
 	if err := f.check(false); err != nil {
 		return fail(ctx, err)
@@ -182,14 +223,131 @@ func (s *Server) handleConnAdd(ctx rweb.Context) error {
 		s.cfg.RemoveConn(f.Name)
 		return fail(ctx, serr.Wrap(err, "op", "add conn"))
 	}
-	if !s.store.Persistent() {
-		warns = append(warns, "the store is not being saved this session (another dbc web holds it), "+
-			"so this connection lasts only until dbc web stops")
+	if w := s.unsavedWarning("connection"); w != "" {
+		warns = append(warns, w)
 	}
 	list := s.connList()
 	s.hub.broadcast("conns", list)
 	list["warnings"] = warns
 	return ok(ctx, list)
+}
+
+// unsavedWarning is the note for a change to a memory-only store: it holds
+// only until dbc web stops. what is the thing that lasts that long.
+func (s *Server) unsavedWarning(what string) string {
+	if s.store.Persistent() {
+		return ""
+	}
+	return "the store is not being saved this session (another dbc web holds it), " +
+		"so this " + what + " lasts only until dbc web stops"
+}
+
+// handleConnEdit is PUT /api/v1/conns/:name: change a connection added in
+// the browser — its name, driver, DSN or ai_rows — in place. The body is the
+// add form's; an empty DSN keeps the stored one (keepDSN).
+//
+// Anything but ai_rows changes what the connection connects to, or what
+// it is called, and a query tab on it holds a session (and perhaps a
+// transaction) opened under the old name and DSN. So, as for a removal,
+// those edits are refused while any tab is on it or connecting to it. An
+// ai_rows change alone goes through regardless: it is read afresh from the
+// config each time the assistant is asked (workspace/chat.go), so the
+// tab's next question simply follows it.
+//
+// The order mirrors handleConnAdd: config first, where a clashing new name
+// or a removal by another window is caught atomically (ReplaceConn), then
+// the store, undone in the config if it fails. The pool opened under the
+// old name and DSN is dropped last, so the next connect opens a fresh one
+// from the new entry. The check-then-change gap is the one handleConnDelete
+// describes, with the same outcome: an error on a tab that raced into it.
+//
+// A rename is broadcast with the "conns" event as renamed {from, to}, so
+// every window can move the query tabs it has on the old name (ones not yet
+// shown, which have no workspace and so do not count as "on" it) to the
+// new — the store's saved tabs are moved by UpdateConn.
+func (s *Server) handleConnEdit(ctx rweb.Context) error {
+	name, err := url.PathUnescape(ctx.Request().PathParam("name"))
+	if err != nil {
+		return fail(ctx, badRequest("bad connection name in the path"))
+	}
+	var f connForm
+	if err = decode(ctx, &f); err != nil {
+		return fail(ctx, err)
+	}
+	cur, known := s.cfg.ConnByName(name)
+	if !known {
+		return fail(ctx, notFound("no connection named %q", name))
+	}
+	if !cur.Web {
+		return fail(ctx, s.fileConnRefusal(name, "change"))
+	}
+	if err = s.keepDSN(&f, name); err != nil {
+		return fail(ctx, err)
+	}
+	if err = f.check(true); err != nil {
+		return fail(ctx, err)
+	}
+	dsn, warns := config.ExpandDSN(f.Name, f.DSN)
+	next := config.Connection{Name: f.Name, Driver: f.Driver, DSN: dsn, AIRows: f.AIRows, Web: true}
+
+	// Compared expanded, as the pool would see it: a DSN retyped to the same
+	// text, or kept, is no change; a ${VAR} whose value moved since startup
+	// is one, and the pool should pick it up.
+	renamed := f.Name != name
+	reconnects := renamed || f.Driver != cur.Driver || dsn != cur.DSN
+	if reconnects {
+		if n := s.hub.tabsOn(name); n > 0 {
+			return fail(ctx, conflict("%s on %q — switch %s to another connection first "+
+				"(the assistant's row access alone can change while it is in use)",
+				tabsAre(n), name, itThem(n)))
+		}
+	}
+
+	if err = s.cfg.ReplaceConn(name, next); err != nil {
+		switch {
+		case errors.Is(err, config.ErrConnExists):
+			return fail(ctx, conflict("a connection named %q already exists", f.Name))
+		case errors.Is(err, config.ErrConnNotFound):
+			return fail(ctx, notFound("no connection named %q", name))
+		}
+		return fail(ctx, err)
+	}
+	// the DSN as typed (or as stored, when kept): see SavedConn
+	if err = s.store.UpdateConn(name, SavedConn{Name: f.Name, Driver: f.Driver, DSN: f.DSN, AIRows: f.AIRows}); err != nil {
+		// Put the config back as it was. That fails only if another window
+		// added a connection under the old name in the moment since it was
+		// given up; the edit then stands for this run and the store keeps
+		// the old entry, which the next start skips as a clash and says so.
+		_ = s.cfg.ReplaceConn(f.Name, cur)
+		return fail(ctx, serr.Wrap(err, "op", "edit conn"))
+	}
+	if reconnects {
+		s.mgr.Drop(name)
+	}
+	if w := s.unsavedWarning("change"); w != "" {
+		warns = append(warns, w)
+	}
+	list := s.connList()
+	if renamed {
+		list["renamed"] = map[string]string{"from": name, "to": f.Name}
+	}
+	s.hub.broadcast("conns", list)
+	list["warnings"] = warns
+	return ok(ctx, list)
+}
+
+// fileConnRefusal is the answer to changing or removing a connection that
+// is not the browser's to change: the config file's, or a built-in demo.
+// verb is what was asked ("change", "remove").
+func (s *Server) fileConnRefusal(name, verb string) error {
+	if s.cfg.Demo {
+		return badRequest("%q is a built-in demo connection", name)
+	}
+	where := "the config file"
+	if s.cfg.Path != "" {
+		where = s.cfg.Path
+	}
+	return badRequest("%q is defined in %s — edit the file to %s it", name, where, verb)
 }
 
 // handleConnDelete is DELETE /api/v1/conns/:name: forget a connection added
@@ -214,14 +372,7 @@ func (s *Server) handleConnDelete(ctx rweb.Context) error {
 		return fail(ctx, notFound("no connection named %q", name))
 	}
 	if !cn.Web {
-		where := "the config file"
-		if s.cfg.Path != "" {
-			where = s.cfg.Path
-		}
-		if s.cfg.Demo {
-			return fail(ctx, badRequest("%q is a built-in demo connection", name))
-		}
-		return fail(ctx, badRequest("%q is defined in %s — edit the file to remove it", name, where))
+		return fail(ctx, s.fileConnRefusal(name, "remove"))
 	}
 	if n := s.hub.tabsOn(name); n > 0 {
 		return fail(ctx, conflict("%s on %q — switch %s to another connection first",

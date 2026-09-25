@@ -32,11 +32,13 @@ func (s *Server) handleHealth(ctx rweb.Context) error {
 
 // connInfo is what the browser learns about a connection: never its DSN.
 // Saved marks one added in the browser (conns.go), the only kind it may
-// remove.
+// edit or remove. AIRows is there for the edit form's checkbox; it is no
+// secret, the file's own setting being in plain sight in the file.
 type connInfo struct {
 	Name   string `json:"name"`
 	Driver string `json:"driver"`
 	Saved  bool   `json:"saved,omitempty"`
+	AIRows bool   `json:"ai_rows,omitempty"`
 }
 
 func (s *Server) handleConns(ctx rweb.Context) error {

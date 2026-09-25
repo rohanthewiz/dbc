@@ -140,10 +140,13 @@
   function onEvent(ev) {
     const d = ev.data;
     if (!ev.ws) {
-      // window-level: the assistant's, or a connection added or removed
-      // (in this window or another — every window redraws its sidebar)
-      if (ev.type === "conns") dbc.conns.draw(d.conns);
-      else if (ev.type.startsWith("chat.")) dbc.chat.onEvent(ev.type, d);
+      // window-level: the assistant's, or a connection added, edited or
+      // removed (in this window or another — every window redraws its
+      // sidebar, and follows a rename)
+      if (ev.type === "conns") {
+        dbc.conns.draw(d.conns);
+        if (d.renamed) connRenamed(d.renamed.from, d.renamed.to);
+      } else if (ev.type.startsWith("chat.")) dbc.chat.onEvent(ev.type, d);
       return;
     }
     const t = tabOf(ev.ws);
@@ -518,8 +521,21 @@
     });
   }
 
+  // connRenamed moves this window's query tabs from a connection's old name
+  // to its new one. The server refuses a rename while a tab with a
+  // workspace is on the connection, so the tabs this finds are ones not
+  // shown yet: their conn is only a note of what to connect to when they
+  // are, and left on the old name they would fall back to another
+  // connection. The server has moved the saved copies already; this keeps
+  // the page's next save from writing the old name back. Idempotent — the
+  // "conns" event and the edit's own response may both call it.
+  function connRenamed(from, to) {
+    for (const t of tabs) if (t.conn === from) t.conn = to;
+    if (state.active === from) state.active = to;
+  }
+
   Object.assign(dbc.cmd, {
-    run, stop, history, preview, editorState, scripts, help, newTab, pickTab, connect,
+    run, stop, history, preview, editorState, scripts, help, newTab, pickTab, connect, connRenamed,
     closeTab: () => closeTab(state.tab),
     exportMenu: () => dbc.grid.exportMenu(),
   });

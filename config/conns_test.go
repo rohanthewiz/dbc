@@ -69,3 +69,30 @@ func TestExpandDSN(t *testing.T) {
 		t.Fatalf("warnings = %q", warns)
 	}
 }
+
+func TestReplaceConn(t *testing.T) {
+	c := &Config{Connections: []Connection{{Name: "a"}, {Name: "b", Web: true}, {Name: "c"}}}
+	before := c.Conns()
+
+	if err := c.ReplaceConn("b", Connection{Name: "b2", AIRows: true, Web: true}); err != nil {
+		t.Fatal(err)
+	}
+	// in place: the entry keeps its position
+	if got := c.Conns(); got[1].Name != "b2" || !got[1].AIRows || len(got) != 3 {
+		t.Fatalf("after replace: %+v", got)
+	}
+	// copy-on-write: an earlier snapshot still has the old entry
+	if before[1].Name != "b" {
+		t.Fatalf("an earlier snapshot changed: %+v", before)
+	}
+	// the same name is no clash with itself
+	if err := c.ReplaceConn("b2", Connection{Name: "b2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ReplaceConn("b2", Connection{Name: "c"}); !errors.Is(err, ErrConnExists) {
+		t.Fatalf("clash: %v", err)
+	}
+	if err := c.ReplaceConn("gone", Connection{Name: "z"}); !errors.Is(err, ErrConnNotFound) {
+		t.Fatalf("missing: %v", err)
+	}
+}

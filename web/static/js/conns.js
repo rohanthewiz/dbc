@@ -1,6 +1,6 @@
 // dbc web — the connection list's own UI: adding a connection (with a test
-// before saving), removing one added here, and redrawing the sidebar list
-// when either happens in any window.
+// before saving), editing or removing one added here, and redrawing the
+// sidebar list when any of these happens in any window.
 //
 // The list itself is rendered by the server (pages/workbench.go) and only
 // redrawn here after a change — draw builds the same markup, so keep the
@@ -8,7 +8,9 @@
 // connection goes there directly.
 //
 // What the server knows about a connection and the page does not: its DSN.
-// The form sends one, and nothing ever sends one back.
+// The form sends one, and nothing ever sends one back — so the edit form
+// starts with the DSN field empty, and an empty DSN there means "leave it
+// as it is" (the server fills in the stored one).
 (function () {
   "use strict";
 
@@ -37,18 +39,28 @@
     for (const c of list) {
       const b = el("button", { class: marks.get(c.name) || "conn-item", type: "button",
         "data-conn": c.name, "data-driver": c.driver,
-        "data-saved": c.saved ? "1" : null, title: c.saved ? c.name + " — added here; right-click to remove" : null },
+        "data-saved": c.saved ? "1" : null, "data-airows": c.ai_rows ? "1" : null,
+        title: c.saved ? c.name + " — added here; right-click to edit or remove" : null },
         el("span", "name", c.name), el("span", "driver", c.driver));
       conns.append(el("li", null, b));
     }
   }
 
-  // ── adding ─────────────────────────────────────────────────────────────
-  // openAdd shows the form. Test runs the DSN through POST /conns/test and
-  // says what happened in the result box; Save adds it (whether or not it
-  // was tested — a database that is down right now may still be worth
-  // adding) and switches the query tab to it.
-  function openAdd() {
+  // ── adding and editing ─────────────────────────────────────────────────
+  // openForm shows the form: empty to add a connection, or filled from cur
+  // ({name, driver, aiRows} — what the sidebar knows) to edit one added
+  // here. Test runs the DSN through POST /conns/test and says what happened
+  // in the result box; Save adds it (whether or not it was tested — a
+  // database that is down right now may still be worth adding) and switches
+  // the query tab to it, or saves the edit (PUT /conns/:name) and leaves
+  // every tab where it is.
+  //
+  // Editing, the DSN field starts empty: the page never has the DSN. Left
+  // empty it keeps the stored one — for a test too, which sends from: the
+  // connection's name so the server can find it. A changed driver cannot
+  // keep a DSN written for the old one, so the placeholder then asks for a
+  // new DSN instead (and the server refuses one left empty).
+  function openForm(cur) {
     const name = el("input", { type: "text", id: "cf-name", autocomplete: "off", spellcheck: "false",
       maxlength: "64", placeholder: "prod-reports" });
     const driver = el("select", { id: "cf-driver" });
@@ -59,8 +71,17 @@
       spellcheck: "false", autocapitalize: "off" });
     const aiRows = el("input", { type: "checkbox", id: "cf-airows" });
     const result = el("div", { class: "connresult", "aria-live": "polite", hidden: "hidden" });
+    if (cur) {
+      name.value = cur.name;
+      driver.value = cur.driver;
+      aiRows.checked = cur.aiRows;
+    }
 
-    const placeholder = () => { dsn.placeholder = DRIVERS.find(([d]) => d === driver.value)[1]; };
+    const placeholder = () => {
+      dsn.placeholder = cur && driver.value === cur.driver
+        ? "unchanged — type a DSN to replace it"
+        : DRIVERS.find(([d]) => d === driver.value)[1];
+    };
     driver.addEventListener("change", placeholder);
     placeholder();
 
@@ -78,7 +99,8 @@
     const cancel = el("button", { type: "button" }, "Cancel");
     cancel.addEventListener("click", () => dbc.modal.close());
 
-    const body = () => ({ name: name.value, driver: driver.value, dsn: dsn.value, ai_rows: aiRows.checked });
+    const body = () => ({ name: name.value, driver: driver.value, dsn: dsn.value, ai_rows: aiRows.checked,
+      from: cur ? cur.name : undefined });
 
     function say(level, text) {
       result.hidden = false;
@@ -116,6 +138,17 @@
       seq++; // a test still out must not overwrite what the save says
       busy(true);
       try {
+        if (cur) {
+          // from rides along harmlessly: the path names the connection
+          const r = await dbc.api("PUT", "/api/v1/conns/" + encodeURIComponent(cur.name), body());
+          draw(r.conns);
+          if (r.renamed) dbc.cmd.connRenamed(r.renamed.from, r.renamed.to);
+          dbc.modal.close();
+          dbc.log("ok", r.renamed ? "renamed connection " + r.renamed.from + " to " + r.renamed.to
+            : "updated connection " + cur.name);
+          for (const w of r.warnings || []) dbc.log("warn", w);
+          return;
+        }
         const r = await dbc.api("POST", "/api/v1/conns", body());
         draw(r.conns); // the "conns" event will say the same; this is sooner
         const added = name.value.trim();
@@ -132,7 +165,7 @@
     save.addEventListener("click", runSave);
 
     dbc.modal.open({
-      title: "Add a connection", focus: name,
+      title: cur ? "Edit " + cur.name : "Add a connection", focus: name,
       body: el("div", null, form, result),
       foot: el("div", "mfoot", test, el("span", "hint", ""), save, cancel),
       // Enter saves from any field, as a form would; Ctrl/⌘+Enter tests.
@@ -146,6 +179,11 @@
       onClose: () => { seq++; dbc.editor.focus(); },
     });
   }
+
+  const openAdd = () => openForm(null);
+
+  // openEdit edits the sidebar entry b — a connection added here.
+  const openEdit = (b) => openForm({ name: b.dataset.conn, driver: b.dataset.driver, aiRows: !!b.dataset.airows });
 
   // ── removing ───────────────────────────────────────────────────────────
   // Only a connection added here can go; the server refuses the rest, and
@@ -173,20 +211,24 @@
     });
   }
 
-  // The right-click menu: connect, or remove one added here. For the
-  // config file's, Remove is shown and says why it cannot, rather than
-  // being absent and leaving the user to wonder where it went.
+  // The right-click menu: connect, or edit or remove one added here. For
+  // the config file's, Edit and Remove are shown and say why they cannot,
+  // rather than being absent and leaving the user to wonder where they went.
   conns.addEventListener("contextmenu", (e) => {
     const b = e.target.closest(".conn-item");
     if (!b) return;
     e.preventDefault();
     const name = b.dataset.conn;
+    const fromFile = name + " comes from the config file (or is a built-in demo) — edit the file to ";
     dbc.menu.open(e.clientX, e.clientY, [
       { head: name },
       { label: "Connect", act: () => dbc.cmd.connect(name) },
       b.dataset.saved
+        ? { label: "Edit…", act: () => openEdit(b) }
+        : { label: "Edit…", why: fromFile + "change it" },
+      b.dataset.saved
         ? { label: "Remove…", act: () => confirmRemove(name) }
-        : { label: "Remove…", why: name + " comes from the config file (or is a built-in demo) — edit the file to remove it" },
+        : { label: "Remove…", why: fromFile + "remove it" },
       { head: "" },
       { label: "Add a connection…", act: openAdd },
     ]);
@@ -194,5 +236,5 @@
 
   document.getElementById("conn-add").addEventListener("click", openAdd);
 
-  dbc.conns = { draw, openAdd };
+  dbc.conns = { draw, openAdd, openEdit };
 })();

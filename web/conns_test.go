@@ -223,3 +223,152 @@ func TestSavedConnsMergeAtStartup(t *testing.T) {
 		t.Fatalf("list order = %s", names)
 	}
 }
+
+// editBody is a PUT /api/v1/conns/:name body.
+func editBody(name, driver, dsn string, aiRows bool) string {
+	b, _ := json.Marshal(connForm{Name: name, Driver: driver, DSN: dsn, AIRows: aiRows})
+	return string(b)
+}
+
+// An edit, on both kinds of store: the memory-only one keeps its maps, the
+// file one runs UpdateConn's SQL (delete, insert, retag tabs) on bytdb.
+func TestConnEdit(t *testing.T) {
+	for _, persistent := range []bool{false, true} {
+		t.Run(fmt.Sprintf("persistent=%v", persistent), func(t *testing.T) {
+			testConnEdit(t, persistent)
+		})
+	}
+}
+
+func testConnEdit(t *testing.T, persistent bool) {
+	var tweaks []func(*config.Config, *Options)
+	if persistent {
+		st, err := OpenStore(filepath.Join(t.TempDir(), "web.bytdb"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = st.Close() })
+		tweaks = append(tweaks, func(_ *config.Config, o *Options) { o.Store = st })
+	}
+	e := newTestEnv(t, tweaks...)
+	id, s := e.connected()
+
+	t.Setenv("DBC_TEST_EDITNAME", "edit1")
+	typed := "file:${DBC_TEST_EDITNAME}?mode=memory&cache=shared"
+	e.api("POST", "/api/v1/conns", connBody("scratch", "sqlite", typed), 200)
+	e.api("POST", "/api/v1/conns", connBody("later", "sqlite", "file:later?mode=memory&cache=shared"), 200)
+	s.await(t, "conns")
+	s.await(t, "conns")
+	before, _, _ := e.srv.store.Conn("scratch")
+	// a saved query tab not shown in any window, noted as on "scratch"
+	if err := e.srv.store.SaveTab(Tab{ID: "bg", Title: "Q", Conn: "scratch"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// a test from the edit form with the DSN left empty tests the stored one
+	r := decodeData[probeResp](t, e.api("POST", "/api/v1/conns/test",
+		`{"driver":"sqlite","dsn":"","from":"scratch"}`, 200))
+	if !r.OK {
+		t.Fatalf("test with the kept DSN: %+v", r)
+	}
+	// ...but not under another driver, whose DSN it cannot be
+	res := e.api("POST", "/api/v1/conns/test", `{"driver":"postgres","dsn":"","from":"scratch"}`, 400)
+	if !strings.Contains(res.Error, "type a postgres DSN") {
+		t.Fatalf("kept DSN, new driver: %q", res.Error)
+	}
+
+	// rename and let the assistant see rows, keeping the DSN
+	env := e.api("PUT", "/api/v1/conns/scratch", editBody("renamed", "sqlite", "", true), 200)
+	if strings.Contains(string(env.Data), "edit1") || strings.Contains(string(env.Data), "DBC_TEST") {
+		t.Fatalf("the edit response carries the DSN: %s", env.Data)
+	}
+	var got struct {
+		connListResp
+		Renamed map[string]string `json:"renamed"`
+	}
+	if err := json.Unmarshal(env.Data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Renamed["from"] != "scratch" || got.Renamed["to"] != "renamed" {
+		t.Fatalf("renamed = %v", got.Renamed)
+	}
+	if c, ok := got.find("renamed"); !ok || !c.Saved || !c.AIRows {
+		t.Fatalf("after edit: %+v", got.Conns)
+	}
+	if _, ok := got.find("scratch"); ok {
+		t.Fatal("the old name is still listed")
+	}
+	// it keeps its place: after the file's, before the one added later
+	if names := fmt.Sprint(got.Conns); !strings.Contains(names, "{demo-sqlite") ||
+		strings.Index(names, "renamed") > strings.Index(names, "later") {
+		t.Fatalf("order after edit: %s", names)
+	}
+	// every window hears of the rename
+	ev, _ := s.await(t, "conns")
+	if !strings.Contains(string(ev.Data), `"renamed":{"from":"scratch","to":"renamed"}`) {
+		t.Fatalf("conns event = %s", ev.Data)
+	}
+	// the config has the new entry with the same expanded DSN; the store
+	// has the DSN as typed, the original Added, and the saved tab moved
+	cc, ok := e.srv.cfg.ConnByName("renamed")
+	if !ok || !cc.Web || !cc.AIRows || cc.DSN != "file:edit1?mode=memory&cache=shared" {
+		t.Fatalf("config entry = %+v", cc)
+	}
+	after, found, _ := e.srv.store.Conn("renamed")
+	if !found || after.DSN != typed || !after.Added.Equal(before.Added) || !after.AIRows {
+		t.Fatalf("store entry = %+v (before %+v)", after, before)
+	}
+	if _, found, _ = e.srv.store.Conn("scratch"); found {
+		t.Fatal("the old name is still in the store")
+	}
+	tabs, _ := e.srv.store.Tabs()
+	for _, tb := range tabs {
+		if tb.ID == "bg" && tb.Conn != "renamed" {
+			t.Fatalf("saved tab still on %q", tb.Conn)
+		}
+	}
+
+	// refusals: a name in use, a new driver with the DSN kept, the file's
+	// connection, one that is not there
+	e.api("PUT", "/api/v1/conns/renamed", editBody("later", "sqlite", "", true), 409)
+	e.api("PUT", "/api/v1/conns/renamed", editBody("demo-sqlite", "sqlite", "", true), 409)
+	e.api("PUT", "/api/v1/conns/renamed", editBody("renamed", "mysql", "", true), 400)
+	res = e.api("PUT", "/api/v1/conns/demo-sqlite", editBody("x", "sqlite", "", false), 400)
+	if !strings.Contains(res.Error, "edit the file to change it") {
+		t.Fatalf("config conn refusal = %q", res.Error)
+	}
+	e.api("PUT", "/api/v1/conns/scratch", editBody("x", "sqlite", "", false), 404)
+
+	// while a tab is on it, a new DSN or name is refused, ai_rows is not
+	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"renamed"}`, 200)
+	s.await(t, "conn")
+	res = e.api("PUT", "/api/v1/conns/renamed",
+		editBody("renamed", "sqlite", "file:other?mode=memory&cache=shared", true), 409)
+	if !strings.Contains(res.Error, "1 query tab is") {
+		t.Fatalf("in-use refusal = %q", res.Error)
+	}
+	e.api("PUT", "/api/v1/conns/renamed", editBody("again", "sqlite", "", true), 409)
+	e.api("PUT", "/api/v1/conns/renamed", editBody("renamed", "sqlite", "", false), 200)
+	if cc, _ = e.srv.cfg.ConnByName("renamed"); cc.AIRows {
+		t.Fatal("ai_rows did not change while in use")
+	}
+	// retyping the same DSN is no change either
+	e.api("PUT", "/api/v1/conns/renamed", editBody("renamed", "sqlite", typed, false), 200)
+
+	// off it, a new DSN goes through and the next connect uses it
+	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"demo-sqlite"}`, 200)
+	s.await(t, "conn")
+	e.api("PUT", "/api/v1/conns/renamed",
+		editBody("renamed", "sqlite", "file:edit2?mode=memory&cache=shared", false), 200)
+	if cc, _ = e.srv.cfg.ConnByName("renamed"); cc.DSN != "file:edit2?mode=memory&cache=shared" {
+		t.Fatalf("new DSN not in the config: %+v", cc)
+	}
+	if sc, _, _ := e.srv.store.Conn("renamed"); sc.DSN != "file:edit2?mode=memory&cache=shared" {
+		t.Fatalf("new DSN not in the store: %+v", sc)
+	}
+	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"renamed"}`, 200)
+	cev, _ := s.await(t, "conn")
+	if c := decodeData[connEvent](t, testEnvelope{Data: cev.Data}); c.Active != "renamed" || c.Failed {
+		t.Fatalf("connect after edit: %+v", c)
+	}
+}

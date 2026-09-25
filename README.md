@@ -589,9 +589,14 @@ a warning. The TUI and headless runs read only the file, so they don't see
 these connections. A DSN is stored as typed: write `${PGPASS}` and the
 password stays in `dbc web`'s environment instead of the file. A DSN is never
 sent back to the browser. Connections added this way show a small dot. To
-remove one, right-click it and pick *Remove…*. A connection a tab is still on
-can't be removed until you switch that tab away. The file's connections are
-changed in the file.
+change one, right-click it and pick *Edit…*: the same form, filled in, with
+the DSN field left empty. Leave it empty to keep the saved DSN (for a test
+too), or type a new one; changing the driver needs a new DSN. A rename keeps
+the connection's place in the list and moves the saved query tabs that were
+on it. To remove one, pick *Remove…*. A connection a tab is still on can't
+be removed, renamed or given a new DSN until you switch that tab away;
+whether the assistant may see its rows can be changed at any time. The
+file's connections are changed in the file.
 
 **Keys.** The TUI's, bent where a browser keeps the chord for itself:
 

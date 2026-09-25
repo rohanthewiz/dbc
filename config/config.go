@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -167,13 +168,13 @@ type Config struct {
 	// Connections is written freely while the config is being built (Load,
 	// the demo pruning, an ad-hoc --dsn), when nothing else can see it. Once
 	// something may run beside a change — dbc web adding a connection while
-	// its tabs connect and run — the change goes through AddConn/RemoveConn
-	// and every reader through Conns/ConnByName, which take connMu.
+	// its tabs connect and run — the change goes through AddConn/RemoveConn/
+	// ReplaceConn and every reader through Conns/ConnByName, which take connMu.
 	//
-	// The writers are copy-on-write: AddConn and RemoveConn build a new
-	// slice rather than edit the old one in place, so a slice a reader got
-	// from Conns (or a range over the field that began before the change)
-	// never sees an element change under it.
+	// The writers are copy-on-write: AddConn, RemoveConn and ReplaceConn
+	// build a new slice rather than edit the old one in place, so a slice a
+	// reader got from Conns (or a range over the field that began before the
+	// change) never sees an element change under it.
 	Connections []Connection `toml:"connection"`
 	connMu      sync.RWMutex
 
@@ -400,6 +401,39 @@ func (c *Config) RemoveConn(name string) bool {
 	}
 	c.Connections = next
 	return true
+}
+
+// ErrConnNotFound is ReplaceConn finding no connection by the old name —
+// removed (in another window, say) since the caller looked it up.
+var ErrConnNotFound = errors.New("no connection by that name")
+
+// ReplaceConn swaps the connection named old for cn, in place: the entry
+// keeps its position, so an edit does not move it down the sidebar. cn may
+// carry a new name; ErrConnExists refuses one another connection already
+// has. Doing the lookup, the clash check and the swap under one lock is
+// what makes two windows editing (or one editing while another removes)
+// safe: the second of them fails here instead of leaving two entries by
+// one name or resurrecting a removed one.
+func (c *Config) ReplaceConn(old string, cn Connection) error {
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+	at := -1
+	for i, x := range c.Connections {
+		switch {
+		case x.Name == old:
+			at = i
+		case x.Name == cn.Name:
+			return serr.Wrap(ErrConnExists, "name", cn.Name)
+		}
+	}
+	if at < 0 {
+		return serr.Wrap(ErrConnNotFound, "name", old)
+	}
+	// copy-on-write: see Connections
+	next := slices.Clone(c.Connections)
+	next[at] = cn
+	c.Connections = next
+	return nil
 }
 
 // ExpandDSN expands ${VAR} and $VAR in a DSN from the environment, as Load

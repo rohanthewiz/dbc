@@ -348,6 +348,94 @@ func (s *Store) SaveConn(c SavedConn) error {
 	return wrap(err, "op", "save conn", "name", c.Name)
 }
 
+// Conn finds one saved connection by name — the edit form's "leave the DSN
+// as it is" reads the DSN as typed from here, since the browser never had it.
+func (s *Store) Conn(name string) (SavedConn, bool, error) {
+	all, err := s.Conns()
+	if err != nil {
+		return SavedConn{}, false, err
+	}
+	for _, c := range all {
+		if c.Name == name {
+			return c, true, nil
+		}
+	}
+	return SavedConn{}, false, nil
+}
+
+// UpdateConn replaces the saved connection named old with c, which may
+// carry a new name. It keeps the old row's Added — that is the sidebar's
+// order, and an edit should not move the entry to the end at the next
+// start.
+//
+// On a rename the saved query tabs that were on old are moved to the new
+// name in the same transaction. A saved tab's conn is the connection it
+// reconnects to when shown again; left on a name that no longer exists it
+// would fall back to whatever the window has active, and the user would
+// find a tab quietly on another database. (History and saved assistant
+// chats keep the old name: they record what happened, under the name it
+// had then.)
+//
+// A missing old is an error: the caller checked it exists, so its absence
+// means it was removed meanwhile, and writing c would resurrect it.
+func (s *Store) UpdateConn(old string, c SavedConn) error {
+	if s.db == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		prev, ok := s.conns[old]
+		if !ok {
+			return serr.New("no saved connection by that name", "name", old)
+		}
+		if _, dup := s.conns[c.Name]; dup && c.Name != old {
+			return serr.New("a saved connection by that name already exists", "name", c.Name)
+		}
+		c.Added = prev.Added
+		delete(s.conns, old)
+		s.conns[c.Name] = c
+		if c.Name != old {
+			for id, t := range s.tabs {
+				if t.Conn == old {
+					t.Conn = c.Name
+					s.tabs[id] = t
+				}
+			}
+		}
+		return nil
+	}
+
+	ctx, cancel := opCtx()
+	defer cancel()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return serr.Wrap(err, "op", "update conn")
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op after Commit
+	var added time.Time
+	if err = tx.QueryRowContext(ctx, `SELECT added FROM conns WHERE name = $1`, old).Scan(&added); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return serr.New("no saved connection by that name", "name", old)
+		}
+		return serr.Wrap(err, "op", "update conn", "name", old)
+	}
+	// Delete and insert rather than one UPDATE: the name is the primary
+	// key, and a rename is then the same statements as any other edit — a
+	// clash with another saved name fails the INSERT on that key.
+	if _, err = tx.ExecContext(ctx, `DELETE FROM conns WHERE name = $1`, old); err != nil {
+		return serr.Wrap(err, "op", "update conn", "name", old)
+	}
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO conns (name, driver, dsn, ai_rows, added) VALUES ($1, $2, $3, $4, $5)`,
+		c.Name, c.Driver, c.DSN, c.AIRows, added); err != nil {
+		return serr.Wrap(err, "op", "update conn", "name", c.Name)
+	}
+	if c.Name != old {
+		if _, err = tx.ExecContext(ctx, `UPDATE tabs SET conn = $1 WHERE conn = $2`, c.Name, old); err != nil {
+			return serr.Wrap(err, "op", "retag tabs", "from", old, "to", c.Name)
+		}
+	}
+	return wrap(tx.Commit(), "op", "update conn", "name", c.Name)
+}
+
 // DeleteConn forgets a saved connection. A missing one is success.
 func (s *Store) DeleteConn(name string) error {
 	if s.db == nil {

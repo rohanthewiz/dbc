@@ -464,34 +464,50 @@ func TestLiveConnIdleTimeout(t *testing.T) {
 // to check out the cut one.
 //
 // The checks differ. go-sql-driver/mysql peeks at the socket on every
-// checkout. pgx pings only when the connection has been idle more than a
-// second since its last checkout (stdlib ResetSession, v5.10.0), so a
-// Postgres connection cut and reused within that second fails its first
-// statement — found here with a kill straight after the statement. That
-// window does not arise in interactive use, where a pooled connection sits
-// for longer between statements, so the test waits it out rather than
-// ask pgx to ping on every checkout.
+// checkout. pgx on its own pings only when the connection has been idle more
+// than a second since its last checkout (stdlib ResetSession, v5.10.0). A
+// Postgres connection cut and reused within that second used to fail its
+// first statement. This test found that with a kill straight after the
+// statement (N-043). pgShouldPing now adds the same socket peek, so both
+// cases run: "at once" reuses the cut connection inside pgx's second (the
+// peek's case), and "after 1s" reuses it past that second (pgx's own ping).
 func TestLiveCutPooledConnReplaced(t *testing.T) {
+	cases := []struct {
+		name string
+		wait time.Duration // from the last statement to the next checkout
+	}{
+		{"at once", 0},
+		{"after 1s", 1200 * time.Millisecond}, // past pgx's 1s
+	}
 	forLive(t, func(t *testing.T, e liveEngine) {
-		mgr := liveMgr(t, e.env, e.driver)
-		obs := liveMgr(t, e.env, e.driver)
-		dbh, err := mgr.DB("live")
-		if err != nil {
-			t.Fatalf("open: %v", err)
-		}
-		dbh.SetMaxOpenConns(1)
-		id := liveVal(t, onPool(mgr), e.backend)
-		used := time.Now()
-		liveExec(t, obs, fmt.Sprintf(e.kill, id))
-		waitGone(t, obs, e, id)
-		time.Sleep(time.Until(used.Add(1200 * time.Millisecond))) // past pgx's 1s
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				mgr := liveMgr(t, e.env, e.driver)
+				obs := liveMgr(t, e.env, e.driver)
+				dbh, err := mgr.DB("live")
+				if err != nil {
+					t.Fatalf("open: %v", err)
+				}
+				dbh.SetMaxOpenConns(1)
+				id := liveVal(t, onPool(mgr), e.backend)
+				used := time.Now()
+				liveExec(t, obs, fmt.Sprintf(e.kill, id))
+				waitGone(t, obs, e, id)
+				if c.wait == 0 && time.Since(used) >= time.Second {
+					// The kill took so long that pgx's own ping would fire,
+					// and the peek would go untested.
+					t.Fatalf("the kill took %s; the case needs the reuse inside 1s", time.Since(used))
+				}
+				time.Sleep(time.Until(used.Add(c.wait)))
 
-		res, err := mgr.Run("live", e.backend)
-		if err != nil {
-			t.Fatalf("first statement after the server cut the pooled connection: %v", err)
-		}
-		if got := res.Rows[0][0]; got == id {
-			t.Errorf("still on the cut connection %s", id)
+				res, err := mgr.Run("live", e.backend)
+				if err != nil {
+					t.Fatalf("first statement after the server cut the pooled connection: %v", err)
+				}
+				if got := res.Rows[0][0]; got == id {
+					t.Errorf("still on the cut connection %s", id)
+				}
+			})
 		}
 	})
 }

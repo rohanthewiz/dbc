@@ -33,7 +33,9 @@ const (
 	// left open overnight gives its connections back. It is a ceiling, not a
 	// keepalive: a server or proxy that cuts idle connections sooner still
 	// does, and the drivers' liveness checks on checkout replace those
-	// transparently. The editor's pinned session is checked out, never idle,
+	// transparently (for Postgres, with db.pgShouldPing's help: pgx alone
+	// skips the check within a second of the last checkout). The editor's
+	// pinned session is checked out, never idle,
 	// so this never expires it.
 	DefaultConnIdleTimeout = time.Hour
 

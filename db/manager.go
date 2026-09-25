@@ -12,6 +12,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5"
 	pgxstdlib "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 
@@ -191,7 +192,7 @@ func (m *Manager) open(ctx context.Context, name string) (dbh *sql.DB, anchor *s
 	if drv == "sqlite" {
 		dsn = sqliteDSN(dsn)
 	}
-	dbh, err = sql.Open(drv, dsn)
+	dbh, err = openPool(drv, dsn)
 	if err != nil {
 		return nil, nil, serr.Wrap(err, "conn", name, "driver", drv)
 	}
@@ -244,6 +245,63 @@ func (m *Manager) open(ctx context.Context, name string) (dbh *sql.DB, anchor *s
 		}
 	}
 	return dbh, anchor, nil
+}
+
+// openPool is sql.Open, except for Postgres. sql.Open("pgx", dsn) builds
+// pgx's bare connector, which has no way to take pgx options, so Postgres
+// parses the DSN here and opens through pgxstdlib.OpenDB with pgShouldPing.
+// The DSN is now parsed once per pool, not once per new connection, so a
+// .pgpass or PG* environment change is picked up when dbc reopens the
+// connection, not by the next pooled dial. A bad DSN fails here, not at the
+// first ping. pgconn's parse error leaves the password out, as it did when
+// the error came from the ping.
+func openPool(drv, dsn string) (*sql.DB, error) {
+	if drv != "pgx" {
+		return sql.Open(drv, dsn)
+	}
+	pcfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	return pgxstdlib.OpenDB(*pcfg, pgxstdlib.OptionShouldPing(pgShouldPing)), nil
+}
+
+// pgShouldPing decides whether pgx pings a pooled connection before handing it
+// out again. On its own, pgx pings only when the connection has sat idle more
+// than a second since its last checkout (stdlib Conn.ResetSession, v5.10.0).
+// A connection the server cut inside that second is handed out unchecked.
+// Its statement is written into the dead socket, and the reply is the
+// server's FATAL or EOF. pgx cannot tell whether the statement ran, so it
+// does not return driver.ErrBadConn, database/sql does not retry, and the
+// statement fails once.
+//
+// The go-sql-driver/mysql check runs on every checkout, and so does this one.
+// config.DefaultConnIdleTimeout promises this on both engines: a connection
+// the server cuts is replaced without the user seeing it. The cheap signal
+// is the socket itself. A server that ends a session (pg_terminate_backend,
+// idle_session_timeout, a restart) sends FATAL and closes its end. A proxy
+// that drops an idle client closes its end too. Either way bytes or a FIN
+// sit in the kernel's buffer, and sockQuiet finds them with no round trip.
+// Then this asks for the ping, the ping fails, ResetSession returns
+// ErrBadConn, and database/sql dials a fresh connection.
+//
+//	checkout ─► idle > 1s? ──yes──► ping ─ok─► reuse
+//	               │no                 └fail─► ErrBadConn ─► new connection
+//	               ▼
+//	          sockQuiet? ──no───► ping (as above)
+//	               │yes
+//	               ▼
+//	             reuse (no round trip)
+//
+// Pinging on every checkout (always true) would also cover this, but it
+// costs a round trip per pooled statement. A script looping over a remote
+// server would pay that on every Query. The peek costs one syscall.
+//
+// What the peek cannot see, pgx's 1s ping still covers: a path that died
+// silently (no FIN, no RST) and a FIN swallowed by a pgconn background read
+// left over from a slow write.
+func pgShouldPing(_ context.Context, p pgxstdlib.ShouldPingParams) bool {
+	return p.IdleDuration > time.Second || !sockQuiet(p.Conn.PgConn().Conn())
 }
 
 // closeOpened closes a pool and its anchor. The anchor goes first: DB.Close

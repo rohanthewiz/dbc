@@ -101,7 +101,7 @@ Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
 - **N-052** · raised `2026-0925-1554-dbc-web-phases-3-4` ·
-  closed 2026-09-25 — a numeric column (`export.NumericColumns`) is now sized
+  closed 2026-09-25, 2026-0925-1708-numeric-column-widths — a numeric column (`export.NumericColumns`) is now sized
   from every row, by `workspace.WidestNumeric`: a `len()` per cell, since a
   number's text is ASCII. Text columns keep the 500-row sample. It measures
   the widest text rather than using min/max, because a float's text is not

@@ -87,13 +87,6 @@ ten session docs in `ai_docs/claude_sessions/`
   A "Delete this conversation" row in the transcript's menu would remove its
   file and clear the pane without saving.
 
-- **N-040** · raised `2026-0925-1026-headless-streaming-tx-keep-going` · value low
-  A headless `dbc script` still collects what it `s.Show`s and renders it
-  at the end, while its `s.Print` lines stream to stdout in `text` — so the
-  log runs ahead of the results it describes. Streaming them (N-003's
-  `blockStream`) needs a banner that does not know the total, since a
-  script's result count is not known up front (`#2` instead of `2/5`).
-
 ## Roadmap
 
 Wanted, but deliberately not next. Empty at seeding: the session docs never
@@ -126,6 +119,22 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-040** · raised `2026-0925-1026-headless-streaming-tx-keep-going` ·
+  closed 2026-09-25, 2026-0925-1042-headless-script-streaming — a headless
+  script now streams each `s.Show` result to stdout in a block format
+  (`scriptStreams`: no `-o`, `export.Streamable`), so its blocks interleave
+  in order with the `s.Print` lines. `RenderBlock` takes `n <= 0` as an open-ended total and banners it `#i` (`export.Pos`);
+  `blockStream` with `total: 0` names its blocks `result #i` in notes and
+  errors, and its `show` drops later results and cancels the script's
+  context after a failed write, which is reported as "render failed" rather
+  than "script canceled". Every streamed script result has a banner, even a
+  lone one, since the stream cannot know a second will not follow. That
+  changes a one-`Show` script's `text`/`markdown` output, which used to
+  render bare. `-o` in a block format writes `export.RenderOpen`, the same
+  `#i` document, so `> file` and `-o file` agree. HTML and JSON still
+  collect via `RenderAll`. Checked through the binary on a scratch SQLite
+  file with a script that sleeps between shows: each block appeared a
+  second apart, right after its log line.
 - **N-004** · raised `2026-0728-2022-multi-statement-headless` ·
   closed 2026-09-25, 2026-0925-1026-headless-streaming-tx-keep-going —
   both exist. `--tx` runs dbc's own `BEGIN` before the

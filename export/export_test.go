@@ -339,3 +339,76 @@ func TestRenderRunNeedsAPositionPerResult(t *testing.T) {
 		t.Fatal("expected an error for a missing position")
 	}
 }
+
+// An open-ended total — a script's results — numbers each banner "#i", since
+// there is no n to count against. CSV and TSV have no banner to change.
+func TestRenderBlockOpenEnded(t *testing.T) {
+	r := query("demo", "SELECT 1", []string{"n"}, [][]string{{"1"}})
+	for f, want := range map[Format]string{Text: "-- #2 │ demo │", Markdown: "**#2** · `demo`"} {
+		got, err := RenderBlock(r, f, 2, 0)
+		if err != nil {
+			t.Fatalf("RenderBlock(%s): %v", f, err)
+		}
+		if !strings.HasPrefix(got, want) {
+			t.Errorf("%s banner = %q, want prefix %q", f, got, want)
+		}
+		if strings.Contains(got, "2/") {
+			t.Errorf("%s: open-ended banner still counts against a total: %q", f, got)
+		}
+	}
+	csv, _ := RenderBlock(r, CSV, 2, 0)
+	if want, _ := Render(r, CSV); csv != want {
+		t.Errorf("csv block = %q, want the bare result %q", csv, want)
+	}
+}
+
+// RenderOpen is the open-ended blocks joined by BlockSep — what a stream of
+// them writes — and a lone result keeps its banner, since the stream wrote it
+// before it could know no second would follow.
+func TestRenderOpen(t *testing.T) {
+	rs := []*model.Result{
+		query("demo", "SELECT id FROM cats", []string{"id"}, [][]string{{"1"}}),
+		exec("demo", "DELETE FROM cats", 3),
+	}
+	for _, f := range []Format{CSV, TSV, Markdown, Text} {
+		blocks := make([]string, len(rs))
+		for i, r := range rs {
+			blocks[i], _ = RenderBlock(r, f, i+1, 0)
+		}
+		got, err := RenderOpen(rs, f)
+		if err != nil {
+			t.Fatalf("RenderOpen(%s): %v", f, err)
+		}
+		if want := strings.Join(blocks, BlockSep); got != want {
+			t.Errorf("%s: RenderOpen differs from the joined blocks:\n%s\n---\n%s", f, got, want)
+		}
+	}
+
+	lone, err := RenderOpen(rs[:1], Text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(lone, "-- #1 │") {
+		t.Errorf("a lone open-ended result lost its banner:\n%s", lone)
+	}
+
+	if _, err := RenderOpen(nil, Text); err == nil {
+		t.Error("RenderOpen of nothing should fail")
+	}
+	for _, f := range []Format{HTML, JSON} {
+		if _, err := RenderOpen(rs, f); err == nil {
+			t.Errorf("%s: RenderOpen should refuse a document format", f)
+		}
+	}
+}
+
+func TestPos(t *testing.T) {
+	for _, c := range []struct {
+		i, n int
+		want string
+	}{{2, 5, "2/5"}, {1, 1, "1/1"}, {2, 0, "#2"}, {3, -1, "#3"}} {
+		if got := Pos(c.i, c.n); got != c.want {
+			t.Errorf("Pos(%d, %d) = %q, want %q", c.i, c.n, got, c.want)
+		}
+	}
+}

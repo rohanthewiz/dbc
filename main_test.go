@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -493,6 +495,148 @@ func TestScriptHeadlessHonorsFormatAndOutfile(t *testing.T) {
 	if strings.Contains(got, "->") {
 		t.Errorf("script log output leaked into the data stream:\n%s", got)
 	}
+}
+
+// A streamed script writes each result the moment it is shown, so the
+// s.Print line before a Show lands before that result's block, not ahead of
+// every block. The banners are open-ended ("#2"), and the whole of stdout is
+// the log lines around export.RenderOpen's blocks.
+func TestScriptHeadlessStreamsInOrder(t *testing.T) {
+	mgr := newTestManager(t)
+	setFlag(t, &flagOut, "")
+
+	got := captureStdout(t, func() {
+		runScriptHeadless(mgr, "testdata/show_two.go", export.Text)
+	})
+
+	tabby := strings.Index(got, "breed Tabby")
+	first := strings.Index(got, "-- #1 │ demo │")
+	siamese := strings.Index(got, "breed Siamese")
+	second := strings.Index(got, "-- #2 │ demo │")
+	if tabby < 0 || first < 0 || siamese < 0 || second < 0 {
+		t.Fatalf("output is missing a log line or a banner:\n%s", got)
+	}
+	if !(tabby < first && first < siamese && siamese < second) {
+		t.Errorf("results did not stream between the log lines:\n%s", got)
+	}
+	if strings.Contains(got, "/2 │") {
+		t.Errorf("a script banner counted against a total:\n%s", got)
+	}
+}
+
+// -o in a block format writes what the stream would have: "#i" banners, so a
+// script's `> file` and `-o file` hold the same results.
+func TestScriptHeadlessOutfileMatchesStream(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "cats.txt")
+	setFlag(t, &flagOut, out)
+	runScriptHeadless(newTestManager(t), "testdata/show_two.go", export.Text)
+	bs, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read -o file: %v", err)
+	}
+
+	// the stream, without the log lines that shared stdout with it
+	setFlag(t, &flagOut, "")
+	streamed := captureStdout(t, func() {
+		runScriptHeadless(newTestManager(t), "testdata/show_two.go", export.Text)
+	})
+	var kept []string
+	for _, line := range strings.SplitAfter(streamed, "\n") {
+		if !strings.HasPrefix(line, "breed ") {
+			kept = append(kept, line)
+		}
+	}
+	// Durations differ run to run; everything else must agree.
+	norm := func(s string) string {
+		return regexp.MustCompile(` in [0-9.]+[µnm]?s`).ReplaceAllString(s, " in D")
+	}
+	if a, b := norm(string(bs)), norm(strings.Join(kept, "")); a != b {
+		t.Errorf("-o file differs from the stream:\n%s\n---\n%s", a, b)
+	}
+}
+
+// A script's stream numbers its blocks "#i" and names them "result #i" in
+// notes and errors. After a failed write it stops the script once and drops
+// every later result.
+func TestBlockStreamOpenEnded(t *testing.T) {
+	var out, notes strings.Builder
+	st := &blockStream{out: &out, notes: &notes, f: export.Text}
+	full := &model.Result{Conn: "demo", Columns: []string{"n"}, Rows: [][]string{{"1"}}}
+	cut := &model.Result{Conn: "demo", Columns: []string{"n"}, Rows: [][]string{{"1"}, {"2"}}, Truncated: true}
+
+	st.show(full, nil)
+	st.show(cut, nil)
+	want, err := export.RenderOpen([]*model.Result{full, cut}, export.Text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != want {
+		t.Errorf("streamed output differs from RenderOpen:\n%s\n---\n%s", out.String(), want)
+	}
+	if got := notes.String(); !strings.Contains(got, "note: result #2: result truncated at 2 rows") {
+		t.Errorf("note = %q, want the result's place among the script's", got)
+	}
+
+	// a render failure (HTML is no block format) stops the script, once
+	stops := 0
+	bad := &blockStream{out: &out, notes: &notes, f: export.HTML}
+	bad.show(full, func() { stops++ })
+	bad.show(full, func() { stops++ })
+	var se *serr.SErr
+	if !errors.As(bad.err, &se) || se.FieldsMap()["result"] != "#1" {
+		t.Errorf("stream err = %v, want a failure naming result #1", bad.err)
+	}
+	if stops != 1 {
+		t.Errorf("stop called %d times, want once", stops)
+	}
+}
+
+// A script streams in any block format on stdout; -o and the document
+// formats collect. There is no count to check.
+func TestScriptStreams(t *testing.T) {
+	cases := []struct {
+		name    string
+		outFile string
+		format  export.Format
+		want    bool
+	}{
+		{"text, stdout", "", export.Text, true},
+		{"csv, stdout", "", export.CSV, true},
+		{"markdown, stdout", "", export.Markdown, true},
+		{"-o writes one file", "out.txt", export.Text, false},
+		{"json is one array", "", export.JSON, false},
+		{"html is one document", "", export.HTML, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			setFlag(t, &flagOut, c.outFile)
+			if got := scriptStreams(c.format); got != c.want {
+				t.Errorf("scriptStreams = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// captureStdout runs fn with os.Stdout on a pipe and returns what it wrote.
+// The pipe is drained as fn writes, so output past the pipe buffer cannot
+// block it.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	done := make(chan string)
+	go func() {
+		bs, _ := io.ReadAll(r)
+		done <- string(bs)
+	}()
+	defer func() { os.Stdout = old }()
+	fn()
+	_ = w.Close()
+	return <-done
 }
 
 // scriptLog keeps s.Print off stdout only when it would corrupt what is

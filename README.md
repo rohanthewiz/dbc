@@ -469,9 +469,15 @@ input; neither do `--tx` and `-k`, since a script runs its statements itself):
 ./dbc -t csv -o report.csv script scripts/loop.go  # straight to a file
 ```
 
-The results a script pushes with `s.Show` are collected and rendered together
-when it finishes, exactly as the statements of a multi-statement query are —
-so `-t json` yields one array rather than a run of separate documents.
+On stdout, in a block format (`text`, `markdown`, `csv`, `tsv`), each result a
+script pushes with `s.Show` is written the moment it is shown, so it lands in
+order among the `s.Print` lines around it. A script can show any number of
+results, so their banners count up without a total — `#1`, `#2` — where a
+multi-statement query's read `2/5`; a script that shows one result still
+gets its `#1`. With `-o`, or in `json` or `html`, the results are collected
+and rendered together when the script finishes — so `-t json` yields one
+array rather than a run of separate documents. A block format written with
+`-o` holds exactly what the stream would have written.
 
 `s.Print` output is progress, not data, and streams as it happens. It shares
 stdout with a `text` table, but moves to stderr when a machine-readable format

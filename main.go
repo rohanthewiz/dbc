@@ -688,11 +688,17 @@ func streamsResults(f export.Format, stmts int) bool {
 // straight to out — os.Stdout is unbuffered — so a block shows as soon as its
 // statement finishes. The truncation note for a block goes to notes (stderr)
 // right after it, so it lands next to the result it is about.
+//
+// A script's results stream too (show), with total 0: a script shows as many
+// results as it likes, so its banners read "#2" rather than "2/5", and the
+// document is export.RenderOpen's rather than RenderAll's.
 type blockStream struct {
 	out, notes io.Writer
 	f          export.Format
-	total      int // statements in the run; the banners count against it
-	wrote      int // blocks written so far, to know when a separator is due
+	// total is the statements in the run, which the banners count against;
+	// 0 means open-ended (a script), numbering blocks "#i"
+	total int
+	wrote int // blocks written so far, to know when a separator is due
 	// err is the render or write failure that stopped the stream, kept so the
 	// caller can tell it from the statement failure runStatements returns
 	err error
@@ -700,10 +706,10 @@ type blockStream struct {
 
 // add writes result i (0-based). Its signature fits runStatements' onResult.
 func (b *blockStream) add(i int, r *model.Result) error {
-	pos := fmt.Sprintf("%d/%d", i+1, b.total)
+	noun, pos := b.where(i + 1)
 	block, err := export.RenderBlock(r, b.f, i+1, b.total)
 	if err != nil {
-		b.err = serr.Wrap(err, "statement", pos)
+		b.err = serr.Wrap(err, noun, pos)
 		return b.err
 	}
 	if b.wrote > 0 {
@@ -711,11 +717,35 @@ func (b *blockStream) add(i int, r *model.Result) error {
 	}
 	b.wrote++
 	if _, err = io.WriteString(b.out, block); err != nil {
-		b.err = serr.Wrap(err, "statement", pos)
+		b.err = serr.Wrap(err, noun, pos)
 		return b.err
 	}
-	noteTruncated(b.notes, r, pos)
+	noteTruncated(b.notes, r, noun+" "+pos)
 	return nil
+}
+
+// show writes a script's next result — the one s.Show just pushed — as the
+// block after the last. sdb's show callback has no error to return, so a
+// failed write is kept on b.err, reported once through stop (the caller
+// cancels the script with it), and every later result is dropped: a stream
+// that lost a block must not go on as if the numbering still held.
+func (b *blockStream) show(r *model.Result, stop func()) {
+	if b.err != nil {
+		return
+	}
+	if b.add(b.wrote, r) != nil && stop != nil {
+		stop()
+	}
+}
+
+// where names block i (1-based) for errors and notes: the statement it came
+// from in a query run ("statement", "2/5"), or its place among a script's
+// results ("result", "#2").
+func (b *blockStream) where(i int) (noun, pos string) {
+	if b.total <= 0 {
+		return "result", export.Pos(i, 0)
+	}
+	return "statement", export.Pos(i, b.total)
 }
 
 // emit renders the results to stdout, or to the --out file when one was given.
@@ -732,11 +762,18 @@ func emitRun(results []*model.Result, at []int, total int, f export.Format) {
 		fail(err, "render failed")
 	}
 	warnTruncated(os.Stderr, results, at, total)
+	writeOut(out, results)
+}
+
+// writeOut sends a rendered document to stdout, or to the --out file with a
+// line saying how much went there. results are what out was rendered from,
+// for that count.
+func writeOut(out string, results []*model.Result) {
 	if flagOut == "" {
 		fmt.Print(out)
 		return
 	}
-	if err = os.WriteFile(flagOut, []byte(out), 0644); err != nil {
+	if err := os.WriteFile(flagOut, []byte(out), 0644); err != nil {
 		fail(serr.Wrap(err, "path", flagOut), "write failed")
 	}
 	rows := 0
@@ -758,47 +795,72 @@ func emitRun(results []*model.Result, at []int, total int, f export.Format) {
 // at and total place each result in its run, as for emitRun.
 func warnTruncated(w io.Writer, results []*model.Result, at []int, total int) {
 	for i, r := range results {
-		pos := ""
+		what := ""
 		if total > 1 {
-			pos = fmt.Sprintf("%d/%d", at[i], total)
+			what = "statement " + export.Pos(at[i], total)
 		}
-		noteTruncated(w, r, pos)
+		noteTruncated(w, r, what)
 	}
 }
 
 // noteTruncated writes warnTruncated's note for one result, if it hit the
-// cap. pos is the statement's "i/n", or "" for a lone result.
-func noteTruncated(w io.Writer, r *model.Result, pos string) {
+// cap. what names the result — "statement 2/5", a script's "result #2" — or
+// is "" for a lone result, which needs no name.
+func noteTruncated(w io.Writer, r *model.Result, what string) {
 	if !r.Truncated {
 		return
 	}
-	if pos != "" {
-		pos = "statement " + pos + ": "
+	if what != "" {
+		what += ": "
 	}
 	fmt.Fprintf(w, "note: %sresult truncated at %d rows — raise max_rows in config for more\n",
-		pos, len(r.Rows))
+		what, len(r.Rows))
 }
 
-// runScriptHeadless runs a Go script. The results it pushes with s.Show are
-// collected and rendered together when it finishes, exactly as the statements
-// of a multi-statement query are — so -t json yields one array rather than a
-// run of separate documents, and -o writes one file.
+// runScriptHeadless runs a Go script. The results it pushes with s.Show go
+// out one of two ways:
+//
+//   - streamed, in a block format on stdout (scriptStreams): each result is
+//     written the moment it is shown, so it lands in order with the s.Print
+//     lines around it instead of after all of them. A script's result count
+//     is open-ended, so each block's banner reads "#2", not "2/5" — and a
+//     lone result carries one too, since the stream could not know it would
+//     stay alone.
+//   - collected, for -o, HTML, and JSON: rendered together when the script
+//     returns, so -t json yields one array rather than a run of separate
+//     documents, and -o writes one file. A block format collected is
+//     export.RenderOpen's document — the bytes the stream would have written,
+//     so `> file` and `-o file` agree.
 func runScriptHeadless(mgr *db.Manager, path string, f export.Format) {
 	ctx, stop := interruptible()
 	defer stop()
 
 	var results []*model.Result
+	show := func(r *model.Result) { results = append(results, r) }
+	var stream *blockStream
+	if scriptStreams(f) {
+		// total 0: open-ended, "#i" banners. A failed write cancels the
+		// script's context, so its next query fails and it unwinds rather than
+		// computing results nobody will see.
+		stream = &blockStream{out: os.Stdout, notes: os.Stderr, f: f}
+		show = func(r *model.Result) { stream.show(r, stop) }
+	}
 	logOut := scriptLog(f)
 
-	s := sdb.New(mgr,
-		func(r *model.Result) { results = append(results, r) },
+	s := sdb.New(mgr, show,
 		func(msg string) { fmt.Fprintln(logOut, msg) },
 	).WithContext(ctx)
 
 	err := script.Run(path, s)
-	// output first: a script that failed on its third query still showed two
+	if stream != nil && stream.err != nil {
+		// checked before err: the script was canceled because output failed,
+		// and "script canceled" would hide why
+		fail(stream.err, "render failed")
+	}
+	// output first: a script that failed on its third query still showed two.
+	// A streamed script already wrote them, one at a time.
 	if len(results) > 0 {
-		emit(results, f)
+		emitScript(results, f)
 	}
 	if err != nil {
 		if errors.Is(err, db.ErrCanceled) {
@@ -806,6 +868,34 @@ func runScriptHeadless(mgr *db.Manager, path string, f export.Format) {
 		}
 		fail(err, "script failed")
 	}
+}
+
+// scriptStreams decides whether a headless script writes each result as it
+// is shown: on stdout (-o writes one file, with a total in its "wrote" line)
+// and in a block format (HTML and JSON are one document around every result).
+// Unlike streamsResults there is no count to check — a script's is not known
+// until it returns, and the "#i" banners do not need it.
+func scriptStreams(f export.Format) bool {
+	return flagOut == "" && export.Streamable(f)
+}
+
+// emitScript renders a script's collected results. A block format gets
+// export.RenderOpen's "#i" document, the one a stream to stdout would have
+// written; HTML and JSON render as a run of that many results, as they always
+// have — collected, their count is known.
+func emitScript(results []*model.Result, f export.Format) {
+	if !export.Streamable(f) {
+		emit(results, f)
+		return
+	}
+	out, err := export.RenderOpen(results, f)
+	if err != nil {
+		fail(err, "render failed")
+	}
+	for i, r := range results {
+		noteTruncated(os.Stderr, r, "result "+export.Pos(i+1, 0))
+	}
+	writeOut(out, results)
 }
 
 // scriptLog picks where a script's s.Print output goes. It is progress, not

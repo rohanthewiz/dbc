@@ -125,6 +125,40 @@ func RenderRun(rs []*model.Result, at []int, total int, f Format) (string, error
 	return "", serr.New("unknown format", "format", string(f))
 }
 
+// RenderOpen produces the document a stream of rs writes when the total was
+// open-ended while it ran — a script's s.Show results, whose count is known
+// only once the script returns. Every block carries an "#i" banner, a lone
+// one included: the stream had to write the first block before it could know
+// whether a second would follow, and rendering it bare only when collected
+// would make `> file` and `-o file` differ. Only Streamable formats have such
+// a document; HTML and JSON are collected whole, so RenderAll serves them.
+func RenderOpen(rs []*model.Result, f Format) (string, error) {
+	if len(rs) == 0 {
+		return "", serr.New("no result to export")
+	}
+	if !Streamable(f) {
+		return "", serr.New("format is not a block format", "format", string(f))
+	}
+	blocks := make([]string, 0, len(rs))
+	for i, r := range rs {
+		b, err := RenderBlock(r, f, i+1, 0)
+		if err != nil {
+			return "", err
+		}
+		blocks = append(blocks, b)
+	}
+	return strings.Join(blocks, BlockSep), nil
+}
+
+// Pos formats block i's place for a banner or a note: "i/n" against a known
+// total, "#i" when the total is open-ended (n <= 0).
+func Pos(i, n int) string {
+	if n <= 0 {
+		return fmt.Sprintf("#%d", i)
+	}
+	return fmt.Sprintf("%d/%d", i, n)
+}
+
 // Seq returns the positions 1…n, for a run in which every statement produced
 // a result.
 func Seq(n int) []int {
@@ -158,8 +192,11 @@ func Streamable(f Format) bool {
 // result itself. CSV and TSV carry no banner — it would not be data. n is
 // what the banner counts against; a streaming caller passes the number of
 // statements it means to run, since it cannot know how many will succeed.
+//
+// n <= 0 means the total is open-ended — a script's results, which arrive
+// until the script returns — and the banner reads "#i" instead of "i/n".
 func RenderBlock(r *model.Result, f Format, i, n int) (string, error) {
-	pos := fmt.Sprintf("%d/%d", i, n)
+	pos := Pos(i, n)
 	switch f {
 	case CSV:
 		return delimited(r, ',')

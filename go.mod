@@ -9,6 +9,7 @@ require (
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jezek/xgb v1.3.1
 	github.com/rivo/uniseg v0.4.7
 	github.com/rohanthewiz/bytdb v0.16.0
 	github.com/rohanthewiz/element v0.6.0

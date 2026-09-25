@@ -14,7 +14,8 @@
 //
 //	macOS    osascript -l JavaScript → NSPasteboard: public.html + public.utf8-plain-text
 //	Windows  user32 SetClipboardData: "HTML Format" (CF_HTML) + CF_UNICODETEXT
-//	Linux    wl-copy / xclip with -t text/html (one payload; see rich_unix.go)
+//	Linux    Wayland: wl-copy -t text/html (one payload; see rich_unix.go)
+//	         X11: dbc owns the selection, every target (see x11owner.go)
 //
 // Plain-text writes keep going through atotto, which has been dbc's path all
 // along and whose behavior on every platform is already known.

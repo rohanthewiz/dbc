@@ -29,16 +29,15 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-044
+**Next ID:** N-045
 
 ## Open
 
-- **N-030** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` · value low
-  X11 rich copy (xclip) advertises only text/html, so a GTK/Qt terminal
-  paste right after gets nothing instead of the markup. Premise narrowed
-  2026-09-25: Wayland is fine (wl-copy adds text/plain etc. for any text/*
-  type), and xclip's -alt-text is unreleased. Fix is owning the X11
-  selection (pure-Go xgb, detached helper); only if an X11 user trips on it.
+- **N-044** · raised `2026-0925-1353-x11-clipboard-owner` · value low
+  Verify the X11 clipboard owner (`clip/x11owner.go`) on a real X11 desktop:
+  a GNOME/KDE terminal paste after an HTML copy gets the markup, Teams or
+  LibreOffice gets the table, and a clipboard manager (Klipper, GPaste) does
+  not keep a helper alive. Only Xvfb + xclip has exercised it so far.
 
 ## Roadmap
 
@@ -71,6 +70,18 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-030** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` ·
+  closed 2026-09-25, 2026-0925-1353-x11-clipboard-owner — Linux rich copy served text/html only. Premise
+  narrowed first: Wayland was already fine (wl-copy offers text/plain and the
+  X11 text atoms for any text/* type); the gap was X11, where xclip lists only
+  text/html and GTK/Qt terminals pasted nothing. dbc now owns the X11
+  CLIPBOARD itself (`clip/x11owner.go`, pure-Go `jezek/xgb`): a detached
+  re-exec of the binary serving text/html, UTF8_STRING, text/plain(;charset),
+  TEXT and Latin-1 STRING, with INCR for large copies, until another client
+  copies. xclip remains the fallback. Verified in Docker/Xvfb by
+  `clip/live_linux_test.go` (opt-in `DBC_CLIP_LIVE=1`) and a headless
+  `dbc script` export whose clipboard outlived the process.
 
 - **N-011** · raised `2026-0913-2158-dbc-migrate-replaces-goose` ·
   closed 2026-09-25, 2026-0925-1330-tag-v0.1.0-release — Tag a release. Annotated tag `v0.1.0` on `aec93c8`

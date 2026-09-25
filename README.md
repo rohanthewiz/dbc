@@ -319,8 +319,8 @@ styles, so it pastes into Teams, Outlook, Slack or Google Docs as a formatted
 table rather than as markup. Markdown, CSV, TSV and JSON are one row down.
 The scope is the selected range when there is one, or the whole result.
 
-The rich copy needs the local clipboard (macOS, Windows, or Linux with
-`wl-copy`/`xclip`). Over SSH dbc falls back to the terminal's clipboard
+The rich copy needs the local clipboard (macOS, Windows, or Linux with an
+X11 display or `wl-copy` on Wayland). Over SSH dbc falls back to the terminal's clipboard
 protocol, which carries plain text only, and says so in the log.
 
 ### AI assistant

@@ -16,6 +16,7 @@ import (
 	pgxstdlib "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 
+	"github.com/rohanthewiz/bytdb"
 	bytdbdrv "github.com/rohanthewiz/bytdb/stdlib"
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/model"
@@ -234,6 +235,9 @@ func (m *Manager) open(ctx context.Context, name string) (dbh *sql.DB, anchor *s
 	}
 	dbh, err = openPool(drv, dsn)
 	if err != nil {
+		if errors.Is(err, bytdb.ErrLocked) {
+			return nil, nil, inUse(name, err)
+		}
 		return nil, nil, serr.Wrap(err, "conn", name, "driver", drv)
 	}
 	// conn_idle_timeout: see config.DefaultConnIdleTimeout for why an idle
@@ -743,6 +747,32 @@ func SessionLost(name string, err error) error {
 // fresh one.
 func BadConn(err error) bool {
 	return errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone)
+}
+
+// ErrInUse is returned when a bytdb file is held by another process — most
+// often a second dbc (another TUI, or a TUI beside dbc web) on the same file,
+// the demo's demo.bytdb included.
+//
+// bytdb (v0.18.0+) takes an exclusive lock on a "<file>.lock" sidecar when it
+// opens a file and holds it until close: two engines replaying and appending
+// to one WAL would each miss the other's writes. The lock is taken by the
+// driver's OpenConnector, i.e. inside sql.Open, and held for the *sql.DB's
+// life, so the pool this Manager caches keeps the file for as long as the
+// connection is open, idle connections or not. The loser gets this error on
+// its open and nothing is cached, so the caller decides: a demo is dropped
+// with a warning (openDemos), and a configured connection reports it where
+// the user connected. Within one process the driver shares one engine per
+// path, so two connections (or dbc web's store) on one file never collide.
+var ErrInUse = errors.New("bytdb file in use by another process")
+
+// inUse wraps bytdb's lock error as ErrInUse, in words that say who likely
+// holds the file. The hint is in the message, not a serr field: the TUI's log
+// pane and the demo warnings print Error(), which leaves fields out. The DSN
+// is left out too — it can carry options beyond the path — and bytdb's own
+// error already records the file.
+func inUse(name string, err error) error {
+	return serr.Wrap(fmt.Errorf("%w (another dbc — a TUI or dbc web — most likely has it open): %w",
+		ErrInUse, err), "conn", name)
 }
 
 // ErrCanceled is returned when a statement was stopped by the user. Callers

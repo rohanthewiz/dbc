@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rohanthewiz/bytdb"
 	"github.com/rohanthewiz/dbc/config"
 )
 
@@ -105,6 +106,32 @@ func TestSeedDemosPrunesUnusableDemo(t *testing.T) {
 	// and the surviving demo is actually usable
 	if _, err := mgr.Run(config.DemoSQLite, "SELECT id FROM cats"); err != nil {
 		t.Errorf("sqlite demo: %v", err)
+	}
+}
+
+// The case the demo fallback was built for: demo.bytdb held by another dbc
+// (a TUI, or dbc web). bytdb's file lock refuses the open, and the bytdb demo
+// is dropped with a warning saying why, rather than both processes writing
+// one WAL.
+func TestSeedDemosDropsHeldBytdbDemo(t *testing.T) {
+	cfg := demoCfg(t)
+	holder, err := bytdb.Open(cfg.Connections[0].DSN) // the other dbc
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = holder.Close() })
+	mgr := NewManager(cfg)
+	t.Cleanup(mgr.Close)
+
+	if err = SeedDemos(mgr, cfg); err != nil {
+		t.Fatalf("seed should survive a held demo: %v", err)
+	}
+	if len(cfg.Connections) != 1 || cfg.Connections[0].Name != config.DemoSQLite {
+		t.Fatalf("connections = %+v, want only the sqlite demo", cfg.Connections)
+	}
+	if len(cfg.Warnings) != 1 || !strings.Contains(cfg.Warnings[0], config.DemoBytdb) ||
+		!strings.Contains(cfg.Warnings[0], "in use") {
+		t.Errorf("warnings = %v, want one naming the demo and saying it is in use", cfg.Warnings)
 	}
 }
 

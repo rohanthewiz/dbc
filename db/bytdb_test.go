@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rohanthewiz/bytdb"
 	"github.com/rohanthewiz/dbc/config"
 )
 
@@ -241,5 +242,32 @@ func TestBytdbReturning(t *testing.T) {
 	}
 	if !res.IsExec || res.Affected != 1 {
 		t.Errorf("plain insert: exec=%v affected=%d, want exec of 1", res.IsExec, res.Affected)
+	}
+}
+
+// A bytdb file held by another process — another dbc, most often — fails the
+// open with ErrInUse, caches nothing, and opens normally once let go. A bare
+// bytdb.Open stands in for the other process: it is a separate engine taking
+// its own lock on the file's sidecar (in one process the driver would share
+// its engine instead, and there would be no contention to see).
+func TestBytdbFileInUse(t *testing.T) {
+	mgr := bytdbMgr(t)
+	path := mgr.cfg.Connections[0].DSN
+	holder, err := bytdb.Open(path)
+	if err != nil {
+		t.Fatalf("the stand-in for another process: %v", err)
+	}
+	_, err = mgr.DB("bd")
+	if !errors.Is(err, ErrInUse) || !errors.Is(err, bytdb.ErrLocked) {
+		t.Fatalf("open of a held file: %v, want ErrInUse wrapping bytdb.ErrLocked", err)
+	}
+	if !strings.Contains(err.Error(), "another dbc") {
+		t.Errorf("the error should say who likely holds the file: %v", err)
+	}
+	if err = holder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = mgr.Run("bd", "SELECT 1"); err != nil {
+		t.Fatalf("after the holder let go: %v", err)
 	}
 }

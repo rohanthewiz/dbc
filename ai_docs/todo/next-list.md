@@ -42,13 +42,6 @@ ten session docs in `ai_docs/claude_sessions/`
   Opt-in live `workspace` tests on Postgres/MySQL (same `DBC_LIVE_*` DSNs):
   retry-once, session lost, cancel mid-statement and connection switch through
   the workspace, not just `db`. Its own tests use in-memory SQLite only.
-- **N-049** · raised `2026-0925-1451-dbc-web-phase2-skeleton` · value medium
-  bytdb (v0.16.0) takes no file lock, so two dbc processes — two TUIs, or a
-  TUI and `dbc web` — open the same bytdb file (the demo's
-  `demo.bytdb` included) and both write its WAL. Seen in Phase 2: a second
-  `dbc web` on the same HOME opened `demo.bytdb` without a word. Lock in
-  bytdb itself, or in `db.Manager` as `web.bytdb` does (`web/lock_*.go`),
-  and drop the connection with a warning when held.
 - **N-050** · raised `2026-0925-1451-dbc-web-phase2-skeleton` · value low
   rweb v0.1.31: `SSEHub.broadcastToClients` bumps each client's `dropped`
   counter under the hub's READ lock, so concurrent `Broadcast` calls race
@@ -117,6 +110,20 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-049** · raised `2026-0925-1451-dbc-web-phase2-skeleton` ·
+  closed 2026-09-25, 2026-0925-1651-bytdb-file-lock — two dbc processes
+  shared one bytdb file. bytdb
+  v0.18.0 now locks it itself (an exclusive lock on a `<file>.lock`
+  sidecar, taken in `sql.Open` and held for the pool's life), and dbc
+  upgraded to it. `db.Manager` turns the lock error into `db.ErrInUse`
+  ("another dbc — a TUI or dbc web — most likely has it open"), so a held
+  demo is dropped with that warning and a held configured connection says
+  so where it was opened. `web.bytdb`'s own flock (`web/lock_*.go`) is gone:
+  it took the very sidecar bytdb now locks, and the lock is not reentrant,
+  so it would have refused the store's own open. Checked by
+  `TestBytdbFileInUse`, `TestSeedDemosDropsHeldBytdbDemo`,
+  `TestStorePersistsAndLocks`, and two real `dbc web` processes on one HOME.
 
 - **N-048** · raised `2026-0925-1425-workspace-extraction-web-phase1` ·
   closed 2026-09-25, 2026-0925-1641-dbc-web-phases-5-6 — dbc web Phases 5 (`d7dd3f0`) and 6 (`51bcf15`). Phase 5: the

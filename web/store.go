@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rohanthewiz/bytdb"
 	bytdbdrv "github.com/rohanthewiz/bytdb/stdlib"
 	"github.com/rohanthewiz/serr"
 )
@@ -21,18 +22,21 @@ import (
 // History and assistant conversations are not here — they stay in userdata,
 // shared with the TUI, so a query run in either shows up in both.
 //
-// It is a bytdb file, ~/.config/dbc/web.bytdb. bytdb itself takes no file
-// lock (v0.16.0), and two processes writing one bytdb WAL would corrupt it,
-// so the store holds an advisory lock on a sibling file, web.bytdb.lock, for
-// as long as it is open. A second `dbc web` finds it held and, rather than
-// refuse to start, gets a memory-only Store (see OpenStore) and says so. The
-// same fallback covers a machine with no home directory.
+// It is a bytdb file, ~/.config/dbc/web.bytdb. Two processes writing one
+// bytdb WAL would corrupt it, so only one may hold it. bytdb (v0.18.0+) sees
+// to that itself: opening the file takes an exclusive lock on its sidecar,
+// web.bytdb.lock, held until the last handle closes, and a second opener
+// gets bytdb.ErrLocked. The store once took that same sidecar lock itself
+// (bytdb v0.16.0 had none); it must not now — the lock is not reentrant, so
+// the store's lock would make bytdb refuse the store's own open. A second
+// `dbc web` finds the file held and, rather than refuse to start, gets a
+// memory-only Store (see OpenStore) and says so. The same fallback covers a
+// machine with no home directory.
 //
 // A memory-only Store has db == nil and keeps everything in the maps below,
 // so callers never branch on which kind they hold.
 type Store struct {
-	db   *sql.DB  // nil: memory only
-	lock *os.File // holds the advisory lock while db is open
+	db   *sql.DB // nil: memory only; holds bytdb's file lock while open
 	path string
 
 	mu     sync.Mutex
@@ -87,20 +91,14 @@ func OpenStore(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return st, serr.Wrap(err, "path", path, "op", "mkdir")
 	}
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return st, serr.Wrap(err, "path", path, "op", "open lock")
-	}
-	if err = lockFile(lock); err != nil {
-		_ = lock.Close()
-		if errors.Is(err, errLocked) {
-			return st, serr.Wrap(err, "path", path)
-		}
-		return st, serr.Wrap(err, "path", path, "op", "lock")
-	}
+	// The bytdb driver opens the engine — and takes its file lock — in
+	// sql.Open itself (its OpenConnector), not lazily on the first query, so
+	// a held file shows up here.
 	dbh, err := sql.Open(bytdbdrv.DriverName, path)
 	if err != nil {
-		_ = lock.Close()
+		if errors.Is(err, bytdb.ErrLocked) {
+			return st, serr.Wrap(errLocked, "path", path)
+		}
 		return st, serr.Wrap(err, "path", path)
 	}
 	// one connection: the store's writes are a few small ones per edit
@@ -111,11 +109,10 @@ func OpenStore(path string) (*Store, error) {
 	for _, ddl := range storeSchema {
 		if _, err = dbh.ExecContext(ctx, ddl); err != nil {
 			_ = dbh.Close()
-			_ = lock.Close()
 			return st, serr.Wrap(err, "path", path, "op", "schema")
 		}
 	}
-	st.db, st.lock = dbh, lock
+	st.db = dbh
 	return st, nil
 }
 
@@ -130,18 +127,17 @@ func (s *Store) Path() string {
 	return s.path
 }
 
-// errLocked is another process holding the store.
+// errLocked is another process holding the store — bytdb.ErrLocked, in words
+// that name the likely culprit for the warning webcmd prints.
 var errLocked = errors.New("the store is in use by another dbc web")
 
-// Close closes the file and lets go of the lock. A memory-only store has
-// nothing to close.
+// Close closes the file, and with it bytdb lets go of the lock. A memory-only
+// store has nothing to close.
 func (s *Store) Close() error {
 	if s.db == nil {
 		return nil
 	}
-	err := s.db.Close()
-	_ = s.lock.Close() // closing the file releases the lock
-	return err
+	return s.db.Close()
 }
 
 // Tabs lists the saved tabs, oldest id first.

@@ -261,7 +261,10 @@ Two resource limits this touches, both real today:
   not* (v0.16.0 takes none), so `dbc web` and a TUI — or two TUIs, as today
   — can both open the same bytdb file, the demo included, and both write its
   WAL. dbc web's own `web.bytdb` takes an advisory lock of its own (see
-  Phase 2's outcome); the connection files are a follow-up.
+  Phase 2's outcome); the connection files are a follow-up. *Since bytdb
+  v0.18.0 it does* (N-049): opening a file locks its `<file>.lock` sidecar,
+  a held connection fails with `db.ErrInUse` (a held demo is dropped with a
+  warning), and `web.bytdb` relies on that lock instead of its own.
 
 ## Security
 
@@ -388,7 +391,7 @@ bad Host → 403, cross-site POST → 403) pass.
 | `hub.go` | one `workspace.Workspace` + one rweb `SSEHub` per browser tab; `launch` runs a Start's Job on a goroutine with a ticker; `deliver` turns landed events into `log`/`busy`/`tick`/`run`/`conn` SSE events; idle release and forget |
 | `api.go` | the JSON handlers, the UTF-16 caret → byte offset conversion |
 | `respond.go` | the envelope and `classify` (Refusal Busy 409 / other 400, `reqError`, `db.ErrCanceled` 200 stopped, else 500 logged) |
-| `store.go`, `lock_*.go` | `web.bytdb`: tabs (buffer, connection) and layout (editor height), with a memory-only fallback |
+| `store.go` | `web.bytdb`: tabs (buffer, connection) and layout (editor height), with a memory-only fallback |
 | `pages/` | the element shell, the result table, the sign-in notice |
 | `static/` | `app.css`, `app.js` (one module: boot/reattach, SSE switch, keys, splitter, autosave) |
 
@@ -428,6 +431,8 @@ real thing:
   rweb. And bytdb takes no file lock (see *Sessions, tabs and
   connections*); `web.bytdb` has its own flock/`LockFileEx` on
   `web.bytdb.lock`, and a second instance runs memory-only with a warning.
+  (Since bytdb v0.18.0, bytdb takes that lock itself and `lock_*.go` is
+  gone — N-049.)
 
 Verified: 16 `web` tests against a real server (the three auth tests,
 Bearer, the login cookie, CSP on every response, run → SSE → result, the

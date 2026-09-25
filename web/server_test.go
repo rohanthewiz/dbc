@@ -3,6 +3,7 @@ package web
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rohanthewiz/bytdb"
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
 )
@@ -569,18 +571,31 @@ func TestStorePersistsAndLocks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// a second process's open finds the file locked, and falls back to memory
+	if err = st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Another process's open finds the file locked, and falls back to memory.
+	// A second OpenStore here would not do: in one process the bytdb driver
+	// shares one engine per path, so it would get the same engine, not the
+	// lock. A bare bytdb.Open is a separate engine taking its own lock on the
+	// sidecar — what a second dbc web's open is.
+	holder, err := bytdb.Open(path)
+	if err != nil {
+		t.Fatalf("the stand-in for another process: %v", err)
+	}
 	second, err := OpenStore(path)
-	if err == nil || second.Persistent() {
-		t.Fatalf("a second open of a held store: err=%v persistent=%v", err, second.Persistent())
+	if !errors.Is(err, errLocked) || second.Persistent() {
+		t.Fatalf("an open of a held store: err=%v persistent=%v", err, second.Persistent())
 	}
 	if err = second.SaveTab(Tab{ID: "x"}); err != nil {
 		t.Fatalf("the memory fallback cannot save: %v", err)
 	}
-
-	if err = st.Close(); err != nil {
+	if err = holder.Close(); err != nil {
 		t.Fatal(err)
 	}
+
+	// the holder gone, the file opens again — with what was saved before
 	st, err = OpenStore(path)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)

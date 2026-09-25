@@ -82,10 +82,26 @@ func Render(r *model.Result, f Format) (string, error) {
 // are separated by a blank line and each keeps its own header row. A single
 // result renders exactly as Render does.
 func RenderAll(rs []*model.Result, f Format) (string, error) {
+	return RenderRun(rs, Seq(len(rs)), len(rs), f)
+}
+
+// RenderRun is RenderAll for a run in which not every statement produced a
+// result — one that stopped at a failure, or went on past some. at[i] is the
+// 1-based position of rs[i] among the run's total statements, and the
+// banners (and HTML headings) count against total, so result 4 of a run of 5
+// in which statement 2 failed still reads "4/5". The shape follows total,
+// not len(rs): a multi-statement run is always a multi-result document, even
+// when only one of its statements made it — a JSON consumer gets the array of
+// envelopes it asked for, not a bare result array. A run of one statement
+// renders exactly as Render does.
+func RenderRun(rs []*model.Result, at []int, total int, f Format) (string, error) {
 	switch {
 	case len(rs) == 0:
 		return "", serr.New("no result to export")
-	case len(rs) == 1:
+	case len(at) != len(rs):
+		return "", serr.New("a position is needed for every result",
+			"results", fmt.Sprint(len(rs)), "positions", fmt.Sprint(len(at)))
+	case total == 1:
 		return Render(rs[0], f)
 	}
 	switch f {
@@ -94,7 +110,7 @@ func RenderAll(rs []*model.Result, f Format) (string, error) {
 		// caller makes one result at a time, so the two can never drift.
 		blocks := make([]string, 0, len(rs))
 		for i, r := range rs {
-			b, err := RenderBlock(r, f, i+1, len(rs))
+			b, err := RenderBlock(r, f, at[i], total)
 			if err != nil {
 				return "", err
 			}
@@ -102,11 +118,21 @@ func RenderAll(rs []*model.Result, f Format) (string, error) {
 		}
 		return strings.Join(blocks, BlockSep), nil
 	case HTML:
-		return htmlDocAll(rs), nil
+		return htmlDocAll(rs, at, total), nil
 	case JSON:
 		return jsonAll(rs)
 	}
 	return "", serr.New("unknown format", "format", string(f))
+}
+
+// Seq returns the positions 1…n, for a run in which every statement produced
+// a result.
+func Seq(n int) []int {
+	at := make([]int, n)
+	for i := range at {
+		at[i] = i + 1
+	}
+	return at
 }
 
 // BlockSep goes between two blocks of a multi-result document in a block
@@ -368,11 +394,11 @@ tbody tr:nth-child(even) { background: ` + theme.Panel + `; }
 tbody tr:hover { background: ` + theme.Sel + `; }
 `
 
-func htmlDoc(r *model.Result) string { return htmlDocAll([]*model.Result{r}) }
+func htmlDoc(r *model.Result) string { return htmlDocAll([]*model.Result{r}, []int{1}, 1) }
 
 // htmlDocAll builds one page with a section per result. With a single result
 // the section is the whole page, as a one-statement export always was.
-func htmlDocAll(rs []*model.Result) string {
+func htmlDocAll(rs []*model.Result, at []int, total int) string {
 	esc := stdhtml.EscapeString
 	b := element.B()
 	b.Html().R(
@@ -384,8 +410,8 @@ func htmlDocAll(rs []*model.Result) string {
 		b.Body().R(
 			element.ForEach2(rs, func(r *model.Result, i int) {
 				heading := "Query Result"
-				if len(rs) > 1 {
-					heading = fmt.Sprintf("Statement %d of %d", i+1, len(rs))
+				if total > 1 {
+					heading = fmt.Sprintf("Statement %d of %d", at[i], total)
 				}
 				b.H2().T(heading)
 				b.PClass("meta").T(esc(fmt.Sprintf("connection: %s · %s",

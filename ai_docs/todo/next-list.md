@@ -33,10 +33,6 @@ ten session docs in `ai_docs/claude_sessions/`
 
 ## Open
 
-- **N-004** · raised `2026-0728-2022-multi-statement-headless` · value low
-  Headless: no `-tx` flag to wrap the whole buffer in one transaction, and no
-  continue-on-error mode. Neither exists today.
-
 - **N-006** · raised `2026-0728-2022-multi-statement-headless` · value low
   A TUI "run all" key that runs the whole buffer through the multi-statement
   path. The TUI runs the statement under the cursor (or the selection) by
@@ -91,7 +87,7 @@ ten session docs in `ai_docs/claude_sessions/`
   A "Delete this conversation" row in the transcript's menu would remove its
   file and clear the pane without saving.
 
-- **N-040** · raised `2026-0925-headless-streaming` · value low
+- **N-040** · raised `2026-0925-1026-headless-streaming-tx-keep-going` · value low
   A headless `dbc script` still collects what it `s.Show`s and renders it
   at the end, while its `s.Print` lines stream to stdout in `text` — so the
   log runs ahead of the results it describes. Streaming them (N-003's
@@ -130,8 +126,36 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-004** · raised `2026-0728-2022-multi-statement-headless` ·
+  closed 2026-09-25, 2026-0925-1026-headless-streaming-tx-keep-going —
+  both exist. `--tx` runs dbc's own `BEGIN` before the
+  buffer and `COMMIT` after it. On the first failure or a Ctrl+C it runs
+  `ROLLBACK` instead (`endTx`, under a context of its own, since Ctrl+C has
+  killed the run's) and notes it on stderr; a failed COMMIT exits 1 as
+  "commit failed". `-k`/`--keep-going` reports each failure as it happens
+  (`statement=2/3`), goes on, and exits 1 at the end with "N of M
+  statements failed". It still stops for a cancel or a dead connection
+  (`Session.Classify` ≠ `FaultNone`). Refused as usage errors (exit 2):
+  `--tx` with `-k` (all-or-nothing, and Postgres rejects everything after an
+  error in a transaction); `--tx` over a buffer with its own transaction
+  control (`txControl`: BEGIN, START TRANSACTION, COMMIT, END, ROLLBACK but
+  not ROLLBACK TO, ABORT, PREPARE TRANSACTION), since a second BEGIN is an
+  error on SQLite and an implicit COMMIT on MySQL; and both flags on
+  `script`/`migrate` (`refuseFile` → `refuseQueryFlags`). MySQL's implicit
+  commit before DDL is documented in the README, not detected.
+  `runStatements` now takes `runHooks` and returns `runOutcome`, which keeps
+  each result's statement position. New `export.RenderRun(rs, at, total, f)`
+  numbers banners and HTML headings by statement, and picks the document's
+  shape by statement count, not by how many succeeded. That also fixed two
+  existing quirks of a failed run: collected banners said `2/2` where the
+  error said `statement 3/5`, and `-t json` for a multi-statement run that
+  failed after one success printed a bare row array instead of the envelope
+  array. Checked through the binary on a scratch SQLite file and a scratch
+  bytdb file: a failed `--tx` run kept 0 rows, a good one kept both.
+
 - **N-003** · raised `2026-0728-2022-multi-statement-headless` ·
-  closed 2026-09-25 — a headless multi-statement query streams: each result
+  closed 2026-09-25, 2026-0925-1026-headless-streaming-tx-keep-going —
+  a headless multi-statement query streams: each result
   is written to stdout as its statement finishes. It streams in every block
   format (text, markdown, csv, tsv), not only `text` — their multi-result
   document is just the blocks joined by a blank line, so writing them one
@@ -143,7 +167,7 @@ written up in the session docs themselves.
   (`main.go`) writes each block and its truncation note together. One
   visible difference when a statement fails: streamed banners count against
   every statement (`2/5`), where the collected shape counts only the ones
-  that ran (`2/2`). Checked through the binary with a 1.7s recursive CTE as
+  that ran (`2/2`) — gone since N-004, which numbers both by statement. Checked through the binary with a 1.7s recursive CTE as
   statement 2: block 1 printed at once, block 2 when it finished; `-t json`
   still printed at the end. Scripts still collect (N-040).
 

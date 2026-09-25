@@ -64,7 +64,8 @@ func TestRunStatementsInOrder(t *testing.T) {
 	if len(stmts) != 3 {
 		t.Fatalf("split gave %d statements, want 3", len(stmts))
 	}
-	results, err := runStatements(context.Background(), sess, stmts, nil)
+	run, err := runStatements(context.Background(), sess, stmts, runHooks{})
+	results := run.results
 	if err != nil {
 		t.Fatalf("runStatements: %v", err)
 	}
@@ -93,7 +94,8 @@ func TestRunStatementsShareOneTransaction(t *testing.T) {
 		ROLLBACK;
 		SELECT count(*) AS n FROM cats WHERE name = 'Ghost';
 	`)
-	results, err := runStatements(context.Background(), sess, stmts, nil)
+	run, err := runStatements(context.Background(), sess, stmts, runHooks{})
+	results := run.results
 	if err != nil {
 		t.Fatalf("runStatements: %v", err)
 	}
@@ -107,7 +109,8 @@ func TestRunStatementsShareOneTransaction(t *testing.T) {
 func TestRunStatementsStopsAtFirstError(t *testing.T) {
 	sess := newTestSession(t)
 	stmts := sqlsplit.Split(`SELECT 1 AS n; SELECT * FROM no_such_table; SELECT 3 AS n`)
-	results, err := runStatements(context.Background(), sess, stmts, nil)
+	run, err := runStatements(context.Background(), sess, stmts, runHooks{})
+	results := run.results
 	if err == nil {
 		t.Fatal("expected an error from the missing table")
 	}
@@ -122,6 +125,185 @@ func TestRunStatementsStopsAtFirstError(t *testing.T) {
 	}
 }
 
+// --keep-going passes over a failed statement: the run goes on, the failure
+// is reported with its position, and each result keeps its statement's
+// place, so the output can say "3/3" rather than "2/2".
+func TestRunStatementsKeepGoing(t *testing.T) {
+	sess := newTestSession(t)
+	stmts := sqlsplit.Split(`SELECT 1 AS n; SELECT * FROM no_such_table; SELECT 3 AS n`)
+	var failedAt []string
+	h := runHooks{keepGoing: true, onFail: func(_ int, err error) {
+		var se *serr.SErr
+		if errors.As(err, &se) {
+			failedAt = append(failedAt, se.FieldsMap()["statement"])
+		}
+	}}
+
+	run, err := runStatements(context.Background(), sess, stmts, h)
+	if err != nil {
+		t.Fatalf("a passed-over failure stopped the run: %v", err)
+	}
+	if run.failed != 1 || !reflect.DeepEqual(failedAt, []string{"2/3"}) {
+		t.Errorf("failed = %d, reported at %v; want 1, at [2/3]", run.failed, failedAt)
+	}
+	if !reflect.DeepEqual(run.at, []int{1, 3}) {
+		t.Errorf("positions = %v, want [1 3]", run.at)
+	}
+	if len(run.results) != 2 || run.results[1].Rows[0][0] != "3" {
+		t.Errorf("results = %v, want statements 1 and 3", run.results)
+	}
+}
+
+// Ctrl+C means stop, --keep-going or not: a canceled run must not go on to
+// the next statement.
+func TestRunStatementsKeepGoingStopsOnCancel(t *testing.T) {
+	sess := newTestSession(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	run, err := runStatements(ctx, sess, sqlsplit.Split("SELECT 1; SELECT 2"), runHooks{keepGoing: true})
+	if !errors.Is(err, db.ErrCanceled) {
+		t.Fatalf("err = %v, want ErrCanceled", err)
+	}
+	if run.failed != 0 {
+		t.Errorf("a cancel was counted as a passed-over failure")
+	}
+}
+
+// With a gap in the run, streamed and collected output still agree: both
+// number each result by its statement.
+func TestBlockStreamMatchesCollectedWithGap(t *testing.T) {
+	sess := newTestSession(t)
+	stmts := sqlsplit.Split(`SELECT 1 AS n; SELECT * FROM no_such_table; SELECT 3 AS n`)
+	var out, notes strings.Builder
+	st := &blockStream{out: &out, notes: &notes, f: export.Text, total: len(stmts)}
+
+	run, err := runStatements(context.Background(), sess, stmts,
+		runHooks{onResult: st.add, keepGoing: true})
+	if err != nil {
+		t.Fatalf("runStatements: %v", err)
+	}
+	want, err := export.RenderRun(run.results, run.at, len(stmts), export.Text)
+	if err != nil {
+		t.Fatalf("RenderRun: %v", err)
+	}
+	if out.String() != want {
+		t.Errorf("streamed output differs from collected:\n%s\n---\n%s", out.String(), want)
+	}
+	if !strings.Contains(want, "-- 3/3 │") {
+		t.Errorf("the last result lost its statement position:\n%s", want)
+	}
+}
+
+// txControl is what keeps --tx from being fought over: every statement that
+// begins or ends a transaction is caught, and the ones that work inside one
+// are let through.
+func TestTxControl(t *testing.T) {
+	cases := map[string]bool{
+		"BEGIN":                          true,
+		"begin immediate":                true,
+		"START TRANSACTION":              true,
+		"COMMIT":                         true,
+		"END":                            true,
+		"ROLLBACK":                       true,
+		"ABORT":                          true,
+		"PREPARE TRANSACTION 'x'":        true,
+		"/* why */ commit":               true,
+		"ROLLBACK TO SAVEPOINT a":        false,
+		"ROLLBACK TO a":                  false,
+		"SAVEPOINT a":                    false,
+		"RELEASE SAVEPOINT a":            false,
+		"PREPARE q AS SELECT 1":          false,
+		"START REPLICA":                  false,
+		"SELECT 'begin'":                 false,
+		"UPDATE t SET commit = 1":        false,
+		"INSERT INTO t VALUES ('abort')": false,
+	}
+	for stmt, want := range cases {
+		if got := txControl(stmt); got != want {
+			t.Errorf("txControl(%q) = %v, want %v", stmt, got, want)
+		}
+	}
+}
+
+// --tx refuses what it could not honor, before anything runs; without --tx
+// a buffer may manage its own transaction, --keep-going or not.
+func TestCheckRunFlags(t *testing.T) {
+	plain := sqlsplit.Split("INSERT INTO t VALUES (1); SELECT 1")
+	ownTx := sqlsplit.Split("BEGIN; INSERT INTO t VALUES (1); COMMIT")
+	cases := []struct {
+		name    string
+		tx      bool
+		keep    bool
+		stmts   []sqlsplit.Stmt
+		wantErr string
+	}{
+		{"no flags", false, false, ownTx, ""},
+		{"--tx on plain statements", true, false, plain, ""},
+		{"--keep-going on its own transaction", false, true, ownTx, ""},
+		{"--tx with --keep-going", true, true, plain, "do not mix"},
+		{"--tx over BEGIN", true, false, ownTx, "statement 1/3 (BEGIN)"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			setBoolFlag(t, &flagTx, c.tx)
+			setBoolFlag(t, &flagKeep, c.keep)
+			err := checkRunFlags(c.stmts)
+			switch {
+			case c.wantErr == "" && err != nil:
+				t.Errorf("refused: %v", err)
+			case c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr)):
+				t.Errorf("err = %v, want one mentioning %q", err, c.wantErr)
+			}
+		})
+	}
+}
+
+// endTx keeps the work of a run that succeeded and drops that of one that
+// did not — including one stopped by Ctrl+C, whose context is already dead
+// when the rollback has to run.
+func TestEndTx(t *testing.T) {
+	count := func(t *testing.T, sess *db.Session) string {
+		t.Helper()
+		res, err := sess.Run(context.Background(), "SELECT count(*) FROM cats WHERE name = 'Tx'")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Rows[0][0]
+	}
+	insert := func(t *testing.T, sess *db.Session) {
+		t.Helper()
+		for _, stmt := range []string{"BEGIN", "INSERT INTO cats (name, breed, age) VALUES ('Tx', 'Tabby', 1)"} {
+			if _, err := sess.Run(context.Background(), stmt); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	t.Run("commit", func(t *testing.T) {
+		sess := newTestSession(t)
+		insert(t, sess)
+		if err := endTx(context.Background(), sess, true); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+		if n := count(t, sess); n != "1" {
+			t.Errorf("found %s committed rows, want 1", n)
+		}
+	})
+	t.Run("rollback after cancel", func(t *testing.T) {
+		sess := newTestSession(t)
+		insert(t, sess)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := endTx(ctx, sess, false); err != nil {
+			t.Fatalf("rollback: %v", err)
+		}
+		if n := count(t, sess); n != "0" {
+			t.Errorf("found %s rows after the rollback, want 0", n)
+		}
+	})
+}
+
 // A result that hit max_rows must announce itself on stderr — a truncated
 // export must not look complete.
 func TestWarnTruncated(t *testing.T) {
@@ -129,21 +311,29 @@ func TestWarnTruncated(t *testing.T) {
 	cut := &model.Result{Rows: [][]string{{"a"}, {"b"}}, Truncated: true}
 
 	var sb strings.Builder
-	warnTruncated(&sb, []*model.Result{full})
+	warnTruncated(&sb, []*model.Result{full}, []int{1}, 1)
 	if sb.Len() != 0 {
 		t.Errorf("untruncated result warned: %q", sb.String())
 	}
 
 	sb.Reset()
-	warnTruncated(&sb, []*model.Result{cut})
+	warnTruncated(&sb, []*model.Result{cut}, []int{1}, 1)
 	if got := sb.String(); !strings.Contains(got, "truncated at 2 rows") {
 		t.Errorf("single-result note = %q, want the row count", got)
 	}
 
 	sb.Reset()
-	warnTruncated(&sb, []*model.Result{full, cut})
+	warnTruncated(&sb, []*model.Result{full, cut}, []int{1, 2}, 2)
 	if got := sb.String(); !strings.Contains(got, "statement 2/2") {
 		t.Errorf("multi-result note = %q, want the statement position", got)
+	}
+
+	// a run that passed over statements 2 and 3 names the statement, not the
+	// result's place among the survivors
+	sb.Reset()
+	warnTruncated(&sb, []*model.Result{full, cut}, []int{1, 4}, 5)
+	if got := sb.String(); !strings.Contains(got, "statement 4/5") {
+		t.Errorf("note after a gap = %q, want statement 4/5", got)
 	}
 }
 
@@ -161,7 +351,8 @@ func TestBlockStreamMatchesCollected(t *testing.T) {
 			`)
 			var out, notes strings.Builder
 			st := &blockStream{out: &out, notes: &notes, f: f, total: len(stmts)}
-			results, err := runStatements(context.Background(), sess, stmts, st.add)
+			run, err := runStatements(context.Background(), sess, stmts, runHooks{onResult: st.add})
+			results := run.results
 			if err != nil {
 				t.Fatalf("runStatements: %v", err)
 			}
@@ -185,7 +376,7 @@ func TestBlockStreamStopsAtFailure(t *testing.T) {
 	var out, notes strings.Builder
 	st := &blockStream{out: &out, notes: &notes, f: export.Text, total: len(stmts)}
 
-	_, err := runStatements(context.Background(), sess, stmts, st.add)
+	_, err := runStatements(context.Background(), sess, stmts, runHooks{onResult: st.add})
 	if err == nil || !strings.Contains(err.Error(), "no_such_table") {
 		t.Fatalf("err = %v, want the missing table", err)
 	}
@@ -212,7 +403,8 @@ func TestBlockStreamRenderFailureStopsRun(t *testing.T) {
 	// HTML is not a block format, so RenderBlock refuses it
 	st := &blockStream{out: &out, notes: &notes, f: export.HTML, total: len(stmts)}
 
-	results, err := runStatements(context.Background(), sess, stmts, st.add)
+	run, err := runStatements(context.Background(), sess, stmts, runHooks{onResult: st.add})
+	results := run.results
 	if err == nil || st.err == nil || err != st.err {
 		t.Fatalf("err = %v, stream err = %v, want the same render failure", err, st.err)
 	}
@@ -326,6 +518,14 @@ func TestScriptLogDestination(t *testing.T) {
 	}
 }
 
+// setBoolFlag overrides a bool flag for one test and restores it after.
+func setBoolFlag(t *testing.T, f *bool, v bool) {
+	t.Helper()
+	old := *f
+	*f = v
+	t.Cleanup(func() { *f = old })
+}
+
 // setFlag overrides a string flag for one test and restores it after.
 func setFlag(t *testing.T, f *string, v string) {
 	t.Helper()
@@ -341,7 +541,7 @@ func TestRunStatementsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := runStatements(ctx, sess, sqlsplit.Split("SELECT 1; SELECT 2"), nil)
+	_, err := runStatements(ctx, sess, sqlsplit.Split("SELECT 1; SELECT 2"), runHooks{})
 	if !errors.Is(err, db.ErrCanceled) {
 		t.Fatalf("err = %v, want ErrCanceled", err)
 	}

@@ -20,6 +20,9 @@
 //	-f, --file path    read the SQL to run headless from a file ("-" = stdin)
 //	-t, --format fmt   headless output format: text|csv|tsv|markdown|html|json
 //	-o, --out file     write headless output to a file instead of stdout
+//	--tx               run a headless query's statements in one transaction:
+//	                   all of them commit, or none do
+//	-k, --keep-going   go on past a failed statement instead of stopping there
 //	--demo engine      which built-in demo starts active: bytdb (default) | sqlite
 //	                   (also $DBC_DEMO; only applies when there is no config file)
 //	--driver name      with --dsn: run against an ad-hoc connection instead of a
@@ -44,7 +47,9 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/rohanthewiz/logger"
 	"github.com/rohanthewiz/serr"
@@ -75,6 +80,8 @@ var (
 	flagDSN     string
 	flagDir     string
 	flagMissing bool
+	flagTx      bool
+	flagKeep    bool
 )
 
 func main() {
@@ -120,6 +127,12 @@ func newCLI() *cli.Command {
 				Usage: "headless output `FORMAT`: text|csv|tsv|markdown|html|json", Destination: &flagFormat},
 			&cli.StringFlag{Name: "out", Aliases: []string{"o"}, Usage: "write headless output to `FILE` instead of stdout",
 				Destination: &flagOut},
+			&cli.BoolFlag{Name: "tx",
+				Usage:       "run the statements in one transaction: all commit, or on the first failure none do",
+				Destination: &flagTx},
+			&cli.BoolFlag{Name: "keep-going", Aliases: []string{"k"},
+				Usage:       "go on past a failed statement; exit 1 at the end if any failed",
+				Destination: &flagKeep},
 			&cli.StringFlag{Name: "demo", Sources: cli.EnvVars("DBC_DEMO"),
 				Usage: "built-in demo `ENGINE` to start on when no config exists: bytdb|sqlite", Destination: &flagDemo},
 			&cli.StringFlag{Name: "driver", Category: "ad-hoc connection",
@@ -179,7 +192,7 @@ func rootAction(ctx context.Context, cmd *cli.Command) error {
 }
 
 func scriptAction(ctx context.Context, cmd *cli.Command) error {
-	refuseFile("script")
+	refuseQueryFlags("script")
 	if cmd.Args().Len() != 1 {
 		usage("usage: dbc script <file.go>")
 	}
@@ -193,7 +206,7 @@ func scriptAction(ctx context.Context, cmd *cli.Command) error {
 }
 
 func migrateAction(ctx context.Context, cmd *cli.Command) error {
-	refuseFile("migrate")
+	refuseQueryFlags("migrate")
 	cfg, mgr := setup(demoForRun)
 	defer mgr.Close()
 	warnConfig(cfg)
@@ -262,11 +275,19 @@ func stdinHasInput() bool {
 	return m&os.ModeNamedPipe != 0 || m.IsRegular()
 }
 
-// refuseFile rejects --file on the subcommands, which read their own input
-// (a script file, migration files) and would otherwise ignore it silently.
-func refuseFile(sub string) {
-	if flagFile != "" {
+// refuseQueryFlags rejects the headless-query flags on the subcommands, which
+// would otherwise ignore them silently: --file, since they read their own
+// input (a script file, migration files), and --tx and --keep-going, since
+// they run their own statements their own way (goose-format migrations bring
+// their own per-file transactions; a script calls s.Exec itself).
+func refuseQueryFlags(sub string) {
+	switch {
+	case flagFile != "":
 		usage(fmt.Sprintf("--file is SQL for a headless query; `dbc %s` does not read it", sub))
+	case flagTx:
+		usage(fmt.Sprintf("--tx wraps a headless query; `dbc %s` does not use it", sub))
+	case flagKeep:
+		usage(fmt.Sprintf("--keep-going is for a headless query; `dbc %s` does not use it", sub))
 	}
 }
 
@@ -356,7 +377,8 @@ func warnConfig(cfg *config.Config) {
 
 // runQueryHeadless runs the SQL buffer given on the command line. It may hold
 // several statements: they run in order on one connection, stopping at the
-// first failure, and every result that made it is still rendered.
+// first failure (or, with --keep-going, going on past it), and every result
+// that made it is still rendered.
 //
 // Rendering takes one of two shapes (see streamsResults):
 //
@@ -364,11 +386,24 @@ func warnConfig(cfg *config.Config) {
 //	           so a long run shows progress — block formats on stdout only
 //	collected  every result is held until the run ends and rendered as one
 //	           document — HTML, JSON, -o, and any single statement
+//
+// With --tx the run is bracketed by dbc's own BEGIN and COMMIT (see
+// checkTx and endTx):
+//
+//	BEGIN ─► stmt 1 ─► stmt 2 ─► … ─► stmt n ─► COMMIT   all kept
+//	            └──────── any failure, or Ctrl+C ─► ROLLBACK   none kept
+//
+// Either way the results that ran are still shown — in a rolled-back run
+// they are what the statements saw, not what the database now holds, and a
+// note on stderr says so.
 func runQueryHeadless(cfg *config.Config, mgr *db.Manager, sql string, f export.Format) {
 	conn := pickConn(cfg)
 	stmts := sqlsplit.Split(sql)
 	if len(stmts) == 0 {
 		usage("nothing to run — the SQL holds no statement")
+	}
+	if err := checkRunFlags(stmts); err != nil {
+		usage(err.Error())
 	}
 	ctx, stop := interruptible()
 	defer stop()
@@ -381,28 +416,140 @@ func runQueryHeadless(cfg *config.Config, mgr *db.Manager, sql string, f export.
 	}
 	defer sess.Close()
 
+	if flagTx {
+		if _, err = sess.Run(ctx, "BEGIN"); err != nil {
+			if errors.Is(err, db.ErrCanceled) {
+				canceled("query")
+			}
+			fail(err, "could not begin the transaction")
+		}
+	}
+
+	hooks := runHooks{keepGoing: flagKeep, onFail: reportFailed}
 	var stream *blockStream
-	var onResult func(i int, r *model.Result) error
 	if streamsResults(f, len(stmts)) {
 		stream = &blockStream{out: os.Stdout, notes: os.Stderr, f: f, total: len(stmts)}
-		onResult = stream.add
+		hooks.onResult = stream.add
 	}
-	results, runErr := runStatements(ctx, sess, stmts, onResult)
+	run, runErr := runStatements(ctx, sess, stmts, hooks)
+
+	// Settle the transaction before anything can exit: fail and canceled
+	// call os.Exit, which skips the deferred Close. (Were it skipped anyway,
+	// the connection closing with the process makes the server roll back.)
+	var txErr error
+	if flagTx {
+		txErr = endTx(ctx, sess, runErr == nil && (stream == nil || stream.err == nil))
+	}
+
 	if stream != nil && stream.err != nil {
 		// the run stopped because output did, not because a statement failed
 		fail(stream.err, "render failed")
 	}
 	// output first: a failing statement 3 does not invalidate results 1 and 2.
 	// A streamed run already wrote them, one at a time.
-	if stream == nil && len(results) > 0 {
-		emit(results, f)
+	if stream == nil && len(run.results) > 0 {
+		emitRun(run.results, run.at, len(stmts), f)
 	}
-	if runErr != nil {
-		if errors.Is(runErr, db.ErrCanceled) {
-			canceled("query")
-		}
+	switch {
+	case runErr != nil && errors.Is(runErr, db.ErrCanceled):
+		canceled("query")
+	case runErr != nil:
 		fail(runErr, "query failed")
+	case txErr != nil:
+		fail(txErr, "commit failed")
+	case run.failed > 0:
+		// every failure was reported as it happened (reportFailed); this is
+		// the count, and the exit status a script can test
+		fail(serr.New(fmt.Sprintf("%d of %d statements failed", run.failed, len(stmts))),
+			"query failed")
 	}
+}
+
+// checkRunFlags refuses the --tx and --keep-going runs that could not do what
+// they promise. It runs before a connection is opened, so a refusal costs
+// nothing and changes nothing.
+//
+//   - --tx with --keep-going: the pair contradicts itself. --tx means all or
+//     nothing, so the first failure has to end the run. And going on would not
+//     even work everywhere: after an error Postgres refuses every statement
+//     until the transaction ends ("current transaction is aborted").
+//   - --tx with a transaction statement in the buffer: dbc's BEGIN is already
+//     open, and a second one is an error on SQLite, only a warning on
+//     Postgres, and on MySQL an implicit COMMIT of everything so far — so the
+//     run would be neither the user's transaction nor dbc's. A buffer that
+//     manages its own transaction does not need --tx.
+func checkRunFlags(stmts []sqlsplit.Stmt) error {
+	if !flagTx {
+		return nil
+	}
+	if flagKeep {
+		return errors.New("--tx and --keep-going do not mix: a transaction is all or nothing, so the first failure ends it")
+	}
+	for i, st := range stmts {
+		if txControl(st.Text) {
+			return fmt.Errorf("--tx opens its own transaction, but statement %d/%d (%s) manages one — drop --tx, or the statement",
+				i+1, len(stmts), strings.ToUpper(sqlsplit.FirstKeyword(st.Text)))
+		}
+	}
+	return nil
+}
+
+// txControl reports whether stmt begins or ends a transaction, by its leading
+// keyword — the statements that would fight --tx for control of the one it
+// opens:
+//
+//	BEGIN, START TRANSACTION           open one (MySQL: commit the open one first)
+//	COMMIT, END                        commit (END is Postgres's COMMIT)
+//	ROLLBACK, ABORT                    roll back (ABORT is Postgres's ROLLBACK)
+//	PREPARE TRANSACTION                Postgres two-phase: ends the transaction
+//
+// SAVEPOINT, RELEASE and ROLLBACK TO work inside a transaction without ending
+// it, so they are fine under --tx. MySQL also commits implicitly before DDL
+// (CREATE, ALTER, DROP …); that cannot be read off the SQL reliably and is
+// left to the --tx documentation rather than guessed at here.
+func txControl(stmt string) bool {
+	switch sqlsplit.FirstKeyword(stmt) {
+	case "begin", "commit", "end", "abort":
+		return true
+	case "rollback":
+		return !sqlsplit.HasKeyword(stmt, "to")
+	case "start", "prepare":
+		return sqlsplit.HasKeyword(stmt, "transaction")
+	}
+	return false
+}
+
+// endTx commits the --tx transaction when the run succeeded (ok), and rolls
+// it back otherwise. It returns only a COMMIT failure: a commit that fails
+// (a deferred constraint, a serialization failure) has kept nothing, and the
+// run must fail with it.
+//
+// The rollback runs under a context of its own. The run's context is dead
+// after Ctrl+C, which is exactly when a rollback matters most. If the
+// rollback itself fails, the deferred Session.Close still discards the
+// connection, and a server rolls back whatever a closed connection left
+// open — so the note says "rolled back" either way.
+func endTx(ctx context.Context, sess *db.Session, ok bool) error {
+	if ok {
+		if _, err := sess.Run(ctx, "COMMIT"); err != nil {
+			return err
+		}
+		return nil
+	}
+	rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if _, err := sess.Run(rbCtx, "ROLLBACK"); err != nil {
+		logger.LogErr(err, "rollback failed — the connection is being dropped, which rolls back too")
+	}
+	fmt.Fprintln(os.Stderr, "note: transaction rolled back — nothing this run changed was kept")
+	return nil
+}
+
+// reportFailed logs a statement that failed in a --keep-going run, as it
+// happens, in the same shape fail uses for the one that ends a run. The
+// error already carries the statement's position.
+func reportFailed(_ int, err error) {
+	logger.LogErr(err, "statement failed")
 }
 
 // pickConn decides which connection a headless run uses: -c, else the
@@ -452,36 +599,69 @@ func addAdHocConn(cfg *config.Config) error {
 	return nil
 }
 
-// runStatements executes stmts in order on one session, stopping at the first
-// failure. It returns the results that completed and the error that stopped
-// it, so the caller can still report the work that got done. A failure in a
-// multi-statement run is tagged with the statement's position.
-//
-// onResult, when not nil, is handed each result (with its 0-based index) as
-// soon as its statement finishes, which is what lets a headless run stream.
-// An error from it stops the run before the next statement and comes back
-// as is — it is the caller's failure, not the statement's, so it is not
-// tagged with a position.
-func runStatements(ctx context.Context, sess *db.Session, stmts []sqlsplit.Stmt,
-	onResult func(i int, r *model.Result) error) ([]*model.Result, error) {
+// runHooks is how a caller shapes a run of statements. The zero value runs
+// every statement in order and stops at the first failure.
+type runHooks struct {
+	// onResult, when not nil, is handed each result (with its 0-based index)
+	// as soon as its statement finishes, which is what lets a headless run
+	// stream. An error from it stops the run before the next statement and
+	// comes back as is — it is the caller's failure, not the statement's, so
+	// it is not tagged with a position.
+	onResult func(i int, r *model.Result) error
+	// keepGoing goes on past a failed statement instead of stopping there
+	// (--keep-going). It still stops for a failure that says the rest cannot
+	// run: a cancel (Ctrl+C means stop) or a dead connection (see
+	// Session.Classify) — every later statement would fail too, or worse, run
+	// on a fresh connection without the state the earlier ones set up.
+	keepGoing bool
+	// onFail, when not nil, is told of each failure keepGoing passes over,
+	// with the error already tagged with the statement's position.
+	onFail func(i int, err error)
+}
 
-	results := make([]*model.Result, 0, len(stmts))
+// runOutcome is what a run of statements produced.
+type runOutcome struct {
+	results []*model.Result
+	at      []int // at[i] is results[i]'s 1-based position among the statements
+	failed  int   // statements that failed and were passed over (keepGoing)
+}
+
+// runStatements executes stmts in order on one session, as h says (see
+// runHooks). It returns the results that completed, with their positions,
+// and the error that stopped the run, so the caller can still report the
+// work that got done. A failure in a multi-statement run is tagged with the
+// statement's position.
+func runStatements(ctx context.Context, sess *db.Session, stmts []sqlsplit.Stmt,
+	h runHooks) (runOutcome, error) {
+
+	out := runOutcome{
+		results: make([]*model.Result, 0, len(stmts)),
+		at:      make([]int, 0, len(stmts)),
+	}
 	for i, st := range stmts {
 		res, err := sess.Run(ctx, st.Text)
 		if err != nil {
 			if len(stmts) > 1 {
 				err = serr.Wrap(err, "statement", fmt.Sprintf("%d/%d", i+1, len(stmts)))
 			}
-			return results, err
+			if !h.keepGoing || errors.Is(err, db.ErrCanceled) || sess.Classify(err) != db.FaultNone {
+				return out, err
+			}
+			out.failed++
+			if h.onFail != nil {
+				h.onFail(i, err)
+			}
+			continue
 		}
-		results = append(results, res)
-		if onResult != nil {
-			if err = onResult(i, res); err != nil {
-				return results, err
+		out.results = append(out.results, res)
+		out.at = append(out.at, i+1)
+		if h.onResult != nil {
+			if err = h.onResult(i, res); err != nil {
+				return out, err
 			}
 		}
 	}
-	return results, nil
+	return out, nil
 }
 
 // streamsResults decides whether a headless query writes each result as it
@@ -495,10 +675,9 @@ func runStatements(ctx context.Context, sess *db.Session, stmts []sqlsplit.Stmt,
 //   - a block format (export.Streamable): HTML and JSON are one document
 //     wrapped around every result, so they cannot close until the last one
 //
-// A streamed document is byte for byte what the collected one would be for a
-// run that succeeds. When a statement fails, the banners already written
-// count against every statement ("2/5"), where the collected shape counts
-// only the ones that made it ("2/2") — the stream could not know yet.
+// A streamed document is byte for byte what the collected one would be: both
+// number each result by its statement's place in the whole run ("2/5"), so a
+// run that stops early or passes over a failure reads the same either way.
 func streamsResults(f export.Format, stmts int) bool {
 	return stmts > 1 && flagOut == "" && export.Streamable(f)
 }
@@ -541,11 +720,18 @@ func (b *blockStream) add(i int, r *model.Result) error {
 
 // emit renders the results to stdout, or to the --out file when one was given.
 func emit(results []*model.Result, f export.Format) {
-	out, err := export.RenderAll(results, f)
+	emitRun(results, export.Seq(len(results)), len(results), f)
+}
+
+// emitRun is emit for a run of total statements in which not every one
+// produced a result: at[i] is results[i]'s 1-based position, so the banners
+// and notes name the statement they are about (see export.RenderRun).
+func emitRun(results []*model.Result, at []int, total int, f export.Format) {
+	out, err := export.RenderRun(results, at, total, f)
 	if err != nil {
 		fail(err, "render failed")
 	}
-	warnTruncated(os.Stderr, results)
+	warnTruncated(os.Stderr, results, at, total)
 	if flagOut == "" {
 		fmt.Print(out)
 		return
@@ -568,11 +754,13 @@ func emit(results []*model.Result, f export.Format) {
 // Multi-statement banners and JSON envelopes carry the flag themselves, but a
 // single-statement CSV/TSV/text export would otherwise look complete while
 // quietly missing rows — and stderr keeps the note out of the data stream.
-func warnTruncated(w io.Writer, results []*model.Result) {
+//
+// at and total place each result in its run, as for emitRun.
+func warnTruncated(w io.Writer, results []*model.Result, at []int, total int) {
 	for i, r := range results {
 		pos := ""
-		if len(results) > 1 {
-			pos = fmt.Sprintf("%d/%d", i+1, len(results))
+		if total > 1 {
+			pos = fmt.Sprintf("%d/%d", at[i], total)
 		}
 		noteTruncated(w, r, pos)
 	}

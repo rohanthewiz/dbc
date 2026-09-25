@@ -291,3 +291,51 @@ func TestRenderBlockRefusesDocumentFormats(t *testing.T) {
 		}
 	}
 }
+
+// A run that passed over a statement numbers each result by its statement,
+// in every format that shows positions.
+func TestRenderRunKeepsStatementPositions(t *testing.T) {
+	rs := []*model.Result{
+		query("demo", "SELECT 1", []string{"n"}, [][]string{{"1"}}),
+		query("demo", "SELECT 3", []string{"n"}, [][]string{{"3"}}),
+	}
+	at := []int{1, 3}
+	for f, want := range map[Format]string{
+		Text:     "-- 3/3 │",
+		Markdown: "**3/3**",
+		HTML:     "Statement 3 of 3",
+	} {
+		out, err := RenderRun(rs, at, 3, f)
+		if err != nil {
+			t.Fatalf("RenderRun(%s): %v", f, err)
+		}
+		if !strings.Contains(out, want) {
+			t.Errorf("%s: missing %q:\n%s", f, want, out)
+		}
+		if strings.Contains(out, "2/2") || strings.Contains(out, "2 of 2") {
+			t.Errorf("%s: numbered by result, not statement:\n%s", f, out)
+		}
+	}
+}
+
+// The document's shape follows the run, not how much of it succeeded: one
+// surviving result of a three-statement run is still an envelope in JSON,
+// so a consumer's parser does not depend on how many statements failed.
+func TestRenderRunShapeFollowsTotal(t *testing.T) {
+	r := query("demo", "SELECT 1", []string{"n"}, [][]string{{"1"}})
+	out, err := RenderRun([]*model.Result{r}, []int{1}, 3, JSON)
+	if err != nil {
+		t.Fatalf("RenderRun: %v", err)
+	}
+	var envs []map[string]any
+	if err = json.Unmarshal([]byte(out), &envs); err != nil || len(envs) != 1 || envs[0]["statement"] != "SELECT 1" {
+		t.Errorf("want one statement envelope, got %s (err %v)", out, err)
+	}
+}
+
+func TestRenderRunNeedsAPositionPerResult(t *testing.T) {
+	r := query("demo", "SELECT 1", []string{"n"}, [][]string{{"1"}})
+	if _, err := RenderRun([]*model.Result{r, r}, []int{1}, 2, Text); err == nil {
+		t.Fatal("expected an error for a missing position")
+	}
+}

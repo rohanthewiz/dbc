@@ -442,6 +442,8 @@ Everything works without the TUI, for cron jobs and shell pipelines:
 | `-t`, `--format FORMAT` | `text` (default), `csv`, `tsv`, `markdown`, `html`, `json` |
 | `-o`, `--out FILE` | write the output to a file instead of stdout |
 | `-c`, `--conn NAME` | which connection to run on |
+| `--tx` | run the statements in one transaction: all commit, or none do |
+| `-k`, `--keep-going` | go on past a failed statement instead of stopping there |
 | `--config FILE` | config file (default `./dbc.toml`, then `~/.config/dbc/config.toml`) |
 | `--demo bytdb\|sqlite` | which demo starts active when there is no config (also `$DBC_DEMO`) |
 | `--driver NAME --dsn STRING` | a one-off connection that is in no config file |
@@ -459,7 +461,8 @@ says to use `-t csv` rather than looking for a file named `csv`.
 
 ### Scripts headless
 
-`-t` and `-o` apply to scripts too (`-f` does not: a script is its own input):
+`-t` and `-o` apply to scripts too (`-f` does not, since a script is its own
+input; neither do `--tx` and `-k`, since a script runs its statements itself):
 
 ```sh
 ./dbc -t json script scripts/loop_params.go        # one JSON array on stdout
@@ -501,10 +504,19 @@ Siamese     2
 Maine Coon  2
 ```
 
+In `text`, `markdown`, `csv` and `tsv` on stdout, each result is written as
+soon as its statement finishes, so a long run shows its progress. `html` and
+`json` are one document around every result, and `-o` writes one file, so
+those wait for the run to end. Either way the output is the same.
+
 A run stops at the first statement that fails — later statements are skipped —
-but the results collected before it are still written, and the error names the
-one that broke (`statement=2/3`). Exit status is 1 for a failure, 130 for a
-Ctrl+C.
+but the results before it are still written, and the error names the one that
+broke (`statement=2/3`). Exit status is 1 for a failure, 130 for a Ctrl+C.
+
+With `-k` (`--keep-going`) a failed statement is reported on stderr as it
+happens and the run goes on to the next. Each result keeps its statement's
+number (`-- 3/3` after a failed `2/3`), and the run exits 1 at the end if any
+statement failed. A Ctrl+C or a lost connection still stops it.
 
 The statements share one pinned database session, so session-scoped SQL means
 what it says across them: nothing is committed until you say so in
@@ -515,7 +527,19 @@ what it says across them: nothing is committed until you say so in
 
 and `SET`, `PRAGMA`, and temp tables set up by one statement are still there
 for the next. Nothing is wrapped in a transaction for you — without a `BEGIN`
-each statement commits on its own.
+each statement commits on its own — unless you ask with `--tx`:
+
+```sh
+./dbc --tx -f backfill.sql
+```
+
+dbc then runs `BEGIN` first and `COMMIT` after the last statement, and on the
+first failure (or a Ctrl+C) it runs `ROLLBACK` instead and says so on stderr. The
+results that ran are still shown, but none of their changes are kept. `--tx`
+refuses a buffer that manages its own transaction (`BEGIN`, `COMMIT`,
+`ROLLBACK`, `START TRANSACTION`, …) and does not mix with `-k`. On MySQL, DDL
+(`CREATE`, `ALTER`, `DROP`, …) commits implicitly, so keep it out of a `--tx`
+run there.
 
 Each format keeps its own shape across statements:
 

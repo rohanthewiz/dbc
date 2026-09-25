@@ -13,8 +13,8 @@ func TestTablesQueryPerDriver(t *testing.T) {
 		driver string
 		want   string // a fragment only that driver's catalog query has
 	}{
-		{"postgres", "pg_catalog"},
-		{"pg", "pg_catalog"},
+		{"postgres", "pg_matviews"},
+		{"pg", "pg_matviews"},
 		{"mysql", "DATABASE()"},
 		{"mariadb", "DATABASE()"},
 		{"sqlite", "sqlite_master"},
@@ -37,6 +37,10 @@ func TestTablesQueryPerDriver(t *testing.T) {
 				t.Errorf("TablesQuery(%q) is missing the %s column:\n%s", c.driver, col, q)
 			}
 		}
+	}
+	// bytdb has no pg_matviews, so the Postgres query would fail there
+	if q, _ := TablesQuery("bytdb"); strings.Contains(q, "pg_matviews") {
+		t.Errorf("bytdb's catalog query reads pg_matviews:\n%s", q)
 	}
 	if _, err := TablesQuery("cassandra"); err == nil {
 		t.Error("an unknown driver should not yield a catalog query")

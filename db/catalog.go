@@ -24,11 +24,35 @@ func TablesQuery(driver string) (string, error) {
 		return "", err
 	}
 	switch drv {
-	case "pgx", bytdbdrv.DriverName:
+	case "pgx":
+		// information_schema.tables is the SQL standard's view, and the
+		// standard has no materialized views, so Postgres leaves them out
+		// of it; pg_matviews supplies them. Their type contains VIEW, so
+		// TableRefs and the sidebar both read them as views.
+		//
+		// information_schema.tables shows only relations the user holds
+		// some privilege on, while pg_matviews shows all of them; the
+		// has_table_privilege filter keeps the two halves to the same
+		// rule. A matview's only useful privilege is SELECT. The name is
+		// quoted, as that function parses its text argument as SQL.
+		//
+		// ORDER BY after a UNION applies to the whole result, by the
+		// first branch's column names.
+		return `SELECT table_schema, table_name, table_type
+FROM information_schema.tables
+WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+UNION ALL
+SELECT schemaname, matviewname, 'MATERIALIZED VIEW'
+FROM pg_catalog.pg_matviews
+WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+  AND has_table_privilege(quote_ident(schemaname) || '.' || quote_ident(matviewname), 'SELECT')
+ORDER BY table_schema, table_name`, nil
+	case bytdbdrv.DriverName:
 		// The two catalog schemas are always there and never what was
 		// meant. bytdb serves the same information_schema.tables, views
-		// included (listed as 'VIEW', as Postgres does), so one query
-		// covers both.
+		// included (listed as 'VIEW', as Postgres does). It has no
+		// materialized views, and no pg_matviews, so it keeps the plain
+		// query rather than sharing Postgres's.
 		return `SELECT table_schema, table_name, table_type
 FROM information_schema.tables
 WHERE table_schema NOT IN ('pg_catalog', 'information_schema')

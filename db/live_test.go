@@ -131,6 +131,9 @@ func TestLiveColumnsPostgres(t *testing.T) {
 		// the same table name in a second schema must not merge into the first
 		`CREATE TABLE dbc_live2.cats (id int, owner text)`,
 		`CREATE VIEW dbc_live.old_cats AS SELECT id, name FROM dbc_live.cats`,
+		// relkind 'm': information_schema.tables leaves it out, so it is
+		// found only through TablesQuery's pg_matviews half (N-042)
+		`CREATE MATERIALIZED VIEW dbc_live.cat_names AS SELECT id, name FROM dbc_live.cats`,
 		// relkind 'p' for the parent, 'r' for the partition
 		`CREATE TABLE dbc_live.events (id bigint, at date) PARTITION BY RANGE (at)`,
 		`CREATE TABLE dbc_live.events_2026 PARTITION OF dbc_live.events
@@ -144,6 +147,7 @@ func TestLiveColumnsPostgres(t *testing.T) {
 		FROM dbc_live.cats c
 		JOIN dbc_live2.cats o USING (id)
 		JOIN dbc_live.old_cats v USING (id)
+		JOIN dbc_live.cat_names n USING (id)
 		JOIN dbc_live.events e USING (id)
 		JOIN dbc_live."MixedCase" m USING (id)`)
 
@@ -154,8 +158,25 @@ func TestLiveColumnsPostgres(t *testing.T) {
 		"tags text[]", "mood dbc_live.mood", "born timestamp with time zone")
 	wantCols(t, got, "dbc_live2.cats", "id integer", "owner text")
 	wantCols(t, got, "dbc_live.old_cats", "id integer", "name character varying(80)")
+	wantCols(t, got, "dbc_live.cat_names", "id integer", "name character varying(80)")
 	wantCols(t, got, "dbc_live.events", "id bigint", "at date")
 	wantCols(t, got, "dbc_live.MixedCase", "id integer", "Weird Col text")
+
+	// the sidebar and the assistant both read the matview as a view
+	q, _ := TablesQuery("postgres")
+	res, err := mgr.Run("live", q)
+	if err != nil {
+		t.Fatalf("catalog: %v", err)
+	}
+	var matview *TableRef
+	for _, r := range TableRefs(res.Rows) {
+		if r.Schema == "dbc_live" && r.Name == "cat_names" {
+			matview = &r
+		}
+	}
+	if matview == nil || !matview.View {
+		t.Errorf("dbc_live.cat_names listed as %+v, want a view (catalog: %v)", matview, res.Rows)
+	}
 }
 
 func TestLiveColumnsMySQL(t *testing.T) {

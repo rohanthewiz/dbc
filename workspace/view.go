@@ -119,3 +119,28 @@ func Project(src *model.Result, rows, cols []int) *model.Result {
 	}
 	return out
 }
+
+// WidestNumeric is the widest display value of numeric column c over EVERY
+// row of r — for a column export.NumericColumns vouched for.
+//
+// Auto-sizing measures only a grid's first few hundred rows (a text column's
+// width costs a grapheme walk per value, and a huge result should not pay
+// that on arrival), which is fine for text, whose width varies without
+// pattern, and wrong for numbers, which grow: an id column sized by rows
+// 1–500 shows "10…" at row 1,000. A number's display text is plain ASCII,
+// so its width is len() — no decoding — and scanning every row is a length
+// read per cell. NULLs count as their "NULL" text, which is how both grids
+// draw them.
+//
+// The widest text is measured rather than derived from the column's
+// min/max: a float's text is not monotonic in its value (0.123456789 is
+// wider than 1000), and a length scan is as cheap as a comparison.
+func WidestNumeric(r *model.Result, c int) int {
+	w := 0
+	for _, row := range r.Rows {
+		if c < len(row) {
+			w = max(w, len(row[c]))
+		}
+	}
+	return w
+}

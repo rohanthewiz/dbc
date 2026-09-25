@@ -46,7 +46,8 @@ import (
 const gridPage = 1000
 
 // Auto-sizing mirrors the TUI's grid (tui/grid.go): measure the header and
-// the first widthSample values, and cap a column at maxColWidth characters
+// the first widthSample values (every value, for a numeric column — see
+// workspace.WidestNumeric), and cap a column at maxColWidth characters
 // so one long TEXT value cannot push every other column off screen — the
 // full value is a double-click away, and a double-click on the header
 // border fits past the cap.
@@ -58,10 +59,14 @@ const (
 // resultView is a tab's cache of its last result as the grid sees it. The
 // order is re-sorted only when the sort changes, not on every page fetch —
 // sorting 50,000 rows per scroll step would be the slow part of scrolling.
+// The column widths are cached for the same reason: a numeric column is
+// measured from every row, which is cheap once and wasteful per page.
 type resultView struct {
 	res     *model.Result
 	seq     int
 	numeric []bool
+	widths  []int // auto widths, capped (colWidths)
+	content []int // content widths, uncapped
 	sortCol int
 	desc    bool
 	order   []int
@@ -80,7 +85,9 @@ func (t *tab) view(sortCol int, desc bool) *resultView {
 	v := &t.rv
 	if v.res != r {
 		t.rvSeq++
-		*v = resultView{res: r, seq: t.rvSeq, numeric: export.NumericColumns(r), sortCol: -2}
+		num := export.NumericColumns(r)
+		*v = resultView{res: r, seq: t.rvSeq, numeric: num, sortCol: -2}
+		v.widths, v.content = colWidths(r, num)
 	}
 	if sortCol < -1 || sortCol >= len(r.Columns) {
 		sortCol = -1
@@ -147,7 +154,7 @@ func (s *Server) handleResult(ctx rweb.Context) error {
 		Total: total, Rows: len(r.Rows), Sort: v.sortCol, Desc: v.desc,
 		From: from, Cells: make([][]*string, 0, to-from),
 	}
-	pg.Widths, pg.Content = colWidths(r)
+	pg.Widths, pg.Content = v.widths, v.content
 	for d := from; d < to; d++ {
 		ri := v.order[d]
 		row := make([]*string, len(r.Columns))
@@ -169,14 +176,20 @@ func isNull(r *model.Result, row, col int) bool {
 
 // colWidths measures each column as the TUI's grid does: the header plus
 // room for the sort arrow, and the first widthSample values with newlines
-// flattened to one character. auto is capped at maxColWidth, content not.
-func colWidths(r *model.Result) (auto, content []int) {
+// flattened to one character — or every value of a numeric column (numeric
+// is export.NumericColumns(r)), since numbers grow down a result. auto is
+// capped at maxColWidth, content not.
+func colWidths(r *model.Result, numeric []bool) (auto, content []int) {
 	auto, content = make([]int, len(r.Columns)), make([]int, len(r.Columns))
 	n := min(len(r.Rows), widthSample)
 	for c, name := range r.Columns {
 		w := utf8.RuneCountInString(name) + 2
-		for i := 0; i < n; i++ {
-			w = max(w, utf8.RuneCountInString(r.Rows[i][c]))
+		if c < len(numeric) && numeric[c] {
+			w = max(w, workspace.WidestNumeric(r, c))
+		} else {
+			for i := 0; i < n; i++ {
+				w = max(w, utf8.RuneCountInString(r.Rows[i][c]))
+			}
 		}
 		content[c], auto[c] = w, min(w, maxColWidth)
 	}

@@ -101,9 +101,11 @@ const minColWidth = 3
 // dragging — but finite, so a runaway drag cannot build absurd layouts.
 const maxUserWidth = 400
 
-// widthSample bounds how many rows are measured to size the columns. Sizing
-// by the first few hundred is indistinguishable in practice and keeps a huge
-// result from costing a full scan on arrival.
+// widthSample bounds how many rows are measured to size a text column.
+// Sizing by the first few hundred is indistinguishable in practice and keeps
+// a huge result from costing a full scan on arrival. Numeric columns are the
+// exception — they grow down the result, and are measured from every row
+// (workspace.WidestNumeric).
 const widthSample = 500
 
 func newGrid() *grid {
@@ -153,10 +155,17 @@ func (g *grid) SetResult(r *model.Result, displayCap int) {
 }
 
 // contentWidth measures result column c: its header (plus room for the sort
-// arrow) and the first widthSample values, uncapped. Auto-sizing caps it;
-// a double-click on the border (fit) does not.
+// arrow) and the first widthSample values, uncapped — or every value, for a
+// numeric column. Auto-sizing caps it; a double-click on the border (fit)
+// does not.
 func (g *grid) contentWidth(c int) int {
 	w := width(g.res.Columns[c]) + 2 // room for the sort arrow
+	if c < len(g.numeric) && g.numeric[c] {
+		// numbers are ASCII, never multi-line: a byte length over every row
+		// is exact and cheap, where the sampled loop below would miss a
+		// wider value past row widthSample
+		return max(minColWidth, w, workspace.WidestNumeric(g.res, c))
+	}
 	for i := 0; i < min(len(g.res.Rows), widthSample); i++ {
 		if c < len(g.res.Rows[i]) {
 			w = max(w, width(flatten(g.res.Rows[i][c])))

@@ -74,6 +74,25 @@ func TestGridSortsOnTheServer(t *testing.T) {
 	}
 }
 
+// A numeric column is sized from every row — "1000" is the 1,000th — while
+// a text column is still sized from the first widthSample rows.
+func TestGridSizesNumericColumnsFromEveryRow(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	e.runAndWait(id, s, `WITH RECURSIVE n(v) AS (SELECT 1 UNION ALL SELECT v + 1 FROM n WHERE v < 1000)
+SELECT v, CASE WHEN v <= 500 THEN 'x' ELSE 'a much longer text value' END AS t FROM n`)
+	pg := e.page(id, "from=0&n=10")
+	if pg.Rows != 1000 || !pg.Numeric[0] || pg.Numeric[1] {
+		t.Fatalf("rows %d numeric %v", pg.Rows, pg.Numeric)
+	}
+	if pg.Widths[0] != 4 || pg.Content[0] != 4 {
+		t.Errorf("numeric width = %d/%d, want 4", pg.Widths[0], pg.Content[0])
+	}
+	if pg.Widths[1] != 3 {
+		t.Errorf("text width = %d, want 3 (header + arrow; sampled rows are \"x\")", pg.Widths[1])
+	}
+}
+
 // Pages are windows of display rows, and max_display_rows caps them — it
 // bounds drawing, not what a whole-result copy takes.
 func TestGridPagesAndDisplayCap(t *testing.T) {

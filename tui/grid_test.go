@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -297,5 +298,28 @@ func TestGridLayoutSurvivesARerun(t *testing.T) {
 	g.SetResult(&model.Result{Columns: []string{"id", "name"}, Rows: [][]string{{"1", "a"}}, Raw: [][]any{{1, "a"}}}, 0)
 	if g.Cols() != 2 || g.HiddenCount() != 0 || g.userW[0] != 0 || g.cur.col != 0 {
 		t.Errorf("different columns reset the layout: cols %v cur %v", g.cols, g.cur)
+	}
+}
+
+// A numeric column is sized from every row, since numbers grow down a
+// result: an id that reaches four digits at row 1,000 must not show "10…".
+// A text column is still sized from the first widthSample rows.
+func TestGridSizesNumericColumnsFromEveryRow(t *testing.T) {
+	r := &model.Result{Columns: []string{"n", "t"}}
+	for i := 1; i <= 1000; i++ {
+		s, txt := fmt.Sprint(i), "x"
+		if i > widthSample {
+			txt = "a much longer text value"
+		}
+		r.Rows = append(r.Rows, []string{s, txt})
+		r.Raw = append(r.Raw, []any{int64(i), txt})
+	}
+	g := newGrid()
+	g.SetResult(r, 0)
+	if g.widths[0] != 4 {
+		t.Errorf("numeric width = %d, want 4 (\"1000\" at the last row)", g.widths[0])
+	}
+	if g.widths[1] != 3 {
+		t.Errorf("text width = %d, want 3 (header + arrow; sampled rows are \"x\")", g.widths[1])
 	}
 }

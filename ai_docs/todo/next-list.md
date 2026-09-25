@@ -50,11 +50,6 @@ ten session docs in `ai_docs/claude_sessions/`
   Phase 6) that are gone after the session, so a regression in the page's
   JavaScript is caught only by hand. Phase 6's run found three real bugs
   (a disposed Monaco model, a console rejection, a rename redrawn away).
-- **N-052** · raised `2026-0925-1554-dbc-web-phases-3-4` · value low
-  Column auto-widths are measured from the first 500 rows (TUI grid and web
-  grid alike), so a numeric column that widens later shows "10…" at row
-  1,000. For numeric columns the widest value is cheap to know (min/max);
-  size those from every row.
 - **N-053** · raised `2026-0925-1641-dbc-web-phases-5-6` · value low
   A macOS app wrapper for `dbc web`, the way gonotes has one — the plan's
   optional last item of Phase 6, left out: `dbc web` and the cats "dbc —
@@ -105,6 +100,16 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-052** · raised `2026-0925-1554-dbc-web-phases-3-4` ·
+  closed 2026-09-25 — a numeric column (`export.NumericColumns`) is now sized
+  from every row, by `workspace.WidestNumeric`: a `len()` per cell, since a
+  number's text is ASCII. Text columns keep the 500-row sample. It measures
+  the widest text rather than using min/max, because a float's text is not
+  monotonic in its value (`0.123456789` is wider than `1000`). The web grid
+  now caches its widths per result in `resultView` rather than measuring on
+  every page fetch. `TestGridSizesNumericColumnsFromEveryRow` in `tui` and
+  in `web` (1,000 rows: `1000` gets width 4, a text value past row 500 is
+  still unmeasured); both fail on the old code.
 - **N-050** · raised `2026-0925-1451-dbc-web-phase2-skeleton` ·
   closed 2026-09-25, 2026-0925-1656-rweb-ssehub-race — rweb's `SSEHub` bumped each
   client's drop counter under its read lock, so concurrent broadcasts

@@ -286,9 +286,40 @@ func (m *Model) currentStmtRange() [2]int {
 	return [2]int{all[i].Start, all[i].End}
 }
 
+// allStmts is what Ctrl+Shift+R executes: every statement in the buffer,
+// whatever the caret or selection says. A one-statement buffer is tagged
+// "query", as Ctrl+R tags it, since "all" of one says nothing more.
+func (m *Model) allStmts() (stmts []string, tag string) {
+	for _, p := range sqlsplit.Split(m.editor.Text()) {
+		stmts = append(stmts, p.Text)
+	}
+	switch len(stmts) {
+	case 0:
+		return nil, ""
+	case 1:
+		return stmts, "query"
+	}
+	return stmts, fmt.Sprintf("all %d statements", len(stmts))
+}
+
 // runQuery is Ctrl+R.
 func (m *Model) runQuery() tea.Cmd {
 	stmts, tag := m.stmtsToRun()
+	return m.runStmts(stmts, tag)
+}
+
+// runAll is Ctrl+Shift+R (Alt+R where the terminal cannot tell Ctrl+Shift+R
+// from Ctrl+R). It is a second door onto the path a multi-statement
+// selection already takes — in order, on the pinned session, stopping at the
+// first failure, last result shown — so Ctrl+R keeps its one-statement
+// default and a scratchpad of unrelated queries is never run by accident.
+func (m *Model) runAll() tea.Cmd {
+	stmts, tag := m.allStmts()
+	return m.runStmts(stmts, tag)
+}
+
+// runStmts records and runs what Ctrl+R or Ctrl+Shift+R picked.
+func (m *Model) runStmts(stmts []string, tag string) tea.Cmd {
 	if len(stmts) == 0 {
 		m.log(logWarn, "nothing to run — type a query first")
 		return nil

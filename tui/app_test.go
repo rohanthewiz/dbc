@@ -52,6 +52,68 @@ func TestStatementUnderCaret(t *testing.T) {
 	}
 }
 
+// Ctrl+Shift+R (and its Alt+R twin) runs the whole buffer in order, wherever
+// the caret sits, and shows the last result.
+func TestRunAllRunsTheWholeBuffer(t *testing.T) {
+	for _, chord := range []string{"ctrl+shift+r", "alt+r"} {
+		t.Run(chord, func(t *testing.T) {
+			m := newTestModel(t)
+			m.editor.SetText("CREATE TEMP TABLE ra (x INT);\nINSERT INTO ra VALUES (5);\nSELECT x AS y FROM ra;")
+			m.editor.move(pos{0, 0}, false) // caret on the first statement
+			key(t, m, chord)
+			if m.lastErr != "" {
+				t.Fatalf("lastErr = %s", m.lastErr)
+			}
+			if m.lastRes == nil || m.lastRes.Columns[0] != "y" || m.lastRes.Rows[0][0] != "5" {
+				t.Fatalf("want the last statement's result, got %+v", m.lastRes)
+			}
+			log := logText(m)
+			if !strings.Contains(log, "running all 3 statements") ||
+				!strings.Contains(log, "3 statements completed") {
+				t.Errorf("log: %s", log)
+			}
+		})
+	}
+}
+
+// A failure stops run-all there, naming the statement; later ones never run.
+func TestRunAllStopsAtTheFirstFailure(t *testing.T) {
+	m := newTestModel(t)
+	m.editor.SetText("SELECT 1 AS a;\nSELEC nonsense;\nCREATE TEMP TABLE never (x INT);")
+	key(t, m, "ctrl+shift+r")
+	if !strings.Contains(m.lastErr, "2/3") {
+		t.Errorf("lastErr should name statement 2/3: %q", m.lastErr)
+	}
+	m.editor.SetText("SELECT count(*) FROM temp.sqlite_master WHERE name = 'never'")
+	key(t, m, "ctrl+r")
+	if m.lastRes == nil || m.lastRes.Rows[0][0] != "0" {
+		t.Errorf("the statement after the failure ran: %+v", m.lastRes)
+	}
+}
+
+// The editor menu offers Run all only when it would run more than Run does.
+func TestEditorMenuRunAll(t *testing.T) {
+	m := newTestModel(t)
+	m.editor.SetText("SELECT 1 AS a")
+	frame(m)
+	e := m.lay.editor
+	rightClick(t, m, e.X+10, e.Y+1)
+	x, y := findText(t, frame(m), "▶ Run all")
+	click(t, m, x, y)
+	if !strings.Contains(logText(m), "the buffer holds one statement") {
+		t.Errorf("log: %s", logText(m))
+	}
+
+	m.editor.SetText("SELECT 1 AS a;\nSELECT 2 AS b;")
+	m.editor.move(pos{0, 0}, false)
+	rightClick(t, m, e.X+10, e.Y+1)
+	x, y = findText(t, frame(m), "▶ Run all 2 statements")
+	click(t, m, x, y)
+	if m.lastRes == nil || m.lastRes.Columns[0] != "b" {
+		t.Errorf("Run all should end on the second statement: %+v", m.lastRes)
+	}
+}
+
 // BEGIN, work, and COMMIT across three runs land on one pinned connection.
 func TestSessionCarriesAcrossRuns(t *testing.T) {
 	m := newTestModel(t)

@@ -202,7 +202,7 @@ func (m *Model) startupLog() {
 	} else if m.cfg.Path != "" {
 		m.logf(logInfo, "loaded config from %s", m.cfg.Path)
 	}
-	m.log(logMuted, "keys: ^R run · ^K stop · ^A assistant · ^E export · ^P history · ^O scripts · "+
+	m.log(logMuted, "keys: ^R run · ^⇧R/⌥R run all · ^K stop · ^A assistant · ^E export · ^P history · ^O scripts · "+
 		"^T tables · ^L conns · Tab focus · y/Y/c copy · Enter inspect · -/+ hide/show column · ^Q quit")
 	m.log(logMuted, "mouse: click to focus · drag to select · right-click for menus · "+
 		"drag borders to resize · hold Shift (⌥ on macOS) to select terminal text")
@@ -348,6 +348,11 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 	switch s {
 	case "ctrl+r":
 		return m.runQuery()
+	case "ctrl+shift+r", "alt+r":
+		// Ctrl+Shift+R arrives as itself only where the terminal speaks the
+		// kitty keyboard protocol; elsewhere it is plain Ctrl+R, so Alt+R is
+		// the door that works everywhere Option/Alt sends Meta.
+		return m.runAll()
 	case "ctrl+k":
 		if m.focus == focusChat && m.chat.busy() {
 			m.chatStop()

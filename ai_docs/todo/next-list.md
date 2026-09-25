@@ -33,11 +33,6 @@ ten session docs in `ai_docs/claude_sessions/`
 
 ## Open
 
-- **N-006** · raised `2026-0728-2022-multi-statement-headless` · value low
-  A TUI "run all" key that runs the whole buffer through the multi-statement
-  path. The TUI runs the statement under the cursor (or the selection) by
-  design; this is contingent on that design changing.
-
 - **N-009** · raised `2026-0807-2148-bytdb-v0.9.1-and-dual-demo-defaults` · value low
   The shipped scripts hard-code the connection name `demo` —
   `scripts/export_report.go`, `scripts/loop_params.go` and
@@ -119,6 +114,18 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-006** · raised `2026-0728-2022-multi-statement-headless` ·
+  closed 2026-09-25 — `Ctrl+Shift+R` (and `Alt+R`, since a terminal without
+  the kitty keyboard protocol sends Ctrl+Shift+R as plain Ctrl+R) runs every
+  statement in the buffer, wherever the caret or selection is. The design it
+  was waiting on did not have to change: `Ctrl+R` keeps its one-statement
+  default, and run-all is a second key onto the path a multi-statement
+  selection already took (`runStmts` → `run`: in order, on the pinned
+  session, stopping at the first failure, last result shown, each statement
+  recorded in history). The editor's right-click menu has a `▶ Run all N
+  statements` row, disabled with a reason when the buffer holds one
+  statement or the selection already covers all of them. It is not on the
+  toolbar and has no ⌘ twin.
 - **N-040** · raised `2026-0925-1026-headless-streaming-tx-keep-going` ·
   closed 2026-09-25, 2026-0925-1042-headless-script-streaming — a headless
   script now streams each `s.Show` result to stdout in a block format

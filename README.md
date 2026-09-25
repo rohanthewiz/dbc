@@ -131,6 +131,7 @@ dragging.
 | Key | Action |
 | --- | --- |
 | `Ctrl+R` | Run the statement under the caret (or the selection); the gutter marks which |
+| `Ctrl+Shift+R` / `Alt+R` | Run every statement in the buffer, in order |
 | `Ctrl+K` | Stop the running query or script, a connect still dialing — or the assistant's answer |
 | `Ctrl+A` | Open the assistant / move between it and the editor |
 | `Ctrl+E` | Export the result (format picker; file, or clipboard) |
@@ -324,6 +325,10 @@ which one (`running statement 2/4 …`). Select a region first and `Ctrl+R`
 runs exactly that instead — a selection holding several statements runs them
 in order, stopping at the first failure, with the last result shown in the
 table.
+To run the whole buffer without selecting it, press `Ctrl+Shift+R` (or
+`Alt+R` — a terminal without the kitty keyboard protocol sends Ctrl+Shift+R
+as plain Ctrl+R, and on macOS `Alt+R` needs Option set to send Meta), or pick **▶ Run all** from the editor's right-click menu;
+it takes the same path as a selection of every statement.
 
 Statements are separated on semicolons, ignoring the ones inside strings,
 quoted identifiers, comments, and PostgreSQL `$$` bodies — so a function

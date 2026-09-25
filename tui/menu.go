@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -290,9 +291,24 @@ func (m *Model) openEditorMenu(x, y int) {
 	if len(stmts) == 0 {
 		runWhy = "nothing to run — type a query first"
 	}
+	// Run all is offered only when it differs from Run: with one statement
+	// in the buffer, or a selection already covering all of them, the two
+	// rows would do the same thing.
+	allStmts, allLabel := m.allStmts()
+	allWhy := ""
+	switch {
+	case len(allStmts) == 0:
+		allWhy, allLabel = "nothing to run — type a query first", "all"
+	case len(allStmts) == 1:
+		allWhy, allLabel = "the buffer holds one statement — ^R runs it", "all"
+	case slices.Equal(allStmts, stmts):
+		allWhy = "the selection already covers every statement"
+	}
 	m.openMenu(x, y, []menuItem{
 		{label: "▶ Run " + orDefault(tag, "statement"), key: "^R", why: runWhy,
 			act: func(m *Model) tea.Cmd { return m.runQuery() }},
+		{label: "▶ Run " + allLabel, key: "^⇧R", why: allWhy,
+			act: func(m *Model) tea.Cmd { return m.runAll() }},
 		heading(""),
 		{label: "Copy", why: noSel, act: func(m *Model) tea.Cmd {
 			s, _, _ := m.editor.Selection()

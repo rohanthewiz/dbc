@@ -53,10 +53,11 @@ const (
 	// DemoBytdb is the bytdb-backed demo, and the one active by default.
 	DemoBytdb = "demo-bytdb"
 
-	// DemoSQLite keeps the name the demo has always had, so the shipped
-	// scripts and any muscle memory that says s.Query("demo", …) still land
-	// on the same connection they used to.
-	DemoSQLite = "demo"
+	// DemoSQLite is the in-memory SQLite demo. It was plain "demo" before the
+	// bytdb demo arrived; the engine suffix now names both the same way. The
+	// shipped scripts name it directly — their ? placeholders are SQLite's, so
+	// they could not run on the bytdb demo ($1) under any name.
+	DemoSQLite = "demo-sqlite"
 )
 
 // DemoEngine names which built-in demo connection starts out active. Both

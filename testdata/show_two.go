@@ -8,7 +8,7 @@ import "github.com/rohanthewiz/dbc/sdb"
 // the data stream apart from the progress stream.
 func Run(s *sdb.S) error {
 	for _, breed := range []string{"Tabby", "Siamese"} {
-		r, err := s.Query("demo",
+		r, err := s.Query("demo-sqlite",
 			"SELECT name FROM cats WHERE breed = ? ORDER BY name", breed)
 		if err != nil {
 			return err

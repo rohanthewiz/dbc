@@ -13,7 +13,7 @@ import (
 
 func Run(s *sdb.S) error {
 	for _, breed := range []string{"Tabby", "Siamese", "Maine Coon"} {
-		r, err := s.Query("demo",
+		r, err := s.Query("demo-sqlite",
 			"SELECT id, name, age, adopted FROM cats WHERE breed = ? ORDER BY name", breed)
 		if err != nil {
 			return err
@@ -25,7 +25,7 @@ func Run(s *sdb.S) error {
 		s.Print("wrote %s (%d rows)", file, len(r.Rows))
 	}
 
-	adopted, err := s.Query("demo",
+	adopted, err := s.Query("demo-sqlite",
 		"SELECT name, breed, age FROM cats WHERE adopted = ? ORDER BY breed, name", 1)
 	if err != nil {
 		return err

@@ -44,8 +44,8 @@ func TestDemoFallbackRegistersBothEngines(t *testing.T) {
 	if cfg.Connections[1].Name != DemoSQLite || cfg.Connections[1].Driver != "sqlite" {
 		t.Errorf("second connection = %+v, want the sqlite demo", cfg.Connections[1])
 	}
-	// the sqlite demo keeps its historical in-memory DSN, so the shipped
-	// scripts that name "demo" behave exactly as before
+	// the sqlite demo stays in memory, so the shipped scripts that name it
+	// start from freshly seeded data every run
 	if !strings.Contains(cfg.Connections[1].DSN, "mode=memory") {
 		t.Errorf("sqlite demo DSN = %q, want the in-memory one", cfg.Connections[1].DSN)
 	}

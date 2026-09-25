@@ -34,11 +34,11 @@ func killSession(t *testing.T, m *Model) {
 func TestDeadStatelessSessionIsReplaced(t *testing.T) {
 	m := newTestModel(t)
 	ctx := context.Background()
-	if _, err := m.runOnSession(ctx, "demo", "SELECT 1"); err != nil {
+	if _, err := m.runOnSession(ctx, "demo-sqlite", "SELECT 1"); err != nil {
 		t.Fatalf("select: %v", err)
 	}
 	killSession(t, m)
-	if _, err := m.runOnSession(ctx, "demo", "SELECT 2"); err != nil {
+	if _, err := m.runOnSession(ctx, "demo-sqlite", "SELECT 2"); err != nil {
 		t.Fatalf("retry on a fresh session failed: %v", err)
 	}
 }
@@ -48,12 +48,12 @@ func TestDeadStatelessSessionIsReplaced(t *testing.T) {
 func TestDeadStatefulSessionFailsLoudly(t *testing.T) {
 	m := newTestModel(t)
 	ctx := context.Background()
-	if _, err := m.runOnSession(ctx, "demo", "BEGIN"); err != nil {
+	if _, err := m.runOnSession(ctx, "demo-sqlite", "BEGIN"); err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 	killSession(t, m)
 
-	_, err := m.runOnSession(ctx, "demo", "COMMIT")
+	_, err := m.runOnSession(ctx, "demo-sqlite", "COMMIT")
 	if !errors.Is(err, db.ErrSessionLost) {
 		t.Fatalf("err = %v, want ErrSessionLost", err)
 	}
@@ -61,7 +61,7 @@ func TestDeadStatefulSessionFailsLoudly(t *testing.T) {
 		t.Error("the dead session is still pinned")
 	}
 	// the next run starts clean
-	if _, err = m.runOnSession(ctx, "demo", "SELECT 1"); err != nil {
+	if _, err = m.runOnSession(ctx, "demo-sqlite", "SELECT 1"); err != nil {
 		t.Fatalf("run after a lost session: %v", err)
 	}
 }
@@ -77,7 +77,7 @@ func TestSwitchingConnectionReleasesSession(t *testing.T) {
 	})
 	ctx := context.Background()
 	for _, stmt := range []string{"BEGIN", "DELETE FROM cats"} {
-		if _, err := m.runOnSession(ctx, "demo", stmt); err != nil {
+		if _, err := m.runOnSession(ctx, "demo-sqlite", stmt); err != nil {
 			t.Fatalf("%s: %v", stmt, err)
 		}
 	}
@@ -93,7 +93,7 @@ func TestSwitchingConnectionReleasesSession(t *testing.T) {
 	if !strings.Contains(logText(m), "left demo") {
 		t.Errorf("no warning that the demo session's state was dropped; log:\n%s", logText(m))
 	}
-	res, err := m.mgr.Run("demo", "SELECT count(*) FROM cats")
+	res, err := m.mgr.Run("demo-sqlite", "SELECT count(*) FROM cats")
 	if err != nil {
 		t.Fatalf("count: %v", err)
 	}
@@ -176,8 +176,8 @@ func TestCancelConnect(t *testing.T) {
 			}
 			drive(t, m, await(t, done, "the canceled connect"))
 
-			if m.active != "demo" {
-				t.Errorf("active = %q, want demo: a canceled connect switched", m.active)
+			if m.active != "demo-sqlite" {
+				t.Errorf("active = %q, want demo-sqlite: a canceled connect switched", m.active)
 			}
 			if m.connCancel != nil {
 				t.Error("connect still marked in flight")

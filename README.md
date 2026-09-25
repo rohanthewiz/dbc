@@ -65,11 +65,11 @@ everything immediately, and compare the two engines on the same query:
 | Connection | Engine | Storage |
 | --- | --- | --- |
 | `demo-bytdb` | bytdb | `demo.bytdb` in the OS cache dir (`~/Library/Caches/dbc`, `~/.cache/dbc`) — persists between runs |
-| `demo` | SQLite | in-memory, fresh every run |
+| `demo-sqlite` | SQLite | in-memory, fresh every run |
 
 `demo-bytdb` is the active one out of the box. `--demo sqlite` (or
-`DBC_DEMO=sqlite`) makes `demo` active instead; either way both are in the
-connections list, so `Ctrl+L` — or `-c demo` headless — switches between them.
+`DBC_DEMO=sqlite`) makes `demo-sqlite` active instead; either way both are in the
+connections list, so `Ctrl+L` — or `-c demo-sqlite` headless — switches between them.
 The flag is ignored once a config file exists, since a config names its own
 `default_connection`.
 
@@ -367,7 +367,7 @@ loops without touching the database can still check `s.Canceled()`, and
 `sdb.IsCanceled(err)` tells a stop apart from a real failure:
 
 ```go
-r, err := s.Query("demo", bigQuery)
+r, err := s.Query("demo-sqlite", bigQuery)
 if err != nil {
 	if sdb.IsCanceled(err) {
 		return nil // stopped by the user, not a failure
@@ -389,7 +389,7 @@ import "github.com/rohanthewiz/dbc/sdb"
 
 func Run(s *sdb.S) error {
 	for _, minAge := range []int{1, 3, 5} {
-		r, err := s.Query("demo",
+		r, err := s.Query("demo-sqlite",
 			"SELECT id, name, breed, age FROM cats WHERE age >= ? ORDER BY age", minAge)
 		if err != nil {
 			return err

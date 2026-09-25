@@ -22,22 +22,24 @@ import (
 )
 
 // newTestManager builds a manager over a private in-memory SQLite seeded with
-// the demo data, so each test runs against its own cats table.
+// the demo data, so each test runs against its own cats table. The connection
+// takes the SQLite demo's name because the scripts under testdata query it by
+// that name.
 func newTestManager(t *testing.T) *db.Manager {
 	t.Helper()
 
 	cfg := &config.Config{
 		MaxRows:           1000,
-		DefaultConnection: "demo",
+		DefaultConnection: config.DemoSQLite,
 		Connections: []config.Connection{{
-			Name: "demo", Driver: "sqlite",
+			Name: config.DemoSQLite, Driver: "sqlite",
 			DSN: "file:" + strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()) +
 				"?mode=memory&cache=shared",
 		}},
 	}
 	mgr := db.NewManager(cfg)
 	t.Cleanup(mgr.Close)
-	if err := db.SeedDemo(mgr, "demo"); err != nil {
+	if err := db.SeedDemo(mgr, config.DemoSQLite); err != nil {
 		t.Fatalf("seed demo: %v", err)
 	}
 	return mgr
@@ -47,7 +49,7 @@ func newTestManager(t *testing.T) *db.Manager {
 func newTestSession(t *testing.T) *db.Session {
 	t.Helper()
 
-	sess, err := newTestManager(t).Session(context.Background(), "demo")
+	sess, err := newTestManager(t).Session(context.Background(), config.DemoSQLite)
 	if err != nil {
 		t.Fatalf("session: %v", err)
 	}
@@ -510,9 +512,9 @@ func TestScriptHeadlessStreamsInOrder(t *testing.T) {
 	})
 
 	tabby := strings.Index(got, "breed Tabby")
-	first := strings.Index(got, "-- #1 │ demo │")
+	first := strings.Index(got, "-- #1 │ demo-sqlite │")
 	siamese := strings.Index(got, "breed Siamese")
-	second := strings.Index(got, "-- #2 │ demo │")
+	second := strings.Index(got, "-- #2 │ demo-sqlite │")
 	if tabby < 0 || first < 0 || siamese < 0 || second < 0 {
 		t.Fatalf("output is missing a log line or a banner:\n%s", got)
 	}

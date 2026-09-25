@@ -29,15 +29,9 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-041
+**Next ID:** N-042
 
 ## Open
-
-- **N-009** · raised `2026-0807-2148-bytdb-v0.9.1-and-dual-demo-defaults` · value low
-  The shipped scripts hard-code the connection name `demo` —
-  `scripts/export_report.go`, `scripts/loop_params.go` and
-  `testdata/show_two.go` — which is why the SQLite demo keeps the name `demo`
-  instead of a symmetric `demo-sqlite`. Only matters if that rename is wanted.
 
 - **N-011** · raised `2026-0913-2158-dbc-migrate-replaces-goose` · value medium
   Tag a release. The push half of this item is done (N-019). The repo has no
@@ -75,6 +69,12 @@ ten session docs in `ai_docs/claude_sessions/`
   `pgx.Conn.IsClosed` and has no test without a live connection), and
   `conn_idle_timeout`/`connect_timeout`.
 
+- **N-041** · raised `2026-0925-1111-rename-sqlite-demo-to-demo-sqlite` · value low
+  The README's multi-statement headless example (`### Multi-statement runs`)
+  shows `│ demo │` banners for a run with no `-c`, but with no config the
+  active demo is `demo-bytdb`, so the sample output was already stale before
+  the rename. Regenerate it from the binary.
+
 ## Roadmap
 
 Wanted, but deliberately not next. Empty at seeding: the session docs never
@@ -106,6 +106,17 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-009** · raised `2026-0807-2148-bytdb-v0.9.1-and-dual-demo-defaults` ·
+  closed 2026-09-25, 2026-0925-1111-rename-sqlite-demo-to-demo-sqlite — the rename was wanted: the SQLite demo is now
+  `demo-sqlite` (`config.DemoSQLite`), symmetric with `demo-bytdb`. The
+  three scripts, the README (demo table, `-c`, script examples) and the two
+  test harnesses that run shipped scripts (`newTestManager`, the TUI's
+  `newTestModelInHost`) follow it. No alias: `-c demo` and user scripts that
+  name `"demo"` now fail with "unknown connection". The rename alone does not
+  make the scripts run on either demo — their `?` placeholders are SQLite's,
+  bytdb takes `$1`. Checked through the binary with no config:
+  `dbc script scripts/loop_params.go` lands on `demo-sqlite`.
 
 - **N-038** · raised `2026-0924-1958-assistant-conversation-archive` ·
   closed 2026-09-25, 2026-0925-1058-delete-live-assistant-conversation — the transcript's right-click menu has a **Delete this

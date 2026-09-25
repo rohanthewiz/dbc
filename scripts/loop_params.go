@@ -12,7 +12,7 @@ import "github.com/rohanthewiz/dbc/sdb"
 
 func Run(s *sdb.S) error {
 	for _, minAge := range []int{1, 3, 5} {
-		r, err := s.Query("demo",
+		r, err := s.Query("demo-sqlite",
 			"SELECT id, name, breed, age FROM cats WHERE age >= ? ORDER BY age", minAge)
 		if err != nil {
 			return err

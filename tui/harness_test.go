@@ -58,7 +58,9 @@ func newTestModel(t *testing.T) *Model {
 // for tests that point it at a fake host first.
 func newTestModelInHost(t *testing.T) *Model {
 	t.Helper()
-	name := "demo"
+	// the SQLite demo's name, since TestScriptRunsFromThePicker runs a shipped
+	// script that queries that connection by name
+	name := config.DemoSQLite
 	dsn := fmt.Sprintf("file:tuitest%d?mode=memory&cache=shared", dbSeq.Add(1))
 	cfg := &config.Config{
 		ScriptsDir: "testdata", MaxRows: 1000, MaxDisplayRows: 2000,

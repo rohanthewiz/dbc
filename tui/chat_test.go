@@ -71,7 +71,7 @@ func TestAssistantSendsQueryButWithholdsRows(t *testing.T) {
 	pumpChat(t, m, func() bool { return !m.chat.streaming })
 
 	p := lastPrompt(t, f)
-	for _, want := range []string{"SQL assistant inside dbc", `Connection "demo" uses the SQLite driver`,
+	for _, want := range []string{"SQL assistant inside dbc", `Connection "demo-sqlite" uses the SQLite driver`,
 		"FROM cats ORDER BY age", "columns: id, name, breed, age, adopted", "Question: why is Oliver first?"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt is missing %q:\n%s", want, p)
@@ -81,7 +81,7 @@ func TestAssistantSendsQueryButWithholdsRows(t *testing.T) {
 		t.Error("row values went to the agent without ai_rows")
 	}
 	tr := m.chat.transcriptText()
-	if !strings.Contains(tr, `rows not sent — set ai_rows = true on connection "demo"`) {
+	if !strings.Contains(tr, `rows not sent — set ai_rows = true on connection "demo-sqlite"`) {
 		t.Errorf("the transcript should say rows were withheld:\n%s", tr)
 	}
 	if !strings.Contains(tr, "echo: Question: why is Oliver first?") {
@@ -353,10 +353,10 @@ func TestAssistantSendsTheQuerysSchema(t *testing.T) {
 func TestAssistantFindsTablesNamedInTheQuestion(t *testing.T) {
 	f := fakeAssistant(t, nil)
 	m := newTestModel(t)
-	if _, err := m.mgr.Run("demo", "CREATE TABLE owners (id INTEGER PRIMARY KEY, cat_id INTEGER, email TEXT)"); err != nil {
+	if _, err := m.mgr.Run("demo-sqlite", "CREATE TABLE owners (id INTEGER PRIMARY KEY, cat_id INTEGER, email TEXT)"); err != nil {
 		t.Fatal(err)
 	}
-	drive(t, m, nil, m.connectCmd("demo")) // reload the catalog
+	drive(t, m, nil, m.connectCmd("demo-sqlite")) // reload the catalog
 	m.editor.SetText("")
 	key(t, m, "ctrl+a")
 	pumpChat(t, m, func() bool { return m.chat.state == chatReady })
@@ -395,11 +395,11 @@ func TestAssistantContextOffSendsNoSchema(t *testing.T) {
 func TestAssistantSkipsATableThatIsGone(t *testing.T) {
 	f := fakeAssistant(t, nil)
 	m := newTestModel(t)
-	if _, err := m.mgr.Run("demo", "CREATE TABLE owners (id INTEGER)"); err != nil {
+	if _, err := m.mgr.Run("demo-sqlite", "CREATE TABLE owners (id INTEGER)"); err != nil {
 		t.Fatal(err)
 	}
-	drive(t, m, nil, m.connectCmd("demo"))
-	if _, err := m.mgr.Run("demo", "DROP TABLE owners"); err != nil {
+	drive(t, m, nil, m.connectCmd("demo-sqlite"))
+	if _, err := m.mgr.Run("demo-sqlite", "DROP TABLE owners"); err != nil {
 		t.Fatal(err)
 	}
 	m.editor.SetText("")
@@ -446,7 +446,7 @@ func TestAssistantKeepsConversations(t *testing.T) {
 	pumpChat(t, m, func() bool { return !m.chat.streaming })
 
 	saved := savedChats(t, dir)
-	if len(saved) != 1 || saved[0].Title != "why is Oliver first?" || saved[0].Conn != "demo" {
+	if len(saved) != 1 || saved[0].Title != "why is Oliver first?" || saved[0].Conn != "demo-sqlite" {
 		t.Fatalf("after one answer, saved = %+v", saved)
 	}
 	id := saved[0].ID
@@ -567,7 +567,7 @@ func seedChats(t *testing.T, dir string, n int) {
 		at := base.Add(time.Duration(i) * time.Minute)
 		q := fmt.Sprintf("question %d", i)
 		err := userdata.SaveChat(dir, userdata.Chat{ID: userdata.NewChatID(at), Updated: at,
-			Title: q, Conn: "demo", Msgs: []userdata.ChatMsg{{Role: "user", Text: q}}})
+			Title: q, Conn: "demo-sqlite", Msgs: []userdata.ChatMsg{{Role: "user", Text: q}}})
 		if err != nil {
 			t.Fatal(err)
 		}

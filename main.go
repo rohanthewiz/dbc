@@ -35,7 +35,7 @@
 // input for a headless query only; script and migrate refuse it.
 //
 // With no config file, dbc starts on two seeded demo connections — demo-bytdb
-// (embedded bytdb, a file in the OS cache directory) and demo (in-memory
+// (embedded bytdb, a file in the OS cache directory) and demo-sqlite (in-memory
 // SQLite) — so the same query can be run against both engines. --demo picks
 // which one starts active; the other is still there in the connection list.
 package main

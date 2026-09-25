@@ -68,13 +68,19 @@ ten session docs in `ai_docs/claude_sessions/`
   grid alike), so a numeric column that widens later shows "10…" at row
   1,000. For numeric columns the widest value is cheap to know (min/max);
   size those from every row.
-- **N-054** · raised `2026-0925-dbc-web-phases-5-6` · value low
+- **N-053** · raised `2026-0925-1641-dbc-web-phases-5-6` · value low
+  A macOS app wrapper for `dbc web`, the way gonotes has one — the plan's
+  optional last item of Phase 6, left out: `dbc web` and the cats "dbc —
+  web" action already launch it, and a `.app` is a second packaging path to
+  keep building and signing. `/api/v1/health` is there for a wrapper to
+  poll.
+- **N-054** · raised `2026-0925-1641-dbc-web-phases-5-6` · value low
   Two browser tabs of `dbc web` are two windows over the same saved query
   tabs (`web.bytdb`), each with its own sessions, so editing one tab's text
   in both loses the earlier save (last write wins). The README says to edit
   a tab in one window at a time. A fix: a window claims the tabs it shows,
   and a second window gets fresh ones (or a read-only view).
-- **N-055** · raised `2026-0925-dbc-web-phases-5-6` · value low
+- **N-055** · raised `2026-0925-1641-dbc-web-phases-5-6` · value low
   A query tab that was showing its plan reopens on the plan when switched
   back to, but not after a reload: `planOpen` lives only in the page. Save
   it with the tab (a layout key per tab, or a column) so a reload lands
@@ -85,13 +91,6 @@ ten session docs in `ai_docs/claude_sessions/`
 Wanted, but deliberately not next. Empty at seeding: the session docs never
 marked an item as deferred, so sorting Open items into here is the user's
 call.
-
-- **N-053** · raised `2026-0925-dbc-web-phases-5-6` · value low
-  A macOS app wrapper for `dbc web`, the way gonotes has one — the plan's
-  optional last item of Phase 6, left out: `dbc web` and the cats "dbc —
-  web" action already launch it, and a `.app` is a second packaging path to
-  keep building and signing. `/api/v1/health` is there for a wrapper to
-  poll.
 
 - **N-029** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` · value medium
   Verify the Windows rich clipboard (`clip/rich_windows.go`) on a real
@@ -120,7 +119,7 @@ Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
 - **N-048** · raised `2026-0925-1425-workspace-extraction-web-phase1` ·
-  closed 2026-09-25, dbc web Phases 5 (`d7dd3f0`) and 6 — Phase 5: the
+  closed 2026-09-25, 2026-0925-1641-dbc-web-phases-5-6 — dbc web Phases 5 (`d7dd3f0`) and 6 (`51bcf15`). Phase 5: the
   assistant pane on the window's stream (`web/chat.go`, `chat.js`: lazy
   agent, server-side transcript, stop, model/agent switch, the shared
   archive, device-flow sign-in in the page; context through
@@ -131,7 +130,7 @@ written up in the session docs themselves.
   workspace per tab, Alt+T/W/1–9, per-tab editor model, grid view and
   plan), layout persistence, light/dark from `theme.Light`, the F1 key
   list, error pages, the cats "dbc — web" action, the README section. The
-  macOS wrapper went to the roadmap (N-053). Raised N-053, N-054, N-055.
+  macOS wrapper was left out (N-053). Raised N-053, N-054, N-055.
 
 - **N-046** · raised `2026-0925-1425-workspace-extraction-web-phase1` ·
   closed 2026-09-25, 2026-0925-1554-dbc-web-phases-3-4 — the plan page's script is now

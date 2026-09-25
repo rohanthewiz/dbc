@@ -694,7 +694,7 @@ Decisions and findings:
   tool's second browser tab warrants.
 - **The macOS app wrapper was left out** — optional in the plan, and a
   second way to launch something `dbc web` and the cats action already
-  launch. On the Next list's roadmap.
+  launch. On the Next list as N-053.
 - **Found by the browser run, fixed:** Monaco disposes a model it made
   itself (`value:`) when the editor switches models, which lost the first
   tab's document on the first switch — the first model is now made

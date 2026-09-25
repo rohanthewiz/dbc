@@ -154,12 +154,8 @@ func (v *planView) set(p *explain.Plan) {
 }
 
 // samePlanSubject reports whether two plans explain the same statement on
-// the same connection, give or take whitespace — the condition for showing
-// one as the "before" of the other.
-func samePlanSubject(a, b *explain.Plan) bool {
-	norm := func(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
-	return a.Conn == b.Conn && a.Engine == b.Engine && norm(a.Statement) == norm(b.Statement) && a.Statement != ""
-}
+// the same connection — explain.SameSubject, shared with dbc web.
+func samePlanSubject(a, b *explain.Plan) bool { return explain.SameSubject(a, b) }
 
 // node returns the selected step.
 func (v *planView) node() *explain.Node {
@@ -599,35 +595,9 @@ func (v *planView) drawHeadline(s Surface, st styles) {
 }
 
 // comparison describes this plan against the previous one of the same
-// statement, by the best figure both have: measured time, else estimated
-// cost. good says whether it went the right way.
+// statement — explain.Compare, shared with dbc web so the words match.
 func (v *planView) comparison() (text string, good bool) {
-	a, b := v.prev, v.plan
-	if a == nil {
-		return "", false
-	}
-	var before, after float64
-	var f func(float64) string
-	switch {
-	case a.ExecutionMs > 0 && b.ExecutionMs > 0:
-		before, after, f = a.ExecutionMs, b.ExecutionMs, explain.FmtMs
-	case a.Root.HasCost && b.Root.HasCost:
-		before, after, f = a.Root.TotalCost, b.Root.TotalCost, func(c float64) string { return "cost " + explain.FmtCost(c) }
-	default:
-		return "", false
-	}
-	if before <= 0 {
-		return "", false
-	}
-	change := (after - before) / before * 100
-	arrow := "▼"
-	if change > 0 {
-		arrow = "▲"
-	}
-	if math.Abs(change) < 1 {
-		return fmt.Sprintf("same as before: %s", f(after)), true
-	}
-	return fmt.Sprintf("was %s → %s %s%.0f%%", f(before), f(after), arrow, math.Abs(change)), change < 0
+	return explain.Compare(v.prev, v.plan)
 }
 
 // drawChips draws the view switcher, the metric picker and the actions.

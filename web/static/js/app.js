@@ -342,6 +342,12 @@
     } else if (k === "e") {
       e.preventDefault();
       dbc.grid.exportMenu();
+    } else if (k === "x" && (e.shiftKey || !dbc.editor.selection())) {
+      // explain; with a selection and no Shift it is cut, as ever (the
+      // plain editor's path — Monaco binds these itself, see editor.js)
+      if (!dbc.editor.hasFocus()) return;
+      e.preventDefault();
+      dbc.cmd.explain(e.shiftKey);
     }
   });
 

@@ -707,6 +707,7 @@
       case "+": showAll(); break;
       case "=": fit(g.cur.col); break;
       case "s": sortBy(g.cur.col); break;
+      case "p": dbc.cmd.showPlan(); break; // the TUI's p: over to the plan
       case "ContextMenu": case "c": {
         const r = root.getBoundingClientRect();
         gridMenu(r.left + g.rnW + g.colX[g.cur.col] - root.scrollLeft + 10,

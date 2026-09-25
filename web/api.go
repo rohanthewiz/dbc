@@ -119,6 +119,7 @@ type wsState struct {
 	Busy       bool     `json:"busy"`
 	Status     string   `json:"status,omitempty"` // the run in flight
 	HasResult  bool     `json:"hasResult"`
+	HasPlan    bool     `json:"hasPlan"`  // the Plan tab has something to show
 	Stateful   bool     `json:"stateful"` // the "session state" badge; see runEvent
 	Tables     []tabRef `json:"tables"`
 	Warnings   []string `json:"warnings,omitempty"`
@@ -128,7 +129,7 @@ func (s *Server) state(t *tab) wsState {
 	st := wsState{
 		ID: t.id, Active: t.ws.Active(), Connected: t.ws.Catalog() != nil,
 		Busy: t.ws.Busy(), Status: t.ws.RunningStatus(),
-		HasResult: t.ws.LastResult() != nil, Tables: tables(t.ws),
+		HasResult: t.ws.LastResult() != nil, HasPlan: t.planState().plan != nil, Tables: tables(t.ws),
 	}
 	if name, ok := t.ws.Connecting(); ok {
 		st.Connecting = name

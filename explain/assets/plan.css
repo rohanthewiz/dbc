@@ -1,0 +1,165 @@
+/* The plan view's look — shared by the standalone page (plan.html inlines
+   it) and dbc web's Plan tab (served as /static/css/plan.css).
+
+   Everything is scoped under .dbc-plan, the element DbcPlan.mount draws
+   into, so it can sit inside the workbench without its rules reaching the
+   workbench's elements or theirs reaching in. Colors are the dbc palette's
+   custom properties (--bg, --accent, …), which the page around it defines:
+   the standalone page from the theme constants, the workbench from
+   /theme.css. The light variant is a second set of values on the root. */
+.dbc-plan[data-theme="light"] {
+  --bg:#f6f8f6; --panel:#ffffff; --panel2:#eef2ee; --sel:#d7e8dc; --line:#d3dbd4;
+  --fg:#1f2a22; --muted:#5f7066; --accent:#2e8f5f; --warn:#b7791f; --err:#c53d3d;
+}
+.dbc-plan, .dbc-plan * { box-sizing: border-box; }
+.dbc-plan {
+  background: var(--bg); color: var(--fg);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  display: flex; flex-direction: column;
+  /* the narrow layout follows the view's own width, not the window's: in
+     the workbench the view is narrower than the window */
+  container-type: inline-size;
+}
+.dbc-plan .mono, .dbc-plan code, .dbc-plan pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+.dbc-plan .num { font-variant-numeric: tabular-nums; }
+.dbc-plan button { font: inherit; color: inherit; cursor: pointer; }
+
+/* ---------- header ---------- */
+.dbc-plan > header { padding: 14px 20px 10px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.dbc-plan .hrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.dbc-plan .badge { background: var(--accent); color: var(--bg); font-weight: 700; padding: 2px 8px; border: 0; border-radius: 6px; font-size: 13px; }
+.dbc-plan h1 { font-size: 16px; font-weight: 600; margin: 0; flex: 1 1 320px; }
+.dbc-plan .meta { color: var(--muted); font-size: 12.5px; margin-top: 4px; display: flex; gap: 14px; flex-wrap: wrap; }
+.dbc-plan .meta b { color: var(--fg); font-weight: 600; }
+.dbc-plan .chip { display: inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); font-size: 12px; }
+.dbc-plan .chip.on { border-color: var(--accent); color: var(--accent); }
+.dbc-plan .chip.good { border-color: var(--accent); color: var(--accent); }
+.dbc-plan .chip.bad { border-color: var(--warn); color: var(--warn); }
+.dbc-plan .notes { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.dbc-plan .note { font-size: 12.5px; background: var(--panel2); border-left: 3px solid var(--warn); padding: 4px 10px; border-radius: 4px; }
+.dbc-plan .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.dbc-plan .seg button { background: transparent; border: 0; border-radius: 0; padding: 4px 11px; font-size: 13px; border-right: 1px solid var(--line); }
+.dbc-plan .seg button:last-child { border-right: 0; }
+.dbc-plan .seg button.on { background: var(--accent); color: var(--bg); font-weight: 600; }
+.dbc-plan .seg button:hover:not(.on) { background: var(--sel); }
+.dbc-plan .iconbtn { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 3px 10px; font-size: 13px; }
+.dbc-plan .iconbtn:hover { border-color: var(--accent); }
+.dbc-plan .acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.dbc-plan details.stmt { margin-top: 10px; }
+.dbc-plan details.stmt summary { cursor: pointer; color: var(--muted); font-size: 12.5px; user-select: none; }
+.dbc-plan details.stmt pre { margin: 6px 0 0; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; font-size: 12.5px; }
+.dbc-plan .kw { color: var(--accent); font-weight: 600; } .dbc-plan .str { color: var(--warn); } .dbc-plan .nm { color: var(--warn); } .dbc-plan .cm { color: var(--muted); font-style: italic; }
+
+/* ---------- body layout ---------- */
+.dbc-plan > main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 380px; min-height: 0; }
+.dbc-plan .viz { display: flex; flex-direction: column; min-width: 0; min-height: 520px; border-right: 1px solid var(--line); }
+.dbc-plan .toolbar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.dbc-plan .toolbar .spacer { flex: 1; }
+.dbc-plan .legend { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.dbc-plan .legend .ramp { width: 90px; height: 8px; border-radius: 4px; }
+.dbc-plan .pane { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+.dbc-plan .pane[hidden] { display: none; }
+.dbc-plan [data-p="graph"] { cursor: grab; background:
+  radial-gradient(circle, color-mix(in srgb, var(--line) 70%, transparent) 1px, transparent 1px) 0 0 / 22px 22px; }
+.dbc-plan [data-p="graph"].panning { cursor: grabbing; }
+.dbc-plan [data-p="stage"] { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.dbc-plan [data-p="edges"] { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.dbc-plan [data-p="edges"] path { fill: none; stroke: var(--line); stroke-linecap: round; transition: stroke .15s; }
+.dbc-plan [data-p="edges"] path.hot { stroke: var(--accent); }
+.dbc-plan [data-p="edges"] text { font-size: 11px; fill: var(--muted); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; }
+.dbc-plan .hint { position: absolute; right: 12px; bottom: 10px; font-size: 11.5px; color: var(--muted); pointer-events: none;
+  background: color-mix(in srgb, var(--bg) 80%, transparent); padding: 2px 8px; border-radius: 6px; }
+
+/* ---------- cards ---------- */
+.dbc-plan .card { position: absolute; width: 250px; height: 108px; border-radius: 10px; padding: 8px 10px 6px;
+  border: 1.5px solid var(--line); background: var(--panel); box-shadow: 0 2px 8px rgba(0,0,0,.25);
+  cursor: pointer; user-select: none; transition: box-shadow .15s, transform .15s; overflow: hidden; }
+.dbc-plan .card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.35); }
+.dbc-plan .card.sel { box-shadow: 0 0 0 3px var(--accent), 0 6px 18px rgba(0,0,0,.4); }
+.dbc-plan .card.path { border-style: solid; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent); }
+.dbc-plan .card.never { opacity: .5; border-style: dashed; }
+.dbc-plan .c-top { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13.5px; white-space: nowrap; }
+.dbc-plan .glyph { width: 20px; height: 20px; border-radius: 5px; display: inline-grid; place-items: center; font-size: 13px;
+  background: var(--panel2); color: var(--accent); flex: none; }
+.dbc-plan .c-top .op { overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.dbc-plan .sev { font-size: 12px; flex: none; }
+.dbc-plan .sev.crit, .dbc-plan .ins.crit .ititle i { color: var(--err); }
+.dbc-plan .sev.warn, .dbc-plan .ins.warn .ititle i { color: var(--warn); }
+.dbc-plan .sev.info, .dbc-plan .ins.info .ititle i { color: var(--accent); }
+.dbc-plan .c-target, .dbc-plan .c-sum { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dbc-plan .c-target { color: var(--fg); opacity: .9; margin-top: 2px; }
+.dbc-plan .c-sum { color: var(--muted); }
+.dbc-plan .c-nums { display: flex; gap: 8px; font-size: 12px; margin-top: 4px; align-items: baseline; white-space: nowrap; }
+.dbc-plan .c-nums .val { margin-left: auto; font-weight: 600; }
+.dbc-plan .factor { color: var(--warn); font-weight: 600; }
+.dbc-plan .c-bar { position: absolute; left: 10px; right: 10px; bottom: 6px; height: 4px; background: var(--panel2); border-radius: 2px; overflow: hidden; }
+.dbc-plan .c-bar i { display: block; height: 100%; border-radius: 2px; }
+.dbc-plan .tog { position: absolute; right: 7px; top: 7px; width: 20px; height: 20px; border-radius: 5px;
+  border: 1px solid var(--line); background: var(--panel2); font-size: 10px; line-height: 1; padding: 0; color: var(--muted); }
+.dbc-plan .tog:hover { color: var(--accent); border-color: var(--accent); }
+.dbc-plan .card.fold .c-top { padding-right: 24px; }
+.dbc-plan .more { position: absolute; font-size: 11.5px; padding: 2px 9px; border-radius: 999px; border: 1px dashed var(--muted);
+  background: var(--panel); color: var(--muted); cursor: pointer; white-space: nowrap; }
+.dbc-plan .more:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ---------- flame ---------- */
+.dbc-plan [data-p="flame"] { overflow: auto; padding: 10px 14px 14px; }
+.dbc-plan .crumbs { font-size: 12.5px; color: var(--muted); margin-bottom: 8px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.dbc-plan .crumbs a { color: var(--accent); cursor: pointer; text-decoration: none; }
+.dbc-plan .crumbs a:hover { text-decoration: underline; }
+.dbc-plan .crumbs .grow { flex: 1; }
+.dbc-plan [data-p="fbox"] { position: relative; width: 100%; }
+.dbc-plan .fb { position: absolute; height: 28px; border-radius: 4px; padding: 0 6px; font-size: 12px; line-height: 28px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; cursor: pointer; border: 1px solid rgba(0,0,0,.25); color: #10150f; }
+.dbc-plan .fb b { font-weight: 600; }
+.dbc-plan .fb:hover { filter: brightness(1.12); }
+.dbc-plan .fb.sel { outline: 2px solid var(--fg); outline-offset: -2px; }
+.dbc-plan .fb.never { opacity: .45; }
+
+/* ---------- side ---------- */
+.dbc-plan > main > aside { display: flex; flex-direction: column; min-height: 0; overflow: auto; background: var(--panel); }
+.dbc-plan section.box { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.dbc-plan section.box h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+.dbc-plan .ins { border: 1px solid var(--line); border-left-width: 4px; border-radius: 8px; padding: 8px 10px; margin-bottom: 8px;
+  background: var(--bg); cursor: pointer; }
+.dbc-plan .ins:hover { border-color: var(--accent); }
+.dbc-plan .ins.crit { border-left-color: var(--err); } .dbc-plan .ins.warn { border-left-color: var(--warn); } .dbc-plan .ins.info { border-left-color: var(--accent); }
+.dbc-plan .ins.nofocus { cursor: default; }
+.dbc-plan .ititle { font-weight: 600; font-size: 13px; } .dbc-plan .ititle i { font-style: normal; margin-right: 5px; }
+.dbc-plan .ins .idet { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+.dbc-plan .ins .ifix { font-size: 12.5px; margin-top: 5px; } .dbc-plan .ins .ifix::before { content: "→ "; color: var(--accent); }
+.dbc-plan .sqlbox { display: flex; align-items: flex-start; gap: 6px; margin-top: 6px; }
+.dbc-plan .sqlbox code { flex: 1; font-size: 12px; padding: 6px 8px; background: var(--panel2); border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+.dbc-plan .sqlbtns { display: flex; flex-direction: column; gap: 4px; }
+.dbc-plan .copy { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; font-size: 12px; padding: 4px 8px; white-space: nowrap; }
+.dbc-plan .copy:hover { border-color: var(--accent); } .dbc-plan .copy.done { color: var(--accent); border-color: var(--accent); }
+.dbc-plan .dtitle { display: flex; gap: 8px; align-items: center; font-weight: 600; font-size: 15px; }
+.dbc-plan .dsub { color: var(--muted); font-size: 12.5px; margin: 3px 0 10px; }
+.dbc-plan .stats { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 12.5px; margin-bottom: 10px; }
+.dbc-plan .stats dt { color: var(--muted); } .dbc-plan .stats dd { margin: 0; }
+.dbc-plan .share { display: inline-block; width: 70px; height: 6px; background: var(--panel2); border-radius: 3px; vertical-align: middle; margin-left: 6px; overflow: hidden; }
+.dbc-plan .share i { display: block; height: 100%; }
+.dbc-plan .props { border-top: 1px solid var(--line); padding-top: 8px; font-size: 12px; }
+.dbc-plan .props div { display: grid; grid-template-columns: 38% 1fr; gap: 8px; padding: 2px 0; }
+.dbc-plan .props .k { color: var(--muted); } .dbc-plan .props .v { word-break: break-word; }
+.dbc-plan .dins { margin-top: 10px; }
+.dbc-plan .empty { color: var(--muted); font-size: 13px; }
+
+@container (max-width: 900px) {
+  .dbc-plan > main { grid-template-columns: 1fr; }
+  .dbc-plan .viz { border-right: 0; border-bottom: 1px solid var(--line); min-height: 62vh; }
+  .dbc-plan > main > aside { overflow: visible; }
+  .dbc-plan > header { padding: 12px 14px 8px; }
+}
+
+/* ---------- inside dbc web's workbench ----------
+   The view fills the results pane instead of the window: it scrolls as a
+   whole on a short pane, and the graph takes what the pane can give it. */
+.dbc-plan.embedded { height: 100%; overflow: auto; }
+.dbc-plan.embedded > header { padding: 8px 14px 6px; }
+.dbc-plan.embedded .viz { min-height: 340px; }
+.dbc-plan.embedded:focus { outline: none; }
+@container (max-width: 900px) {
+  .dbc-plan.embedded .viz { min-height: 340px; }
+}

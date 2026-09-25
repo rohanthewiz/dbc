@@ -23,11 +23,11 @@ type Workbench struct {
 
 // Render returns the whole document.
 //
-//	┌ topbar: dbc · active connection · [session state] ·  ▶ Run  ▶▶ Run all  ■ Stop  ⟲ History ┐
+//	┌ topbar: dbc · connection · [session state] · ▶ Run ▶▶ Run all ◈ Explain ■ Stop ⟲ History ┐
 //	├ sidebar ──────┬ editor (textarea, upgraded to Monaco) ──────────────────────────────────────┤
 //	│ Connections   ├ ═ splitter (drag; the height is saved) ══════════════════════════════════════┤
-//	│ Tables        │ results bar: [Results] · 8 rows · sorted by name asc     ⧉ Copy ▾  ⤓ Export ▾ │
-//	│               │ the grid (virtualized; its rows are fetched a page at a time)                │
+//	│ Tables        │ results bar: [Results][◈ Plan] · 8 rows · sorted by name asc  ⧉ Copy ▾ ⤓ Export ▾ │
+//	│               │ the grid (virtualized; rows fetched a page at a time) — or the plan view      │
 //	│               ├ log ──────────────────────────────────────────────────────────────────────────┤
 //	└ status bar ───┴───────────────────────────────────────────────────────────────────────────────┘
 //
@@ -54,7 +54,10 @@ func (p Workbench) Render() string {
 					b.SectionClass("results", "id", "results", "aria-label", "Results").R(
 						b.DivClass("rbar").R(
 							b.DivClass("rtabs", "id", "rtabs", "role", "tablist").R(
-								b.ButtonClass("rtab on", "type", "button", "role", "tab", "data-rtab", "results").T("▦ Results"),
+								b.ButtonClass("rtab on", "type", "button", "role", "tab", "data-rtab", "results",
+									"title", "The result grid (p from the plan)").T("▦ Results"),
+								b.ButtonClass("rtab", "id", "plan-tab", "type", "button", "role", "tab", "data-rtab", "plan", "hidden", "hidden",
+									"title", "The last plan (p from the grid)").T("◈ Plan"),
 							),
 							b.SpanClass("grid-info", "id", "grid-info", "aria-live", "polite").R(),
 							b.DivClass("ractions").R(
@@ -67,12 +70,17 @@ func (p Workbench) Render() string {
 							b.DivClass("grid", "id", "grid", "tabindex", "0", "hidden", "hidden",
 								"aria-label", "Result grid — arrows move, Shift extends, y copies, Enter inspects").R(),
 						),
+						// the plan view (explain/assets/plan.js) is mounted here
+						b.DivClass("rpane", "id", "rpane-plan", "hidden", "hidden").R(
+							b.Div("id", "plan", "tabindex", "0", "aria-label",
+								"Query plan — arrows walk the steps, e / a explain again, y copies, p back to the results").R(),
+						),
 					),
 					b.SectionClass("log", "id", "log", "aria-label", "Log").R(),
 				),
 				b.FooterClass("statusbar").R(
 					b.Span("id", "status").T("starting…"),
-					b.SpanClass("keys").T("Ctrl+Enter run · Ctrl+Shift+Enter run all · Ctrl+K stop · Ctrl+P history · Ctrl+E export"),
+					b.SpanClass("keys").T("Ctrl+Enter run · Ctrl+Shift+Enter all · Ctrl+X explain · Ctrl+K stop · Ctrl+P history · Ctrl+E export"),
 				),
 			),
 		),
@@ -92,6 +100,8 @@ func (p Workbench) topbar(b *element.Builder) any {
 		b.DivClass("actions").R(
 			b.Button("id", "run", "type", "button", "title", "Run the statement under the caret (Ctrl+Enter)").T("▶ Run"),
 			b.Button("id", "run-all", "type", "button", "title", "Run every statement (Ctrl+Shift+Enter)").T("▶▶ Run all"),
+			b.Button("id", "explain-btn", "type", "button",
+				"title", "Explain the statement under the caret (Ctrl+X with nothing selected; Ctrl+Shift+X analyzes)").T("◈ Explain"),
 			b.Button("id", "stop", "type", "button", "disabled", "disabled", "title", "Stop the run or connect (Ctrl+K)").T("■ Stop"),
 			b.Button("id", "history-btn", "type", "button", "title", "Past statements, here and in the TUI (Ctrl+P)").T("⟲ History"),
 		),
@@ -124,7 +134,7 @@ func (p Workbench) sidebar(b *element.Builder) any {
 
 // scripts are the workbench's modules, in load order: core first (the
 // shared API, log and state), app last (boot, which uses all the others).
-var scripts = []string{"core.js", "ui.js", "editor.js", "grid.js", "app.js"}
+var scripts = []string{"core.js", "ui.js", "editor.js", "grid.js", "plan.js", "planview.js", "app.js"}
 
 // head is the <head> every page shares: the theme as CSS variables, the
 // stylesheet, and the script (deferred, so it runs once the DOM is parsed).
@@ -136,6 +146,7 @@ func head(b *element.Builder, title, ver string) any {
 		b.Link("rel", "icon", "href", "/favicon.ico").R(),
 		b.Link("rel", "stylesheet", "href", "/theme.css").R(),
 		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v="+ver).R(),
+		b.Link("rel", "stylesheet", "href", "/static/css/plan.css?v="+ver).R(),
 		b.Wrap(func() {
 			// deferred, so they run in this order once the DOM is parsed;
 			// see core.js for what each one hangs on window.dbc

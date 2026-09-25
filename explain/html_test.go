@@ -1,6 +1,8 @@
 package explain
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"html"
 	"os"
@@ -74,7 +76,7 @@ func TestHTMLRendersEveryFixture(t *testing.T) {
 		if !strings.Contains(page, "<title>"+html.EscapeString(p.Headline())+"</title>") {
 			t.Errorf("%s: title is not the headline %q", name, p.Headline())
 		}
-		for _, ph := range []string{"{{PLAN_JSON}}", "{{TITLE}}", "/*{{PALETTE}}*/"} {
+		for _, ph := range []string{"{{PLAN_JSON}}", "{{TITLE}}", "/*{{PALETTE}}*/", "/*{{PLAN_CSS}}*/", "{{PLAN_SCRIPT}}"} {
 			if strings.Contains(page, ph) {
 				t.Errorf("%s: placeholder %s left in the page", name, ph)
 			}
@@ -141,5 +143,36 @@ func TestHTMLIsSelfContained(t *testing.T) {
 				t.Errorf("%s: page references %q", name, bad)
 			}
 		}
+	}
+}
+
+// The view is one script shared by this page and dbc web: the page inlines
+// it, so it must never contain what ends an inline script, and the page's
+// only executable script must be exactly the one ScriptHash names — a
+// server sending the page allows that hash and nothing else.
+func TestHTMLInlinesTheSharedView(t *testing.T) {
+	if strings.Contains(strings.ToLower(PlanJS), "</script") {
+		t.Fatal("plan.js contains </script, which would end the page's inline script")
+	}
+	if !strings.Contains(PlanJS, "global.DbcPlan = { mount }") || !strings.Contains(PlanCSS, ".dbc-plan") {
+		t.Fatal("the shared assets are not the view")
+	}
+	page, err := htmlFixtures(t)["pg_analyze_join.json"].HTML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const open = "<script>"
+	i := strings.Index(page, open)
+	j := strings.LastIndex(page, "</script>")
+	if i < 0 || j < i || strings.Count(page, open) != 1 {
+		t.Fatalf("want exactly one executable inline script, got %d", strings.Count(page, open))
+	}
+	body := page[i+len(open) : j]
+	sum := sha256.Sum256([]byte(body))
+	if want := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"; ScriptHash() != want {
+		t.Errorf("ScriptHash = %s, the inline script hashes to %s", ScriptHash(), want)
+	}
+	if !strings.Contains(body, "DbcPlan.mount(") || !strings.Contains(page, ".dbc-plan[data-theme=\"light\"]") {
+		t.Error("the page does not mount the view with its styles")
 	}
 }

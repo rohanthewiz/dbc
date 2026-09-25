@@ -40,6 +40,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/explain"
 	"github.com/rohanthewiz/dbc/theme"
 	"github.com/rohanthewiz/dbc/userdata"
 	"github.com/rohanthewiz/dbc/web/pages"
@@ -187,6 +188,10 @@ func (s *Server) routes() {
 	r.Post("/api/v1/ws/:id/connect", s.handleConnect)
 	r.Post("/api/v1/ws/:id/run", s.handleRun)
 	r.Post("/api/v1/ws/:id/preview", s.handlePreview)
+	r.Post("/api/v1/ws/:id/explain", s.handleExplain)
+	r.Get("/api/v1/ws/:id/plan", s.handlePlan)
+	r.Get("/api/v1/ws/:id/plan/text", s.handlePlanText)
+	r.Get("/api/v1/ws/:id/plan.html", s.handlePlanPage)
 	r.Post("/api/v1/ws/:id/cancel", s.handleCancel)
 }
 
@@ -300,9 +305,12 @@ func handleStatic(ctx rweb.Context) error {
 	if name == "" || strings.Contains(name, "..") {
 		return plain(ctx, http.StatusNotFound, "not found")
 	}
-	b, err := fs.ReadFile(staticFiles, "static/"+name)
-	if err != nil {
-		return plain(ctx, http.StatusNotFound, "not found")
+	b, ok := sharedAssets[name]
+	if !ok {
+		var err error
+		if b, err = fs.ReadFile(staticFiles, "static/"+name); err != nil {
+			return plain(ctx, http.StatusNotFound, "not found")
+		}
 	}
 	ctx.Response().SetHeader("Content-Type", contentType(name))
 	if ctx.Request().QueryParam("v") != "" {
@@ -329,11 +337,23 @@ func contentType(name string) string {
 	return "application/octet-stream"
 }
 
+// sharedAssets are static files that live in another package: the plan
+// view, which the standalone plan page inlines and the Plan tab loads — one
+// script for both (see explain/html.go).
+var sharedAssets = map[string][]byte{
+	"js/plan.js":   []byte(explain.PlanJS),
+	"css/plan.css": []byte(explain.PlanCSS),
+}
+
 // assetVersion hashes every embedded asset: any change to any file busts
 // every cached one, which for a handful of small files is simpler than
 // tracking them one by one.
 func assetVersion() string {
 	h := sha256.New()
+	for _, name := range []string{"js/plan.js", "css/plan.css"} {
+		_, _ = io.WriteString(h, name)
+		_, _ = h.Write(sharedAssets[name])
+	}
 	_ = fs.WalkDir(staticFiles, "static", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err

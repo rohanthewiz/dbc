@@ -178,6 +178,10 @@ button:focus-visible, textarea:focus-visible, li:focus-visible { outline: 1px so
 .ractions button { font-size: 12px; padding: 1px 8px; }
 .rpane { position: relative; flex: 1 1 auto; min-height: 0; display: flex; }
 .grid-msg { padding: 16px; color: var(--muted); }
+/* the Plan tab: the view fills its pane; the grid's info and actions are
+   about the result, so they step aside while the plan is shown */
+#plan { flex: 1 1 auto; min-width: 0; }
+.results.plan-on .grid-info, .results.plan-on .ractions { visibility: hidden; }
 .grid-msg.exec { color: var(--fg); }
 
 /* ── the grid ──────────────────────────────────────────────────────────────

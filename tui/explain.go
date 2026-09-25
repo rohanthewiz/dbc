@@ -75,46 +75,19 @@ func (m *Model) showPlan(p *explain.Plan) {
 	m.setStatus(planStatus(p))
 }
 
-// planStatus is the status-bar summary of a plan.
-func planStatus(p *explain.Plan) string {
-	s := strings.TrimPrefix(p.Headline(), "Plan · ")
-	crit, warn := countSev(p)
-	if crit+warn > 0 {
-		s += fmt.Sprintf(" · %s", plural(crit+warn, "finding"))
-	}
-	return "plan · " + s
-}
+// planStatus is the status-bar summary of a plan — workspace.PlanStatus,
+// the words dbc web uses too.
+func planStatus(p *explain.Plan) string { return workspace.PlanStatus(p) }
 
-func countSev(p *explain.Plan) (crit, warn int) {
-	for _, in := range p.Insights {
-		switch in.Severity {
-		case explain.SevCrit:
-			crit++
-		case explain.SevWarn:
-			warn++
-		}
-	}
-	return crit, warn
-}
+// countSev counts the plan's findings worth acting on.
+func countSev(p *explain.Plan) (crit, warn int) { return p.Findings() }
 
-// logPlan writes the plan's gist to the log: its size and cost, and the
-// headline finding — so the log alone tells the story of a tuning session.
+// logPlan writes the plan's gist to the log: its size and cost, the
+// comparison with the last plan of the statement, and the findings — so the
+// log alone tells the story of a tuning session. The words are
+// workspace.PlanNotes, shared with dbc web.
 func (m *Model) logPlan(p *explain.Plan, elapsed time.Duration) {
-	m.logf(logOk, "explained in %s — %s", explain.FmtMs(float64(elapsed.Microseconds())/1000),
-		strings.TrimPrefix(p.Headline(), "Plan · "))
-	if cmp, _ := m.planv.comparison(); cmp != "" {
-		m.logf(logAccent, "vs the last plan of this statement: %s", cmp)
-	}
-	for _, in := range p.Insights {
-		if in.Severity == explain.SevInfo {
-			continue
-		}
-		kind := logWarn
-		if in.Severity == explain.SevCrit {
-			kind = logErr
-		}
-		m.log(kind, in.Severity.Glyph()+" "+in.Title)
-	}
+	m.notes(workspace.PlanNotes(p, m.planv.prev, elapsed))
 }
 
 // ---------------------------------------------------------------------------

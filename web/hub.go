@@ -71,6 +71,7 @@ type tab struct {
 	viewMu sync.Mutex
 	rv     resultView
 	rvSeq  int
+	ps     planState // the Plan tab's plan and its "before" (plan.go)
 
 	// reaper state, guarded by hub.mu
 	idleSince time.Time // zero while a stream is attached
@@ -306,6 +307,9 @@ type runEvent struct {
 	Stopped   bool   `json:"stopped"`
 	Status    string `json:"status"`
 	HasResult bool   `json:"hasResult"`
+	// HasPlan: the result is itself a query plan (an EXPLAIN the user
+	// typed), which the page opens in its Plan tab, as the TUI does.
+	HasPlan bool `json:"hasPlan"`
 	// Stateful raises the page's "session state" badge: the pinned session
 	// may hold a transaction, SET values or temp tables that closing it
 	// would lose. It is db.Session.Stateful, which errs on the side of yes
@@ -341,6 +345,13 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 			Stopped: errors.Is(ev.Err, db.ErrCanceled), Status: ev.Status,
 			HasResult: ev.Result != nil,
 		}
+		if ev.Plan != nil {
+			t.setPlan(ev.Plan)
+			out.HasPlan = true
+			// the raw rows stay in the Results tab, one keypress (p) away
+			t.send("log", logLine{Level: "accent",
+				Text: "that result is a query plan — shown in the ◈ Plan tab (p switches back to the raw rows)"})
+		}
 		if r := ev.Result; r != nil {
 			shown := s.shown(r)
 			out.Status = workspace.ResultStatus(r, s.cfg.MaxRows, shown)
@@ -354,6 +365,11 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 		// and this is the Job's goroutine, so waiting here holds up nobody.
 		_, out.Stateful = t.ws.Session()
 		t.send("run", out)
+	case *workspace.ExplainDone:
+		if ev.Stale {
+			return
+		}
+		s.deliverExplain(t, ev)
 	case *workspace.SessionReleased:
 		t.notes(ev.Notes)
 	}

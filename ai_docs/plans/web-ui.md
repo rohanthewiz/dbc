@@ -3,8 +3,8 @@
 Raised 2026-09-25. The ask: a web UI for dbc, started as `dbc web`.
 
 This is a plan. **Phases 1 (the `workspace` extraction), 2 (the `dbc web`
-skeleton) and 3 (the real editor and grid) are done** (2026-09-25);
-everything from Phase 4 on is not built yet.
+skeleton), 3 (the real editor and grid) and 4 (explain) are done**
+(2026-09-25); everything from Phase 5 on is not built yet.
 
 ## The one-paragraph version
 
@@ -507,7 +507,7 @@ the last column and `+` restores, Ctrl+P filters and inserts without
 running, table double-click previews, Ctrl+E → CSV downloads, 1,000 rows
 keep ~40 in the DOM, 420 px has no horizontal scroll.
 
-### Phase 4 — explain, with everything the HTML plan page already does
+### Phase 4 — explain, with everything the HTML plan page already does — ✅ done 2026-09-25
 
 A Plan tab beside Results that is **the interactive plan page, feature for
 feature** — not a reduced view of it. The page's script
@@ -546,6 +546,55 @@ the same page, savable and sendable); and a plan detected in a typed
 **Done when** the checklist is ticked in a headless-Chrome run against the
 fixtures `explain/html_test.go` already renders (Postgres analyzed, MySQL,
 SQLite, bytdb), and the standalone page still passes its own tests.
+
+*Outcome:*
+
+| Piece | Where | As built |
+|---|---|---|
+| The view | `explain/assets/plan.js`, `plan.css` | the page's script, now `DbcPlan.mount(root, doc, opts) → {destroy, select, setTab, fit}`: every lookup scoped to `root` (parts are `data-p`, no ids), every rule under `.dbc-plan`, per-mount state, `destroy` unhooks its document key listener and ResizeObserver. Options carry the web's extras (`embedded`, `keys`, `copy`, `onInsert`, `compare`, `actions`); the standalone page passes only `hash` |
+| Standalone page | `explain/assets/plan.html`, `explain/html.go` | a template that inlines `plan.css` and `plan.js` (+ a one-line boot) — still one self-contained file. `explain.PlanJS` / `PlanCSS` are exported for the web; `explain.ScriptHash()` is the CSP hash of the page's one inline script |
+| Plan tab | `web/static/js/planview.js`, `web/plan.go` | `POST …/explain {…, analyze, again}` (Ctrl+X / Ctrl+Shift+X / Alt+X, ◈ Explain; `e` / `a` explain the plan's own statement again); SSE `explain`; `GET …/plan` → `{doc, compare}` mounted in the results pane beside ▦ Results; `y` / `Y` (`GET …/plan/text`) copy the text tree or the engine's output; `b` / ↗ Page opens `GET …/plan.html` (the standalone page, its own CSP: `script-src` = the hash only); ⤓ Save downloads it; ⤓ Insert beside a finding's Copy appends its SQL to the editor, never runs it; `p` flips between Results and Plan; a typed `EXPLAIN`'s result opens the tab |
+| Shared words | `explain.SameSubject`, `explain.Compare`, `Plan.Findings`, `workspace.PlanNotes`, `workspace.PlanStatus` | moved out of the TUI (`tui/plan.go`, `tui/explain.go` now call them), so "explained in …", "vs the last plan of this statement: was 30.1 ms → 87 µs ▼100%" and the status line read the same in both UIs. The web keeps the replaced plan per tab as the "before" |
+
+Decisions and findings:
+
+- **The theme toggle is per view**: `data-theme` on the view's root, and
+  the light palette is scoped to `.dbc-plan[data-theme="light"]`, so the
+  plan can go light without the workbench (whose light mode is Phase 6).
+- **The narrow layout follows the view's width**, a container query rather
+  than a media query: inside the workbench the view is narrower than the
+  window.
+- **Ctrl+X explains only with nothing selected** (with a selection it is
+  the browser's cut; on a Mac, Ctrl+X with a selection does nothing, as in
+  any Mac text field, and ⌘X cuts). ◈ Explain and Alt+X always explain.
+- The checklist's "EXPLAIN command (full on hover)" was not quite so in the
+  page — its hover said only "The EXPLAIN dbc sent"; the hover now carries
+  the full command, in both homes.
+- Deferred to Phase 5, with the chat pane: "✦ ask the assistant about this
+  step / plan".
+
+Verified: `explain` tests (the page inlines the shared view, holds no
+`</script`, has exactly one executable inline script, and `ScriptHash`
+matches it; the existing self-contained and break-out tests unchanged);
+`web` tests for explain → event → plan, again (the plan's statement, the
+before kept), plan text and raw, a typed EXPLAIN opening the tab, refusals
+(nothing, several statements, busy 409), the served page's CSP and
+download name, and the shared assets served byte for byte; all green,
+`-race` too; the live `db` tests pass against Postgres 17 and MySQL 8.4.
+In headless Chrome, 283 checks: the whole parity checklist (header, chip,
+command on hover, statement fold and highlighting, metric buttons and keys
+1–4, ramp and legend, cards, edge widths, drag pan, wheel zoom, − + Fit, `f`,
+boot on the worst finding, ←↑↓→ walk, Enter folds, path highlight, detail
+for every step, insight click selects, flame, zoom, breadcrumbs, Esc,
+`g`, theme toggle, `#flame` deep link, a 255-step plan folding below depth
+5) on the five fixture pages AND in the web Plan tab on live Postgres
+(analyzed), MySQL, SQLite and bytdb plans; then the web's extras: Ctrl+Shift+X
+from Monaco, ⤓ Insert of a finding's `CREATE INDEX` (nothing ran), running
+it, `a` → "was 30.1 ms → 87 µs ▼100%" in the log and as a header chip, `y` /
+`Y` on the clipboard, `p` both ways, `b` opening the standalone page whose
+inline script runs under the hash-only CSP with a clean console, a typed
+`EXPLAIN QUERY PLAN` opening the tab, 420 px with no horizontal scroll, and
+a clean console throughout.
 
 ### Phase 5 — the assistant and scripts
 

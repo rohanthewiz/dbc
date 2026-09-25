@@ -502,24 +502,26 @@ splits them — semicolons inside strings, comments, and `$$` bodies don't count
 They run in order on one connection, and every result is rendered:
 
 ```sh
-./dbc "INSERT INTO cats (name, breed, age) VALUES ('Zed', 'Tabby', 4);
-       SELECT breed, count(*) AS n FROM cats GROUP BY breed ORDER BY n DESC"
+./dbc "INSERT INTO cats (id, name, breed, age) VALUES (9, 'Zed', 'Tabby', 4);
+       SELECT breed, count(*) AS n FROM cats GROUP BY breed ORDER BY n DESC, breed"
 ```
 
 ```
--- 1/2 │ demo │ 1 rows affected in 50µs
--- INSERT INTO cats (name, breed, age) VALUES ('Zed', 'Tabby', 4)
+-- 1/2 │ demo-bytdb │ 1 rows affected in 3.73ms
+-- INSERT INTO cats (id, name, breed, age) VALUES (9, 'Zed', 'Tabby', 4)
 rows_affected
 -------------
 1
 
--- 2/2 │ demo │ 3 rows in 150µs
--- SELECT breed, count(*) AS n FROM cats GROUP BY breed ORDER BY n DESC
+-- 2/2 │ demo-bytdb │ 5 rows in 80µs
+-- SELECT breed, count(*) AS n FROM cats GROUP BY breed ORDER BY n DESC, b…
 breed       n
 ----------  -
 Tabby       3
-Siamese     2
 Maine Coon  2
+Siamese     2
+Bengal      1
+Sphynx      1
 ```
 
 In `text`, `markdown`, `csv` and `tsv` on stdout, each result is written as

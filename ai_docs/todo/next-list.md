@@ -40,12 +40,6 @@ ten session docs in `ai_docs/claude_sessions/`
   works today only as a pseudo-version of `main`). A `v0.1.0` tag would line
   the three up.
 
-- **N-028** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` · value low
-  Copilot sign-in from inside dbc. Today an unsigned-in user is told to sign
-  in from another editor; ced shows the device-flow code itself by running
-  the language server in LSP mode (`signIn` → `workspace/executeCommand`).
-  Contingent on someone using dbc without ced or another Copilot editor.
-
 - **N-030** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` · value low
   Linux rich copy offers text/html only (wl-copy/xclip set one type), so a
   terminal paste right after gets nothing or markup. Serving both needs
@@ -106,6 +100,22 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-028** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` ·
+  closed 2026-09-25, 2026-0925-1129-copilot-sign-in-from-dbc — Copilot sign-in from inside dbc. `ai/signin.go` runs
+  the language server in LSP mode (`--stdio`; the transport gained
+  Content-Length framing next to ACP's NDJSON) and drives GitHub's device
+  flow: `signIn` → code → `workspace/executeCommand` (≤15 min). ACP's own
+  `authenticate` was not used: it is an OAuth code flow that needs a browser
+  on the dbc host, which fails over SSH. A handshake or turn refused for lack
+  of auth is now `ai.ErrAuthRequired`. The pane offers ⎆ sign in under it,
+  puts the code in the transcript, copies it, opens the page, and reconnects
+  on success. A question refused with the handshake (even mid schema lookup)
+  goes out after sign-in. The transcript menu has "Sign in to Copilot…" at any
+  time. Checked against the real server (1.526.0): signed in →
+  `AlreadySignedIn`; with an empty `XDG_CONFIG_HOME` → ACP refuses with
+  `Authentication required (-32000)` and `signIn` returns a real device code.
+  Not checked: entering a code end to end (it would mint a real token).
 
 - **N-009** · raised `2026-0807-2148-bytdb-v0.9.1-and-dual-demo-defaults` ·
   closed 2026-09-25, 2026-0925-1111-rename-sqlite-demo-to-demo-sqlite — the rename was wanted: the SQLite demo is now

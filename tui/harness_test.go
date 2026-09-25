@@ -29,6 +29,9 @@ var sent []tea.Msg
 // clipLog records what reached the (stubbed) clipboard in the current test.
 var clipLog []clip.Content
 
+// openLog records the pages the (stubbed) browser was asked to open.
+var openLog []string
+
 // lastClip returns the most recent clipboard write.
 func lastClip(t *testing.T) clip.Content {
 	t.Helper()
@@ -77,6 +80,11 @@ func newTestModelInHost(t *testing.T) *Model {
 	prev := clipWrite
 	clipWrite = func(c clip.Content) (bool, error) { clipLog = append(clipLog, c); return c.HTML != "", nil }
 	t.Cleanup(func() { clipWrite = prev })
+	// nor ever open a browser
+	openLog = nil
+	prevOpen := openURL
+	openURL = func(u string) { openLog = append(openLog, u) }
+	t.Cleanup(func() { openURL = prevOpen })
 
 	m := New(cfg, mgr, Options{NoPersist: true})
 	t.Cleanup(m.shutdown)

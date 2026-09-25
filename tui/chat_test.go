@@ -731,3 +731,135 @@ func TestAssistantDeletesTheLiveConversation(t *testing.T) {
 		t.Errorf("the deleted conversation should stay gone: %s", got)
 	}
 }
+
+// fakeSignIn makes the pane's sign-in run against f's scripted language
+// server, for the duration of a test.
+func fakeSignIn(t *testing.T, f *aitest.Fake) {
+	t.Helper()
+	prev := beginSignIn
+	beginSignIn = f.SignIn
+	t.Cleanup(func() { beginSignIn = prev })
+}
+
+// A signed-out Copilot user asks a question: the handshake is refused, the
+// pane offers ⎆ sign in, the device code is shown, copied and its page
+// opened, and once GitHub confirms the pane reconnects and the question
+// that was refused goes out.
+func TestAssistantSignsInToCopilot(t *testing.T) {
+	f := fakeAssistant(t, nil)
+	f.SignedOut = true
+	fakeSignIn(t, f)
+	m := newTestModel(t)
+	m.chat.open, m.focus = true, focusChat
+	typeText(t, m, "hello")
+	key(t, m, "enter")
+	pumpChat(t, m, func() bool { return m.chat.state == chatDead })
+
+	tr := m.chat.transcriptText()
+	for _, want := range []string{"Authentication required", "once you are signed in"} {
+		if !strings.Contains(tr, want) {
+			t.Errorf("transcript lacks %q:\n%s", want, tr)
+		}
+	}
+	if strings.Contains(tr, "⟲ new to try again") {
+		t.Error("with sign-in on offer, ⟲ new is not the next step")
+	}
+	x, y := findText(t, frame(m), "⎆ sign in to Copilot")
+	click(t, m, x+1, y) // runs the flow to the end: the fake confirms at once
+
+	if f.SignIns() != 1 {
+		t.Errorf("device codes handed out = %d", f.SignIns())
+	}
+	tr = m.chat.transcriptText()
+	if !strings.Contains(tr, "enter code "+aitest.FakeUserCode+" at https://github.com/login/device") {
+		t.Errorf("the code is not in the transcript:\n%s", tr)
+	}
+	if got := lastClip(t).Text; got != aitest.FakeUserCode {
+		t.Errorf("clipboard = %q", got)
+	}
+	if len(openLog) != 1 || openLog[0] != "https://github.com/login/device" {
+		t.Errorf("opened = %v", openLog)
+	}
+	if !strings.Contains(tr, "signed in to GitHub as octocat") {
+		t.Errorf("no success line:\n%s", tr)
+	}
+	pumpChat(t, m, func() bool { return m.chat.state == chatReady && !m.chat.streaming })
+	if !strings.Contains(lastPrompt(t, f), "Question: hello") {
+		t.Errorf("the refused question was not sent after sign-in: %q", lastPrompt(t, f))
+	}
+	if m.chat.offerSignIn() {
+		t.Error("the chip should be gone once signed in")
+	}
+}
+
+// A GitHub account without Copilot says so and offers sign-in again (for a
+// different account).
+func TestAssistantSignInWithoutSubscription(t *testing.T) {
+	f := fakeAssistant(t, nil)
+	f.SignedOut = true
+	f.SignInResult = ai.AuthStatus{Status: "NotAuthorized", User: "octocat"}
+	fakeSignIn(t, f)
+	m := newTestModel(t)
+	key(t, m, "ctrl+a")
+	pumpChat(t, m, func() bool { return m.chat.state == chatDead })
+	x, y := findText(t, frame(m), "⎆ sign in to Copilot")
+	click(t, m, x+1, y)
+	if tr := m.chat.transcriptText(); !strings.Contains(tr, "no Copilot subscription") {
+		t.Errorf("transcript:\n%s", tr)
+	}
+	if m.chat.state != chatDead || !m.chat.offerSignIn() {
+		t.Error("still signed out: the chip should be back")
+	}
+}
+
+// A sign-in that is waiting on GitHub can be cancelled, and its late answer
+// changes nothing.
+func TestAssistantSignInCancel(t *testing.T) {
+	f := fakeAssistant(t, nil)
+	f.SignedOut = true
+	fakeSignIn(t, f)
+	m := newTestModel(t)
+	key(t, m, "ctrl+a")
+	pumpChat(t, m, func() bool { return m.chat.state == chatDead })
+
+	// Start the flow but hold back the wait's answer, as if the user has not
+	// entered the code yet: land the code, but do not run the wait it
+	// returns.
+	code := m.chatSignIn()().(chatSignInCodeMsg)
+	_ = m.chatSignInCode(code)
+	if m.chat.signState != signInWaiting {
+		t.Fatalf("sign-in state = %v", m.chat.signState)
+	}
+	c := frame(m)
+	findText(t, c, "waiting on GitHub — code "+aitest.FakeUserCode)
+	x, y := findText(t, c, "✕ cancel")
+	seq := m.chat.signSeq
+	click(t, m, x+1, y)
+	if m.chat.signState != signInNone || !m.chat.offerSignIn() {
+		t.Error("cancel should end the sign-in and offer it again")
+	}
+	drive(t, m, chatSignInDoneMsg{seq: seq, st: ai.AuthStatus{Status: "OK", User: "octocat"}})
+	if strings.Contains(m.chat.transcriptText(), "signed in to GitHub") {
+		t.Error("a cancelled sign-in's answer was acted on")
+	}
+}
+
+// The transcript menu offers sign-in for Copilot even when nothing was
+// refused; a signed-in account is told so and nothing else changes.
+func TestAssistantMenuSignInWhenSignedIn(t *testing.T) {
+	f := fakeAssistant(t, nil)
+	fakeSignIn(t, f)
+	m := newTestModel(t)
+	key(t, m, "ctrl+a")
+	pumpChat(t, m, func() bool { return m.chat.state == chatReady })
+	drive(t, m, nil, m.chatSignIn())
+	if tr := m.chat.transcriptText(); !strings.Contains(tr, "signed in to GitHub as octocat") {
+		t.Errorf("transcript:\n%s", tr)
+	}
+	if f.SignIns() != 0 || len(openLog) != 0 {
+		t.Error("an account already signed in needs no code and no browser")
+	}
+	if m.chat.state != chatReady {
+		t.Errorf("state = %v", m.chat.state)
+	}
+}

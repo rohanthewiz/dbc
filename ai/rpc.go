@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,11 +18,15 @@ import (
 //
 // PROVENANCE. Ported from ced (github.com/rohanthewiz/ced,
 // internal/lsp/client.go, acp.go, ndjson.go), where it has carried Copilot
-// chat since July 2026. It is trimmed to what ACP needs: ced's copy also
-// speaks LSP's Content-Length framing for gopls, which dbc has no use for,
-// so only the newline-delimited dialect survives. The correlation, the
-// per-request goroutines and the teardown order are unchanged, because
-// those are the parts that took ced several sessions to get right.
+// chat since July 2026. The correlation, the per-request goroutines and the
+// teardown order are unchanged, because those are the parts that took ced
+// several sessions to get right.
+//
+// TWO DIALECTS. Chat is ACP, which frames newline-delimited JSON. Copilot
+// sign-in (signin.go) has to run the same binary as an LSP server, which
+// frames with Content-Length headers — so both survive here, chosen per
+// connection. The envelope, correlation and threading are identical; only
+// send and the reader differ.
 //
 //	caller ──Call/Notify──► rpcConn ──stdin──► agent process
 //	  ▲                        │
@@ -28,8 +34,9 @@ import (
 //	  └── the Chat turns these into Events on a channel; nothing here
 //	      touches UI state
 //
-// FRAMING. One JSON object per line. json.Marshal never emits a raw newline
-// inside an object, so body+"\n" is always exactly one record.
+// FRAMING. ACP: one JSON object per line — json.Marshal never emits a raw
+// newline inside an object, so body+"\n" is always exactly one record. LSP:
+// "Content-Length: N\r\n\r\n" then exactly N bytes of body.
 //
 // THREADING. Call and Notify are safe from any goroutine (writes are
 // serialized by writeMu). The read loop runs on its own goroutine: it
@@ -70,6 +77,10 @@ type rpcConn struct {
 	pending map[int64]chan *message
 	closed  bool
 
+	// lsp selects Content-Length framing instead of newline-delimited JSON.
+	// Fixed before the read loop starts; never changed after.
+	lsp bool
+
 	// onNotify receives agent→client notifications. Called on the read-loop
 	// goroutine, so it must hand off rather than block for long.
 	onNotify func(method string, params json.RawMessage)
@@ -96,10 +107,28 @@ func newRPCConn(r io.Reader, w io.Writer,
 	onNotify func(string, json.RawMessage),
 	onRequest func(string, json.RawMessage) (any, error),
 	onExit func(error)) *rpcConn {
+	return newConn(r, w, false, onNotify, onRequest, onExit)
+}
+
+// newLSPConn is newRPCConn with LSP's Content-Length framing.
+func newLSPConn(r io.Reader, w io.Writer,
+	onNotify func(string, json.RawMessage),
+	onRequest func(string, json.RawMessage) (any, error),
+	onExit func(error)) *rpcConn {
+	return newConn(r, w, true, onNotify, onRequest, onExit)
+}
+
+// newConn builds a connection in either dialect. The dialect is set before
+// the read loop starts, for the same reason the hooks are.
+func newConn(r io.Reader, w io.Writer, lsp bool,
+	onNotify func(string, json.RawMessage),
+	onRequest func(string, json.RawMessage) (any, error),
+	onExit func(error)) *rpcConn {
 	c := &rpcConn{
 		w:         w,
 		r:         bufio.NewReader(r),
 		pending:   map[int64]chan *message{},
+		lsp:       lsp,
 		onNotify:  onNotify,
 		onRequest: onRequest,
 		onExit:    onExit,
@@ -121,6 +150,14 @@ func startRPC(dir, bin string, args []string,
 	onNotify func(string, json.RawMessage),
 	onRequest func(string, json.RawMessage) (any, error),
 	onExit func(error)) (*rpcConn, error) {
+	return spawn(dir, bin, args, false, onNotify, onRequest, onExit)
+}
+
+// spawn is startRPC in either dialect.
+func spawn(dir, bin string, args []string, lsp bool,
+	onNotify func(string, json.RawMessage),
+	onRequest func(string, json.RawMessage) (any, error),
+	onExit func(error)) (*rpcConn, error) {
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = dir
 	stdin, err := cmd.StdinPipe()
@@ -134,7 +171,7 @@ func startRPC(dir, bin string, args []string,
 	if err = cmd.Start(); err != nil {
 		return nil, err
 	}
-	c := newRPCConn(stdout, stdin, onNotify, onRequest, onExit)
+	c := newConn(stdout, stdin, lsp, onNotify, onRequest, onExit)
 	c.cmd = cmd
 	return c, nil
 }
@@ -230,9 +267,16 @@ func (c *rpcConn) send(m *message) error {
 	if err != nil {
 		return err
 	}
+	if c.lsp {
+		// header and body in one Write, so a reader on the far side never
+		// sees a header without the body that follows it
+		body = append([]byte(fmt.Sprintf("Content-Length: %d\r\n\r\n", len(body))), body...)
+	} else {
+		body = append(body, '\n')
+	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	_, err = c.w.Write(append(body, '\n'))
+	_, err = c.w.Write(body)
 	return err
 }
 
@@ -254,8 +298,12 @@ func marshalParams(params any) json.RawMessage {
 // the call it answers, the notification hook, or a request handler.
 func (c *rpcConn) readLoop() {
 	var loopErr error
+	read := readLine
+	if c.lsp {
+		read = readFramed
+	}
 	for {
-		m, err := readLine(c.r)
+		m, err := read(c.r)
 		if err != nil {
 			if err != io.EOF {
 				loopErr = err
@@ -338,4 +386,55 @@ func readLine(r *bufio.Reader) (*message, error) {
 		}
 		return &m, nil
 	}
+}
+
+// readFramed parses one Content-Length-framed message. Headers other than
+// Content-Length (Content-Type) are skipped. A missing or malformed length
+// is a hard error for the same reason a bad NDJSON line is: past it, there
+// is no way to find where the next message starts. EOF between messages is
+// a clean end (io.EOF); EOF inside one is not.
+func readFramed(r *bufio.Reader) (*message, error) {
+	length, headers := -1, 0
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			if err == io.EOF && line == "" && headers == 0 {
+				return nil, io.EOF
+			}
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			return nil, err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			if headers == 0 {
+				continue // a stray blank line between messages
+			}
+			break // the blank line that ends the header block
+		}
+		headers++
+		if name, v, ok := strings.Cut(line, ":"); ok && strings.EqualFold(strings.TrimSpace(name), "Content-Length") {
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil || n < 0 {
+				return nil, fmt.Errorf("bad Content-Length %q from agent", strings.TrimSpace(v))
+			}
+			length = n
+		}
+	}
+	if length < 0 {
+		return nil, errors.New("message from agent has no Content-Length")
+	}
+	body := make([]byte, length)
+	if _, err := io.ReadFull(r, body); err != nil {
+		if err == io.EOF {
+			err = io.ErrUnexpectedEOF
+		}
+		return nil, err
+	}
+	var m message
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, fmt.Errorf("bad message from agent: %w", err)
+	}
+	return &m, nil
 }

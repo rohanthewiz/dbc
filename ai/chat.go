@@ -245,13 +245,30 @@ func (c *Chat) connect(opt Options, dial dialFunc) {
 	c.emit(Event{Kind: EventReady, Models: sess.models, ModelID: sess.modelID})
 }
 
+// ErrAuthRequired matches (errors.Is) an EventExit or EventTurnDone error
+// that the agent refused for lack of sign-in. A UI uses it to offer the
+// agent's sign-in — for an agent that CanSignIn, one dbc runs itself.
+var ErrAuthRequired = errors.New("sign-in required")
+
+// authError is an agent error recognised as missing auth: it reads as the
+// agent's words plus its sign-in hint, and matches both the original error
+// and ErrAuthRequired.
+type authError struct {
+	err  error
+	hint string
+}
+
+func (e *authError) Error() string   { return e.err.Error() + " — " + e.hint }
+func (e *authError) Unwrap() []error { return []error{e.err, ErrAuthRequired} }
+
 // explain adds the agent's sign-in hint to an error that looks like missing
-// auth. The agents word it variously; these are the phrasings seen so far.
+// auth. The agents word it variously; these are the phrasings seen so far
+// (Copilot's is ACP's "Authentication required", code -32000).
 func (c *Chat) explain(err error) error {
 	msg := strings.ToLower(err.Error())
 	for _, k := range []string{"auth", "sign in", "signin", "not signed", "login", "unauthorized", "401"} {
 		if strings.Contains(msg, k) {
-			return fmt.Errorf("%w — %s", err, c.agent.Auth)
+			return &authError{err: err, hint: c.agent.Auth}
 		}
 	}
 	return err

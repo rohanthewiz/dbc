@@ -308,6 +308,10 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 		return m.chatModelSet(msg)
 	case chatSchemaMsg:
 		return m.chatSchema(msg)
+	case chatSignInCodeMsg:
+		return m.chatSignInCode(msg)
+	case chatSignInDoneMsg:
+		return m.chatSignInDone(msg)
 	case catsMsg:
 		return m.catsHandle(msg)
 	}

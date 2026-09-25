@@ -104,6 +104,14 @@ type chatPane struct {
 	pending   string // a prompt written before the handshake finished
 	attach    bool   // send context with the next question
 
+	// signing in to the agent — see chatsignin.go
+	needAuth  bool        // the agent refused for lack of sign-in
+	signState signInState // where a sign-in is
+	signIn    *ai.SignIn  // the flow waiting on GitHub, while signInWaiting
+	signSeq   int         // bumped per attempt and on its end; stale answers are dropped
+	signCode  string      // the device code being waited on
+	signURL   string      // where to enter it
+
 	input *editor
 
 	// the conversation archive — see chatarchive.go
@@ -140,6 +148,12 @@ const (
 	targetCopyReply
 	targetOpenSaved // a saved conversation offered in the empty pane; text is its id
 	targetAllSaved  // "all recent…" under those rows
+
+	// the sign-in row's chips — see chatsignin.go
+	targetSignIn
+	targetCopySignInCode // text is the device code
+	targetOpenURL        // text is the page to open
+	targetSignInCancel
 )
 
 // chatEventMsg carries one ai.Event to Update, tagged with the connection
@@ -188,6 +202,7 @@ func (p *chatPane) close() {
 	if p.c != nil {
 		p.c.Close()
 	}
+	p.endSignIn()
 }
 
 // startChat is ai.Start, as a var so tests hand in a scripted agent instead
@@ -270,6 +285,7 @@ func (m *Model) ensureChat() tea.Cmd {
 	}
 	p.gen++
 	p.state = chatStarting
+	p.needAuth = false // a refusal of this connection sets it again
 	p.c = startChat(p.agent, ai.Options{Dir: dir, Model: m.cfg.AIModel})
 	return waitChat(p.c, p.gen)
 }
@@ -302,6 +318,9 @@ func (m *Model) resetChat() tea.Cmd {
 
 // switchAgent starts a new conversation with a different backend.
 func (m *Model) switchAgent(a ai.Agent) tea.Cmd {
+	if a.ID != m.chat.agent.ID {
+		m.chat.endSignIn() // a sign-in belongs to the agent being left
+	}
 	m.chat.agent = a
 	return m.newChat()
 }
@@ -327,6 +346,7 @@ func (m *Model) chatEvent(msg chatEventMsg) tea.Cmd {
 	switch e.Kind {
 	case ai.EventReady:
 		p.state, p.models, p.modelID = chatReady, e.Models, e.ModelID
+		p.needAuth = false
 		if p.pending != "" {
 			prompt := p.pending
 			p.pending = ""
@@ -345,6 +365,9 @@ func (m *Model) chatEvent(msg chatEventMsg) tea.Cmd {
 		switch {
 		case e.Err != nil:
 			p.add(roleErr, e.Err.Error())
+			// a credential revoked mid-conversation refuses the turn, not
+			// the handshake; the ⎆ chip is offered the same way
+			p.needAuth = isAuthRefusal(e.Err)
 		case e.StopReason == "cancelled":
 			p.add(roleInfo, "— stopped")
 		}
@@ -355,7 +378,16 @@ func (m *Model) chatEvent(msg chatEventMsg) tea.Cmd {
 		p.state = chatDead
 		if e.Err != nil {
 			p.add(roleErr, e.Err.Error())
-			p.add(roleInfo, "click ⟲ new to try again")
+			p.needAuth = isAuthRefusal(e.Err)
+			// When dbc can sign in, the ⎆ chip under this is the next step
+			// and a question already asked waits for it; ⟲ new would only
+			// be refused again.
+			switch {
+			case !p.offerSignIn():
+				p.add(roleInfo, "click ⟲ new to try again")
+			case p.pending != "":
+				p.add(roleInfo, "your question goes out once you are signed in")
+			}
 		}
 		m.chatSave() // an answer cut off by the exit is still worth keeping
 		m.catsAfterTransition()
@@ -551,6 +583,14 @@ func (m *Model) chatSchema(msg chatSchemaMsg) tea.Cmd {
 		// the agent exited while the lookup ran; its exit is already in the
 		// transcript, and ⟲ new starts over
 		p.streaming = false
+		if p.offerSignIn() {
+			// ...unless it was refused for lack of sign-in: then the
+			// question waits for the sign-in, as one queued before the
+			// refusal does (finishSubmit queues it, since not ready)
+			m.finishSubmit(msg.question, ctx)
+			p.streaming = false
+			p.add(roleInfo, "your question goes out once you are signed in")
+		}
 		return nil
 	}
 	m.finishSubmit(msg.question, ctx)
@@ -670,6 +710,16 @@ func (m *Model) chatTargetPress(t chatTarget) tea.Cmd {
 	case targetAllSaved:
 		m.openRecentChats()
 		return nil
+	case targetSignIn:
+		return m.chatSignIn()
+	case targetCopySignInCode:
+		return m.copyString(t.text, "the sign-in code")
+	case targetOpenURL:
+		openURL(t.text)
+		return nil
+	case targetSignInCancel:
+		m.chatSignInCancel()
+		return nil
 	}
 	return nil
 }
@@ -737,6 +787,14 @@ func (m *Model) openChatMenu(x, y int) {
 	if len(p.msgs) == 0 && p.archiveID == "" {
 		noConversation = "no conversation to delete"
 	}
+	agent := p.agent
+	if agent.ID == "" {
+		agent = m.aiAgent
+	}
+	noSignIn := ""
+	if !agent.CanSignIn() {
+		noSignIn = "dbc cannot sign in to " + agent.Name + " — " + agent.Auth
+	}
 	m.openMenu(x, y, []menuItem{
 		{label: "Copy last reply", why: noReply, act: func(m *Model) tea.Cmd { return m.copyString(last, "the reply") }},
 		{label: "Copy conversation", act: func(m *Model) tea.Cmd { return m.copyString(p.transcriptText(), "the conversation") }},
@@ -746,6 +804,10 @@ func (m *Model) openChatMenu(x, y int) {
 		{label: "Delete this conversation", why: noConversation,
 			act: func(m *Model) tea.Cmd { return m.chatDeleteLive() }},
 		{label: "Model and assistant…", act: func(m *Model) tea.Cmd { m.openModelMenu(x, y); return nil }},
+		// Always offered for an agent dbc can sign in to, not only after a
+		// refusal: it is also how to check which account is signed in, and
+		// a signed-in account just gets "already signed in as …".
+		{label: signInMenuLabel(agent), why: noSignIn, act: func(m *Model) tea.Cmd { return m.chatSignIn() }},
 	})
 }
 
@@ -822,6 +884,10 @@ func (m *Model) drawChat(c *Canvas, r Rect) *caret {
 	status, sst := "", st.muted
 	p.stopBtn = Rect{}
 	switch {
+	case p.signState == signInStarting:
+		status, sst = "starting GitHub sign-in…", st.warn
+	case p.signState == signInWaiting:
+		status, sst = "waiting on GitHub — code "+p.signCode, st.warn
 	case p.state == chatStarting:
 		status = "connecting to " + name + "…"
 	case p.streaming:
@@ -1059,7 +1125,7 @@ func (p *chatPane) layoutRows(st styles, w int) []chatRow {
 			}
 		}
 	}
-	return rows
+	return append(rows, p.signInRows(st)...)
 }
 
 // agentRows renders an answer: paragraphs wrapped, `inline code` and

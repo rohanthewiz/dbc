@@ -20,9 +20,20 @@ type Fake struct {
 	// Reply scripts the answer to a prompt, as the chunks to stream.
 	Reply func(prompt string) []string
 
+	// SignedOut makes session/new refuse as Copilot does for an account
+	// with no credential, until a sign-in through SignIn completes. Set it
+	// before the first Start.
+	SignedOut bool
+
+	// SignInResult is what the device flow ends with; the zero value is a
+	// successful sign-in as "octocat". Any status that is not signed in
+	// leaves SignedOut as it was.
+	SignInResult ai.AuthStatus
+
 	mu      sync.Mutex
 	prompts []string
 	cancels int
+	signIns int // device codes handed out
 
 	out     *io.PipeWriter
 	writeMu sync.Mutex
@@ -85,6 +96,15 @@ func (f *Fake) serve(in *bufio.Reader) {
 		case "initialize":
 			f.reply(m.ID, map[string]any{"protocolVersion": 1})
 		case "session/new":
+			f.mu.Lock()
+			out := f.SignedOut
+			f.mu.Unlock()
+			if out {
+				// the language server's words and code for this refusal
+				f.write(map[string]any{"jsonrpc": "2.0", "id": m.ID,
+					"error": map[string]any{"code": -32000, "message": "Authentication required"}})
+				continue
+			}
 			f.reply(m.ID, map[string]any{"sessionId": "s1", "models": map[string]any{
 				"currentModelId": "fast",
 				"availableModels": []any{

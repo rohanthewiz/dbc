@@ -175,8 +175,14 @@ protocol, which carries plain text only, and says so in the log.
 `✦ Ask` (or `Ctrl+A`) opens a chat about the query in the editor and the
 result in the grid. It runs GitHub Copilot by default through its official
 language server, speaking the Agent Client Protocol, so dbc holds no
-credential: sign in to Copilot once from any editor that uses the language
-server (ced, VS Code, Neovim) and dbc uses the same sign-in.
+credential: the language server keeps it, shared with every editor that uses
+it (ced, VS Code, Neovim). Signed in from one of those, dbc just works. If you
+are not, the pane says so and offers **⎆ sign in to Copilot**. It shows a
+code to enter at github.com/login/device, copies it, and opens your browser
+there. The question you asked goes out once GitHub confirms. It is GitHub's
+device flow, so it works over SSH too: enter the code in a browser on any
+machine. The transcript's right-click menu has **Sign in to Copilot…** at any
+time, which also tells you which account is signed in.
 
 ```sh
 npm install -g @github/copilot-language-server   # if you do not have it

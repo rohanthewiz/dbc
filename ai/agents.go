@@ -37,7 +37,16 @@ type Agent struct {
 
 	// Auth says how to sign in, shown when the agent refuses for lack of it.
 	Auth string
+
+	// SignInArgs is the argv after the binary that runs it as a language
+	// server offering GitHub's device-flow sign-in (see signin.go). Nil when
+	// dbc cannot sign the user in for this agent — then Auth is the only
+	// way, and it names the agent's own login command.
+	SignInArgs []string
 }
+
+// CanSignIn reports whether dbc can run this agent's sign-in itself.
+func (a Agent) CanSignIn() bool { return a.SignInArgs != nil }
 
 // CopilotID is the default agent.
 const CopilotID = "copilot"
@@ -49,8 +58,12 @@ func Agents() []Agent {
 			ID: CopilotID, Name: "Copilot",
 			Binary: "copilot-language-server", Args: []string{"--acp"},
 			Install: "npm install -g @github/copilot-language-server",
-			Auth: "sign in to GitHub Copilot once from any editor that uses the language server " +
-				"(ced, VS Code, Neovim) — the credential is shared",
+			Auth: "sign in to GitHub Copilot — dbc can do it (a code to enter at github.com), " +
+				"or do it once from any editor that uses the language server (ced, VS Code, Neovim); " +
+				"the credential is shared",
+			// Without --stdio the server prints a usage error and exits,
+			// which would look exactly like a failed sign-in.
+			SignInArgs: []string{"--stdio"},
 		},
 		{
 			ID: "claude", Name: "Claude Code",

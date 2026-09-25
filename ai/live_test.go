@@ -62,3 +62,30 @@ func TestLiveHandshake(t *testing.T) {
 		}
 	}
 }
+
+// TestLiveSignInStatus runs the real server in LSP mode and asks it to sign
+// in. On a signed-in machine that answers "already signed in" and changes
+// nothing, so it proves the LSP handshake and framing against the real thing
+// for free. On a signed-out one it prints the device code, and
+// DBC_AI_LIVE_SIGNIN=1 waits for it to be entered.
+func TestLiveSignInStatus(t *testing.T) {
+	if os.Getenv("DBC_AI_LIVE") == "" {
+		t.Skip("set DBC_AI_LIVE=1 to talk to the real agent")
+	}
+	dir, _ := os.Getwd()
+	s, err := BeginSignIn(Agents()[0], dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if s.UserCode == "" {
+		t.Logf("already signed in: %+v", s.Status)
+		return
+	}
+	t.Logf("enter %s at %s", s.UserCode, s.VerificationURI)
+	if os.Getenv("DBC_AI_LIVE_SIGNIN") == "" {
+		return
+	}
+	st, err := s.Wait()
+	t.Logf("sign-in: %+v, %v", st, err)
+}

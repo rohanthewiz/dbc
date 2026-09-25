@@ -9,6 +9,7 @@
 //	dbc script scripts/loop.go     run a Go script headless
 //	dbc migrate up                 apply pending migrations (see migrate.go)
 //	dbc explain -a "SELECT …"      show a statement's plan and findings (see explain.go)
+//	dbc web                        the workbench in a browser (see webcmd.go)
 //
 // Headless runs are cancelable with Ctrl+C, which aborts the statement on the
 // server and exits 130.
@@ -156,6 +157,7 @@ func newCLI() *cli.Command {
 				Action:    scriptAction,
 			},
 			explainCommand(),
+			webCommand(),
 			{
 				Name:      "migrate",
 				Usage:     "apply or inspect goose-format migrations (dbc migrate help)",

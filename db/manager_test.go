@@ -66,3 +66,36 @@ func TestSqliteConcurrentWrites(t *testing.T) {
 		t.Errorf("count = %s, want %s", res.Rows[0][0], want)
 	}
 }
+
+// SetMemoryPool raises the cap of an in-memory SQLite pool that is already
+// open, and of one opened later; it never lowers it below the TUI's shape.
+func TestSetMemoryPool(t *testing.T) {
+	cfg := &config.Config{Connections: []config.Connection{
+		{Name: "a", Driver: "sqlite", DSN: "file:" + memName(t) + "a?mode=memory&cache=shared"},
+		{Name: "b", Driver: "sqlite", DSN: "file:" + memName(t) + "b?mode=memory&cache=shared"},
+	}}
+	m := NewManager(cfg)
+	defer m.Close()
+	a, err := m.DB("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Stats().MaxOpenConnections; got != memSQLiteMaxOpen {
+		t.Fatalf("default cap = %d, want %d", got, memSQLiteMaxOpen)
+	}
+	m.SetMemoryPool(2) // below the minimum: ignored
+	if got := a.Stats().MaxOpenConnections; got != memSQLiteMaxOpen {
+		t.Fatalf("cap after SetMemoryPool(2) = %d, want %d", got, memSQLiteMaxOpen)
+	}
+	m.SetMemoryPool(16)
+	if got := a.Stats().MaxOpenConnections; got != 16 {
+		t.Fatalf("open pool's cap = %d, want 16", got)
+	}
+	b, err := m.DB("b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := b.Stats().MaxOpenConnections; got != 16 {
+		t.Fatalf("later pool's cap = %d, want 16", got)
+	}
+}

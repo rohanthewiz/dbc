@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-049
+**Next ID:** N-051
 
 ## Open
 
@@ -38,13 +38,6 @@ ten session docs in `ai_docs/claude_sessions/`
   a GNOME/KDE terminal paste after an HTML copy gets the markup, Teams or
   LibreOffice gets the table, and a clipboard manager (Klipper, GPaste) does
   not keep a helper alive. Only Xvfb + xclip has exercised it so far.
-- **N-045** · raised `2026-0925-1425-workspace-extraction-web-phase1` · value medium
-  `dbc web` Phase 2 (`ai_docs/plans/web-ui.md`): the subcommand (`--listen`,
-  `--no-open`, `--secret`), rweb server, auth middleware (per-launch secret,
-  HMAC cookie, Host/Origin/CSRF checks), serr → envelope responder, element
-  shell, embedded assets, SSE hub running workspace Jobs, cleanup on Ctrl+C,
-  health endpoint, `web.bytdb` for tabs/layout; raise the in-memory SQLite
-  pool cap. Phase 1 (`workspace`) is done.
 - **N-046** · raised `2026-0925-1425-workspace-extraction-web-phase1` · value medium
   `dbc web` Phase 4: the Plan tab with full parity with the HTML plan page —
   lift `explain/assets/plan.html`'s script into one `plan.js` the standalone
@@ -58,6 +51,20 @@ ten session docs in `ai_docs/claude_sessions/`
 - **N-048** · raised `2026-0925-1425-workspace-extraction-web-phase1` · value low
   `dbc web` Phases 3, 5, 6 (Monaco editor + virtualized grid + copy/export;
   assistant and scripts on SSE; tabs, layout, packaging), per the plan.
+
+- **N-049** · raised `2026-0925-1451-dbc-web-phase2-skeleton` · value medium
+  bytdb (v0.16.0) takes no file lock, so two dbc processes — two TUIs, or a
+  TUI and `dbc web` — open the same bytdb file (the demo's
+  `demo.bytdb` included) and both write its WAL. Seen in Phase 2: a second
+  `dbc web` on the same HOME opened `demo.bytdb` without a word. Lock in
+  bytdb itself, or in `db.Manager` as `web.bytdb` does (`web/lock_*.go`),
+  and drop the connection with a warning when held.
+- **N-050** · raised `2026-0925-1451-dbc-web-phase2-skeleton` · value low
+  rweb v0.1.31: `SSEHub.broadcastToClients` bumps each client's `dropped`
+  counter under the hub's READ lock, so concurrent `Broadcast` calls race
+  (caught by `-race` in `web`). dbc works around it with a per-tab send
+  mutex (`web/hub.go`, `tab.sendMu`); fix it in rweb (atomic counter or the
+  write lock), then the mutex can go.
 
 ## Roadmap
 
@@ -90,6 +97,20 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-045** · raised `2026-0925-1425-workspace-extraction-web-phase1` ·
+  closed 2026-09-25, 2026-0925-1451-dbc-web-phase2-skeleton — `dbc web`
+  Phase 2 is built: `dbc web [--listen] [--no-open] [--secret]`, package
+  `web/` (rweb server; guard middleware with Host and Origin checks, the
+  per-launch secret traded for a SameSite=Strict cookie at `/login?s=`,
+  Bearer for scripts; the envelope and serr → status mapping; the element
+  shell and result table; embedded assets; one workspace and SSE stream per
+  browser tab with reattach, idle release and forget; cleanup on Ctrl+C;
+  health; `web.bytdb` for tabs and layout, advisory-locked), and
+  `db.Manager.SetMemoryPool` for the in-memory SQLite cap. Auth was kept
+  small at the user's word (no TLS, login form or CSRF token). The plan's
+  Phase 2 outcome lists the decisions. Checked by 17 tests under `-race` and
+  end to end in headless Chrome. Raised N-049, N-050.
 
 - **N-030** · raised `2026-0924-1422-ui-revamp-mouse-ai-assistant-rich-copy` ·
   closed 2026-09-25, 2026-0925-1353-x11-clipboard-owner — Linux rich copy served text/html only. Premise

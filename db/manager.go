@@ -29,6 +29,9 @@ import (
 // a script or a catalog refresh.
 const memSQLiteMaxOpen = 3
 
+// The cap is a default for the TUI's shape, not a law: dbc web pins a session
+// per browser tab, and raises it with SetMemoryPool.
+
 // Manager owns the pool of named database connections. Connections are
 // opened lazily on first use and cached for the life of the process.
 //
@@ -58,8 +61,11 @@ type Manager struct {
 	// Session.Close). The anchor is checked out and never used, so the pool
 	// can never close it.
 	anchors map[string]*sql.Conn
-	closed  bool
-	cfg     *config.Config
+	// memMaxOpen is the pool cap of a shared in-memory SQLite database;
+	// 0 means memSQLiteMaxOpen. Guarded by mu.
+	memMaxOpen int
+	closed     bool
+	cfg        *config.Config
 }
 
 // openCall is one open-and-ping in progress. dbh and err are written before
@@ -167,6 +173,10 @@ func (m *Manager) DBContext(ctx context.Context, name string) (*sql.DB, error) {
 			m.conns[name] = dbh
 			if anchor != nil {
 				m.anchors[name] = anchor
+				// open set the default cap; a raised one is applied here,
+				// under mu, so a SetMemoryPool racing this open is not
+				// lost between the two
+				dbh.SetMaxOpenConns(m.memMaxOpenLocked())
 			}
 		}
 		m.mu.Unlock()
@@ -175,6 +185,36 @@ func (m *Manager) DBContext(ctx context.Context, name string) (*sql.DB, error) {
 		close(call.done)
 		return dbh, err
 	}
+}
+
+// SetMemoryPool sets the pool cap of every shared in-memory SQLite database,
+// open now or opened later. n counts every connection: the anchor, one per
+// pinned session, and the pool's own. A UI that pins more than one session
+// at a time (dbc web: one per browser tab) raises it; n < 3 is ignored, since
+// the anchor and one session alone would leave nothing for the pool.
+//
+// A session that finds the pool full waits for a connection under its run's
+// context, so the cost of too small a cap is a run that waits (and can be
+// canceled), not a failure.
+func (m *Manager) SetMemoryPool(n int) {
+	if n < memSQLiteMaxOpen {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.memMaxOpen = n
+	for name := range m.anchors {
+		if dbh := m.conns[name]; dbh != nil {
+			dbh.SetMaxOpenConns(n)
+		}
+	}
+}
+
+func (m *Manager) memMaxOpenLocked() int {
+	if m.memMaxOpen > 0 {
+		return m.memMaxOpen
+	}
+	return memSQLiteMaxOpen
 }
 
 // open does the slow part of DBContext — sql.Open, pool settings, ping — with

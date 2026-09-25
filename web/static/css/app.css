@@ -1,0 +1,225 @@
+/* dbc web — the workbench's look. Colors come from /theme.css, which the
+   server writes from the theme package, so the browser wears the TUI's
+   palette. No inline styles anywhere: the CSP forbids them, and the page's
+   script sizes panes through the CSSOM (element.style), which it allows. */
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.45 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button {
+  font: inherit;
+  color: var(--fg);
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { color: var(--muted); cursor: default; opacity: .6; }
+button:focus-visible, textarea:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+
+[hidden] { display: none !important; }
+
+/* ── layout ───────────────────────────────────────────────────────────────
+   topbar spans the top; the sidebar runs down the left; the work column
+   holds editor, splitter, results and log; the status bar spans the foot. */
+.app {
+  display: grid;
+  grid-template-columns: 230px 1fr;
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    "top  top"
+    "side work"
+    "foot foot";
+  height: 100vh;
+}
+
+.topbar {
+  grid-area: top;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--panel2);
+  border-bottom: 1px solid var(--line);
+}
+.topbar > *, .actions button { white-space: nowrap; }
+.brand { font-weight: 700; color: var(--accent); letter-spacing: .5px; }
+.active-conn { color: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  border: 1px solid var(--warn);
+  color: var(--warn);
+}
+.busy { color: var(--warn); animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .3; } }
+.actions { margin-left: auto; display: flex; gap: 6px; }
+#run { border-color: var(--accent); }
+
+.sidebar {
+  grid-area: side;
+  overflow: auto;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  padding: 8px 0;
+}
+.sidebar h2 {
+  margin: 10px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  color: var(--muted);
+}
+.sidebar h2 .count { text-transform: none; letter-spacing: 0; }
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.conn-item {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  padding: 3px 12px;
+  text-align: left;
+}
+.conn-item:hover { background: var(--sel); }
+.conn-item.active { background: var(--sel); box-shadow: inset 2px 0 var(--accent); }
+.conn-item.connecting .name::after { content: " …"; color: var(--warn); }
+.conn-item .driver { color: var(--muted); font-size: 11px; }
+#tables li {
+  padding: 1px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+#tables li:hover { background: var(--sel); }
+#tables li .schema { color: var(--muted); }
+#tables li.view::after { content: " (view)"; color: var(--muted); }
+#tables li.none { color: var(--muted); cursor: default; font-family: inherit; }
+
+.work {
+  grid-area: work;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+#editor {
+  flex: 0 0 auto;
+  height: 36%;
+  min-height: 60px;
+  resize: none;
+  border: 0;
+  padding: 10px 12px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  tab-size: 4;
+}
+.splitter {
+  flex: 0 0 5px;
+  cursor: row-resize;
+  background: var(--line);
+}
+.splitter:hover, .splitter.dragging { background: var(--accent); }
+
+.results {
+  flex: 1 1 auto;
+  overflow: auto;
+  min-height: 40px;
+  background: var(--bg);
+}
+.results .empty, .results .exec, .results .failed {
+  padding: 16px;
+  color: var(--muted);
+}
+.results .exec { color: var(--fg); }
+.results .failed { color: var(--err); white-space: pre-wrap; font-family: ui-monospace, monospace; }
+.results .more { margin: 6px 12px; color: var(--warn); }
+
+table.grid {
+  border-collapse: collapse;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+table.grid th, table.grid td {
+  padding: 2px 10px;
+  border-right: 1px solid var(--line);
+  white-space: pre;
+  max-width: 480px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+table.grid thead th {
+  position: sticky;
+  top: 0;
+  background: var(--panel2);
+  color: var(--accent);
+  font-weight: 600;
+  border-bottom: 1px solid var(--line);
+}
+table.grid tbody tr:nth-child(even) { background: var(--panel); }
+table.grid tbody tr:hover { background: var(--sel); }
+table.grid .rownum { color: var(--muted); text-align: right; }
+table.grid td.num { text-align: right; }
+table.grid td.null { color: var(--muted); font-style: italic; }
+
+.log {
+  flex: 0 0 130px;
+  overflow: auto;
+  padding: 4px 12px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.log div { white-space: pre-wrap; }
+.log .t { color: var(--muted); margin-right: 8px; }
+.log .ok { color: var(--accent); }
+.log .warn { color: var(--warn); }
+.log .err { color: var(--err); }
+.log .accent { color: var(--accent); }
+.log .muted { color: var(--muted); }
+
+.statusbar {
+  grid-area: foot;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 12px;
+  background: var(--panel2);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+#status.err { color: var(--err); }
+#status.warn { color: var(--warn); }
+
+/* narrow screens: the sidebar goes above the work column */
+@media (max-width: 700px) {
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto 1fr auto;
+    grid-template-areas: "top" "side" "work" "foot";
+  }
+  .topbar { flex-wrap: wrap; gap: 6px 10px; }
+  .sidebar { max-height: 30vh; border-right: 0; border-bottom: 1px solid var(--line); }
+  .statusbar .keys { display: none; }
+}
+
+/* the sign-in notice */
+.signin { max-width: 520px; margin: 12vh auto; padding: 0 16px; }
+.signin h1 { color: var(--accent); }

@@ -2,8 +2,9 @@
 
 Raised 2026-09-25. The ask: a web UI for dbc, started as `dbc web`.
 
-This is a plan. **Phase 1 (the `workspace` extraction) is done** (2026-09-25);
-everything from Phase 2 on is not built yet.
+This is a plan. **Phases 1 (the `workspace` extraction) and 2 (the `dbc web`
+skeleton) are done** (2026-09-25); everything from Phase 3 on is not built
+yet.
 
 ## The one-paragraph version
 
@@ -255,10 +256,11 @@ Two resource limits this touches, both real today:
   one pinned session + one pooled). Two tabs pinning sessions would starve
   the pool. `dbc web` raises the cap (it is a constant for the TUI's shape,
   not a law) and says so in a comment.
-- **bytdb** holds a file lock, so `dbc web` and a TUI cannot both open the
-  same bytdb file (the demo included) — the same limit two TUIs have. The
-  second process gets the existing "dropped with a warning" behavior; the
-  web log says which connection is unavailable and why.
+- **bytdb** was assumed to hold a file lock. *Found in Phase 2: it does
+  not* (v0.16.0 takes none), so `dbc web` and a TUI — or two TUIs, as today
+  — can both open the same bytdb file, the demo included, and both write its
+  WAL. dbc web's own `web.bytdb` takes an advisory lock of its own (see
+  Phase 2's outcome); the connection files are a follow-up.
 
 ## Security
 
@@ -374,6 +376,69 @@ embedded assets, the SSE hub, cleanup on Ctrl+C, the health endpoint, and a
 A run returns a plain HTML table. **Done when** you can pick a connection,
 type a query, run it, cancel a slow one, and the auth tests (no token → 401,
 bad Host → 403, cross-site POST → 403) pass.
+
+*Outcome (✅ 2026-09-25):* `dbc web [--listen ADDR] [--no-open] [--secret S]`
+(`webcmd.go`), package `web/`:
+
+| File | Holds |
+|---|---|
+| `server.go` | `Options`, `New`, the routes, `Run` (rweb's own SIGINT handling, then `Shutdown`), port 8450 with a free-port fallback, embedded assets with a content-hash `?v=`, `/theme.css` from the `theme` package, the idle reaper loop |
+| `auth.go` | the guard middleware: Host check, Origin check on non-GET, session cookie or Bearer; `/login?s=` → cookie → 303 `/`; CSP and friends on every response |
+| `hub.go` | one `workspace.Workspace` + one rweb `SSEHub` per browser tab; `launch` runs a Start's Job on a goroutine with a ticker; `deliver` turns landed events into `log`/`busy`/`tick`/`run`/`conn` SSE events; idle release and forget |
+| `api.go` | the JSON handlers, the UTF-16 caret → byte offset conversion |
+| `respond.go` | the envelope and `classify` (Refusal Busy 409 / other 400, `reqError`, `db.ErrCanceled` 200 stopped, else 500 logged) |
+| `store.go`, `lock_*.go` | `web.bytdb`: tabs (buffer, connection) and layout (editor height), with a memory-only fallback |
+| `pages/` | the element shell, the result table, the sign-in notice |
+| `static/` | `app.css`, `app.js` (one module: boot/reattach, SSE switch, keys, splitter, autosave) |
+
+Decisions and departures, each recorded here so later phases build on the
+real thing:
+
+- **Auth, kept small at the user's word** ("likely this will remain just a
+  local tool"): per-launch secret → an `HttpOnly` `SameSite=Strict` cookie
+  (a random per-launch value, not an HMAC-signed expiry; a restart signs
+  everyone out), Bearer for scripts, Host check (DNS rebinding) and Origin
+  check (cross-site POST). **Dropped from the Security section:** TLS and
+  `--insecure` (a non-loopback `--listen` just warns), the `/login` form (a
+  browser without the cookie is told to use the printed link), the
+  `X-DBC-CSRF` header and its `<meta>`. The cookie name carries the port, as
+  cookies are not port-scoped and two instances would sign each other out.
+- **No inline script at all**, so the CSP needs no hash: the page reads
+  nothing from the shell but the DOM. Console clean in Chrome.
+- **Results are fetched, not streamed:** the `run` event says
+  `hasResult`, and the page GETs `/api/v1/ws/:id/result` (rendered with
+  element). A page that missed the event can still catch up; Phase 3's
+  paged grid extends the same route.
+- **Reattach:** the tab keeps its workspace id in `sessionStorage`, so a
+  reload rejoins the same workspace — same pinned session, same open
+  transaction. A 404 (forgotten, or a restart) opens a new one.
+- **The badge is "session state", not "transaction open":**
+  `db.Session.Stateful` errs toward yes (any non-read sets it, nothing but a
+  new session clears it), so "transaction open" would lie after a plain
+  `UPDATE` or a `ROLLBACK`.
+- **Idle rules:** a tab with no stream for `conn_idle_timeout` has its
+  session released (`ws.Close`, still usable after); after 24 h it is
+  forgotten. Checked once a minute.
+- **In-memory SQLite:** `db.Manager.SetMemoryPool(n)` raises the cap for
+  open and future pools; dbc web asks for 16.
+- **Found on the way:** rweb v0.1.31's `SSEHub` updates each client's drop
+  counter under its *read* lock, so concurrent broadcasts race (`-race`
+  caught it). Worked around with a per-tab send mutex; the fix belongs in
+  rweb. And bytdb takes no file lock (see *Sessions, tabs and
+  connections*); `web.bytdb` has its own flock/`LockFileEx` on
+  `web.bytdb.lock`, and a second instance runs memory-only with a warning.
+
+Verified: 16 `web` tests against a real server (the three auth tests,
+Bearer, the login cookie, CSP on every response, run → SSE → result, the
+caret with a multi-byte character, run all, refusals 400/404, busy 409 then
+cancel → stopped, the session badge across runs and reattach, idle release
+then forget, tabs/layout round trip, store persistence and lock) plus the
+status-mapping table, all green under `-race -count=5`. End to end in
+headless Chrome via go-rod: sign in through the link, run with Ctrl+Enter,
+switch connection, stop a slow query, reload keeps workspace, badge and
+buffer, 420 px has no horizontal scroll, console clean; SIGINT released the
+open session and exited; a second instance fell back to a free port and a
+memory-only store.
 
 ### Phase 3 — the real editor and grid
 

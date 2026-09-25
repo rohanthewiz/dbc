@@ -62,6 +62,8 @@ github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
 github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=
 github.com/rivo/uniseg v0.4.7/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUcx88=
+github.com/rohanthewiz/assert v0.1.2 h1:coi0nUTAuqgpxoa7THQynDnBKUzV9Bid+tNaocUkCYE=
+github.com/rohanthewiz/assert v0.1.2/go.mod h1:Xix0OMMRN0aGkE207Wk5GJk0eWlpcNGph0+kYpuq+vQ=
 github.com/rohanthewiz/btypedb v0.7.0 h1:i8zu+Rc5YIkocbVuNk1jlnb94g9RTtJQGAGm9xob+QI=
 github.com/rohanthewiz/btypedb v0.7.0/go.mod h1:K+7M8clbmaVh33X9QYm1sA5A7DWDKOE1+O9WFQflMI0=
 github.com/rohanthewiz/bytdb v0.16.0 h1:T4cQHGTe+ygxz5uKp1hgeJrpJLwFa+Mx76a6vJxN0Qk=
@@ -70,6 +72,8 @@ github.com/rohanthewiz/element v0.6.0 h1:YS7I69mKKjtMa1ezr1ZQKm+XmrhQzKiE9vOSPxd
 github.com/rohanthewiz/element v0.6.0/go.mod h1:YZnKqWX2lSsR+zi06x3vhViYVoOSx8xHQjUMTmM/FLo=
 github.com/rohanthewiz/logger v1.3.0 h1:cJoocqUvv5wsHcjlW7wupMTruyBCUHuu8J380u5fyFs=
 github.com/rohanthewiz/logger v1.3.0/go.mod h1:aPgQ2SY+8fjgyUVcHpWBT9gGHaqKU4cfWjJ7Gkt+Eb0=
+github.com/rohanthewiz/rweb v0.1.31 h1:FdJWpyWVfY8nEUHievuUEKEXlaLa2DDrh4krUItXZiA=
+github.com/rohanthewiz/rweb v0.1.31/go.mod h1:byJnPYevT7h4eqAlEQjlH124J0VPFmrP3Cp34wnQNqk=
 github.com/rohanthewiz/serr v1.4.0 h1:twQnnRRB3+orPJBrdVBaxaYScNE+Dk9MxSLtEabvoGA=
 github.com/rohanthewiz/serr v1.4.0/go.mod h1:l01AbjXw1zP0kxe5tX5s/sADHiBbl0Rwfo/igde4b88=
 github.com/sirupsen/logrus v1.9.4 h1:TsZE7l11zFCLZnZ+teH4Umoq5BhEIfIzfRDZ1Uzql2w=

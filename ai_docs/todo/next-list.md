@@ -56,11 +56,6 @@ ten session docs in `ai_docs/claude_sessions/`
   web" action already launch it, and a `.app` is a second packaging path to
   keep building and signing. `/api/v1/health` is there for a wrapper to
   poll.
-- **N-056** · raised `2026-0925-1812-web-add-connection` · value low
-  Edit a browser-added connection in place (rename, change the DSN or
-  `ai_rows`). Today it is remove and add again, which means retyping the
-  DSN, since the browser never gets it back. An edit form would need a
-  "leave the DSN unchanged" path for the same reason.
 - **N-057** · raised `2026-0925-1812-web-add-connection` · value low
   Connections added in `dbc web` are invisible to the TUI and headless runs,
   which read only the config file. Sharing them needs somewhere both can
@@ -98,6 +93,24 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-056** · raised `2026-0925-1812-web-add-connection` ·
+  closed 2026-09-25, 2026-0925-1831-N-056-edit-connection — a connection
+  added in the browser is edited in place from the sidebar's right-click
+  *Edit…* (`PUT /api/v1/conns/:name`). The
+  form is the add form, filled from the sidebar (`ai_rows` now rides in the
+  connection list); its DSN field starts empty, and empty means "keep the
+  stored DSN" — for Save, and for Test via `from` (`keepDSN`). A kept DSN
+  goes only with its own driver. `config.ReplaceConn` swaps the entry in
+  place under the lock (a rename keeps its position; a clash or a removal by
+  another window is caught there); `Store.UpdateConn` keeps `added` and, on a
+  rename, moves the saved tabs' `conn` in the same transaction, and the
+  "conns" event carries `renamed {from, to}` so every window moves its
+  not-yet-shown tabs too. A rename, driver or DSN change is refused while a
+  tab is on the connection (as a removal is); `ai_rows` alone is not, since
+  the assistant reads it afresh. History and saved chats keep the old name.
+  Tested in `web/conns_test.go` on both the memory and the bytdb store, and
+  end to end in headless Chrome.
 
 - **N-054** · raised `2026-0925-1641-dbc-web-phases-5-6` ·
   closed 2026-09-25, 2026-0925-1728-N-054-tab-claims — a window claims the saved tabs it shows

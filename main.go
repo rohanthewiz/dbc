@@ -65,6 +65,7 @@ import (
 	"github.com/rohanthewiz/dbc/sdb"
 	"github.com/rohanthewiz/dbc/sqlsplit"
 	"github.com/rohanthewiz/dbc/tui"
+	"github.com/rohanthewiz/dbc/version"
 )
 
 // The flag values. Each cli flag writes into one of these through its
@@ -112,8 +113,11 @@ func main() {
 // (`dbc --dir db/migrate migrate up`) keeps working.
 func newCLI() *cli.Command {
 	return &cli.Command{
-		Name:      "dbc",
-		Usage:     "a TUI database client with Go scripting",
+		Name:  "dbc",
+		Usage: "a TUI database client with Go scripting",
+		// Setting Version makes the cli package add --version / -v, which
+		// prints "dbc version x.y.z" and exits before any config is read.
+		Version:   version.Version,
 		ArgsUsage: `["SQL"]`,
 		Description: "With no SQL, dbc opens the TUI. SQL given as the argument, with --file, " +
 			"or piped to stdin runs headless: statements run in order on one connection " +

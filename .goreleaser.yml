@@ -1,0 +1,58 @@
+# GoReleaser config for dbc, driven by .github/workflows/release.yml on every
+# push to the `release` branch: that workflow bumps version/version.go and
+# cats-plugin.toml, tags v<x.y.z>, then runs `goreleaser release --clean`,
+# which cross-compiles dbc, archives it, and attaches the archives and
+# checksums to a GitHub Release.
+#
+# The cats plugin is dbc's primary install and builds from source, so these
+# archives are for machines without cats or a Go toolchain (a server to run
+# `dbc migrate` on, say). Shaped after ../ced/.goreleaser.yml.
+
+version: 2
+
+project_name: dbc
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: dbc
+    binary: dbc
+    main: .
+    # Pure Go: modernc SQLite, bytdb, pgx and go-sql-driver need no cgo, so
+    # every target cross-compiles from one Linux runner and the binaries are
+    # static.
+    env:
+      - CGO_ENABLED=0
+    # The platforms cats-plugin.toml declares. Windows is left out because
+    # nothing has exercised the TUI or the cats integration there, not because
+    # it is known not to build.
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+
+archives:
+  - id: default
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - README*
+      - dbc.example.toml
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^test:"
+      - "^Session doc:"
+      - "^Next list:"
+      - "Merge pull request"
+      - "Merge branch"

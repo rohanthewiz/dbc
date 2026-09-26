@@ -19,6 +19,10 @@
 
 id = "rohanthewiz.dbc"
 name = "dbc"
+# Informational only; the host does not compare it. version/version.go is the
+# source of truth: release CI (.github/workflows/release.yml) rewrites this line
+# in the same commit as its auto-bump, and TestVersion_MatchesCatsManifest fails
+# when the two disagree, so a hand-pinned version must be edited in both places.
 version = "0.1.0"
 description = "A terminal database client for Postgres, MySQL, SQLite and bytdb, scriptable in Go: run the statement under the cursor, explain its plan (tree, flame graph, fixes), browse tables, recall history, export results as CSV, Markdown, HTML or JSON, and drive whole query loops from a .go script. `dbc web` serves the same workbench in a browser."
 platforms = ["linux", "macos"]
@@ -87,11 +91,14 @@ command = ["./bin/dbc", "web"]
 # The static form, because dbc has no completion code of its own and its
 # surface is small: the subcommands in first position (a bare first word is
 # otherwise a SQL string, which nothing could complete), and the flags wherever
-# a word starts with "-". Keep these in step with the flags in main.go's newCLI.
+# a word starts with "-". TestCatsManifest_CompletionsCoverCLI (manifest_test.go)
+# compares these lists with newCLI both ways, so a flag added, renamed or
+# dropped in Go fails the tests until it is changed here too.
 [[completions]]
 binary = "dbc"
 subcommands = ["script", "migrate", "explain", "web"]
 flags = ["--config", "-c", "--conn", "-f", "--file", "-t", "--format", "-o", "--out",
+         "--tx", "-k", "--keep-going",
          "--demo", "--driver", "--dsn", "--dir", "--allow-missing",
-         "-a", "--analyze", "--open", "--fail-on",
-         "--listen", "--no-open", "--secret", "--help"]
+         "-a", "--analyze", "--open", "--fail-on", "--theme",
+         "--listen", "--no-open", "--secret", "--help", "-v", "--version"]

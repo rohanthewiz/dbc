@@ -17,6 +17,19 @@ terminal, `dbc web` serves the whole workbench there.
 go build -o dbc .
 ```
 
+Or install a tagged release with `go install github.com/rohanthewiz/dbc@latest`,
+through Cats ([As a Cats plugin](#as-a-cats-plugin)), or from the archives on
+the GitHub Releases page. `dbc --version` prints the version.
+
+### Releasing
+
+Fast-forward the `release` branch to main and push it
+(`git push origin main:release`). The Release workflow runs the tests, bumps
+the patch number in `version/version.go` and `cats-plugin.toml`, tags
+`v<x.y.z>`, and publishes linux/darwin archives. For a minor or major release,
+edit both files by hand in the commit you push and the workflow uses that
+number as-is. Merge `release` back into main afterwards.
+
 ## Configure connections
 
 Copy `dbc.example.toml` to `./dbc.toml` (or `~/.config/dbc/config.toml`):
@@ -469,7 +482,9 @@ catctl plugin run rohanthewiz.dbc       # opens the TUI in a new tab
 
 Installing builds `bin/dbc` and links it as `~/.cats/bin/dbc`, so `dbc`
 typed in any shell is the same build the plugin launches. `catctl completion`
-picks up dbc's subcommands and flags as well.
+picks up dbc's subcommands and flags as well. `catctl plugin update
+rohanthewiz.dbc` fetches and rebuilds; add `--ref v0.2.0` to the install to pin
+a release instead of tracking main.
 
 The plugin tab opens in your current directory, so a project's own
 `./dbc.toml` is used when there is one, otherwise

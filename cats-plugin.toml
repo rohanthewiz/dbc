@@ -23,7 +23,7 @@ name = "dbc"
 # source of truth: release CI (.github/workflows/release.yml) rewrites this line
 # in the same commit as its auto-bump, and TestVersion_MatchesCatsManifest fails
 # when the two disagree, so a hand-pinned version must be edited in both places.
-version = "0.1.0"
+version = "0.2.0"
 description = "A terminal database client for Postgres, MySQL, SQLite and bytdb, scriptable in Go: run the statement under the cursor, explain its plan (tree, flame graph, fixes), browse tables, recall history, export results as CSV, Markdown, HTML or JSON, and drive whole query loops from a .go script. `dbc web` serves the same workbench in a browser."
 platforms = ["linux", "macos"]
 # What kind of tool this is. A database client is not an LLM agent, so cats

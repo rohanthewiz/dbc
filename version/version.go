@@ -12,4 +12,4 @@ package version
 // Version is the dbc release version, printed by `dbc --version`. Plain
 // major.minor.patch with no pre-release suffix: the release workflow's
 // auto-bump parses exactly that shape.
-const Version = "0.2.0"
+const Version = "0.2.1"

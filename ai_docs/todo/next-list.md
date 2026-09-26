@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-058
+**Next ID:** N-060
 
 ## Open
 
@@ -61,6 +61,16 @@ ten session docs in `ai_docs/claude_sessions/`
   which read only the config file. Sharing them needs somewhere both can
   read. `web.bytdb` is locked by a running `dbc web`, so the TUI can't open
   it alongside.
+- **N-058** · raised `2026-0925-1902-explain-plan-sharing-pdf-jpeg-mermaid` · value low
+  The plan's PDF is the picture on a page, so its text can't be selected or
+  searched. A vector PDF would need the Go fonts embedded as CID fonts, and
+  the layout drawn through a second backend. Only worth it if someone asks to
+  search or copy from a shared PDF (`y` copies the plan as text today).
+- **N-059** · raised `2026-0925-1902-explain-plan-sharing-pdf-jpeg-mermaid` · value low
+  `dbc explain -t pdf|jpeg|png` and the TUI's Save as PDF / JPEG always use
+  the dark palette. Only the web follows the view's light/dark. A light
+  choice for the shell (a flag or config key) would make printed PDFs
+  friendlier.
 
 ## Roadmap
 

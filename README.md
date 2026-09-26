@@ -250,6 +250,23 @@ in a `dbc-plans` folder in the system temp directory, and the log (or, for
 `--open`, the terminal) says exactly where. The file is readable only by
 you, since a plan quotes your SQL.
 
+**Sharing it where a page won't go.** A plan is also a PDF, a picture, or a
+Mermaid chart: the same graph, cards and heat colors, with the statement
+above and the findings below, drawn by dbc itself (no browser needed, so it
+works from the shell and on CI too).
+
+| Form | For | From |
+| --- | --- | --- |
+| PDF | a document, an email, a printer | web: ⤓ Save ▸ PDF · TUI: right-click ▸ **Save as PDF** · shell: `-t pdf -o plan.pdf` |
+| JPEG / PNG | a chat, a ticket, a slide | web: ⤓ Save ▸ JPEG / PNG · TUI: right-click ▸ **Save as JPEG** · shell: `-t jpeg` / `-t png` |
+| Mermaid | a pull request or wiki (GitHub, GitLab and Notion draw ` ```mermaid ` blocks) | web: `m` or ⤓ Save ▸ Copy as Mermaid · TUI: right-click ▸ **Copy as Mermaid chart** · shell: `-t mermaid` |
+
+The web's files are drawn as the view is showing them: sized by its metric,
+in its light or dark, with the before/after comparison when there is one.
+The shell's and the TUI's use dbc's dark palette, like the page. The PDF is a
+picture on a page sized to fit the plan, so its text is not selectable; `y`
+copies the plan as text.
+
 **What you see**
 
 - **Header** — the engine, how the plan was obtained (estimated or analyzed),
@@ -732,6 +749,9 @@ says to use `-t csv` rather than looking for a file named `csv`.
 ./dbc -c pg explain -t json "SELECT …" | jq .insights     # for tooling
 ./dbc explain -t html -o plan.html "SELECT …"             # the interactive page
 ./dbc explain --open "SELECT …"                           # … straight into the browser
+./dbc explain -t pdf -o plan.pdf "SELECT …"               # graph + findings, to send
+./dbc explain -t jpeg -o plan.jpg "SELECT …"              # … as a picture (png too)
+./dbc explain -t mermaid "SELECT …" | pbcopy              # a chart for a PR or a wiki
 ```
 
 `--fail-on warn` (or `crit`) exits **3** when the plan has a finding that
@@ -743,7 +763,9 @@ for q in queries/*.sql; do ./dbc -c staging explain --fail-on warn -f "$q" || ex
 ```
 
 `explain` takes one statement. `-t` is `text` (colored on a terminal, unless
-`NO_COLOR` is set), `markdown`, `json`, or `html`.
+`NO_COLOR` is set), `markdown`, `json`, `html`, `pdf`, `jpeg`, `png`, or
+`mermaid`. The PDF and pictures are bytes: write them with `-o`, or pipe
+them — dbc refuses to print them on a terminal.
 
 ### Scripts headless
 

@@ -7,7 +7,10 @@
 //   Ctrl+X / Ctrl+Shift+X (the editor), ◈ Explain   explain / analyze the caret's statement
 //   e / a                                         explain the plan's statement again / analyze it
 //   y / Y                                         copy the plan as text / the engine's own output
+//   m                                             copy the plan as a Mermaid chart
 //   b                                             open it as the standalone page (a tab of its own)
+//   s, ⤓ Save                                     save or share it: the page, a PDF, a JPEG or PNG,
+//                                                 the Mermaid source
 //   p                                             back to the results (and, from the grid, to the plan)
 //   ⤓ Insert, beside a finding's Copy             put its SQL at the end of the editor — never run it
 //
@@ -99,7 +102,7 @@
           { label: "⧉ Text", title: "Copy the plan as text, findings included (y)", act: () => copyPlan("text") },
           { label: "⧉ Engine", title: "Copy the engine's own output (Y)", act: () => copyPlan("raw") },
           { label: "↗ Page", title: "Open as the standalone page, to keep or send (b)", act: openPage },
-          { label: "⤓ Save", title: "Download the standalone page", act: savePage },
+          { label: "⤓ Save ▾", id: "save", title: "Save or share the plan: the page, a PDF, a picture, a Mermaid chart (s)", act: saveMenu },
           { label: "✦ Ask", title: "Ask the assistant where the time goes and what to change", act: askPlan },
         ],
         onAsk: (title) => dbc.cmd.askAbout("In this plan, what is the \"" + title + "\" step doing, and is it a problem?"),
@@ -146,6 +149,39 @@
     log("ok", "opened the plan as a page of its own — save it from there, or ⤓ Save");
   }
 
+  // saveMenu is ⤓ Save: every form the plan can leave in. The page is the
+  // interactive one; the PDF and the pictures are the graph and findings
+  // drawn by the server (explain.Picture) for places a page will not go —
+  // a chat, a ticket, a slide; Mermaid is for a pull request or a wiki,
+  // which draw it. The pictures are drawn as the view is showing: sized
+  // by its metric, in its light or dark.
+  function saveMenu(button) {
+    const b = button || host.querySelector('[data-act="save"]');
+    if (!b) return;
+    dbc.menu.at(b, [
+      { head: "save as" },
+      { label: "Page — interactive (.html)", act: savePage },
+      { label: "PDF — graph and findings", act: () => download("pdf") },
+      { label: "JPEG picture", act: () => download("jpg") },
+      { label: "PNG picture — lossless", act: () => download("png") },
+      { label: "Mermaid chart (.mmd)", act: () => download("mmd") },
+      { head: "" },
+      { label: "⧉ Copy as Mermaid", key: "m", act: () => copyPlan("mermaid") },
+    ]);
+  }
+
+  // download fetches one of the plan's files as an attachment, drawn with
+  // the view's metric and theme.
+  function download(ext) {
+    const metric = view ? view.state.metric : "";
+    const q = "?download=1&metric=" + encodeURIComponent(metric) + "&theme=" + encodeURIComponent(host.dataset.theme || "dark");
+    const a = el("a", { href: dbc.wsPath("/plan." + ext + q), download: "" });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    log("ok", "downloading the plan as ." + ext);
+  }
+
   function savePage() {
     const a = el("a", { href: dbc.wsPath("/plan.html?download=1"), download: "" });
     document.body.append(a);
@@ -158,7 +194,8 @@
   document.addEventListener("keydown", (e) => {
     if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || !keysForView()) return;
     const acts = { e: () => explainAgain(false), a: () => explainAgain(true), y: () => copyPlan("text"),
-      Y: () => copyPlan("raw"), b: openPage, p: () => showTab("results") };
+      Y: () => copyPlan("raw"), m: () => copyPlan("mermaid"), b: openPage, s: () => saveMenu(null),
+      p: () => showTab("results") };
     const f = acts[e.key];
     if (f) { e.preventDefault(); f(); }
   });

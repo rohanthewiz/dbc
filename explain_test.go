@@ -48,6 +48,35 @@ func TestRenderPlanFormats(t *testing.T) {
 	}
 }
 
+// The plan-only formats: the PDF and the pictures as bytes, Mermaid as
+// text, each reachable by its name and its common alias.
+func TestExplainOnlyFormats(t *testing.T) {
+	for in, want := range map[string]export.Format{"pdf": fmtPDF, "JPG": fmtJPEG, "jpeg": fmtJPEG, "png": fmtPNG,
+		"mmd": fmtMermaid, "mermaid": fmtMermaid, "md": export.Markdown, "html": export.HTML} {
+		if got, err := explainFormat(in); err != nil || got != want {
+			t.Errorf("explainFormat(%q) = %q, %v", in, got, err)
+		}
+	}
+	if _, err := explainFormat("csv"); err != nil {
+		t.Error("csv parses (and is then refused by explain with its list)")
+	}
+	if _, err := explainFormat("yaml"); err == nil || !strings.Contains(err.Error(), "mermaid") {
+		t.Errorf("an unknown format should list explain's formats: %v", err)
+	}
+	if !binaryFormat(fmtPDF) || !binaryFormat(fmtJPEG) || binaryFormat(fmtMermaid) || binaryFormat(export.HTML) {
+		t.Error("binaryFormat")
+	}
+
+	p := demoPlan(t, "SELECT breed, count(*) FROM cats GROUP BY breed")
+	for f, magic := range map[export.Format]string{fmtPDF: "%PDF-1.4", fmtJPEG: "\xff\xd8\xff", fmtPNG: "\x89PNG",
+		fmtMermaid: "%% Plan · sqlite"} {
+		out, err := renderPlan(p, f, false, 100)
+		if err != nil || !strings.HasPrefix(out, magic) {
+			t.Errorf("%s (%v): starts %.16q", f, err, out)
+		}
+	}
+}
+
 func TestFailOn(t *testing.T) {
 	for in, want := range map[string]explain.Severity{"": "", "warn": explain.SevWarn, "WARNING": explain.SevWarn, "crit": explain.SevCrit} {
 		if got, err := parseFailOn(in); err != nil || got != want {

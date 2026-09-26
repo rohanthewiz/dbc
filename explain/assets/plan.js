@@ -23,8 +23,10 @@
 //   onInsert(sql)      offer "⤓ Insert" beside a finding's Copy: the host
 //                      puts the SQL in its editor (never runs it)
 //   compare   {text, good}: this plan against the last one of the statement
-//   actions   [{label, title, act}] buttons for the header (the host's
-//             re-explain, copy, open-as-page …)
+//   actions   [{label, title, act, id}] buttons for the header (the host's
+//             re-explain, copy, open-as-page …); act(button) is handed its
+//             button, so an action can open a menu under it, and id (when
+//             given) is the button's data-act, for the host to find it
 //   onAsk(title)       offer "✦ Ask" on the selected step's detail: the
 //                      host opens its assistant with a question drafted
 //                      about the step (title is the TUI's Node.Title)
@@ -283,7 +285,8 @@
         b.type = "button";
         b.textContent = a.label;
         if (a.title) b.title = a.title;
-        b.onclick = () => a.act();
+        if (a.id) b.dataset.act = a.id;
+        b.onclick = () => a.act(b);
         acts.append(b);
       });
     }

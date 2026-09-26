@@ -18,7 +18,8 @@ require (
 	github.com/rohanthewiz/serr v1.4.0
 	github.com/traefik/yaegi v0.16.1
 	github.com/urfave/cli/v3 v3.13.0
-	golang.org/x/sys v0.46.0
+	golang.org/x/image v0.46.0
+	golang.org/x/sys v0.48.0
 	modernc.org/sqlite v1.54.0
 )
 
@@ -46,8 +47,8 @@ require (
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/tidwall/btype v0.3.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/text v0.31.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	modernc.org/libc v1.74.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

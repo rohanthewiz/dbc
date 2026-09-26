@@ -209,6 +209,11 @@ func (m *Model) openPlanMenu(x, y int) {
 		menuItem{label: "Copy plan as text", key: "y", act: func(m *Model) tea.Cmd { return m.copyPlanText() }},
 		menuItem{label: "Copy the engine's own output", key: "Y", act: func(m *Model) tea.Cmd { return m.copyPlanRaw() }},
 		menuItem{label: "↗ Open in browser (interactive)", key: "b", act: func(m *Model) tea.Cmd { return m.planInBrowser() }},
+		menuItem{label: "⤓ Save as PDF", act: func(m *Model) tea.Cmd { return m.planFile("pdf") }},
+		menuItem{label: "⤓ Save as JPEG", act: func(m *Model) tea.Cmd { return m.planFile("jpg") }},
+		menuItem{label: "Copy as Mermaid chart", act: func(m *Model) tea.Cmd {
+			return m.copyString(p.Mermaid(), "the plan as a Mermaid chart")
+		}},
 		menuItem{label: "✦ Ask the assistant about this plan", key: "^A", act: func(m *Model) tea.Cmd {
 			return m.askAbout("Explain this query plan: where does the time go, and what would you change?")
 		}},
@@ -300,6 +305,37 @@ func (m *Model) planInBrowser() tea.Cmd {
 	}
 	openURL("file://" + path)
 	m.logf(logOk, "opened the plan in your browser — saved as %s", path)
+	return nil
+}
+
+// planFile saves the plan as a PDF or a JPEG — the graph and its findings,
+// for a chat, a ticket or an email — beside the pages `b` writes, and opens
+// it in the system's viewer, which is where it gets shared from. It is
+// sized by the metric the plan view is showing; the palette is dbc's dark
+// one, as the page's is.
+func (m *Model) planFile(ext string) tea.Cmd {
+	p := m.planv.plan
+	if p == nil {
+		return nil
+	}
+	opt := explain.PictureOptions{Metric: m.planv.metric}
+	var data []byte
+	var err error
+	switch ext {
+	case "pdf":
+		data, err = p.PDF(opt)
+	default:
+		data, err = p.JPEG(opt)
+	}
+	if err == nil {
+		var path string
+		if path, err = p.WriteFile(planDir(), ext, data); err == nil {
+			openURL("file://" + path)
+			m.logf(logOk, "saved the plan as %s — opened it", path)
+			return nil
+		}
+	}
+	m.logf(logErr, "could not save the plan: %s", serr.StringFromErr(err))
 	return nil
 }
 

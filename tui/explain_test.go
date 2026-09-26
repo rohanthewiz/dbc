@@ -279,6 +279,29 @@ func TestPlanCopyAndBrowser(t *testing.T) {
 	}
 }
 
+// Save as PDF / JPEG from the plan menu: the file lands beside the pages
+// `b` writes and is opened; "copy as Mermaid" copies the chart.
+func TestPlanFilesFromTheMenu(t *testing.T) {
+	m := explainModel(t)
+	dir := t.TempDir()
+	prev := planDir
+	planDir = func() string { return dir }
+	t.Cleanup(func() { planDir = prev })
+
+	key(t, m, "ctrl+x")
+	for ext, magic := range map[string]string{"pdf": "%PDF-1.4", "jpg": "\xff\xd8\xff"} {
+		openLog = nil
+		m.planFile(ext)
+		if len(openLog) != 1 || !strings.HasPrefix(openLog[0], "file://"+dir) || !strings.HasSuffix(openLog[0], "."+ext) {
+			t.Fatalf("%s: opened %v\n%s", ext, openLog, logText(m))
+		}
+		b, err := os.ReadFile(strings.TrimPrefix(openLog[0], "file://"))
+		if err != nil || !strings.HasPrefix(string(b), magic) {
+			t.Errorf("%s: %v, starts %.8q", ext, err, b)
+		}
+	}
+}
+
 // A user who types EXPLAIN and runs it gets the plan view on its output; the
 // raw rows stay in the Results tab.
 func TestUserExplainResultShowsAsPlan(t *testing.T) {

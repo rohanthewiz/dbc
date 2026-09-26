@@ -12,6 +12,7 @@
 //	SQLite    EXPLAIN QUERY PLAN (id, parent, detail)     ─► ParseSQLite ───────┘      │     insights)
 //	                                                                                   ▼
 //	                                             TUI plan view · text · JSON · interactive HTML
+//	                                             PDF · JPEG/PNG (picture.go) · Mermaid (mermaid.go)
 //
 // THE TREE IS THE LOWEST COMMON DENOMINATOR, NOT THE UNION. A Node has the
 // fields every consumer needs to draw and judge a step — its operation, the

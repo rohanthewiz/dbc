@@ -10,6 +10,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/explain"
+	"github.com/rohanthewiz/dbc/theme"
 	"github.com/rohanthewiz/dbc/workspace"
 )
 
@@ -33,7 +34,10 @@ import (
 //
 // The page can also be had whole: GET …/plan.html is the standalone page,
 // the same file `dbc explain --open` writes, to open in its own tab, save,
-// or send to someone.
+// or send to someone. For someone who will not open a page, the plan is
+// also a file: …/plan.pdf, plan.jpg and plan.png (the graph and findings
+// drawn by explain.Picture) and plan.mmd (a Mermaid flowchart) — see
+// handlePlanFile.
 
 // planState is a tab's plan and the one it replaced, when that was a plan
 // of the same statement — the "before" of a tuning session. Guarded by
@@ -180,6 +184,11 @@ func (s *Server) handlePlanText(ctx rweb.Context) error {
 		return fail(ctx, badRequest("no plan yet — Ctrl+X explains the statement under the caret"))
 	}
 	q := ctx.Request()
+	if q.QueryParam("what") == "mermaid" {
+		// the chart's source, for a pull request or a wiki page that draws
+		// ```mermaid blocks
+		return ok(ctx, map[string]string{"text": p.Mermaid(), "what": "the plan as a Mermaid chart"})
+	}
 	if q.QueryParam("what") == "raw" {
 		if p.Raw == "" {
 			return fail(ctx, badRequest("the engine's output was not kept for this plan"))
@@ -229,4 +238,66 @@ func (s *Server) handlePlanPage(ctx rweb.Context) error {
 			time.Now().Format("20060102-150405")+`.html"`)
 	}
 	return writePage(ctx, http.StatusOK, page)
+}
+
+// planFile is one of the plan's downloadable renderings.
+type planFile struct {
+	ext, mime string
+	render    func(p *explain.Plan, opt explain.PictureOptions) ([]byte, error)
+}
+
+var (
+	planPDF     = planFile{"pdf", "application/pdf", (*explain.Plan).PDF}
+	planJPEG    = planFile{"jpg", "image/jpeg", (*explain.Plan).JPEG}
+	planPNG     = planFile{"png", "image/png", (*explain.Plan).PNG}
+	planMermaid = planFile{"mmd", "text/plain; charset=utf-8", func(p *explain.Plan, _ explain.PictureOptions) ([]byte, error) {
+		return []byte(p.Mermaid()), nil
+	}}
+)
+
+// handlePlanFile serves the plan as a PDF, a picture, or Mermaid source —
+// the forms that travel where a page will not: a chat, a ticket, a slide,
+// a pull request.
+//
+// The picture is drawn as the Plan tab shows it, so what is sent is what
+// was on screen: ?metric= is the metric the view is sized by (one the plan
+// lacks falls back to its best, as the text copy does), ?theme=light the
+// view's light palette, and the before/after comparison rides in the
+// header when there is one. ?download=1 makes it an attachment named as
+// the page's download is; without it the browser shows it in a tab.
+//
+// The bytes are drawn in Go from the plan the tab holds — nothing from the
+// request reaches them but those three choices — and are served with the
+// type they are (the security headers every response carries include
+// nosniff), so a picture cannot be read as a page.
+func (s *Server) handlePlanFile(f planFile) rweb.Handler {
+	return func(ctx rweb.Context) error {
+		t, err := s.hub.get(ctx.Request().PathParam("id"))
+		if err != nil {
+			return fail(ctx, err)
+		}
+		ps := t.planState()
+		if ps.plan == nil {
+			return plain(ctx, http.StatusNotFound, "no plan yet — explain a statement first")
+		}
+		q := ctx.Request()
+		opt := explain.PictureOptions{Metric: explain.Metric(q.QueryParam("metric")), Palette: theme.Default()}
+		if q.QueryParam("theme") == "light" {
+			opt.Palette = theme.Light()
+		}
+		opt.Compare, _ = explain.Compare(ps.prev, ps.plan)
+		body, err := f.render(ps.plan, opt)
+		if err != nil {
+			return fail(ctx, err)
+		}
+		h := ctx.Response()
+		h.SetHeader("Content-Type", f.mime)
+		h.SetHeader("Cache-Control", "no-store")
+		if q.QueryParam("download") == "1" {
+			h.SetHeader("Content-Disposition", `attachment; filename="plan-`+fileSafe(ps.plan.Conn)+"-"+
+				time.Now().Format("20060102-150405")+"."+f.ext+`"`)
+		}
+		ctx.SetStatus(http.StatusOK)
+		return ctx.Bytes(body)
+	}
 }

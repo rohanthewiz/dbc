@@ -19,18 +19,33 @@ func (p *Plan) WriteHTML(dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err = os.MkdirAll(dir, 0o700); err != nil {
+	return p.WriteFile(dir, "html", []byte(page))
+}
+
+// WriteFile saves one rendering of the plan (the page, a PDF, a JPEG, the
+// Mermaid source) into dir under the same what-and-when name WriteHTML
+// uses, with ext as its extension, and returns its path. 0600 for the
+// reason WriteHTML gives: every rendering quotes the statement.
+func (p *Plan) WriteFile(dir, ext string, data []byte) (string, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", serr.Wrap(err, "dir", dir)
 	}
-	name := "plan-" + time.Now().Format("20060102-150405") + ".html"
-	if c := safeFileName(p.Conn); c != "" {
-		name = "plan-" + c + "-" + time.Now().Format("20060102-150405") + ".html"
-	}
-	path := filepath.Join(dir, name)
-	if err = os.WriteFile(path, []byte(page), 0o600); err != nil {
+	path := filepath.Join(dir, p.FileName(ext))
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return "", serr.Wrap(err, "path", path)
 	}
 	return path, nil
+}
+
+// FileName is the name a saved or downloaded rendering of the plan takes:
+// plan-<conn>-<yyyymmdd-hhmmss>.<ext>, or plan-<stamp>.<ext> with no
+// connection.
+func (p *Plan) FileName(ext string) string {
+	stamp := time.Now().Format("20060102-150405")
+	if c := safeFileName(p.Conn); c != "" {
+		return "plan-" + c + "-" + stamp + "." + ext
+	}
+	return "plan-" + stamp + "." + ext
 }
 
 // PlanDir is where plans opened in a browser are kept by default.

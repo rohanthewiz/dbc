@@ -25,6 +25,9 @@ import (
 //	dbc explain -t json -f q.sql            the plan as JSON, for tooling
 //	dbc explain -t html -o plan.html "…"    the interactive page, to a file
 //	dbc explain --open "SELECT …"           … or straight into the browser
+//	dbc explain -t pdf -o plan.pdf "…"      the graph and findings, to send
+//	dbc explain -t jpeg -o plan.jpg "…"     … as a picture (png too)
+//	dbc explain -t mermaid "…"              … as a Mermaid chart, for a PR or wiki
 //	dbc explain --fail-on warn -f q.sql     exit 3 when a finding is that bad
 //
 // The SQL comes the way a headless query's does — the argument, -f, or piped
@@ -59,7 +62,8 @@ func explainCommand() *cli.Command {
 		ArgsUsage: `["SQL"]`,
 		Description: "Explains one statement (the argument, --file, or piped stdin) on the connection -c names. " +
 			"--format text (default) draws the plan as a tree with findings; json is the plan for tooling; " +
-			"html is an interactive page. --analyze runs the statement to measure it — on Postgres a write is " +
+			"html is an interactive page; pdf, jpeg and png are the graph and its findings as a document or " +
+			"a picture (written with -o, or piped); mermaid is a flowchart for a pull request or a wiki. --analyze runs the statement to measure it — on Postgres a write is " +
 			"run inside a transaction that is rolled back; on the other engines a write is not run at all.",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{Name: "analyze", Aliases: []string{"a"},
@@ -81,9 +85,21 @@ func explainAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		usage(err.Error())
 	}
-	f := outFormat()
-	if f != export.Text && f != export.JSON && f != export.HTML && f != export.Markdown {
-		usage(fmt.Sprintf("explain renders text, markdown, json or html — not %s", f))
+	f, err := explainFormat(flagFormat)
+	if err != nil {
+		usage(err.Error())
+	}
+	if f != export.Text && f != export.JSON && f != export.HTML && f != export.Markdown &&
+		f != fmtPDF && f != fmtJPEG && f != fmtPNG && f != fmtMermaid {
+		usage(fmt.Sprintf("explain renders text, markdown, json, html, pdf, jpeg, png or mermaid — not %s", f))
+	}
+	// A PDF or a picture is bytes, not text: on a terminal it would be a
+	// screenful of garbage that can also leave the terminal in a strange
+	// state. Refused before the explain runs, so an --analyze is not spent
+	// on output nobody can read. A pipe or a redirect is fine — that is
+	// the caller asking for the bytes.
+	if binaryFormat(f) && flagOut == "" && !flagOpen && term.IsTerminal(os.Stdout.Fd()) {
+		usage(fmt.Sprintf("%s is binary — write it with -o plan.%s, or pipe it", f, f))
 	}
 	sql, ok, err := sqlInput(cmd.Args().Slice(), flagFile, os.Stdin, stdinHasInput())
 	if err != nil {
@@ -120,7 +136,7 @@ func explainAction(ctx context.Context, cmd *cli.Command) error {
 			fail(err, "write failed")
 		}
 		fmt.Printf("wrote the plan (%s) to %s\n", f, flagOut)
-	} else if !flagOpen || f != export.HTML {
+	} else if !flagOpen || (f != export.HTML && !binaryFormat(f)) {
 		fmt.Print(out)
 	}
 	if n := findingsAtLeast(p, failOn); n > 0 {
@@ -146,12 +162,59 @@ func explainHeadless(cfg *config.Config, mgr *db.Manager, stmt string) *explain.
 	return p
 }
 
+// The renderings explain has beyond the result formats export knows. They
+// live here rather than in export because they exist only for a plan: a
+// query result has no graph to draw.
+const (
+	fmtPDF     export.Format = "pdf"
+	fmtJPEG    export.Format = "jpeg"
+	fmtPNG     export.Format = "png"
+	fmtMermaid export.Format = "mermaid"
+)
+
+// explainFormat reads --format for explain: the plan-only renderings first,
+// then everything export.ParseFormat accepts.
+func explainFormat(s string) (export.Format, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "pdf":
+		return fmtPDF, nil
+	case "jpeg", "jpg":
+		return fmtJPEG, nil
+	case "png":
+		return fmtPNG, nil
+	case "mermaid", "mmd":
+		return fmtMermaid, nil
+	}
+	f, err := export.ParseFormat(s)
+	if err != nil {
+		// export's own message lists only the result formats
+		return "", fmt.Errorf("unknown format %q (use text|markdown|json|html|pdf|jpeg|png|mermaid)", s)
+	}
+	return f, nil
+}
+
+// binaryFormat reports whether f renders bytes rather than text.
+func binaryFormat(f export.Format) bool { return f == fmtPDF || f == fmtJPEG || f == fmtPNG }
+
 // renderPlan renders a plan in a headless format. Markdown is the text tree in
 // a code fence, with the statement above it, which is how a plan is pasted
-// into a pull request or a wiki.
+// into a pull request or a wiki. The pictures (pdf, jpeg, png) use the dark
+// dbc palette, as the page `--open` writes does: a plan that travels looks
+// like dbc wherever it is opened.
 func renderPlan(p *explain.Plan, f export.Format, color bool, width int) (string, error) {
 	opt := explain.TextOptions{Width: width, Color: color, Insights: true}
 	switch f {
+	case fmtPDF:
+		b, err := p.PDF(explain.PictureOptions{})
+		return string(b), err
+	case fmtJPEG:
+		b, err := p.JPEG(explain.PictureOptions{})
+		return string(b), err
+	case fmtPNG:
+		b, err := p.PNG(explain.PictureOptions{})
+		return string(b), err
+	case fmtMermaid:
+		return p.Mermaid(), nil
 	case export.JSON:
 		b, err := p.JSON()
 		return string(b) + "\n", err

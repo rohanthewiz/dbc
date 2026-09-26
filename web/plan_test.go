@@ -185,3 +185,46 @@ func TestPlanAssetsAreTheSharedOnes(t *testing.T) {
 		}
 	}
 }
+
+// The plan as files to share: a PDF, the pictures and the Mermaid source,
+// each served as what it is, drawn in the view's metric and theme, and an
+// attachment named like the page's download when asked.
+func TestPlanFiles(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	res := e.req("GET", "/api/v1/ws/"+id+"/plan.pdf", "", nil)
+	res.Body.Close()
+	if res.StatusCode != 404 {
+		t.Errorf("no plan yet = %d, want 404", res.StatusCode)
+	}
+	e.explainAndWait(id, s, explainBody("SELECT * FROM cats ORDER BY name", false, false))
+	for ext, want := range map[string]struct{ mime, magic string }{
+		"pdf": {"application/pdf", "%PDF-1.4"},
+		"jpg": {"image/jpeg", "\xff\xd8\xff"},
+		"png": {"image/png", "\x89PNG"},
+		"mmd": {"text/plain; charset=utf-8", "%% Plan · sqlite"},
+	} {
+		res := e.req("GET", "/api/v1/ws/"+id+"/plan."+ext+"?metric=shape&theme=light&download=1", "", nil)
+		b, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		if res.StatusCode != 200 || res.Header.Get("Content-Type") != want.mime || !strings.HasPrefix(string(b), want.magic) {
+			t.Errorf("plan.%s = %d %q, starts %.12q", ext, res.StatusCode, res.Header.Get("Content-Type"), b)
+		}
+		if cd := res.Header.Get("Content-Disposition"); !strings.HasPrefix(cd, `attachment; filename="plan-demo-sqlite-`) ||
+			!strings.HasSuffix(cd, "."+ext+`"`) {
+			t.Errorf("plan.%s Content-Disposition = %q", ext, cd)
+		}
+	}
+	// without download=1 it shows in the tab
+	res = e.req("GET", "/api/v1/ws/"+id+"/plan.jpg", "", nil)
+	res.Body.Close()
+	if res.StatusCode != 200 || res.Header.Get("Content-Disposition") != "" {
+		t.Errorf("inline jpg = %d, %q", res.StatusCode, res.Header.Get("Content-Disposition"))
+	}
+
+	// "copy as Mermaid" is the same source, through the text copy
+	out := decodeData[map[string]string](t, e.api("GET", "/api/v1/ws/"+id+"/plan/text?what=mermaid", "", 200))
+	if !strings.Contains(out["text"], "flowchart BT") || out["what"] != "the plan as a Mermaid chart" {
+		t.Errorf("mermaid copy = %+v", out)
+	}
+}

@@ -234,6 +234,10 @@ func (s *Server) routes() {
 	r.Get("/api/v1/ws/:id/plan", s.handlePlan)
 	r.Get("/api/v1/ws/:id/plan/text", s.handlePlanText)
 	r.Get("/api/v1/ws/:id/plan.html", s.handlePlanPage)
+	r.Get("/api/v1/ws/:id/plan.pdf", s.handlePlanFile(planPDF))
+	r.Get("/api/v1/ws/:id/plan.jpg", s.handlePlanFile(planJPEG))
+	r.Get("/api/v1/ws/:id/plan.png", s.handlePlanFile(planPNG))
+	r.Get("/api/v1/ws/:id/plan.mmd", s.handlePlanFile(planMermaid))
 	r.Post("/api/v1/ws/:id/cancel", s.handleCancel)
 	r.Post("/api/v1/ws/:id/script", s.handleScript)
 

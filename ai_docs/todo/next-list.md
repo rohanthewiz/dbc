@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-060
+**Next ID:** N-061
 
 ## Open
 
@@ -56,6 +56,11 @@ ten session docs in `ai_docs/claude_sessions/`
   web" action already launch it, and a `.app` is a second packaging path to
   keep building and signing. `/api/v1/health` is there for a wrapper to
   poll.
+- **N-060** · raised `2026-0925-1944-cats-plugin-release-setup` · value medium
+  Add a LICENSE. dbc now publishes release archives, but has no license file,
+  so by default nobody else may use the code (ced ships one). Once
+  it exists, put `LICENSE*` back in `.goreleaser.yml`'s archive `files`. It was
+  removed there so the archive glob didn't match nothing.
 
 ## Roadmap
 

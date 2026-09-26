@@ -56,11 +56,6 @@ ten session docs in `ai_docs/claude_sessions/`
   web" action already launch it, and a `.app` is a second packaging path to
   keep building and signing. `/api/v1/health` is there for a wrapper to
   poll.
-- **N-057** · raised `2026-0925-1812-web-add-connection` · value low
-  Connections added in `dbc web` are invisible to the TUI and headless runs,
-  which read only the config file. Sharing them needs somewhere both can
-  read. `web.bytdb` is locked by a running `dbc web`, so the TUI can't open
-  it alongside.
 - **N-059** · raised `2026-0925-1902-explain-plan-sharing-pdf-jpeg-mermaid` · value low
   `dbc explain -t pdf|jpeg|png` and the TUI's Save as PDF / JPEG always use
   the dark palette. Only the web follows the view's light/dark. A light
@@ -103,6 +98,27 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-057** · raised `2026-0925-1812-web-add-connection` ·
+  closed 2026-09-25, 2026-0925-1930-N-057-shared-connections — connections
+  added in `dbc web` now live in `~/.config/dbc/connections.toml` (the user
+  chose a dbc-owned TOML file over a second bytdb file), which every command
+  merges in `main.setup` after the
+  config file and the ad-hoc `--dsn` one (`config.LoadSaved`; a clash, an
+  unknown driver or a nameless entry is skipped with a warning). Readers take
+  no lock. `config.SavedStore` writes by a locked read-modify-write
+  (btypedb's `AcquireLock` sidecar, polled up to 3s), then a temp file,
+  fsync and rename, so a reader never sees half a file. The file is `0600`
+  in the `0700` directory, and DSNs are stored as typed, with `${VAR}`s
+  unexpanded. A file that fails to parse is never overwritten. `dbc web`
+  moves any `web.bytdb` `conns` rows to the file at startup
+  (`moveStoreConns`). A rename's saved-tab retag is now `Store.RetagTabs`.
+  A second `dbc web` can add connections too; one the file already has is a
+  409. A running `dbc web` reads the file only at startup. Tested in
+  `config/saved_test.go` (including concurrent writers and waiting on a held
+  lock) and `web/conns_test.go`, and end to end with real binaries: an old
+  build's row moved, headless runs on it while `dbc web` ran, and a rename
+  and a delete were seen by the next headless run.
 
 - **N-056** · raised `2026-0925-1812-web-add-connection` ·
   closed 2026-09-25, 2026-0925-1831-N-056-edit-connection — a connection

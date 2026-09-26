@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"image/jpeg"
 	"os"
 	"strings"
 	"testing"
@@ -298,6 +299,43 @@ func TestPlanFilesFromTheMenu(t *testing.T) {
 		b, err := os.ReadFile(strings.TrimPrefix(openLog[0], "file://"))
 		if err != nil || !strings.HasPrefix(string(b), magic) {
 			t.Errorf("%s: %v, starts %.8q", ext, err, b)
+		}
+	}
+}
+
+// plan_theme = "light" draws the saved picture on paper: the JPEG's corner
+// (the page background) is near-white rather than dbc's slate. Compared
+// loosely, since JPEG is lossy.
+func TestPlanFileLightTheme(t *testing.T) {
+	m := explainModel(t)
+	dir := t.TempDir()
+	prev := planDir
+	planDir = func() string { return dir }
+	t.Cleanup(func() { planDir = prev })
+
+	key(t, m, "ctrl+x")
+	for _, c := range []struct {
+		theme string
+		light bool
+	}{{"dark", false}, {"light", true}} {
+		m.cfg.PlanTheme = c.theme
+		openLog = nil
+		m.planFile("jpg")
+		if len(openLog) != 1 {
+			t.Fatalf("%s: opened %v\n%s", c.theme, openLog, logText(m))
+		}
+		f, err := os.Open(strings.TrimPrefix(openLog[0], "file://"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		img, err := jpeg.Decode(f)
+		f.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, g, b, _ := img.At(2, 2).RGBA()
+		if light := (r>>8)+(g>>8)+(b>>8) > 3*200; light != c.light {
+			t.Errorf("plan_theme %s: corner #%02x%02x%02x, light = %v", c.theme, r>>8, g>>8, b>>8, light)
 		}
 	}
 }

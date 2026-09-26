@@ -196,6 +196,41 @@ dsn = "a.db"
 	}
 }
 
+// plan_theme is normalized to dark or light; a typo warns and draws dark
+// rather than failing the load.
+func TestLoadPlanTheme(t *testing.T) {
+	conn := `
+[[connection]]
+name = "db"
+driver = "sqlite"
+dsn = "a.db"
+`
+	cases := []struct {
+		name, body, want string
+		wantWarn         bool
+	}{
+		{"absent", conn, "dark", false},
+		{"light", `plan_theme = "Light"` + conn, "light", false},
+		{"dark", `plan_theme = "dark"` + conn, "dark", false},
+		{"typo", `plan_theme = "lite"` + conn, "dark", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, c.body))
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if cfg.PlanTheme != c.want {
+				t.Errorf("PlanTheme = %q, want %q", cfg.PlanTheme, c.want)
+			}
+			warned := strings.Contains(strings.Join(cfg.Warnings, "\n"), "plan_theme")
+			if warned != c.wantWarn {
+				t.Errorf("warned = %v, want %v (warnings: %q)", warned, c.wantWarn, cfg.Warnings)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsDuplicateNames(t *testing.T) {
 	_, err := Load(writeConfig(t, `
 [[connection]]

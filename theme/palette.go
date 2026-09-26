@@ -54,6 +54,24 @@ func Light() Palette {
 	}
 }
 
+// ByName is the built-in palette a setting names: "dark" (or "", the
+// default) is Default, "light" is Light. Case and surrounding space are
+// ignored. Anything else is an error rather than a quiet dark, so a typo in
+// a flag is reported instead of producing the picture that was not asked for.
+//
+// Only the two built-ins are nameable. A host palette (FromHost) belongs to
+// the terminal dbc happens to run in, and a plan picture is sent to people
+// who are not sitting in it — see Default's note on the HTML exporter.
+func ByName(name string) (Palette, error) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "", "dark":
+		return Default(), nil
+	case "light":
+		return Light(), nil
+	}
+	return Palette{}, fmt.Errorf("unknown theme %q (use light or dark)", name)
+}
+
 // Blend mixes fg over bg at the given alpha (0 = bg, 1 = fg) and returns the
 // result as "#rrggbb". Both inputs must parse; anything else returns bg
 // unchanged, so a caller that is already refusing non-hex input gets a

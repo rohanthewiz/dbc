@@ -15,6 +15,7 @@ import (
 	"github.com/rohanthewiz/dbc/explain"
 	"github.com/rohanthewiz/dbc/export"
 	"github.com/rohanthewiz/dbc/sqlsplit"
+	"github.com/rohanthewiz/dbc/theme"
 	"github.com/rohanthewiz/dbc/tui"
 )
 
@@ -27,6 +28,7 @@ import (
 //	dbc explain --open "SELECT …"           … or straight into the browser
 //	dbc explain -t pdf -o plan.pdf "…"      the graph and findings, to send
 //	dbc explain -t jpeg -o plan.jpg "…"     … as a picture (png too)
+//	dbc explain -t pdf --theme light …      … on paper rather than slate, to print
 //	dbc explain -t mermaid "…"              … as a Mermaid chart, for a PR or wiki
 //	dbc explain --fail-on warn -f q.sql     exit 3 when a finding is that bad
 //
@@ -41,6 +43,10 @@ import (
 //
 //	for q in queries/*.sql; do dbc -c staging explain --fail-on warn -f "$q" || exit 1; done
 //
+// The pictures are dark (dbc's own palette) unless --theme light, or
+// plan_theme = "light" in the config, asks for paper — the flag wins, so a
+// config that prints light can still send one dark picture to a chat.
+//
 // Exit status: 0 fine, 1 the explain failed, 2 bad usage, 3 a finding at or
 // above --fail-on, 130 Ctrl+C.
 
@@ -48,6 +54,7 @@ var (
 	flagAnalyze bool
 	flagOpen    bool
 	flagFailOn  string
+	flagTheme   string
 )
 
 // exitFindings is the status for "the plan has a finding at --fail-on or
@@ -63,7 +70,7 @@ func explainCommand() *cli.Command {
 		Description: "Explains one statement (the argument, --file, or piped stdin) on the connection -c names. " +
 			"--format text (default) draws the plan as a tree with findings; json is the plan for tooling; " +
 			"html is an interactive page; pdf, jpeg and png are the graph and its findings as a document or " +
-			"a picture (written with -o, or piped); mermaid is a flowchart for a pull request or a wiki. --analyze runs the statement to measure it — on Postgres a write is " +
+			"a picture (written with -o, or piped), dark unless --theme light or the config's plan_theme asks for paper; mermaid is a flowchart for a pull request or a wiki. --analyze runs the statement to measure it — on Postgres a write is " +
 			"run inside a transaction that is rolled back; on the other engines a write is not run at all.",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{Name: "analyze", Aliases: []string{"a"},
@@ -72,6 +79,9 @@ func explainCommand() *cli.Command {
 				Usage: "write the interactive HTML plan to a temp file and open it in the browser", Destination: &flagOpen},
 			&cli.StringFlag{Name: "fail-on",
 				Usage: "exit 3 when a finding is at least this `SEVERITY`: warn|crit", Destination: &flagFailOn},
+			&cli.StringFlag{Name: "theme",
+				Usage:       "palette of a pdf, jpeg or png: light|dark (default: the config's plan_theme, else dark)",
+				Destination: &flagTheme},
 		},
 		Action: explainAction,
 	}
@@ -98,6 +108,18 @@ func explainAction(ctx context.Context, cmd *cli.Command) error {
 	// state. Refused before the explain runs, so an --analyze is not spent
 	// on output nobody can read. A pipe or a redirect is fine — that is
 	// the caller asking for the bytes.
+	// Checked here, before the explain runs, for the same reason as the
+	// terminal check below. --theme with a text format is refused rather
+	// than ignored: only the pictures have a palette to change, and a flag
+	// that silently does nothing reads as a bug.
+	if flagTheme != "" {
+		if _, err = theme.ByName(flagTheme); err != nil {
+			usage("--theme: " + err.Error())
+		}
+		if !binaryFormat(f) {
+			usage(fmt.Sprintf("--theme colors a pdf, jpeg or png — %s has no palette to change", f))
+		}
+	}
 	if binaryFormat(f) && flagOut == "" && !flagOpen && term.IsTerminal(os.Stdout.Fd()) {
 		usage(fmt.Sprintf("%s is binary — write it with -o plan.%s, or pipe it", f, f))
 	}
@@ -124,7 +146,7 @@ func explainAction(ctx context.Context, cmd *cli.Command) error {
 
 	// the plan's notes are part of every rendering (the text's header, the
 	// JSON's "notes", the page's callouts), so they are not repeated here
-	out, err := renderPlan(p, f, planColor(), termWidth())
+	out, err := renderPlan(p, f, planColor(), termWidth(), planPalette(cfg))
 	if err != nil {
 		fail(err, "render failed")
 	}
@@ -196,22 +218,37 @@ func explainFormat(s string) (export.Format, error) {
 // binaryFormat reports whether f renders bytes rather than text.
 func binaryFormat(f export.Format) bool { return f == fmtPDF || f == fmtJPEG || f == fmtPNG }
 
+// planPalette is the palette explain's pictures are drawn in: --theme when
+// given, else the config's plan_theme. Both were validated already (the flag
+// by explainAction, the key by config.Load), so the error cannot happen; a
+// zero Palette would be drawn dark by explain.Picture anyway.
+func planPalette(cfg *config.Config) theme.Palette {
+	name := cfg.PlanTheme
+	if flagTheme != "" {
+		name = flagTheme
+	}
+	pal, _ := theme.ByName(name)
+	return pal
+}
+
 // renderPlan renders a plan in a headless format. Markdown is the text tree in
 // a code fence, with the statement above it, which is how a plan is pasted
-// into a pull request or a wiki. The pictures (pdf, jpeg, png) use the dark
-// dbc palette, as the page `--open` writes does: a plan that travels looks
-// like dbc wherever it is opened.
-func renderPlan(p *explain.Plan, f export.Format, color bool, width int) (string, error) {
+// into a pull request or a wiki. The pictures (pdf, jpeg, png) are drawn in
+// pal — dbc's dark palette by default, as the page `--open` writes is, so a
+// plan that travels looks like dbc wherever it is opened; light when asked
+// for, for a page that will be printed. Only the pictures read pal.
+func renderPlan(p *explain.Plan, f export.Format, color bool, width int, pal theme.Palette) (string, error) {
 	opt := explain.TextOptions{Width: width, Color: color, Insights: true}
+	pic := explain.PictureOptions{Palette: pal}
 	switch f {
 	case fmtPDF:
-		b, err := p.PDF(explain.PictureOptions{})
+		b, err := p.PDF(pic)
 		return string(b), err
 	case fmtJPEG:
-		b, err := p.JPEG(explain.PictureOptions{})
+		b, err := p.JPEG(pic)
 		return string(b), err
 	case fmtPNG:
-		b, err := p.PNG(explain.PictureOptions{})
+		b, err := p.PNG(pic)
 		return string(b), err
 	case fmtMermaid:
 		return p.Mermaid(), nil

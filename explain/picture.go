@@ -74,7 +74,8 @@ type PictureOptions struct {
 	Metric Metric
 	// Palette colors the picture; the zero value is theme.Default(). dbc web
 	// passes the light or dark palette the view is wearing, so what is sent
-	// is what was on screen.
+	// is what was on screen; the shell and the TUI pass the config's
+	// plan_theme (or `dbc explain --theme`).
 	Palette theme.Palette
 	// Compare is the before/after line for a plan re-explained after a
 	// change ("vs last: 3.4× faster"), shown in the header when set.

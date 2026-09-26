@@ -263,7 +263,9 @@ works from the shell and on CI too).
 
 The web's files are drawn as the view is showing them: sized by its metric,
 in its light or dark, with the before/after comparison when there is one.
-The shell's and the TUI's use dbc's dark palette, like the page. The PDF is a
+The shell's and the TUI's use dbc's dark palette, like the page — or light,
+for a PDF headed to a printer: `plan_theme = "light"` in the config sets it
+for both, and `dbc explain --theme light|dark` for one run. The PDF is a
 picture on a page sized to fit the plan, so its text is not selectable; `y`
 copies the plan as text.
 
@@ -759,6 +761,7 @@ says to use `-t csv` rather than looking for a file named `csv`.
 ./dbc explain --open "SELECT …"                           # … straight into the browser
 ./dbc explain -t pdf -o plan.pdf "SELECT …"               # graph + findings, to send
 ./dbc explain -t jpeg -o plan.jpg "SELECT …"              # … as a picture (png too)
+./dbc explain -t pdf --theme light -o plan.pdf "SELECT …"  # … on paper, to print
 ./dbc explain -t mermaid "SELECT …" | pbcopy              # a chart for a PR or a wiki
 ```
 
@@ -773,7 +776,8 @@ for q in queries/*.sql; do ./dbc -c staging explain --fail-on warn -f "$q" || ex
 `explain` takes one statement. `-t` is `text` (colored on a terminal, unless
 `NO_COLOR` is set), `markdown`, `json`, `html`, `pdf`, `jpeg`, `png`, or
 `mermaid`. The PDF and pictures are bytes: write them with `-o`, or pipe
-them — dbc refuses to print them on a terminal.
+them — dbc refuses to print them on a terminal. They are dark unless
+`--theme light` (or `plan_theme = "light"` in the config) asks for paper.
 
 ### Scripts headless
 

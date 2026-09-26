@@ -56,11 +56,6 @@ ten session docs in `ai_docs/claude_sessions/`
   web" action already launch it, and a `.app` is a second packaging path to
   keep building and signing. `/api/v1/health` is there for a wrapper to
   poll.
-- **N-059** · raised `2026-0925-1902-explain-plan-sharing-pdf-jpeg-mermaid` · value low
-  `dbc explain -t pdf|jpeg|png` and the TUI's Save as PDF / JPEG always use
-  the dark palette. Only the web follows the view's light/dark. A light
-  choice for the shell (a flag or config key) would make printed PDFs
-  friendlier.
 
 ## Roadmap
 
@@ -98,6 +93,19 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-059** · raised `2026-0925-1902-explain-plan-sharing-pdf-jpeg-mermaid` ·
+  closed 2026-09-25 — the shell's and the TUI's plan pictures can be light.
+  `plan_theme = "light"|"dark"` in the config (normalized by `config.Load`;
+  a typo warns and draws dark) sets it for `dbc explain -t pdf|jpeg|png` and
+  the TUI's Save as PDF / JPEG. `dbc explain --theme light|dark` overrides
+  it for one run, and is refused, before the explain runs, for a format with no
+  palette. `theme.ByName` maps the name to `Default()` / `Light()` (only
+  the built-ins: a cats host palette is the terminal's, not the reader's).
+  dbc web is unchanged: it still follows the view. Tested in
+  `explain_test.go` (flag > key > dark, PNG corner = the palette's Bg),
+  `tui/explain_test.go` (a light JPEG), `config` and `theme`, and by hand
+  with a built binary.
 
 - **N-057** · raised `2026-0925-1812-web-add-connection` ·
   closed 2026-09-25, 2026-0925-1930-N-057-shared-connections — connections

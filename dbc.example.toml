@@ -24,6 +24,12 @@ conn_idle_timeout = "1h"
 # way, Ctrl+K (or Ctrl+C) abandons a connect that is taking too long.
 connect_timeout = "5s"
 
+# Palette of the plan pictures drawn outside the browser — `dbc explain -t
+# pdf|jpeg|png` and the TUI's Save as PDF / JPEG: "dark" (dbc's own) or
+# "light" (paper, for a PDF that will be printed). `dbc explain --theme`
+# overrides it for one run. dbc web's files follow the view's light or dark.
+plan_theme = "dark"
+
 # AI assistant. dbc runs an Agent Client Protocol agent as a subprocess and
 # never holds a credential itself: "copilot" (the default) is GitHub's
 # copilot-language-server, signed in once from any editor that uses it;

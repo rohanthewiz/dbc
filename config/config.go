@@ -164,6 +164,15 @@ type Config struct {
 	// wins. Global for the same reason as ConnIdleTimeout.
 	ConnectTimeout time.Duration `toml:"connect_timeout"`
 
+	// PlanTheme is the palette of the plan pictures the shell and the TUI
+	// draw — `dbc explain -t pdf|jpeg|png` and the TUI's Save as PDF /
+	// JPEG: "dark" (the default, dbc's own slate) or "light" (paper, kinder
+	// to a printer). Load normalizes it to one of the two, so readers can
+	// hand it to theme.ByName without a second error to handle. dbc web
+	// ignores it: its files follow the light or dark the view is wearing.
+	// A string rather than a theme.Palette so config stays a leaf package.
+	PlanTheme string `toml:"plan_theme"`
+
 	DefaultConnection string `toml:"default_connection"`
 
 	// Connections is written freely while the config is being built (Load,
@@ -200,7 +209,7 @@ func Load(explicit string) (*Config, error) {
 func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 	cfg := &Config{ScriptsDir: "scripts", MaxRows: defaultMaxRows,
 		MaxDisplayRows: defaultMaxDisplayRows, AIContextRows: DefaultAIContextRows,
-		ConnIdleTimeout: DefaultConnIdleTimeout, ConnectTimeout: DefaultConnectTimeout}
+		ConnIdleTimeout: DefaultConnIdleTimeout, ConnectTimeout: DefaultConnectTimeout, PlanTheme: "dark"}
 
 	path := explicit
 	if path == "" {
@@ -236,6 +245,7 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 	}
 	cfg.checkDuration("conn_idle_timeout", &cfg.ConnIdleTimeout, DefaultConnIdleTimeout)
 	cfg.checkDuration("connect_timeout", &cfg.ConnectTimeout, DefaultConnectTimeout)
+	cfg.checkPlanTheme()
 	if cfg.ScriptsDir == "" {
 		cfg.ScriptsDir = "scripts"
 	}
@@ -279,6 +289,23 @@ func (c *Config) checkDuration(key string, d *time.Duration, def time.Duration) 
 		"%s = %s is not a usable timeout (write a duration string such as \"30s\" or \"1h\", or 0 for no limit); using %s",
 		key, *d, def))
 	*d = def
+}
+
+// checkPlanTheme normalizes plan_theme to "dark" or "light". An unknown
+// value falls back to dark with a warning rather than failing the load: a
+// misspelled cosmetic setting is not a reason to refuse to start, and the
+// warning names the fix.
+func (c *Config) checkPlanTheme() {
+	switch v := strings.ToLower(strings.TrimSpace(c.PlanTheme)); v {
+	case "", "dark":
+		c.PlanTheme = "dark"
+	case "light":
+		c.PlanTheme = "light"
+	default:
+		c.Warnings = append(c.Warnings, fmt.Sprintf(
+			"plan_theme = %q is not a theme (use \"light\" or \"dark\"); using dark", c.PlanTheme))
+		c.PlanTheme = "dark"
+	}
 }
 
 // demoFallback fills cfg with the built-in demo connections, used when there

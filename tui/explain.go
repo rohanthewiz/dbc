@@ -9,6 +9,7 @@ import (
 	"github.com/rohanthewiz/serr"
 
 	"github.com/rohanthewiz/dbc/explain"
+	"github.com/rohanthewiz/dbc/theme"
 	"github.com/rohanthewiz/dbc/workspace"
 )
 
@@ -311,14 +312,19 @@ func (m *Model) planInBrowser() tea.Cmd {
 // planFile saves the plan as a PDF or a JPEG — the graph and its findings,
 // for a chat, a ticket or an email — beside the pages `b` writes, and opens
 // it in the system's viewer, which is where it gets shared from. It is
-// sized by the metric the plan view is showing; the palette is dbc's dark
-// one, as the page's is.
+// sized by the metric the plan view is showing, in the config's plan_theme:
+// dbc's dark palette by default, as the page's is, or light for a PDF that
+// will be printed. Not the terminal's own colors — the file is for people
+// who are not looking at this terminal.
 func (m *Model) planFile(ext string) tea.Cmd {
 	p := m.planv.plan
 	if p == nil {
 		return nil
 	}
-	opt := explain.PictureOptions{Metric: m.planv.metric}
+	// config.Load has already normalized plan_theme, so ByName cannot fail
+	// here; a Config built without Load ("") is dark.
+	pal, _ := theme.ByName(m.cfg.PlanTheme)
+	opt := explain.PictureOptions{Metric: m.planv.metric, Palette: pal}
 	var data []byte
 	var err error
 	switch ext {

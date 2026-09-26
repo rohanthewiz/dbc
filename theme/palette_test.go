@@ -69,3 +69,15 @@ func TestBlend(t *testing.T) {
 		t.Errorf("a bad background should be returned unchanged, got %q", got)
 	}
 }
+
+func TestByName(t *testing.T) {
+	for in, want := range map[string]Palette{"": Default(), "dark": Default(), " Light ": Light(), "LIGHT": Light()} {
+		if got, err := ByName(in); err != nil || got != want {
+			t.Errorf("ByName(%q) = %+v, %v", in, got, err)
+		}
+	}
+	// a typo is reported, not drawn dark
+	if _, err := ByName("lite"); err == nil {
+		t.Error(`ByName("lite") should fail`)
+	}
+}

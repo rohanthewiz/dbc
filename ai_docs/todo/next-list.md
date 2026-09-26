@@ -95,7 +95,8 @@ Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
 - **N-059** · raised `2026-0925-1902-explain-plan-sharing-pdf-jpeg-mermaid` ·
-  closed 2026-09-25 — the shell's and the TUI's plan pictures can be light.
+  closed 2026-09-25, 2026-0925-1935-N-059-light-plan-pictures — the shell's
+  and the TUI's plan pictures can be light.
   `plan_theme = "light"|"dark"` in the config (normalized by `config.Load`;
   a typo warns and draws dark) sets it for `dbc explain -t pdf|jpeg|png` and
   the TUI's Save as PDF / JPEG. `dbc explain --theme light|dark` overrides

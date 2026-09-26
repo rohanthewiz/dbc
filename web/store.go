@@ -18,10 +18,13 @@ import (
 )
 
 // Store keeps what only the browser UI has: its query tabs (the editor
-// buffer and the connection each one was on), its layout (pane sizes), and
-// the connections added in the browser (see SavedConn).
+// buffer and the connection each one was on) and its layout (pane sizes).
 // History and assistant conversations are not here — they stay in userdata,
-// shared with the TUI, so a query run in either shows up in both.
+// shared with the TUI, so a query run in either shows up in both — and
+// neither are the connections added in the browser, which every dbc reads
+// from connections.toml (config.SavedStore). Its conns table is where an
+// older dbc web kept those; dbc web moves them out at startup (see
+// SavedConn).
 //
 // It is a bytdb file, ~/.config/dbc/web.bytdb. Two processes writing one
 // bytdb WAL would corrupt it, so only one may hold it. bytdb (v0.18.0+) sees
@@ -55,16 +58,15 @@ type Tab struct {
 	Updated time.Time `json:"updated"`
 }
 
-// SavedConn is a connection added in the browser. The config file's
-// connections stay the file's: dbc web never rewrites it (the TOML encoder
-// would drop the user's comments and layout), so what the browser adds is
-// kept here instead and merged into the config at startup.
+// SavedConn is a row of the conns table, where dbc web kept connections
+// added in the browser until they moved to connections.toml, which the TUI
+// and headless runs can read beside a running dbc web (this file is locked
+// by it). The table is now only read, once, by Server.moveStoreConns, which
+// copies each row to config.SavedStore and deletes it here; the table stays
+// in the schema so an older file opens, and so that read has something to
+// query.
 //
-// DSN is stored as typed — ${VAR} references unexpanded — so a password
-// kept in the environment never lands in this file; it is expanded each
-// time the connection is merged in (config.ExpandDSN), as the file's are.
-// A DSN typed with the password inline is stored as typed: the file is
-// the user's own, under ~/.config/dbc (created 0700), like config.toml.
+// DSN is as typed — ${VAR} references unexpanded — which is how it moves.
 type SavedConn struct {
 	Name   string
 	Driver string
@@ -291,9 +293,8 @@ func (s *Store) SetLayout(values map[string]string) error {
 	return wrap(tx.Commit(), "op", "save layout")
 }
 
-// Conns lists the connections added in the browser, oldest first — the
-// order they were added, which is the order the sidebar shows them in,
-// after the config file's.
+// Conns lists the conns table's rows (see SavedConn), oldest first — the
+// order they were added, which moveStoreConns keeps in the file.
 func (s *Store) Conns() ([]SavedConn, error) {
 	if s.db == nil {
 		s.mu.Lock()
@@ -323,10 +324,9 @@ func (s *Store) Conns() ([]SavedConn, error) {
 	return out, wrap(rows.Err(), "op", "list conns")
 }
 
-// SaveConn adds a connection. Unlike SaveTab it does not replace one by the
-// same name: the caller has already checked the name against the config,
-// and a name here that the config did not know is one this store kept but
-// could not merge — replacing it silently would be a surprise.
+// SaveConn adds a row to the conns table. Nothing in dbc web writes the
+// table any more (see SavedConn); this is how the tests make a store as an
+// older dbc web left it. It does not replace a row by the same name.
 func (s *Store) SaveConn(c SavedConn) error {
 	if c.Added.IsZero() {
 		c.Added = time.Now().UTC()
@@ -348,95 +348,33 @@ func (s *Store) SaveConn(c SavedConn) error {
 	return wrap(err, "op", "save conn", "name", c.Name)
 }
 
-// Conn finds one saved connection by name — the edit form's "leave the DSN
-// as it is" reads the DSN as typed from here, since the browser never had it.
-func (s *Store) Conn(name string) (SavedConn, bool, error) {
-	all, err := s.Conns()
-	if err != nil {
-		return SavedConn{}, false, err
-	}
-	for _, c := range all {
-		if c.Name == name {
-			return c, true, nil
-		}
-	}
-	return SavedConn{}, false, nil
-}
-
-// UpdateConn replaces the saved connection named old with c, which may
-// carry a new name. It keeps the old row's Added — that is the sidebar's
-// order, and an edit should not move the entry to the end at the next
-// start.
-//
-// On a rename the saved query tabs that were on old are moved to the new
-// name in the same transaction. A saved tab's conn is the connection it
-// reconnects to when shown again; left on a name that no longer exists it
-// would fall back to whatever the window has active, and the user would
-// find a tab quietly on another database. (History and saved assistant
-// chats keep the old name: they record what happened, under the name it
-// had then.)
-//
-// A missing old is an error: the caller checked it exists, so its absence
-// means it was removed meanwhile, and writing c would resurrect it.
-func (s *Store) UpdateConn(old string, c SavedConn) error {
+// RetagTabs moves the saved query tabs on connection from to connection to
+// — a rename of a connection added in the browser (handleConnEdit). A saved
+// tab's conn is the connection it reconnects to when shown again; left on a
+// name that no longer exists it would fall back to whatever the window has
+// active, and the user would find a tab quietly on another database.
+// (History and saved assistant chats keep the old name: they record what
+// happened, under the name it had then.)
+func (s *Store) RetagTabs(from, to string) error {
 	if s.db == nil {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		prev, ok := s.conns[old]
-		if !ok {
-			return serr.New("no saved connection by that name", "name", old)
-		}
-		if _, dup := s.conns[c.Name]; dup && c.Name != old {
-			return serr.New("a saved connection by that name already exists", "name", c.Name)
-		}
-		c.Added = prev.Added
-		delete(s.conns, old)
-		s.conns[c.Name] = c
-		if c.Name != old {
-			for id, t := range s.tabs {
-				if t.Conn == old {
-					t.Conn = c.Name
-					s.tabs[id] = t
-				}
+		for id, t := range s.tabs {
+			if t.Conn == from {
+				t.Conn = to
+				s.tabs[id] = t
 			}
 		}
 		return nil
 	}
-
 	ctx, cancel := opCtx()
 	defer cancel()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return serr.Wrap(err, "op", "update conn")
-	}
-	defer func() { _ = tx.Rollback() }() // a no-op after Commit
-	var added time.Time
-	if err = tx.QueryRowContext(ctx, `SELECT added FROM conns WHERE name = $1`, old).Scan(&added); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return serr.New("no saved connection by that name", "name", old)
-		}
-		return serr.Wrap(err, "op", "update conn", "name", old)
-	}
-	// Delete and insert rather than one UPDATE: the name is the primary
-	// key, and a rename is then the same statements as any other edit — a
-	// clash with another saved name fails the INSERT on that key.
-	if _, err = tx.ExecContext(ctx, `DELETE FROM conns WHERE name = $1`, old); err != nil {
-		return serr.Wrap(err, "op", "update conn", "name", old)
-	}
-	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO conns (name, driver, dsn, ai_rows, added) VALUES ($1, $2, $3, $4, $5)`,
-		c.Name, c.Driver, c.DSN, c.AIRows, added); err != nil {
-		return serr.Wrap(err, "op", "update conn", "name", c.Name)
-	}
-	if c.Name != old {
-		if _, err = tx.ExecContext(ctx, `UPDATE tabs SET conn = $1 WHERE conn = $2`, c.Name, old); err != nil {
-			return serr.Wrap(err, "op", "retag tabs", "from", old, "to", c.Name)
-		}
-	}
-	return wrap(tx.Commit(), "op", "update conn", "name", c.Name)
+	_, err := s.db.ExecContext(ctx, `UPDATE tabs SET conn = $1 WHERE conn = $2`, to, from)
+	return wrap(err, "op", "retag tabs", "from", from, "to", to)
 }
 
-// DeleteConn forgets a saved connection. A missing one is success.
+// DeleteConn removes a conns table row, once moveStoreConns has moved it.
+// A missing one is success.
 func (s *Store) DeleteConn(name string) error {
 	if s.db == nil {
 		s.mu.Lock()

@@ -19,6 +19,7 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/tui"
 	"github.com/rohanthewiz/dbc/userdata"
 	"github.com/rohanthewiz/dbc/web"
@@ -36,7 +37,8 @@ func webCommand() *cli.Command {
 		Usage: "open the workbench in a browser (a local web server)",
 		Description: "Serves dbc's workbench on loopback and opens the browser on it. Only a browser that " +
 			"opened the printed link (or a client sending the secret as a Bearer token) can use it. " +
-			"Tabs and layout are kept in ~/.config/dbc/web.bytdb; query history and assistant conversations are shared with the TUI.",
+			"Tabs and layout are kept in ~/.config/dbc/web.bytdb. Connections added in the browser go to ~/.config/dbc/connections.toml, " +
+			"which every dbc reads; query history and assistant conversations are shared with the TUI too.",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "listen", Usage: "`ADDR` to listen on (default " + web.DefaultListen +
 				", or a free port when it is taken)", Destination: &flagListen},
@@ -72,9 +74,11 @@ func webAction(ctx context.Context, cmd *cli.Command) error {
 	defer store.Close()
 
 	srv, err := web.New(cfg, mgr, web.Options{
-		Listen:  flagListen,
-		Secret:  flagSecret,
-		Store:   store,
+		Listen: flagListen,
+		Secret: flagSecret,
+		Store:  store,
+		// the file setup merged: the browser's adds, edits and removals go there
+		Conns:   config.OpenSaved(config.SavedFile()),
 		History: userdata.LoadHistory(userdata.HistoryFile()),
 		// the TUI's archive, so a conversation had in either is offered in both
 		ChatsDir: userdata.ChatsDir(),

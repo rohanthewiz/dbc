@@ -11,6 +11,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/jezek/xgb v1.3.1
 	github.com/rivo/uniseg v0.4.7
+	github.com/rohanthewiz/btypedb v0.8.0
 	github.com/rohanthewiz/bytdb v0.18.0
 	github.com/rohanthewiz/element v0.6.0
 	github.com/rohanthewiz/logger v1.3.0
@@ -43,7 +44,6 @@ require (
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/rohanthewiz/btypedb v0.8.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/tidwall/btype v0.3.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect

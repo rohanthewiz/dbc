@@ -19,8 +19,8 @@
   const conns = document.getElementById("conns");
 
   // Placeholders show each driver's DSN shape — the same examples as
-  // dbc.example.toml. ${VAR} is expanded from dbc web's environment, which
-  // keeps a password out of web.bytdb.
+  // dbc.example.toml. ${VAR} is expanded from the environment of each dbc
+  // that reads connections.toml, which keeps a password out of the file.
   const DRIVERS = [
     ["postgres", "postgres://user:${PGPASS}@localhost:5432/mydb?sslmode=disable"],
     ["mysql", "user:${MYSQL_PASS}@tcp(localhost:3306)/mydb?parseTime=true"],

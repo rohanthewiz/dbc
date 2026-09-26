@@ -331,6 +331,14 @@ func setup(demos demoOpen) (*config.Config, *db.Manager) {
 	if err = addAdHocConn(cfg); err != nil {
 		fail(err, "bad --dsn/--driver")
 	}
+	// The connections added in dbc web, for every command alike, so one
+	// added in the browser is there in the TUI and for `dbc -c name`. Last,
+	// so the config file's and the ad-hoc --dsn one keep their names: a
+	// saved one that clashes is the one skipped, with a warning.
+	cfg.LoadSaved(config.SavedFile(), func(driver string) bool {
+		_, err := db.Driver(driver)
+		return err == nil
+	})
 	mgr := db.NewManager(cfg)
 	if !cfg.Demo {
 		return cfg, mgr

@@ -599,13 +599,21 @@ closes it again, so nothing is saved until you choose to. It reports how long
 the connect took, or the driver's error. For a SQLite or bytdb file that does
 not exist yet, it says so rather than creating one. **Save** adds the
 connection and switches the tab to it, whether or not it was tested. The
-connection is kept in `web.bytdb`, not in your config file, which dbc never
-rewrites. It is merged in each time `dbc web` starts, after the file's
-connections; if the file later defines the same name, the file's wins, with
-a warning. The TUI and headless runs read only the file, so they don't see
-these connections. A DSN is stored as typed: write `${PGPASS}` and the
-password stays in `dbc web`'s environment instead of the file. A DSN is never
-sent back to the browser. Connections added this way show a small dot. To
+connection is kept in `~/.config/dbc/connections.toml`, not in your config
+file, which dbc never rewrites. Every dbc reads it after the config file,
+so the TUI, headless runs (`dbc -c name …`), `script`, `migrate` and
+`explain` see these connections too. If the config file later defines the
+same name, the config file's wins, with a warning. `connections.toml` uses
+the same `[[connection]]` tables as the config file, so an entry can be
+copied across. You may edit it by hand, but dbc rewrites it whole on the
+next change from the browser, so comments are not kept. A running `dbc web`
+reads it only at startup. A DSN is stored as typed: write `${PGPASS}` and the
+password stays in the environment instead of the file. Each dbc expands it
+from its own environment, so set the variable wherever you run the TUI too.
+A DSN typed with the password inline is stored as typed, in a file only you
+can read (`0600`). A DSN is never sent back to the browser. Connections that
+an older `dbc web` kept in `web.bytdb` are moved to `connections.toml` the
+first time it starts. Connections added this way show a small dot. To
 change one, right-click it and pick *Edit…*: the same form, filled in, with
 the DSN field left empty. Leave it empty to keep the saved DSN (for a test
 too), or type a new one; changing the driver needs a new DSN. A rename keeps

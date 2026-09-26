@@ -113,14 +113,14 @@ func TestConnAddConnectRemove(t *testing.T) {
 	if ev.WS != "" || !strings.Contains(string(ev.Data), `"scratch"`) {
 		t.Fatalf("conns event = %+v", ev)
 	}
-	// the running config has it, the DSN expanded; the store has it as typed
+	// the running config has it, the DSN expanded; the saved list as typed
 	cc, ok := e.srv.cfg.ConnByName("scratch")
 	if !ok || !cc.Web || cc.DSN != "file:addtest?mode=memory&cache=shared" {
 		t.Fatalf("config entry = %+v", cc)
 	}
-	saved, _ := e.srv.store.Conns()
+	saved, _ := e.srv.saved.List()
 	if len(saved) != 1 || saved[0].DSN != "file:${DBC_TEST_MEMNAME}?mode=memory&cache=shared" {
-		t.Fatalf("store = %+v", saved)
+		t.Fatalf("saved = %+v", saved)
 	}
 
 	// a name in use — the config's or a saved one — is a 409
@@ -151,8 +151,8 @@ func TestConnAddConnectRemove(t *testing.T) {
 	if _, ok := e.srv.cfg.ConnByName("scratch"); ok {
 		t.Fatal("still in the config after remove")
 	}
-	if saved, _ = e.srv.store.Conns(); len(saved) != 0 {
-		t.Fatalf("still in the store after remove: %+v", saved)
+	if saved, _ = e.srv.saved.List(); len(saved) != 0 {
+		t.Fatalf("still saved after remove: %+v", saved)
 	}
 
 	// the file's connections, and names that are not there, are not removable
@@ -173,18 +173,29 @@ func TestConnRemoveEscapedName(t *testing.T) {
 	}
 }
 
-func TestSavedConnsMergeAtStartup(t *testing.T) {
-	st, err := OpenStore(filepath.Join(t.TempDir(), "web.bytdb"))
+// Connections an older dbc web kept in web.bytdb move to the saved-
+// connections file at startup, and the moved ones join the running config.
+func TestStoreConnsMoveAtStartup(t *testing.T) {
+	dir := t.TempDir()
+	st, err := OpenStore(filepath.Join(dir, "web.bytdb"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
+	saved := config.OpenSaved(filepath.Join(dir, "connections.toml"))
+	// moved by an earlier start that stopped before deleting the row: the
+	// file's entry stands, and the row is only dropped
+	if err = saved.Add(config.SavedConn{Name: "twice", Driver: "sqlite", DSN: "file:filever?mode=memory"}); err != nil {
+		t.Fatal(err)
+	}
+
 	t.Setenv("DBC_TEST_MERGE", "merged")
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Second)
 	for i, sc := range []SavedConn{
 		{Name: "kept", Driver: "sqlite", DSN: "file:${DBC_TEST_MERGE}?mode=memory&cache=shared", AIRows: true},
-		{Name: "demo-sqlite", Driver: "sqlite", DSN: "file:clash?mode=memory"}, // the file's name now
+		{Name: "demo-sqlite", Driver: "sqlite", DSN: "file:clash?mode=memory"}, // the config file's name now
 		{Name: "odd", Driver: "oracle", DSN: "x"},
+		{Name: "twice", Driver: "sqlite", DSN: "file:rowver?mode=memory"},
 	} {
 		sc.Added = now.Add(time.Duration(i) * time.Second)
 		if err = st.SaveConn(sc); err != nil {
@@ -192,14 +203,14 @@ func TestSavedConnsMergeAtStartup(t *testing.T) {
 		}
 	}
 
-	e := newTestEnv(t, func(_ *config.Config, o *Options) { o.Store = st })
+	e := newTestEnv(t, func(_ *config.Config, o *Options) { o.Store, o.Conns = st, saved })
 
 	cc, ok := e.srv.cfg.ConnByName("kept")
 	if !ok || !cc.Web || !cc.AIRows || cc.DSN != "file:merged?mode=memory&cache=shared" {
 		t.Fatalf("kept = %+v (found %v)", cc, ok)
 	}
 	if cc, _ = e.srv.cfg.ConnByName("demo-sqlite"); cc.Web {
-		t.Fatal("a saved connection displaced the config file's")
+		t.Fatal("a moved connection displaced the config file's")
 	}
 	w := strings.Join(e.srv.cfg.Warnings, "\n")
 	for _, want := range []string{`"demo-sqlite" skipped`, `"odd" skipped`} {
@@ -207,11 +218,31 @@ func TestSavedConnsMergeAtStartup(t *testing.T) {
 			t.Fatalf("warnings %q lack %q", w, want)
 		}
 	}
-	// the skipped ones stay in the store: the user may yet rename the file's
-	if saved, _ := st.Conns(); len(saved) != 3 {
-		t.Fatalf("store after merge = %+v", saved)
+	// every row is in the file — the skipped ones too, for the user to
+	// rename or fix — in the order added, with the file's "twice" kept as
+	// it was and the DSNs as typed
+	file, err := saved.List()
+	if err != nil {
+		t.Fatal(err)
 	}
-	// and the sidebar order is the file's, then the saved ones in the order added
+	got := fmt.Sprint(func() (n []string) {
+		for _, c := range file {
+			n = append(n, c.Name)
+		}
+		return
+	}())
+	if got != "[twice kept demo-sqlite odd]" {
+		t.Fatalf("file after the move = %s", got)
+	}
+	if file[0].DSN != "file:filever?mode=memory" || file[1].DSN != "file:${DBC_TEST_MERGE}?mode=memory&cache=shared" ||
+		!file[1].Added.Equal(now) || !file[1].AIRows {
+		t.Fatalf("file entries = %+v", file)
+	}
+	// ...and none is left in the store, so the next start has nothing to move
+	if rows, _ := st.Conns(); len(rows) != 0 {
+		t.Fatalf("store after the move = %+v", rows)
+	}
+	// the sidebar order is the config file's, then the moved ones
 	l := decodeData[connListResp](t, e.api("GET", "/api/v1/conns", "", 200))
 	names := fmt.Sprint(func() (n []string) {
 		for _, c := range l.Conns {
@@ -224,14 +255,32 @@ func TestSavedConnsMergeAtStartup(t *testing.T) {
 	}
 }
 
+// A connection another dbc web added to the file since this one started is
+// refused by the file, and the running config is left as it was.
+func TestConnAddClashInFile(t *testing.T) {
+	saved := config.OpenSaved(filepath.Join(t.TempDir(), "connections.toml"))
+	e := newTestEnv(t, func(_ *config.Config, o *Options) { o.Conns = saved })
+	if err := saved.Add(config.SavedConn{Name: "other", Driver: "sqlite", DSN: "file:o?mode=memory"}); err != nil {
+		t.Fatal(err)
+	}
+	res := e.api("POST", "/api/v1/conns", connBody("other", "sqlite", "file:x?mode=memory"), 409)
+	if !strings.Contains(res.Error, "another dbc web") {
+		t.Fatalf("clash in the file = %q", res.Error)
+	}
+	if _, ok := e.srv.cfg.ConnByName("other"); ok {
+		t.Fatal("the refused connection stayed in the config")
+	}
+}
+
 // editBody is a PUT /api/v1/conns/:name body.
 func editBody(name, driver, dsn string, aiRows bool) string {
 	b, _ := json.Marshal(connForm{Name: name, Driver: driver, DSN: dsn, AIRows: aiRows})
 	return string(b)
 }
 
-// An edit, on both kinds of store: the memory-only one keeps its maps, the
-// file one runs UpdateConn's SQL (delete, insert, retag tabs) on bytdb.
+// An edit, on both kinds of store: the memory-only ones keep their maps and
+// lists; the persistent ones write connections.toml and run RetagTabs' SQL
+// on bytdb.
 func TestConnEdit(t *testing.T) {
 	for _, persistent := range []bool{false, true} {
 		t.Run(fmt.Sprintf("persistent=%v", persistent), func(t *testing.T) {
@@ -248,7 +297,8 @@ func testConnEdit(t *testing.T, persistent bool) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = st.Close() })
-		tweaks = append(tweaks, func(_ *config.Config, o *Options) { o.Store = st })
+		saved := config.OpenSaved(filepath.Join(t.TempDir(), "connections.toml"))
+		tweaks = append(tweaks, func(_ *config.Config, o *Options) { o.Store, o.Conns = st, saved })
 	}
 	e := newTestEnv(t, tweaks...)
 	id, s := e.connected()
@@ -259,7 +309,7 @@ func testConnEdit(t *testing.T, persistent bool) {
 	e.api("POST", "/api/v1/conns", connBody("later", "sqlite", "file:later?mode=memory&cache=shared"), 200)
 	s.await(t, "conns")
 	s.await(t, "conns")
-	before, _, _ := e.srv.store.Conn("scratch")
+	before, _, _ := e.srv.saved.Get("scratch")
 	// a saved query tab not shown in any window, noted as on "scratch"
 	if err := e.srv.store.SaveTab(Tab{ID: "bg", Title: "Q", Conn: "scratch"}); err != nil {
 		t.Fatal(err)
@@ -308,18 +358,19 @@ func testConnEdit(t *testing.T, persistent bool) {
 	if !strings.Contains(string(ev.Data), `"renamed":{"from":"scratch","to":"renamed"}`) {
 		t.Fatalf("conns event = %s", ev.Data)
 	}
-	// the config has the new entry with the same expanded DSN; the store
-	// has the DSN as typed, the original Added, and the saved tab moved
+	// the config has the new entry with the same expanded DSN; the saved
+	// list has the DSN as typed and the original Added; the store has the
+	// saved tab moved
 	cc, ok := e.srv.cfg.ConnByName("renamed")
 	if !ok || !cc.Web || !cc.AIRows || cc.DSN != "file:edit1?mode=memory&cache=shared" {
 		t.Fatalf("config entry = %+v", cc)
 	}
-	after, found, _ := e.srv.store.Conn("renamed")
+	after, found, _ := e.srv.saved.Get("renamed")
 	if !found || after.DSN != typed || !after.Added.Equal(before.Added) || !after.AIRows {
 		t.Fatalf("store entry = %+v (before %+v)", after, before)
 	}
-	if _, found, _ = e.srv.store.Conn("scratch"); found {
-		t.Fatal("the old name is still in the store")
+	if _, found, _ = e.srv.saved.Get("scratch"); found {
+		t.Fatal("the old name is still saved")
 	}
 	tabs, _ := e.srv.store.Tabs()
 	for _, tb := range tabs {
@@ -363,8 +414,8 @@ func testConnEdit(t *testing.T, persistent bool) {
 	if cc, _ = e.srv.cfg.ConnByName("renamed"); cc.DSN != "file:edit2?mode=memory&cache=shared" {
 		t.Fatalf("new DSN not in the config: %+v", cc)
 	}
-	if sc, _, _ := e.srv.store.Conn("renamed"); sc.DSN != "file:edit2?mode=memory&cache=shared" {
-		t.Fatalf("new DSN not in the store: %+v", sc)
+	if sc, _, _ := e.srv.saved.Get("renamed"); sc.DSN != "file:edit2?mode=memory&cache=shared" {
+		t.Fatalf("new DSN not saved: %+v", sc)
 	}
 	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"renamed"}`, 200)
 	cev, _ := s.await(t, "conn")

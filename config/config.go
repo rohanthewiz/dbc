@@ -119,11 +119,12 @@ type Connection struct {
 	// also carry the ad-hoc --dsn connection, which is the user's database.
 	Demo bool `toml:"-"`
 
-	// Web marks a connection added in dbc web's browser UI and kept in its
-	// store (web.bytdb), not in this file. Never read from a file — the
-	// store sets it when it merges its connections in — so dbc web can tell
-	// which ones it may remove: a file's connections are the file's to
-	// change.
+	// Web marks a connection added in dbc web's browser UI and kept in the
+	// saved-connections file (connections.toml, see SavedStore), not in the
+	// config file. Never read from a file's key — MergeSaved sets it — so dbc
+	// web can tell which ones it may edit or remove: the config file's
+	// connections are the file's to change. Every dbc merges the saved ones,
+	// so the TUI and headless runs list them too.
 	Web bool `toml:"-"`
 }
 

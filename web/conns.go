@@ -21,23 +21,28 @@ import (
 //
 // The config file stays the file's: dbc web never writes it back (the TOML
 // encoder would lose the user's comments and layout). A connection added
-// here is kept in the store (web.bytdb, see SavedConn) and merged into the
-// running config — at startup, and at once when it is added — so the
-// workspaces, the manager and every handler find it through ConnByName like
-// any other. The TUI and headless runs read only the file, so they do not
-// see these.
+// here is kept in the saved-connections file (~/.config/dbc/connections.toml,
+// see config.SavedStore) and merged into the running config — at startup,
+// by every dbc command (config.LoadSaved), and at once when it is added — so
+// the workspaces, the manager and every handler find it through ConnByName
+// like any other, and the TUI and headless runs list it too.
 //
 //	                 ┌── config file ([[connection]]) ──┐
 //	startup:  cfg ◄──┤                                  ├── file's names win a clash
-//	                 └── store (conns table) ───────────┘
+//	(any dbc)        └── connections.toml ──────────────┘
 //
 //	POST   /api/v1/conns/test ─► db.Probe: open, ping, close; nothing saved
-//	POST   /api/v1/conns ──────► cfg.AddConn, store.SaveConn, "conns" to every window
+//	POST   /api/v1/conns ──────► cfg.AddConn, saved.Add, "conns" to every window
 //	PUT    /api/v1/conns/:name ► an edit (rename, driver, DSN, ai_rows); all but an
 //	                             ai_rows change refused while a query tab is on it;
-//	                             cfg.ReplaceConn, store.UpdateConn, mgr.Drop, "conns"
+//	                             cfg.ReplaceConn, saved.Update, store.RetagTabs,
+//	                             mgr.Drop, "conns"
 //	DELETE /api/v1/conns/:name ► refused while a query tab is on it; else
-//	                             cfg.RemoveConn, mgr.Drop, store.DeleteConn, "conns"
+//	                             cfg.RemoveConn, mgr.Drop, saved.Delete, "conns"
+//
+// A running dbc web reads the file only at startup (and at each change it
+// makes, under the lock): a connection another dbc web adds meanwhile shows
+// up here at the next start. The TUI only reads the file.
 //
 // A DSN never goes back to the browser: the list says name, driver, ai_rows
 // and whether it was added here — enough to draw the sidebar, fill the edit
@@ -49,28 +54,52 @@ import (
 // topbar and every history row: a name that long is a paste gone wrong.
 const maxConnName = 64
 
-// mergeSavedConns adds the store's connections to the config. One whose name
-// the config file has since taken is skipped — the file is the user's
-// deliberate word, the store only what was once typed in a form — and so is
-// one whose driver this build does not know. Both stay in the store, and the
-// returned warnings say why they are missing.
-func (s *Server) mergeSavedConns() []string {
-	saved, err := s.store.Conns()
+// moveStoreConns moves the connections an older dbc web kept in its store
+// (web.bytdb's conns table) to the saved-connections file, where every dbc
+// reads them, and merges the moved ones into the running config — the
+// caller merged the file before they were in it.
+//
+//	for each row in web.bytdb:
+//	  file already has the name ─► drop the row (moved by an earlier run
+//	                               that stopped before the delete)
+//	  saved.Add ok ──────────────► merge into cfg, drop the row
+//	  saved.Add fails ───────────► keep the row for the next start, and
+//	                               merge it into cfg anyway, as before
+//
+// Only a dbc web holding web.bytdb gets here with rows: a second one's
+// store is memory-only and empty, so two cannot move one row twice. It runs
+// on every start and costs one empty query once the table is empty.
+func (s *Server) moveStoreConns() []string {
+	rows, err := s.store.Conns()
 	if err != nil {
-		return []string{fmt.Sprintf("connections added in the browser could not be read: %v", err)}
+		return []string{fmt.Sprintf("connections added in an earlier dbc web could not be read: %v", err)}
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	known := func(driver string) bool {
+		_, err := db.Driver(driver)
+		return err == nil
 	}
 	var warns []string
-	for _, sc := range saved {
-		if _, err = db.Driver(sc.Driver); err != nil {
-			warns = append(warns, fmt.Sprintf("saved connection %q skipped: unknown driver %q", sc.Name, sc.Driver))
-			continue
-		}
-		dsn, w := config.ExpandDSN(sc.Name, sc.DSN)
-		warns = append(warns, w...)
-		if err = s.cfg.AddConn(config.Connection{Name: sc.Name, Driver: sc.Driver, DSN: dsn,
-			AIRows: sc.AIRows, Web: true}); err != nil {
+	for _, row := range rows {
+		sc := config.SavedConn{Name: row.Name, Driver: row.Driver, DSN: row.DSN,
+			AIRows: row.AIRows, Added: row.Added}
+		switch err = s.saved.Add(sc); {
+		case errors.Is(err, config.ErrConnExists):
+			// the file's entry is the newer word; it was merged at startup
+		case err != nil:
 			warns = append(warns, fmt.Sprintf(
-				"saved connection %q skipped: the config file now defines a connection by that name", sc.Name))
+				"saved connection %q could not be moved to %s, so only dbc web lists it: %v",
+				row.Name, s.saved.Path(), err))
+			warns = append(warns, s.cfg.MergeSaved([]config.SavedConn{sc}, known)...)
+			continue
+		default:
+			warns = append(warns, s.cfg.MergeSaved([]config.SavedConn{sc}, known)...)
+		}
+		if err = s.store.DeleteConn(row.Name); err != nil {
+			// harmless: the next start finds it in the file and drops it then
+			s.opt.Logf("warning: saved connection %q moved, but not removed from the store: %v", row.Name, err)
 		}
 	}
 	return warns
@@ -111,7 +140,7 @@ func (s *Server) keepDSN(f *connForm, from string) error {
 	if strings.TrimSpace(f.DSN) != "" {
 		return nil
 	}
-	sc, found, err := s.store.Conn(from)
+	sc, found, err := s.saved.Get(from)
 	if err != nil {
 		return err
 	}
@@ -196,10 +225,12 @@ func (s *Server) handleConnTest(ctx rweb.Context) error {
 
 // handleConnAdd is POST /api/v1/conns: add a connection and keep it.
 //
-// The config is changed first, the store second: AddConn is where a
+// The config is changed first, the file second: AddConn is where a
 // duplicate name is caught atomically (two windows saving the same name
-// race there, not in the store), and a store that then fails to write is
-// undone by RemoveConn, so the two never disagree about what exists. It
+// race there, not in the file), and a file that then fails to write is
+// undone by RemoveConn, so the two never disagree about what exists. The
+// file can refuse a name the config allowed: another dbc web added it
+// since this one started. It
 // does not connect — the page switches its tab to it right after, where
 // the connect's outcome shows the way every connect's does.
 func (s *Server) handleConnAdd(ctx rweb.Context) error {
@@ -218,12 +249,16 @@ func (s *Server) handleConnAdd(ctx rweb.Context) error {
 		}
 		return fail(ctx, err)
 	}
-	// the DSN as typed, ${VAR}s and all: see SavedConn
-	if err := s.store.SaveConn(SavedConn{Name: f.Name, Driver: f.Driver, DSN: f.DSN, AIRows: f.AIRows}); err != nil {
+	// the DSN as typed, ${VAR}s and all: see config.SavedConn
+	if err := s.saved.Add(config.SavedConn{Name: f.Name, Driver: f.Driver, DSN: f.DSN, AIRows: f.AIRows}); err != nil {
 		s.cfg.RemoveConn(f.Name)
+		if errors.Is(err, config.ErrConnExists) {
+			return fail(ctx, conflict("a connection named %q was added by another dbc web — "+
+				"restart this one to see it", f.Name))
+		}
 		return fail(ctx, serr.Wrap(err, "op", "add conn"))
 	}
-	if w := s.unsavedWarning("connection"); w != "" {
+	if w := s.unsavedConnWarning("connection"); w != "" {
 		warns = append(warns, w)
 	}
 	list := s.connList()
@@ -232,13 +267,16 @@ func (s *Server) handleConnAdd(ctx rweb.Context) error {
 	return ok(ctx, list)
 }
 
-// unsavedWarning is the note for a change to a memory-only store: it holds
-// only until dbc web stops. what is the thing that lasts that long.
-func (s *Server) unsavedWarning(what string) string {
-	if s.store.Persistent() {
+// unsavedConnWarning is the note for a connection change that no file
+// keeps — there is no home directory to keep one in: it holds only until
+// dbc web stops. what is the thing that lasts that long. (A second dbc web,
+// whose store is memory-only, still writes the saved-connections file: that
+// has no long-held lock to lose to the first.)
+func (s *Server) unsavedConnWarning(what string) string {
+	if s.saved.Persistent() {
 		return ""
 	}
-	return "the store is not being saved this session (another dbc web holds it), " +
+	return "connections are not being saved (no home directory to keep them in), " +
 		"so this " + what + " lasts only until dbc web stops"
 }
 
@@ -256,15 +294,16 @@ func (s *Server) unsavedWarning(what string) string {
 //
 // The order mirrors handleConnAdd: config first, where a clashing new name
 // or a removal by another window is caught atomically (ReplaceConn), then
-// the store, undone in the config if it fails. The pool opened under the
-// old name and DSN is dropped last, so the next connect opens a fresh one
-// from the new entry. The check-then-change gap is the one handleConnDelete
+// the file, undone in the config if it fails. On a rename, the saved query
+// tabs on the old name are moved to the new one in the store (RetagTabs).
+// The pool opened under the old name and DSN is dropped last, so the next
+// connect opens a fresh one from the new entry. The check-then-change gap is the one handleConnDelete
 // describes, with the same outcome: an error on a tab that raced into it.
 //
 // A rename is broadcast with the "conns" event as renamed {from, to}, so
 // every window can move the query tabs it has on the old name (ones not yet
 // shown, which have no workspace and so do not count as "on" it) to the
-// new — the store's saved tabs are moved by UpdateConn.
+// new — the store's saved tabs are moved by RetagTabs.
 func (s *Server) handleConnEdit(ctx rweb.Context) error {
 	name, err := url.PathUnescape(ctx.Request().PathParam("name"))
 	if err != nil {
@@ -312,19 +351,38 @@ func (s *Server) handleConnEdit(ctx rweb.Context) error {
 		}
 		return fail(ctx, err)
 	}
-	// the DSN as typed (or as stored, when kept): see SavedConn
-	if err = s.store.UpdateConn(name, SavedConn{Name: f.Name, Driver: f.Driver, DSN: f.DSN, AIRows: f.AIRows}); err != nil {
+	// the DSN as typed (or as stored, when kept): see config.SavedConn
+	if err = s.saved.Update(name, config.SavedConn{Name: f.Name, Driver: f.Driver, DSN: f.DSN, AIRows: f.AIRows}); err != nil {
 		// Put the config back as it was. That fails only if another window
 		// added a connection under the old name in the moment since it was
-		// given up; the edit then stands for this run and the store keeps
+		// given up; the edit then stands for this run and the file keeps
 		// the old entry, which the next start skips as a clash and says so.
 		_ = s.cfg.ReplaceConn(f.Name, cur)
+		switch {
+		case errors.Is(err, config.ErrConnExists):
+			return fail(ctx, conflict("a connection named %q was added by another dbc web — "+
+				"restart this one to see it", f.Name))
+		case errors.Is(err, config.ErrConnNotFound):
+			return fail(ctx, notFound("%q is no longer in %s — removed by another dbc web, "+
+				"or by hand", name, s.saved.Path()))
+		}
 		return fail(ctx, serr.Wrap(err, "op", "edit conn"))
+	}
+	if renamed {
+		// A saved tab's conn is what it reconnects to when shown again; left
+		// on a name that no longer exists it would fall back to whatever the
+		// window has active. A failure here is only that, so it is a warning
+		// rather than an undo of an edit the file already holds.
+		if err = s.store.RetagTabs(name, f.Name); err != nil {
+			warns = append(warns, fmt.Sprintf(
+				"saved query tabs on %q were not moved to %q, and will open on the window's connection: %v",
+				name, f.Name, err))
+		}
 	}
 	if reconnects {
 		s.mgr.Drop(name)
 	}
-	if w := s.unsavedWarning("change"); w != "" {
+	if w := s.unsavedConnWarning("change"); w != "" {
 		warns = append(warns, w)
 	}
 	list := s.connList()
@@ -380,7 +438,7 @@ func (s *Server) handleConnDelete(ctx rweb.Context) error {
 	}
 	s.cfg.RemoveConn(name)
 	s.mgr.Drop(name)
-	if err = s.store.DeleteConn(name); err != nil {
+	if err = s.saved.Delete(name); err != nil {
 		// gone for this run, back at the next start: say so rather than
 		// pretend, and leave it removed now — putting it back would only
 		// hand the page a connection it just asked to be rid of

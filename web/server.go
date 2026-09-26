@@ -69,6 +69,11 @@ type Options struct {
 	Secret string
 	// Store keeps tabs and layout; nil means a memory-only store.
 	Store *Store
+	// Conns is where connections added in the browser are kept — the
+	// saved-connections file every dbc reads (config.SavedFile); nil keeps
+	// them in memory. New does not merge the file into cfg: the caller has
+	// (config.LoadSaved), because every dbc command does it the same way.
+	Conns *config.SavedStore
 	// History is the query history every tab records into — the TUI's
 	// file, so a query run in either shows up in both. nil keeps it in
 	// memory.
@@ -99,6 +104,7 @@ type Server struct {
 	mgr   *db.Manager
 	opt   Options
 	store *Store
+	saved *config.SavedStore // connections added in the browser
 	auth  *auth
 	hub   *hub
 	rw    *rweb.Server
@@ -126,6 +132,9 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) (*Server, error) {
 	if opt.Store == nil {
 		opt.Store, _ = OpenStore("") // memory only; cannot fail
 	}
+	if opt.Conns == nil {
+		opt.Conns = config.OpenSaved("") // memory only
+	}
 	if opt.History == nil {
 		opt.History = userdata.LoadHistory("")
 	}
@@ -144,7 +153,7 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) (*Server, error) {
 	}
 	mgr.SetMemoryPool(memPoolTabs)
 
-	s := &Server{cfg: cfg, mgr: mgr, opt: opt, store: opt.Store, auth: a,
+	s := &Server{cfg: cfg, mgr: mgr, opt: opt, store: opt.Store, saved: opt.Conns, auth: a,
 		ready: make(chan struct{}, 1), ver: assetVersion()}
 	s.hub = newHub(func(sink func(workspace.Event)) *workspace.Workspace {
 		return workspace.New(cfg, mgr, opt.History, workspace.Options{Sink: sink})
@@ -153,11 +162,11 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) (*Server, error) {
 	s.rw = rweb.NewServer(rweb.ServerOptions{Address: addr, ReadyChan: s.ready})
 	s.rw.Use(s.guard)
 	s.routes()
-	// after the file's connections (Load) and the demos (db.openDemos), so a
-	// saved one never displaces either; see mergeSavedConns. Its warnings go
-	// to the terminal and join the config's, which a new window's page logs
-	// (handleOpen) — appending is safe here, as nothing is serving yet.
-	for _, w := range s.mergeSavedConns() {
+	// Connections an older dbc web kept in web.bytdb move to the saved-
+	// connections file; see moveStoreConns. Its warnings go to the terminal
+	// and join the config's, which a new window's page logs (handleOpen) —
+	// appending is safe here, as nothing is serving yet.
+	for _, w := range s.moveStoreConns() {
 		opt.Logf("warning: %s", w)
 		cfg.Warnings = append(cfg.Warnings, w)
 	}

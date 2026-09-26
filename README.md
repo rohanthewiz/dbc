@@ -959,3 +959,7 @@ Docs as a table (see *Copying results* above). That holds for a script's
 The HTML page wears the same muted green as the TUI, surface for surface.
 Both read the palette from [`theme/`](theme/theme.go), so a change to those
 constants reaches the app and its exports together.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

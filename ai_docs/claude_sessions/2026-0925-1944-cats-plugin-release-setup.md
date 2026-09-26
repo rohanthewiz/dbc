@@ -61,8 +61,27 @@ hand bump. The hand bump is only used when the *last* pushed commit edits
 4. Once the workflow finishes, `release` is merged back into `main` (a
    no-op on a hand bump, since CI makes no bump commit then).
 
+Outcome: Release run 36206031879 succeeded in about 4m40s. Its test step
+passed, it took the hand bump as-is (it skipped the bump commit), and it tagged
+`v0.2.0` and published
+https://github.com/rohanthewiz/dbc/releases/tag/v0.2.0 with
+`dbc_0.2.0_{darwin,linux}_{amd64,arm64}.tar.gz` and `checksums.txt`. The first
+Test run (36206031878) passed on ubuntu and macOS. `release` and `main` were at
+the same commit, so nothing needed merging back. The only CI annotations were
+the GitHub-wide Node 20 deprecation notice and goreleaser pinning `latest` to
+`~> v2`.
+
+## License (after the release)
+
+While v0.2.0 was building, the user asked for an MIT License. dbc had
+none, which was N-060, raised by this session. `LICENSE` is MIT, Copyright (c)
+2026 Rohan Allison, matching ced's text. `LICENSE*` is back in
+`.goreleaser.yml`'s archive files, and the README ends with a License section.
+The v0.2.0 archives were already published without the file. The next
+release (any push to `release`, auto-bumping to 0.2.1) will include it.
+
 ## Next
 
-Closed: None. Declined: None. Raised: N-060.
+Closed: N-060. Declined: None. Raised: N-060.
 Deferred: None. Promoted: None.
 Updated: None. Full list: `ai_docs/todo/next-list.md`.

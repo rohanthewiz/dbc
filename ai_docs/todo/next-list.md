@@ -56,11 +56,6 @@ ten session docs in `ai_docs/claude_sessions/`
   web" action already launch it, and a `.app` is a second packaging path to
   keep building and signing. `/api/v1/health` is there for a wrapper to
   poll.
-- **N-060** · raised `2026-0925-1944-cats-plugin-release-setup` · value medium
-  Add a LICENSE. dbc now publishes release archives, but has no license file,
-  so by default nobody else may use the code (ced ships one). Once
-  it exists, put `LICENSE*` back in `.goreleaser.yml`'s archive `files`. It was
-  removed there so the archive glob didn't match nothing.
 
 ## Roadmap
 
@@ -99,6 +94,14 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-060** · raised `2026-0925-1944-cats-plugin-release-setup` · value medium
+  Add a LICENSE. dbc now publishes release archives, but has no license file,
+  so by default nobody else may use the code (ced ships one). Once
+  it exists, put `LICENSE*` back in `.goreleaser.yml`'s archive `files`. It was
+  removed there so the archive glob didn't match nothing.
+  closed 2026-09-25, `2026-0925-1944-cats-plugin-release-setup`: MIT
+  `LICENSE` (Copyright 2026 Rohan Allison) added after v0.2.0 shipped;
+  `LICENSE*` is back in the goreleaser archive files.
 - **N-059** · raised `2026-0925-1902-explain-plan-sharing-pdf-jpeg-mermaid` ·
   closed 2026-09-25, 2026-0925-1935-N-059-light-plan-pictures — the shell's
   and the TUI's plan pictures can be light.

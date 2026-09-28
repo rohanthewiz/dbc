@@ -10,6 +10,7 @@
 //	dbc migrate up                 apply pending migrations (see migrate.go)
 //	dbc explain -a "SELECT …"      show a statement's plan and findings (see explain.go)
 //	dbc web                        the workbench in a browser (see webcmd.go)
+//	dbc version                    print the version (same as --version / -v)
 //
 // Headless runs are cancelable with Ctrl+C, which aborts the statement on the
 // server and exits 130.
@@ -163,6 +164,19 @@ func newCLI() *cli.Command {
 			explainCommand(),
 			webCommand(),
 			{
+				// A subcommand as well as the --version / -v flag the cli
+				// package adds, since `dbc version` is what people type first.
+				// Without it the bare word would fall through to the root
+				// action and run headless as the SQL "version". It shares the
+				// cli's VersionPrinter, handed the root because the default
+				// printer reads Name and Version off the command it is given,
+				// so both spellings print the same "dbc version x.y.z" line.
+				// Like --version, it reads no config and opens nothing.
+				Name:   "version",
+				Usage:  "print the dbc version",
+				Action: versionAction,
+			},
+			{
 				Name:      "migrate",
 				Usage:     "apply or inspect goose-format migrations (dbc migrate help)",
 				ArgsUsage: "<command> [VERSION|NAME]",
@@ -210,6 +224,16 @@ func scriptAction(ctx context.Context, cmd *cli.Command) error {
 	defer mgr.Close()
 	warnConfig(cfg)
 	runScriptHeadless(mgr, cmd.Args().First(), outFormat())
+	return nil
+}
+
+// versionAction prints the version the same way --version does. It takes no
+// arguments, so a stray one is a usage error rather than silently ignored.
+func versionAction(ctx context.Context, cmd *cli.Command) error {
+	if cmd.Args().Present() {
+		usage("usage: dbc version")
+	}
+	cli.VersionPrinter(cmd.Root())
 	return nil
 }
 

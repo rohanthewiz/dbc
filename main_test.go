@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -19,6 +20,7 @@ import (
 	"github.com/rohanthewiz/dbc/export"
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/sqlsplit"
+	"github.com/rohanthewiz/dbc/version"
 )
 
 // newTestManager builds a manager over a private in-memory SQLite seeded with
@@ -778,6 +780,8 @@ func TestCLIParsing(t *testing.T) {
 			got{action: "migrate", args: []string{"down-to", "0"}, format: "json"}},
 		{"script", []string{"-o", "r.csv", "script", "s.go"},
 			got{action: "script", args: []string{"s.go"}, format: "text", out: "r.csv"}},
+		{"version is a subcommand, not the SQL \"version\"", []string{"version"},
+			got{action: "version", format: "text"}},
 		{"-- keeps a leading comment as SQL", []string{"--", "-- note\nSELECT 1"},
 			got{action: "root", args: []string{"-- note\nSELECT 1"}, format: "text"}},
 	}
@@ -809,6 +813,26 @@ func TestCLIParsing(t *testing.T) {
 			}
 			if !reflect.DeepEqual(g, c.want) {
 				t.Errorf("got  %+v\nwant %+v", g, c.want)
+			}
+		})
+	}
+}
+
+// TestVersionCommand checks that `dbc version` prints exactly what the cli
+// package's own --version and -v print, so the spellings cannot drift apart.
+func TestVersionCommand(t *testing.T) {
+	want := "dbc version " + version.Version + "\n"
+	for _, argv := range [][]string{{"version"}, {"--version"}, {"-v"}} {
+		t.Run(strings.Join(argv, " "), func(t *testing.T) {
+			resetFlags(t)
+			var buf bytes.Buffer
+			app := newCLI()
+			app.Writer = &buf
+			if err := app.Run(context.Background(), append([]string{"dbc"}, argv...)); err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			if buf.String() != want {
+				t.Errorf("got %q, want %q", buf.String(), want)
 			}
 		})
 	}

@@ -19,7 +19,7 @@ go build -o dbc .
 
 Or install a tagged release with `go install github.com/rohanthewiz/dbc@latest`,
 through Cats ([As a Cats plugin](#as-a-cats-plugin)), or from the archives on
-the GitHub Releases page. `dbc --version` prints the version.
+the GitHub Releases page. `dbc version` (or `dbc --version`) prints the version.
 
 ### Releasing
 

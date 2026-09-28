@@ -22,6 +22,11 @@ type Workbench struct {
 	Active string              // the connection a new workspace starts on
 	Ver    string              // asset version, for cache busting (?v=)
 	Theme  string              // "light", or "" for the dark default
+	// SideHidden: the sidebar was folded away (‹, Ctrl+B, or dragging its
+	// edge shut). Rendered into the page, like the theme, so a reload with
+	// it folded does not flash the column first; the layout's "sideHidden"
+	// key remembers it.
+	SideHidden bool
 }
 
 // Render returns the whole document.
@@ -32,11 +37,24 @@ type Workbench struct {
 //	│ Connections   ├ ═ splitter (drag; the height is saved) ═══════════════┤│ ✦ Copilot · model ▾  ⟲ ✕ │
 //	│ Tables        │ results bar: [Results][◈ Plan] · 8 rows   ⧉ Copy ⤓ Export ││ transcript               │
 //	│               │ the grid (virtualized) — or the plan view             ││ [✓] with: query, …       │
-//	│               ├ log ──────────────────────────────────────────────────┤│ composer          ⏎ send │
+//	│               ├ ═ log-split (drag; the log's height is saved) ═════════┤│                          │
+//	│               │ log                                                   ││ composer          ⏎ send │
 //	└ status bar ──────────────────────────────────────────────── keys · ⌨ keys ┴──────────────────────────┘
 //
 // The assistant pane is hidden until opened; ║ on its left edge drags its
 // width. Opening it and its width are saved with the layout.
+//
+// The sidebar mirrors it on the left: ║ on its right edge (side-split) drags
+// its width, and ‹ beside Connections folds it away. Folded, that same edge
+// widens into a thin strip carrying a › tab that brings the column back:
+//
+//	shown                                folded
+//	┌ sidebar ─────║┬ work ───      ┌›┬ work ─────────────
+//	│ CONNECTIONS +‹║│                │ │
+//	│ …             ║│                │ │
+//
+// Its width and the fold are saved with the layout too. Every bar resets
+// to its default size on a double-click.
 //
 // The body carries the asset version (data-ver) for the scripts that load
 // more files themselves — Monaco's loader versions every module with it.
@@ -50,9 +68,14 @@ func (p Workbench) Render() string {
 	b.Html("lang", "en", "data-theme", theme).R(
 		head(b, "dbc web", p.Ver),
 		b.Body("data-ver", p.Ver).R(
-			b.DivClass("app").R(
+			b.DivClass(p.appClass()).R(
 				p.topbar(b),
 				p.sidebar(b),
+				// the sidebar's drag edge — and, folded, its reveal tab. A
+				// sibling of the aside rather than inside it, so it survives
+				// the aside going display:none (see "sidebar edge" in app.css)
+				b.DivClass("side-split", "id", "side-split", "role", "separator",
+					"aria-orientation", "vertical", "title", sideSplitTitle(p.SideHidden)).R(),
 				b.MainClass("work").R(
 					// the query tabs; app.js draws them from the saved ones
 					b.DivClass("qtabs", "id", "qtabs", "role", "tablist", "aria-label", "Query tabs").R(
@@ -65,7 +88,7 @@ func (p Workbench) Render() string {
 						b.DivClass("monaco", "id", "monaco").R(),
 					),
 					b.DivClass("splitter", "id", "splitter", "role", "separator",
-						"aria-orientation", "horizontal", "title", "Drag to resize").R(),
+						"aria-orientation", "horizontal", "title", "Drag to resize the editor (double-click to reset)").R(),
 					b.SectionClass("results", "id", "results", "aria-label", "Results").R(
 						b.DivClass("rbar").R(
 							b.DivClass("rtabs", "id", "rtabs", "role", "tablist").R(
@@ -91,6 +114,10 @@ func (p Workbench) Render() string {
 								"Query plan — arrows walk the steps, e / a explain again, y copies, p back to the results").R(),
 						),
 					),
+					// results | log: the same kind of bar as the editor's, it
+					// sizes the log (its height is saved as "logHeight")
+					b.DivClass("splitter", "id", "log-split", "role", "separator",
+						"aria-orientation", "horizontal", "title", "Drag to resize the log (double-click to reset)").R(),
 					b.SectionClass("log", "id", "log", "aria-label", "Log").R(),
 				),
 				p.chat(b),
@@ -103,6 +130,25 @@ func (p Workbench) Render() string {
 		),
 	)
 	return b.String()
+}
+
+// appClass is the layout root's class list: side-off when the sidebar
+// starts folded.
+func (p Workbench) appClass() string {
+	if p.SideHidden {
+		return "app side-off"
+	}
+	return "app"
+}
+
+// sideSplitTitle is the sidebar edge's tooltip, which says what a press on
+// it does in each state. app.js keeps it in step (syncSideTitle) once the
+// page is live; the wording must match there.
+func sideSplitTitle(hidden bool) string {
+	if hidden {
+		return "Show the sidebar (Ctrl+B)"
+	}
+	return "Drag to resize the sidebar (double-click to reset, Ctrl+B to hide)"
 }
 
 func (p Workbench) topbar(b *element.Builder) any {
@@ -129,13 +175,49 @@ func (p Workbench) topbar(b *element.Builder) any {
 	return nil
 }
 
+// sidebar is the left column: Connections over Tables, split by a bar that
+// drags the Connections list's height (saved as "connsHeight"). Each half
+// scrolls on its own, so a long table list never pushes the connections
+// out of view — the column itself no longer scrolls.
+//
+//	┌ side-conns ─────────┐  natural height, capped (app.css); a drag fixes it
+//	│ CONNECTIONS     + ‹ │
+//	│ …                   │
+//	├ side-hsplit ════════┤
+//	│ TABLES 12           │  side-tables: the rest
+//	│ …                   │
+//	└─────────────────────┘
 func (p Workbench) sidebar(b *element.Builder) any {
 	b.AsideClass("sidebar").R(
+		b.SectionClass("side-conns", "id", "side-conns").R(
+			p.connsList(b),
+		),
+		b.DivClass("side-hsplit", "id", "side-hsplit", "role", "separator", "aria-orientation", "horizontal",
+			"title", "Drag to resize the connections list (double-click to reset)").R(),
+		b.SectionClass("side-tables").R(
+			b.H2().R(b.T("Tables "), b.SpanClass("count", "id", "table-count").R()),
+			b.Ul("id", "tables").R(),
+		),
+	)
+	return nil
+}
+
+// connsList is the Connections heading and list.
+func (p Workbench) connsList(b *element.Builder) any {
+	b.Wrap(func() {
 		b.H2Class("hrow").R(
 			b.T("Connections"),
-			b.ButtonClass("hadd", "id", "conn-add", "type", "button",
-				"title", "Add a connection", "aria-label", "Add a connection").T("+"),
-		),
+			// the row's buttons are grouped so the heading's space-between
+			// keeps the label left and both buttons together on the right
+			b.SpanClass("hbtns").R(
+				b.ButtonClass("hadd", "id", "conn-add", "type", "button",
+					"title", "Add a connection", "aria-label", "Add a connection").T("+"),
+				// folds the column away; the › tab on the edge (side-split)
+				// is its mirror and brings it back
+				b.ButtonClass("hadd side-fold", "id", "side-fold", "type", "button",
+					"title", "Hide the sidebar (Ctrl+B)", "aria-label", "Hide the sidebar").T("‹"),
+			),
+		)
 		// conns.js redraws this list when a connection is added, edited or
 		// removed (draw): keep the two in step
 		b.Ul("id", "conns").R(
@@ -160,10 +242,8 @@ func (p Workbench) sidebar(b *element.Builder) any {
 					),
 				)
 			}),
-		),
-		b.H2().R(b.T("Tables "), b.SpanClass("count", "id", "table-count").R()),
-		b.Ul("id", "tables").R(),
-	)
+		)
+	})
 	return nil
 }
 
@@ -172,7 +252,7 @@ func (p Workbench) sidebar(b *element.Builder) any {
 func (p Workbench) chat(b *element.Builder) any {
 	b.AsideClass("chat", "id", "chat", "hidden", "hidden", "aria-label", "Assistant").R(
 		b.DivClass("chat-split", "id", "chat-split", "role", "separator", "aria-orientation", "vertical",
-			"title", "Drag to resize").R(),
+			"title", "Drag to resize (double-click to reset)").R(),
 		b.DivClass("cbar").R(
 			b.ButtonClass("cmodel", "id", "chat-model", "type", "button", "title", "Model and assistant").T("✦ Assistant ▾"),
 			b.ButtonClass("cstop", "id", "chat-stop", "type", "button", "hidden", "hidden", "title", "Stop the answer (Ctrl+K)").T("■ stop"),

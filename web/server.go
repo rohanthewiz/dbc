@@ -324,6 +324,7 @@ func (s *Server) handlePage(ctx rweb.Context) error {
 	l, _ := s.store.Layout() // a store that cannot be read just means the defaults
 	return writePage(ctx, http.StatusOK, pages.Workbench{
 		Conns: s.cfg.Conns(), Active: s.defaultConn(), Ver: s.ver, Theme: l["theme"],
+		SideHidden: l["sideHidden"] == "1",
 	}.Render())
 }
 

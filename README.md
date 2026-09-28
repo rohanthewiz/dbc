@@ -588,6 +588,14 @@ the AI assistant. It runs statements through the same code the TUI does, so
 the run slot, pinned sessions, cancel, history, explain and the assistant's
 data rules behave the same in both.
 
+**Layout.** A draggable bar separates every pair of neighbouring sections:
+the sidebar and the work column, Connections and Tables, the editor and the
+results, the results and the log, and the work column and the assistant.
+Double-click a bar to go back to the default size. `‹` beside Connections
+(or `Ctrl+B` / `⌘B`, or dragging the sidebar's edge shut) folds the sidebar
+away; the `›` tab left on the window's edge brings it back. Sizes and the
+fold are saved with the layout.
+
 **Access.** It listens on loopback, and only a browser holding this launch's
 secret can use it: dbc opens `…/login?s=<secret>` (and prints it), which
 trades the secret for a session cookie. A restart signs every browser out;

@@ -32,10 +32,13 @@ button:focus-visible, textarea:focus-visible, li:focus-visible { outline: 1px so
 
 /* ── layout ───────────────────────────────────────────────────────────────
    topbar spans the top; the sidebar runs down the left; the work column
-   holds editor, splitter, results and log; the status bar spans the foot. */
+   holds editor, splitter, results and log; the status bar spans the foot.
+   The sidebar's width is --side-w: unset it is 230px; app.js sets it on
+   the root element when its edge is dragged, and .app.side-off overrides it
+   on .app itself while the column is folded (see "sidebar edge" below). */
 .app {
   display: grid;
-  grid-template-columns: 230px 1fr;
+  grid-template-columns: var(--side-w, 230px) 1fr;
   grid-template-rows: auto 1fr auto;
   grid-template-areas:
     "top  top"
@@ -68,13 +71,43 @@ button:focus-visible, textarea:focus-visible, li:focus-visible { outline: 1px so
 .actions { margin-left: auto; display: flex; gap: 6px; }
 #run { border-color: var(--accent); }
 
+/* The column is a flex stack of Connections, a drag bar, and Tables; each
+   half scrolls itself, so the column does not (see Workbench.sidebar). */
 .sidebar {
   grid-area: side;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   background: var(--panel);
   border-right: 1px solid var(--line);
-  padding: 8px 0;
 }
+/* Connections takes its natural height up to a cap, so a short list leaves
+   the room to Tables and a long one cannot crowd it out. A drag replaces
+   the cap with a fixed height (.sized, --conns-h), which app.js sets. */
+.side-conns {
+  flex: 0 1 auto;
+  max-height: 45%;
+  min-height: 0;
+  overflow: auto;
+  padding-top: 8px;
+}
+.side-conns.sized { flex: 0 0 var(--conns-h); max-height: none; }
+.side-tables {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 8px;
+}
+/* the bar between them: a hairline with 3px of grab room either side */
+.side-hsplit {
+  flex: 0 0 7px;
+  margin: 3px 0 0;
+  cursor: row-resize;
+  background: linear-gradient(var(--line), var(--line)) center / 100% 1px no-repeat;
+}
+.side-hsplit:hover, .side-hsplit.dragging { background: var(--accent); }
+body.row-dragging { cursor: row-resize; user-select: none; }
 .sidebar h2 {
   margin: 10px 12px 4px;
   font-size: 11px;
@@ -118,6 +151,72 @@ button:focus-visible, textarea:focus-visible, li:focus-visible { outline: 1px so
 #tables li .schema { color: var(--muted); }
 #tables li.view::after { content: " (view)"; color: var(--muted); }
 #tables li.none { color: var(--muted); cursor: default; font-family: inherit; }
+.hbtns { display: flex; align-items: center; gap: 2px; }
+
+/* ── the sidebar edge ─────────────────────────────────────────────────────
+   side-split is its own grid item placed in the sidebar's area, not a child
+   of the aside: folding hides the aside (display:none) and the edge has to
+   outlive it, because folded it is the only way back. Both items name the
+   "side" area, so they overlap in the one cell rather than auto-placing
+   into separate tracks.
+
+   Shown, it is a 6px strip straddling the sidebar's right border — pulled
+   3px into the work column with a negative margin, as the assistant pane's
+   edge (chat-split) straddles its left border — and z-index lifts it over
+   the work column's tabs and editor there.
+
+   Folded, the track narrows to 14px rather than to nothing, and the strip
+   fills it, carrying a › tab at mid-height (::after). A zero track would
+   leave nothing to point at; a floating button would sit over the query
+   tabs or the editor's gutter and steal their clicks. 14px of editor width
+   is the whole price, paid only while folded. */
+.side-split {
+  grid-area: side;
+  justify-self: end;
+  width: 6px;
+  margin-right: -3px;
+  z-index: 5;
+  cursor: col-resize;
+  display: flex;          /* centers the folded tab without measuring */
+  align-items: center;
+}
+.side-split:hover, .side-split.dragging { background: var(--accent); }
+/* while dragging, the editor and grid under the pointer would otherwise
+   hand out text cursors and start selections */
+body.side-dragging { cursor: col-resize; user-select: none; }
+
+/* --side-w is set here on .app, which beats the value app.js puts on the
+   root (inherited) while leaving that stored width alone for the reveal */
+.app.side-off { --side-w: 14px; }
+.app.side-off .sidebar { display: none; }
+.app.side-off .side-split {
+  width: 100%;
+  margin-right: 0;
+  cursor: pointer;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+}
+/* the tab: flush with the window's left edge, rounded on the side it opens
+   toward, the chevron the mirror of the ‹ that folded it */
+.app.side-off .side-split::after {
+  content: "\203A";
+  width: 100%;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel2);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-left: 0;
+  border-radius: 0 5px 5px 0;
+  font-size: 14px;
+  line-height: 1;
+}
+.app.side-off .side-split:hover::after, .app.side-off .side-split.dragging::after {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 
 .work {
   grid-area: work;
@@ -151,8 +250,15 @@ button:focus-visible, textarea:focus-visible, li:focus-visible { outline: 1px so
 /* the statement under the caret: a bar in the gutter, as the TUI marks it */
 .stmt-mark { background: var(--accent); width: 3px !important; margin-left: 3px; }
 
+/* Positioned and lifted: Monaco's content layer (.lines-content — absolute,
+   contain:strict, transformed, and 2^24px square) is clipped on screen
+   but still wins Chrome's hit test over an unpositioned 5px bar, so a
+   press on either bar (editor | results, results | log) went to the
+   editor and no drag began. A z-index of its own puts the bar above it. */
 .splitter {
   flex: 0 0 5px;
+  position: relative;
+  z-index: 5;
   cursor: row-resize;
   background: var(--line);
 }
@@ -334,8 +440,9 @@ button.primary { border-color: var(--accent); }
 
 .offscreen { position: fixed; left: -9999px; top: 0; opacity: 0; }
 
+/* --log-h is set on .work by the results | log bar (app.js) */
 .log {
-  flex: 0 0 130px;
+  flex: 0 0 var(--log-h, 130px);
   overflow: auto;
   padding: 4px 12px;
   background: var(--panel);
@@ -376,6 +483,11 @@ button.primary { border-color: var(--accent); }
   .actions { flex-wrap: wrap; margin-left: 0; }
   .sidebar { max-height: 30vh; border-right: 0; border-bottom: 1px solid var(--line); }
   .statusbar .keys { display: none; }
+  /* stacked, the sidebar is a band above the work column: it has no width
+     to drag and folding it is not offered, so a fold saved on a wide
+     screen does not hide it here */
+  .side-split, .side-fold { display: none; }
+  .app.side-off .sidebar { display: block; }
 }
 
 /* ── the assistant pane ───────────────────────────────────────────────────
@@ -383,7 +495,7 @@ button.primary { border-color: var(--accent); }
    handle on its left edge sets. Below 1000px there is no room for three
    columns, so it floats over the work area from the right instead. */
 .app.chat-on {
-  grid-template-columns: 230px minmax(0, 1fr) var(--chat-w, 380px);
+  grid-template-columns: var(--side-w, 230px) minmax(0, 1fr) var(--chat-w, 380px);
   grid-template-areas:
     "top  top  top"
     "side work chat"
@@ -456,7 +568,7 @@ a.btnlink:hover { border-color: var(--accent); }
 
 @media (max-width: 1000px) {
   .app.chat-on {
-    grid-template-columns: 230px minmax(0, 1fr);
+    grid-template-columns: var(--side-w, 230px) minmax(0, 1fr);
     grid-template-areas: "top top" "side work" "foot foot";
   }
   .chat {

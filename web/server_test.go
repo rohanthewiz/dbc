@@ -555,6 +555,32 @@ func TestTabsAndLayoutRoundTrip(t *testing.T) {
 	}
 }
 
+// A folded sidebar is rendered into the page, as the theme is, so a reload
+// does not flash the column before app.js could hide it: the layout root
+// carries side-off, and the edge's tooltip offers the way back.
+func TestSidebarFoldRendered(t *testing.T) {
+	e := newTestEnv(t)
+	page := func() string {
+		res := e.req("GET", "/", "", nil)
+		b, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		return string(b)
+	}
+	if p := page(); strings.Contains(p, "side-off") || !strings.Contains(p, `id="side-split"`) ||
+		!strings.Contains(p, `id="side-fold"`) || !strings.Contains(p, `id="log-split"`) ||
+		!strings.Contains(p, `id="side-hsplit"`) {
+		t.Fatal("unfolded page: want the sidebar's edge, fold button and both row bars, and no side-off")
+	}
+	e.api("PUT", "/api/v1/layout", `{"sideHidden":"1"}`, 200)
+	if p := page(); !strings.Contains(p, `class="app side-off"`) || !strings.Contains(p, "Show the sidebar") {
+		t.Fatal("folded page: want side-off on the layout root and the reveal tooltip")
+	}
+	e.api("PUT", "/api/v1/layout", `{"sideHidden":""}`, 200)
+	if strings.Contains(page(), "side-off") {
+		t.Fatal("shown again: side-off is still rendered")
+	}
+}
+
 func TestStorePersistsAndLocks(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "web.bytdb")
 	st, err := OpenStore(path)

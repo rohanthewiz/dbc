@@ -57,6 +57,10 @@
     run: $("run"), runAll: $("run-all"), stop: $("stop"), history: $("history-btn"), scripts: $("scripts-btn"),
     qtabs: $("qtabs"), theme: $("theme-btn"), help: $("help-btn"),
     splitter: $("splitter"), work: document.querySelector(".work"),
+    app: document.querySelector(".app"), sidebar: document.querySelector(".sidebar"),
+    sideSplit: $("side-split"), sideFold: $("side-fold"),
+    sideConns: $("side-conns"), sideHsplit: $("side-hsplit"),
+    logSplit: $("log-split"), log: $("log"), results: $("results"),
   };
 
   function setBusy(busy) {
@@ -576,6 +580,10 @@
     } else if (k === "e") {
       e.preventDefault();
       dbc.grid.exportMenu();
+    } else if (k === "b" && !e.shiftKey && !e.altKey) {
+      // the sidebar, folded and back — VS Code's key for its own side bar
+      e.preventDefault();
+      setSideHidden(!sideHidden());
     } else if (k === "i" && !e.shiftKey) {
       e.preventDefault();
       dbc.cmd.assistant();
@@ -625,10 +633,210 @@
     els.splitter.addEventListener("pointerup", up);
   });
 
+  // double-click: back to the stylesheet's share of the column
+  els.splitter.addEventListener("dblclick", () => {
+    dbc.editor.element.style.removeProperty("height");
+    saveLayout({ editorHeight: "" });
+  });
+
   function setEditorHeight(px) {
-    const max = els.work.getBoundingClientRect().height - 120;
+    // the log sits below the results now at a height of its own choosing,
+    // so the editor's room is what the column has less the log's
+    const max = els.work.getBoundingClientRect().height - els.log.getBoundingClientRect().height - 120;
     dbc.editor.setHeight(Math.max(60, Math.min(px, max)));
   }
+
+  // ── row bars: results | log, and Connections | Tables ─────────────────
+  // dragRows wires a horizontal bar that sizes the pane on one side of it.
+  // start() reads that pane's height when the press lands; set(h) applies a
+  // height (clamping is set's own business); dir is +1 when the pane is
+  // above the bar (dragging down grows it), -1 when below. done() runs on a
+  // release that actually moved — a bare click must not turn a natural
+  // height into a fixed one — and reset() on a double-click.
+  function dragRows(bar, { start, set, dir, done, reset }) {
+    bar.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const startY = e.clientY, startH = start();
+      let moved = false;
+      bar.setPointerCapture(e.pointerId);
+      bar.classList.add("dragging");
+      document.body.classList.add("row-dragging");
+      const move = (m) => {
+        if (Math.abs(m.clientY - startY) > 2) moved = true;
+        if (moved) set(startH + dir * (m.clientY - startY));
+      };
+      const up = () => {
+        bar.removeEventListener("pointermove", move);
+        bar.removeEventListener("pointerup", up);
+        bar.removeEventListener("pointercancel", up);
+        bar.classList.remove("dragging");
+        document.body.classList.remove("row-dragging");
+        if (moved) done();
+      };
+      bar.addEventListener("pointermove", move);
+      bar.addEventListener("pointerup", up);
+      bar.addEventListener("pointercancel", up);
+    });
+    bar.addEventListener("dblclick", reset);
+  }
+
+  // The log: at least a few lines, at most what leaves the results pane
+  // its bar and a couple of rows. Measured live — the editor's height and
+  // the window's both move that ceiling.
+  function setLogHeight(px) {
+    const room = els.log.getBoundingClientRect().height + els.results.getBoundingClientRect().height - 90;
+    els.work.style.setProperty("--log-h", Math.round(Math.max(40, Math.min(px, room))) + "px");
+  }
+  dragRows(els.logSplit, {
+    start: () => els.log.getBoundingClientRect().height,
+    set: setLogHeight,
+    dir: -1, // the log is below its bar: dragging up grows it
+    done: () => saveLayout({ logHeight: String(Math.round(els.log.getBoundingClientRect().height)) }),
+    reset: () => { els.work.style.removeProperty("--log-h"); saveLayout({ logHeight: "" }); },
+  });
+
+  // Connections: from one row under its heading to all but a sliver of the
+  // column, which Tables keeps for its own heading. A height here replaces
+  // the stylesheet's cap (.sized); the reset hands the cap back.
+  function setConnsHeight(px) {
+    const h2 = els.sideConns.querySelector("h2");
+    const min = (h2 ? h2.offsetHeight : 0) + 30;
+    const max = Math.max(min, els.sidebar.clientHeight - 70);
+    els.sideConns.style.setProperty("--conns-h", Math.round(Math.max(min, Math.min(px, max))) + "px");
+    els.sideConns.classList.add("sized");
+  }
+  // a saved height the boot could not apply because the column was folded;
+  // the first reveal applies it (setSideHidden)
+  let pendingConnsH = 0;
+  dragRows(els.sideHsplit, {
+    start: () => els.sideConns.getBoundingClientRect().height,
+    set: setConnsHeight,
+    dir: 1,
+    done: () => saveLayout({ connsHeight: String(Math.round(els.sideConns.getBoundingClientRect().height)) }),
+    reset: () => {
+      pendingConnsH = 0;
+      els.sideConns.classList.remove("sized");
+      els.sideConns.style.removeProperty("--conns-h");
+      saveLayout({ connsHeight: "" });
+    },
+  });
+
+  // ── the sidebar: drag its edge to size it, ‹ or Ctrl+B to fold it ──────
+  // Both are saved with the layout ("sideWidth", "sideHidden"), as the
+  // assistant pane's width and openness are. The fold is also rendered into
+  // the page by the server (Workbench.SideHidden), so a reload does not
+  // flash the column before hiding it; the width is applied at boot.
+  //
+  // The width goes on the root element as --side-w, not on .app: folding
+  // sets --side-w on .app (.app.side-off), which has to win while folded yet
+  // leave the chosen width untouched, so revealing lands back on it.
+  const SIDE_MIN = 150;
+  // Dragging the edge this far left of the floor folds the column — live,
+  // under the pointer, and dragging back past the same mark brings it
+  // straight back. Folding as a preview rather than on release makes the
+  // gesture explain itself: the column dragged into nothing stays gone.
+  const SIDE_FOLD = Math.round(SIDE_MIN * 0.55);
+  // Room for the work column: the widest the sidebar may grow still leaves
+  // the editor this much.
+  const sideMax = () => Math.max(SIDE_MIN, innerWidth - 400);
+
+  function setSideWidth(px) {
+    const w = Math.round(Math.max(SIDE_MIN, Math.min(px, sideMax())));
+    document.documentElement.style.setProperty("--side-w", w + "px");
+  }
+
+  const sideHidden = () => els.app.classList.contains("side-off");
+
+  // setSideHidden folds or reveals the column. save is false while a drag
+  // is still under way: the drag's release saves once, rather than every
+  // pass across the fold mark.
+  function setSideHidden(hide, save) {
+    if (hide === sideHidden()) return;
+    els.app.classList.toggle("side-off", hide);
+    syncSideTitle();
+    if (!hide && pendingConnsH) { setConnsHeight(pendingConnsH); pendingConnsH = 0; }
+    // focus inside the column would be left on an element that is gone
+    if (hide && els.sidebar.contains(document.activeElement)) dbc.editor.focus();
+    if (save !== false) saveLayout({ sideHidden: hide ? "1" : "" });
+  }
+
+  // the edge's tooltip says what a press on it does; the server renders
+  // the same wording (pages.sideSplitTitle) for the first paint
+  function syncSideTitle() {
+    els.sideSplit.title = sideHidden()
+      ? "Show the sidebar (Ctrl+B)"
+      : "Drag to resize the sidebar (double-click to reset, Ctrl+B to hide)";
+  }
+
+  // ‹ lives in the column, so it only ever folds; the › tab that takes its
+  // place on the edge is what brings the column back
+  els.sideFold.addEventListener("click", () => setSideHidden(true));
+
+  // A press that only revealed the column must not have its second half
+  // read as a double-click, which would also reset the width it revealed.
+  let sideRevealedAt = 0;
+  els.sideSplit.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    els.sideSplit.setPointerCapture(e.pointerId);
+    els.sideSplit.classList.add("dragging");
+    document.body.classList.add("side-dragging");
+    // Where on the edge it was grabbed, measured from the column's right
+    // border (0 when folded — the tab is the whole column), so the edge
+    // stays under the pointer rather than jumping by the grab offset on
+    // the first move. The sidebar starts at the window's left edge, so the
+    // wanted width is simply the pointer's x less that offset.
+    const startHidden = sideHidden(), startX = e.clientX;
+    const edge = startHidden ? 0 : els.sidebar.getBoundingClientRect().right;
+    const grab = startHidden ? 0 : e.clientX - edge;
+    // the width before the drag: a drag that ends folded passed through
+    // every narrower width on the way down, and the reveal should land on
+    // this one, not the last of those
+    const startW = document.documentElement.style.getPropertyValue("--side-w");
+    let moved = false;
+    const move = (m) => {
+      if (Math.abs(m.clientX - startX) > 3) moved = true;
+      if (!moved) return;
+      const want = m.clientX - grab;
+      if (want < SIDE_FOLD) { setSideHidden(true, false); return; }
+      setSideHidden(false, false); // dragged back out of the fold zone
+      setSideWidth(want);
+    };
+    const up = () => {
+      els.sideSplit.removeEventListener("pointermove", move);
+      els.sideSplit.removeEventListener("pointerup", up);
+      els.sideSplit.removeEventListener("pointercancel", up);
+      els.sideSplit.classList.remove("dragging");
+      document.body.classList.remove("side-dragging");
+      // A press on the folded tab that never became a drag is a click,
+      // and the one thing a click there can mean is "show it again".
+      if (startHidden && !moved) {
+        setSideHidden(false, false);
+        sideRevealedAt = Date.now();
+      }
+      if (sideHidden() && !startHidden) {
+        if (startW) document.documentElement.style.setProperty("--side-w", startW);
+        else document.documentElement.style.removeProperty("--side-w");
+      }
+      const values = {};
+      if (sideHidden() !== startHidden) values.sideHidden = sideHidden() ? "1" : "";
+      // Only a real drag that ended with the column showing is a new
+      // width: folding it is its own setting, not a width of 0.
+      if (moved && !sideHidden()) values.sideWidth = String(Math.round(els.sidebar.getBoundingClientRect().width));
+      if (Object.keys(values).length) saveLayout(values);
+    };
+    els.sideSplit.addEventListener("pointermove", move);
+    els.sideSplit.addEventListener("pointerup", up);
+    els.sideSplit.addEventListener("pointercancel", up);
+  });
+  // double-click hands the column back to the stylesheet's default width;
+  // "" because the layout has no delete
+  els.sideSplit.addEventListener("dblclick", () => {
+    if (sideHidden() || Date.now() - sideRevealedAt < 600) return; // the reveal click, twice
+    document.documentElement.style.removeProperty("--side-w");
+    saveLayout({ sideWidth: "" });
+  });
 
   // ── saving tabs: every tab's buffer, title and connection survive a restart
   let saveTimer = 0;
@@ -942,6 +1150,7 @@
       ["Ctrl+E", "export the result"],
       ["Ctrl+O", "scripts — run a Go script from scripts_dir"],
       ["Ctrl+I", "the assistant — and back"],
+      ["Ctrl+B", "hide the sidebar — and back"],
     ]],
     ["Query tabs", [
       ["Alt+T", "new tab"], ["Alt+W", "close the tab"], ["Alt+1 … Alt+9", "go to tab N"],
@@ -964,6 +1173,13 @@
     ["Sidebar", [
       ["click a connection", "switch this tab to it"], ["+ beside Connections", "add a connection"],
       ["right-click a connection", "connect · remove one added here"],
+      ["‹ beside Connections · Ctrl+B", "hide it; the › tab on the left edge brings it back"],
+      ["drag its right edge", "resize it (double-click the edge: the default width)"],
+      ["drag the bar above Tables", "share the column between the lists"],
+    ]],
+    ["Splitters", [
+      ["drag a bar", "resize the panes either side — the size is saved"],
+      ["double-click a bar", "back to the default size"],
     ]],
     ["Anywhere", [["F1 · ?", "this list"]]],
   ];
@@ -984,7 +1200,17 @@
   async function boot() {
     try {
       const layout = await api("GET", "/api/v1/layout");
+      // the log first: the editor's ceiling is measured against it
+      if (Number(layout.logHeight) > 0) setLogHeight(Number(layout.logHeight));
       if (layout.editorHeight) setEditorHeight(Number(layout.editorHeight));
+      if (Number(layout.sideWidth) > 0) setSideWidth(Number(layout.sideWidth));
+      // skipped while folded: the column has no height to measure against
+      // (setConnsHeight clamps to it), and the stylesheet's cap serves until
+      // the next drag
+      if (Number(layout.connsHeight) > 0) {
+        if (sideHidden()) pendingConnsH = Number(layout.connsHeight);
+        else setConnsHeight(Number(layout.connsHeight));
+      }
       dbc.chat.boot(layout);
 
       // the window: this browser tab's, if the server still has it — and

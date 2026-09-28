@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-061
+**Next ID:** N-062
 
 ## Open
 
@@ -56,6 +56,13 @@ ten session docs in `ai_docs/claude_sessions/`
   web" action already launch it, and a `.app` is a second packaging path to
   keep building and signing. `/api/v1/health` is there for a wrapper to
   poll.
+- **N-061** · raised `2026-0928-0050-sidebar-splitter-fold-and-section-splitters` · value low
+  Check `dbc web`'s splitters and sidebar fold in Safari and Firefox. They were
+  verified only in Chrome, and the fix that lets a press reach the editor and
+  log bars depends on how Chrome hit-tests. (The bars were raised above
+  Monaco's `.lines-content`, which is clipped on screen but 2^24px square with
+  `contain:strict`.) The other checks: Ctrl+B / ⌘B must not open Firefox's
+  bookmarks sidebar, and the › tab must be clickable in both browsers.
 
 ## Roadmap
 

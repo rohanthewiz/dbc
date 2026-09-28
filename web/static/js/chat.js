@@ -599,6 +599,11 @@
     els.split.addEventListener("pointermove", move);
     els.split.addEventListener("pointerup", up);
   });
+  // double-click: back to the stylesheet's default width
+  els.split.addEventListener("dblclick", () => {
+    els.app.style.removeProperty("--chat-w");
+    saveLayout({ chatWidth: "" });
+  });
 
   // ── hooks app.js calls ─────────────────────────────────────────────────
   dbc.chat = {

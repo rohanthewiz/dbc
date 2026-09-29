@@ -239,6 +239,7 @@ func (s *Server) routes() {
 	r.Post("/api/v1/ws/:id/connect", s.handleConnect)
 	r.Post("/api/v1/ws/:id/run", s.handleRun)
 	r.Post("/api/v1/ws/:id/preview", s.handlePreview)
+	r.Post("/api/v1/ws/:id/columns", s.handleColumns)
 	r.Post("/api/v1/ws/:id/explain", s.handleExplain)
 	r.Get("/api/v1/ws/:id/plan", s.handlePlan)
 	r.Get("/api/v1/ws/:id/plan/text", s.handlePlanText)

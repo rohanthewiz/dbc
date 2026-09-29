@@ -88,3 +88,16 @@ func (m *Model) tablePicked() tea.Cmd {
 	m.focus = focusGrid
 	return m.startRun(m.ws.RunStmts([]string{stmt}, "preview "+it.label)) // records it, then runs
 }
+
+// tableColumns lists the information_schema.columns rows of the table under
+// the cursor in the grid, where the grid's copies take them out as TSV,
+// Markdown or HTML. Recorded in the history like a preview; see
+// workspace.ShowColumns.
+func (m *Model) tableColumns() tea.Cmd {
+	it, ok := m.tables.current()
+	if !ok {
+		return nil
+	}
+	m.focus = focusGrid
+	return m.startRun(m.ws.ShowColumns(it.data.(string)))
+}

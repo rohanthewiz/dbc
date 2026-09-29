@@ -360,6 +360,7 @@ func (m *Model) openTableMenu(x, y int) {
 	name := it.data.(string)
 	m.openMenu(x, y, []menuItem{
 		{label: "Preview rows", key: "2×click", act: func(m *Model) tea.Cmd { return m.tablePicked() }},
+		{label: "Show columns", key: "c", act: func(m *Model) tea.Cmd { return m.tableColumns() }},
 		{label: "Insert name at the caret", act: func(m *Model) tea.Cmd {
 			m.editor.Insert(name)
 			m.focus = focusEditor

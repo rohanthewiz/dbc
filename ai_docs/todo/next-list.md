@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-062
+**Next ID:** N-064
 
 ## Open
 
@@ -63,6 +63,18 @@ ten session docs in `ai_docs/claude_sessions/`
   Monaco's `.lines-content`, which is clipped on screen but 2^24px square with
   `contain:strict`.) The other checks: Ctrl+B / ⌘B must not open Firefox's
   bookmarks sidebar, and the › tab must be clickable in both browsers.
+- **N-062** · raised `2026-0928-1917-show-table-columns` · value medium
+  Run the opt-in live tests for "Show columns" (`DBC_LIVE_PG_DSN`,
+  `DBC_LIVE_MYSQL_DSN`). `TestLiveColumnsPostgres` now runs
+  `db.InfoColumnsQuery` on a table and on a materialized view. It is the only
+  check that the query's `information_schema.columns` ∪ `pg_attribute` UNION
+  type-checks on a real server. `TestLiveColumnsMySQL` checks that the
+  lower-case aliases hold on MySQL 8. Docker was not running, so neither has run.
+- **N-063** · raised `2026-0928-1917-show-table-columns` · value low
+  Check `dbc web`'s "Show columns" in a browser: the tables menu item, the `c`
+  key on a selected table (and that ⌘C / Ctrl+C there still copies rather than
+  firing it), and a copy out of the resulting grid. Only the Go route test and
+  `node --check app.js` covered the page side.
 
 ## Roadmap
 

@@ -177,6 +177,18 @@ func TestLiveColumnsPostgres(t *testing.T) {
 	if matview == nil || !matview.View {
 		t.Errorf("dbc_live.cat_names listed as %+v, want a view (catalog: %v)", matview, res.Rows)
 	}
+	// "Show columns": information_schema.columns for a table, and the
+	// pg_attribute branch for the matview the view leaves out. The two
+	// branches are UNIONed, so this is also the check that their types
+	// line up on a real server.
+	info := infoRows(t, mgr, "live", "postgres", TableRef{Schema: "dbc_live", Name: "cats"})
+	if len(info) != 6 || !strings.HasPrefix(info[1], "2 | name | character varying | NO | NULL | 80") {
+		t.Errorf("cats info columns = %q", info)
+	}
+	info = infoRows(t, mgr, "live", "postgres", TableRef{Schema: "dbc_live", Name: "cat_names"})
+	if len(info) != 2 || !strings.HasPrefix(info[1], "2 | name | character varying(80) | YES") {
+		t.Errorf("cat_names (matview) info columns = %q", info)
+	}
 }
 
 func TestLiveColumnsMySQL(t *testing.T) {
@@ -215,4 +227,11 @@ func TestLiveColumnsMySQL(t *testing.T) {
 		"weight decimal(5,2)", "born datetime(3)", "meta json")
 	wantCols(t, got, "dbc_live_old_cats", "id int unsigned", "name varchar(80)")
 	wantCols(t, got, "dbc_live_MixedCase", "id int", "Weird Col text")
+
+	// "Show columns": MySQL 8 names information_schema's columns in upper
+	// case; infoRows checks the aliases bring them back to lower
+	info := infoRows(t, mgr, "live", "mysql", TableRef{Name: "dbc_live_cats"})
+	if len(info) != 6 || !strings.HasPrefix(info[1], "2 | name | varchar | NO | NULL | 80") {
+		t.Errorf("dbc_live_cats info columns = %q", info)
+	}
 }

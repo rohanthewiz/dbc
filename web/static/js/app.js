@@ -84,8 +84,9 @@
   }
 
   // The tables list: a click selects, a double-click (or Enter) previews
-  // the first 100 rows — the TUI's gestures — and the right-click menu
-  // inserts or copies the name.
+  // the first 100 rows — the TUI's gestures — c lists the table's
+  // information_schema.columns in the grid, and the right-click menu offers
+  // those and inserts or copies the name.
   function showTables(tables) {
     els.tables.replaceChildren();
     els.tableCount.textContent = tables.length ? "· " + tables.length : "";
@@ -95,7 +96,7 @@
     }
     for (const t of tables) {
       const li = el("li", { class: t.view ? "view" : "", tabindex: "-1", "data-name": t.qname,
-        title: t.qname + " — double-click previews its rows, right-click for more" });
+        title: t.qname + " — double-click previews its rows, c shows its columns, right-click for more" });
       const dot = t.qname.lastIndexOf(".");
       if (dot > 0) li.append(el("span", "schema", t.qname.slice(0, dot + 1)), t.qname.slice(dot + 1));
       else li.append(t.qname);
@@ -122,6 +123,10 @@
     if (!li) return;
     let next = null;
     if (e.key === "Enter") { e.preventDefault(); preview(li.dataset.name); return; }
+    // plain c only: a chord with it (⌘C copying a selection) is not ours
+    if (e.key === "c" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault(); columns(li.dataset.name); return;
+    }
     if (e.key === "ArrowDown") next = li.nextElementSibling;
     else if (e.key === "ArrowUp") next = li.previousElementSibling;
     if (next) { e.preventDefault(); pickTable(next); }
@@ -135,6 +140,7 @@
     dbc.menu.open(e.clientX, e.clientY, [
       { head: name },
       { label: "Preview rows", key: "Enter", act: () => preview(name) },
+      { label: "Show columns", key: "c", act: () => columns(name) },
       { label: "Insert the name at the caret", act: () => dbc.editor.insert(name) },
       { label: "Copy name", act: () => dbc.clip.copyText(name, "the table name") },
     ]);
@@ -413,6 +419,16 @@
   async function preview(name) {
     try {
       await api("POST", dbc.wsPath("/preview"), { name });
+    } catch (e) {
+      setStatus(e.message, e.status === 409 ? "warn" : "err");
+    }
+  }
+
+  // columns is "Show columns": the table's information_schema.columns rows,
+  // run into the grid like a preview, so the grid's copies take them out
+  async function columns(name) {
+    try {
+      await api("POST", dbc.wsPath("/columns"), { name });
     } catch (e) {
       setStatus(e.message, e.status === 409 ? "warn" : "err");
     }

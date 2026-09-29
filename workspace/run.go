@@ -99,6 +99,34 @@ func (w *Workspace) ListTables() (Start, error) {
 	return w.Run([]string{q}, "list tables")
 }
 
+// ShowColumns lists a table's information_schema.columns rows in the grid,
+// where they can be read, sorted and copied like any result. qname is the
+// name the sidebar shows for the table (see db.TableIndex.Lookup).
+//
+// It goes through RunStmts, like a table preview: the statement is recorded
+// in the history, because it is what the user would have typed and is the
+// easiest way back to it (or to an edited SELECT * of it). It is not put in
+// the editor, whose text is the user's.
+//
+// Only a table in the active connection's catalog is accepted. The name is
+// inlined into SQL, so a name from anywhere else is refused, not escaped
+// and tried.
+func (w *Workspace) ShowColumns(qname string) (Start, error) {
+	cc, ok := w.cfg.ConnByName(w.Active())
+	if !ok {
+		return Start{}, refuse(NoConnection, Warn, "no active connection — pick one in the sidebar")
+	}
+	t, ok := w.TableIndex().Lookup(qname)
+	if !ok {
+		return Start{}, refuse(Invalid, Warn, "no table %q on %s", qname, cc.Name)
+	}
+	q, err := db.InfoColumnsQuery(cc.Driver, t)
+	if err != nil {
+		return Start{}, refuse(Invalid, Err, "%s", serr.StringFromErr(err))
+	}
+	return w.RunStmts([]string{q}, "columns "+qname)
+}
+
 // Run executes statements in order on the pinned session, stopping at the
 // first failure, and publishes the last result. The Job's event is a
 // *RunDone.

@@ -145,6 +145,46 @@ func (x *TableIndex) Display(t TableRef) string {
 	return t.Name
 }
 
+// Lookup finds a table by the name the sidebar shows for it, which is
+// Display's: "schema.name" when the connection has several schemas, the bare
+// name when it has one. Either spelling is accepted, so a qualified name
+// still resolves on a one-schema connection.
+//
+// The maps are keyed in lower case (for Mentioned's word matching), but a
+// Postgres catalog can hold both "Cats" and cats. An exact match among the
+// candidates therefore wins; a case-insensitive one is taken only when it is
+// the only candidate, so an ambiguous name is refused rather than guessed.
+func (x *TableIndex) Lookup(qname string) (TableRef, bool) {
+	if x == nil || qname == "" {
+		return TableRef{}, false
+	}
+	// The candidates are the case-insensitive matches; exact holds those
+	// that also match in case. A bare name can be in several schemas, so
+	// it is matched on the name alone and must still come out unique.
+	name, schema, qualified := qname, "", false
+	if dot := strings.LastIndexByte(qname, '.'); dot > 0 {
+		schema, name, qualified = qname[:dot], qname[dot+1:], true
+	}
+	var cands, exact []int
+	for _, i := range x.byName[strings.ToLower(name)] {
+		t := x.tables[i]
+		if qualified && !strings.EqualFold(t.Schema, schema) {
+			continue
+		}
+		cands = append(cands, i)
+		if t.Name == name && (!qualified || t.Schema == schema) {
+			exact = append(exact, i)
+		}
+	}
+	switch {
+	case len(exact) == 1:
+		return x.tables[exact[0]], true
+	case len(exact) == 0 && len(cands) == 1:
+		return x.tables[cands[0]], true
+	}
+	return TableRef{}, false
+}
+
 // Mentioned returns the tables named in a SQL statement or in prose, in
 // order of first mention, each once. The statement's words come first, since
 // that is what the question is most often about.
@@ -278,6 +318,78 @@ ORDER BY table_name, ordinal_position`, nil
 FROM sqlite_master m JOIN pragma_table_info(m.name) p
 WHERE m.type IN ('table', 'view') AND m.name IN (` + nameList(tables, false) + `)
 ORDER BY m.name, p.cid`, nil
+	}
+	return "", serr.New("no column listing for this driver", "driver", driver)
+}
+
+// InfoColumnsQuery returns the statement behind the sidebar's "Show
+// columns": one table's rows of information_schema.columns, in declared
+// order, for a person to read and copy out of the grid. It differs from
+// ColumnsQuery, which feeds the assistant, in three ways. It covers one
+// table. It asks the standard view by name, because that is what was asked
+// for and what a user would type to get it. And it keeps the columns a
+// reader wants beside the type: nullability, default and length.
+//
+// The select list is the same on every driver, so a copy reads the same
+// wherever it came from. It is the intersection of what the four servers
+// provide; bytdb's information_schema.columns has exactly these columns
+// and a few more. The AS aliases pin the result's column names to lower
+// case, since MySQL 8 reports information_schema column names in upper case.
+//
+// The statement is shown in the history and can be re-run from there, so a
+// user who wants every column of the view can edit it to SELECT *.
+func InfoColumnsQuery(driver string, t TableRef) (string, error) {
+	drv, err := driverFor(driver)
+	if err != nil {
+		return "", err
+	}
+	if t.Name == "" {
+		return "", serr.New("no table to describe")
+	}
+	const cols = `SELECT ordinal_position AS ordinal_position, column_name AS column_name,
+       data_type AS data_type, is_nullable AS is_nullable, column_default AS column_default,
+       character_maximum_length AS character_maximum_length
+FROM information_schema.columns`
+	switch drv {
+	case "pgx":
+		// Postgres follows the standard and leaves materialized views out
+		// of information_schema (see TablesQuery). The sidebar lists them,
+		// so the second branch reads a matview's columns from pg_attribute.
+		// It returns no rows for any other kind of relation, so the two
+		// branches never both describe one table. The casts give the
+		// branches plainly matching types; information_schema's are
+		// domains (cardinal_number, sql_identifier, character_data).
+		return cols + `
+WHERE table_schema = ` + sqlLit(t.Schema, false) + ` AND table_name = ` + sqlLit(t.Name, false) + `
+UNION ALL
+SELECT a.attnum::int, a.attname::text, format_type(a.atttypid, a.atttypmod),
+       CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END, NULL::text, NULL::int
+FROM pg_catalog.pg_attribute a
+JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind = 'm' AND a.attnum > 0 AND NOT a.attisdropped
+  AND n.nspname = ` + sqlLit(t.Schema, false) + ` AND c.relname = ` + sqlLit(t.Name, false) + `
+ORDER BY 1`, nil
+	case bytdbdrv.DriverName:
+		// bytdb has no materialized views, so the view alone is complete
+		return cols + `
+WHERE table_schema = ` + sqlLit(t.Schema, false) + ` AND table_name = ` + sqlLit(t.Name, false) + `
+ORDER BY ordinal_position`, nil
+	case "mysql":
+		// scoped like TablesQuery, to the database the DSN connected to
+		return cols + `
+WHERE table_schema = DATABASE() AND table_name = ` + sqlLit(t.Name, true) + `
+ORDER BY ordinal_position`, nil
+	case "sqlite":
+		// SQLite has no information_schema. pragma_table_info carries the
+		// same facts, so it is renamed into the same shape. It has no
+		// length column: SQLite does not enforce a declared length, which
+		// stays visible in data_type ("VARCHAR(80)").
+		return `SELECT cid + 1 AS ordinal_position, name AS column_name, type AS data_type,
+       CASE WHEN "notnull" THEN 'NO' ELSE 'YES' END AS is_nullable,
+       dflt_value AS column_default, NULL AS character_maximum_length
+FROM pragma_table_info(` + sqlLit(t.Name, false) + `)
+ORDER BY cid`, nil
 	}
 	return "", serr.New("no column listing for this driver", "driver", driver)
 }

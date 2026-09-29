@@ -414,6 +414,33 @@ func (s *Server) handlePreview(ctx rweb.Context) error {
 	return ok(ctx, map[string]any{"tag": st.Tag})
 }
 
+// handleColumns is the tables menu's "Show columns": the table's
+// information_schema.columns rows, run into the grid and recorded in the
+// history like a preview. The body is a previewReq, as both name one
+// sidebar table. The workspace resolves the name against its own catalog
+// and refuses one it does not hold, so this is no more a way to run SQL
+// than the preview is.
+func (s *Server) handleColumns(ctx rweb.Context) error {
+	t, err := s.hub.get(ctx.Request().PathParam("id"))
+	if err != nil {
+		return fail(ctx, err)
+	}
+	var req previewReq
+	if err = decode(ctx, &req); err != nil {
+		return fail(ctx, err)
+	}
+	st, err := t.ws.ShowColumns(req.Name)
+	if err != nil {
+		t.notes(st.Notes)
+		if r, isRefusal := asRefusal(err); isRefusal {
+			t.notes([]workspace.Note{r.Note})
+		}
+		return fail(ctx, err)
+	}
+	s.launch(t, st)
+	return ok(ctx, map[string]any{"tag": st.Tag})
+}
+
 type stmtReq struct {
 	Buffer string `json:"buffer"`
 	Caret  int    `json:"caret"`

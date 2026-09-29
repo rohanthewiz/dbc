@@ -248,3 +248,132 @@ func TestColumnsOnBytdb(t *testing.T) {
 		t.Errorf("old_cats columns = %v", cols[1])
 	}
 }
+
+func TestInfoColumnsQueryPerDriver(t *testing.T) {
+	odd := TableRef{Schema: "public", Name: `o'dd\name`}
+	cases := []struct{ driver, want string }{
+		{"postgres", "information_schema.columns"},
+		{"bytdb", "information_schema.columns"},
+		{"mysql", "information_schema.columns"},
+		{"sqlite", "pragma_table_info"},
+	}
+	for _, c := range cases {
+		q, err := InfoColumnsQuery(c.driver, odd)
+		if err != nil {
+			t.Errorf("InfoColumnsQuery(%q): %v", c.driver, err)
+			continue
+		}
+		if !strings.Contains(q, c.want) || !strings.Contains(q, `'o''dd\`) {
+			t.Errorf("InfoColumnsQuery(%q) = \n%s", c.driver, q)
+		}
+	}
+	// only Postgres needs the matview branch
+	if q, _ := InfoColumnsQuery("postgres", odd); !strings.Contains(q, "relkind = 'm'") {
+		t.Errorf("postgres should read matviews from pg_attribute:\n%s", q)
+	}
+	if q, _ := InfoColumnsQuery("mysql", odd); !strings.Contains(q, `'o''dd\\name'`) {
+		t.Errorf("mysql should double the backslash too:\n%s", q)
+	}
+	if _, err := InfoColumnsQuery("sqlite", TableRef{}); err == nil {
+		t.Error("no table should be an error")
+	}
+	if _, err := InfoColumnsQuery("cassandra", odd); err == nil {
+		t.Error("an unknown driver should not yield a columns query")
+	}
+}
+
+// Lookup takes the sidebar's spelling of a name, qualified or not, and
+// refuses rather than guesses when the name is ambiguous.
+func TestTableIndexLookup(t *testing.T) {
+	x := NewTableIndex([]TableRef{
+		{Schema: "public", Name: "cats"},
+		{Schema: "public", Name: "Cats"},
+		{Schema: "public", Name: "owners"},
+		{Schema: "audit", Name: "owners"},
+		{Schema: "audit", Name: "log"},
+	})
+	cases := []struct {
+		q          string
+		wantSchema string
+		wantName   string
+	}{
+		{"cats", "public", "cats"},        // exact case wins over "Cats"
+		{"Cats", "public", "Cats"},        // and the other way
+		{"CATS", "", ""},                  // two case-insensitive matches: refused
+		{"public.Cats", "public", "Cats"}, // qualified
+		{"owners", "", ""},                // in two schemas: refused
+		{"audit.owners", "audit", "owners"},
+		{"log", "audit", "log"}, // unique bare name, in any schema
+		{"AUDIT.LOG", "audit", "log"},
+		{"public.log", "", ""},
+		{"nope", "", ""},
+		{"", "", ""},
+	}
+	for _, c := range cases {
+		got, ok := x.Lookup(c.q)
+		if ok != (c.wantName != "") || got.Schema != c.wantSchema || got.Name != c.wantName {
+			t.Errorf("Lookup(%q) = %+v, %v; want %s.%s", c.q, got, ok, c.wantSchema, c.wantName)
+		}
+	}
+	var none *TableIndex
+	if _, ok := none.Lookup("cats"); ok {
+		t.Error("a nil index should find nothing")
+	}
+}
+
+// infoRows runs InfoColumnsQuery and returns its rows joined with " | "
+// (NULL reads "NULL"), after checking the column names every driver shares.
+func infoRows(t *testing.T, mgr *Manager, conn, driver string, tbl TableRef) []string {
+	t.Helper()
+	q, err := InfoColumnsQuery(driver, tbl)
+	if err != nil {
+		t.Fatalf("InfoColumnsQuery: %v", err)
+	}
+	res, err := mgr.Run(conn, q)
+	if err != nil {
+		t.Fatalf("run:\n%s\n%v", q, err)
+	}
+	want := "ordinal_position column_name data_type is_nullable column_default character_maximum_length"
+	if got := strings.Join(res.Columns, " "); got != want {
+		t.Errorf("columns = %s", got)
+	}
+	var out []string
+	for _, row := range res.Rows {
+		out = append(out, strings.Join(row, " | "))
+	}
+	return out
+}
+
+func TestInfoColumnsOnSqlite(t *testing.T) {
+	cfg := &config.Config{
+		MaxRows: 1000,
+		Connections: []config.Connection{{
+			Name: "demo", Driver: "sqlite",
+			DSN: "file:infocolumnstest?mode=memory&cache=shared",
+		}},
+	}
+	mgr := NewManager(cfg)
+	defer mgr.Close()
+	if _, err := mgr.Run("demo", `CREATE TABLE pets (id INTEGER PRIMARY KEY, name VARCHAR(80) NOT NULL, kind TEXT DEFAULT 'cat')`); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got := infoRows(t, mgr, "demo", "sqlite", TableRef{Schema: "main", Name: "pets"})
+	if len(got) != 3 || !strings.HasPrefix(got[0], "1 | id | INTEGER") ||
+		!strings.HasPrefix(got[1], "2 | name | VARCHAR(80) | NO") ||
+		!strings.HasPrefix(got[2], "3 | kind | TEXT | YES | 'cat'") {
+		t.Errorf("rows = %q", got)
+	}
+}
+
+func TestInfoColumnsOnBytdb(t *testing.T) {
+	mgr := bytdbMgr(t)
+	if _, err := mgr.Run("bd", "CREATE TABLE cats (id int PRIMARY KEY, name varchar(40) NOT NULL, age int DEFAULT 1)"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got := infoRows(t, mgr, "bd", "bytdb", TableRef{Schema: "public", Name: "cats"})
+	if len(got) != 3 || !strings.HasPrefix(got[0], "1 | id | ") ||
+		!strings.Contains(got[1], "| name |") || !strings.Contains(got[1], "| NO |") ||
+		!strings.HasPrefix(got[2], "3 | age | ") {
+		t.Errorf("rows = %q", got)
+	}
+}

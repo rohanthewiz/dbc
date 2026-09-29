@@ -320,6 +320,29 @@ func TestTablesSidebarPreview(t *testing.T) {
 	}
 }
 
+// c on a selected table lists its columns in the grid, as the menu's "Show
+// columns" does, and leaves the editor alone.
+func TestTablesSidebarShowColumns(t *testing.T) {
+	m := newTestModel(t)
+	frame(m)
+	click(t, m, m.lay.tables.X+3, m.lay.tables.Y+1) // selects cats, focuses the list
+	before := m.editor.Text()
+	key(t, m, "c")
+	r := m.ws.LastResult()
+	if r == nil || !strings.Contains(r.Query, "pragma_table_info('cats')") {
+		t.Fatalf("show columns did not run: %+v", r)
+	}
+	if len(r.Columns) != 6 || r.Columns[1] != "column_name" || len(r.Rows) == 0 || r.Rows[0][1] != "id" {
+		t.Errorf("columns result = %v %v", r.Columns, r.Rows)
+	}
+	if m.editor.Text() != before {
+		t.Error("show columns must not touch the editor")
+	}
+	if m.focus != focusGrid {
+		t.Errorf("focus = %v, want the grid, where the copies are", m.focus)
+	}
+}
+
 // History: Ctrl+P lists past statements; Enter inserts, never runs.
 func TestHistoryRecallInserts(t *testing.T) {
 	m := newTestModel(t)

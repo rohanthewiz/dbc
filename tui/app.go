@@ -397,6 +397,11 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 	case focusConns:
 		return m.listKey(m.conns, k, m.connPicked)
 	case focusTables:
+		// c is the tables list's one letter key, for "Show columns": the
+		// list's own keys are movement and Enter, so it shadows nothing
+		if k.String() == "c" {
+			return m.tableColumns()
+		}
 		return m.listKey(m.tables, k, m.tablePicked)
 	case focusLog:
 		m.logp.key(k)

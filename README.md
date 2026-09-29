@@ -123,7 +123,8 @@ mouse gesture and every gesture has a key.
 | anywhere | click | focuses that pane — the keyboard follows the mouse |
 | toolbar | click | Run, Stop, Explain, Copy ▾, Export, History, Scripts, Tables, Assistant; `● conn ▾` switches connection |
 | connections | click | connects |
-| tables | click / double-click / right-click | select / preview the first 100 rows / insert name, copy name |
+| tables | click / double-click / right-click | select / preview the first 100 rows / show columns, insert name, copy name |
+| tables | `c` on the selected table | show its columns: its `information_schema.columns` rows (name, type, nullable, default, length) in the grid, ready to copy |
 | editor | click, drag, double-, triple-click | caret, selection, word, line |
 | editor | right-click | run, copy, cut, select all, undo, history, ask the assistant |
 | results | click, drag, shift-click | cell, rectangular range, extend |

@@ -270,6 +270,32 @@ func TestHistoryAndPreview(t *testing.T) {
 	e.api("POST", "/api/v1/ws/"+id+"/preview", `{"name":"cats; DROP TABLE cats"}`, 400)
 }
 
+// "Show columns" lists a sidebar table's information_schema.columns rows in
+// the grid and records the statement; a name not in the catalog is refused.
+func TestShowColumns(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+
+	env := e.api("POST", "/api/v1/ws/"+id+"/columns", `{"name":"cats"}`, 200)
+	if tag := decodeData[map[string]string](t, env)["tag"]; tag != "columns cats" {
+		t.Errorf("tag = %q", tag)
+	}
+	s.await(t, "run")
+	pg := e.page(id, "")
+	if pg.Total != 5 || len(pg.Columns) != 6 || pg.Columns[1] != "column_name" {
+		t.Fatalf("columns = %d rows, %+v", pg.Total, pg.Columns)
+	}
+	if got := col(pg, 1); got != "id,name,breed,age,adopted" {
+		t.Errorf("column_name = %s", got)
+	}
+	type entry struct{ SQL string }
+	if h := decodeData[[]entry](t, e.api("GET", "/api/v1/history", "", 200)); !strings.Contains(h[0].SQL, "pragma_table_info('cats')") {
+		t.Errorf("the columns query should be recorded: %+v", h[0])
+	}
+	e.api("POST", "/api/v1/ws/"+id+"/columns", `{"name":"cats'); DROP TABLE cats; --"}`, 400)
+	e.api("POST", "/api/v1/ws/"+id+"/columns", `{"name":"nope"}`, 400)
+}
+
 // The editor's marker asks for the statement under the caret, in UTF-16.
 func TestStmtRange(t *testing.T) {
 	e := newTestEnv(t)

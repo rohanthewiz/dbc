@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-064
+**Next ID:** N-065
 
 ## Open
 
@@ -50,12 +50,6 @@ ten session docs in `ai_docs/claude_sessions/`
   Phase 6) that are gone after the session, so a regression in the page's
   JavaScript is caught only by hand. Phase 6's run found three real bugs
   (a disposed Monaco model, a console rejection, a rename redrawn away).
-- **N-053** · raised `2026-0925-1641-dbc-web-phases-5-6` · value low
-  A macOS app wrapper for `dbc web`, the way gonotes has one — the plan's
-  optional last item of Phase 6, left out: `dbc web` and the cats "dbc —
-  web" action already launch it, and a `.app` is a second packaging path to
-  keep building and signing. `/api/v1/health` is there for a wrapper to
-  poll.
 - **N-061** · raised `2026-0928-0050-sidebar-splitter-fold-and-section-splitters` · value low
   Check `dbc web`'s splitters and sidebar fold in Safari and Firefox. They were
   verified only in Chrome, and the fix that lets a press reach the editor and
@@ -75,6 +69,15 @@ ten session docs in `ai_docs/claude_sessions/`
   key on a selected table (and that ⌘C / Ctrl+C there still copies rather than
   firing it), and a copy out of the resulting grid. Only the Go route test and
   `node --check app.js` covered the page side.
+- **N-064** · raised `2026-0929-1619-macos-app-wrapper` · value low
+  Click through `dbc.app` by hand; what the session could not drive from a
+  shell. Checks: a grid export and each plan download land in `~/Downloads`;
+  the plan's "open page" opens a second, signed-in window; the Copilot
+  sign-in's GitHub link opens in the browser; copy (plain and "for Teams")
+  reaches the clipboard from WKWebView; ⌘B/⌘R/⌘K reach the page, not the
+  menu; View ▸ Open in Browser signs the browser in. Launch, sign-in (the page
+  opened a workspace), Quit, `kill -9` of the app, and the login-shell `PATH`
+  were verified.
 
 ## Roadmap
 
@@ -112,6 +115,20 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-053** · raised `2026-0925-1641-dbc-web-phases-5-6` · value low
+  A macOS app wrapper for `dbc web`, the way gonotes has one — the plan's
+  optional last item of Phase 6, left out: `dbc web` and the cats "dbc —
+  web" action already launch it, and a `.app` is a second packaging path to
+  keep building and signing. `/api/v1/health` is there for a wrapper to
+  poll.
+  closed 2026-09-29, `2026-0929-1619-macos-app-wrapper`: `mac-install.sh` builds a checkout (or a clone of main
+  in `~/.dbc-src`) into `~/Applications/dbc.app`. That is a Swift/WebKit
+  shell (`macapp/DbcApp.swift`) around a bundled dbc: its own port and
+  secret, the login shell's environment, a health poll, then sign-in.
+  Hidden `dbc web --exit-on-eof` ties the server to the app through a stdin
+  pipe, so a crash leaves nothing behind. It is built locally and signed ad
+  hoc, so it is not a second release pipeline. Raised N-064.
 
 - **N-060** · raised `2026-0925-1944-cats-plugin-release-setup` · value medium
   Add a LICENSE. dbc now publishes release archives, but has no license file,

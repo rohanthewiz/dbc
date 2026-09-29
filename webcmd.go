@@ -6,6 +6,7 @@ package main
 //	dbc web --no-open              … and only print the link
 //	dbc web --listen 127.0.0.1:9000
 //	dbc web --secret s3cret        a fixed secret instead of a fresh one ($DBC_WEB_SECRET)
+//	dbc web --exit-on-eof          stop when stdin closes (hidden; the macOS app, macapp/)
 //
 // The terminal prints a login link carrying this launch's secret; opening it
 // signs that browser in. Ctrl+C stops the server, canceling every tab's run
@@ -14,8 +15,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"syscall"
 
 	"github.com/urfave/cli/v3"
 
@@ -29,6 +32,7 @@ var (
 	flagListen string
 	flagNoOpen bool
 	flagSecret string
+	flagEOF    bool
 )
 
 func webCommand() *cli.Command {
@@ -45,6 +49,10 @@ func webCommand() *cli.Command {
 			&cli.BoolFlag{Name: "no-open", Usage: "print the link instead of opening the browser", Destination: &flagNoOpen},
 			&cli.StringFlag{Name: "secret", Sources: cli.EnvVars("DBC_WEB_SECRET"),
 				Usage: "the login `SECRET` (default: a fresh random one per launch)", Destination: &flagSecret},
+			// plumbing for a wrapper that owns the process, not for people:
+			// see exitOnEOF
+			&cli.BoolFlag{Name: "exit-on-eof", Hidden: true, Destination: &flagEOF,
+				Usage: "stop when stdin reaches EOF (the parent holding it has gone)"},
 		},
 		Action: webAction,
 	}
@@ -93,6 +101,9 @@ func webAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		fail(err, "could not start dbc web")
 	}
+	if flagEOF {
+		go exitOnEOF(os.Stdin, interruptSelf)
+	}
 	if err = srv.Run(); err != nil {
 		fail(err, "dbc web stopped")
 	}
@@ -110,4 +121,31 @@ func loopback(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// exitOnEOF reads r until it ends, then calls stop. It is how the macOS app
+// (macapp/DbcApp.swift) ties this server's life to its own: the app hands
+// dbc web the read end of a pipe as stdin and keeps the write end. The
+// kernel closes that end when the app exits by any road — Quit, a crash,
+// Force Quit, kill -9 — so EOF arrives even when the app never had the
+// chance to send a signal, and no orphaned server is left holding
+// web.bytdb and its database sessions.
+//
+//	DbcApp ──(pipe, write end)──► dbc web stdin ── EOF ──► stop()
+//
+// Anything written into the pipe is discarded: only its end matters. A read
+// error counts as the end too, since there is nothing left to wait for.
+func exitOnEOF(r io.Reader, stop func()) {
+	_, _ = io.Copy(io.Discard, r)
+	stop()
+}
+
+// interruptSelf sends this process SIGTERM, which rweb already treats like
+// Ctrl+C: the listener closes, Run returns and Shutdown releases every tab's
+// session. Reusing that road keeps a single shutdown path rather than a
+// second one to keep in step with it.
+func interruptSelf() {
+	if p, err := os.FindProcess(os.Getpid()); err == nil {
+		_ = p.Signal(syscall.SIGTERM)
+	}
 }

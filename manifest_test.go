@@ -74,9 +74,14 @@ func TestCatsManifest_CompletionsCoverCLI(t *testing.T) {
 	// flagWords spells a flag the way a user types it: one dash for a
 	// single-letter name, two otherwise (the cli package accepts both, but
 	// that is how its help prints them and how the manifest lists them).
+	// A hidden flag (web's --exit-on-eof, plumbing for the macOS app) is
+	// left out: completing it would offer what --help does not.
 	var want []string
 	flagWords := func(flags []cli.Flag) {
 		for _, f := range flags {
+			if v, ok := f.(cli.VisibleFlag); ok && !v.IsVisible() {
+				continue
+			}
 			for _, n := range f.Names() {
 				if len(n) == 1 {
 					want = append(want, "-"+n)

@@ -685,6 +685,46 @@ lines reach the log and `s.Show` results the grid as they happen.
 `Ctrl+C` in the terminal stops the server; every tab's run is stopped and
 its session released — anything left open is rolled back.
 
+### As a macOS app
+
+```sh
+./mac-install.sh     # from a checkout: builds it, installs ~/Applications/dbc.app
+curl -fsSL https://raw.githubusercontent.com/rohanthewiz/dbc/main/mac-install.sh | bash
+```
+
+`dbc.app` is `dbc web` in a window of its own rather than a browser tab: a
+small Swift/WebKit shell ([`macapp/DbcApp.swift`](macapp/DbcApp.swift))
+around a bundled dbc. It needs the Xcode Command Line Tools
+(`xcode-select --install`) for `swiftc`; Go comes from your `PATH`, or the
+script fetches the version `go.mod` asks for into `~/.local/go`. Run from a
+checkout, the script builds that checkout as it is. Piped from curl, it
+keeps a clone of `main` in `~/.dbc-src` and resets it on every run. The app
+is built on your Mac and signed ad hoc, not downloaded, so there is nothing
+to notarize. Re-run the script to update it. `DBC_APP_DIR` and
+`DBC_APP_NAME` change where it goes and what it is called (the script's
+header lists the rest).
+
+Each launch starts its own `dbc web` on a free loopback port with a secret
+of its own, waits for `/api/v1/health`, and signs its window in, so a
+`dbc web` in a terminal keeps working beside it. The server gets your login
+shell's environment (`$SHELL -il`), as a terminal would. That makes the
+assistant's agents findable on `PATH`, and `${PGPASS}` in a DSN and
+`ANTHROPIC_API_KEY` resolve as they do there. It starts in your home
+directory, so `~/dbc.toml`, then `~/.config/dbc/config.toml`, is the config.
+Everything else (connections, history, conversations, tabs and layout) is
+the same `~/.config/dbc` every dbc uses. Only one `dbc web` can save tabs
+at a time, though: whichever of the app or the terminal starts second warns
+in its log and does not save them.
+
+Downloads go to `~/Downloads`. The plan's standalone page opens in a second
+window, and links off the workbench (GitHub's Copilot sign-in page, say)
+open in your browser. **View ▸ Open in Browser** signs your browser in to
+the same server. **View ▸ Show Log** opens `~/Library/Logs/dbc/dbc-web.log`,
+the server's console (the previous launch's is `dbc-web.log.1`). ⌘Q stops
+the server as `Ctrl+C` would. If the app crashes or is force-quit, the
+server notices its stdin close and shuts down the same way. The app never
+leaves a server behind.
+
 ## Scripting in Go
 
 A script is a plain Go file defining one function:

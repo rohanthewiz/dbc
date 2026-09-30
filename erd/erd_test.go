@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image/jpeg"
 	"image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -401,5 +402,135 @@ func TestSelect(t *testing.T) {
 	got, missing := s.Select(Selection{Tables: []string{"owners", "nope"}, Depth: 1})
 	if labels(got) != "cats countries owners profiles" || len(missing) != 1 {
 		t.Errorf("Select around a view = %q, missing %v", labels(got), missing)
+	}
+}
+
+// farRanks is a chain t00 ◄── … ◄── t05 whose every link also has a second
+// key straight back to t00, so lines to t02…t05 skip columns; t00 has four
+// more children stacked beside t01, so those lines also have boxes of
+// their own rank to thread between (rank 1 wraps into two columns).
+func farRanks() *Schema {
+	s := chain(6)
+	s.Conn = "farranks"
+	root := s.Tables[0]
+	for _, t := range s.Tables {
+		t.Cols = append(t.Cols, &Column{Name: "root_id", Type: "int"}, &Column{Name: "a", Type: "text"}, &Column{Name: "b", Type: "text"})
+	}
+	for _, t := range s.Tables[1:] {
+		s.Rels = append(s.Rels, &Rel{Name: t.Name + "_root", Child: t, Parent: root, ChildCols: []string{"root_id"}, ParentCols: []string{"id"}})
+	}
+	for i := range 4 {
+		c := &Table{Name: fmt.Sprintf("side%d", i), PK: []string{"id"},
+			Cols: []*Column{{Name: "id", Type: "int"}, {Name: "t_id", Type: "int"}, {Name: "x", Type: "text"}, {Name: "y", Type: "text"}}}
+		c.Label = c.Name
+		s.Tables = append(s.Tables, c)
+		s.Rels = append(s.Rels, &Rel{Name: c.Name + "_fk", Child: c, Parent: root, ChildCols: []string{"t_id"}, ParentCols: []string{"id"}})
+	}
+	s.MarkKeys()
+	s.Sort()
+	return s
+}
+
+func testLayout(t *testing.T, s *Schema) *layout {
+	t.Helper()
+	fs, err := fonts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newFaces(fs, 1)
+	defer m.close()
+	return newLayout(s, m)
+}
+
+// No line passes through a box — not its own boxes, which it only touches
+// at their edges, and not the boxes between them on the way to a far rank
+// or a wrapped column — and every line stays inside the picture, below
+// the title band.
+func TestRoutesMissBoxes(t *testing.T) {
+	for _, s := range []*Schema{fixture(), star(45), chain(12), farRanks(), star(400)} {
+		l := testLayout(t, s)
+		for _, r := range s.Rels {
+			p := l.paths[r]
+			if p == nil {
+				t.Fatalf("%s: %s has no path", s.Conn, r.Name)
+			}
+			hit := map[*box]bool{}
+			for i := 1; i < len(p.pts); i++ {
+				a, b := p.pts[i-1], p.pts[i]
+				// sample every CSS pixel of the segment: points alone
+				// could step over a box's corner
+				n := int(math.Ceil(math.Hypot(b.x-a.x, b.y-a.y))) + 1
+				for k := 0; k <= n; k++ {
+					q := pt2{a.x + (b.x-a.x)*float64(k)/float64(n), a.y + (b.y-a.y)*float64(k)/float64(n)}
+					if q.x < 0 || q.x > l.w || q.y < margin+titleH-1 || q.y > l.h {
+						t.Errorf("%s: %s leaves the picture at %.0f,%.0f", s.Conn, r.Name, q.x, q.y)
+						break
+					}
+					for _, bx := range l.boxes {
+						// 1 px in from the border: a line's ends sit on it
+						if !hit[bx] && q.x > bx.x+1 && q.x < bx.x+bx.w-1 && q.y > bx.y+1 && q.y < bx.y+bx.h-1 {
+							hit[bx] = true
+							t.Errorf("%s: %s passes through %s at %.0f,%.0f", s.Conn, r.Name, bx.t.Label, q.x, q.y)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// The lines through one gap between two boxes keep clear of both boxes,
+// however many share it.
+func TestLanesFitTheirHole(t *testing.T) {
+	h := &hole{top: 100, bot: 100 + stackGap}
+	for i := range 9 {
+		h.users = append(h.users, &crossing{idx: i, yl: float64(i * 10), yr: float64(i * 10)})
+	}
+	setLanes(h)
+	prev := math.Inf(-1)
+	for _, x := range h.users {
+		y := h.lane[x]
+		if y < h.top+holePad-1e-9 || y > h.bot-holePad+1e-9 {
+			t.Errorf("lane %.1f is outside %.0f…%.0f less the padding", y, h.top, h.bot)
+		}
+		if y <= prev {
+			t.Errorf("lanes out of order: %.1f after %.1f", y, prev)
+		}
+		prev = y
+	}
+}
+
+// A line that goes over the top of a column is not drawn into the title:
+// the group moves down to hold it. chain(3) plus a key from t02's id to
+// t00's id puts one box in every column. All three are tall and t01 the
+// tallest (so it sets the group's top), which puts the id rows the line
+// joins near t01's top: its cheapest way past t01 is the open space just
+// above it.
+func TestRouteAboveMovesGroupDown(t *testing.T) {
+	s := chain(3)
+	for i, tb := range s.Tables {
+		n := 8
+		if i == 1 {
+			n = 10
+		}
+		for j := range n {
+			tb.Cols = append(tb.Cols, &Column{Name: fmt.Sprintf("c%d", j), Type: "text"})
+		}
+	}
+	s.Rels = append(s.Rels, &Rel{Name: "t02_skip", Child: s.Tables[2], Parent: s.Tables[0], ChildCols: []string{"id"}, ParentCols: []string{"id"}})
+	s.MarkKeys()
+	s.Sort()
+	l := testLayout(t, s)
+	p := l.paths[rel(s, "t02_skip")]
+	top := math.Inf(1)
+	for _, q := range p.pts {
+		top = math.Min(top, q.y)
+	}
+	mid := l.byT[s.Tables[1]]
+	if top >= mid.y {
+		t.Fatalf("the skip line's top %.0f is not above t01 (y %.0f); the test needs it to be", top, mid.y)
+	}
+	if top < margin+titleH {
+		t.Errorf("the skip line rises to %.0f, into the title band (below %.0f)", top, margin+titleH)
 	}
 }

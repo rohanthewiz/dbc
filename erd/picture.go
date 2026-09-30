@@ -110,9 +110,9 @@ func (s *Schema) Picture(opt Options) (*image.RGBA, error) {
 
 	d := drawer{pt: pt, pal: pal, meas: meas, l: l}
 	d.title(s)
-	// lines first, boxes over them: a line that crosses a box on its way
-	// to a further rank passes under it rather than striking through its
-	// text
+	// lines first, boxes over them: lines are routed around boxes, but a
+	// line's ends sit on its boxes' edges, and the boxes' borders should
+	// be drawn over the line's anti-aliased fringe there
 	for _, r := range s.Rels {
 		d.rel(r)
 	}
@@ -216,8 +216,9 @@ func (d drawer) marker(p pt2, dir float64, kind marker) {
 	}
 }
 
-// rel draws one relationship: a line from the child's first key column to
-// the parent's first referenced column, with its markers.
+// rel draws one relationship: the line layout routed for it (route.go),
+// from the child's first key column to the parent's first referenced
+// column, with its markers.
 //
 // Which sides of the boxes it leaves from depends on where they are:
 //
@@ -226,45 +227,11 @@ func (d drawer) marker(p pt2, dir float64, kind marker) {
 //	│ │──────<│ │            │ │>──────│ │             │ │ │  both on the right,
 //	└─┘       └─┘            └─┘       └─┘             ├C┤─╯  looping outward
 //
-// The ends are straight stubs (where the markers sit) joined by a cubic
-// with horizontal tangents, so the line leaves and enters each box square.
+// The ends are straight stubs (where the markers sit); a line to a column
+// further away than the next one threads between the boxes in its way.
 func (d drawer) rel(r *Rel) {
-	c, p := d.l.byT[r.Child], d.l.byT[r.Parent]
-	cy := c.rowY(first(r.ChildCols))
-	py := p.rowY(first(r.ParentCols))
-
-	var cx, px, cdir, pdir float64
-	loop := false
-	switch {
-	case c.x >= p.x+p.w: // child to the right of the parent
-		cx, cdir, px, pdir = c.x, -1, p.x+p.w, 1
-	case c.x+c.w <= p.x: // child to the left
-		cx, cdir, px, pdir = c.x+c.w, 1, p.x, -1
-	default: // one column, or a self-reference
-		cx, cdir, px, pdir = c.x+c.w, 1, p.x+p.w, 1
-		loop = true
-		if c == p && math.Abs(cy-py) < 1 {
-			// a key column referencing itself would be a loop of zero
-			// height; attach the parent end to the header instead
-			py = p.y + headH/2
-		}
-	}
-	a := pt2{cx + cdir*stub, cy}
-	b := pt2{px + pdir*stub, py}
-	var c1, c2 pt2
-	if loop {
-		// both ends face right: bow out past the wider of the two, more
-		// for a taller loop so it stays round
-		mx := math.Max(a.x, b.x) + 18 + math.Min(60, math.Abs(b.y-a.y)*0.15)
-		c1, c2 = pt2{mx, a.y}, pt2{mx, b.y}
-	} else {
-		dx := math.Max(30, math.Abs(b.x-a.x)*0.45)
-		c1, c2 = pt2{a.x + cdir*dx, a.y}, pt2{b.x + pdir*dx, b.y}
-	}
-	pts := []pt2{{cx, cy}}
-	pts = append(pts, cubicPts(a, c1, c2, b)...)
-	pts = append(pts, pt2{px, py})
-	d.pt.polyline(pts, edgeW, d.pal.edge)
+	p := d.l.paths[r]
+	d.pt.polyline(p.pts, edgeW, d.pal.edge)
 
 	child := mMany
 	if r.OneToOne() {
@@ -274,8 +241,8 @@ func (d drawer) rel(r *Rel) {
 	if r.Optional() {
 		parent = mZeroOne
 	}
-	d.marker(pt2{cx, cy}, cdir, child)
-	d.marker(pt2{px, py}, pdir, parent)
+	d.marker(p.child, p.cdir, child)
+	d.marker(p.parent, p.pdir, parent)
 }
 
 func first(s []string) string {

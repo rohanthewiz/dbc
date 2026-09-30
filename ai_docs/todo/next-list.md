@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-070
+**Next ID:** N-071
 
 ## Open
 
@@ -83,13 +83,6 @@ ten session docs in `ai_docs/claude_sessions/`
   menu; View ▸ Open in Browser signs the browser in. Launch, sign-in (the page
   opened a workspace), Quit, `kill -9` of the app, and the login-shell `PATH`
   were verified.
-- **N-065** · raised `2026-0930-0003-erd-diagrams-png-jpeg-mermaid` · value low
-  ERD lines to a far rank, or to a wrapped column of a hub's children, pass
-  under the boxes in between (drawn first, so they are hidden rather than
-  striking through text). A 45-child star reads, but a line can be hard to
-  follow. Routing lines through the gaps between boxes (channel routing, or
-  dummy nodes per rank as full Sugiyama does) would fix it. Until then,
-  `--table` with `--depth` gives a cleaner picture of a big hub.
 - **N-066** · raised `2026-0930-0003-erd-diagrams-png-jpeg-mermaid` · value low
   When several foreign keys reference the same parent column, their parent-end
   markers are drawn on top of each other at one port. When they differ (one key
@@ -115,6 +108,13 @@ ten session docs in `ai_docs/claude_sessions/`
   plan's painter is unexported and draws only vertical curves. Extract a
   shared raster package if a third picture arrives. The ERD's general
   `polyline` could then replace the plan's `curve`.
+- **N-070** · raised `2026-0930-1152-erd-channel-routing` · value low
+  ERD channel routing fits only about five lines through the 24 px gap between
+  two boxes. When a column is crossed by more lines than its gaps hold (a
+  400-child star's first wrapped column is crossed by ~370), the rest are
+  routed above or below the column in ribbons that make the picture ~18%
+  taller. Widening a column's gaps to fit the lines crossing it, which means
+  routing before the final placement, would keep them between the boxes.
 
 ## Roadmap
 
@@ -152,6 +152,23 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-065** · raised `2026-0930-0003-erd-diagrams-png-jpeg-mermaid` · value low
+  ERD lines to a far rank, or to a wrapped column of a hub's children, pass
+  under the boxes in between (drawn first, so they are hidden rather than
+  striking through text). A 45-child star reads, but a line can be hard to
+  follow. Routing lines through the gaps between boxes (channel routing, or
+  dummy nodes per rank as full Sugiyama does) would fix it. Until then,
+  `--table` with `--depth` gives a cleaner picture of a big hub.
+  closed 2026-09-30, `2026-0930-1152-erd-channel-routing`: channel routing (`erd/route.go`). After the boxes are
+  placed, a line that skips a column crosses it through a hole — the
+  stackGap band between two of its boxes, or the open space above or below
+  it — picked by a small DP over the columns (vertical travel plus a charge
+  per line already in a hole), with the lines through one hole spread into
+  ordered lanes. Boxes never move for a line. A group grows (downward) to
+  hold lines routed over its top; a 400-child star still gets ribbons of
+  overflow lines there (raised N-070), so `--table`/`--depth` remains the view for a
+  giant hub.
 
 - **N-053** · raised `2026-0925-1641-dbc-web-phases-5-6` · value low
   A macOS app wrapper for `dbc web`, the way gonotes has one — the plan's

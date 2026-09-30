@@ -51,6 +51,8 @@ import (
 //     by area) is split into several columns, so a hub with forty
 //     children is a block, not a strip.
 //  4. place: columns left to right, each centred vertically.
+//  5. route: each line that skips a column finds its way through the gaps
+//     between that column's boxes (route.go), rather than under them.
 
 // Layout constants, in CSS pixels.
 const (
@@ -83,6 +85,7 @@ type box struct {
 	x, y    float64
 	w, h    float64
 	rank    int
+	col     int     // its column's index within its group, left to right
 	pos     float64 // position within its rank, 0…1, for the barycenter
 	nbrs    []*box  // tables it shares a key with (not itself)
 	hasRels bool    // any relationship, a self-reference included
@@ -104,7 +107,8 @@ func (b *box) rowY(col string) float64 {
 type layout struct {
 	boxes  []*box
 	byT    map[*Table]*box
-	loose  []*box  // tables with no relationship at all
+	loose  []*box // tables with no relationship at all
+	paths  map[*Rel]*path
 	looseY float64 // where the loose section's caption goes; <0 when none
 	w, h   float64
 }
@@ -183,7 +187,7 @@ func newBox(t *Table, m *faces) *box {
 // newLayout lays the schema out. The title band's height is left free at
 // the top; the picture draws into it.
 func newLayout(s *Schema, m *faces) *layout {
-	l := &layout{byT: map[*Table]*box{}, looseY: -1}
+	l := &layout{byT: map[*Table]*box{}, looseY: -1, paths: map[*Rel]*path{}}
 	for _, t := range s.Tables {
 		b := newBox(t, m)
 		l.boxes = append(l.boxes, b)
@@ -211,7 +215,7 @@ func newLayout(s *Schema, m *faces) *layout {
 			l.loose = append(l.loose, g[0])
 			continue
 		}
-		gw, gh := layGroup(g, s.Rels, l.byT, margin, y)
+		gw, gh := layGroup(g, s.Rels, l.byT, margin, y, l.paths)
 		width = math.Max(width, gw)
 		y += gh + groupGap
 	}
@@ -266,9 +270,10 @@ func (l *layout) groups() [][]*box {
 	return out
 }
 
-// layGroup places one connected group with its top-left at (x0, y0) and
-// returns its size. See the top of this file for the steps.
-func layGroup(g []*box, rels []*Rel, byT map[*Table]*box, x0, y0 float64) (w, h float64) {
+// layGroup places one connected group with its top-left at (x0, y0),
+// routes its relationships' lines into paths, and returns its size. See the
+// top of this file for the steps.
+func layGroup(g []*box, rels []*Rel, byT map[*Table]*box, x0, y0 float64, paths map[*Rel]*path) (w, h float64) {
 	in := make(map[*box]bool, len(g))
 	for _, b := range g {
 		in[b] = true
@@ -441,6 +446,7 @@ func layGroup(g []*box, rels []*Rel, byT map[*Table]*box, x0, y0 float64) (w, h 
 		h = math.Max(h, heights[i])
 	}
 	x := x0
+	placed := make([]*column, len(cols))
 	for i, col := range cols {
 		colW := 0.0
 		for _, b := range col {
@@ -452,14 +458,42 @@ func layGroup(g []*box, rels []*Rel, byT map[*Table]*box, x0, y0 float64) (w, h 
 			// in both directions have about the same room
 			b.x = x + (colW-b.w)/2
 			b.y = y
+			b.col = i
 			y += b.h + stackGap
 		}
+		placed[i] = &column{x: x, w: colW, boxes: col}
 		x += colW
 		if i < len(cols)-1 {
 			x += rankGap
 		}
 	}
-	return x - x0, h
+	w = x - x0
+
+	// 5. Route. A line may leave the boxes' extent: above a column's top
+	// box (when every hole nearer its ends is full), below its bottom one,
+	// or, for a loop on the last column, out to the right. The group grows
+	// to hold its lines — moved down by whatever rises above y0, so it
+	// never overlaps the title or the group before it.
+	top, bot, right := y0, y0+h, x0+w
+	for r, p := range route(placed, rels, byT, in) {
+		paths[r] = p
+		for _, q := range p.pts {
+			top = math.Min(top, q.y-laneGap/2)
+			bot = math.Max(bot, q.y+laneGap/2)
+			right = math.Max(right, q.x+edgeW)
+		}
+	}
+	if dy := y0 - top; dy > 0 {
+		for _, b := range g {
+			b.y += dy
+		}
+		for r, p := range paths {
+			if in[byT[r.Child]] {
+				p.shift(dy)
+			}
+		}
+	}
+	return right - x0, bot - top
 }
 
 // layLoose packs the tables with no relationships into columns, masonry

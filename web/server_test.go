@@ -655,3 +655,32 @@ func TestByteOffset(t *testing.T) {
 		}
 	}
 }
+
+// The row counts follow the "conn" that drew the list, as a "counts" event
+// carrying the list again with each table's count and its tooltip words;
+// the state a reattaching page reads has them too.
+func TestRowCountsFollowTheConnect(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	ev, _ := s.await(t, "counts")
+	c := decodeData[countsEvent](t, testEnvelope{Data: ev.Data})
+	find := func(tables []tabRef) tabRef {
+		for _, tr := range tables {
+			if tr.QName == "cats" {
+				return tr
+			}
+		}
+		t.Fatalf("no cats in %+v", tables)
+		return tabRef{}
+	}
+	if c.Active != "demo-sqlite" {
+		t.Errorf("counts for %q", c.Active)
+	}
+	if cats := find(c.Tables); cats.Rows != "8" || cats.RowsHint != "cats with 8 rows" {
+		t.Errorf("cats = %+v", cats)
+	}
+	st := decodeData[wsState](t, e.api("GET", "/api/v1/ws/"+id, "", 200))
+	if cats := find(st.Tables); cats.Rows != "8" {
+		t.Errorf("state's cats = %+v", cats)
+	}
+}

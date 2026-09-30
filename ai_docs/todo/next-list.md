@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-072
+**Next ID:** N-074
 
 ## Open
 
@@ -78,6 +78,20 @@ ten session docs in `ai_docs/claude_sessions/`
   a port slot (all of a hub's keys to its id) could share a lane through a
   gap and fan out only after it, like a bus, which would need no widening
   at all for a star.
+
+- **N-072** · raised `2026-0930-1557-sidebar-table-row-counts` · value low
+  The sidebar's row counts refresh only on a connect (served from the
+  Manager's 2-minute cache), not on a timer or after a statement that writes.
+  Sitting on one connection for ten minutes leaves ten-minute-old numbers,
+  and an INSERT/DELETE/TRUNCATE the user just ran is not reflected. Could
+  drop the connection's cache and re-run the Counts job after a run whose
+  statement is not a plain read (db.Session.Stateful already judges that).
+- **N-073** · raised `2026-0930-1557-sidebar-table-row-counts` · value low
+  A partitioned Postgres parent's own `reltuples` is usually -1, so the row
+  counting runs an exact `count(*)` on it, which reads every partition. On a
+  big partitioned table that hits the 3 s timeout and shows no number. Sum
+  the partitions' `reltuples` (pg_inherits) into the parent's estimate so it
+  gets `~N` like any other large table.
 
 ## Roadmap
 

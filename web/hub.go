@@ -453,6 +453,15 @@ type connEvent struct {
 	Tables  []tabRef `json:"tables"`
 }
 
+// countsEvent brings the row counts, seconds after the "conn" that drew the
+// list. It repeats the whole list rather than just the numbers so the page
+// patches its rows by qname with the same code that draws them; Active lets
+// it drop counts for a connection it has since left.
+type countsEvent struct {
+	Active string   `json:"active"`
+	Tables []tabRef `json:"tables"`
+}
+
 // tabRef is a sidebar row for a table or view. QName is the name to put in
 // SQL: schema-qualified only when the catalog spans several schemas, the
 // TUI's rule (tui/sidebar.go) — "public.cats" is noise when there is only
@@ -462,6 +471,12 @@ type tabRef struct {
 	Name   string `json:"name"`
 	QName  string `json:"qname"`
 	View   bool   `json:"view,omitempty"`
+	// Rows is the row count as the sidebar prints it ("1,234", "~1.2M")
+	// and RowsHint the same in words for its tooltip ("cats with 1,234
+	// rows"); both "" until the counts land, and always for a view. The
+	// wording is db.RowCount's, so the TUI and the page say the same.
+	Rows     string `json:"rows,omitempty"`
+	RowsHint string `json:"rowsHint,omitempty"`
 }
 
 // runEvent reports a run that landed. The rows are not in it: a result can
@@ -502,6 +517,17 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 		})
 		if ev.Release != nil {
 			go func() { s.deliver(t, ev.Release()) }()
+		}
+		if ev.Counts != nil {
+			go func() { s.deliver(t, ev.Counts()) }()
+		}
+	case *workspace.RowCounts:
+		if ev.Stale {
+			return // the tab has moved on to another connection
+		}
+		t.notes(ev.Notes)
+		if ev.Counts != nil {
+			t.send("counts", countsEvent{Active: ev.Conn, Tables: tables(t.ws)})
 		}
 	case *workspace.RunDone:
 		if ev.Stale {
@@ -560,6 +586,11 @@ func tables(ws *workspace.Workspace) []tabRef {
 		return []tabRef{}
 	}
 	refs := db.TableRefs(cat.Rows)
+	// Read apart from the catalog, so a connect landing in between could
+	// pair this catalog with no counts, or with the next one's. Counts are
+	// keyed by table, so the worst case is a row without its number until
+	// the "counts" event that follows every landing.
+	counts := ws.RowCounts()
 	schemas := map[string]bool{}
 	for _, r := range refs {
 		schemas[r.Schema] = true
@@ -571,6 +602,9 @@ func tables(ws *workspace.Workspace) []tabRef {
 			q = r.Schema + "." + r.Name
 		}
 		out[i] = tabRef{Schema: r.Schema, Name: r.Name, QName: q, View: r.View}
+		if c, ok := counts[r]; ok {
+			out[i].Rows, out[i].RowsHint = c.Short(), c.Sentence(q)
+		}
 	}
 	return out
 }

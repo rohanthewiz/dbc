@@ -131,7 +131,8 @@ func (m *Model) setActive(name string) tea.Cmd {
 
 // connected draws a connect's outcome. On a switch, the session pinned to
 // the old connection is released by the event's Release job — separately,
-// because it waits for any statement still running there.
+// because it waits for any statement still running there. The tables' row
+// counts come from the Counts job, after the list has drawn.
 func (m *Model) connected(ev *workspace.Connected) tea.Cmd {
 	if ev.Stale {
 		return nil // superseded by a later connect, which canceled this one
@@ -146,7 +147,7 @@ func (m *Model) connected(ev *workspace.Connected) tea.Cmd {
 	m.refreshConns()
 	m.refreshTables()
 	m.catsAfterTransition()
-	return job(ev.Release)
+	return tea.Batch(job(ev.Release), job(ev.Counts))
 }
 
 // sessionReleased tells the user when a released session took state with

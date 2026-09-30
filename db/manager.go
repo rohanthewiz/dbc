@@ -67,6 +67,10 @@ type Manager struct {
 	memMaxOpen int
 	closed     bool
 	cfg        *config.Config
+
+	// rows caches each connection's table row counts for the sidebar; see
+	// rowcount.go. It has its own lock, as a counting can take seconds.
+	rows rowCounter
 }
 
 // openCall is one open-and-ping in progress. dbh and err are written before
@@ -389,6 +393,10 @@ func (m *Manager) Drop(name string) {
 		delete(m.conns, name)
 		delete(m.anchors, name)
 	}
+	// The counts may describe the database the connection pointed at before
+	// an edit. rows.mu nests inside mu here, and is never held while taking
+	// mu, so the order cannot deadlock.
+	m.rows.forget(name)
 }
 
 // Close closes all open connections. A connection still being opened when

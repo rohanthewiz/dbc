@@ -60,6 +60,10 @@ func (w *Workspace) Connect(name string) Start {
 	if w.connCancel != nil {
 		w.connCancel()
 	}
+	if w.countCancel != nil {
+		w.countCancel() // the old sidebar's numbers; see countsJob
+		w.countCancel = nil
+	}
 	w.connGen++
 	gen := w.connGen
 	w.connCancel, w.connName = cancel, name
@@ -104,6 +108,9 @@ func (w *Workspace) landConnect(ev *Connected, gen int) {
 	ev.Changed = ev.Name != w.active
 	w.active = ev.Name
 	w.setCatalogLocked(ev.Catalog)
+	if ev.Catalog != nil {
+		ev.Counts = w.countsJobLocked(ev.Name, gen, db.TableRefs(ev.Catalog.Rows))
+	}
 	if ev.Changed {
 		ev.Notes = append(ev.Notes, notef(Ok, "connected to %s", ev.Name))
 		ev.Status = "connected"
@@ -113,11 +120,52 @@ func (w *Workspace) landConnect(ev *Connected, gen int) {
 	}
 }
 
-// setCatalogLocked installs a connection's catalog and its index.
+// setCatalogLocked installs a connection's catalog and its index. Row counts
+// belong to the catalog they were counted for, so they go with it.
 func (w *Workspace) setCatalogLocked(tables *model.Result) {
-	w.catalog, w.tableIdx = tables, nil
+	w.catalog, w.tableIdx, w.rowCounts = tables, nil, nil
 	if tables != nil {
 		w.tableIdx = db.NewTableIndex(db.TableRefs(tables.Rows))
+	}
+}
+
+// countsJobLocked makes the Job that counts the rows of the tables of the
+// connect gen landed, for the sidebar. The counting itself (exact or
+// estimated, cached for a couple of minutes, shared by every workspace on
+// the Manager) is db.Manager.RowCounts's.
+//
+// Its context is the workspace's to cancel: the next connect does, since
+// the counts would only be dropped as stale when they landed, and a counting
+// can hold pool connections for up to its budget. A counting canceled that
+// way is not cached, so switching straight back counts again rather than
+// finding half the numbers.
+//
+//	connect lands ─► Counts job ─► mgr.RowCounts ─► lands under mu
+//	                                                 ├─ gen still current → rowCounts set
+//	                                                 └─ superseded        → Stale
+func (w *Workspace) countsJobLocked(name string, gen int, tables []db.TableRef) Job {
+	ctx, cancel := context.WithCancel(context.Background())
+	w.countCancel = cancel
+	mgr := w.mgr
+	return func() Event {
+		defer cancel()
+		counts, err := mgr.RowCounts(ctx, name, tables)
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		ev := &RowCounts{Conn: name}
+		if gen != w.connGen {
+			ev.Stale = true // a later connect owns the sidebar now
+			return ev
+		}
+		w.countCancel = nil
+		if err != nil {
+			// the list is still there, just without numbers: background
+			// detail, not a failure worth a warning
+			ev.Notes = append(ev.Notes, notef(Muted, "row counts unavailable: %s", serr.StringFromErr(err)))
+			return ev
+		}
+		w.rowCounts, ev.Counts = counts, counts
+		return ev
 	}
 }
 

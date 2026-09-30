@@ -2,9 +2,11 @@ package tui
 
 import (
 	"fmt"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/workspace"
 )
 
 // The sidebar: connections on top, the active connection's tables below.
@@ -29,34 +31,62 @@ func (m *Model) refreshConns() {
 }
 
 // refreshTables rebuilds the tables list from the active connection's
-// catalog: table_schema · table_name · table_type, per db.TablesQuery.
+// catalog, with the cursor back at the top: a new catalog is a new list.
+func (m *Model) refreshTables() {
+	m.tables.cur = 0
+	m.fillTables()
+}
+
+// fillTables (re)draws the tables list's rows from the active connection's
+// catalog: table_schema · table_name · table_type, per db.TablesQuery, and
+// the row counts once they land. It leaves the cursor where it is, so the
+// counts filling in seconds after a connect do not yank the selection.
+//
 // Schema is shown only when the connection has more than one, since
 // "public." in front of every name says nothing.
-func (m *Model) refreshTables() {
+//
+// A count goes in the row's right-aligned muted slot ("cats      1,234")
+// rather than after the name: a long name is truncated from its end, and
+// the count is what would be cut. Views have no count (see db/rowcount.go)
+// and keep "view" there instead.
+func (m *Model) fillTables() {
 	r := m.ws.Catalog()
 	if r == nil || len(r.Columns) < 2 {
 		m.tables.set(nil)
 		return
 	}
+	counts := m.ws.RowCounts()
 	schemas := map[string]bool{}
 	for _, row := range r.Rows {
 		schemas[row[0]] = true
 	}
 	items := make([]listItem, 0, len(r.Rows))
-	for _, row := range r.Rows {
-		name := row[1]
-		qualified := name
-		if len(schemas) > 1 && row[0] != "" {
-			qualified = row[0] + "." + name
+	for _, ref := range db.TableRefs(r.Rows) {
+		qualified := ref.Name
+		if len(schemas) > 1 && ref.Schema != "" {
+			qualified = ref.Schema + "." + ref.Name
 		}
 		it := listItem{label: qualified, data: qualified}
-		if len(row) > 2 && strings.Contains(strings.ToUpper(row[2]), "VIEW") {
+		if ref.View {
 			it.sub, it.muted = "view", true
+		} else if c, ok := counts[ref]; ok {
+			it.sub = c.Short()
 		}
 		items = append(items, it)
 	}
-	m.tables.cur = 0
 	m.tables.set(items)
+}
+
+// rowCountsLanded fills the counts into the tables list. An estimated count
+// is marked "~" by RowCount.Short, which is all the TUI has room to say; the
+// web page's tooltip says the rest.
+func (m *Model) rowCountsLanded(ev *workspace.RowCounts) tea.Cmd {
+	if ev.Stale {
+		return nil
+	}
+	m.notes(ev.Notes)
+	m.fillTables()
+	return nil
 }
 
 // listKey drives a sidebar list from the keyboard; Enter calls pick.

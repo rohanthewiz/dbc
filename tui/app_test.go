@@ -8,6 +8,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/rohanthewiz/dbc/workspace"
 )
 
 // These tests drive the whole Model through the harness — keys, clicks,
@@ -340,6 +342,61 @@ func TestTablesSidebarShowColumns(t *testing.T) {
 	}
 	if m.focus != focusGrid {
 		t.Errorf("focus = %v, want the grid, where the copies are", m.focus)
+	}
+}
+
+// The tables list fills in each table's row count after the connect, in
+// the row's right-aligned slot; counts landing later leave the cursor where
+// the user put it.
+func TestTablesSidebarRowCounts(t *testing.T) {
+	m := newTestModel(t)
+	var cats listItem
+	for _, it := range m.tables.items {
+		if it.label == "cats" {
+			cats = it
+		}
+	}
+	if cats.sub != "8" {
+		t.Fatalf("cats sub = %q, want its 8 rows (items %+v)", cats.sub, m.tables.items)
+	}
+	// on screen: the cats row of the tables pane ends with its count
+	c := frame(m)
+	r := m.lay.tables
+	found := false
+	for y := r.Y; y < r.Y+r.H; y++ {
+		line := []rune(c.Line(y))
+		row := strings.Trim(string(line[r.X:min(len(line), r.X+r.W)]), " │")
+		if strings.HasPrefix(row, "cats ") {
+			found = true
+			if !strings.HasSuffix(row, " 8") {
+				t.Errorf("the count should end the cats row: %q", row)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no cats row in the tables pane:\n%s", c.Text())
+	}
+
+	// a catalog long enough to put the cursor somewhere, reconnected so
+	// the list and its counts are the full connect path's
+	for _, q := range []string{"CREATE TABLE a (x INT)", "CREATE TABLE b (x INT)"} {
+		if _, err := m.ws.Manager().Run(m.ws.Active(), q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	drive(t, m, nil, job(m.ws.Connect(m.ws.Active()).Job))
+	if len(m.tables.items) != 3 || m.tables.items[0].sub != "0" {
+		t.Fatalf("after the reconnect: %+v", m.tables.items)
+	}
+	m.tables.cur = 2
+	drive(t, m, &workspace.RowCounts{Conn: m.ws.Active(), Counts: m.ws.RowCounts()})
+	if m.tables.cur != 2 {
+		t.Errorf("counts landing moved the cursor to %d", m.tables.cur)
+	}
+	// counts for a connection already left draw nothing
+	drive(t, m, &workspace.RowCounts{Conn: "gone", Stale: true})
+	if m.tables.cur != 2 {
+		t.Errorf("stale counts moved the cursor to %d", m.tables.cur)
 	}
 }
 

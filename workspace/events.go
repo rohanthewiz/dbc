@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/explain"
 	"github.com/rohanthewiz/dbc/model"
 )
@@ -104,6 +105,11 @@ type Connected struct {
 	// because it waits for any statement still running on that session,
 	// and the switch itself must not.
 	Release Job
+	// Counts, when non-nil, fetches the row counts of the catalog's tables
+	// for the sidebar; its event is a *RowCounts. It is separate so the
+	// tables list draws at once and the numbers fill in after — a count
+	// reads a table's rows, and the list must never wait for that.
+	Counts Job
 }
 
 // RunDone lands a run of statements, or of a script.
@@ -151,7 +157,21 @@ type SessionReleased struct {
 	Notes    []Note // a warning when it did
 }
 
+// RowCounts lands the row counts of the active connection's tables. The
+// counts are also kept in the workspace (see Workspace.RowCounts), so a UI
+// that redraws its tables list later finds them there.
+type RowCounts struct {
+	Conn   string
+	Counts map[db.TableRef]db.RowCount // read-only; see db.Manager.RowCounts
+	// Stale reports counts for a connection that is no longer the active
+	// one, or a counting a later connect canceled: nothing landed, and a UI
+	// draws nothing.
+	Stale bool
+	Notes []Note
+}
+
 func (*Connected) event()       {}
+func (*RowCounts) event()       {}
 func (*RunDone) event()         {}
 func (*ExplainDone) event()     {}
 func (*ScriptShow) event()      {}

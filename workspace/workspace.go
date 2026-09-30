@@ -87,6 +87,12 @@ type Workspace struct {
 	active   string         // the active connection
 	catalog  *model.Result  // its tables, for a sidebar; nil until connected
 	tableIdx *db.TableIndex // the same catalog, indexed for the assistant
+	// rowCounts are the catalog's tables' row counts, once the Counts job
+	// of the connect that loaded it lands; nil until then. countCancel
+	// stops that job, which the next connect does: the counts would be for
+	// a sidebar about to be replaced.
+	rowCounts   map[db.TableRef]db.RowCount
+	countCancel context.CancelFunc
 
 	lastStmt string        // the statement the last run executed
 	lastErr  string        // what it failed with, "" if it worked
@@ -175,6 +181,15 @@ func (w *Workspace) Catalog() *model.Result {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.catalog
+}
+
+// RowCounts is the row count of each of the catalog's tables that has one
+// (views never do); nil until the connect's counting lands. The map is
+// shared: read it, never write to it.
+func (w *Workspace) RowCounts() map[db.TableRef]db.RowCount {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.rowCounts
 }
 
 // TableIndex is the catalog indexed for name lookups; nil without one.
@@ -294,8 +309,9 @@ func (w *Workspace) Session() (conn string, stateful bool) {
 // Shutting down
 // ---------------------------------------------------------------------------
 
-// Stop cancels the run and the connect in flight, if any, without a word —
-// the first step of quitting. The canceled work still lands its outcome.
+// Stop cancels the run, the connect and the row counting in flight, if any,
+// without a word — the first step of quitting. The canceled work still lands
+// its outcome.
 func (w *Workspace) Stop() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -304,6 +320,9 @@ func (w *Workspace) Stop() {
 	}
 	if w.connCancel != nil {
 		w.connCancel()
+	}
+	if w.countCancel != nil {
+		w.countCancel()
 	}
 }
 

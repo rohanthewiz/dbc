@@ -116,6 +116,16 @@ A toolbar, a connections and tables sidebar, the SQL editor, the results
 grid, a log, and — when you open it — the AI assistant. Everything has a
 mouse gesture and every gesture has a key.
 
+The tables list shows each table's row count once it has been counted —
+`cats (8)` in `dbc web`, where hovering says "cats with 8 rows", and a
+right-aligned `8` in the terminal. The counts load after the list, never
+holding it up, and are cached per connection for two minutes. On Postgres
+and MySQL a table the database's statistics put at a million rows or more
+shows that estimate, marked `~` (`~1.2M`), instead of being counted; the
+rest, and every table on SQLite and bytdb, are counted exactly. A count that
+takes over three seconds falls back to the estimate, or to no number. Views
+are not counted.
+
 ### Mouse
 
 | Where | Gesture | Does |

@@ -96,12 +96,37 @@
       return;
     }
     for (const t of tables) {
-      const li = el("li", { class: t.view ? "view" : "", tabindex: "-1", "data-name": t.qname,
-        title: t.qname + " — double-click previews its rows, c shows its columns, e diagrams it, right-click for more" });
+      const li = el("li", { class: t.view ? "view" : "", tabindex: "-1", "data-name": t.qname });
       const dot = t.qname.lastIndexOf(".");
       if (dot > 0) li.append(el("span", "schema", t.qname.slice(0, dot + 1)), t.qname.slice(dot + 1));
       else li.append(t.qname);
+      setRowCount(li, t);
       els.tables.append(li);
+    }
+  }
+
+  // setRowCount shows a table's row count after its name, "cats (1,234)",
+  // and leads its tooltip with the count in words, "cats with 1,234 rows".
+  // The counts land seconds after the list (a "counts" event; see
+  // db/rowcount.go), so this also runs on a row already drawn — patching
+  // it in place, which keeps the selection and focus a redraw would drop.
+  // The words come from the server, so they read as the TUI's do.
+  function setRowCount(li, t) {
+    const help = "double-click previews its rows, c shows its columns, e diagrams it, right-click for more";
+    li.title = t.rowsHint ? t.rowsHint + "\n" + help : t.qname + " — " + help;
+    let span = li.querySelector(".rows");
+    if (!t.rows) { if (span) span.remove(); return; }
+    if (!span) li.append(span = el("span", "rows"));
+    span.textContent = " (" + t.rows + ")";
+  }
+
+  // showCounts patches the counts into the rows on screen, by qname. A
+  // table the list does not show (it has changed since) is skipped.
+  function showCounts(tables) {
+    const byName = new Map([...els.tables.querySelectorAll("li[data-name]")].map((li) => [li.dataset.name, li]));
+    for (const t of tables) {
+      const li = byName.get(t.qname);
+      if (li) setRowCount(li, t);
     }
   }
 
@@ -209,6 +234,11 @@
         else if (!state.busy) setStatus("ready on " + d.active);
         if (d.changed) saveTab(t);
         dbc.chat.refresh(); // another catalog: other tables' schema
+        break;
+      case "counts":
+        // for a connection this tab has since left: the next "conn" and
+        // its own "counts" redraw the list
+        if (d.active === state.active) showCounts(d.tables || []);
         break;
     }
     trackTab(t, ev.type, d);

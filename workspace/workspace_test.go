@@ -490,6 +490,48 @@ func TestNewerConnectSupersedesOlder(t *testing.T) {
 	}
 }
 
+// A connect lands the catalog at once and hands back a Counts job for the
+// row counts, which lands them in the workspace for a sidebar to draw.
+func TestConnectCountsRows(t *testing.T) {
+	w := newTestWorkspace(t)
+	ev := w.Connect(demo).Job().(*Connected)
+	if ev.Err != nil || ev.Counts == nil {
+		t.Fatalf("connect: %+v", ev)
+	}
+	if w.RowCounts() != nil {
+		t.Error("counts belong to the catalog they were counted for; a new one starts without")
+	}
+	rc := ev.Counts().(*RowCounts)
+	if rc.Stale || rc.Conn != demo {
+		t.Fatalf("counts: %+v", rc)
+	}
+	cats := db.TableRef{Schema: "main", Name: "cats"}
+	if c := w.RowCounts()[cats]; c != (db.RowCount{N: 8}) {
+		t.Errorf("cats = %+v, want 8 counted exactly (all: %v)", c, w.RowCounts())
+	}
+	if rc.Counts[cats] != w.RowCounts()[cats] {
+		t.Error("the event and the workspace should hold the same counts")
+	}
+}
+
+// Counts that land after the workspace has moved to another connection are
+// stale: nothing lands, and the new connection's list is not given the old
+// one's numbers.
+func TestRowCountsStaleAfterSwitch(t *testing.T) {
+	w := newTestWorkspace(t)
+	addConn(w, config.Connection{Name: "other", Driver: "sqlite", DSN: memDSN()})
+	first := w.Connect(demo).Job().(*Connected)
+	if ev := w.Switch("other").Job().(*Connected); ev.Err != nil {
+		t.Fatalf("other: %+v", ev)
+	}
+	if rc := first.Counts().(*RowCounts); !rc.Stale {
+		t.Errorf("counts for a connection left behind: %+v", rc)
+	}
+	if w.RowCounts() != nil {
+		t.Errorf("stale counts landed: %v", w.RowCounts())
+	}
+}
+
 // ---------------------------------------------------------------------------
 // The assistant's context
 // ---------------------------------------------------------------------------

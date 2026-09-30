@@ -268,6 +268,8 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 	// script's mid-run output from the sink
 	case *workspace.Connected:
 		return m.connected(msg)
+	case *workspace.RowCounts:
+		return m.rowCountsLanded(msg)
 	case *workspace.SessionReleased:
 		return m.sessionReleased(msg)
 	case *workspace.RunDone:

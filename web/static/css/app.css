@@ -149,6 +149,7 @@ body.row-dragging { cursor: row-resize; user-select: none; }
 #tables li:hover { background: var(--sel); }
 #tables li.sel { background: var(--sel); box-shadow: inset 2px 0 var(--accent); outline: none; }
 #tables li .schema { color: var(--muted); }
+#tables li .rows { color: var(--muted); }
 #tables li.view::after { content: " (view)"; color: var(--muted); }
 #tables li.none { color: var(--muted); cursor: default; font-family: inherit; }
 .hbtns { display: flex; align-items: center; gap: 2px; }

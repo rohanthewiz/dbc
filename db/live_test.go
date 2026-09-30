@@ -331,3 +331,95 @@ func TestLiveSchemaMySQL(t *testing.T) {
 	}
 	checkPets(t, s, "dbc_erd_")
 }
+
+// liveRowCounts counts the connection's catalog as the sidebar does, keyed
+// by schema.name for the tables whose schema starts with prefix (or, when
+// prefix is "", every table).
+func liveRowCounts(t *testing.T, mgr *Manager, driver, prefix string) map[string]RowCount {
+	t.Helper()
+	counts, err := mgr.RowCounts(context.Background(), "live", catalogRefs(t, mgr, "live", driver))
+	if err != nil {
+		t.Fatalf("RowCounts: %v", err)
+	}
+	out := map[string]RowCount{}
+	for ref, c := range counts {
+		if strings.HasPrefix(ref.Schema+"."+ref.Name, prefix) {
+			out[ref.Schema+"."+ref.Name] = c
+		}
+	}
+	return out
+}
+
+// On Postgres a table whose statistics say it is huge keeps the estimate;
+// the rest are counted exactly, a quoted name included, and views (plain
+// and materialized) are left out. The "huge" table is faked by writing
+// reltuples directly, which a superuser may, rather than inserting a
+// million rows.
+func TestLiveRowCountsPostgres(t *testing.T) {
+	mgr := liveMgr(t, "DBC_LIVE_PG_DSN", "postgres")
+	drop := `DROP SCHEMA IF EXISTS dbc_live_rc CASCADE`
+	liveExec(t, mgr, drop)
+	t.Cleanup(func() { _, _ = mgr.Run("live", drop) })
+	liveExec(t, mgr,
+		`CREATE SCHEMA dbc_live_rc`,
+		`CREATE TABLE dbc_live_rc.cats (id int)`,
+		`INSERT INTO dbc_live_rc.cats SELECT generate_series(1, 3)`,
+		`CREATE TABLE dbc_live_rc."Odd ""One""" (id int)`,
+		`INSERT INTO dbc_live_rc."Odd ""One""" VALUES (1)`,
+		`CREATE TABLE dbc_live_rc.big (id int)`,
+		`INSERT INTO dbc_live_rc.big VALUES (1), (2)`,
+		`ANALYZE dbc_live_rc.big`,
+		`UPDATE pg_class SET reltuples = 5e6 WHERE oid = 'dbc_live_rc.big'::regclass`,
+		`CREATE VIEW dbc_live_rc.v AS SELECT * FROM dbc_live_rc.cats`,
+		`CREATE MATERIALIZED VIEW dbc_live_rc.mv AS SELECT * FROM dbc_live_rc.cats`,
+	)
+	got := liveRowCounts(t, mgr, "postgres", "dbc_live_rc.")
+	want := map[string]RowCount{
+		"dbc_live_rc.cats":      {N: 3},
+		`dbc_live_rc.Odd "One"`: {N: 1},
+		"dbc_live_rc.big":       {N: 5_000_000, Estimate: true},
+	}
+	if len(got) != len(want) {
+		t.Errorf("counts = %v, want %v", got, want)
+	}
+	for k, w := range want {
+		if got[k] != w {
+			t.Errorf("%s = %+v, want %+v", k, got[k], w)
+		}
+	}
+}
+
+// On MySQL small tables are counted exactly (table_rows, InnoDB's sampled
+// estimate, is read but only stands in above exactCountLimit) and a view is
+// left out.
+func TestLiveRowCountsMySQL(t *testing.T) {
+	mgr := liveMgr(t, "DBC_LIVE_MYSQL_DSN", "mysql")
+	drop := []string{
+		`DROP VIEW IF EXISTS dbc_live_rc_v`,
+		"DROP TABLE IF EXISTS dbc_live_rc_cats, `dbc_live_rc_odd``one`",
+	}
+	liveExec(t, mgr, drop...)
+	t.Cleanup(func() {
+		for _, s := range drop {
+			_, _ = mgr.Run("live", s)
+		}
+	})
+	liveExec(t, mgr,
+		`CREATE TABLE dbc_live_rc_cats (id int)`,
+		`INSERT INTO dbc_live_rc_cats VALUES (1), (2), (3)`,
+		"CREATE TABLE `dbc_live_rc_odd``one` (id int)",
+		"INSERT INTO `dbc_live_rc_odd``one` VALUES (1)",
+		`CREATE VIEW dbc_live_rc_v AS SELECT * FROM dbc_live_rc_cats`,
+	)
+	got := map[string]RowCount{}
+	for k, c := range liveRowCounts(t, mgr, "mysql", "") {
+		if name := k[strings.Index(k, ".")+1:]; strings.HasPrefix(name, "dbc_live_rc") {
+			got[name] = c
+		}
+	}
+	want := map[string]RowCount{"dbc_live_rc_cats": {N: 3}, "dbc_live_rc_odd`one": {N: 1}}
+	if len(got) != len(want) || got["dbc_live_rc_cats"] != want["dbc_live_rc_cats"] ||
+		got["dbc_live_rc_odd`one"] != want["dbc_live_rc_odd`one"] {
+		t.Errorf("counts = %v, want %v", got, want)
+	}
+}

@@ -360,8 +360,14 @@ column to the parent's, with crow's-foot ends:
 | `>o` at the child | zero or many | the usual foreign key |
 | `┼o` at the child | zero or one | the key's columns are unique in the child (1:1) |
 
+Keys to the same parent column with different ends (one `NOT NULL`, one
+nullable) attach a little apart on its row, one point per kind of end; keys
+with the same end share it.
+
 Parents sit to the left of their children, a column per level. A table with
-many children has them wrapped into a block. Tables with no relationships
+many children has them wrapped into a block. Lines to a far column run
+through the gaps between the boxes in their way; a gap is widened when more
+lines need it than it holds. Tables with no relationships
 are packed together underneath. Views are left out unless asked for, since
 they have no keys. Past 40 columns a table shows its key columns and then as
 many others as fit.
@@ -381,7 +387,9 @@ size. The shell and the TUI draw dark unless `plan_theme = "light"` or
 The schema is read fresh each time, from the engine's own catalog. On
 Postgres and bytdb that is `pg_constraint` and `pg_attribute`. On MySQL it
 is `information_schema.key_column_usage`, and on SQLite its `pragma_*`
-functions. It runs on the connection pool, never inside your open
+functions. A Postgres partitioned table is drawn once: its partitions, and
+the copies of its foreign keys Postgres keeps on each of them, are left
+out (the sidebar still lists them). It runs on the connection pool, never inside your open
 transaction, and it doesn't wait for a running query. Mermaid needs a plain
 word as an entity name, so a table like `public.cats` on a multi-schema
 connection becomes `t1["public.cats"]`, an alias that needs Mermaid 10.5 or

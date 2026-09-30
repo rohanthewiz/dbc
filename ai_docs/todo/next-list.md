@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-071
+**Next ID:** N-072
 
 ## Open
 
@@ -57,18 +57,6 @@ ten session docs in `ai_docs/claude_sessions/`
   Monaco's `.lines-content`, which is clipped on screen but 2^24px square with
   `contain:strict`.) The other checks: Ctrl+B / ⌘B must not open Firefox's
   bookmarks sidebar, and the › tab must be clickable in both browsers.
-- **N-062** · raised `2026-0928-1917-show-table-columns` · value medium
-  Run the opt-in live tests for "Show columns" (`DBC_LIVE_PG_DSN`,
-  `DBC_LIVE_MYSQL_DSN`). `TestLiveColumnsPostgres` now runs
-  `db.InfoColumnsQuery` on a table and on a materialized view. It is the only
-  check that the query's `information_schema.columns` ∪ `pg_attribute` UNION
-  type-checks on a real server. `TestLiveColumnsMySQL` checks that the
-  lower-case aliases hold on MySQL 8. The ERD's `TestLiveSchemaPostgres` and
-  `TestLiveSchemaMySQL` (`db/live_test.go`) are the only checks of
-  `db.SchemaKeysQuery` on those servers: `conkey::text` and `confkey` read
-  across schemas, and a dropped column's gap in attnum, on Postgres; the
-  `key_column_usage` ⋈ `table_constraints` join on MySQL. Docker was not
-  running in either session, so none of the four has run.
 - **N-063** · raised `2026-0928-1917-show-table-columns` · value low
   Check `dbc web`'s "Show columns" in a browser: the tables menu item, the `c`
   key on a selected table (and that ⌘C / Ctrl+C there still copies rather than
@@ -83,38 +71,13 @@ ten session docs in `ai_docs/claude_sessions/`
   menu; View ▸ Open in Browser signs the browser in. Launch, sign-in (the page
   opened a workspace), Quit, `kill -9` of the app, and the login-shell `PATH`
   were verified.
-- **N-066** · raised `2026-0930-0003-erd-diagrams-png-jpeg-mermaid` · value low
-  When several foreign keys reference the same parent column, their parent-end
-  markers are drawn on top of each other at one port. When they differ (one key
-  NOT NULL, another nullable), the result reads as `||o`, which is no notation.
-  Fan the ports out down the row, or draw the parent end once per distinct
-  marker.
-- **N-067** · raised `2026-0930-0003-erd-diagrams-png-jpeg-mermaid` · value low
-  Check the web ERD dialog's ⧉ Copy as Mermaid (button and `m`) with a real
-  click in a browser, and that ⤓ PNG / JPEG / Mermaid download under
-  `erd-<conn>-<stamp>.<ext>`. Chrome verified the dialog itself: ERD button,
-  table menu, `e`, fit/100%, depth, views, the light picture. But the
-  automated copy stayed pending on the clipboard permission, and the
-  downloads were only checked by the Go route test.
-- **N-068** · raised `2026-0930-0003-erd-diagrams-png-jpeg-mermaid` · value low
-  On Postgres, a partitioned table's partitions appear in the ERD as tables of
-  their own, each with a clone of the parent's foreign keys (`pg_constraint`
-  rows with `conparentid <> 0`), since the sidebar's catalog lists partitions.
-  Hide partitions from the diagram (`pg_class.relispartition`) and skip the
-  cloned keys.
-- **N-069** · raised `2026-0930-0003-erd-diagrams-png-jpeg-mermaid` · value low
-  `erd/paint.go` and `explain/picture.go` each carry their own copy of the Go
-  font setup, text fitting and the vector fill (about 150 lines), because the
-  plan's painter is unexported and draws only vertical curves. Extract a
-  shared raster package if a third picture arrives. The ERD's general
-  `polyline` could then replace the plan's `curve`.
-- **N-070** · raised `2026-0930-1152-erd-channel-routing` · value low
-  ERD channel routing fits only about five lines through the 24 px gap between
-  two boxes. When a column is crossed by more lines than its gaps hold (a
-  400-child star's first wrapped column is crossed by ~370), the rest are
-  routed above or below the column in ribbons that make the picture ~18%
-  taller. Widening a column's gaps to fit the lines crossing it, which means
-  routing before the final placement, would keep them between the boxes.
+- **N-071** · raised `2026-0930-1217-erd-ports-partitions-widening-raster` · value low
+  A big hub's lines stay between the boxes now (N-070), but each one gets
+  its own lane through every gap it crosses, so a 400-child star is 14%
+  taller than with ribbons (4426×4571 against 4426×4018). Lines that share
+  a port slot (all of a hub's keys to its id) could share a lane through a
+  gap and fan out only after it, like a bus, which would need no widening
+  at all for a star.
 
 ## Roadmap
 
@@ -152,6 +115,106 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-070** · raised `2026-0930-1152-erd-channel-routing` · value low
+  ERD channel routing fits only about five lines through the 24 px gap between
+  two boxes. When a column is crossed by more lines than its gaps hold (a
+  400-child star's first wrapped column is crossed by ~370), the rest are
+  routed above or below the column in ribbons that make the picture ~18%
+  taller. Widening a column's gaps to fit the lines crossing it, which means
+  routing before the final placement, would keep them between the boxes.
+  closed 2026-09-30, `2026-0930-1217-erd-ports-partitions-widening-raster`: routing measures before the final placement
+  (`widen` in `erd/route.go`). The lines are routed once as if every gap held
+  any number (past a gap's capacity costs `growLoad`, 12, instead of
+  `overLoad`, 120), each gap past its capacity is widened to fit its lines
+  `minLane` apart, and the columns are placed again, for up to four rounds.
+  A gap that fits keeps `stackGap`, so ordinary diagrams are unchanged
+  (the fixture, `chain(12)` and `star(12)` are placed exactly as before). No line of
+  `star(120)` (7 before) or `star(400)` (98 before) goes round the group
+  any more; star(400) is 4426×4571 (was 4018), star(45) 1197 → 1208.
+  `TestCrowdedGapsWiden` fails with the widening turned off. Raised N-071.
+
+- **N-069** · raised `2026-0930-0003-erd-diagrams-png-jpeg-mermaid` · value low
+  `erd/paint.go` and `explain/picture.go` each carry their own copy of the Go
+  font setup, text fitting and the vector fill (about 150 lines), because the
+  plan's painter is unexported and draws only vertical curves. Extract a
+  shared raster package if a third picture arrives. The ERD's general
+  `polyline` could then replace the plan's `curve`.
+  closed 2026-09-30, `2026-0930-1217-erd-ports-partitions-widening-raster`, at the user's request rather than for a third
+  picture: the new `raster` package holds the Go fonts, `Faces`
+  (`Width`/`Fit`/`Wrap`), `Painter` (`Fill`, `RoundRect`, `Box`, `Circle`,
+  `Polyline`, `Text`), `CubicPts`, `Mix` and `RGB`. `erd/paint.go` keeps only
+  the diagram's text styles and palette, and `explain/picture.go` only the
+  plan's. The plan's `curve` is now `Polyline` over `CubicPts`. The ERD
+  pictures are byte-identical before and after. The plan pictures differ only in
+  the edges' anti-aliasing (≤28/255 on ~2,000 px). `Fill` now clips a shape to the picture
+  (erd's rule) where the plan's skipped one that was not wholly inside;
+  none is, by construction. Tested in `raster/raster_test.go`.
+
+- **N-068** · raised `2026-0930-0003-erd-diagrams-png-jpeg-mermaid` · value low
+  On Postgres, a partitioned table's partitions appear in the ERD as tables of
+  their own, each with a clone of the parent's foreign keys (`pg_constraint`
+  rows with `conparentid <> 0`), since the sidebar's catalog lists partitions.
+  Hide partitions from the diagram (`pg_class.relispartition`) and skip the
+  cloned keys.
+  closed 2026-09-30, `2026-0930-1217-erd-ports-partitions-widening-raster`: `db.PartitionsQuery` (Postgres only: `pg_class.relispartition`)
+  is a fourth catalog query in `Manager.Schema`, and `BuildSchema` takes its
+  rows as `hidden`. Hidden tables get no box, so the keys Postgres cloned
+  onto partitions and the ones it cloned to reference partitions drop out
+  with them. Labels still follow the whole catalog. `conparentid` was not
+  needed. Tested by `TestBuildSchemaHidesPartitions`, and live by
+  `TestLiveSchemaPostgres` (a partitioned table with a partition in each
+  schema, one sub-partitioned, and a composite key to it), which fails
+  with the hiding turned off.
+
+- **N-067** · raised `2026-0930-0003-erd-diagrams-png-jpeg-mermaid` · value low
+  Check the web ERD dialog's ⧉ Copy as Mermaid (button and `m`) with a real
+  click in a browser, and that ⤓ PNG / JPEG / Mermaid download under
+  `erd-<conn>-<stamp>.<ext>`. Chrome verified the dialog itself: ERD button,
+  table menu, `e`, fit/100%, depth, views, the light picture. But the
+  automated copy stayed pending on the clipboard permission, and the
+  downloads were only checked by the Go route test.
+  closed 2026-09-30, `2026-0930-1217-erd-ports-partitions-widening-raster`: checked with a scratch go-rod program against a
+  built `dbc web` (sqlite pets schema, clipboard permissions granted).
+  ⧉ Copy as Mermaid clicked with real input and `m` in the dialog both put
+  the same 620-byte erDiagram on the clipboard and log "copied the diagram
+  as Mermaid". ⤓ PNG / JPEG / Mermaid download as
+  `erd-pets-<yyyymmdd>-<hhmmss>.png|jpg|mmd`, the PNG and JPEG decode, and the `.mmd`
+  equals the copied source. 12/12 checks passed.
+
+- **N-066** · raised `2026-0930-0003-erd-diagrams-png-jpeg-mermaid` · value low
+  When several foreign keys reference the same parent column, their parent-end
+  markers are drawn on top of each other at one port. When they differ (one key
+  NOT NULL, another nullable), the result reads as `||o`, which is no notation.
+  Fan the ports out down the row, or draw the parent end once per distinct
+  marker.
+  closed 2026-09-30, `2026-0930-1217-erd-ports-partitions-widening-raster`: ports (`setPorts` in `erd/route.go`). Each
+  row·side of a box is a port, and each distinct marker at it gets a slot:
+  `portGap` (14) apart, centred on the row, within `portSpan` (20). Keys with the
+  same marker share a slot and are drawn with one marker (`drawer.markers`
+  dedupes, after all lines). Slots are ordered by where their lines go.
+  A loop takes the outermost slot toward its other end, so a line to
+  another column does not cross it (the fixture's `cats.id`: `||` to visits
+  above, the `|o` mother_id loop below). Child ends use the same rule.
+  `TestPortsFanOutByMarker`.
+
+- **N-062** · raised `2026-0928-1917-show-table-columns` · value medium
+  Run the opt-in live tests for "Show columns" (`DBC_LIVE_PG_DSN`,
+  `DBC_LIVE_MYSQL_DSN`). `TestLiveColumnsPostgres` now runs
+  `db.InfoColumnsQuery` on a table and on a materialized view. It is the only
+  check that the query's `information_schema.columns` ∪ `pg_attribute` UNION
+  type-checks on a real server. `TestLiveColumnsMySQL` checks that the
+  lower-case aliases hold on MySQL 8. The ERD's `TestLiveSchemaPostgres` and
+  `TestLiveSchemaMySQL` (`db/live_test.go`) are the only checks of
+  `db.SchemaKeysQuery` on those servers: `conkey::text` and `confkey` read
+  across schemas, and a dropped column's gap in attnum, on Postgres; the
+  `key_column_usage` ⋈ `table_constraints` join on MySQL. Docker was not
+  running in either session, so none of the four has run.
+  closed 2026-09-30, `2026-0930-1217-erd-ports-partitions-widening-raster`: Docker was up, and all 15 live tests passed on
+  postgres:17 and mysql:8.4, the four named here included. The first run
+  failed on a test bug: `checkPets` keyed relationships by `Name`, but
+  on Postgres its prefix is a schema (`dbc_erd.`), which only the `Label`
+  carries. It now keys by `Label`.
 
 - **N-065** · raised `2026-0930-0003-erd-diagrams-png-jpeg-mermaid` · value low
   ERD lines to a far rank, or to a wrapped column of a hub's children, pass

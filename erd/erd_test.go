@@ -9,9 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
+	"github.com/rohanthewiz/dbc/raster"
 	"github.com/rohanthewiz/dbc/theme"
 )
 
@@ -280,13 +282,13 @@ func TestPicture(t *testing.T) {
 // schema's shape — the layout's one hard promise.
 func TestLayoutNoOverlap(t *testing.T) {
 	for _, s := range []*Schema{fixture(), star(45), chain(12)} {
-		fs, err := fonts()
+		fs, err := raster.Fonts()
 		if err != nil {
 			t.Fatal(err)
 		}
-		m := newFaces(fs, 1)
+		m := raster.NewFaces(fs, 1)
 		l := newLayout(s, m)
-		m.close()
+		m.Close()
 		for i, a := range l.boxes {
 			if a.x < margin-0.5 || a.y < margin || a.x+a.w > l.w-margin+0.5 || a.y+a.h > l.h-margin+0.5 {
 				t.Errorf("%s: %s at %.0f,%.0f %.0fx%.0f is outside %.0fx%.0f", s.Conn, a.t.Label, a.x, a.y, a.w, a.h, l.w, l.h)
@@ -303,9 +305,9 @@ func TestLayoutNoOverlap(t *testing.T) {
 // In a chain each child sits in a column right of its parent.
 func TestLayoutParentsLeft(t *testing.T) {
 	s := chain(5)
-	fs, _ := fonts()
-	m := newFaces(fs, 1)
-	defer m.close()
+	fs, _ := raster.Fonts()
+	m := raster.NewFaces(fs, 1)
+	defer m.Close()
 	l := newLayout(s, m)
 	for _, r := range s.Rels {
 		if c, p := l.byT[r.Child], l.byT[r.Parent]; c.x <= p.x+p.w {
@@ -318,9 +320,9 @@ func TestLayoutParentsLeft(t *testing.T) {
 // rather than one very tall strip.
 func TestLayoutWrapsTallRanks(t *testing.T) {
 	s := star(45)
-	fs, _ := fonts()
-	m := newFaces(fs, 1)
-	defer m.close()
+	fs, _ := raster.Fonts()
+	m := raster.NewFaces(fs, 1)
+	defer m.Close()
 	l := newLayout(s, m)
 	if l.h > 2.5*l.w {
 		t.Errorf("a 45-child star is %.0f wide and %.0f tall: not wrapped", l.w, l.h)
@@ -433,12 +435,12 @@ func farRanks() *Schema {
 
 func testLayout(t *testing.T, s *Schema) *layout {
 	t.Helper()
-	fs, err := fonts()
+	fs, err := raster.Fonts()
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := newFaces(fs, 1)
-	defer m.close()
+	m := raster.NewFaces(fs, 1)
+	defer m.Close()
 	return newLayout(s, m)
 }
 
@@ -459,18 +461,18 @@ func TestRoutesMissBoxes(t *testing.T) {
 				a, b := p.pts[i-1], p.pts[i]
 				// sample every CSS pixel of the segment: points alone
 				// could step over a box's corner
-				n := int(math.Ceil(math.Hypot(b.x-a.x, b.y-a.y))) + 1
+				n := int(math.Ceil(math.Hypot(b.X-a.X, b.Y-a.Y))) + 1
 				for k := 0; k <= n; k++ {
-					q := pt2{a.x + (b.x-a.x)*float64(k)/float64(n), a.y + (b.y-a.y)*float64(k)/float64(n)}
-					if q.x < 0 || q.x > l.w || q.y < margin+titleH-1 || q.y > l.h {
-						t.Errorf("%s: %s leaves the picture at %.0f,%.0f", s.Conn, r.Name, q.x, q.y)
+					q := pt2{X: a.X + (b.X-a.X)*float64(k)/float64(n), Y: a.Y + (b.Y-a.Y)*float64(k)/float64(n)}
+					if q.X < 0 || q.X > l.w || q.Y < margin+titleH-1 || q.Y > l.h {
+						t.Errorf("%s: %s leaves the picture at %.0f,%.0f", s.Conn, r.Name, q.X, q.Y)
 						break
 					}
 					for _, bx := range l.boxes {
 						// 1 px in from the border: a line's ends sit on it
-						if !hit[bx] && q.x > bx.x+1 && q.x < bx.x+bx.w-1 && q.y > bx.y+1 && q.y < bx.y+bx.h-1 {
+						if !hit[bx] && q.X > bx.x+1 && q.X < bx.x+bx.w-1 && q.Y > bx.y+1 && q.Y < bx.y+bx.h-1 {
 							hit[bx] = true
-							t.Errorf("%s: %s passes through %s at %.0f,%.0f", s.Conn, r.Name, bx.t.Label, q.x, q.y)
+							t.Errorf("%s: %s passes through %s at %.0f,%.0f", s.Conn, r.Name, bx.t.Label, q.X, q.Y)
 						}
 					}
 				}
@@ -524,7 +526,7 @@ func TestRouteAboveMovesGroupDown(t *testing.T) {
 	p := l.paths[rel(s, "t02_skip")]
 	top := math.Inf(1)
 	for _, q := range p.pts {
-		top = math.Min(top, q.y)
+		top = math.Min(top, q.Y)
 	}
 	mid := l.byT[s.Tables[1]]
 	if top >= mid.y {
@@ -532,5 +534,128 @@ func TestRouteAboveMovesGroupDown(t *testing.T) {
 	}
 	if top < margin+titleH {
 		t.Errorf("the skip line rises to %.0f, into the title band (below %.0f)", top, margin+titleH)
+	}
+}
+
+// audited is users referenced three times by docs and once by notes:
+// created_by and updated_by are NOT NULL (exactly one user), approved_by and
+// notes.author_id nullable (zero or one). All four keys end at users.id.
+func audited() *Schema {
+	s := &Schema{Conn: "audited"}
+	users := &Table{Name: "users", Label: "users", PK: []string{"id"},
+		Cols: []*Column{{Name: "id", Type: "int"}, {Name: "name", Type: "text"}, {Name: "email", Type: "text"}}}
+	docs := &Table{Name: "docs", Label: "docs", PK: []string{"id"}, Cols: []*Column{{Name: "id", Type: "int"},
+		{Name: "created_by", Type: "int"}, {Name: "updated_by", Type: "int"}, {Name: "approved_by", Type: "int", Nullable: true}}}
+	notes := &Table{Name: "notes", Label: "notes", PK: []string{"id"},
+		Cols: []*Column{{Name: "id", Type: "int"}, {Name: "author_id", Type: "int", Nullable: true}}}
+	s.Tables = []*Table{users, docs, notes}
+	for _, k := range []struct {
+		name  string
+		child *Table
+		col   string
+	}{{"docs_created", docs, "created_by"}, {"docs_updated", docs, "updated_by"}, {"docs_approved", docs, "approved_by"}, {"notes_author", notes, "author_id"}} {
+		s.Rels = append(s.Rels, &Rel{Name: k.name, Child: k.child, Parent: users, ChildCols: []string{k.col}, ParentCols: []string{"id"}})
+	}
+	s.MarkKeys()
+	s.Sort()
+	return s
+}
+
+// Keys to one parent column with different parent-end markers attach at
+// different points of the row, one per marker; keys with the same marker
+// share one point (and so one marker). Every point stays within the row.
+func TestPortsFanOutByMarker(t *testing.T) {
+	s := audited()
+	l := testLayout(t, s)
+	users := l.byT[rel(s, "docs_created").Parent]
+	row := users.rowY("id")
+	at := map[string]pt2{}
+	for _, r := range s.Rels {
+		p := l.paths[r]
+		at[r.Name] = p.parent
+		if math.Abs(p.parent.Y-row) > rowH/2 {
+			t.Errorf("%s attaches at %.1f, outside users.id's row (%.1f ± %.1f)", r.Name, p.parent.Y, row, rowH/2)
+		}
+		want := mOne
+		if r.Optional() {
+			want = mZeroOne
+		}
+		if p.pkind != want {
+			t.Errorf("%s: parent marker %d, want %d", r.Name, p.pkind, want)
+		}
+	}
+	if at["docs_created"] != at["docs_updated"] || at["docs_approved"] != at["notes_author"] {
+		t.Errorf("same-marker keys should share a port: %v", at)
+	}
+	if d := math.Abs(at["docs_created"].Y - at["docs_approved"].Y); d < 2*barHalf+2 {
+		t.Errorf("|| and |o are %.1f px apart: their bars touch", d)
+	}
+	// a port with one marker keeps its end at the row's centre
+	f := fixture()
+	fl := testLayout(t, f)
+	r := rel(f, "owners_country_fkey")
+	if got := fl.paths[r].parent.Y; got != fl.byT[r.Parent].rowY("code") {
+		t.Errorf("a port with one marker moved: %.1f", got)
+	}
+	// cats.id's right side has the mother_id loop (|o) and the key from
+	// visits (||). The loop hugs the box, so it takes the slot toward its
+	// other end (below), and the line to visits the one above it: the
+	// other way round, the line to visits would cross the loop.
+	loop, vis := fl.paths[rel(f, "cats_mother_id_fkey")], fl.paths[rel(f, "visits_cat_id_fkey")]
+	if loop.pdir != vis.pdir || loop.parent.Y <= vis.parent.Y {
+		t.Errorf("cats.id: loop end at %.1f, visits end at %.1f; the loop should be below", loop.parent.Y, vis.parent.Y)
+	}
+	if dir := os.Getenv("ERD_PICTURE_DIR"); dir != "" {
+		b, err := s.PNG(Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = os.WriteFile(filepath.Join(dir, "erd-audited.png"), b, 0o644)
+	}
+}
+
+// A column crossed by more lines than its gaps hold has those gaps widened
+// (widen), so the lines still pass between its boxes rather than over or
+// under the whole group. Before widening, 7 of star(120)'s lines and 98 of
+// star(400)'s went round.
+func TestCrowdedGapsWiden(t *testing.T) {
+	for _, s := range []*Schema{star(120), star(400)} {
+		l := testLayout(t, s)
+		top, bot := math.Inf(1), math.Inf(-1)
+		for _, b := range l.boxes {
+			top, bot = math.Min(top, b.y), math.Max(bot, b.y+b.h)
+		}
+		round := 0
+		for _, r := range s.Rels {
+			for _, q := range l.paths[r].pts {
+				if q.Y < top || q.Y > bot {
+					round++
+					break
+				}
+			}
+		}
+		if round > 0 {
+			t.Errorf("%s: %d lines go round the group instead of between its boxes", s.Conn, round)
+		}
+	}
+	// a diagram whose gaps all fit is placed exactly as with no widening:
+	// every gap between two boxes of a column is stackGap (a gap of
+	// groupGap or more is between two groups, which share an x)
+	for _, s := range []*Schema{fixture(), chain(12), star(12)} {
+		l := testLayout(t, s)
+		byX := map[float64][]*box{}
+		for _, b := range l.boxes {
+			if b.hasRels {
+				byX[b.x] = append(byX[b.x], b)
+			}
+		}
+		for _, col := range byX {
+			sort.Slice(col, func(i, j int) bool { return col[i].y < col[j].y })
+			for i := 1; i < len(col); i++ {
+				if g := col[i].y - col[i-1].y - col[i-1].h; g < groupGap && math.Abs(g-stackGap) > 0.01 {
+					t.Errorf("%s: gap %.1f above %s, want stackGap", s.Conn, g, col[i].t.Label)
+				}
+			}
+		}
 	}
 }

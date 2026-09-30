@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rohanthewiz/dbc/raster"
 	"github.com/rohanthewiz/dbc/theme"
 )
 
@@ -153,9 +154,9 @@ func TestPictureBoundsAHugePlan(t *testing.T) {
 	p = &Plan{Engine: Postgres, Root: deep}
 	p.Finalize()
 	lay := &picLayout{plan: p, metric: p.Metric, pal: newPicPalette(theme.Default())}
-	fs, _ := picFonts()
-	lay.meas = newPicFaces(fs, 1)
-	defer lay.meas.close()
+	fs, _ := raster.Fonts()
+	lay.meas = raster.NewFaces(fs, 1)
+	defer lay.meas.Close()
 	lay.build("")
 	if rows := int((lay.treeH-34+picVGap)/(picCardH+picVGap) + 0.5); rows != picFoldDepth+1 {
 		t.Errorf("folded tree has %d rows, want %d", rows, picFoldDepth+1)

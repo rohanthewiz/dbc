@@ -11,6 +11,7 @@ import (
 
 	"github.com/rohanthewiz/serr"
 
+	"github.com/rohanthewiz/dbc/raster"
 	"github.com/rohanthewiz/dbc/theme"
 )
 
@@ -83,15 +84,15 @@ func (s *Schema) PNG(opt Options) ([]byte, error) {
 // Two passes: the layout is measured at 1× (so it does not depend on the
 // scale), then the image is allocated at its final size and painted.
 func (s *Schema) Picture(opt Options) (*image.RGBA, error) {
-	fs, err := fonts()
+	fs, err := raster.Fonts()
 	if err != nil {
 		return nil, err
 	}
 	if opt.Palette == (theme.Palette{}) {
 		opt.Palette = theme.Default()
 	}
-	meas := newFaces(fs, 1)
-	defer meas.close()
+	meas := raster.NewFaces(fs, 1)
+	defer meas.Close()
 	l := newLayout(s, meas)
 
 	k := opt.Scale
@@ -103,8 +104,8 @@ func (s *Schema) Picture(opt Options) (*image.RGBA, error) {
 	k = math.Min(k, math.Sqrt(maxPixels/((l.w+1)*(l.h+1))))
 	k = math.Min(k, math.Min(maxSide/l.w, maxSide/l.h))
 	img := image.NewRGBA(image.Rect(0, 0, int(math.Ceil(l.w*k)), int(math.Ceil(l.h*k))))
-	pt := &painter{img: img, k: k, faces: newFaces(fs, k)}
-	defer pt.faces.close()
+	pt := &raster.Painter{Img: img, K: k, Faces: raster.NewFaces(fs, k)}
+	defer pt.Faces.Close()
 	pal := newPalette(opt.Palette)
 	draw.Draw(img, img.Bounds(), image.NewUniform(pal.bg), image.Point{}, draw.Src)
 
@@ -116,20 +117,23 @@ func (s *Schema) Picture(opt Options) (*image.RGBA, error) {
 	for _, r := range s.Rels {
 		d.rel(r)
 	}
+	// markers after every line, so no line is drawn across another's
+	// marker
+	d.markers(s.Rels)
 	for _, b := range l.boxes {
 		d.box(b)
 	}
 	if l.looseY >= 0 {
-		pt.text(tTable, pal.muted, margin, l.looseY, "TABLES WITHOUT RELATIONSHIPS")
+		pt.Text(tTable, pal.muted, margin, l.looseY, "TABLES WITHOUT RELATIONSHIPS")
 	}
 	return img, nil
 }
 
 // drawer holds what every drawing step needs.
 type drawer struct {
-	pt   *painter
+	pt   *raster.Painter
 	pal  palette
-	meas *faces
+	meas *raster.Faces
 	l    *layout
 }
 
@@ -137,28 +141,28 @@ type drawer struct {
 func (d drawer) title(s *Schema) {
 	pt, pal := d.pt, d.pal
 	x, y := margin, margin
-	pt.text(tTitle, pal.fg, x, y-4, s.Title())
+	pt.Text(tTitle, pal.fg, x, y-4, s.Title())
 
 	// the legend: each marker at the end of a short sample line, with its
 	// meaning, then the badges
 	y += 30
 	lx := x
 	sample := func(kind marker, label string) {
-		cy := y + tLegend.lineH()/2
-		pt.polyline([]pt2{{lx, cy}, {lx + 36, cy}}, 1.6, pal.edge)
-		d.marker(pt2{lx, cy}, 1, kind)
+		cy := y + tLegend.LineH()/2
+		pt.Polyline([]pt2{{X: lx, Y: cy}, {X: lx + 36, Y: cy}}, 1.6, pal.edge)
+		d.marker(pt2{X: lx, Y: cy}, 1, kind)
 		lx += 44
-		pt.text(tLegend, pal.muted, lx, y, label)
-		lx += d.meas.width(tLegend, label) + 22
+		pt.Text(tLegend, pal.muted, lx, y, label)
+		lx += d.meas.Width(tLegend, label) + 22
 	}
 	sample(mOne, "exactly one")
 	sample(mZeroOne, "zero or one")
 	sample(mMany, "zero or many")
 	for _, bg := range []struct{ tag, label string }{{"PK", "primary key"}, {"FK", "foreign key"}, {"UK", "unique"}} {
-		d.badge(bg.tag, lx, y+(tLegend.lineH()-rowH)/2)
+		d.badge(bg.tag, lx, y+(tLegend.LineH()-rowH)/2)
 		lx += badgeW
-		pt.text(tLegend, pal.muted, lx, y, bg.label)
-		lx += d.meas.width(tLegend, bg.label) + 18
+		pt.Text(tLegend, pal.muted, lx, y, bg.label)
+		lx += d.meas.Width(tLegend, bg.label) + 18
 	}
 }
 
@@ -190,14 +194,14 @@ const (
 func (d drawer) marker(p pt2, dir float64, kind marker) {
 	pt, col := d.pt, d.pal.edge
 	bar := func(at float64) {
-		x := p.x + dir*at
-		pt.polyline([]pt2{{x, p.y - barHalf}, {x, p.y + barHalf}}, edgeW, col)
+		x := p.X + dir*at
+		pt.Polyline([]pt2{{X: x, Y: p.Y - barHalf}, {X: x, Y: p.Y + barHalf}}, edgeW, col)
 	}
 	ring := func() {
-		cx := p.x + dir*ringAt
-		pt.circle(cx, p.y, ringR, col)
+		cx := p.X + dir*ringAt
+		pt.Circle(cx, p.Y, ringR, col)
 		// hollow: the background punched back in
-		pt.circle(cx, p.y, ringR-edgeW, d.pal.bg)
+		pt.Circle(cx, p.Y, ringR-edgeW, d.pal.bg)
 	}
 	switch kind {
 	case mOne:
@@ -209,9 +213,9 @@ func (d drawer) marker(p pt2, dir float64, kind marker) {
 	case mMany:
 		// three prongs from a point on the line out to the box edge: the
 		// foot touches the child, which is the "many" side
-		q := pt2{p.x + dir*footLen, p.y}
-		pt.polyline([]pt2{q, {p.x, p.y - footW}}, edgeW, col)
-		pt.polyline([]pt2{q, {p.x, p.y + footW}}, edgeW, col)
+		q := pt2{X: p.X + dir*footLen, Y: p.Y}
+		pt.Polyline([]pt2{q, {X: p.X, Y: p.Y - footW}}, edgeW, col)
+		pt.Polyline([]pt2{q, {X: p.X, Y: p.Y + footW}}, edgeW, col)
 		ring()
 	}
 }
@@ -229,20 +233,49 @@ func (d drawer) marker(p pt2, dir float64, kind marker) {
 //
 // The ends are straight stubs (where the markers sit); a line to a column
 // further away than the next one threads between the boxes in its way.
+//
+// Only the line is drawn here; the markers are drawn by markers, after
+// every line, since several lines can share one marker (see setPorts).
 func (d drawer) rel(r *Rel) {
-	p := d.l.paths[r]
-	d.pt.polyline(p.pts, edgeW, d.pal.edge)
+	d.pt.Polyline(d.l.paths[r].pts, edgeW, d.pal.edge)
+}
 
-	child := mMany
+// markers draws every line's two end markers, each distinct one once.
+// Lines that share a port's slot end at the same point with the same
+// marker; drawing it once per line would composite its anti-aliased edges
+// again and again, and it would come out heavier than a lone line's.
+func (d drawer) markers(rels []*Rel) {
+	type key struct {
+		p    pt2
+		dir  float64
+		kind marker
+	}
+	done := map[key]bool{}
+	draw := func(k key) {
+		if !done[k] {
+			done[k] = true
+			d.marker(k.p, k.dir, k.kind)
+		}
+	}
+	for _, r := range rels {
+		p := d.l.paths[r]
+		draw(key{p.child, p.cdir, p.ckind})
+		draw(key{p.parent, p.pdir, p.pkind})
+	}
+}
+
+// endMarkers is a relationship's notation: the child end is zero-or-many,
+// or zero-or-one for a 1:1 key; the parent end is exactly one, or
+// zero-or-one when the key may be NULL.
+func endMarkers(r *Rel) (child, parent marker) {
+	child, parent = mMany, mOne
 	if r.OneToOne() {
 		child = mZeroOne
 	}
-	parent := mOne
 	if r.Optional() {
 		parent = mZeroOne
 	}
-	d.marker(p.child, p.cdir, child)
-	d.marker(p.parent, p.pdir, parent)
+	return child, parent
 }
 
 func first(s []string) string {
@@ -258,24 +291,24 @@ func (d drawer) box(b *box) {
 	const rad = 6.0
 	// border, then the header band, then the body inset by the border's
 	// width: a filled border is crisper than a stroked one at any scale
-	pt.roundRect(b.x, b.y, b.w, b.h, rad, pal.line)
-	pt.roundRect(b.x+1, b.y+1, b.w-2, b.h-2, rad-1, pal.panel2)
+	pt.RoundRect(b.x, b.y, b.w, b.h, rad, pal.line)
+	pt.RoundRect(b.x+1, b.y+1, b.w-2, b.h-2, rad-1, pal.panel2)
 	// The body: square down to one radius above the bottom, then a rounded
 	// strip whose top corners fall inside that square part and whose
 	// bottom corners match the border's — a square body all the way down
 	// would paint over the border's rounded corners.
-	pt.roundRect(b.x+1, b.y+headH, b.w-2, b.h-headH-1-rad, 0, pal.panel)
-	pt.roundRect(b.x+1, b.y+b.h-1-2*rad, b.w-2, 2*rad, rad-1, pal.panel)
-	pt.roundRect(b.x+1, b.y+headH, b.w-2, 1, 0, pal.line)
+	pt.RoundRect(b.x+1, b.y+headH, b.w-2, b.h-headH-1-rad, 0, pal.panel)
+	pt.RoundRect(b.x+1, b.y+b.h-1-2*rad, b.w-2, 2*rad, rad-1, pal.panel)
+	pt.RoundRect(b.x+1, b.y+headH, b.w-2, 1, 0, pal.line)
 
 	// header: the name, and a VIEW tag on a view
 	nameW := b.w - 2*padX
 	if b.t.View {
-		tw := m.width(tBadge, "VIEW")
-		pt.text(tBadge, pal.muted, b.x+b.w-padX-tw, b.y+(headH-tBadge.lineH())/2, "VIEW")
+		tw := m.Width(tBadge, "VIEW")
+		pt.Text(tBadge, pal.muted, b.x+b.w-padX-tw, b.y+(headH-tBadge.LineH())/2, "VIEW")
 		nameW -= tw + 8
 	}
-	pt.text(tTable, pal.accent, b.x+padX, b.y+(headH-tTable.lineH())/2, m.fit(tTable, b.t.Label, nameW))
+	pt.Text(tTable, pal.accent, b.x+padX, b.y+(headH-tTable.LineH())/2, m.Fit(tTable, b.t.Label, nameW))
 
 	// rows: badge · name · type (right-aligned)
 	y := b.y + headH
@@ -289,13 +322,13 @@ func (d drawer) box(b *box) {
 		if c.PK {
 			st = tColB
 		}
-		pt.text(st, col, b.x+padX+badgeW, y+(rowH-st.lineH())/2, m.fit(st, c.Name, b.nameW))
-		ty := m.fit(tType, c.Type, typeW)
-		pt.text(tType, pal.muted, b.x+b.w-padX-m.width(tType, ty), y+(rowH-tType.lineH())/2, ty)
+		pt.Text(st, col, b.x+padX+badgeW, y+(rowH-st.LineH())/2, m.Fit(st, c.Name, b.nameW))
+		ty := m.Fit(tType, c.Type, typeW)
+		pt.Text(tType, pal.muted, b.x+b.w-padX-m.Width(tType, ty), y+(rowH-tType.LineH())/2, ty)
 		y += rowH
 	}
 	if b.more > 0 {
-		pt.text(tCol, pal.muted, b.x+padX+badgeW, y+(rowH-tCol.lineH())/2, "… "+plural(b.more, "more column"))
+		pt.Text(tCol, pal.muted, b.x+padX+badgeW, y+(rowH-tCol.LineH())/2, "… "+plural(b.more, "more column"))
 	}
 }
 
@@ -332,7 +365,7 @@ func (d drawer) badge(tag string, x, y float64) {
 	}
 	const w, h = 20.0, 13.0
 	by := y + (rowH-h)/2
-	d.pt.roundRect(x, by, w, h, 3, mix(col, pal.panel, 0.22))
-	tw := d.meas.width(tBadge, tag)
-	d.pt.text(tBadge, col, x+(w-tw)/2, by+(h-tBadge.lineH())/2, tag)
+	d.pt.RoundRect(x, by, w, h, 3, raster.Mix(col, pal.panel, 0.22))
+	tw := d.meas.Width(tBadge, tag)
+	d.pt.Text(tBadge, col, x+(w-tw)/2, by+(h-tBadge.LineH())/2, tag)
 }

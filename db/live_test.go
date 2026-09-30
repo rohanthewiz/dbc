@@ -270,6 +270,48 @@ func TestLiveSchemaPostgres(t *testing.T) {
 	if c := cats.Col("vet_id"); c == nil || !c.FK {
 		t.Errorf("the key on a column past the dropped one: %+v", c)
 	}
+
+	// A partitioned table: its partitions (one in the other schema, one
+	// itself partitioned) are hidden, with the keys Postgres clones onto
+	// them and the ones it clones to reference them.
+	liveExec(t, mgr,
+		`CREATE TABLE dbc_erd.weighs (cat_id int NOT NULL REFERENCES dbc_erd.cats(id), day date NOT NULL,
+		   grams int, PRIMARY KEY (cat_id, day)) PARTITION BY RANGE (day)`,
+		`CREATE TABLE dbc_erd.weighs_2026 PARTITION OF dbc_erd.weighs FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')`,
+		`CREATE TABLE dbc_erd2.weighs_2027 PARTITION OF dbc_erd.weighs FOR VALUES FROM ('2027-01-01') TO ('2028-01-01')
+		   PARTITION BY RANGE (day)`,
+		`CREATE TABLE dbc_erd2.weighs_2027h1 PARTITION OF dbc_erd2.weighs_2027 FOR VALUES FROM ('2027-01-01') TO ('2027-07-01')`,
+		`CREATE TABLE dbc_erd.weigh_notes (cat_id int, day date, body text,
+		   FOREIGN KEY (cat_id, day) REFERENCES dbc_erd.weighs (cat_id, day))`)
+	s, err = mgr.Schema(context.Background(), "live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the partitions are no boxes at all; were they drawn, their cloned
+	// keys would hang them off cats and weigh_notes, not off weighs
+	for _, n := range []string{"dbc_erd.weighs_2026", "dbc_erd2.weighs_2027", "dbc_erd2.weighs_2027h1"} {
+		if _, ok := s.Find(n); ok {
+			t.Errorf("partition %s is in the diagram", n)
+		}
+	}
+	notes, _ := s.Around([]string{"dbc_erd.weigh_notes"}, 1)
+	if len(notes.Tables) != 2 || len(notes.Rels) != 1 {
+		t.Errorf("around weigh_notes: %d tables, %d keys (a clone to a partition?)", len(notes.Tables), len(notes.Rels))
+	}
+	s, _ = s.Around([]string{"dbc_erd.weighs"}, 1)
+	var names, keys []string
+	for _, tb := range s.Tables {
+		names = append(names, tb.Label)
+	}
+	for _, r := range s.Rels {
+		keys = append(keys, r.Child.Label+"→"+r.Parent.Label)
+	}
+	if strings.Join(names, " ") != "dbc_erd.cats dbc_erd.weigh_notes dbc_erd.weighs" {
+		t.Errorf("around weighs: %q", names)
+	}
+	if strings.Join(keys, " ") != "dbc_erd.cats→dbc_erd.cats dbc_erd.weigh_notes→dbc_erd.weighs dbc_erd.weighs→dbc_erd.cats" {
+		t.Errorf("keys around weighs: %q", keys)
+	}
 }
 
 // TestLiveSchemaMySQL reads petsDDL back through information_schema's

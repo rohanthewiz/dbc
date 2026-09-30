@@ -3,6 +3,8 @@ package erd
 import (
 	"math"
 	"sort"
+
+	"github.com/rohanthewiz/dbc/raster"
 )
 
 // Routing: the path each relationship's line takes between its two boxes.
@@ -65,6 +67,7 @@ const (
 	minLane  = 3.0 // closest two lanes of a crowded hole get
 	laneLoad = 6.0 // charge for each line already through a hole
 	overLoad = 120.0
+	growLoad = 12.0 // overLoad's stand-in while measuring: what widening a gap one lane costs
 )
 
 // column is one column of boxes in a group, as placed.
@@ -80,6 +83,7 @@ type hole struct {
 	top, bot float64     // the band; -Inf/+Inf for the open side above the top box / below the bottom one
 	users    []*crossing // the lines through it, in lane order once lanes are set
 	lane     map[*crossing]float64
+	measure  bool // routing to measure demand for widen: growLoad past capacity, not overLoad
 }
 
 // bounded reports whether the hole is between two boxes (so its lanes must
@@ -115,7 +119,16 @@ func (h *hole) cost() float64 {
 	n := len(h.users)
 	c := laneLoad * float64(n)
 	if over := n - h.capacity() + 1; over > 0 {
-		c += overLoad * float64(over)
+		if h.measure {
+			// while measuring, a full gap can still be widened, which
+			// costs the column a few pixels of height rather than the
+			// line a detour over or under the column: past capacity is
+			// dearer than a gap with room, so lines still spread first,
+			// but far cheaper than going round
+			c += growLoad * float64(over)
+		} else {
+			c += overLoad * float64(over)
+		}
 	}
 	return c
 }
@@ -125,6 +138,7 @@ type path struct {
 	pts           []pt2   // the stroke, box edge to box edge
 	child, parent pt2     // where it meets each box: its markers go here
 	cdir, pdir    float64 // the way it leaves each box: +1 right, -1 left
+	ckind, pkind  marker  // the marker at each end (see endMarkers)
 }
 
 // crossing is a line between two different columns while it is routed.
@@ -167,11 +181,22 @@ func (c *column) makeHoles() {
 
 // route computes the path of every relationship within one placed group.
 // cols are the group's columns, left to right; every box's col is its index.
-func route(cols []*column, rels []*Rel, byT map[*Table]*box, in map[*box]bool) map[*Rel]*path {
+//
+// With measure set, it only chooses holes, as if every gap between boxes
+// held any number of lanes, and leaves each hole's users for widen to count;
+// it returns nil.
+func route(cols []*column, rels []*Rel, byT map[*Table]*box, in map[*box]bool, measure bool) map[*Rel]*path {
 	out := map[*Rel]*path{}
 	for _, c := range cols {
 		c.makeHoles()
+		for _, h := range c.holes {
+			h.measure = measure
+		}
 	}
+
+	// 1b. Ports: where on its row each end attaches, fanned out when
+	// different markers meet at one row.
+	ends := setPorts(rels, byT, in)
 
 	// 2. Choose each crossing line's holes.
 	var xs []*crossing
@@ -180,9 +205,10 @@ func route(cols []*column, rels []*Rel, byT map[*Table]*box, in map[*box]bool) m
 		if !in[c] {
 			continue
 		}
-		cy, py := c.rowY(first(r.ChildCols)), p.rowY(first(r.ParentCols))
+		cy, py := ends[r][0].y, ends[r][1].y
 		if c.col == p.col {
 			out[r] = loopPath(cols[c.col], c, p, cy, py)
+			out[r].ckind, out[r].pkind = ends[r][0].kind, ends[r][1].kind
 			continue
 		}
 		x := &crossing{r: r, idx: i, l: p, rb: c, yl: py, yr: cy}
@@ -195,6 +221,9 @@ func route(cols []*column, rels []*Rel, byT map[*Table]*box, in map[*box]bool) m
 		}
 		xs = append(xs, x)
 	}
+	if measure {
+		return nil
+	}
 
 	// 3. Lanes.
 	for _, c := range cols {
@@ -205,9 +234,188 @@ func route(cols []*column, rels []*Rel, byT map[*Table]*box, in map[*box]bool) m
 
 	// 4. Points.
 	for _, x := range xs {
-		out[x.r] = x.path(cols)
+		p := x.path(cols)
+		p.ckind, p.pkind = ends[x.r][0].kind, ends[x.r][1].kind
+		out[x.r] = p
 	}
 	return out
+}
+
+// Port constants, in CSS pixels.
+const (
+	portGap  = 14.0 // between two slots of one port: two markers' bars (barHalf each) and 2 px of air
+	portSpan = 20.0 // the most a port's slots spread, first to last, so they stay near their row
+	// loopOrder is how far a loop's ordering height is pushed past its
+	// real one (see setPorts): further than any picture is tall, and
+	// finite, so a slot's mean stays a number
+	loopOrder = 1e7
+)
+
+// end is one end of a relationship's line while its port is set.
+type end struct {
+	r     *Rel
+	kind  marker
+	y     float64 // where it attaches: the row's centre, then its slot's
+	other float64 // the row the line's other end attaches to, for ordering slots
+}
+
+// portKey names a port: one row of one box, on one side of it. Every line
+// ending at the same port attaches to the same row from the same direction.
+type portKey struct {
+	b    *box
+	row  string
+	side float64 // +1 right edge, -1 left
+}
+
+// setPorts decides where each relationship's two ends attach: [0] is the
+// child end, [1] the parent's.
+//
+// PORTS AND SLOTS. Every end attaches at its key column's row, so several
+// foreign keys to one parent column (created_by, updated_by → users.id) all
+// meet at one point, on one side, and their markers are drawn over each
+// other. When the markers are the same, that is right: the lines join like
+// a bus into one marker, which says the same thing once. When they differ
+// (one key NOT NULL, one nullable), the overlap reads as ||o, which is no
+// notation at all. So each port gets one slot per distinct marker, spread
+// down the row portGap apart and centred on it; lines with the same marker
+// still share their slot. A port has at most three distinct markers (a
+// row's ends can be ||, |o or >o), so the slots stay within portSpan and a
+// line still visibly joins its own row (rowH is 21):
+//
+//	      ┌users────────┐
+//	──||──┤PK id        │   slot 1: the NOT NULL keys, sharing one ||
+//	──|o──┤             │   slot 2: the nullable keys, sharing one |o
+//	      │   name      │
+//
+// Slots are ordered by the mean height of their lines' other ends, so the
+// lines fan out toward where they are going instead of crossing at the box.
+//
+// A key column that references itself (a loop of zero height) attaches its
+// parent end to the header instead, as its own port.
+func setPorts(rels []*Rel, byT map[*Table]*box, in map[*box]bool) map[*Rel][2]*end {
+	out := map[*Rel][2]*end{}
+	ports := map[portKey][]*end{}
+	var order []portKey // first-seen order, so the result does not depend on map order
+	add := func(k portKey, e *end) {
+		if _, ok := ports[k]; !ok {
+			order = append(order, k)
+		}
+		ports[k] = append(ports[k], e)
+	}
+	for _, r := range rels {
+		c, p := byT[r.Child], byT[r.Parent]
+		if !in[c] {
+			continue
+		}
+		crow, prow := first(r.ChildCols), first(r.ParentCols)
+		if c == p && crow == prow {
+			prow = "\x00header" // no column has this name, so rowY gives the header
+		}
+		// which side each end leaves from: see drawer.rel's picture
+		cside, pside := 1.0, 1.0
+		switch {
+		case c.col < p.col:
+			pside = -1
+		case c.col > p.col:
+			cside = -1
+		}
+		ck, pk := endMarkers(r)
+		ce := &end{r: r, kind: ck, y: c.rowY(crow), other: p.rowY(prow)}
+		pe := &end{r: r, kind: pk, y: p.rowY(prow), other: c.rowY(crow)}
+		if c.col == p.col {
+			// A loop bows out just beside the column, inside every line
+			// that leaves the same side for another column, so its slot
+			// must be the outermost one toward its other end: were it
+			// above a line heading down past it, that line would cross
+			// the loop. Pushing its ordering height far that way does it.
+			for _, e := range []*end{ce, pe} {
+				switch {
+				case e.other > e.y:
+					e.other = e.y + loopOrder
+				case e.other < e.y:
+					e.other = e.y - loopOrder
+				}
+			}
+		}
+		add(portKey{c, crow, cside}, ce)
+		add(portKey{p, prow, pside}, pe)
+		out[r] = [2]*end{ce, pe}
+	}
+
+	for _, k := range order {
+		es := ports[k]
+		// the port's distinct markers, each with the mean height of its
+		// lines' other ends
+		type slot struct {
+			kind   marker
+			sum    float64
+			n      int
+			offset float64
+		}
+		var slots []*slot
+		byKind := map[marker]*slot{}
+		for _, e := range es {
+			s := byKind[e.kind]
+			if s == nil {
+				s = &slot{kind: e.kind}
+				byKind[e.kind] = s
+				slots = append(slots, s)
+			}
+			s.sum += e.other
+			s.n++
+		}
+		if len(slots) < 2 {
+			continue
+		}
+		sort.SliceStable(slots, func(i, j int) bool {
+			a, b := slots[i].sum/float64(slots[i].n), slots[j].sum/float64(slots[j].n)
+			if a != b {
+				return a < b
+			}
+			return slots[i].kind < slots[j].kind
+		})
+		n := len(slots)
+		sp := math.Min(portGap, portSpan/float64(n-1))
+		for i, s := range slots {
+			s.offset = (float64(i) - float64(n-1)/2) * sp
+		}
+		for _, e := range es {
+			e.y += byKind[e.kind].offset
+		}
+	}
+	return out
+}
+
+// widenRounds bounds widen's measure → widen → place rounds. One round
+// settles every diagram but a big hub's; the hub's lines shift a little as
+// its children's columns stretch, and a second or third round catches the
+// gaps that shift overfills. Past that, a leftover line takes the open
+// side, as it would have with no widening at all.
+const widenRounds = 4
+
+// widen grows extra (see layGroup's step 4) so that every gap between two
+// boxes holds the lines route chose for it in measure mode. Only a gap
+// past its capacity grows, and only to fit its lines minLane apart within
+// holePad of the boxes — the spacing a crowded gap already has. A gap that
+// fits keeps stackGap, so a diagram only changes where lines would
+// otherwise have gone round a column, and a hub's wrapped children keep
+// their grid wherever they can. Extra only grows: a gap is never narrowed
+// again, so the rounds end. It reports whether anything grew.
+func widen(cols []*column, extra [][]float64) bool {
+	grew := false
+	for i, c := range cols {
+		// holes[j] is the gap above box j; holes[0] and the last are the
+		// open sides, which need no room
+		for j := 1; j < len(c.boxes); j++ {
+			n := len(c.holes[j].users)
+			need := 2*holePad + float64(n-1)*minLane - stackGap
+			if need > extra[i][j]+0.5 {
+				extra[i][j] = math.Ceil(need)
+				grew = true
+			}
+		}
+	}
+	return grew
 }
 
 // chooseHoles picks one hole in each of cols (the columns between a line's
@@ -324,22 +532,22 @@ func (x *crossing) path(cols []*column) *path {
 	}
 	runs = append(runs, run{math.Min(r.x-stub, rc.x), r.x, x.yr})
 
-	pts := []pt2{{runs[0].x0, runs[0].y}}
+	pts := []pt2{{X: runs[0].x0, Y: runs[0].y}}
 	for i := 1; i < len(runs); i++ {
 		a, b := runs[i-1], runs[i]
-		p, q := pt2{a.x1, a.y}, pt2{b.x0, b.y}
+		p, q := pt2{X: a.x1, Y: a.y}, pt2{X: b.x0, Y: b.y}
 		// horizontal tangents at both ends, so the line leaves one run
 		// and joins the next square; the control reach is the adjacent
 		// line's rule from before routing, so a line between neighbouring
 		// columns is drawn exactly as it always was
-		dx := math.Max(30, (q.x-p.x)*0.45)
-		pts = append(pts, cubicPts(p, pt2{p.x + dx, p.y}, pt2{q.x - dx, q.y}, q)...)
+		dx := math.Max(30, (q.X-p.X)*0.45)
+		pts = append(pts, raster.CubicPts(p, pt2{X: p.X + dx, Y: p.Y}, pt2{X: q.X - dx, Y: q.Y}, q)...)
 	}
 	last := runs[len(runs)-1]
-	pts = append(pts, pt2{last.x1, last.y})
+	pts = append(pts, pt2{X: last.x1, Y: last.y})
 
 	out := &path{pts: pts}
-	lp, rp := pt2{l.x + l.w, x.yl}, pt2{r.x, x.yr}
+	lp, rp := pt2{X: l.x + l.w, Y: x.yl}, pt2{X: r.x, Y: x.yr}
 	if l.t == x.r.Child {
 		out.child, out.cdir, out.parent, out.pdir = lp, 1, rp, -1
 	} else {
@@ -367,22 +575,22 @@ func loopPath(col *column, c, p *box, cy, py float64) *path {
 	}
 	edge := col.x + col.w
 	cx, px := c.x+c.w, p.x+p.w
-	a := pt2{math.Max(cx+stub, edge), cy}
-	b := pt2{math.Max(px+stub, edge), py}
+	a := pt2{X: math.Max(cx+stub, edge), Y: cy}
+	b := pt2{X: math.Max(px+stub, edge), Y: py}
 	// bow out past the further of the two, more for a taller loop so it
 	// stays round
-	mx := math.Max(a.x, b.x) + 18 + math.Min(60, math.Abs(b.y-a.y)*0.15)
-	pts := []pt2{{cx, cy}}
-	pts = append(pts, cubicPts(a, pt2{mx, a.y}, pt2{mx, b.y}, b)...)
-	pts = append(pts, pt2{px, py})
-	return &path{pts: pts, child: pt2{cx, cy}, cdir: 1, parent: pt2{px, py}, pdir: 1}
+	mx := math.Max(a.X, b.X) + 18 + math.Min(60, math.Abs(b.Y-a.Y)*0.15)
+	pts := []pt2{{X: cx, Y: cy}}
+	pts = append(pts, raster.CubicPts(a, pt2{X: mx, Y: a.Y}, pt2{X: mx, Y: b.Y}, b)...)
+	pts = append(pts, pt2{X: px, Y: py})
+	return &path{pts: pts, child: pt2{X: cx, Y: cy}, cdir: 1, parent: pt2{X: px, Y: py}, pdir: 1}
 }
 
 // shift moves a path down by dy.
 func (p *path) shift(dy float64) {
 	for i := range p.pts {
-		p.pts[i].y += dy
+		p.pts[i].Y += dy
 	}
-	p.child.y += dy
-	p.parent.y += dy
+	p.child.Y += dy
+	p.parent.Y += dy
 }

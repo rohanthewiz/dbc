@@ -52,9 +52,11 @@ func checkPets(t *testing.T, s *erd.Schema, prefix string) {
 	if c := cats.Col("owner_id"); c == nil || !c.FK || !c.Nullable {
 		t.Errorf("cats.owner_id = %+v", c)
 	}
+	// keyed by Label, not Name: on Postgres the prefix is a schema
+	// (dbc_erd.cats), which only the label carries
 	rels := map[string]*erd.Rel{}
 	for _, r := range s.Rels {
-		rels[r.Child.Name+"."+strings.Join(r.ChildCols, ",")+"→"+r.Parent.Name+"."+strings.Join(r.ParentCols, ",")] = r
+		rels[r.Child.Label+"."+strings.Join(r.ChildCols, ",")+"→"+r.Parent.Label+"."+strings.Join(r.ParentCols, ",")] = r
 	}
 	p := prefix
 	for _, want := range []struct {
@@ -190,7 +192,7 @@ func TestBuildSchemaPostgresRows(t *testing.T) {
 		{"app", "cats", "cats_far_fkey", "f", "{3}", "", "elsewhere", "far", "{1}"},
 		{"app", "cats", "cats_bad_fkey", "f", "{9}", "", "app", "owners", "{1}"}, // attnum not listed
 	}
-	s := BuildSchema("postgres", "pg", tables, cols, keys)
+	s := BuildSchema("postgres", "pg", tables, cols, keys, nil)
 	if len(s.Tables) != 3 || len(s.Rels) != 1 {
 		t.Fatalf("tables %d rels %d: %+v", len(s.Tables), len(s.Rels), s.Rels)
 	}
@@ -223,10 +225,70 @@ func TestBuildSchemaMySQLSchemaCase(t *testing.T) {
 		{"shop", "lines", "PRIMARY", "p", "1", "order_id", "", "", ""}, // out of order
 		{"shop", "lines", "lines_ibfk_1", "f", "1", "order_id", "shop", "orders", "id"},
 	}
-	s := BuildSchema("mysql", "my", tables, cols, keys)
+	s := BuildSchema("mysql", "my", tables, cols, keys, nil)
 	lines, _ := s.Find("lines")
 	if strings.Join(lines.PK, ",") != "order_id,n" || len(s.Rels) != 1 || !s.Rels[0].Identifying() {
 		t.Errorf("lines = %+v, rels %d", lines, len(s.Rels))
+	}
+}
+
+// A partitioned table's partitions are hidden, with the foreign keys
+// Postgres cloned onto them (conparentid <> 0) and the ones it cloned to
+// reference them; the partitioned table keeps its own key, and the labels
+// stay qualified as the sidebar's are.
+func TestBuildSchemaHidesPartitions(t *testing.T) {
+	tables := []TableRef{
+		{Schema: "app", Name: "owners"},
+		{Schema: "app", Name: "events"},
+		{Schema: "parts", Name: "events_2026_01"},
+		{Schema: "parts", Name: "events_2026_02"},
+		{Schema: "app", Name: "notes"},
+	}
+	cols := [][]string{{"app", "owners", "id", "integer", "NO", "1"}, {"app", "notes", "event_id", "integer", "YES", "1"}}
+	for _, tb := range []string{"events", "events_2026_01", "events_2026_02"} {
+		sch := "parts"
+		if tb == "events" {
+			sch = "app"
+		}
+		cols = append(cols, []string{sch, tb, "id", "integer", "NO", "1"}, []string{sch, tb, "owner_id", "integer", "NO", "2"})
+	}
+	keys := [][]string{
+		{"app", "owners", "owners_pkey", "p", "{1}", "", "", "", ""},
+		{"app", "events", "events_pkey", "p", "{1}", "", "", "", ""},
+		{"app", "events", "events_owner_fkey", "f", "{2}", "", "app", "owners", "{1}"},
+		// the clones on each partition
+		{"parts", "events_2026_01", "events_owner_fkey", "f", "{2}", "", "app", "owners", "{1}"},
+		{"parts", "events_2026_02", "events_owner_fkey", "f", "{2}", "", "app", "owners", "{1}"},
+		// a key to the partitioned table, and its clones to each partition
+		{"app", "notes", "notes_event_fkey", "f", "{1}", "", "app", "events", "{1}"},
+		{"app", "notes", "notes_event_fkey1", "f", "{1}", "", "parts", "events_2026_01", "{1}"},
+		{"app", "notes", "notes_event_fkey2", "f", "{1}", "", "parts", "events_2026_02", "{1}"},
+	}
+	hidden := [][]string{{"parts", "events_2026_01"}, {"parts", "events_2026_02"}}
+	s := BuildSchema("postgres", "pg", tables, cols, keys, hidden)
+	var names, rels []string
+	for _, tb := range s.Tables {
+		names = append(names, tb.Label)
+	}
+	for _, r := range s.Rels {
+		rels = append(rels, r.Name)
+	}
+	if strings.Join(names, " ") != "app.events app.notes app.owners" {
+		t.Errorf("tables = %q", names)
+	}
+	if strings.Join(rels, " ") != "events_owner_fkey notes_event_fkey" {
+		t.Errorf("rels = %q", rels)
+	}
+}
+
+func TestPartitionsQuery(t *testing.T) {
+	if q, err := PartitionsQuery("postgres"); err != nil || !strings.Contains(q, "relispartition") {
+		t.Errorf("postgres: %q, %v", q, err)
+	}
+	for _, d := range []string{"bytdb", "mysql", "sqlite"} {
+		if q, err := PartitionsQuery(d); err != nil || q != "" {
+			t.Errorf("%s: %q, %v", d, q, err)
+		}
 	}
 }
 

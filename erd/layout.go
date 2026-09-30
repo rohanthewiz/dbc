@@ -3,6 +3,8 @@ package erd
 import (
 	"math"
 	"sort"
+
+	"github.com/rohanthewiz/dbc/raster"
 )
 
 // The diagram's layout: where every table's box goes.
@@ -52,7 +54,9 @@ import (
 //     children is a block, not a strip.
 //  4. place: columns left to right, each centred vertically.
 //  5. route: each line that skips a column finds its way through the gaps
-//     between that column's boxes (route.go), rather than under them.
+//     between that column's boxes (route.go), rather than under them. A
+//     gap that more lines need than it holds is widened first, and the
+//     columns placed again (widen), so the lines stay between the boxes.
 
 // Layout constants, in CSS pixels.
 const (
@@ -122,7 +126,7 @@ type layout struct {
 // A table with more than maxRows columns shows its key columns (which lines
 // attach to) and then as many of the rest as fit, in declared order, with a
 // "… n more" row — a wide fact table is still one screen tall.
-func newBox(t *Table, m *faces) *box {
+func newBox(t *Table, m *raster.Faces) *box {
 	b := &box{t: t}
 	if len(t.Cols) <= maxRows {
 		b.rows = t.Cols
@@ -151,13 +155,13 @@ func newBox(t *Table, m *faces) *box {
 		if c.PK {
 			st = tColB
 		}
-		nameW = math.Max(nameW, m.width(st, c.Name))
-		typeW = math.Max(typeW, m.width(tType, c.Type))
+		nameW = math.Max(nameW, m.Width(st, c.Name))
+		typeW = math.Max(typeW, m.Width(tType, c.Type))
 	}
 	w := padX + badgeW + nameW + nameGap + typeW + padX
-	head := padX + m.width(tTable, t.Label) + padX
+	head := padX + m.Width(tTable, t.Label) + padX
 	if t.View {
-		head += m.width(tBadge, "VIEW") + 8
+		head += m.Width(tBadge, "VIEW") + 8
 	}
 	w = math.Max(w, head)
 	w = math.Max(boxMinW, math.Min(boxMaxW, w))
@@ -186,7 +190,7 @@ func newBox(t *Table, m *faces) *box {
 
 // newLayout lays the schema out. The title band's height is left free at
 // the top; the picture draws into it.
-func newLayout(s *Schema, m *faces) *layout {
+func newLayout(s *Schema, m *raster.Faces) *layout {
 	l := &layout{byT: map[*Table]*box{}, looseY: -1, paths: map[*Rel]*path{}}
 	for _, t := range s.Tables {
 		b := newBox(t, m)
@@ -434,53 +438,85 @@ func layGroup(g []*box, rels []*Rel, byT map[*Table]*box, x0, y0 float64, paths 
 	}
 
 	// 4. Place: columns left to right, each as wide as its widest box and
-	// centred vertically on the tallest column.
-	heights := make([]float64, len(cols))
-	for i, col := range cols {
-		for j, b := range col {
-			if j > 0 {
-				heights[i] += stackGap
-			}
-			heights[i] += b.h
-		}
-		h = math.Max(h, heights[i])
-	}
-	x := x0
+	// centred vertically on the tallest column. extra[i][j] is room added
+	// to the gap above column i's box j, beyond stackGap, when more lines
+	// cross that gap than it holds (see step 5); it starts at nothing.
 	placed := make([]*column, len(cols))
+	extra := make([][]float64, len(cols))
 	for i, col := range cols {
-		colW := 0.0
-		for _, b := range col {
-			colW = math.Max(colW, b.w)
-		}
-		y := y0 + (h-heights[i])/2
-		for _, b := range col {
-			// boxes narrower than the column are centred in it, so lines
-			// in both directions have about the same room
-			b.x = x + (colW-b.w)/2
-			b.y = y
-			b.col = i
-			y += b.h + stackGap
-		}
-		placed[i] = &column{x: x, w: colW, boxes: col}
-		x += colW
-		if i < len(cols)-1 {
-			x += rankGap
-		}
+		extra[i] = make([]float64, len(col))
 	}
-	w = x - x0
+	place := func() {
+		h = 0
+		heights := make([]float64, len(cols))
+		for i, col := range cols {
+			for j, b := range col {
+				if j > 0 {
+					heights[i] += stackGap + extra[i][j]
+				}
+				heights[i] += b.h
+			}
+			h = math.Max(h, heights[i])
+		}
+		x := x0
+		for i, col := range cols {
+			colW := 0.0
+			for _, b := range col {
+				colW = math.Max(colW, b.w)
+			}
+			y := y0 + (h-heights[i])/2
+			for j, b := range col {
+				// boxes narrower than the column are centred in it, so
+				// lines in both directions have about the same room
+				b.x = x + (colW-b.w)/2
+				b.y = y
+				b.col = i
+				y += b.h + stackGap
+				if j+1 < len(col) {
+					y += extra[i][j+1]
+				}
+			}
+			placed[i] = &column{x: x, w: colW, boxes: col}
+			x += colW
+			if i < len(cols)-1 {
+				x += rankGap
+			}
+		}
+		w = x - x0
+	}
+	place()
 
-	// 5. Route. A line may leave the boxes' extent: above a column's top
-	// box (when every hole nearer its ends is full), below its bottom one,
-	// or, for a loop on the last column, out to the right. The group grows
-	// to hold its lines — moved down by whatever rises above y0, so it
-	// never overlaps the title or the group before it.
+	// 5. Route. First make room: a gap between two boxes holds about five
+	// lines, and a column that more lines cross than its gaps hold (the
+	// first wrapped column of a big hub's children) would send the rest
+	// over or under the whole column, in ribbons. So the lines are routed
+	// once as if every gap were wide enough (measure), each gap is widened
+	// to the lanes that chose it, and the columns are placed again. Moving
+	// boxes moves the rows lines attach to, so a line may then prefer
+	// another gap; a few rounds settle it (widening only ever grows, so it
+	// ends). A diagram whose gaps all fit (nearly every real schema) is
+	// measured once and placed exactly as before.
+	for range widenRounds {
+		route(placed, rels, byT, in, true)
+		if !widen(placed, extra) {
+			break
+		}
+		place()
+	}
+
+	// Then route for real. A line may still leave the boxes' extent: above
+	// a column's top box (when every hole nearer its ends is full, or it is
+	// the shorter way), below its bottom one, or, for a loop on the last
+	// column, out to the right. The group grows to hold its lines — moved
+	// down by whatever rises above y0, so it never overlaps the title or
+	// the group before it.
 	top, bot, right := y0, y0+h, x0+w
-	for r, p := range route(placed, rels, byT, in) {
+	for r, p := range route(placed, rels, byT, in, false) {
 		paths[r] = p
 		for _, q := range p.pts {
-			top = math.Min(top, q.y-laneGap/2)
-			bot = math.Max(bot, q.y+laneGap/2)
-			right = math.Max(right, q.x+edgeW)
+			top = math.Min(top, q.Y-laneGap/2)
+			bot = math.Max(bot, q.Y+laneGap/2)
+			right = math.Max(right, q.X+edgeW)
 		}
 	}
 	if dy := y0 - top; dy > 0 {

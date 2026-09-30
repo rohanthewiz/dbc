@@ -20,6 +20,7 @@ import (
 //	TablesQuery ───────► the tables and views (the sidebar's list)
 //	SchemaColumnsQuery ► schema · table · column · type · nullable · position
 //	SchemaKeysQuery ───► one row per key column (see below)
+//	PartitionsQuery ───► schema · table of each partition (Postgres only)
 //	                            │
 //	                BuildSchema (pure, tested without a database)
 //	                            ▼
@@ -142,24 +143,72 @@ ORDER BY 1, 2, 3, 5`, nil
 	return "", serr.New("no key listing for this driver", "driver", driver)
 }
 
-// BuildSchema assembles the diagram's model from the three queries' rows.
+// PartitionsQuery returns the statement listing the tables that are
+// partitions of another (schema · table), or "" when the engine has none
+// that the diagram needs to hide.
+//
+// WHY HIDE THEM. A Postgres partitioned table's partitions are tables in
+// the catalog, and the sidebar lists them (a person may well query one
+// directly). But in a diagram each would be a box of its own, with a clone
+// of every one of the parent's foreign keys: Postgres copies a key
+// declared on a partitioned table onto each partition (pg_constraint rows
+// with conparentid <> 0), and a key referencing a partitioned table onto
+// each of the referenced partitions too. A table split by month over three
+// years would draw 36 copies of itself, each with the parent's lines. The
+// partitioned table itself carries the model: its columns and the keys
+// declared on it.
+//
+// relispartition is set on every partition, a sub-partition included, and
+// has been since partitioning arrived (Postgres 10). bytdb has no
+// partitioning, and its pg_class need not carry the column, so it gets no
+// query.
+func PartitionsQuery(driver string) (string, error) {
+	drv, err := driverFor(driver)
+	if err != nil {
+		return "", err
+	}
+	if drv != "pgx" {
+		return "", nil
+	}
+	return `SELECT n.nspname, c.relname
+FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relispartition`, nil
+}
+
+// BuildSchema assembles the diagram's model from the catalog queries' rows.
 // tables is the sidebar's catalog (TableRefs of TablesQuery), which decides
 // which tables exist and which are views; columns and keys of anything not
-// in it (an index, a sequence, a system table) are ignored. Rows of the
-// wrong shape are skipped rather than guessed at, as TableRefs does.
+// in it (an index, a sequence, a system table) are ignored. hidden lists
+// (schema, table) rows of catalog tables the diagram leaves out — the
+// partitions of PartitionsQuery — and so the columns and keys of those
+// too: a key cloned onto a partition, or cloned to reference one, has no
+// box at one end and is dropped with it. Rows of the wrong shape are
+// skipped rather than guessed at, as TableRefs does.
 //
-// A table's Label follows TableIndex.Display, over the same catalog, so the
-// name the sidebar shows is the name erd.Schema.Find resolves.
-func BuildSchema(driver, conn string, tables []TableRef, colRows, keyRows [][]string) *erd.Schema {
+// A table's Label follows TableIndex.Display over the whole catalog,
+// hidden tables included, so the name the sidebar shows is the name
+// erd.Schema.Find resolves: hiding a schema's only tables (partitions kept
+// in a schema of their own) does not turn every other label bare.
+func BuildSchema(driver, conn string, tables []TableRef, colRows, keyRows, hidden [][]string) *erd.Schema {
 	s := &erd.Schema{Conn: conn, Driver: driver}
 	idx := NewTableIndex(tables)
 	type key struct{ schema, name string }
+	skip := map[key]bool{}
+	for _, r := range hidden {
+		if len(r) >= 2 {
+			skip[key{r[0], r[1]}] = true
+		}
+	}
 	byKey := map[key]*erd.Table{}
 	// MySQL reports table_schema in whatever case the server stores it,
 	// which need not match DATABASE(); a name alone is unambiguous there
 	// (one database per connection), so it is the fallback.
 	byName := map[string][]*erd.Table{}
 	for _, t := range tables {
+		if skip[key{t.Schema, t.Name}] {
+			continue
+		}
 		et := &erd.Table{Schema: t.Schema, Name: t.Name, Label: idx.Display(t), View: t.View}
 		s.Tables = append(s.Tables, et)
 		byKey[key{t.Schema, t.Name}] = et
@@ -363,17 +412,24 @@ func (m *Manager) Schema(ctx context.Context, name string) (*erd.Schema, error) 
 	if err != nil {
 		return nil, err
 	}
+	pq, err := PartitionsQuery(cc.Driver)
+	if err != nil {
+		return nil, err
+	}
 	dbh, err := m.DBContext(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	var rows [3][][]string
-	for i, q := range []string{tq, cq, kq} {
+	var rows [4][][]string
+	for i, q := range []string{tq, cq, kq, pq} {
+		if q == "" {
+			continue // an engine with nothing to hide
+		}
 		if rows[i], err = stringRows(ctx, dbh, q); err != nil {
 			return nil, wrapRunErr(ctx, err, name, "op", "read the schema")
 		}
 	}
-	return BuildSchema(cc.Driver, name, TableRefs(rows[0]), rows[1], rows[2]), nil
+	return BuildSchema(cc.Driver, name, TableRefs(rows[0]), rows[1], rows[2], rows[3]), nil
 }
 
 // stringRows runs a catalog query and returns its cells as strings, NULL as

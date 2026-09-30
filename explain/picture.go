@@ -10,18 +10,10 @@ import (
 	"image/png"
 	"math"
 	"strings"
-	"sync"
-
-	"golang.org/x/image/font"
-	"golang.org/x/image/font/gofont/gobold"
-	"golang.org/x/image/font/gofont/gomono"
-	"golang.org/x/image/font/gofont/goregular"
-	"golang.org/x/image/font/opentype"
-	"golang.org/x/image/math/fixed"
-	"golang.org/x/image/vector"
 
 	"github.com/rohanthewiz/serr"
 
+	"github.com/rohanthewiz/dbc/raster"
 	"github.com/rohanthewiz/dbc/theme"
 )
 
@@ -150,7 +142,7 @@ func (p *Plan) Picture(opt PictureOptions) (*image.RGBA, error) {
 // picture is Picture plus the scale it was drawn at, which the PDF needs to
 // size its page in points rather than pixels.
 func (p *Plan) picture(opt PictureOptions) (*image.RGBA, float64, error) {
-	fs, err := picFonts()
+	fs, err := raster.Fonts()
 	if err != nil {
 		return nil, 0, err
 	}
@@ -172,8 +164,8 @@ func (p *Plan) picture(opt PictureOptions) (*image.RGBA, float64, error) {
 	// Pass 1 — lay out: measure everything at 1× and record what to draw
 	// as ops, so the image can be allocated at its final size before a
 	// single pixel is painted.
-	lay := &picLayout{plan: p, metric: m, pal: newPicPalette(opt.Palette), meas: newPicFaces(fs, 1)}
-	defer lay.meas.close()
+	lay := &picLayout{plan: p, metric: m, pal: newPicPalette(opt.Palette), meas: raster.NewFaces(fs, 1)}
+	defer lay.meas.Close()
 	w, h := lay.build(opt.Compare)
 
 	// Pass 2 — choose the scale and paint.
@@ -184,8 +176,8 @@ func (p *Plan) picture(opt PictureOptions) (*image.RGBA, float64, error) {
 	k = math.Min(k, math.Sqrt(maxPixels/(w*h)))
 	k = math.Min(k, math.Min(maxSide/w, maxSide/h))
 	img := image.NewRGBA(image.Rect(0, 0, int(math.Ceil(w*k)), int(math.Ceil(h*k))))
-	pt := &painter{img: img, k: k, faces: newPicFaces(fs, k)}
-	defer pt.faces.close()
+	pt := &painter{Img: img, K: k, Faces: raster.NewFaces(fs, k)}
+	defer pt.Faces.Close()
 	draw.Draw(img, img.Bounds(), image.NewUniform(lay.pal.bg), image.Point{}, draw.Src)
 	for _, op := range lay.ops {
 		op(pt)
@@ -194,157 +186,38 @@ func (p *Plan) picture(opt PictureOptions) (*image.RGBA, float64, error) {
 }
 
 // ---------------------------------------------------------------------------
-// Fonts and text
+// Text styles, colors and the edge curve
 // ---------------------------------------------------------------------------
+//
+// The drawing kit itself — the Go fonts, text measuring, fitting and
+// wrapping, filled rounded rectangles and strokes — is the raster
+// package's, shared with the schema diagram (erd). What stays here is the
+// plan's own: its text styles, its palette with the heat ramp, and the
+// shape of the edge between two cards.
 
-// The Go fonts: a humanist sans for prose, its bold for names, and the
-// monospace for SQL. They are embedded in golang.org/x/image, so the
-// picture looks the same on every machine and needs no system font.
-const (
-	fRegular = iota
-	fBold
-	fMono
+// txt, picFaces and painter are raster's text style, faces and painter
+// under the names the layout below uses throughout.
+type (
+	txt      = raster.Style
+	picFaces = raster.Faces
+	painter  = raster.Painter
 )
-
-var picFonts = sync.OnceValues(func() ([3]*opentype.Font, error) {
-	var out [3]*opentype.Font
-	for i, ttf := range [][]byte{goregular.TTF, gobold.TTF, gomono.TTF} {
-		f, err := opentype.Parse(ttf)
-		if err != nil {
-			return out, serr.Wrap(err, "op", "parse the go fonts")
-		}
-		out[i] = f
-	}
-	return out, nil
-})
-
-// txt is a text style: which font, at what CSS-pixel size.
-type txt struct {
-	font int
-	size float64
-}
 
 var (
-	tHead    = txt{fBold, 16}
-	tBadge   = txt{fBold, 13}
-	tMeta    = txt{fRegular, 12.5}
-	tMono    = txt{fMono, 12}
-	tOp      = txt{fBold, 13.5}
-	tCard    = txt{fRegular, 12}
-	tCardB   = txt{fBold, 12}
-	tSum     = txt{fMono, 11.5}
-	tKind    = txt{fMono, 9.5}
-	tEdge    = txt{fRegular, 11}
-	tSection = txt{fBold, 12}
-	tInsT    = txt{fBold, 13}
-	tInsD    = txt{fRegular, 12.5}
+	tHead    = txt{Font: raster.Bold, Size: 16}
+	tBadge   = txt{Font: raster.Bold, Size: 13}
+	tMeta    = txt{Font: raster.Regular, Size: 12.5}
+	tMono    = txt{Font: raster.Mono, Size: 12}
+	tOp      = txt{Font: raster.Bold, Size: 13.5}
+	tCard    = txt{Font: raster.Regular, Size: 12}
+	tCardB   = txt{Font: raster.Bold, Size: 12}
+	tSum     = txt{Font: raster.Mono, Size: 11.5}
+	tKind    = txt{Font: raster.Mono, Size: 9.5}
+	tEdge    = txt{Font: raster.Regular, Size: 11}
+	tSection = txt{Font: raster.Bold, Size: 12}
+	tInsT    = txt{Font: raster.Bold, Size: 13}
+	tInsD    = txt{Font: raster.Regular, Size: 12.5}
 )
-
-// lineH is the line height for a style — plan.css's 1.45.
-func (t txt) lineH() float64 { return t.size * 1.45 }
-
-// picFaces caches one font.Face per style at one scale. Faces are not safe
-// for concurrent use, so every render makes its own.
-type picFaces struct {
-	fonts [3]*opentype.Font
-	k     float64
-	faces map[txt]font.Face
-}
-
-func newPicFaces(fs [3]*opentype.Font, k float64) *picFaces {
-	return &picFaces{fonts: fs, k: k, faces: map[txt]font.Face{}}
-}
-
-func (f *picFaces) face(t txt) font.Face {
-	if fc, ok := f.faces[t]; ok {
-		return fc
-	}
-	// At DPI 72 a point is a pixel, so Size is the device-pixel size.
-	// Unhinted: hinting snaps advances to whole pixels, which would make
-	// a line measured at 1× a different width drawn at 2×.
-	fc, err := opentype.NewFace(f.fonts[t.font], &opentype.FaceOptions{Size: t.size * f.k, DPI: 72, Hinting: font.HintingNone})
-	if err != nil {
-		// NewFace fails only on a bad size, and every size here is a
-		// positive constant times a positive scale
-		panic(err)
-	}
-	f.faces[t] = fc
-	return fc
-}
-
-func (f *picFaces) close() {
-	for _, fc := range f.faces {
-		_ = fc.Close()
-	}
-}
-
-// width is s's advance in CSS pixels.
-func (f *picFaces) width(t txt, s string) float64 {
-	return fix2f(font.MeasureString(f.face(t), s)) / f.k
-}
-
-// fit shortens s with an ellipsis until it is at most w CSS pixels wide.
-func (f *picFaces) fit(t txt, s string, w float64) string {
-	if f.width(t, s) <= w {
-		return s
-	}
-	r := []rune(s)
-	// binary search the longest prefix that fits with its "…": measuring
-	// is the cost here, and a long SQL fragment would otherwise be
-	// measured once per rune dropped
-	lo, hi := 0, len(r)
-	for lo < hi {
-		mid := (lo + hi + 1) / 2
-		if f.width(t, string(r[:mid])+"…") <= w {
-			lo = mid
-		} else {
-			hi = mid - 1
-		}
-	}
-	return strings.TrimRight(string(r[:lo]), " ") + "…"
-}
-
-// wrap breaks s into lines of at most w CSS pixels, at spaces where it
-// can and inside a word where it must (a long identifier, a URL).
-// Newlines in s are kept as line breaks.
-func (f *picFaces) wrap(t txt, s string, w float64) []string {
-	var out []string
-	for para := range strings.SplitSeq(s, "\n") {
-		line := ""
-		for word := range strings.FieldsSeq(para) {
-			try := word
-			if line != "" {
-				try = line + " " + word
-			}
-			if f.width(t, try) <= w {
-				line = try
-				continue
-			}
-			if line != "" {
-				out = append(out, line)
-			}
-			// a word wider than the whole measure is cut into pieces that fit
-			for f.width(t, word) > w {
-				r := []rune(word)
-				n := len(r) - 1
-				for n > 1 && f.width(t, string(r[:n])) > w {
-					n--
-				}
-				out = append(out, string(r[:n]))
-				word = string(r[n:])
-			}
-			line = word
-		}
-		out = append(out, line)
-	}
-	return out
-}
-
-func fix2f(v fixed.Int26_6) float64 { return float64(v) / 64 }
-
-// ---------------------------------------------------------------------------
-// Colors
-// ---------------------------------------------------------------------------
 
 // picPalette is the theme's hex strings, parsed once.
 type picPalette struct {
@@ -352,28 +225,18 @@ type picPalette struct {
 }
 
 func newPicPalette(p theme.Palette) picPalette {
-	c := func(hex string) color.RGBA {
-		r, g, b, _ := theme.ParseHex(hex)
-		return color.RGBA{r, g, b, 0xff}
-	}
+	c := raster.RGB
 	return picPalette{bg: c(p.Bg), panel: c(p.Panel), panel2: c(p.Panel2), line: c(p.Line), fg: c(p.Fg),
 		muted: c(p.Muted), accent: c(p.Accent), warn: c(p.Warn), err: c(p.Err)}
-}
-
-// mixRGB is a at weight t over b: 0 is b, 1 is a (CSS color-mix order).
-func mixRGB(a, b color.RGBA, t float64) color.RGBA {
-	t = math.Max(0, math.Min(1, t))
-	l := func(x, y uint8) uint8 { return uint8(math.Round(float64(x)*t + float64(y)*(1-t))) }
-	return color.RGBA{l(a.R, b.R), l(a.G, b.G), l(a.B, b.B), 0xff}
 }
 
 // heat is plan.js's ramp for a step's share of the metric: accent through
 // warn to err, reaching warn at 40% and err at 80%.
 func (c picPalette) heat(s float64) color.RGBA {
 	if s <= 0.4 {
-		return mixRGB(c.warn, c.accent, s/0.4)
+		return raster.Mix(c.warn, c.accent, s/0.4)
 	}
-	return mixRGB(c.err, c.warn, (s-0.4)/0.4)
+	return raster.Mix(c.err, c.warn, (s-0.4)/0.4)
 }
 
 func (c picPalette) sev(s Severity) color.RGBA {
@@ -386,135 +249,14 @@ func (c picPalette) sev(s Severity) color.RGBA {
 	return c.accent
 }
 
-// ---------------------------------------------------------------------------
-// The painter: shapes and text at scale k, in CSS-pixel coordinates
-// ---------------------------------------------------------------------------
-
-type painter struct {
-	img   *image.RGBA
-	k     float64
-	z     vector.Rasterizer
-	faces *picFaces
-}
-
-// shape rasterizes one path, anti-aliased, over the picture. The
-// rasterizer is sized to the shape's own bounding box rather than the
-// whole picture: Reset clears every cell it covers, so a picture-sized
-// rasterizer would make each of a big plan's hundreds of shapes cost a
-// pass over millions of pixels.
-//
-// path receives an emitter taking CSS-pixel points; minX…maxY is the
-// shape's CSS-pixel bounding box.
-func (pt *painter) shape(minX, minY, maxX, maxY float64, col color.Color, path func(move, line func(x, y float64), cube func(x1, y1, x2, y2, x, y float64))) {
-	x0, y0 := int(math.Floor(minX*pt.k)), int(math.Floor(minY*pt.k))
-	x1, y1 := int(math.Ceil(maxX*pt.k))+1, int(math.Ceil(maxY*pt.k))+1
-	r := image.Rect(x0, y0, x1, y1)
-	// The rasterizer does not clip to the destination; every shape is
-	// inside the margins by construction, and one that is not is skipped
-	// rather than allowed to write out of bounds.
-	if r.Empty() || !r.In(pt.img.Bounds()) {
-		return
-	}
-	pt.z.Reset(r.Dx(), r.Dy())
-	pt.z.DrawOp = draw.Over
-	tx := func(x float64) float32 { return float32(x*pt.k - float64(x0)) }
-	ty := func(y float64) float32 { return float32(y*pt.k - float64(y0)) }
-	path(
-		func(x, y float64) { pt.z.MoveTo(tx(x), ty(y)) },
-		func(x, y float64) { pt.z.LineTo(tx(x), ty(y)) },
-		func(ax, ay, bx, by, x, y float64) { pt.z.CubeTo(tx(ax), ty(ay), tx(bx), ty(by), tx(x), ty(y)) },
-	)
-	pt.z.ClosePath()
-	pt.z.Draw(pt.img, r, image.NewUniform(col), image.Point{})
-}
-
-// kappa places a cubic's control points so it traces a quarter circle.
-const kappa = 0.5522847498
-
-// roundRect fills a rectangle with corners of radius rad.
-func (pt *painter) roundRect(x, y, w, h, rad float64, col color.Color) {
-	rad = math.Min(rad, math.Min(w, h)/2)
-	c := rad * kappa
-	pt.shape(x, y, x+w, y+h, col, func(move, line func(x, y float64), cube func(x1, y1, x2, y2, x, y float64)) {
-		move(x+rad, y)
-		line(x+w-rad, y)
-		cube(x+w-rad+c, y, x+w, y+rad-c, x+w, y+rad)
-		line(x+w, y+h-rad)
-		cube(x+w, y+h-rad+c, x+w-rad+c, y+h, x+w-rad, y+h)
-		line(x+rad, y+h)
-		cube(x+rad-c, y+h, x, y+h-rad+c, x, y+h-rad)
-		line(x, y+rad)
-		cube(x, y+rad-c, x+rad-c, y, x+rad, y)
-	})
-}
-
-// box is a bordered rounded rectangle: the border color filled, then the
-// fill inset by the border's width — cheaper and crisper than stroking.
-func (pt *painter) box(x, y, w, h, rad, border float64, stroke, fill color.Color) {
-	pt.roundRect(x, y, w, h, rad, stroke)
-	pt.roundRect(x+border, y+border, w-2*border, h-2*border, math.Max(rad-border, 0), fill)
-}
-
-func (pt *painter) circle(cx, cy, rad float64, col color.Color) {
-	pt.roundRect(cx-rad, cy-rad, 2*rad, 2*rad, rad, col)
-}
-
 // curve strokes the S-shaped cubic plan.js draws between a parent's bottom
-// and a child's top: vertical tangents at both ends, bending at mid-height.
-//
-// vector only fills, so the stroke is built as its outline: the curve is
-// flattened to points, each offset half the width either side along the
-// normal, and the left side forward plus the right side back is one closed
-// polygon. The curve is gentle (it never turns more than 90°), so the
-// offset sides never cross and no join handling is needed.
-func (pt *painter) curve(x1, y1, x2, y2, width float64, col color.Color) {
+// and a child's top: vertical tangents at both ends, bending at mid-height
+// (control points (x1,my) and (x2,my)). It is the diagram's general
+// polyline stroke over the flattened curve.
+func curve(pt *painter, x1, y1, x2, y2, width float64, col color.Color) {
 	my := (y1 + y2) / 2
-	bez := func(t float64) (float64, float64) {
-		u := 1 - t
-		// control points: (x1,y1) (x1,my) (x2,my) (x2,y2)
-		x := u*u*u*x1 + 3*u*u*t*x1 + 3*u*t*t*x2 + t*t*t*x2
-		y := u*u*u*y1 + 3*u*u*t*my + 3*u*t*t*my + t*t*t*y2
-		return x, y
-	}
-	const steps = 32
-	var left, right [][2]float64
-	for i := 0; i <= steps; i++ {
-		t := float64(i) / steps
-		x, y := bez(t)
-		// the tangent, from a small step either side (clamped at the ends)
-		ax, ay := bez(math.Max(t-0.01, 0))
-		bx, by := bez(math.Min(t+0.01, 1))
-		dx, dy := bx-ax, by-ay
-		l := math.Hypot(dx, dy)
-		if l == 0 {
-			dx, dy, l = 0, 1, 1
-		}
-		nx, ny := -dy/l*width/2, dx/l*width/2
-		left = append(left, [2]float64{x + nx, y + ny})
-		right = append(right, [2]float64{x - nx, y - ny})
-	}
-	minX, maxX := math.Min(x1, x2)-width, math.Max(x1, x2)+width
-	pt.shape(minX, y1-width, maxX, y2+width, col, func(move, line func(x, y float64), _ func(x1, y1, x2, y2, x, y float64)) {
-		move(left[0][0], left[0][1])
-		for _, q := range left[1:] {
-			line(q[0], q[1])
-		}
-		for i := len(right) - 1; i >= 0; i-- {
-			line(right[i][0], right[i][1])
-		}
-	})
-}
-
-// text draws s with its top at y (the line box's top, as CSS places it).
-func (pt *painter) text(t txt, col color.Color, x, y float64, s string) {
-	fc := pt.faces.face(t)
-	m := fc.Metrics()
-	// center the glyphs in the line box the way CSS does: half the
-	// leading above, then the ascent to the baseline
-	lead := (t.lineH()*pt.k - fix2f(m.Ascent+m.Descent)) / 2
-	d := font.Drawer{Dst: pt.img, Src: image.NewUniform(col), Face: fc,
-		Dot: fixed.Point26_6{X: fixed.Int26_6(x * pt.k * 64), Y: fixed.Int26_6((y*pt.k + lead + fix2f(m.Ascent)) * 64)}}
-	d.DrawString(s)
+	pts := raster.CubicPts(raster.Pt{X: x1, Y: y1}, raster.Pt{X: x1, Y: my}, raster.Pt{X: x2, Y: my}, raster.Pt{X: x2, Y: y2})
+	pt.Polyline(pts, width, col)
 }
 
 // ---------------------------------------------------------------------------
@@ -571,15 +313,15 @@ func (l *picLayout) header(y, w float64, compare string) float64 {
 	x := picMargin
 
 	// [dbc] badge, then the headline in what is left of the line
-	bw := f.width(tBadge, "dbc") + 16
-	head := f.fit(tHead, p.Headline(), w-bw-12)
+	bw := f.Width(tBadge, "dbc") + 16
+	head := f.Fit(tHead, p.Headline(), w-bw-12)
 	top := y
 	l.op(func(pt *painter) {
-		pt.roundRect(x, top+2, bw, tBadge.lineH()+4, 6, c.accent)
-		pt.text(tBadge, c.bg, x+8, top+4, "dbc")
-		pt.text(tHead, c.fg, x+bw+12, top, head)
+		pt.RoundRect(x, top+2, bw, tBadge.LineH()+4, 6, c.accent)
+		pt.Text(tBadge, c.bg, x+8, top+4, "dbc")
+		pt.Text(tHead, c.fg, x+bw+12, top, head)
 	})
-	y += tHead.lineH() + 6
+	y += tHead.LineH() + 6
 
 	facts := []string{"engine " + p.Engine}
 	if p.Conn != "" {
@@ -601,25 +343,25 @@ func (l *picLayout) header(y, w float64, compare string) float64 {
 	if compare != "" {
 		facts = append(facts, "vs last: "+compare)
 	}
-	for _, line := range f.wrap(tMeta, strings.Join(facts, "   ·   "), w) {
+	for _, line := range f.Wrap(tMeta, strings.Join(facts, "   ·   "), w) {
 		ly := y
-		l.op(func(pt *painter) { pt.text(tMeta, c.muted, x, ly, line) })
-		y += tMeta.lineH()
+		l.op(func(pt *painter) { pt.Text(tMeta, c.muted, x, ly, line) })
+		y += tMeta.LineH()
 	}
 
 	// the notes are facts a reader must have to read the plan right
 	// ("ran inside a transaction that was rolled back"), so they are on
 	// the picture as the page shows them: a warn-barred callout each
 	for _, n := range p.Notes {
-		lines := f.wrap(tMeta, n, w-24)
-		nh := float64(len(lines))*tMeta.lineH() + 8
+		lines := f.Wrap(tMeta, n, w-24)
+		nh := float64(len(lines))*tMeta.LineH() + 8
 		y += 6
 		ny := y
 		l.op(func(pt *painter) {
-			pt.roundRect(x, ny, w, nh, 4, c.panel2)
-			pt.roundRect(x, ny, 3, nh, 1.5, c.warn)
+			pt.RoundRect(x, ny, w, nh, 4, c.panel2)
+			pt.RoundRect(x, ny, 3, nh, 1.5, c.warn)
 			for i, ln := range lines {
-				pt.text(tMeta, c.fg, x+12, ny+4+float64(i)*tMeta.lineH(), ln)
+				pt.Text(tMeta, c.fg, x+12, ny+4+float64(i)*tMeta.LineH(), ln)
 			}
 		})
 		y += nh
@@ -628,7 +370,7 @@ func (l *picLayout) header(y, w float64, compare string) float64 {
 	if p.Statement != "" {
 		var lines []string
 		for raw := range strings.SplitSeq(strings.TrimSpace(p.Statement), "\n") {
-			lines = append(lines, f.wrap(tMono, strings.TrimRight(raw, " \t"), w-24)...)
+			lines = append(lines, f.Wrap(tMono, strings.TrimRight(raw, " \t"), w-24)...)
 		}
 		more := 0
 		if len(lines) > stmtMaxLines {
@@ -639,16 +381,16 @@ func (l *picLayout) header(y, w float64, compare string) float64 {
 		if more > 0 {
 			n++
 		}
-		sh := float64(n)*tMono.lineH() + 16
+		sh := float64(n)*tMono.LineH() + 16
 		y += 10
 		sy := y
 		l.op(func(pt *painter) {
-			pt.box(x, sy, w, sh, 8, 1, c.line, c.panel)
+			pt.Box(x, sy, w, sh, 8, 1, c.line, c.panel)
 			for i, ln := range lines {
-				pt.text(tMono, c.fg, x+12, sy+8+float64(i)*tMono.lineH(), ln)
+				pt.Text(tMono, c.fg, x+12, sy+8+float64(i)*tMono.LineH(), ln)
 			}
 			if more > 0 {
-				pt.text(tMono, c.muted, x+12, sy+8+float64(len(lines))*tMono.lineH(),
+				pt.Text(tMono, c.muted, x+12, sy+8+float64(len(lines))*tMono.LineH(),
 					fmt.Sprintf("… %d more lines", more))
 			}
 		})
@@ -728,11 +470,11 @@ func (l *picLayout) tree(ox, oy float64) {
 		cards = append(cards, l.card(n, x, y, sev[n.ID]))
 		if l.collapsed[n.ID] {
 			label := fmt.Sprintf("+%d steps", countBelow(n))
-			pw := f.width(tEdge, label) + 18
+			pw := f.Width(tEdge, label) + 18
 			px, py := x+picCardW/2-pw/2, y+picCardH+14
 			cards = append(cards, func(pt *painter) {
-				pt.box(px, py, pw, tEdge.lineH()+4, 10, 1, c.muted, c.panel)
-				pt.text(tEdge, c.muted, px+9, py+2, label)
+				pt.Box(px, py, pw, tEdge.LineH()+4, 10, 1, c.muted, c.panel)
+				pt.Text(tEdge, c.muted, px+9, py+2, label)
 			})
 			return
 		}
@@ -754,15 +496,15 @@ func (l *picLayout) tree(ox, oy float64) {
 				parts = append(parts, FmtRows(ch.RowsOut)+" rows")
 			}
 			label := strings.Join(parts, " · ")
-			lw := f.width(tEdge, label)
+			lw := f.Width(tEdge, label)
 			edges = append(edges, func(pt *painter) {
-				pt.curve(x1, y1, x2, y2, width, c.line)
+				curve(pt, x1, y1, x2, y2, width, c.line)
 				if label != "" {
 					// a bg-colored plate behind the label, the picture's
 					// version of the SVG text's halo stroke
-					lx, ly := (x1+x2)/2+6, (y1+y2)/2-tEdge.lineH()/2
-					pt.roundRect(lx-3, ly, lw+6, tEdge.lineH(), 3, c.bg)
-					pt.text(tEdge, c.muted, lx, ly, label)
+					lx, ly := (x1+x2)/2+6, (y1+y2)/2-tEdge.LineH()/2
+					pt.RoundRect(lx-3, ly, lw+6, tEdge.LineH(), 3, c.bg)
+					pt.Text(tEdge, c.muted, lx, ly, label)
 				}
 			})
 			walk(ch)
@@ -786,7 +528,7 @@ func (l *picLayout) card(n *Node, x, y float64, sev Severity) func(*painter) {
 	border, fill := c.line, c.panel
 	if hot {
 		border = h
-		fill = mixRGB(h, c.panel, (8+22*math.Min(s/0.6, 1))/100)
+		fill = raster.Mix(h, c.panel, (8+22*math.Min(s/0.6, 1))/100)
 	}
 
 	const pad = 10.0
@@ -795,14 +537,14 @@ func (l *picLayout) card(n *Node, x, y float64, sev Severity) func(*painter) {
 	if n.Kind != KindOther {
 		kind = strings.ToUpper(string(n.Kind))
 	}
-	kw := f.width(tKind, kind)
+	kw := f.Width(tKind, kind)
 	right := kw
 	if sev != "" {
 		right += 14
 	}
-	op := f.fit(tOp, n.Op, inner-right-8)
-	target := f.fit(tCard, n.Target(), inner)
-	sum := f.fit(tSum, n.Summary(), inner)
+	op := f.Fit(tOp, n.Op, inner-right-8)
+	target := f.Fit(tCard, n.Target(), inner)
+	sum := f.Fit(tSum, n.Summary(), inner)
 
 	rows := ""
 	switch {
@@ -829,39 +571,39 @@ func (l *picLayout) card(n *Node, x, y float64, sev Severity) func(*painter) {
 	if m != MetricShape && n.Self(m) > 0 {
 		val = fmt.Sprintf("%s · %.0f%%", FmtMetric(m, n.Self(m)), s*100)
 	}
-	valW := f.width(tCardB, val)
-	rowsW := f.width(tCard, rows)
-	factorW := f.width(tCardB, factor)
+	valW := f.Width(tCardB, val)
+	rowsW := f.Width(tCard, rows)
+	factorW := f.Width(tCardB, factor)
 
 	return func(pt *painter) {
-		pt.box(x, y, picCardW, picCardH, 10, 1.5, border, fill)
+		pt.Box(x, y, picCardW, picCardH, 10, 1.5, border, fill)
 		ty := y + 7
-		pt.text(tOp, c.fg, x+pad, ty, op)
+		pt.Text(tOp, c.fg, x+pad, ty, op)
 		kx := x + picCardW - pad - kw
-		pt.text(tKind, c.muted, kx, ty+3, kind)
+		pt.Text(tKind, c.muted, kx, ty+3, kind)
 		if sev != "" {
-			pt.circle(kx-9, ty+tOp.lineH()/2, 4.5, c.sev(sev))
+			pt.Circle(kx-9, ty+tOp.LineH()/2, 4.5, c.sev(sev))
 		}
-		ty += tOp.lineH() + 2
-		pt.text(tCard, c.fg, x+pad, ty, target)
-		ty += tCard.lineH()
-		pt.text(tSum, c.muted, x+pad, ty, sum)
-		ty += tSum.lineH() + 3
-		pt.text(tCard, c.fg, x+pad, ty, rows)
+		ty += tOp.LineH() + 2
+		pt.Text(tCard, c.fg, x+pad, ty, target)
+		ty += tCard.LineH()
+		pt.Text(tSum, c.muted, x+pad, ty, sum)
+		ty += tSum.LineH() + 3
+		pt.Text(tCard, c.fg, x+pad, ty, rows)
 		if factor != "" {
-			pt.text(tCardB, c.warn, x+pad+rowsW+8, ty, factor)
+			pt.Text(tCardB, c.warn, x+pad+rowsW+8, ty, factor)
 		}
 		if val != "" && x+pad+rowsW+factorW+16 < x+picCardW-pad-valW {
-			pt.text(tCardB, c.fg, x+picCardW-pad-valW, ty, val)
+			pt.Text(tCardB, c.fg, x+picCardW-pad-valW, ty, val)
 		}
 		bx, by, bw := x+pad, y+picCardH-11, inner
-		pt.roundRect(bx, by, bw, 4, 2, c.panel2)
+		pt.RoundRect(bx, by, bw, 4, 2, c.panel2)
 		if s > 0 {
-			pt.roundRect(bx, by, math.Max(bw*s, 4), 4, 2, h)
+			pt.RoundRect(bx, by, math.Max(bw*s, 4), 4, 2, h)
 		}
 		if n.NeverExecuted {
 			// the page's opacity .5: the card faded half into the page
-			pt.roundRect(x, y, picCardW, picCardH, 10, color.RGBA{c.bg.R / 2, c.bg.G / 2, c.bg.B / 2, 0x80})
+			pt.RoundRect(x, y, picCardW, picCardH, 10, color.RGBA{c.bg.R / 2, c.bg.G / 2, c.bg.B / 2, 0x80})
 		}
 	}
 }
@@ -877,31 +619,31 @@ func (l *picLayout) insights(y, w float64) float64 {
 	}
 	hy := y
 	l.op(func(pt *painter) {
-		pt.roundRect(x, hy-12, w, 1, 0, c.line)
-		pt.text(tSection, c.muted, x, hy, head)
+		pt.RoundRect(x, hy-12, w, 1, 0, c.line)
+		pt.Text(tSection, c.muted, x, hy, head)
 	})
-	y += tSection.lineH() + 8
+	y += tSection.LineH() + 8
 	if len(p.Insights) == 0 {
 		ey := y
-		l.op(func(pt *painter) { pt.text(tInsD, c.muted, x, ey, "No findings — nothing in this plan stands out.") })
-		return y + tInsD.lineH()
+		l.op(func(pt *painter) { pt.Text(tInsD, c.muted, x, ey, "No findings — nothing in this plan stands out.") })
+		return y + tInsD.LineH()
 	}
 
 	const pad = 12.0
 	tw := w - 2*pad - 4
 	for _, in := range p.Insights {
-		title := f.wrap(tInsT, in.Title, tw-14)
+		title := f.Wrap(tInsT, in.Title, tw-14)
 		var detail, fix, sql []string
 		if in.Detail != "" {
-			detail = f.wrap(tInsD, in.Detail, tw)
+			detail = f.Wrap(tInsD, in.Detail, tw)
 		}
 		if in.Fix != "" {
-			fix = f.wrap(tInsD, "→ "+in.Fix, tw)
+			fix = f.Wrap(tInsD, "→ "+in.Fix, tw)
 		}
 		if in.SQL != "" {
-			sql = f.wrap(tMono, in.SQL, tw-16)
+			sql = f.Wrap(tMono, in.SQL, tw-16)
 		}
-		bh := 10 + float64(len(title))*tInsT.lineH() + float64(len(detail)+len(fix))*tInsD.lineH() + 10
+		bh := 10 + float64(len(title))*tInsT.LineH() + float64(len(detail)+len(fix))*tInsD.LineH() + 10
 		if len(detail) > 0 {
 			bh += 3
 		}
@@ -909,38 +651,38 @@ func (l *picLayout) insights(y, w float64) float64 {
 			bh += 4
 		}
 		if len(sql) > 0 {
-			bh += 6 + float64(len(sql))*tMono.lineH() + 12
+			bh += 6 + float64(len(sql))*tMono.LineH() + 12
 		}
 		by, sc := y, c.sev(in.Severity)
 		l.op(func(pt *painter) {
-			pt.box(x, by, w, bh, 8, 1, c.line, c.panel)
-			pt.roundRect(x, by, 4, bh, 2, sc)
+			pt.Box(x, by, w, bh, 8, 1, c.line, c.panel)
+			pt.RoundRect(x, by, 4, bh, 2, sc)
 			tx, ty := x+pad+4, by+10
-			pt.circle(tx+4, ty+tInsT.lineH()/2, 4, sc)
+			pt.Circle(tx+4, ty+tInsT.LineH()/2, 4, sc)
 			for _, ln := range title {
-				pt.text(tInsT, c.fg, tx+14, ty, ln)
-				ty += tInsT.lineH()
+				pt.Text(tInsT, c.fg, tx+14, ty, ln)
+				ty += tInsT.LineH()
 			}
 			if len(detail) > 0 {
 				ty += 3
 			}
 			for _, ln := range detail {
-				pt.text(tInsD, c.muted, tx, ty, ln)
-				ty += tInsD.lineH()
+				pt.Text(tInsD, c.muted, tx, ty, ln)
+				ty += tInsD.LineH()
 			}
 			if len(fix) > 0 {
 				ty += 4
 			}
 			for _, ln := range fix {
-				pt.text(tInsD, c.fg, tx, ty, ln)
-				ty += tInsD.lineH()
+				pt.Text(tInsD, c.fg, tx, ty, ln)
+				ty += tInsD.LineH()
 			}
 			if len(sql) > 0 {
 				ty += 6
-				sh := float64(len(sql))*tMono.lineH() + 12
-				pt.roundRect(tx, ty, tw, sh, 6, c.panel2)
+				sh := float64(len(sql))*tMono.LineH() + 12
+				pt.RoundRect(tx, ty, tw, sh, 6, c.panel2)
 				for i, ln := range sql {
-					pt.text(tMono, c.fg, tx+8, ty+6+float64(i)*tMono.lineH(), ln)
+					pt.Text(tMono, c.fg, tx+8, ty+6+float64(i)*tMono.LineH(), ln)
 				}
 			}
 		})

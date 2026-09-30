@@ -284,6 +284,8 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 		return m.tick(msg)
 	case clipDoneMsg:
 		return m.clipDone(msg)
+	case erdMsg:
+		return m.erdDone(msg)
 	case chatEventMsg:
 		return m.chatEvent(msg)
 	case chatModelSetMsg:
@@ -397,10 +399,14 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 	case focusConns:
 		return m.listKey(m.conns, k, m.connPicked)
 	case focusTables:
-		// c is the tables list's one letter key, for "Show columns": the
-		// list's own keys are movement and Enter, so it shadows nothing
-		if k.String() == "c" {
+		// c ("Show columns") and e (diagram it) are the tables list's
+		// letter keys: the list's own keys are movement and Enter, so
+		// they shadow nothing
+		switch k.String() {
+		case "c":
 			return m.tableColumns()
+		case "e":
+			return m.tableDiagram()
 		}
 		return m.listKey(m.tables, k, m.tablePicked)
 	case focusLog:

@@ -235,3 +235,57 @@ func TestLiveColumnsMySQL(t *testing.T) {
 		t.Errorf("dbc_live_cats info columns = %q", info)
 	}
 }
+
+// TestLiveSchemaPostgres reads petsDDL back for a diagram: pg_constraint's
+// attnum arrays against a real server, including a dropped column's gap in
+// attnum, and a same-named table in a second schema that must stay apart.
+func TestLiveSchemaPostgres(t *testing.T) {
+	mgr := liveMgr(t, "DBC_LIVE_PG_DSN", "postgres")
+	drop := []string{`DROP SCHEMA IF EXISTS dbc_erd CASCADE`, `DROP SCHEMA IF EXISTS dbc_erd2 CASCADE`}
+	liveExec(t, mgr, drop...)
+	t.Cleanup(func() {
+		for _, s := range drop {
+			_, _ = mgr.Run("live", s)
+		}
+	})
+	liveExec(t, mgr, `CREATE SCHEMA dbc_erd`, `CREATE SCHEMA dbc_erd2`)
+	// qualified rather than SET search_path: that is per session, and Run
+	// takes whichever pooled connection is free
+	for _, s := range petsDDL {
+		s = strings.NewReplacer("TABLE ", "TABLE dbc_erd.", "REFERENCES ", "REFERENCES dbc_erd.").Replace(s)
+		liveExec(t, mgr, s)
+	}
+	liveExec(t, mgr,
+		`ALTER TABLE dbc_erd.cats ADD COLUMN gone int`,
+		`ALTER TABLE dbc_erd.cats DROP COLUMN gone`,
+		`ALTER TABLE dbc_erd.cats ADD COLUMN vet_id int REFERENCES dbc_erd.owners(id)`,
+		`CREATE TABLE dbc_erd2.cats (id int PRIMARY KEY)`)
+	s, err := mgr.Schema(context.Background(), "live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ = s.Around([]string{"dbc_erd.cats", "dbc_erd.notes"}, -1)
+	checkPets(t, s, "dbc_erd.")
+	cats, _ := s.Find("dbc_erd.cats")
+	if c := cats.Col("vet_id"); c == nil || !c.FK {
+		t.Errorf("the key on a column past the dropped one: %+v", c)
+	}
+}
+
+// TestLiveSchemaMySQL reads petsDDL back through information_schema's
+// key_column_usage.
+func TestLiveSchemaMySQL(t *testing.T) {
+	mgr := liveMgr(t, "DBC_LIVE_MYSQL_DSN", "mysql")
+	drop := `DROP TABLE IF EXISTS dbc_erd_profiles, dbc_erd_visits, dbc_erd_cats, dbc_erd_owners, dbc_erd_notes`
+	liveExec(t, mgr, drop)
+	t.Cleanup(func() { _, _ = mgr.Run("live", drop) })
+	for _, s := range petsDDL {
+		s = strings.NewReplacer("TABLE ", "TABLE dbc_erd_", "REFERENCES ", "REFERENCES dbc_erd_").Replace(s)
+		liveExec(t, mgr, s)
+	}
+	s, err := mgr.Schema(context.Background(), "live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkPets(t, s, "dbc_erd_")
+}

@@ -162,6 +162,7 @@ func newCLI() *cli.Command {
 				Action:    scriptAction,
 			},
 			explainCommand(),
+			erdCommand(),
 			webCommand(),
 			{
 				// A subcommand as well as the --version / -v flag the cli

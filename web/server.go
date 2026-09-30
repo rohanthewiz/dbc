@@ -248,6 +248,10 @@ func (s *Server) routes() {
 	r.Get("/api/v1/ws/:id/plan.jpg", s.handlePlanFile(planJPEG))
 	r.Get("/api/v1/ws/:id/plan.png", s.handlePlanFile(planPNG))
 	r.Get("/api/v1/ws/:id/plan.mmd", s.handlePlanFile(planMermaid))
+	r.Get("/api/v1/ws/:id/erd", s.handleERD)
+	r.Get("/api/v1/ws/:id/erd.png", s.handleERDFile(erdPNG))
+	r.Get("/api/v1/ws/:id/erd.jpg", s.handleERDFile(erdJPEG))
+	r.Get("/api/v1/ws/:id/erd.mmd", s.handleERDFile(erdMermaid))
 	r.Post("/api/v1/ws/:id/cancel", s.handleCancel)
 	r.Post("/api/v1/ws/:id/script", s.handleScript)
 

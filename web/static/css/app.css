@@ -668,3 +668,18 @@ a.btnlink:hover { border-color: var(--accent); }
 /* the sign-in notice */
 .signin { max-width: 520px; margin: 12vh auto; padding: 0 16px; }
 .signin h1 { color: var(--accent); }
+
+/* ── the ERD dialog (erdview.js) ──────────────────────────────────────────
+   Nearly the whole window: a diagram is only useful big. The body is a
+   column — the bar, then the picture's scroll pane taking the rest — and
+   the picture either fits the pane (.fit) or shows at its CSS size, with
+   the pane scrolling. */
+.modal.erd { width: calc(100vw - 48px); height: calc(100vh - 48px); max-height: none; }
+.erd-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.erd-bar { display: flex; align-items: center; gap: 14px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+.erd-bar .hint { margin-left: auto; }
+.erd-ctl { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; }
+.erd-pane { flex: 1; min-height: 0; overflow: auto; background: var(--bg); outline: none; }
+.erd-img { display: block; margin: 0 auto; }
+.erd-img.fit { max-width: 100%; max-height: 100%; object-fit: contain; }
+.hadd.herd { font-size: 11px; font-weight: 600; letter-spacing: .5px; }

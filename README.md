@@ -123,8 +123,9 @@ mouse gesture and every gesture has a key.
 | anywhere | click | focuses that pane — the keyboard follows the mouse |
 | toolbar | click | Run, Stop, Explain, Copy ▾, Export, History, Scripts, Tables, Assistant; `● conn ▾` switches connection |
 | connections | click | connects |
-| tables | click / double-click / right-click | select / preview the first 100 rows / show columns, insert name, copy name |
+| tables | click / double-click / right-click | select / preview the first 100 rows / show columns, diagram it, diagram all tables, copy the ERD as Mermaid, insert name, copy name |
 | tables | `c` on the selected table | show its columns: its `information_schema.columns` rows (name, type, nullable, default, length) in the grid, ready to copy |
+| tables | `e` on the selected table | diagram it and its neighbours (an ERD, below), saved as a PNG and opened |
 | editor | click, drag, double-, triple-click | caret, selection, word, line |
 | editor | right-click | run, copy, cut, select all, undo, history, ask the assistant |
 | results | click, drag, shift-click | cell, rectangular range, extend |
@@ -344,6 +345,48 @@ The page opens on the step behind the most serious finding.
   the first view is a map; unfold what interests you.
 - Add `#flame` to the file's URL to open straight on the flame view.
 - It looks like dbc wherever it is opened, whatever your terminal's theme.
+
+### Entity-relationship diagrams
+
+dbc draws a connection's schema as an ERD: a box per table with its columns,
+types and key badges (`PK`, `FK`, `UK`, and `PF` for a primary-key column
+that is also a foreign key), and a line per foreign key, from the child's key
+column to the parent's, with crow's-foot ends:
+
+| End | Means | When |
+| --- | --- | --- |
+| `┼┼` at the parent | exactly one | the key's columns are `NOT NULL` |
+| `┼o` at the parent | zero or one | one of them is nullable |
+| `>o` at the child | zero or many | the usual foreign key |
+| `┼o` at the child | zero or one | the key's columns are unique in the child (1:1) |
+
+Parents sit to the left of their children, a column per level. A table with
+many children has them wrapped into a block. Tables with no relationships
+are packed together underneath. Views are left out unless asked for, since
+they have no keys. Past 40 columns a table shows its key columns and then as
+many others as fit.
+
+| Form | For | From |
+| --- | --- | --- |
+| PNG / JPEG | a chat, a ticket, a slide, a design doc | web: **ERD** beside *Tables*, or a table's right-click ▸ **Diagram around it** (`e`), then ⤓ PNG / ⤓ JPEG · TUI: `e` on a table, or right-click ▸ **Diagram around it** / **Diagram all tables** (saved as a PNG and opened) · shell: `dbc erd -t png` / `-t jpeg` |
+| Mermaid | a pull request, a README or a wiki (GitHub, GitLab, Notion and Obsidian draw ` ```mermaid ` blocks) | web: ⧉ Copy as Mermaid (`m`) or ⤓ Mermaid · TUI: right-click ▸ **Copy ERD as Mermaid** · shell: `dbc erd` (`-t markdown` adds the fence) |
+
+"Around" a table means the table plus every table one foreign-key hop away,
+in either direction: what it references and what references it. The web
+dialog can widen that to 2 or 3 hops or to everything it connects to, and
+can include views. `f` there switches between fitting the window and actual
+size. The shell and the TUI draw dark unless `plan_theme = "light"` or
+`dbc erd --theme light`. The web's pictures follow the page's light or dark.
+
+The schema is read fresh each time, from the engine's own catalog. On
+Postgres and bytdb that is `pg_constraint` and `pg_attribute`. On MySQL it
+is `information_schema.key_column_usage`, and on SQLite its `pragma_*`
+functions. It runs on the connection pool, never inside your open
+transaction, and it doesn't wait for a running query. Mermaid needs a plain
+word as an entity name, so a table like `public.cats` on a multi-schema
+connection becomes `t1["public.cats"]`, an alias that needs Mermaid 10.5 or
+later. A type such as `numeric(10,2)` becomes `numeric(10_2)`, with the
+original kept as the attribute's comment.
 
 ### Copying results — including into Teams
 
@@ -842,6 +885,25 @@ for q in queries/*.sql; do ./dbc -c staging explain --fail-on warn -f "$q" || ex
 `mermaid`. The PDF and pictures are bytes: write them with `-o`, or pipe
 them — dbc refuses to print them on a terminal. They are dark unless
 `--theme light` (or `plan_theme = "light"` in the config) asks for paper.
+
+### Diagrams headless
+
+```sh
+./dbc erd                                       # Mermaid erDiagram source for the whole connection
+./dbc erd -t markdown >> docs/schema.md         # … in a ```mermaid fence, which GitHub draws
+./dbc -c pg erd -t png -o schema.png            # the diagram as a picture (jpeg too)
+./dbc erd --open                                # … straight into your image viewer
+./dbc erd --table orders -t png -o orders.png   # orders and the tables one key away
+./dbc erd --table orders --depth 2 …            # … two hops out (-1: all it connects to)
+./dbc erd --views …                             # views too
+./dbc erd -t png --theme light -o schema.png    # on paper rather than slate
+```
+
+`-t` is `mermaid` (the default), `markdown`, `png` or `jpeg`. The pictures
+are bytes: write them with `-o`, or pipe them. dbc refuses to print them on
+a terminal. `--table` takes a name as the sidebar shows it (`schema.name`
+on a connection with several schemas), and can be repeated or
+comma-separated. A table that isn't there is a usage error (exit 2).
 
 ### Scripts headless
 

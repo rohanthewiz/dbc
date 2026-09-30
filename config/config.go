@@ -166,7 +166,8 @@ type Config struct {
 
 	// PlanTheme is the palette of the plan pictures the shell and the TUI
 	// draw — `dbc explain -t pdf|jpeg|png` and the TUI's Save as PDF /
-	// JPEG: "dark" (the default, dbc's own slate) or "light" (paper, kinder
+	// JPEG, and the schema diagrams of `dbc erd -t png|jpeg` and the TUI's
+	// Diagram items: "dark" (the default, dbc's own slate) or "light" (paper, kinder
 	// to a printer). Load normalizes it to one of the two, so readers can
 	// hand it to theme.ByName without a second error to handle. dbc web
 	// ignores it: its files follow the light or dark the view is wearing.

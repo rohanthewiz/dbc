@@ -195,7 +195,15 @@ func (p Workbench) sidebar(b *element.Builder) any {
 		b.DivClass("side-hsplit", "id", "side-hsplit", "role", "separator", "aria-orientation", "horizontal",
 			"title", "Drag to resize the connections list (double-click to reset)").R(),
 		b.SectionClass("side-tables").R(
-			b.H2().R(b.T("Tables "), b.SpanClass("count", "id", "table-count").R()),
+			// hrow, like the Connections heading: the label left, the
+			// ERD button right. The button draws the whole connection's
+			// diagram; one table's neighbourhood is on the table's own
+			// right-click menu (app.js)
+			b.H2Class("hrow").R(
+				b.Span().R(b.T("Tables "), b.SpanClass("count", "id", "table-count").R()),
+				b.ButtonClass("hadd herd", "id", "erd-all", "type", "button",
+					"title", "Diagram the connection's tables and keys (ERD)", "aria-label", "Entity-relationship diagram").T("ERD"),
+			),
 			b.Ul("id", "tables").R(),
 		),
 	)
@@ -276,7 +284,7 @@ func (p Workbench) chat(b *element.Builder) any {
 
 // scripts are the workbench's modules, in load order: core first (the
 // shared API, log and state), app last (boot, which uses all the others).
-var scripts = []string{"core.js", "ui.js", "editor.js", "grid.js", "plan.js", "planview.js", "chat.js", "conns.js", "app.js"}
+var scripts = []string{"core.js", "ui.js", "editor.js", "grid.js", "plan.js", "planview.js", "erdview.js", "chat.js", "conns.js", "app.js"}
 
 // head is the <head> every page shares: the theme as CSS variables, the
 // stylesheet, and the script (deferred, so it runs once the DOM is parsed).

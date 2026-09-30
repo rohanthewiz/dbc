@@ -85,8 +85,9 @@
 
   // The tables list: a click selects, a double-click (or Enter) previews
   // the first 100 rows — the TUI's gestures — c lists the table's
-  // information_schema.columns in the grid, and the right-click menu offers
-  // those and inserts or copies the name.
+  // information_schema.columns in the grid, e diagrams it and its
+  // neighbours (erdview.js), and the right-click menu offers those and
+  // inserts or copies the name. The heading's ERD button diagrams them all.
   function showTables(tables) {
     els.tables.replaceChildren();
     els.tableCount.textContent = tables.length ? "· " + tables.length : "";
@@ -96,7 +97,7 @@
     }
     for (const t of tables) {
       const li = el("li", { class: t.view ? "view" : "", tabindex: "-1", "data-name": t.qname,
-        title: t.qname + " — double-click previews its rows, c shows its columns, right-click for more" });
+        title: t.qname + " — double-click previews its rows, c shows its columns, e diagrams it, right-click for more" });
       const dot = t.qname.lastIndexOf(".");
       if (dot > 0) li.append(el("span", "schema", t.qname.slice(0, dot + 1)), t.qname.slice(dot + 1));
       else li.append(t.qname);
@@ -127,10 +128,14 @@
     if (e.key === "c" && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault(); columns(li.dataset.name); return;
     }
+    if (e.key === "e" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault(); dbc.erd.open(li.dataset.name); return;
+    }
     if (e.key === "ArrowDown") next = li.nextElementSibling;
     else if (e.key === "ArrowUp") next = li.previousElementSibling;
     if (next) { e.preventDefault(); pickTable(next); }
   });
+  document.getElementById("erd-all").addEventListener("click", () => dbc.erd.open(""));
   els.tables.addEventListener("contextmenu", (e) => {
     const li = e.target.closest("li[data-name]");
     if (!li) return;
@@ -141,6 +146,7 @@
       { head: name },
       { label: "Preview rows", key: "Enter", act: () => preview(name) },
       { label: "Show columns", key: "c", act: () => columns(name) },
+      { label: "Diagram around it (ERD)", key: "e", act: () => dbc.erd.open(name) },
       { label: "Insert the name at the caret", act: () => dbc.editor.insert(name) },
       { label: "Copy name", act: () => dbc.clip.copyText(name, "the table name") },
     ]);
@@ -1192,6 +1198,8 @@
       ["‹ beside Connections · Ctrl+B", "hide it; the › tab on the left edge brings it back"],
       ["drag its right edge", "resize it (double-click the edge: the default width)"],
       ["drag the bar above Tables", "share the column between the lists"],
+      ["on a table: Enter · c · e", "preview its rows · show its columns · diagram it and its neighbours (ERD)"],
+      ["ERD beside Tables", "diagram every table and key: PNG, JPEG or Mermaid"],
     ]],
     ["Splitters", [
       ["drag a bar", "resize the panes either side — the size is saved"],

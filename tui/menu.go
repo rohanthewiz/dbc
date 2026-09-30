@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/rohanthewiz/dbc/erd"
 )
 
 // menu is a floating list of actions: every right-click menu, the ⧉ Copy
@@ -361,6 +363,9 @@ func (m *Model) openTableMenu(x, y int) {
 	m.openMenu(x, y, []menuItem{
 		{label: "Preview rows", key: "2×click", act: func(m *Model) tea.Cmd { return m.tablePicked() }},
 		{label: "Show columns", key: "c", act: func(m *Model) tea.Cmd { return m.tableColumns() }},
+		{label: "Diagram around it (ERD)", key: "e", act: func(m *Model) tea.Cmd { return m.tableDiagram() }},
+		{label: "Diagram all tables (ERD)", act: func(m *Model) tea.Cmd { return m.diagram(erd.Selection{}, false) }},
+		{label: "Copy ERD as Mermaid", act: func(m *Model) tea.Cmd { return m.diagram(erd.Selection{}, true) }},
 		{label: "Insert name at the caret", act: func(m *Model) tea.Cmd {
 			m.editor.Insert(name)
 			m.focus = focusEditor

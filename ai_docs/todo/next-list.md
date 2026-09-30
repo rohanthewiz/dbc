@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-065
+**Next ID:** N-070
 
 ## Open
 
@@ -63,7 +63,12 @@ ten session docs in `ai_docs/claude_sessions/`
   `db.InfoColumnsQuery` on a table and on a materialized view. It is the only
   check that the query's `information_schema.columns` ∪ `pg_attribute` UNION
   type-checks on a real server. `TestLiveColumnsMySQL` checks that the
-  lower-case aliases hold on MySQL 8. Docker was not running, so neither has run.
+  lower-case aliases hold on MySQL 8. The ERD's `TestLiveSchemaPostgres` and
+  `TestLiveSchemaMySQL` (`db/live_test.go`) are the only checks of
+  `db.SchemaKeysQuery` on those servers: `conkey::text` and `confkey` read
+  across schemas, and a dropped column's gap in attnum, on Postgres; the
+  `key_column_usage` ⋈ `table_constraints` join on MySQL. Docker was not
+  running in either session, so none of the four has run.
 - **N-063** · raised `2026-0928-1917-show-table-columns` · value low
   Check `dbc web`'s "Show columns" in a browser: the tables menu item, the `c`
   key on a selected table (and that ⌘C / Ctrl+C there still copies rather than
@@ -78,6 +83,38 @@ ten session docs in `ai_docs/claude_sessions/`
   menu; View ▸ Open in Browser signs the browser in. Launch, sign-in (the page
   opened a workspace), Quit, `kill -9` of the app, and the login-shell `PATH`
   were verified.
+- **N-065** · raised `2026-0930-0003-erd-diagrams-png-jpeg-mermaid` · value low
+  ERD lines to a far rank, or to a wrapped column of a hub's children, pass
+  under the boxes in between (drawn first, so they are hidden rather than
+  striking through text). A 45-child star reads, but a line can be hard to
+  follow. Routing lines through the gaps between boxes (channel routing, or
+  dummy nodes per rank as full Sugiyama does) would fix it. Until then,
+  `--table` with `--depth` gives a cleaner picture of a big hub.
+- **N-066** · raised `2026-0930-0003-erd-diagrams-png-jpeg-mermaid` · value low
+  When several foreign keys reference the same parent column, their parent-end
+  markers are drawn on top of each other at one port. When they differ (one key
+  NOT NULL, another nullable), the result reads as `||o`, which is no notation.
+  Fan the ports out down the row, or draw the parent end once per distinct
+  marker.
+- **N-067** · raised `2026-0930-0003-erd-diagrams-png-jpeg-mermaid` · value low
+  Check the web ERD dialog's ⧉ Copy as Mermaid (button and `m`) with a real
+  click in a browser, and that ⤓ PNG / JPEG / Mermaid download under
+  `erd-<conn>-<stamp>.<ext>`. Chrome verified the dialog itself: ERD button,
+  table menu, `e`, fit/100%, depth, views, the light picture. But the
+  automated copy stayed pending on the clipboard permission, and the
+  downloads were only checked by the Go route test.
+- **N-068** · raised `2026-0930-0003-erd-diagrams-png-jpeg-mermaid` · value low
+  On Postgres, a partitioned table's partitions appear in the ERD as tables of
+  their own, each with a clone of the parent's foreign keys (`pg_constraint`
+  rows with `conparentid <> 0`), since the sidebar's catalog lists partitions.
+  Hide partitions from the diagram (`pg_class.relispartition`) and skip the
+  cloned keys.
+- **N-069** · raised `2026-0930-0003-erd-diagrams-png-jpeg-mermaid` · value low
+  `erd/paint.go` and `explain/picture.go` each carry their own copy of the Go
+  font setup, text fitting and the vector fill (about 150 lines), because the
+  plan's painter is unexported and draws only vertical curves. Extract a
+  shared raster package if a third picture arrives. The ERD's general
+  `polyline` could then replace the plan's `curve`.
 
 ## Roadmap
 

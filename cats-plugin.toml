@@ -96,9 +96,10 @@ command = ["./bin/dbc", "web"]
 # dropped in Go fails the tests until it is changed here too.
 [[completions]]
 binary = "dbc"
-subcommands = ["script", "migrate", "explain", "web", "version"]
+subcommands = ["script", "migrate", "explain", "erd", "web", "version"]
 flags = ["--config", "-c", "--conn", "-f", "--file", "-t", "--format", "-o", "--out",
          "--tx", "-k", "--keep-going",
          "--demo", "--driver", "--dsn", "--dir", "--allow-missing",
          "-a", "--analyze", "--open", "--fail-on", "--theme",
+         "--table", "--depth", "--views",
          "--listen", "--no-open", "--secret", "--help", "-v", "--version"]

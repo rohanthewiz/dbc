@@ -66,15 +66,6 @@ ten session docs in `ai_docs/claude_sessions/`
   `<select>` it replaced did not scroll there). Launch, sign-in (the page
   opened a workspace), Quit, `kill -9` of the app, and the login-shell `PATH`
   were verified.
-- **N-086** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value medium
-  Release what is on main: bump `version` in `cats-plugin.toml` and
-  `version/version.go` (0.2.1 now), tag to match, push. This session adds
-  the TUI's database/schema pickers and Disconnect, derived-pool closing,
-  partitioned-table estimates, DSN `${VAR}` escaping and the rename fix.
-  Updated `2026-1001-1817-next-list-sweep`: main now also has the MySQL database picker, encrypted
-  client keys (`tls_key_password`), the session guard (a cut connection
-  found before a run, Stop reaching MySQL), recounts after writes, saved
-  TUI schema picks, ERD bus lanes and the opt-in browser test.
 - **N-087** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
   Drive the TUI's new navigator by hand in a real terminal on a big
   Postgres: the picker rows, `d`/`s`, typing into a 150-schema list, the
@@ -159,6 +150,17 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-086** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value medium
+  Release what is on main: bump `version` in `cats-plugin.toml` and
+  `version/version.go` (0.2.1 now), tag to match, push. This session adds
+  the TUI's database/schema pickers and Disconnect, derived-pool closing,
+  partitioned-table estimates, DSN `${VAR}` escaping and the rename fix.
+  Updated `2026-1001-1817-next-list-sweep`: main now also has the MySQL database picker, encrypted
+  client keys (`tls_key_password`), the session guard (a cut connection
+  found before a run, Stop reaching MySQL), recounts after writes, saved
+  TUI schema picks, ERD bus lanes and the opt-in browser test.
+  closed 2026-10-01, `2026-1001-1817-next-list-sweep`: v0.3.0 — `version/version.go` and `cats-plugin.toml` bumped by hand to 0.3.0 (a minor bump: the MySQL picker, `tls_key_password` and the session guard are new behavior), main pushed and fast-forwarded onto `release`, whose workflow tests, tags `v0.3.0` and runs goreleaser.
 
 - **N-085** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
   A rename in dbc web moves only the schema picks the renaming window holds

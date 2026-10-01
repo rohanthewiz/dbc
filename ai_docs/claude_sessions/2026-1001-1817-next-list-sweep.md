@@ -17,8 +17,8 @@ Not done:
 
 - **Need a person or hardware:** N-044 (an X11 desktop), N-064 (clicking
   through `dbc.app`), N-029 (Windows), and Safari for N-061.
-- **N-086 (release):** a tag push is outward-facing and cannot be taken
-  back, so it is left for the user to approve.
+- **N-086 (release):** held until the user approved it, then cut as
+  v0.3.0 (see Release).
 
 ## What changed
 
@@ -117,7 +117,8 @@ Not done:
   counting does.
 - **Counts on SQLite may include an open transaction's rows.** That is what
   the user's own session sees, and the alternative was a hang.
-- **No release.** It needs the user's go-ahead (N-086, updated).
+- **0.3.0, not 0.2.2.** The user's call: the MySQL database picker, encrypted
+  client keys and the session guard are new behavior, not fixes.
 
 ## Verification
 
@@ -135,9 +136,18 @@ Not done:
 - **N-061:** Firefox via geckodriver passed 34 checks on 3 runs, after the
   Ctrl+B fix.
 
+## Release
+
+v0.3.0, through the `release` workflow: the version was bumped by hand in
+`version/version.go` and `cats-plugin.toml` (a commit that edits
+`version.go` is used as-is rather than patch-bumped), main was pushed, and
+`release` fast-forwarded to it. The workflow runs `go test ./...`, tags
+`v0.3.0` and builds the goreleaser archives. No bump commit comes back, so
+there is nothing to merge back into main.
+
 ## Next
 
-Closed: N-047, N-051, N-063, N-071, N-072, N-075, N-079, N-081, N-084, N-085.
+Closed: N-047, N-051, N-063, N-071, N-072, N-075, N-079, N-081, N-084, N-085, N-086.
 Declined: None. Raised: N-088, N-089, N-090, N-091, N-092, N-093.
 Deferred: None. Promoted: None.
-Updated: N-061, N-086, N-087. Full list: `ai_docs/todo/next-list.md`.
+Updated: N-061, N-087. Full list: `ai_docs/todo/next-list.md`.

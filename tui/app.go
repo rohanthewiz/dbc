@@ -236,6 +236,10 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 	}
 	p := tea.NewProgram(m)
 	m.send = p.Send
+	// the MySQL driver's own log lines would draw over the screen; they
+	// go to the log pane instead (see db.SetDriverLog)
+	db.SetDriverLog(lineWriter(func(line string) { m.send(driverLogMsg(line)) }))
+	defer db.SetDriverLog(nil)
 	_, err := p.Run()
 
 	m.shutdown()
@@ -243,6 +247,24 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 		fmt.Fprintf(os.Stderr, "could not save the editor buffer: %v\n", werr)
 	}
 	return err
+}
+
+// driverLogMsg is one line a database driver logged (db.SetDriverLog).
+type driverLogMsg string
+
+// lineWriter is an io.Writer that hands each complete line written to it
+// to emit, without its newline. The driver's logger writes one whole line
+// per call; a write without a trailing newline is taken as a line too,
+// rather than held back for a newline that may never come.
+type lineWriter func(string)
+
+func (f lineWriter) Write(p []byte) (int, error) {
+	for _, line := range strings.Split(strings.TrimRight(string(p), "\n"), "\n") {
+		if line != "" {
+			f(line)
+		}
+	}
+	return len(p), nil
 }
 
 // shutdown releases everything the session holds, in the order that keeps
@@ -316,6 +338,9 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 		return m.tick(msg)
 	case clipDoneMsg:
 		return m.clipDone(msg)
+	case driverLogMsg:
+		m.log(logMuted, string(msg))
+		return nil
 	case erdMsg:
 		return m.erdDone(msg)
 	case chatEventMsg:

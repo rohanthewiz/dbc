@@ -229,8 +229,20 @@ func TestLiveWorkspaceConnect(t *testing.T) {
 		}
 
 		if !db.Navigable(e.driver) {
-			if ev.Databases != nil || ev.Schemas != nil || ev.Schema != "" {
-				t.Errorf("%s has no levels above its tables: %+v", e.driver, ev)
+			// MySQL lists its server's databases (db.HasDatabases), the
+			// DSN's own marked current, but a database is its one schema:
+			// no schema level, its tables listed whole
+			if ev.Schemas != nil || ev.Schema != "" {
+				t.Errorf("%s has no schema level: %+v", e.driver, ev)
+			}
+			cur := ""
+			for _, d := range ev.Databases {
+				if d.Current {
+					cur = d.Name
+				}
+			}
+			if db.HasDatabases(e.driver) && cur == "" {
+				t.Errorf("%s lists no current database: %+v", e.driver, ev.Databases)
 			}
 			return
 		}

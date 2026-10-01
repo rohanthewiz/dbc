@@ -608,3 +608,21 @@ func TestHideKeys(t *testing.T) {
 		t.Errorf("cols %v log %s", m.grid.cols, logText(m))
 	}
 }
+
+// A driver's log line (the MySQL driver's "unexpected EOF") lands in the log
+// pane, not on the screen; lineWriter splits what it is given into lines.
+func TestDriverLogGoesToTheLogPane(t *testing.T) {
+	m := newTestModel(t)
+	var lines []string
+	w := lineWriter(func(s string) { lines = append(lines, s) })
+	if _, err := w.Write([]byte("mysql driver: packets.go:58 unexpected EOF\nsecond\n")); err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 2 || lines[1] != "second" {
+		t.Fatalf("lines = %q", lines)
+	}
+	drive(t, m, driverLogMsg(lines[0]))
+	if !strings.Contains(logText(m), "unexpected EOF") {
+		t.Errorf("not in the log:\n%s", logText(m))
+	}
+}

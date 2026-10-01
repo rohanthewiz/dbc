@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -45,6 +46,13 @@ type liveEngine struct {
 	// keepsTx: the driver hands a connection back to the pool mid-transaction
 	// (go-sql-driver/mysql), rather than discarding it (pgx).
 	keepsTx bool
+	// heavy is a statement that keeps the server busy for long past any
+	// test's patience, and busy counts the connections with the id given to
+	// %s that are still executing a statement: 1 while heavy runs, 0 once
+	// the server has stopped it. On MySQL heavy is CPU work, not SLEEP:
+	// SLEEP wakes every few seconds to look at the socket, and so stops on
+	// its own once the driver has closed it, which hid the missing KILL.
+	heavy, busy string
 }
 
 var liveEngines = []liveEngine{
@@ -58,6 +66,8 @@ var liveEngines = []liveEngine{
 		setVar:  "SET application_name = 'dbc_live_sess'",
 		getVar:  "SELECT current_setting('application_name')",
 		varSet:  "dbc_live_sess",
+		heavy:   "SELECT pg_sleep(60)",
+		busy:    "SELECT count(*) FROM pg_stat_activity WHERE pid = %s AND state = 'active'",
 	},
 	{
 		env: "DBC_LIVE_MYSQL_DSN", driver: "mysql",
@@ -70,6 +80,8 @@ var liveEngines = []liveEngine{
 		getVar:  "SELECT @dbc_live",
 		varSet:  "dbc_live_sess",
 		keepsTx: true,
+		heavy:   "SELECT BENCHMARK(4000000000, MD5('dbc'))",
+		busy:    "SELECT count(*) FROM information_schema.processlist WHERE id = %s AND command = 'Query'",
 	},
 }
 
@@ -325,7 +337,11 @@ func TestLiveDeadSession(t *testing.T) {
 
 				// First statement after the cut: sent, then the socket read
 				// fails. Not ErrBadConn, so only alive can call it dead.
-				_, err = s.Run(ctx, `SELECT 1`)
+				// It goes straight to m.run, past Session.Run's guard: the
+				// guard would find the cut first and say ErrBadConn
+				// (TestLiveSessionGuardFindsTheCut), and this case is about
+				// a cut that lands while the statement is in flight.
+				_, err = s.m.run(ctx, s.conn, s.name, `SELECT 1`)
 				if err == nil {
 					t.Fatal("statement on a dead connection succeeded")
 				}
@@ -535,5 +551,125 @@ func TestLiveConnectTimeoutSparesStatements(t *testing.T) {
 		if _, err = s.Run(context.Background(), sleep[e.driver]); err != nil {
 			t.Errorf("1.5s statement on a session under a 1s connect_timeout: %v", err)
 		}
+	})
+}
+
+// waitBusy polls, through obs, until the server's busy count for connection
+// id reads want, failing after within. It is how a test sees a statement
+// start on the server (want "1"), and stop there (want "0").
+func waitBusy(t *testing.T, obs *Manager, e liveEngine, id, want string, within time.Duration) {
+	t.Helper()
+	q := fmt.Sprintf(e.busy, id)
+	deadline := time.Now().Add(within)
+	for liveVal(t, onPool(obs), q) != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("connection %s: busy is not %s after %s", id, want, within)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// Session.Run looks at the connection before it sends a statement
+// (sessionguard.go), so a connection the server has cut is reported as
+// driver.ErrBadConn — never sent — rather than with the server's parting
+// error. That is what lets a stateless session be replaced and the
+// statement retried (FaultRetry), and it still fails a stateful one as lost.
+//
+// Two ways in: "at once" is the socket peek, which sees the server's FATAL
+// and FIN within the idle threshold (Postgres only: the MySQL driver does
+// not expose its socket), and "idle" is the ping that follows any pause
+// longer than sessionPingIdle, which is the usual case — a person comes
+// back to a session the server dropped while they were away.
+func TestLiveSessionGuardFindsTheCut(t *testing.T) {
+	cases := []struct {
+		name     string
+		stateful bool
+		wait     bool // wait past sessionPingIdle after the cut
+	}{
+		{"at once, stateless", false, false},
+		{"idle, stateless", false, true},
+		{"idle, stateful", true, true},
+	}
+	forLive(t, func(t *testing.T, e liveEngine) {
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				if !c.wait && e.driver != "postgres" {
+					t.Skip("no socket peek on this driver: the cut is found once the session has idled")
+				}
+				ctx := context.Background()
+				mgr := liveMgr(t, e.env, e.driver)
+				liveTable(t, mgr)
+				s, err := mgr.Session(ctx, "live")
+				if err != nil {
+					t.Fatalf("session: %v", err)
+				}
+				defer s.Close()
+				if c.stateful {
+					for _, stmt := range []string{`BEGIN`, `UPDATE dbc_live_sess SET n = 2 WHERE id = 1`} {
+						if _, err = s.Run(ctx, stmt); err != nil {
+							t.Fatalf("%s: %v", stmt, err)
+						}
+					}
+				}
+				id := liveVal(t, onSession(s), e.backend)
+				liveExec(t, mgr, fmt.Sprintf(e.kill, id))
+				waitGone(t, mgr, e, id)
+				if c.wait {
+					time.Sleep(time.Until(s.used.Add(sessionPingIdle + 200*time.Millisecond)))
+				} else if time.Since(s.used) > sessionPingIdle {
+					t.Fatalf("the kill took %s; the case needs the next statement inside the idle threshold", time.Since(s.used))
+				}
+
+				_, err = s.Run(ctx, `SELECT 1`)
+				if !BadConn(err) {
+					t.Fatalf("err = %v, want ErrBadConn: the cut should be found before the statement is sent", err)
+				}
+				want := FaultRetry
+				if c.stateful {
+					want = FaultLost
+				}
+				if got := s.Classify(err); got != want {
+					t.Errorf("Classify = %d, want %d (err: %v)", got, want, err)
+				}
+			})
+		}
+	})
+}
+
+// A canceled statement stops on the server, not only in the driver. pgx
+// sends Postgres a cancel request of its own; go-sql-driver/mysql only
+// closes its socket, which a running statement does not look at, so the
+// session sends the KILL (reapCanceled). Before it did, the heavy statement
+// here went on running on the server long after Run had returned.
+func TestLiveSessionCancelReachesServer(t *testing.T) {
+	forLive(t, func(t *testing.T, e liveEngine) {
+		mgr := liveMgr(t, e.env, e.driver)
+		obs := liveMgr(t, e.env, e.driver)
+		s, err := mgr.Session(context.Background(), "live")
+		if err != nil {
+			t.Fatalf("session: %v", err)
+		}
+		defer s.Close()
+		id := liveVal(t, onSession(s), e.backend)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			_, err := s.Run(ctx, e.heavy)
+			done <- err
+		}()
+		waitBusy(t, obs, e, id, "1", 5*time.Second)
+		cancel()
+		select {
+		case err = <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the canceled statement never returned")
+		}
+		if !errors.Is(err, ErrCanceled) {
+			t.Fatalf("err = %v, want ErrCanceled", err)
+		}
+		// Well inside the statement's own length (a minute's sleep, or many
+		// seconds of hashing): only a server-side stop gets there in time.
+		waitBusy(t, obs, e, id, "0", 3*time.Second)
 	})
 }

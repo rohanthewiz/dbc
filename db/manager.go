@@ -662,6 +662,15 @@ type Session struct {
 	// CREATE TEMP, LOCK TABLES — so a session that has only ever run SELECTs can be
 	// swapped for a fresh one without anyone losing anything.
 	stateful bool
+
+	// used is when the last statement on the session returned; zero until
+	// the first. ready reads it to decide whether the connection needs a
+	// liveness check before the next statement (sessionguard.go).
+	used time.Time
+	// killID is the server's id for the connection (MySQL's CONNECTION_ID),
+	// for the KILL that stops a canceled statement on the server; "" on the
+	// other engines, or when it could not be read (see reapCanceled).
+	killID string
 }
 
 // Session pins a connection on the named database. The caller must Close it.
@@ -674,7 +683,13 @@ func (m *Manager) Session(ctx context.Context, name string) (*Session, error) {
 	if err != nil {
 		return nil, wrapRunErr(ctx, err, name, "op", "session")
 	}
-	return &Session{m: m, name: name, conn: c}, nil
+	s := &Session{m: m, name: name, conn: c}
+	if cc, ok := m.cfg.ConnByName(name); ok {
+		if drv, _ := driverFor(cc.Driver); drv == "mysql" {
+			s.learnKillID(ctx)
+		}
+	}
+	return s, nil
 }
 
 // Name is the connection the session is pinned to.
@@ -689,8 +704,17 @@ func (s *Session) Stateful() bool { return s.stateful }
 
 // Run executes one statement on the pinned connection, as RunContext does on
 // the pool.
+//
+// It runs under guard (sessionguard.go): a connection the server cut since
+// the last statement is found before this one is sent, and reported as
+// driver.ErrBadConn, which Classify may retry; and a canceled statement is
+// stopped on the server, not only abandoned by the driver.
 func (s *Session) Run(ctx context.Context, stmt string, args ...any) (*model.Result, error) {
-	res, err := s.m.run(ctx, s.conn, s.name, stmt, args...)
+	var res *model.Result
+	err := s.guard(ctx, func() (err error) {
+		res, err = s.m.run(ctx, s.conn, s.name, stmt, args...)
+		return err
+	})
 	// Keyed off the statement, not res.IsExec: an INSERT … RETURNING comes
 	// back as rows, yet it is a write like any other Exec — inside a BEGIN it
 	// is part of the transaction the session must not silently lose.

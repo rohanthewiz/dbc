@@ -49,7 +49,20 @@ type ExplainOptions struct {
 // Explain describes how the session's database runs stmt. A stmt that is
 // itself an EXPLAIN is unwrapped first (and its ANALYZE honored), so a user's
 // own "EXPLAIN ANALYZE SELECT …" works too.
+//
+// It runs under the session's guard, as Run does (sessionguard.go): an
+// ANALYZE runs the statement, so its Stop has to reach the server too.
 func (s *Session) Explain(ctx context.Context, stmt string, opt ExplainOptions) (*explain.Plan, error) {
+	var p *explain.Plan
+	err := s.guard(ctx, func() (err error) {
+		p, err = s.explain(ctx, stmt, opt)
+		return err
+	})
+	return p, err
+}
+
+// explain is Explain without the guard.
+func (s *Session) explain(ctx context.Context, stmt string, opt ExplainOptions) (*explain.Plan, error) {
 	stmt = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(stmt), ";"))
 	if inner, analyze, ok := explain.Strip(stmt); ok {
 		stmt, opt.Analyze = inner, opt.Analyze || analyze

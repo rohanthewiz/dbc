@@ -17,7 +17,9 @@ import (
 // runs.
 //
 // A pinned connection that has gone bad (a server idle timeout) is replaced
-// once, transparently — unless the session held state (a BEGIN, a SET), in
+// once, transparently — db.Session finds such a cut before it sends the
+// statement (db/sessionguard.go), and says so with driver.ErrBadConn, which
+// is what makes it FaultRetry — unless the session held state (a BEGIN, a SET), in
 // which case the call fails with db.ErrSessionLost rather than carry on
 // without it, or the statement may already have reached the server, in which
 // case its error stands rather than risk running it twice.

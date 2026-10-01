@@ -529,6 +529,24 @@ func sidebar(cfg *config.Config, ws *workspace.Workspace) sideState {
 	return st
 }
 
+// closeLeft closes the pool of the derived connection ("<conn>/<database>")
+// a switch moved t away from, once no query tab in any window is on it, so
+// browsing a server's databases does not leave a pool open per database
+// visited (see workspace.Derived). It runs after the switch's Release, so
+// t's own session there is already closed and t is not counted.
+//
+// A tab still on it, or connecting to it, keeps it open; the next tab to
+// leave it closes it. A configured connection's pool is never closed here:
+// that is Disconnect's to do.
+func (s *Server) closeLeft(t *tab, left string) {
+	if left == "" || !t.ws.Derived(left) || s.hub.tabsOn(left) > 0 {
+		return
+	}
+	if s.mgr.Disconnect(left) {
+		t.send("log", logLine{Level: "muted", Text: fmt.Sprintf("closed the connection to %s: no tab is on it", left)})
+	}
+}
+
 // countsEvent brings the row counts, seconds after the "conn" that drew the
 // list. It repeats the whole list rather than just the numbers so the page
 // patches its rows by qname with the same code that draws them; Active lets
@@ -593,7 +611,11 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 			Status: ev.Status, sideState: sidebar(s.cfg, t.ws),
 		})
 		if ev.Release != nil {
-			go func() { s.deliver(t, ev.Release()) }()
+			left := ev.Left
+			go func() {
+				s.deliver(t, ev.Release())
+				s.closeLeft(t, left)
+			}()
 		}
 		if ev.Counts != nil {
 			go func() { s.deliver(t, ev.Counts()) }()

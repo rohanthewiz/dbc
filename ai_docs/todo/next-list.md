@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-084
+**Next ID:** N-088
 
 ## Open
 
@@ -54,7 +54,8 @@ ten session docs in `ai_docs/claude_sessions/`
   (`2026-1001-1415-connection-tls-and-dsn-fields`, 23 checks) and the
   sidebar's schema filter (`2026-1001-1439-sidebar-schema-filter`, against a
   154-schema Postgres) were verified the same throwaway way, as was the
-  connections menu's Disconnect (`2026-1001-1704-disconnect-connection`).
+  connections menu's Disconnect (`2026-1001-1704-disconnect-connection`), and the rename of a connection with derived tabs
+  (`2026-1001-1741-tui-navigator-disconnect-and-release-fixes`, 34 checks).
 - **N-061** · raised `2026-0928-0050-sidebar-splitter-fold-and-section-splitters` · value low
   Check `dbc web`'s splitters and sidebar fold in Safari and Firefox. They were
   verified only in Chrome, and the fix that lets a press reach the editor and
@@ -93,64 +94,43 @@ ten session docs in `ai_docs/claude_sessions/`
   and an INSERT/DELETE/TRUNCATE the user just ran is not reflected. Could
   drop the connection's cache and re-run the Counts job after a run whose
   statement is not a plain read (db.Session.Stateful already judges that).
-- **N-073** · raised `2026-0930-1557-sidebar-table-row-counts` · value low
-  A partitioned Postgres parent's own `reltuples` is usually -1, so the row
-  counting runs an exact `count(*)` on it, which reads every partition. On a
-  big partitioned table that hits the 3 s timeout and shows no number. Sum
-  the partitions' `reltuples` (pg_inherits) into the parent's estimate so it
-  gets `~N` like any other large table.
-- **N-074** · raised `2026-1001-1415-connection-tls-and-dsn-fields` · value low
-  A Postgres DSN built from `dbc web`'s fields puts the password in libpq's
-  quoted keyword form (`password='${PGPASS}'`). `config.ExpandDSN` substitutes
-  the variable's value raw, after the quoting, so an environment password
-  holding `'` or `\` ends the quotes early and the DSN fails to parse. A
-  password typed into the field is escaped correctly. A fix would expand
-  `${VAR}`s per field before quoting, or escape the expansion when it lands
-  inside quotes.
 - **N-075** · raised `2026-1001-1415-connection-tls-and-dsn-fields` · value low
   `tls_key` must be an unencrypted PEM key. A passphrase-protected client key
   works for Postgres only through the DSN's own `sslpassword`. MySQL has no
   way to give one, and there is no `tls_key_password` key. Add one (from
   `${VAR}`, never stored inline) if someone's key is encrypted.
-- **N-078** · raised `2026-1001-1537-postgres-database-schema-navigator` · value medium
-  The TUI has no database or schema picker. It opens with
-  `Options.WholeCatalog`, listing every schema of the connection's own
-  database up to `db.AllSchemasLimit` (5,000 tables), and past that only the
-  default schema, with a note. It cannot reach another database on the
-  server or another schema past the limit. Give its sidebar the web's two
-  levels (`Workspace.Databases`/`Schemas`, `PickSchema`, and a connect to
-  `<conn>/<database>`).
 - **N-079** · raised `2026-1001-1537-postgres-database-schema-navigator` · value low
   The database picker is Postgres-only (`config.supportsDatabases`,
   `db.Navigable`). MySQL's catalog is scoped to the DSN's database as well,
   and could be derived the same way: `mysql.ParseDSN`, then set `DBName` in
   `openPool` and in `mysqlConnector` (TLS path), plus a
   `SHOW DATABASES`-style `DatabasesQuery`.
-- **N-080** · raised `2026-1001-1537-postgres-database-schema-navigator` · value low
-  Renaming a connection in dbc web retags saved tabs on its derived
-  connections (`<old>/db` → `<new>/db`, `web/conns.go`). The page's
-  `connRenamed` moves only exact-name tabs and the exact `tableSchema.<conn>`
-  layout key, though. An unshown tab on `<old>/db` keeps its old name until
-  reload, and the schema picks saved for the derived names are lost.
 - **N-081** · raised `2026-1001-1537-postgres-database-schema-navigator` · value low
   The assistant reaches `schema.table` in a schema the sidebar has not
   loaded (`TableIndex.SetSchemas`), but the words have lost their quotes, so
   the name is taken in lower case. A quoted mixed-case table there
   (`billing."Invoices"`) gets no columns, and is dropped from what is sent.
-- **N-082** · raised `2026-1001-1537-postgres-database-schema-navigator` · value low
-  Each database picked opens its own pool (`<conn>/<database>`), and the pool
-  stays open after the tab moves on, until `conn_idle_timeout` closes its idle
-  connections (the `*sql.DB` itself lives until the base is edited or dbc
-  exits). Browsing many databases on one server leaves a pool per database.
-  Closing a derived pool when no tab is on it would bound that. An explicit
-  Disconnect (`2026-1001-1704-disconnect-connection`) now does close the pool,
-  derived ones with it, once no tab is on it; moving to another database or
-  connection still does not.
-- **N-083** · raised `2026-1001-1704-disconnect-connection` · value low
-  The TUI has no Disconnect: leaving a connection there still means picking
-  another. `workspace.Workspace.Disconnect` is UI-neutral, so the TUI needs
-  only a key or a menu entry, an empty sidebar, and a status line for "not
-  connected".
+- **N-084** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
+  The TUI remembers a schema pick per connection only until dbc exits
+  (`Model.schemaPicks`); dbc web saves its picks in the layout. A restart
+  opens every Postgres connection on its default schema again. Persist the
+  picks under `userdata` (a small file, like the buffer) if that bites.
+- **N-085** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
+  A rename in dbc web moves only the schema picks the renaming window holds
+  (`connRenamed`): a `tableSchema.<old>/<db>` pick saved by another window
+  that has since closed stays under the old key, and is lost. The server
+  moving `tableSchema.*` layout keys in `handleConnEdit` (as it retags saved
+  tabs) would close the gap.
+- **N-086** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value medium
+  Release what is on main: bump `version` in `cats-plugin.toml` and
+  `version/version.go` (0.2.1 now), tag to match, push. This session adds
+  the TUI's database/schema pickers and Disconnect, derived-pool closing,
+  partitioned-table estimates, DSN `${VAR}` escaping and the rename fix.
+- **N-087** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
+  Drive the TUI's new navigator by hand in a real terminal on a big
+  Postgres: the picker rows, `d`/`s`, typing into a 150-schema list, the
+  Disconnect confirm menu. Only the test harness's rendered frames and a
+  live Postgres test have exercised them.
 
 ## Roadmap
 
@@ -188,6 +168,60 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-078** · raised `2026-1001-1537-postgres-database-schema-navigator` · value medium
+  The TUI has no database or schema picker. It opens with
+  `Options.WholeCatalog`, listing every schema of the connection's own
+  database up to `db.AllSchemasLimit` (5,000 tables), and past that only the
+  default schema, with a note. It cannot reach another database on the
+  server or another schema past the limit. Give its sidebar the web's two
+  levels (`Workspace.Databases`/`Schemas`, `PickSchema`, and a connect to
+  `<conn>/<database>`).
+  closed 2026-10-01, `2026-1001-1741-tui-navigator-disconnect-and-release-fixes`: the Tables pane has the web's two levels as picker rows (`⛁ db ▾`, `◫ schema · N ▾`; click, or `d`/`s`), each a type-to-filter list (`tui/navigator.go`); a database pick switches to `<conn>/<database>` with the base's row marked, a schema pick is `PickSchema`, remembered per connection for the run. `WholeCatalog` dropped: the TUI opens on the default schema, as the web does. `TestLiveNavigatorPostgres`. Raised N-084.
+
+- **N-083** · raised `2026-1001-1704-disconnect-connection` · value low
+  The TUI has no Disconnect: leaving a connection there still means picking
+  another. `workspace.Workspace.Disconnect` is UI-neutral, so the TUI needs
+  only a key or a menu entry, an empty sidebar, and a status line for "not
+  connected".
+  closed 2026-10-01, `2026-1001-1741-tui-navigator-disconnect-and-release-fixes`: `x` in the Connections pane, or the connection menu's first row (toolbar chip and right-click), is `workspace.Disconnect`; a stateful session asks first with a menu; the status bar, chip and Tables pane read "not connected"; the pool is closed after the session (the TUI's workspace is its Manager's only one). `TestDisconnectFromTheConnectionsPane`, `TestDisconnectAsksWhenTheSessionHoldsState`.
+
+- **N-082** · raised `2026-1001-1537-postgres-database-schema-navigator` · value low
+  Each database picked opens its own pool (`<conn>/<database>`), and the pool
+  stays open after the tab moves on, until `conn_idle_timeout` closes its idle
+  connections (the `*sql.DB` itself lives until the base is edited or dbc
+  exits). Browsing many databases on one server leaves a pool per database.
+  Closing a derived pool when no tab is on it would bound that. An explicit
+  Disconnect (`2026-1001-1704-disconnect-connection`) now does close the pool,
+  derived ones with it, once no tab is on it; moving to another database or
+  connection still does not.
+  closed 2026-10-01, `2026-1001-1741-tui-navigator-disconnect-and-release-fixes`: `Connected.Left` names the connection a switch left, and `Workspace.Derived` says whether it is `<conn>/<database>`; after the Release job, web closes that pool when `tabsOn` is 0 (logs "closed the connection to …"), and the TUI closes it unless it is back on or dialing it. Configured connections' pools are kept. `TestLiveDerivedPoolClosedWhenLeft` (web), and the TUI live test fails with the close turned off.
+
+- **N-080** · raised `2026-1001-1537-postgres-database-schema-navigator` · value low
+  Renaming a connection in dbc web retags saved tabs on its derived
+  connections (`<old>/db` → `<new>/db`, `web/conns.go`). The page's
+  `connRenamed` moves only exact-name tabs and the exact `tableSchema.<conn>`
+  layout key, though. An unshown tab on `<old>/db` keeps its old name until
+  reload, and the schema picks saved for the derived names are lost.
+  closed 2026-10-01, `2026-1001-1741-tui-navigator-disconnect-and-release-fixes`: `connRenamed` maps every name through `renamedConn` (`<old>/<db>` → `<new>/<db>`, unless a configured connection has that exact name, as `derivedFrom` rules): tabs shown or not, the active connection and every schema pick, in one layout write; idempotent by remembering the last rename (a → a/b). 34/34 headless-Chrome checks (the old page fails 12). Raised N-085 for a pick another, since-closed window saved.
+
+- **N-074** · raised `2026-1001-1415-connection-tls-and-dsn-fields` · value low
+  A Postgres DSN built from `dbc web`'s fields puts the password in libpq's
+  quoted keyword form (`password='${PGPASS}'`). `config.ExpandDSN` substitutes
+  the variable's value raw, after the quoting, so an environment password
+  holding `'` or `\` ends the quotes early and the DSN fails to parse. A
+  password typed into the field is escaped correctly. A fix would expand
+  `${VAR}`s per field before quoting, or escape the expansion when it lands
+  inside quotes.
+  closed 2026-10-01, `2026-1001-1741-tui-navigator-disconnect-and-release-fixes`: `config.ExpandDSN` takes the driver, marks each `${VAR}`, walks the DSN as the driver parses it, and escapes each value for its spot (`config/dsnexpand.go`): libpq quoted values backslashed, bare ones re-quoted when needed, Postgres URL userinfo/path/query values and MySQL database/param values percent-encoded where they would split. A `%XX` already in a value is kept, so a pre-encoded password that worked still does. Table tests through `pgconn.ParseConfig`/`mysql.ParseDSN`; live connect with `q'uo\te @/#%`.
+
+- **N-073** · raised `2026-0930-1557-sidebar-table-row-counts` · value low
+  A partitioned Postgres parent's own `reltuples` is usually -1, so the row
+  counting runs an exact `count(*)` on it, which reads every partition. On a
+  big partitioned table that hits the 3 s timeout and shows no number. Sum
+  the partitions' `reltuples` (pg_inherits) into the parent's estimate so it
+  gets `~N` like any other large table.
+  closed 2026-10-01, `2026-1001-1741-tui-navigator-disconnect-and-release-fixes`: `RowEstimatesQuery` (Postgres) walks `pg_inherits` recursively and sums the leaf partitions' `reltuples` (float8, never-analyzed leaves left out) as a partitioned parent's estimate, falling back to its own when no leaf has one. `TestLiveRowCountsPostgresPartitioned` (two-level tree gets ~5M/~2M; fails on the old query).
 
 - **N-076** · raised `2026-1001-1439-sidebar-schema-filter` · value low
   The Tables heading's ERD button diagrams every schema even while the list

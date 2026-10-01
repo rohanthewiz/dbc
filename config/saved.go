@@ -173,7 +173,7 @@ func (c *Config) MergeSaved(saved []SavedConn, knownDriver func(string) bool) []
 			warns = append(warns, fmt.Sprintf("saved connection %q skipped: %v", sc.Name, err))
 			continue
 		}
-		dsn, w := ExpandDSN(sc.Name, sc.DSN)
+		dsn, w := ExpandDSN(sc.Name, sc.Driver, sc.DSN)
 		tlsOpts, tw := ExpandTLS(sc.Name, sc.TLSOpts, SavedDir())
 		if err := c.AddConn(Connection{Name: sc.Name, Driver: sc.Driver, DSN: dsn,
 			TLSOpts: tlsOpts, AIRows: sc.AIRows, Web: true}); err != nil {

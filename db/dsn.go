@@ -31,13 +31,13 @@ import (
 //	sqlite    scratch.db                       (file:scratch.db?mode=ro with options)
 //	bytdb     notes.bytdb
 //
-// Postgres gets libpq's keyword/value form rather than a URL on purpose. A
-// URL needs the password percent-encoded, and a ${VAR} in it is expanded
-// (config.ExpandDSN) after any encoding could happen — so a password from
-// the environment holding @, / or # would split the URL in the wrong place.
-// In the keyword form the value sits in quotes, which only ' and \ can
-// break. MySQL's DSN needs no such care: go-sql-driver takes the password
-// raw, everything between the first ':' and the last '@'.
+// Postgres gets libpq's keyword/value form rather than a URL on purpose: it
+// reads as typed, where a URL would show a typed password percent-encoded.
+// A ${VAR} is expanded (config.ExpandDSN) after the DSN is built, escaped
+// for where it lands — inside the quotes here, ' and \ backslashed; in a
+// URL someone typed, percent-encoded — so a password from the environment
+// may hold anything. MySQL's DSN needs no such care: go-sql-driver takes
+// the password raw, everything between the first ':' and the last '@'.
 //
 // ${VAR} and $VAR stay as typed in every field, to be expanded at connect
 // like any DSN's (config.ExpandDSN) — so the password can live in the

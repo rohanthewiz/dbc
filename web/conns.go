@@ -315,7 +315,7 @@ func (s *Server) handleConnTest(ctx rweb.Context) error {
 	if name == "" {
 		name = "(new connection)"
 	}
-	dsn, warns := config.ExpandDSN(name, f.DSN)
+	dsn, warns := config.ExpandDSN(name, f.Driver, f.DSN)
 	tlsOpts, tw := f.tlsFor(name)
 	warns = append(warns, tw...)
 	timeout := s.cfg.ConnectTimeout
@@ -359,7 +359,7 @@ func (s *Server) handleConnAdd(ctx rweb.Context) error {
 	if err := f.check(true); err != nil {
 		return fail(ctx, err)
 	}
-	dsn, warns := config.ExpandDSN(f.Name, f.DSN)
+	dsn, warns := config.ExpandDSN(f.Name, f.Driver, f.DSN)
 	tlsOpts, tw := f.tlsFor(f.Name)
 	warns = append(warns, tw...)
 	cn := config.Connection{Name: f.Name, Driver: f.Driver, DSN: dsn, TLSOpts: tlsOpts, AIRows: f.AIRows, Web: true}
@@ -447,7 +447,7 @@ func (s *Server) handleConnEdit(ctx rweb.Context) error {
 	if err = f.check(true); err != nil {
 		return fail(ctx, err)
 	}
-	dsn, warns := config.ExpandDSN(f.Name, f.DSN)
+	dsn, warns := config.ExpandDSN(f.Name, f.Driver, f.DSN)
 	tlsOpts, tw := f.tlsFor(f.Name)
 	warns = append(warns, tw...)
 	next := config.Connection{Name: f.Name, Driver: f.Driver, DSN: dsn, TLSOpts: tlsOpts, AIRows: f.AIRows, Web: true}

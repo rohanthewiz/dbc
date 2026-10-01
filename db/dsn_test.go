@@ -15,9 +15,9 @@ import (
 // its text alone: the point is that the server sees the fields as typed,
 // whatever they hold.
 func TestBuildDSNPostgres(t *testing.T) {
-	// everything a URL would choke on; not ' or \, which would end the
-	// quotes a ${VAR} is expanded inside (see buildPG's doc)
-	t.Setenv("DBC_TEST_PW", "p@ss w/rd#1&x?=")
+	// everything a URL would choke on, and the ' and \ that would end the
+	// quotes the ${VAR} is expanded inside but for ExpandDSN's escaping
+	t.Setenv("DBC_TEST_PW", `p@ss w/rd#1&x?= it's \ 100%`)
 	dsn, err := BuildDSN("postgres", DSNParts{Host: " db.example.com ", Port: "6543", User: "app",
 		Password: "${DBC_TEST_PW}", Database: "my db", Options: "application_name=dbc connect_timeout=7"})
 	if err != nil {
@@ -27,13 +27,13 @@ func TestBuildDSNPostgres(t *testing.T) {
 	if dsn != want {
 		t.Fatalf("dsn\n got %s\nwant %s", dsn, want)
 	}
-	// expanded as a connect expands it (config.ExpandDSN is os.Expand)
-	cfg, err := pgx.ParseConfig(expand(dsn))
+	// expanded as a connect expands it (config.ExpandDSN)
+	cfg, err := pgx.ParseConfig(expand("postgres", dsn))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Host != "db.example.com" || cfg.Port != 6543 || cfg.User != "app" ||
-		cfg.Password != "p@ss w/rd#1&x?=" || cfg.Database != "my db" ||
+		cfg.Password != `p@ss w/rd#1&x?= it's \ 100%` || cfg.Database != "my db" ||
 		cfg.RuntimeParams["application_name"] != "dbc" {
 		t.Fatalf("pgx read %+v", cfg.Config)
 	}
@@ -61,7 +61,7 @@ func TestBuildDSNMySQL(t *testing.T) {
 	if want := "app:${DBC_TEST_PW}@tcp(db.example.com:3307)/shop?parseTime=true&loc=Local"; dsn != want {
 		t.Fatalf("dsn\n got %s\nwant %s", dsn, want)
 	}
-	cfg, err := mysql.ParseDSN(expand(dsn))
+	cfg, err := mysql.ParseDSN(expand("mysql", dsn))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestIsEnvRef(t *testing.T) {
 }
 
 // expand is config.ExpandDSN, as a connect runs it, minus the warnings.
-func expand(s string) string {
-	out, _ := config.ExpandDSN("test", s)
+func expand(driver, s string) string {
+	out, _ := config.ExpandDSN("test", driver, s)
 	return out
 }

@@ -991,18 +991,62 @@
   // shown yet: their conn is only a note of what to connect to when they
   // are, and left on the old name they would fall back to another
   // connection. The server has moved the saved copies already; this keeps
-  // the page's next save from writing the old name back. Idempotent — the
-  // "conns" event and the edit's own response may both call it.
+  // the page's next save from writing the old name back. The "conns" event
+  // and the edit's own response may both call it.
+  //
+  // A connection's other databases ("<from>/analytics", see
+  // config.DatabaseSep) follow it too, to "<to>/analytics": their tabs and
+  // their schema picks are as much the renamed connection's as its own, and
+  // the server retags their saved tabs the same way (handleConnEdit). Left
+  // on the old name, such a tab finds no row when shown (connItem) and
+  // falls back to the window's connection, and its schema pick is never
+  // asked for again.
+  //
+  // Idempotent by remembering the rename last applied, rather than by the
+  // names it leaves: a rename to a name under the old one ("a" to "a/b")
+  // would otherwise move "a/x" on to "a/b/x" and then, on the second call,
+  // to "a/b/b/x". The same rename cannot rightly arrive twice in a row —
+  // after "a" → "b" there is no "a" until something renames "b" back.
+  let lastRename = "";
   function connRenamed(from, to) {
-    for (const t of tabs) if (t.conn === from) t.conn = to;
-    if (state.active === from) state.active = to;
-    // the schema pick follows the connection to its new name; the old key
-    // is blanked, as the layout has no delete
-    if (schemaPicks[from] !== undefined) {
-      schemaPicks[to] = schemaPicks[from];
-      delete schemaPicks[from];
-      saveLayout({ [PICK_KEY + to]: schemaPicks[to], [PICK_KEY + from]: "" });
+    const key = from + "\n" + to;
+    if (key === lastRename) return;
+    lastRename = key;
+    const move = (name) => renamedConn(name, from, to);
+    for (const t of tabs) if (t.conn) t.conn = move(t.conn);
+    if (state.active) state.active = move(state.active);
+    // the schema picks follow the connection to its new name; an old key
+    // is blanked, as the layout has no delete. One write for them all, so
+    // a rename is one layout save however many databases had a pick.
+    const values = {};
+    for (const name of Object.keys(schemaPicks)) {
+      const next = move(name);
+      if (next === name) continue;
+      schemaPicks[next] = schemaPicks[name];
+      delete schemaPicks[name];
+      values[PICK_KEY + next] = schemaPicks[next];
+      values[PICK_KEY + name] = "";
     }
+    if (Object.keys(values).length) saveLayout(values);
+  }
+
+  // renamedConn is name after the connection from is renamed to to: to
+  // itself for from, "<to>/<database>" for a connection derived from it
+  // ("<from>/<database>"), and name unchanged otherwise.
+  //
+  // A configured connection that only happens to be named "<from>/x" is
+  // its own connection, not one of from's databases, and keeps its name —
+  // the server's derivedFrom draws the same line. It is told apart by
+  // having a row of its own in the Connections list, which the "conns"
+  // event (or the edit's response) has redrawn before this runs.
+  function renamedConn(name, from, to) {
+    if (name === from) return to;
+    const prefix = from + "/";
+    if (!name.startsWith(prefix) || name.length === prefix.length) return name;
+    for (const b of els.conns.querySelectorAll(".conn-item")) {
+      if (b.dataset.conn === name) return name;
+    }
+    return to + "/" + name.slice(prefix.length);
   }
 
   Object.assign(dbc.cmd, {

@@ -61,7 +61,7 @@ func TestConnsConcurrent(t *testing.T) {
 
 func TestExpandDSN(t *testing.T) {
 	t.Setenv("DBC_X_SET", "pw")
-	got, warns := ExpandDSN("n", "u:${DBC_X_SET}@h/${DBC_X_SURELY_UNSET}")
+	got, warns := ExpandDSN("n", "", "u:${DBC_X_SET}@h/${DBC_X_SURELY_UNSET}")
 	if got != "u:pw@h/" {
 		t.Fatalf("expanded = %q", got)
 	}

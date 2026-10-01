@@ -39,6 +39,10 @@ type layout struct {
 	chat          Rect // zero when the assistant is closed
 	status        Rect
 
+	// the Tables pane's navigator rows, as drawn (zero when the connection
+	// has none; see navigator.go)
+	dbRow, schemaRow Rect
+
 	// the results pane's title tabs, as drawn (zero when there is no plan
 	// and the title is the plain one)
 	tabResults, tabPlan Rect
@@ -165,6 +169,9 @@ func (m *Model) computeLayout() layout {
 // widest tier that leaves room for the connection chip on the right.
 func (m *Model) layoutButtons(w int) []button {
 	connLabel := "● " + m.ws.Active() + " ▾"
+	if m.ws.Active() == "" {
+		connLabel = "○ not connected ▾"
+	}
 	connW := width(connLabel) + 2
 	avail := w - 6 - connW // " dbc " badge and a gap
 	tiers := []func(buttonSpec) string{
@@ -287,9 +294,7 @@ func (m *Model) render() (*Canvas, *caret) {
 		if n := len(m.tables.items); n > 0 {
 			title = fmt.Sprintf("Tables · %d", n)
 		}
-		m.drawPane(c, l.tables, title, focusTables, m.st.panel, func(s Surface) {
-			m.tables.draw(s, m.st, m.st.panel, m.focus == focusTables, "(none yet)")
-		})
+		m.drawPane(c, l.tables, title, focusTables, m.st.panel, m.drawTablesPane)
 	}
 
 	m.drawPane(c, l.editor, m.editorTitle(), focusEditor, m.st.base, func(s Surface) {
@@ -449,8 +454,13 @@ func (m *Model) drawToolbar(s Surface) {
 func (m *Model) drawStatus(s Surface) {
 	bar := m.st.raised.WithFg(m.st.muted.Fg)
 	s.Fill(bar)
-	x := s.Put(0, 0, " ● ", bar.WithFg(m.st.accent.Fg))
-	x = s.Put(x, 0, m.ws.Active(), bar.WithFg(m.st.accent.Fg).Bold())
+	var x int
+	if a := m.ws.Active(); a != "" {
+		x = s.Put(0, 0, " ● ", bar.WithFg(m.st.accent.Fg))
+		x = s.Put(x, 0, a, bar.WithFg(m.st.accent.Fg).Bold())
+	} else {
+		x = s.Put(0, 0, " ○ not connected", bar)
+	}
 	x = s.Put(x, 0, " │ ", bar)
 	st := bar.WithFg(m.st.base.Fg)
 	switch {

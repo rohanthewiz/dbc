@@ -167,13 +167,57 @@ func RowEstimatesQuery(driver string) (string, error) {
 		// reltuples is the planner's estimate, refreshed by VACUUM, ANALYZE
 		// and autovacuum. It is -1 for a table never analyzed (Postgres 14
 		// and later; 0 before that, which the exact count then corrects).
-		// 'p' is a partitioned parent — whose own reltuples is usually -1,
-		// so it gets counted, and its count(*) reads every partition —
-		// and 'm' a materialized view, listed by TablesQuery but a view to
+		// 'm' is a materialized view, listed by TablesQuery but a view to
 		// TableRefs, so never asked for.
-		return `SELECT n.nspname, c.relname, c.reltuples::bigint
+		//
+		// 'p' is a partitioned parent. It holds no rows of its own, and
+		// autovacuum never analyzes it, so its own reltuples is usually -1:
+		// read as is, the parent would be counted exactly, and its
+		// count(*) reads every partition — on a big partitioned table, the
+		// very table that most needs the estimate, that hits countTimeout
+		// and shows no number at all. So a parent's estimate is the sum of
+		// its leaf partitions' (the parts CTE walks pg_inherits down
+		// through sub-partitioned levels; an intermediate 'p' level is
+		// skipped like the root, for the same reason):
+		//
+		//	events (p, -1) ─┬─ events_2025 (r, 4.1M)
+		//	                ├─ events_2026 (p, -1) ─┬─ events_2026_h1 (r, 2.0M)
+		//	                │                       └─ events_2026_h2 (r, -1)
+		//	                └─ events_default (r, 0)
+		//	   ─► events ≈ 4.1M + 2.0M + 0 = 6.1M (the -1 leaf adds nothing)
+		//
+		// A leaf never analyzed (-1) is left out of the sum rather than
+		// making the whole estimate unknown. The usual such leaf is a
+		// partition created ahead of its data (next month's), which is
+		// empty, so the sum is right; at worst it is a lower bound, and a
+		// table at least that big is still one not worth counting. Only
+		// when no leaf has an estimate does the parent fall back to its
+		// own reltuples (set by a manual ANALYZE of the parent, else -1:
+		// unknown, so counted exactly — a never-analyzed partitioned table
+		// is a small or new one).
+		//
+		// The sum is taken in float8: reltuples is a float4, whose 24-bit
+		// mantissa would round a sum of millions to the nearest few rows
+		// and of billions to the nearest hundreds.
+		return `WITH RECURSIVE parts AS (
+  SELECT c.oid AS root, c.oid AS rel
+  FROM pg_catalog.pg_class c
+  WHERE c.relkind = 'p'
+  UNION ALL
+  SELECT p.root, i.inhrelid
+  FROM parts p
+  JOIN pg_catalog.pg_inherits i ON i.inhparent = p.rel
+), leaves AS (
+  SELECT p.root, sum(l.reltuples::float8) FILTER (WHERE l.reltuples >= 0) AS n
+  FROM parts p
+  JOIN pg_catalog.pg_class l ON l.oid = p.rel
+  WHERE l.relkind <> 'p'
+  GROUP BY p.root
+)
+SELECT n.nspname, c.relname, COALESCE(lv.n, c.reltuples)::bigint
 FROM pg_catalog.pg_class c
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+LEFT JOIN leaves lv ON lv.root = c.oid
 WHERE c.relkind IN ('r', 'p')
   AND n.nspname NOT IN ('pg_catalog', 'information_schema')`, nil
 	case "mysql":

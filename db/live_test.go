@@ -551,6 +551,59 @@ func TestLiveRowCountsPostgres(t *testing.T) {
 	}
 }
 
+// A partitioned parent gets its leaf partitions' estimates summed (N-073),
+// through a sub-partitioned level, rather than an exact count(*) that reads
+// every partition. A leaf never analyzed adds nothing to the sum, and a
+// parent none of whose leaves has an estimate is counted exactly. As above,
+// the big leaves are faked by writing reltuples; the rest stay at -1, the
+// never-analyzed mark, since too few rows go in to wake autovacuum.
+//
+//	ev (p) ─┬─ ev_a  (r, 3e6)
+//	        └─ ev_b (p) ─┬─ ev_b1 (r, 2e6)
+//	                     └─ ev_b2 (r, -1, 2 rows)
+//	small (p) ─┬─ small_a (r, -1, 2 rows)
+//	           └─ small_b (r, -1, 1 row)
+func TestLiveRowCountsPostgresPartitioned(t *testing.T) {
+	mgr := liveMgr(t, "DBC_LIVE_PG_DSN", "postgres")
+	drop := `DROP SCHEMA IF EXISTS dbc_live_rcp CASCADE`
+	liveExec(t, mgr, drop)
+	t.Cleanup(func() { _, _ = mgr.Run("live", drop) })
+	liveExec(t, mgr,
+		`CREATE SCHEMA dbc_live_rcp`,
+		`CREATE TABLE dbc_live_rcp.ev (k int) PARTITION BY RANGE (k)`,
+		`CREATE TABLE dbc_live_rcp.ev_a PARTITION OF dbc_live_rcp.ev FOR VALUES FROM (0) TO (10)`,
+		`CREATE TABLE dbc_live_rcp.ev_b PARTITION OF dbc_live_rcp.ev FOR VALUES FROM (10) TO (20) PARTITION BY RANGE (k)`,
+		`CREATE TABLE dbc_live_rcp.ev_b1 PARTITION OF dbc_live_rcp.ev_b FOR VALUES FROM (10) TO (15)`,
+		`CREATE TABLE dbc_live_rcp.ev_b2 PARTITION OF dbc_live_rcp.ev_b FOR VALUES FROM (15) TO (20)`,
+		`INSERT INTO dbc_live_rcp.ev VALUES (1), (11), (16), (17)`,
+		`UPDATE pg_class SET reltuples = 3e6 WHERE oid = 'dbc_live_rcp.ev_a'::regclass`,
+		`UPDATE pg_class SET reltuples = 2e6 WHERE oid = 'dbc_live_rcp.ev_b1'::regclass`,
+		`CREATE TABLE dbc_live_rcp.small (k int) PARTITION BY LIST (k)`,
+		`CREATE TABLE dbc_live_rcp.small_a PARTITION OF dbc_live_rcp.small FOR VALUES IN (1)`,
+		`CREATE TABLE dbc_live_rcp.small_b PARTITION OF dbc_live_rcp.small FOR VALUES IN (2)`,
+		`INSERT INTO dbc_live_rcp.small VALUES (1), (1), (2)`,
+	)
+	got := liveRowCounts(t, mgr, "postgres", "dbc_live_rcp.")
+	want := map[string]RowCount{
+		"dbc_live_rcp.ev":      {N: 5_000_000, Estimate: true},
+		"dbc_live_rcp.ev_a":    {N: 3_000_000, Estimate: true},
+		"dbc_live_rcp.ev_b":    {N: 2_000_000, Estimate: true},
+		"dbc_live_rcp.ev_b1":   {N: 2_000_000, Estimate: true},
+		"dbc_live_rcp.ev_b2":   {N: 2},
+		"dbc_live_rcp.small":   {N: 3},
+		"dbc_live_rcp.small_a": {N: 2},
+		"dbc_live_rcp.small_b": {N: 1},
+	}
+	if len(got) != len(want) {
+		t.Errorf("counts = %v, want %v", got, want)
+	}
+	for k, w := range want {
+		if got[k] != w {
+			t.Errorf("%s = %+v, want %+v", k, got[k], w)
+		}
+	}
+}
+
 // On MySQL small tables are counted exactly (table_rows, InnoDB's sampled
 // estimate, is read but only stands in above exactCountLimit) and a view is
 // left out.

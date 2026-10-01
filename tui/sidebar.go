@@ -16,12 +16,15 @@ import (
 // keyboard idiom. The tables list is a catalog: one click selects, a
 // double-click previews the rows, and right-click offers the rest.
 
-// refreshConns rebuilds the connections list, marking the active one.
+// refreshConns rebuilds the connections list, marking the active one — or,
+// while the sidebar is on another of its server's databases
+// ("<conn>/<database>"), the configured connection it is derived from.
 func (m *Model) refreshConns() {
 	items := make([]listItem, 0, len(m.cfg.Connections))
+	on := m.baseOf(m.ws.Active())
 	for i, c := range m.cfg.Connections {
 		it := listItem{label: c.Name, sub: c.Driver, data: c.Name}
-		if c.Name == m.ws.Active() {
+		if on != "" && c.Name == on {
 			it.mark = "●"
 			m.conns.cur = i
 		}

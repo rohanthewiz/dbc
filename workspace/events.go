@@ -104,6 +104,11 @@ type Connected struct {
 	Schema    string
 	Err       error // the connect's failure (db.ErrCanceled when stopped); nil on success
 	Changed   bool  // the active connection moved to Name
+	// Left is the connection Changed moved away from, "" when there was
+	// none (the first connect, or one after a Disconnect). A UI that knows
+	// no other workspace is on it may close its pool once Release has run
+	// — see Workspace.Derived for the one kind worth closing.
+	Left string
 	// Stale reports a connect superseded by a newer one: nothing landed,
 	// and a UI draws nothing.
 	Stale  bool

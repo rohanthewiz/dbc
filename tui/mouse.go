@@ -171,10 +171,17 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 		}
 	case l.tables.Contains(x, y):
 		m.focus = focusTables
-		if i := m.tables.indexAt(x, y); i >= 0 {
-			m.tables.cur = i
-			if n == 2 {
-				return m.tablePicked()
+		switch {
+		case l.dbRow.Contains(x, y):
+			m.openDatabasePicker()
+		case l.schemaRow.Contains(x, y):
+			m.openSchemaPicker()
+		default:
+			if i := m.tables.indexAt(x, y); i >= 0 {
+				m.tables.cur = i
+				if n == 2 {
+					return m.tablePicked()
+				}
 			}
 		}
 	case l.logR.Contains(x, y):
@@ -462,9 +469,14 @@ func (m *Model) rightClick(x, y int) tea.Cmd {
 		m.openGridMenu(x, y)
 	case l.tables.Contains(x, y):
 		m.focus = focusTables
+		// a right-click off the rows (a navigator row, an empty schema's
+		// "no tables") still gets the menu, with only its navigator rows
+		// live, so the pickers are reachable from every part of the pane
 		if i := m.tables.indexAt(x, y); i >= 0 {
 			m.tables.cur = i
-			m.openTableMenu(x, y)
+			m.openTableMenu(x, y, true)
+		} else {
+			m.openTableMenu(x, y, false)
 		}
 	case l.conns.Contains(x, y):
 		m.focus = focusConns

@@ -268,6 +268,9 @@ func (w *Workspace) landConnect(ev *Connected, gen int) {
 		return
 	}
 	ev.Changed = ev.Name != w.active
+	if ev.Changed {
+		ev.Left = w.active
+	}
 	w.active = ev.Name
 	// the levels above go in first: the catalog's index reads the schemas
 	w.databases, w.schemas, w.schema = ev.Databases, ev.Schemas, ev.Schema
@@ -473,6 +476,23 @@ func (w *Workspace) Disconnect() (left string, st Start, err error) {
 			return w.releaseJob(keep)()
 		},
 	}, nil
+}
+
+// Derived reports whether name is a connection derived onto another of
+// its base's databases ("<conn>/<database>", config.DatabaseSep) rather
+// than a configured one.
+//
+// It is what a UI asks of Connected.Left before closing the pool a switch
+// left. A derived pool is the one worth closing: browsing a server's
+// databases opens one per database picked, and without a close each stays
+// open (its *sql.DB until dbc exits, its idle connections until
+// conn_idle_timeout), so the count grows with the browsing rather than with
+// the configured connections. A configured connection's pool is kept, as
+// it always was: there is one per row of the Connections list, and
+// switching back to it should not dial again.
+func (w *Workspace) Derived(name string) bool {
+	cc, ok := w.cfg.ConnByName(name)
+	return ok && cc.Base != ""
 }
 
 // releaseJob closes the session pinned to any connection other than keep, so

@@ -75,6 +75,31 @@ func TestRowEstimatesQueryPerDriver(t *testing.T) {
 	}
 }
 
+// A partitioned parent's estimate is its leaf partitions' summed (N-073):
+// its own reltuples is usually -1, and an exact count of it reads every
+// partition. The query must walk pg_inherits recursively (sub-partitions),
+// sum only leaves with an estimate, in float8, and keep the parent's own
+// reltuples as the fallback. The live test checks the numbers.
+func TestRowEstimatesQueryPostgresSumsPartitions(t *testing.T) {
+	q, err := RowEstimatesQuery("postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"WITH RECURSIVE",
+		"pg_catalog.pg_inherits",
+		"i.inhparent = p.rel",
+		"l.relkind <> 'p'",
+		"sum(l.reltuples::float8) FILTER (WHERE l.reltuples >= 0)",
+		"COALESCE(lv.n, c.reltuples)::bigint",
+		"c.relkind IN ('r', 'p')",
+	} {
+		if !strings.Contains(q, want) {
+			t.Errorf("query lacks %q:\n%s", want, q)
+		}
+	}
+}
+
 // sqliteCountMgr is a shared in-memory SQLite connection holding two
 // tables and a view.
 func sqliteCountMgr(t *testing.T, dsnName string) *Manager {

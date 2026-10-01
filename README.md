@@ -181,7 +181,9 @@ server costs what the sidebar shows, not what the server holds:
   credentials and TLS. A Postgres connection is bound to one database, so
   this opens a connection named `<conn>/<database>` (e.g.
   `ProdDr/analytics`). It shows in the header, and tabs, history and the
-  schema pick remember it like any connection.
+  schema pick remember it like any connection. Moving off it closes its
+  connection to the server once no tab is on it, so browsing a server's
+  databases does not leave one open per database visited.
 - **schema**: the database's schemas with their table counts, empty ones
   included. A connect opens on the first schema on `search_path` if it has
   tables (else the first schema that does), or on the schema last picked
@@ -193,11 +195,15 @@ server costs what the sidebar shows, not what the server holds:
   Names are schema-qualified whenever the database has more than one
   schema, so a preview works off the `search_path`.
 
+The terminal UI has the same two levels, as two rows at the top of its
+Tables pane: `⛁ analytics ▾` and `◫ sales · 40 ▾`. Click one, or press `d`
+or `s` in the Tables pane, for a list you can type into to narrow; `Enter`
+or a click picks. The schema picked is remembered per connection until dbc
+exits.
+
 The assistant matches table names in the loaded schema, and also
 `schema.table` names in any other schema of the database. The ERD
-button diagrams the picked schema. The terminal UI has no pickers yet: it
-lists every schema of the connection's own database, up to that limit.
-No table list is cut at `max_rows`, which applies only to results you ask
+button diagrams the picked schema. No table list is cut at `max_rows`, which applies only to results you ask
 for (Ctrl+T included). MySQL, SQLite and bytdb list their tables whole, as
 before.
 
@@ -208,6 +214,8 @@ before.
 | anywhere | click | focuses that pane — the keyboard follows the mouse |
 | toolbar | click | Run, Stop, Explain, Copy ▾, Export, History, Scripts, Tables, Assistant; `● conn ▾` switches connection |
 | connections | click | connects |
+| connections | right-click (or the toolbar's `● conn ▾`) | **Disconnect** the active connection, then the list to connect to |
+| tables | click `⛁ db ▾` / `◫ schema ▾` | *(Postgres)* pick another of the server's databases / another schema, from a list you can type into |
 | tables | click / double-click / right-click | select / preview the first 100 rows / show columns, diagram it, diagram all tables, copy the ERD as Mermaid, insert name, copy name |
 | tables | `c` on the selected table | show its columns: its `information_schema.columns` rows (name, type, nullable, default, length) in the grid, ready to copy |
 | tables | `e` on the selected table | diagram it and its neighbours (an ERD, below), saved as a PNG and opened |
@@ -251,6 +259,8 @@ dragging.
 | `Ctrl+P` | Query history — filter, then `Enter` inserts (never runs) |
 | `Ctrl+T` | List the tables and views on the active connection |
 | `Ctrl+L` | Jump to the connections list |
+| `x` | *(connections)* Disconnect without picking another connection. If the session may hold a transaction, dbc asks first, because disconnecting rolls it back |
+| `d` / `s` | *(tables, Postgres)* Pick a database / a schema |
 | `Ctrl+G` | *(inside Cats)* Hand the statement to an agent in another pane |
 | `y` / `Y` / `c` | *(results)* Copy the cell or range / the row / open the copy menu |
 | `<` / `>` / `=` | *(results)* Narrow / widen the column / fit it to its content |
@@ -795,7 +805,11 @@ text instead and says why. As text, the DSN field starts empty. Leave it
 empty to keep the saved DSN (for a test too), or type a new one; changing
 the driver needs a new DSN. A rename keeps
 the connection's place in the list and moves the saved query tabs that were
-on it. To remove one, pick *Remove…*. A connection a tab is still on can't
+on it. To remove one, pick *Remove…*. *Disconnect*, on the row the tab is
+on, takes the tab off the connection and keeps the connection in the list.
+If the session may hold a transaction, it asks first, because disconnecting
+rolls it back. The connection to the server closes when no other tab is
+on it. A connection a tab is still on can't
 be removed, renamed or given a new DSN until you switch that tab away;
 whether the assistant may see its rows can be changed at any time. The
 file's connections are changed in the file.

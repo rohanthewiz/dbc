@@ -338,13 +338,21 @@ func (m *Model) openEditorMenu(x, y int) {
 	})
 }
 
-// openConnMenu lists the connections; picking one connects.
+// openConnMenu lists the connections; picking one connects. While the
+// sidebar is on (or dialing) a connection, Disconnect leads: it is the one
+// action on that row the list itself does not offer.
 func (m *Model) openConnMenu(x, y int) {
-	items := []menuItem{heading("connect to")}
+	var items []menuItem
+	if on := m.connOn(); on != "" {
+		items = append(items, menuItem{label: "⏏ Disconnect " + on, key: "x",
+			act: func(m *Model) tea.Cmd { return m.disconnect(x, y) }})
+	}
+	items = append(items, heading("connect to"))
+	active := m.baseOf(m.ws.Active())
 	for _, c := range m.cfg.Connections {
 		name := c.Name
 		label := "  " + name
-		if name == m.ws.Active() {
+		if active != "" && name == active {
 			label = "● " + name
 		}
 		items = append(items, menuItem{label: label, key: c.Driver,
@@ -353,26 +361,47 @@ func (m *Model) openConnMenu(x, y int) {
 	m.openMenu(x, y, items)
 }
 
-// openTableMenu is the tables list's context menu.
-func (m *Model) openTableMenu(x, y int) {
-	it, ok := m.tables.current()
-	if !ok {
-		return
+// openTableMenu is the tables list's context menu. onRow says the click
+// landed on a table; off one, the table rows stay visible but dim, so the
+// menu reads the same wherever the pane was clicked. The navigator's pickers
+// come last, live wherever the connection has them.
+func (m *Model) openTableMenu(x, y int, onRow bool) {
+	name, noTable := "", "right-click a table for this"
+	if it, ok := m.tables.current(); ok && onRow {
+		name, noTable = it.data.(string), ""
 	}
-	name := it.data.(string)
-	m.openMenu(x, y, []menuItem{
-		{label: "Preview rows", key: "2×click", act: func(m *Model) tea.Cmd { return m.tablePicked() }},
-		{label: "Show columns", key: "c", act: func(m *Model) tea.Cmd { return m.tableColumns() }},
-		{label: "Diagram around it (ERD)", key: "e", act: func(m *Model) tea.Cmd { return m.tableDiagram() }},
-		{label: "Diagram all tables (ERD)", act: func(m *Model) tea.Cmd { return m.diagram(erd.Selection{}, false) }},
-		{label: "Copy ERD as Mermaid", act: func(m *Model) tea.Cmd { return m.diagram(erd.Selection{}, true) }},
-		{label: "Insert name at the caret", act: func(m *Model) tea.Cmd {
+	noTables := ""
+	if len(m.tables.items) == 0 {
+		noTables = "no tables listed"
+	}
+	items := []menuItem{
+		{label: "Preview rows", key: "2×click", why: noTable, act: func(m *Model) tea.Cmd { return m.tablePicked() }},
+		{label: "Show columns", key: "c", why: noTable, act: func(m *Model) tea.Cmd { return m.tableColumns() }},
+		{label: "Diagram around it (ERD)", key: "e", why: noTable, act: func(m *Model) tea.Cmd { return m.tableDiagram() }},
+		{label: "Diagram all tables (ERD)", why: noTables, act: func(m *Model) tea.Cmd { return m.diagram(erd.Selection{}, false) }},
+		{label: "Copy ERD as Mermaid", why: noTables, act: func(m *Model) tea.Cmd { return m.diagram(erd.Selection{}, true) }},
+		{label: "Insert name at the caret", why: noTable, act: func(m *Model) tea.Cmd {
 			m.editor.Insert(name)
 			m.focus = focusEditor
 			return nil
 		}},
-		{label: "Copy name", act: func(m *Model) tea.Cmd { return m.copyString(name, "the table name") }},
-	})
+		{label: "Copy name", why: noTable, act: func(m *Model) tea.Cmd { return m.copyString(name, "the table name") }},
+	}
+	if dbRow, schemaRow := m.navRows(); dbRow || schemaRow {
+		dbWhy, schemaWhy := "", ""
+		if !dbRow {
+			dbWhy = m.pickWhy("databases")
+		}
+		if !schemaRow {
+			schemaWhy = m.pickWhy("schemas")
+		}
+		items = append(items, heading(""),
+			menuItem{label: "Switch database…", key: "d", why: dbWhy,
+				act: func(m *Model) tea.Cmd { m.openDatabasePicker(); return nil }},
+			menuItem{label: "Pick schema…", key: "s", why: schemaWhy,
+				act: func(m *Model) tea.Cmd { m.openSchemaPicker(); return nil }})
+	}
+	m.openMenu(x, y, items)
 }
 
 // openLogMenu is the log's context menu.

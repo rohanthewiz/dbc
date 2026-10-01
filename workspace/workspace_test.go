@@ -389,7 +389,7 @@ func TestSwitchReleasesTheOldSession(t *testing.T) {
 		t.Errorf("notes = %+v", st.Notes)
 	}
 	ev := st.Job().(*Connected)
-	if ev.Err != nil || !ev.Changed || w.Active() != "other" || ev.Release == nil {
+	if ev.Err != nil || !ev.Changed || w.Active() != "other" || ev.Release == nil || ev.Left != demo {
 		t.Fatalf("event = %+v, active = %q", ev, w.Active())
 	}
 	rel, _ := ev.Release().(*SessionReleased)
@@ -438,7 +438,8 @@ func TestDisconnect(t *testing.T) {
 	_, _, err = w.Disconnect()
 	refusal(t, err, NoConnection)
 
-	if ev := w.Switch(demo).Job().(*Connected); ev.Err != nil || !ev.Changed || w.Catalog() == nil {
+	// nothing was active, so the reconnect left nothing (Left "")
+	if ev := w.Switch(demo).Job().(*Connected); ev.Err != nil || !ev.Changed || ev.Left != "" || w.Catalog() == nil {
 		t.Fatalf("reconnect: %+v", ev)
 	}
 }
@@ -764,4 +765,18 @@ func TestPickSchemaRefusedOffPostgres(t *testing.T) {
 	w := newTestWorkspace(t)
 	_, err := w.PickSchema(SchemaPick{Name: "main"})
 	refusal(t, err, Invalid)
+}
+
+// Derived tells a connection derived onto another database of its base's
+// server from a configured one — the pools a switch away may close.
+func TestDerived(t *testing.T) {
+	w := newTestWorkspace(t)
+	addConn(w, config.Connection{Name: "pg", Driver: "postgres", DSN: "postgres://u@h/app"})
+	for name, want := range map[string]bool{
+		"pg": false, "pg/analytics": true, demo: false, demo + "/x": false, "nope": false,
+	} {
+		if got := w.Derived(name); got != want {
+			t.Errorf("Derived(%q) = %v, want %v", name, got, want)
+		}
+	}
 }

@@ -79,6 +79,14 @@ type Model struct {
 
 	status string // left half of the status bar
 
+	// schemaPicks is the schema pick last made on each connection (derived
+	// ones included), for this run: a switch back to a database reopens the
+	// schema the user was in. See navigator.go.
+	schemaPicks map[string]workspace.SchemaPick
+	// schemaLoading names the schema pick in flight ("" when none), for the
+	// schema row's "loading…" until its tables land.
+	schemaLoading string
+
 	// send delivers a message to the running program from outside a Cmd —
 	// the script engine's show/print callbacks, which fire mid-run. Run
 	// installs Program.Send; tests install a recorder.
@@ -131,6 +139,8 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Model {
 		logH:   7,
 		edFrac: 0.35,
 		send:   func(tea.Msg) {},
+
+		schemaPicks: map[string]workspace.SchemaPick{},
 	}
 	m.chat = newChatPane()
 	m.editor.sqlMode = true
@@ -146,12 +156,12 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Model {
 	// the script's goroutine, to Update through m.send. It reads m.send when
 	// it fires, not now: Run installs Program.Send after New returns.
 	//
-	// WholeCatalog: the TUI's sidebar has no schema picker yet, so it asks
-	// for every schema's tables (up to db.AllSchemasLimit) rather than the
-	// web's one schema at a time.
+	// No WholeCatalog: the Tables pane has the web's database and schema
+	// pickers (navigator.go), so a Postgres connection opens on its default
+	// schema, as in the web, and "all schemas" is a pick away rather than a
+	// catalog read of every schema on every connect.
 	m.ws = workspace.New(cfg, mgr, hist, workspace.Options{
-		Sink:         func(e workspace.Event) { m.send(e) },
-		WholeCatalog: true,
+		Sink: func(e workspace.Event) { m.send(e) },
 	})
 	m.refreshConns()
 
@@ -191,7 +201,7 @@ func (m *Model) startupLog() {
 		m.logf(logInfo, "loaded config from %s", m.cfg.Path)
 	}
 	m.log(logMuted, "keys: ^R run · ^⇧R/⌥R run all · ^X explain · ⌥X explain analyze · ^K stop · ^A assistant · ^E export · ^P history · ^O scripts · "+
-		"^T tables · ^L conns · Tab focus · y/Y/c copy · Enter inspect · -/+ hide/show column · ^Q quit")
+		"^T tables · ^L conns · x disconnect · d/s database/schema · Tab focus · y/Y/c copy · Enter inspect · -/+ hide/show column · ^Q quit")
 	m.log(logMuted, "mouse: click to focus · drag to select · right-click for menus · "+
 		"drag borders to resize · hold Shift (⌥ on macOS) to select terminal text")
 	for _, w := range m.cfg.Warnings {
@@ -273,6 +283,8 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 	// script's mid-run output from the sink
 	case *workspace.Connected:
 		return m.connected(msg)
+	case *workspace.SchemaLoaded:
+		return m.schemaLoaded(msg)
 	case *workspace.RowCounts:
 		return m.rowCountsLanded(msg)
 	case *workspace.SessionReleased:
@@ -404,16 +416,26 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		}
 		return m.gridKey(k)
 	case focusConns:
+		if k.String() == "x" {
+			// below the list's cursor row, where a confirm menu stays in view
+			return m.disconnect(m.conns.view.X+2, m.conns.view.Y+m.conns.cur-m.conns.top+1)
+		}
 		return m.listKey(m.conns, k, m.connPicked)
 	case focusTables:
-		// c ("Show columns") and e (diagram it) are the tables list's
-		// letter keys: the list's own keys are movement and Enter, so
-		// they shadow nothing
+		// c ("Show columns"), e (diagram it), d (database) and s (schema)
+		// are the tables list's letter keys: the list's own keys are
+		// movement and Enter, so they shadow nothing
 		switch k.String() {
 		case "c":
 			return m.tableColumns()
 		case "e":
 			return m.tableDiagram()
+		case "d":
+			m.openDatabasePicker()
+			return nil
+		case "s":
+			m.openSchemaPicker()
+			return nil
 		}
 		return m.listKey(m.tables, k, m.tablePicked)
 	case focusLog:

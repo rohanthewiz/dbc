@@ -122,9 +122,10 @@ func (m *Model) cancelConnect() bool {
 	return ok
 }
 
-// setActive switches to a connection.
+// setActive switches to a connection, opening its sidebar on the schema last
+// picked there in this run (navigator.go), or the default.
 func (m *Model) setActive(name string) tea.Cmd {
-	st := m.ws.Switch(name)
+	st := m.ws.SwitchPick(name, m.schemaPicks[name])
 	m.notes(st.Notes)
 	return job(st.Job)
 }
@@ -137,6 +138,7 @@ func (m *Model) connected(ev *workspace.Connected) tea.Cmd {
 	if ev.Stale {
 		return nil // superseded by a later connect, which canceled this one
 	}
+	m.schemaLoading = "" // a connect supersedes a pick in flight
 	m.notes(ev.Notes)
 	if ev.Status != "" {
 		m.setStatus(ev.Status)
@@ -147,7 +149,7 @@ func (m *Model) connected(ev *workspace.Connected) tea.Cmd {
 	m.refreshConns()
 	m.refreshTables()
 	m.catsAfterTransition()
-	return tea.Batch(job(ev.Release), job(ev.Counts))
+	return tea.Batch(m.releaseThenClose(ev), job(ev.Counts))
 }
 
 // sessionReleased tells the user when a released session took state with

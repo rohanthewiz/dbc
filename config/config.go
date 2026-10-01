@@ -314,7 +314,7 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 		}
 		seen[cn.Name] = true
 		var warns []string
-		cn.DSN, warns = ExpandDSN(cn.Name, cn.DSN)
+		cn.DSN, warns = ExpandDSN(cn.Name, cn.Driver, cn.DSN)
 		cfg.Warnings = append(cfg.Warnings, warns...)
 		// A bad TLS setting fails the load, as a duplicate name does, rather
 		// than becoming a warning: carrying on would mean connecting with
@@ -557,17 +557,35 @@ func (c *Config) ReplaceConn(old string, cn Connection) error {
 // os.ExpandEnv so that a typo'd ${PGPASS} comes back as a warning naming it
 // instead of silently becoming "" and surfacing later as a baffling auth
 // failure. name is the connection's, for the warning.
-func ExpandDSN(name, dsn string) (string, []string) {
+//
+// Each value is escaped for where it lands in the DSN of driver (any alias
+// db.Driver accepts): inside a quoted Postgres value, in a URL's password,
+// in a MySQL param — see dsnexpand.go. So a password kept in the environment
+// may hold any character, as one typed into the DSN form's field may.
+func ExpandDSN(name, driver, dsn string) (string, []string) {
 	var warns []string
-	out := os.Expand(dsn, func(key string) string {
+	lookup := func(key string) string {
 		v, ok := os.LookupEnv(key)
 		if !ok {
 			warns = append(warns, fmt.Sprintf(
 				"connection %q: DSN references unset env var $%s (expanded to empty)", name, key))
 		}
 		return v
+	}
+	if strings.Contains(dsn, "\x00") {
+		// the markers below could not be told from the DSN's own text; no
+		// real DSN holds a NUL, so plain expansion loses nothing real
+		return os.Expand(dsn, lookup), warns
+	}
+	var vals []string
+	marked := os.Expand(dsn, func(key string) string {
+		vals = append(vals, lookup(key))
+		return refMark(len(vals) - 1)
 	})
-	return out, warns
+	if len(vals) == 0 {
+		return marked, warns
+	}
+	return fillRefs(shapeOf(driver, marked), marked, vals), warns
 }
 
 func searchPaths() []string {

@@ -115,3 +115,66 @@ func TestLiveTLSMySQL(t *testing.T) {
 	// dialed: verify-full must refuse what verify-ca accepted
 	liveRefused(t, env, "mysql", config.TLSOpts{TLS: "verify-full", TLSCA: ca}, "certificate")
 }
+
+// The encrypted-key live tests (N-075) connect to a server that admits a
+// client by its certificate ALONE — no password — so a connect proves the
+// key dbc decrypted was the one used. They need a PKI of their own: a CA
+// the server trusts for clients, a client certificate it signed (CN
+// "postgres" for Postgres), and the client key encrypted both ways with
+// the passphrase "dbc-test-pass":
+//
+//	openssl req -x509 -new -newkey rsa:2048 -nodes -keyout ca.key -subj /CN=test-ca -days 2 -out ca.crt
+//	openssl req -new -newkey rsa:2048 -nodes -keyout server.key -subj /CN=localhost -out server.csr
+//	printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\n' > san.ext
+//	openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 2 -extfile san.ext -out server.crt
+//	openssl req -new -newkey rsa:2048 -nodes -keyout client.key -subj /CN=postgres -out client.csr
+//	openssl x509 -req -in client.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 2 -out client.crt
+//	openssl pkcs8 -topk8 -in client.key -v2 aes-256-cbc -v2prf hmacWithSHA256 -passout pass:dbc-test-pass -out client-pkcs8.key
+//	openssl rsa -in client.key -aes256 -traditional -passout pass:dbc-test-pass -out client-legacy.key
+//
+// Postgres: copy the directory to /certs in the container before its first
+// start, with an initdb hook that turns TLS on with server.* and ca.crt and
+// writes pg_hba.conf as "local all all trust" + "hostssl all all all cert".
+// MySQL: start mysqld with --ssl-ca/--ssl-cert/--ssl-key from the same
+// files and CREATE USER certuser REQUIRE X509 (no password). Then:
+//
+//	DBC_LIVE_PG_CERT_DSN='postgres://postgres@127.0.0.1:55471/dbc' \
+//	DBC_LIVE_MYSQL_CERT_DSN='certuser@tcp(127.0.0.1:53371)/dbc' \
+//	DBC_LIVE_CERT_DIR=<the directory> go test ./db -run LiveTLSEncryptedKey -v
+
+// liveEncryptedKey connects to env's DSN with the client key from
+// DBC_LIVE_CERT_DIR in each encoding, and checks the refusals: no client
+// certificate, and a wrong passphrase (which must fail before any dial).
+func liveEncryptedKey(t *testing.T, env, driver, sslQ string) {
+	t.Helper()
+	dir := os.Getenv("DBC_LIVE_CERT_DIR")
+	if dir == "" || os.Getenv(env) == "" {
+		t.Skipf("set %s and DBC_LIVE_CERT_DIR to run against a server that wants a client certificate", env)
+	}
+	t.Setenv("DBC_LIVE_KEY_PASS", "dbc-test-pass")
+	opts := func(key string) config.TLSOpts {
+		return config.TLSOpts{TLS: "verify-full", TLSCA: dir + "/ca.crt", TLSCert: dir + "/client.crt",
+			TLSKey: dir + "/" + key, TLSKeyPassword: "${DBC_LIVE_KEY_PASS}"}
+	}
+	for _, key := range []string{"client-pkcs8.key", "client-legacy.key"} {
+		if got := liveOne(t, liveTLS(t, env, driver, opts(key)), sslQ); got == "" || got == "false" {
+			t.Errorf("%s: the session is not encrypted (%q)", key, got)
+		}
+	}
+	// the server turns away a client with no certificate...
+	if _, err := liveTLS(t, env, driver, config.TLSOpts{TLS: "verify-full", TLSCA: dir + "/ca.crt"}).DB("live"); err == nil {
+		t.Error("connected with no client certificate")
+	}
+	// ...and a wrong passphrase never gets as far as the server
+	t.Setenv("DBC_LIVE_KEY_PASS", "not-it")
+	liveRefused(t, env, driver, opts("client-pkcs8.key"), "wrong tls_key_password")
+}
+
+func TestLiveTLSEncryptedKeyPostgres(t *testing.T) {
+	liveEncryptedKey(t, "DBC_LIVE_PG_CERT_DSN", "postgres",
+		"SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
+}
+
+func TestLiveTLSEncryptedKeyMySQL(t *testing.T) {
+	liveEncryptedKey(t, "DBC_LIVE_MYSQL_CERT_DSN", "mysql", "SHOW SESSION STATUS LIKE 'Ssl_cipher'")
+}

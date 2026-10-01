@@ -80,6 +80,7 @@
         "data-saved": c.saved ? "1" : null, "data-airows": c.ai_rows ? "1" : null,
         "data-tls": c.tls || null, "data-tls-ca": c.tls_ca || null,
         "data-tls-cert": c.tls_cert || null, "data-tls-key": c.tls_key || null,
+        "data-tls-key-password": c.tls_key_password || null,
         title: c.saved ? c.name + " — added here; right-click to edit or remove" : null },
         el("span", "name", c.name), el("span", "driver", c.driver));
       conns.append(el("li", null, b));
@@ -134,6 +135,12 @@
     const tlsCA = input("cf-tls-ca", { class: "mono", placeholder: "~/certs/ca.pem — blank: the system's trusted CAs" });
     const tlsCert = input("cf-tls-cert", { class: "mono", placeholder: "only if the server asks for a client certificate" });
     const tlsKey = input("cf-tls-key", { class: "mono", placeholder: "the client certificate's private key" });
+    // a text field, not a password one: it holds the NAME of an environment
+    // variable (${MY_KEY_PASS}), never the passphrase — the server refuses
+    // anything else (config.TLSOpts.Check), as the file it lands in is
+    // plain text and the value comes back to every window
+    const tlsKeyPass = input("cf-tls-key-password", { class: "mono",
+      placeholder: "${VAR} holding an encrypted key's passphrase — blank if it is not encrypted" });
 
     const aiRows = el("input", { type: "checkbox", id: "cf-airows" });
     const result = el("div", { class: "connresult", "aria-live": "polite", hidden: "hidden" });
@@ -156,7 +163,9 @@
       tlsCA: row("CA file", tlsCA),
       tlsCert: row("Client cert", tlsCert),
       tlsKey: row("Client key", tlsKey),
-      tlsHint: [el("span"), el("span", "hint full", "PEM files. ~ and ${VAR} work; a relative path is relative to ~/.config/dbc.")],
+      tlsKeyPass: row("Key password", tlsKeyPass),
+      tlsHint: [el("span"), el("span", "hint full", "PEM files. ~ and ${VAR} work; a relative path is relative to ~/.config/dbc. " +
+        "An encrypted key's passphrase is read from the ${VAR} under Key password, never typed here.")],
     };
 
     // hasPassword: editing, the stored DSN has a password the page was not
@@ -173,6 +182,7 @@
       tlsCA.value = cur.tlsCA || "";
       tlsCert.value = cur.tlsCert || "";
       tlsKey.value = cur.tlsKey || "";
+      tlsKeyPass.value = cur.tlsKeyPassword || "";
     }
 
     const fieldMode = () => asFields.checked;
@@ -188,7 +198,8 @@
         file: fieldMode() && !server,
         options: fieldMode() && d !== "bytdb",
         dsn: !fieldMode(), dsnHint: true,
-        tls: server, tlsCA: tlsFiles, tlsCert: tlsFiles, tlsKey: tlsFiles, tlsHint: tlsFiles,
+        tls: server, tlsCA: tlsFiles, tlsCert: tlsFiles, tlsKey: tlsFiles, tlsKeyPass: tlsFiles,
+        tlsHint: tlsFiles,
       };
       for (const k in rows) for (const e of rows[k]) e.hidden = !visible[k];
 
@@ -218,6 +229,7 @@
         const t = r.tls || {};
         tls.value = t.tls || ""; tlsCA.value = t.tls_ca || "";
         tlsCert.value = t.tls_cert || ""; tlsKey.value = t.tls_key || "";
+        tlsKeyPass.value = t.tls_key_password || "";
         if (!r.parts) {
           say("", "This DSN is edited as text: " + r.reason);
           return;
@@ -238,7 +250,7 @@
       ...row("Name", name), ...row("Driver", driver),
       ...rows.mode, ...rows.host, ...rows.user, ...rows.password, ...rows.database,
       ...rows.file, ...rows.options, ...rows.dsn, ...rows.dsnHint,
-      ...rows.tls, ...rows.tlsCA, ...rows.tlsCert, ...rows.tlsKey, ...rows.tlsHint,
+      ...rows.tls, ...rows.tlsCA, ...rows.tlsCert, ...rows.tlsKey, ...rows.tlsKeyPass, ...rows.tlsHint,
       el("span"), el("label", { class: "check full", title: "The assistant may see up to ai_context_rows result rows " +
         "from this connection. Off by default: rows are the database's contents." }, aiRows, "Let the assistant see result rows"),
     );
@@ -267,6 +279,7 @@
         b.tls = tls.value;
         if (tls.value !== "disable") {
           b.tls_ca = tlsCA.value; b.tls_cert = tlsCert.value; b.tls_key = tlsKey.value;
+          b.tls_key_password = tlsKeyPass.value;
         }
       }
       return b;
@@ -354,7 +367,8 @@
 
   // openEdit edits the sidebar entry b — a connection added here.
   const openEdit = (b) => openForm({ name: b.dataset.conn, driver: b.dataset.driver, aiRows: !!b.dataset.airows,
-    tls: b.dataset.tls, tlsCA: b.dataset.tlsCa, tlsCert: b.dataset.tlsCert, tlsKey: b.dataset.tlsKey });
+    tls: b.dataset.tls, tlsCA: b.dataset.tlsCa, tlsCert: b.dataset.tlsCert, tlsKey: b.dataset.tlsKey,
+    tlsKeyPassword: b.dataset.tlsKeyPassword });
 
   // ── removing ───────────────────────────────────────────────────────────
   // Only a connection added here can go; the server refuses the rest, and

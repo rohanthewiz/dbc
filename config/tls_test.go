@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,13 @@ func TestTLSOptsCheck(t *testing.T) {
 		{TLSOpts{TLS: "disable", TLSCA: "ca.pem"}, "never reads"},
 		{TLSOpts{TLS: "require", TLSCert: "c.pem"}, "go together"},
 		{TLSOpts{TLS: "require", TLSKey: "c.key"}, "go together"},
+		// tls_key_password: a reference, and only beside a key
+		{TLSOpts{TLS: "require", TLSCert: "c.pem", TLSKey: "c.key", TLSKeyPassword: "${KEY_PASS}"}, ""},
+		{TLSOpts{TLS: "require", TLSCert: "c.pem", TLSKey: "c.key", TLSKeyPassword: " $KEY_PASS "}, ""},
+		{TLSOpts{TLS: "require", TLSCert: "c.pem", TLSKey: "c.key", TLSKeyPassword: "hunter2"}, "must name an environment variable"},
+		{TLSOpts{TLS: "require", TLSCert: "c.pem", TLSKey: "c.key", TLSKeyPassword: "${A}${B}"}, "must name an environment variable"},
+		{TLSOpts{TLS: "require", TLSCert: "c.pem", TLSKey: "c.key", TLSKeyPassword: "x${KEY_PASS}"}, "must name an environment variable"},
+		{TLSOpts{TLS: "require", TLSKeyPassword: "${KEY_PASS}"}, "unlocks tls_key"},
 	} {
 		in := tc.in
 		err := in.Check()
@@ -32,6 +40,14 @@ func TestTLSOptsCheck(t *testing.T) {
 		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
 			t.Errorf("%+v: got %v, want an error mentioning %q", tc.in, err, tc.want)
 		}
+	}
+	// a literal is refused without being echoed: it may be the passphrase
+	lit := TLSOpts{TLS: "require", TLSCert: "c.pem", TLSKey: "c.key", TLSKeyPassword: "s3cret-pass"}
+	if err := lit.Check(); err == nil || strings.Contains(err.Error(), "s3cret") {
+		t.Errorf("literal password: %v", err)
+	}
+	if v := (TLSOpts{TLSKeyPassword: "${KEY_PASS}"}).KeyPasswordVar(); v != "KEY_PASS" {
+		t.Errorf("KeyPasswordVar = %q", v)
 	}
 	// the mode is normalized in place, as Load and the web form rely on
 	o := TLSOpts{TLS: " Verify-Full "}
@@ -52,6 +68,21 @@ func TestExpandTLS(t *testing.T) {
 		TLSCert: filepath.Join(home, "me.pem"), TLSKey: filepath.Join("/cfg", "keys/me.key")}
 	if got != want || len(warns) != 0 {
 		t.Fatalf("got %+v, %q\nwant %+v", got, warns, want)
+	}
+
+	// tls_key_password is a reference, kept as written: the passphrase is
+	// read when the pool opens, and must never land in the Connection
+	// (which is logged, and sent to the browser as JSON)
+	t.Setenv("DBC_TEST_KEY_PASS", "the-passphrase")
+	got, _ = ExpandTLS("c", TLSOpts{TLS: "require", TLSCert: "/c.pem", TLSKey: "/c.key",
+		TLSKeyPassword: "${DBC_TEST_KEY_PASS}"}, "/cfg")
+	if got.TLSKeyPassword != "${DBC_TEST_KEY_PASS}" {
+		t.Errorf("tls_key_password expanded to %q", got.TLSKeyPassword)
+	}
+	js, err := json.Marshal(Connection{Name: "c", TLSOpts: got})
+	if err != nil || strings.Contains(string(js), "the-passphrase") ||
+		!strings.Contains(string(js), `"tls_key_password":"${DBC_TEST_KEY_PASS}"`) {
+		t.Errorf("JSON: %s %v", js, err)
 	}
 
 	// no base: a relative path stays relative (the --tls-* flags)

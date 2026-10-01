@@ -73,6 +73,7 @@ tls      = "verify-full"
 tls_ca   = "certs/reporting-ca.pem"   # blank: the system's trusted CAs
 # tls_cert = "~/certs/me.pem"         # client certificate, if the server asks
 # tls_key  = "~/certs/me.key"         # ...and its private key
+# tls_key_password = "${ME_KEY_PASS}" # an encrypted key's passphrase: always an env var
 
 [[connection]]
 name   = "scratch"

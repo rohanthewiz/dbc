@@ -100,7 +100,7 @@ subcommands = ["script", "migrate", "explain", "erd", "web", "version"]
 flags = ["--config", "-c", "--conn", "-f", "--file", "-t", "--format", "-o", "--out",
          "--tx", "-k", "--keep-going",
          "--demo", "--driver", "--dsn", "--tls", "--tls-ca", "--tls-cert", "--tls-key",
-         "--dir", "--allow-missing",
+         "--tls-key-password", "--dir", "--allow-missing",
          "-a", "--analyze", "--open", "--fail-on", "--theme",
          "--table", "--depth", "--views",
          "--listen", "--no-open", "--secret", "--help", "-v", "--version"]

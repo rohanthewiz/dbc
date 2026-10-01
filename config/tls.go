@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -25,6 +26,7 @@ import (
 //	tls_ca   = "~/certs/ca.pem"          mysql:    a *tls.Config on the
 //	tls_cert = "~/certs/me.pem"                    connector (CA pool, client
 //	tls_key  = "~/certs/me.key"                    cert, ServerName)
+//	tls_key_password = "${ME_KEY_PASS}"
 //
 // Unset (tls = "") leaves TLS to the DSN, exactly as before these keys
 // existed. Set, they win over whatever the DSN says: a config line that asks
@@ -48,6 +50,15 @@ import (
 //
 // Only verify-full stops a man in the middle: the others either check
 // nothing or accept any certificate the CA ever signed, for any host.
+//
+// AN ENCRYPTED tls_key. tls_key_password names the environment variable
+// holding the key's passphrase — "${VAR}" or "$VAR", and nothing else. A
+// literal passphrase is refused: config.toml and the saved-connections file
+// are plain text, and dbc web sends TLSOpts to the browser (they are paths,
+// not secrets — so the reference may go there, the passphrase must not).
+// The reference is kept as written through ExpandTLS, and the db package
+// reads the variable only when it opens the pool (db/tlskey.go), so the
+// passphrase never sits in a Connection, a JSON response or a log line.
 
 // TLS modes, as written in the tls key.
 const (
@@ -72,12 +83,31 @@ type TLSOpts struct {
 	TLS     string `toml:"tls,omitempty" json:"tls,omitempty"`           // a mode above; "" leaves TLS to the DSN
 	TLSCA   string `toml:"tls_ca,omitempty" json:"tls_ca,omitempty"`     // PEM file of CA certificates to trust
 	TLSCert string `toml:"tls_cert,omitempty" json:"tls_cert,omitempty"` // PEM client certificate, for servers that ask for one
-	TLSKey  string `toml:"tls_key,omitempty" json:"tls_key,omitempty"`   // its PEM private key (unencrypted)
+	TLSKey  string `toml:"tls_key,omitempty" json:"tls_key,omitempty"`   // its PEM private key
+	// TLSKeyPassword is "${VAR}" (or "$VAR"): the environment variable
+	// holding tls_key's passphrase, when the key is encrypted. The
+	// reference, never the passphrase — see "AN ENCRYPTED tls_key" above.
+	TLSKeyPassword string `toml:"tls_key_password,omitempty" json:"tls_key_password,omitempty"`
 }
 
 // Set reports whether any TLS key is given.
 func (t TLSOpts) Set() bool {
-	return t.TLS != "" || t.TLSCA != "" || t.TLSCert != "" || t.TLSKey != ""
+	return t.TLS != "" || t.TLSCA != "" || t.TLSCert != "" || t.TLSKey != "" || t.TLSKeyPassword != ""
+}
+
+// envRef matches a whole tls_key_password: one environment variable, as
+// ${NAME} or $NAME, with the kind of name a shell would export.
+var envRef = regexp.MustCompile(`^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$`)
+
+// KeyPasswordVar is the name of the environment variable tls_key_password
+// refers to, or "" when there is none — or when it is not a reference,
+// which Check refuses.
+func (t TLSOpts) KeyPasswordVar() string {
+	m := envRef.FindStringSubmatch(strings.TrimSpace(t.TLSKeyPassword))
+	if m == nil {
+		return ""
+	}
+	return m[1] + m[2]
 }
 
 // Check normalizes the mode's case and turns away settings that cannot be
@@ -89,10 +119,15 @@ func (t TLSOpts) Set() bool {
 //   - a CA or certificate with no mode is refused: whether it was meant to
 //     verify or merely to be offered cannot be guessed;
 //   - so are files beside tls = "disable", which would never be read;
-//   - a client certificate needs its key and the other way round.
+//   - a client certificate needs its key and the other way round;
+//   - tls_key_password must be an environment reference, and needs a
+//     tls_key to unlock. A literal is refused rather than used: accepting
+//     it would leave a passphrase in a plain-text file, and in every
+//     browser dbc web shows the connection to.
 func (t *TLSOpts) Check() error {
 	t.TLS = strings.ToLower(strings.TrimSpace(t.TLS))
 	t.TLSCA, t.TLSCert, t.TLSKey = strings.TrimSpace(t.TLSCA), strings.TrimSpace(t.TLSCert), strings.TrimSpace(t.TLSKey)
+	t.TLSKeyPassword = strings.TrimSpace(t.TLSKeyPassword)
 	files := t.TLSCA != "" || t.TLSCert != "" || t.TLSKey != ""
 	switch {
 	case t.TLS != "" && !validTLSMode(t.TLS):
@@ -106,6 +141,12 @@ func (t *TLSOpts) Check() error {
 		return serr.New(`tls = "disable" never reads tls_ca, tls_cert or tls_key — remove them or pick another mode`)
 	case (t.TLSCert == "") != (t.TLSKey == ""):
 		return serr.New("tls_cert and tls_key go together: a client certificate is no use without its key")
+	case t.TLSKeyPassword != "" && t.KeyPasswordVar() == "":
+		// the value is NOT echoed: it may be the passphrase itself
+		return serr.New(`tls_key_password must name an environment variable — "${MY_KEY_PASS}" — ` +
+			"never the passphrase itself, which would sit in a plain-text file")
+	case t.TLSKeyPassword != "" && t.TLSKey == "":
+		return serr.New("tls_key_password unlocks tls_key — set tls_key (and tls_cert) too, or remove it")
 	}
 	return nil
 }
@@ -150,6 +191,9 @@ func ExpandTLS(name string, t TLSOpts, base string) (TLSOpts, []string) {
 	t.TLSCA = one("tls_ca", t.TLSCA)
 	t.TLSCert = one("tls_cert", t.TLSCert)
 	t.TLSKey = one("tls_key", t.TLSKey)
+	// TLSKeyPassword is left as written: it is a reference, resolved only
+	// when the pool opens (db/tlskey.go), so the passphrase never lands in
+	// the Connection, which is shown, logged and sent to the browser.
 	return t, warns
 }
 

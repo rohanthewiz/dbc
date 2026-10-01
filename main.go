@@ -35,6 +35,10 @@
 //	--tls-ca path      with --tls: CA certificate(s) to verify the server against
 //	--tls-cert path    with --tls: client certificate, and --tls-key its key
 //	--tls-key path
+//	--tls-key-password '${VAR}'
+//	                   with --tls-key: the environment variable holding an
+//	                   encrypted key's passphrase (single-quoted, so the shell
+//	                   leaves it for dbc to read)
 //	--dir path         migrations directory for `dbc migrate`
 //	--allow-missing    let `migrate up` apply out-of-order migrations
 //
@@ -92,6 +96,7 @@ var (
 	flagTLSCA   string
 	flagTLSCert string
 	flagTLSKey  string
+	flagTLSPass string // --tls-key-password: a ${VAR} reference, not the passphrase
 	flagDir     string
 	flagMissing bool
 	flagTx      bool
@@ -165,6 +170,9 @@ func newCLI() *cli.Command {
 				Usage: "with --tls: PEM client certificate `FILE` (needs --tls-key)", Destination: &flagTLSCert},
 			&cli.StringFlag{Name: "tls-key", Category: "ad-hoc connection",
 				Usage: "with --tls: PEM private key `FILE` of the client certificate", Destination: &flagTLSKey},
+			&cli.StringFlag{Name: "tls-key-password", Category: "ad-hoc connection",
+				Usage: "with --tls-key: '${`VAR`}', the environment variable holding an encrypted key's passphrase " +
+					"(single-quoted, so the shell leaves it to dbc)", Destination: &flagTLSPass},
 			&cli.StringFlag{Name: "dir", Category: "migrate",
 				Usage: "migrations `DIR` (default: the connection's migrations, else .)", Destination: &flagDir},
 			&cli.BoolFlag{Name: "allow-missing", Category: "migrate",
@@ -641,13 +649,14 @@ const adHocConnName = "dsn"
 // fresh server can `dbc --driver postgres --dsn "$DATABASE_URL" migrate up`
 // with no config file — goose's whole command line, one flag longer.
 func addAdHocConn(cfg *config.Config) error {
-	tlsOpts := config.TLSOpts{TLS: flagTLS, TLSCA: flagTLSCA, TLSCert: flagTLSCert, TLSKey: flagTLSKey}
+	tlsOpts := config.TLSOpts{TLS: flagTLS, TLSCA: flagTLSCA, TLSCert: flagTLSCert, TLSKey: flagTLSKey,
+		TLSKeyPassword: flagTLSPass}
 	if flagDSN == "" && flagDriver == "" {
 		// The --tls flags describe the ad-hoc connection only; a configured
 		// one takes its TLS from the config file. Ignoring them silently
 		// would leave the user believing a -c run was encrypted.
 		if tlsOpts.Set() {
-			return serr.New("--tls, --tls-ca, --tls-cert and --tls-key go with --dsn " +
+			return serr.New("--tls, --tls-ca, --tls-cert, --tls-key and --tls-key-password go with --dsn " +
 				"(a configured connection sets tls in the config file)")
 		}
 		return nil

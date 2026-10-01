@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5"
 	"github.com/rohanthewiz/serr"
 
 	"github.com/rohanthewiz/dbc/config"
@@ -25,6 +26,8 @@ import (
 //	  ├─ pgx    ─► pgTLSDSN: the settings become the DSN's sslmode,
 //	  │            sslrootcert, sslcert and sslkey, replacing any it had;
 //	  │            pgx.ParseConfig then builds the TLS config itself
+//	  │            (with tls_key_password: no sslcert/sslkey — openPool
+//	  │            attaches the pair decrypted by clientCert, tlskey.go)
 //	  │
 //	  ├─ mysql  ─► mysqlConnector: the DSN is parsed, and a *tls.Config
 //	  │            built by mysqlTLS is set on it — replacing its tls param
@@ -90,8 +93,18 @@ func pgTLSDSN(dsn string, t config.TLSOpts) (string, error) {
 	}
 	add("sslmode", t.TLS)
 	add("sslrootcert", t.TLSCA)
-	add("sslcert", t.TLSCert)
-	add("sslkey", t.TLSKey)
+	if t.TLSKeyPassword == "" {
+		add("sslcert", t.TLSCert)
+		add("sslkey", t.TLSKey)
+	} else {
+		// An encrypted key: pgx would try (and, for PKCS#8, fail) to
+		// decrypt it itself, so the pair stays out of the DSN and openPool
+		// attaches the certificate dbc decrypted (tlskey.go). Set to ""
+		// rather than left out, so a sslcert/sslkey in the DSN — or in
+		// PGSSLCERT/PGSSLKEY, which pgx reads too — cannot add a second,
+		// conflicting pair.
+		params = append(params, [2]string{"sslcert", ""}, [2]string{"sslkey", ""})
+	}
 
 	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
 		u, err := url.Parse(dsn)
@@ -118,6 +131,34 @@ func pgTLSDSN(dsn string, t config.TLSOpts) (string, error) {
 		b.WriteString(p[0] + "='" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(p[1]) + "'")
 	}
 	return b.String(), nil
+}
+
+// pgClientCert attaches t's client certificate to a parsed Postgres config
+// when its key is encrypted (tls_key_password) — the one case pgTLSDSN
+// leaves the pair out of the DSN for, since pgx cannot decrypt a PKCS#8
+// key itself (see tlskey.go). Otherwise it does nothing: pgx has loaded
+// the pair from the DSN already.
+//
+// pgx builds one TLS config per host and per fallback (a multi-host DSN,
+// or sslmode=prefer's plaintext retry), so the certificate goes on every
+// one that has TLS. A nil TLSConfig is a plaintext attempt, and stays one.
+func pgClientCert(pcfg *pgx.ConnConfig, t config.TLSOpts) error {
+	if t.TLSKeyPassword == "" || t.TLSCert == "" {
+		return nil
+	}
+	pair, err := clientCert(t)
+	if err != nil {
+		return err
+	}
+	if pcfg.TLSConfig != nil {
+		pcfg.TLSConfig.Certificates = []tls.Certificate{pair}
+	}
+	for _, fb := range pcfg.Fallbacks {
+		if fb.TLSConfig != nil {
+			fb.TLSConfig.Certificates = []tls.Certificate{pair}
+		}
+	}
+	return nil
 }
 
 // mysqlConnector parses a MySQL DSN and opens its connector per
@@ -190,11 +231,9 @@ func mysqlTLS(t config.TLSOpts, host string) (*tls.Config, error) {
 		tc.RootCAs = roots
 	}
 	if t.TLSCert != "" {
-		pair, err := tls.LoadX509KeyPair(t.TLSCert, t.TLSKey)
+		pair, err := clientCert(t) // decrypting tls_key when it has a password
 		if err != nil {
-			// the key names and paths go in the message: it is shown as is
-			// (serr's fields are not), and which file is wrong is the point
-			return nil, serr.Wrap(fmt.Errorf("tls_cert %s / tls_key %s: %w", t.TLSCert, t.TLSKey, err))
+			return nil, err
 		}
 		tc.Certificates = []tls.Certificate{pair}
 	}

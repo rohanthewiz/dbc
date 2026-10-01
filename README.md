@@ -103,7 +103,8 @@ dsn      = "postgres://app:${PGPASS}@db.example.com:5432/app"
 tls      = "verify-full"        # disable | prefer | require | verify-ca | verify-full
 tls_ca   = "certs/ca.pem"       # CA to verify against (blank: the system's trusted CAs)
 tls_cert = "~/certs/client.pem" # client certificate, if the server asks for one
-tls_key  = "~/certs/client.key" # its private key (unencrypted PEM)
+tls_key  = "~/certs/client.key" # its private key (PEM)
+tls_key_password = "${PGKEYPASS}" # only for an encrypted key: the env var holding its passphrase
 ```
 
 The modes are libpq's `sslmode` names, and mean the same on both engines:
@@ -124,8 +125,22 @@ certificate: its DSN cannot. Paths may use `~` and `${VAR}`; a relative path
 is relative to the config file. A misspelled mode, or a `tls_ca` with no
 `tls`, is rejected at load rather than silently connecting without TLS. A
 CA, certificate or key that cannot be read fails the connect and names the
-file. The same settings are in `dbc web`'s connection form, and for a
-one-off connection there are `--tls`, `--tls-ca`, `--tls-cert` and `--tls-key`.
+file.
+
+An encrypted client key needs `tls_key_password`, which is always an
+environment variable reference (`"${PGKEYPASS}"` or `"$PGKEYPASS"`), never the
+passphrase itself: a literal is rejected at load, so the passphrase stays out
+of the config file, the saved-connections file and the browser. The variable
+is read when the connection opens; unset, the connect fails and names it. Both
+encodings OpenSSL writes are read, on both engines: legacy PEM encryption
+(`Proc-Type: 4,ENCRYPTED`, from `openssl rsa -aes256 -traditional`) and
+PKCS#8 (`ENCRYPTED PRIVATE KEY`, OpenSSL 3's default) with PBKDF2 and AES-CBC.
+A key encrypted with scrypt or DES is refused with the `openssl pkcs8` command
+that re-encrypts it.
+
+The same settings are in `dbc web`'s connection form, and for a one-off
+connection there are `--tls`, `--tls-ca`, `--tls-cert`, `--tls-key` and
+`--tls-key-password '${VAR}'` (single-quoted, so the shell leaves it to dbc).
 
 With **no config at all**, dbc starts on two built-in connections, one per
 embedded engine, each seeded with the same `cats` table — so you can try
@@ -997,7 +1012,7 @@ Everything works without the TUI, for cron jobs and shell pipelines:
 | `--config FILE` | config file (default `./dbc.toml`, then `~/.config/dbc/config.toml`) |
 | `--demo bytdb\|sqlite` | which demo starts active when there is no config (also `$DBC_DEMO`) |
 | `--driver NAME --dsn STRING` | a one-off connection that is in no config file |
-| `--tls MODE` (`--tls-ca`, `--tls-cert`, `--tls-key FILE`) | [TLS](#tls) for the `--dsn` connection, overriding the DSN's own |
+| `--tls MODE` (`--tls-ca`, `--tls-cert`, `--tls-key FILE`, `--tls-key-password '${VAR}'`) | [TLS](#tls) for the `--dsn` connection, overriding the DSN's own |
 
 `dbc --help` lists them all. Long names take one dash or two (`-dsn` works),
 and flags may go before or after the SQL. With no SQL argument and no `-f`,

@@ -542,6 +542,48 @@ func TestConnFieldsAndTLS(t *testing.T) {
 		t.Fatalf("missing CA: %+v", r)
 	}
 
+	// an encrypted client key: tls_key_password is a ${VAR} reference,
+	// stored and listed as written — the passphrase itself never reaches
+	// the config, the file or the browser — and read only by a connect,
+	// which names the variable when it is unset
+	certs, err := filepath.Abs(filepath.Join("..", "db", "testdata", "tlskey"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DBC_TEST_WEB_KEY_PASS", "dbc-test-pass")
+	keyBody := `"tls":"require","tls_cert":"` + filepath.Join(certs, "ec.crt") +
+		`","tls_key":"` + filepath.Join(certs, "ec-pkcs8.key") + `","tls_key_password":"${DBC_TEST_WEB_KEY_PASS}"`
+	env = e.api("POST", "/api/v1/conns", `{"name":"enc","driver":"postgres",
+		"parts":{"host":"127.0.0.1","port":"1"},`+keyBody+`}`, 200)
+	if strings.Contains(string(env.Data), "dbc-test-pass") {
+		t.Fatalf("the add response carries the passphrase: %s", env.Data)
+	}
+	list = decodeData[connListResp](t, env)
+	if c, _ := list.find("enc"); c.TLSKeyPassword != "${DBC_TEST_WEB_KEY_PASS}" {
+		t.Fatalf("the list's tls_key_password = %q", c.TLSKeyPassword)
+	}
+	if cc, _ = e.srv.cfg.ConnByName("enc"); cc.TLSKeyPassword != "${DBC_TEST_WEB_KEY_PASS}" {
+		t.Fatalf("config tls_key_password = %q", cc.TLSKeyPassword)
+	}
+	if sc, _, _ = e.srv.saved.Get("enc"); sc.TLSKeyPassword != "${DBC_TEST_WEB_KEY_PASS}" {
+		t.Fatalf("saved tls_key_password = %q", sc.TLSKeyPassword)
+	}
+	pr = decodeData[partsResp](t, e.api("GET", "/api/v1/conns/enc/parts", "", 200))
+	if pr.TLS.TLSKeyPassword != "${DBC_TEST_WEB_KEY_PASS}" {
+		t.Fatalf("parts' tls_key_password = %q", pr.TLS.TLSKeyPassword)
+	}
+	r = decodeData[probeResp](t, e.api("POST", "/api/v1/conns/test", `{"driver":"postgres",
+		"parts":{"host":"127.0.0.1","port":"1"},`+strings.ReplaceAll(keyBody, "DBC_TEST_WEB_KEY_PASS",
+		"DBC_TEST_SURELY_UNSET_KEY_PASS")+`}`, 200))
+	if r.OK || !strings.Contains(r.Error, "DBC_TEST_SURELY_UNSET_KEY_PASS is not set") {
+		t.Fatalf("unset key password: %+v", r)
+	}
+	res := e.api("POST", "/api/v1/conns/test", `{"driver":"postgres","parts":{"host":"h"},`+
+		strings.ReplaceAll(keyBody, "${DBC_TEST_WEB_KEY_PASS}", "dbc-test-pass")+`}`, 400)
+	if !strings.Contains(res.Error, "must name an environment variable") || strings.Contains(res.Error, "dbc-test-pass") {
+		t.Fatalf("a literal passphrase: %q", res.Error)
+	}
+
 	// refused forms, each with words for the field at fault
 	for _, tc := range []struct {
 		body, want string

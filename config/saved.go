@@ -89,6 +89,8 @@ const savedHeader = `# Connections added in dbc web. Every dbc (the TUI, headles
 # hand edits to entries are kept, comments are not. A DSN may reference
 # ${VAR}s, expanded from the environment of each dbc that reads it; so may
 # tls_ca, tls_cert and tls_key, where a relative path is relative to this file.
+# tls_key_password is only ever a ${VAR}: an encrypted key's passphrase stays
+# in the environment, never in this file.
 
 `
 

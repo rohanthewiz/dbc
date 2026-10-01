@@ -308,7 +308,9 @@ func (m *Manager) open(ctx context.Context, name string) (dbh *sql.DB, anchor *s
 //
 // t is the connection's TLS settings, applied by tlsOpen (tls.go): folded
 // into the DSN for Postgres, a connector of its own for MySQL. Unset, it
-// changes nothing — TLS is then the DSN's business, as it always was.
+// changes nothing — TLS is then the DSN's business, as it always was. An
+// encrypted client key (tls_key_password) is the exception on Postgres:
+// pgClientCert attaches it to the parsed config instead.
 //
 // database, when set, is the database to open instead of the one the DSN
 // names: a connection derived onto another database of the same server
@@ -343,6 +345,9 @@ func openPool(drv, dsn string, t config.TLSOpts, database string) (*sql.DB, erro
 	}
 	pcfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
+		return nil, err
+	}
+	if err = pgClientCert(pcfg, t); err != nil {
 		return nil, err
 	}
 	if database != "" {

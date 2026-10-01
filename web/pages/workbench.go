@@ -278,7 +278,9 @@ func (p Workbench) connsList(b *element.Builder) any {
 				// the edit form's TLS fields start from these, and data-tls
 				// marks the entry in the list (css: .conn-item[data-tls])
 				for _, kv := range [][2]string{{"data-tls", c.TLS}, {"data-tls-ca", c.TLSCA},
-					{"data-tls-cert", c.TLSCert}, {"data-tls-key", c.TLSKey}} {
+					{"data-tls-cert", c.TLSCert}, {"data-tls-key", c.TLSKey},
+					// a ${VAR} reference (config.TLSOpts.Check), never the passphrase
+					{"data-tls-key-password", c.TLSKeyPassword}} {
 					if kv[1] != "" {
 						attrs = append(attrs, kv[0], kv[1])
 					}

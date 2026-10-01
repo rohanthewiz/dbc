@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-088
+**Next ID:** N-094
 
 ## Open
 
@@ -38,24 +38,6 @@ ten session docs in `ai_docs/claude_sessions/`
   a GNOME/KDE terminal paste after an HTML copy gets the markup, Teams or
   LibreOffice gets the table, and a clipboard manager (Klipper, GPaste) does
   not keep a helper alive. Only Xvfb + xclip has exercised it so far.
-- **N-047** · raised `2026-0925-1425-workspace-extraction-web-phase1` · value low
-  Opt-in live `workspace` tests on Postgres/MySQL (same `DBC_LIVE_*` DSNs):
-  retry-once, session lost, cancel mid-statement and connection switch through
-  the workspace, not just `db`. Its own tests use in-memory SQLite only.
-- **N-051** · raised `2026-0925-1554-dbc-web-phases-3-4` · value low
-  Commit the `dbc web` browser checks as an opt-in test (go-rod against a
-  built binary, skipped unless asked for, like the `db/live_*` tests). Phases
-  2–6 were verified by throwaway scratch programs (283 checks for Phase 4,
-  63 for Phase 5 — with a fake ACP agent binary on `PATH` — and 53 for
-  Phase 6) that are gone after the session, so a regression in the page's
-  JavaScript is caught only by hand. Phase 6's run found three real bugs
-  (a disposed Monaco model, a console rejection, a rename redrawn away).
-  The connection form's Fields/DSN toggle and TLS section
-  (`2026-1001-1415-connection-tls-and-dsn-fields`, 23 checks) and the
-  sidebar's schema filter (`2026-1001-1439-sidebar-schema-filter`, against a
-  154-schema Postgres) were verified the same throwaway way, as was the
-  connections menu's Disconnect (`2026-1001-1704-disconnect-connection`), and the rename of a connection with derived tabs
-  (`2026-1001-1741-tui-navigator-disconnect-and-release-fixes`, 34 checks).
 - **N-061** · raised `2026-0928-0050-sidebar-splitter-fold-and-section-splitters` · value low
   Check `dbc web`'s splitters and sidebar fold in Safari and Firefox. They were
   verified only in Chrome, and the fix that lets a press reach the editor and
@@ -63,11 +45,16 @@ ten session docs in `ai_docs/claude_sessions/`
   Monaco's `.lines-content`, which is clipped on screen but 2^24px square with
   `contain:strict`.) The other checks: Ctrl+B / ⌘B must not open Firefox's
   bookmarks sidebar, and the › tab must be clickable in both browsers.
-- **N-063** · raised `2026-0928-1917-show-table-columns` · value low
-  Check `dbc web`'s "Show columns" in a browser: the tables menu item, the `c`
-  key on a selected table (and that ⌘C / Ctrl+C there still copies rather than
-  firing it), and a copy out of the resulting grid. Only the Go route test and
-  `node --check app.js` covered the page side.
+  Updated `2026-1001-1817-next-list-sweep`: Firefox (Developer Edition, headless via geckodriver,
+  real pointer and key actions) passed 34 checks on 3 runs: a press lands
+  on every bar (Monaco's `.lines-content` does not take it), each splitter
+  drags, sizes and the fold survive a reload, ‹/› and the fold zone work,
+  and Ctrl+B / ⌘B are `defaultPrevented`. It found Ctrl+B dead inside the
+  editor on a Mac (Monaco's cursor-left; Chrome too), fixed in `editor.js`
+  and covered by a `web/e2e` step. Left for a person: Safari (needs `sudo
+  safaridriver --enable`), one real ⌘B in a normal Firefox window (WebDriver
+  keys never reach Firefox's own menus), and the assistant pane's
+  `#chat-split`.
 - **N-064** · raised `2026-0929-1619-macos-app-wrapper` · value low
   Click through `dbc.app` by hand; what the session could not drive from a
   shell. Checks: a grid export and each plan download land in `~/Downloads`;
@@ -79,58 +66,62 @@ ten session docs in `ai_docs/claude_sessions/`
   `<select>` it replaced did not scroll there). Launch, sign-in (the page
   opened a workspace), Quit, `kill -9` of the app, and the login-shell `PATH`
   were verified.
-- **N-071** · raised `2026-0930-1217-erd-ports-partitions-widening-raster` · value low
-  A big hub's lines stay between the boxes now (N-070), but each one gets
-  its own lane through every gap it crosses, so a 400-child star is 14%
-  taller than with ribbons (4426×4571 against 4426×4018). Lines that share
-  a port slot (all of a hub's keys to its id) could share a lane through a
-  gap and fan out only after it, like a bus, which would need no widening
-  at all for a star.
-
-- **N-072** · raised `2026-0930-1557-sidebar-table-row-counts` · value low
-  The sidebar's row counts refresh only on a connect (served from the
-  Manager's 2-minute cache), not on a timer or after a statement that writes.
-  Sitting on one connection for ten minutes leaves ten-minute-old numbers,
-  and an INSERT/DELETE/TRUNCATE the user just ran is not reflected. Could
-  drop the connection's cache and re-run the Counts job after a run whose
-  statement is not a plain read (db.Session.Stateful already judges that).
-- **N-075** · raised `2026-1001-1415-connection-tls-and-dsn-fields` · value low
-  `tls_key` must be an unencrypted PEM key. A passphrase-protected client key
-  works for Postgres only through the DSN's own `sslpassword`. MySQL has no
-  way to give one, and there is no `tls_key_password` key. Add one (from
-  `${VAR}`, never stored inline) if someone's key is encrypted.
-- **N-079** · raised `2026-1001-1537-postgres-database-schema-navigator` · value low
-  The database picker is Postgres-only (`config.supportsDatabases`,
-  `db.Navigable`). MySQL's catalog is scoped to the DSN's database as well,
-  and could be derived the same way: `mysql.ParseDSN`, then set `DBName` in
-  `openPool` and in `mysqlConnector` (TLS path), plus a
-  `SHOW DATABASES`-style `DatabasesQuery`.
-- **N-081** · raised `2026-1001-1537-postgres-database-schema-navigator` · value low
-  The assistant reaches `schema.table` in a schema the sidebar has not
-  loaded (`TableIndex.SetSchemas`), but the words have lost their quotes, so
-  the name is taken in lower case. A quoted mixed-case table there
-  (`billing."Invoices"`) gets no columns, and is dropped from what is sent.
-- **N-084** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
-  The TUI remembers a schema pick per connection only until dbc exits
-  (`Model.schemaPicks`); dbc web saves its picks in the layout. A restart
-  opens every Postgres connection on its default schema again. Persist the
-  picks under `userdata` (a small file, like the buffer) if that bites.
-- **N-085** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
-  A rename in dbc web moves only the schema picks the renaming window holds
-  (`connRenamed`): a `tableSchema.<old>/<db>` pick saved by another window
-  that has since closed stays under the old key, and is lost. The server
-  moving `tableSchema.*` layout keys in `handleConnEdit` (as it retags saved
-  tabs) would close the gap.
 - **N-086** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value medium
   Release what is on main: bump `version` in `cats-plugin.toml` and
   `version/version.go` (0.2.1 now), tag to match, push. This session adds
   the TUI's database/schema pickers and Disconnect, derived-pool closing,
   partitioned-table estimates, DSN `${VAR}` escaping and the rename fix.
+  Updated `2026-1001-1817-next-list-sweep`: main now also has the MySQL database picker, encrypted
+  client keys (`tls_key_password`), the session guard (a cut connection
+  found before a run, Stop reaching MySQL), recounts after writes, saved
+  TUI schema picks, ERD bus lanes and the opt-in browser test.
 - **N-087** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
   Drive the TUI's new navigator by hand in a real terminal on a big
   Postgres: the picker rows, `d`/`s`, typing into a 150-schema list, the
   Disconnect confirm menu. Only the test harness's rendered frames and a
   live Postgres test have exercised them.
+  Updated `2026-1001-1817-next-list-sweep`: the real binary was driven in a 140×45 pty through a VT
+  emulator (charmbracelet/x/vt) against 150 schemas and three databases —
+  40 checks, all passing: both rows, `d`/`s`, filtering, mouse clicks on
+  the rows, a database switch and back, the recount after an INSERT, the
+  Disconnect menu, and the saved pick on a restart. What is left needs a
+  person: how `⛁ ◫ ▾` and the counts render in real emulators (iTerm2,
+  Terminal.app, Ghostty, kitty, a cats pane), wheel scrolling and drags
+  with real mouse hardware.
+- **N-088** · raised `2026-1001-1817-next-list-sweep` · value low
+  On MySQL a pinned session the server cut less than a second after its
+  last statement still fails the next run once: `db/sessionguard.go` pings
+  only past `sessionPingIdle` (1s) there, since go-sql-driver/mysql does
+  not expose its socket for the early check Postgres gets (`sockQuiet`).
+  The live workspace tests skip the "at once" retry case on MySQL for it.
+- **N-089** · raised `2026-1001-1817-next-list-sweep` · value low
+  Stop reaches the server only for a pinned session's statement: pooled
+  MySQL statements (a script's, the row counts', the catalog's) are
+  abandoned by the driver but run on, as session statements did before
+  `reapCanceled`. Each would need its connection's `CONNECTION_ID()`.
+- **N-090** · raised `2026-1001-1817-next-list-sweep` · value low
+  The recount after a write (N-072) refreshes only the workspace that ran
+  it: another dbc web tab or window on the same connection keeps its old
+  numbers until its next connect, and writes by other clients are never
+  reflected without one (no timer). The hub could broadcast a "counts"
+  event to every tab on the connection.
+- **N-091** · raised `2026-1001-1817-next-list-sweep` · value low
+  `TestChatSignInThenQueuedQuestionGoes` (web) failed once under the full
+  `-race` suite: the chat went dead with no ⎆ sign-in offer, so the exit's
+  error was not seen as `ai.ErrAuthRequired` (`needAuth`). It passed 5/5
+  alone. Likely an ordering race between the fake agent's refusal and its
+  exit; if real, a user would be told "click ⟲ new" instead of offered
+  sign-in.
+- **N-092** · raised `2026-1001-1817-next-list-sweep` · value low
+  ERD: `fanOut(80, 8)` (80 distinct keys, so no buses) still sends 23 lines
+  round the outside after `widen`'s four rounds. A limit that predates the
+  bus lanes (N-071), which made stars need no widening at all.
+- **N-093** · raised `2026-1001-1817-next-list-sweep` · value low
+  The pty + VT-emulator driver used for N-087 (creack/pty, charmbracelet/x/vt,
+  real keys and SGR mouse against the built binary) worked well, but lives
+  only in that session's scratchpad. Commit it as an opt-in test beside
+  `web/e2e` (its own module, skipped unless asked for), so the TUI's real
+  frames are checked, not just the harness's.
 
 ## Roadmap
 
@@ -168,6 +159,90 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-085** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
+  A rename in dbc web moves only the schema picks the renaming window holds
+  (`connRenamed`): a `tableSchema.<old>/<db>` pick saved by another window
+  that has since closed stays under the old key, and is lost. The server
+  moving `tableSchema.*` layout keys in `handleConnEdit` (as it retags saved
+  tabs) would close the gap.
+  closed 2026-10-01, `2026-1001-1817-next-list-sweep`: `handleConnEdit` moves every `tableSchema.<old>` and `tableSchema.<old>/<db>` layout key in the store (`moveSchemaPicks` → `Store.MoveLayout`, one simultaneous rename that deletes the old keys rather than blanking them). `TestMoveLayout` (chains like a → a/b), and the rename test checks a closed window's picks.
+
+- **N-084** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
+  The TUI remembers a schema pick per connection only until dbc exits
+  (`Model.schemaPicks`); dbc web saves its picks in the layout. A restart
+  opens every Postgres connection on its default schema again. Persist the
+  picks under `userdata` (a small file, like the buffer) if that bites.
+  closed 2026-10-01, `2026-1001-1817-next-list-sweep`: picks are saved per connection to `~/.config/dbc/schema-picks.json` on each pick (`userdata.SavePick`: re-read, set one key, atomic rename, so two TUIs keep each other's), loaded in `New`, and the first connect opens on the saved pick (`connectCmd` → `ConnectPick`). `TestPicksRoundTrip`; `TestLiveNavigatorPostgres` restarts on the saved pick.
+
+- **N-081** · raised `2026-1001-1537-postgres-database-schema-navigator` · value low
+  The assistant reaches `schema.table` in a schema the sidebar has not
+  loaded (`TableIndex.SetSchemas`), but the words have lost their quotes, so
+  the name is taken in lower case. A quoted mixed-case table there
+  (`billing."Invoices"`) gets no columns, and is dropped from what is sent.
+  closed 2026-10-01, `2026-1001-1817-next-list-sweep`: `sqlWords` marks a quoted part (control-byte delimiters) instead of dropping its quotes, and `Mentioned` keeps a quoted name's case when guessing a table in an unloaded schema (`billing."Invoices"`), folds an unquoted one; a dot inside quotes stays in the name. `TestTableIndexSetSchemas`, and `TestLiveColumnsPostgres` fetches the columns of `dbc_live."MixedCase"` through a one-schema index.
+
+- **N-079** · raised `2026-1001-1537-postgres-database-schema-navigator` · value low
+  The database picker is Postgres-only (`config.supportsDatabases`,
+  `db.Navigable`). MySQL's catalog is scoped to the DSN's database as well,
+  and could be derived the same way: `mysql.ParseDSN`, then set `DBName` in
+  `openPool` and in `mysqlConnector` (TLS path), plus a
+  `SHOW DATABASES`-style `DatabasesQuery`.
+  closed 2026-10-01, `2026-1001-1817-next-list-sweep`: `db.HasDatabases` (Postgres, MySQL) gates the database picker, `db.Navigable` (Postgres) the schema level. MySQL lists `information_schema.schemata` less the server's own databases, and `<conn>/<database>` opens through its own connector with `DBName` set (`mysqlConfig`, shared with TLS). TUI: the `⛁` row and `d` only. The web page's `connItem` now treats a MySQL row as a derived connection's base (a bug the browser check found). `TestLiveDatabasesMySQL`, `TestLiveNavigatorMySQL`; 24 scratch go-rod checks.
+
+- **N-075** · raised `2026-1001-1415-connection-tls-and-dsn-fields` · value low
+  `tls_key` must be an unencrypted PEM key. A passphrase-protected client key
+  works for Postgres only through the DSN's own `sslpassword`. MySQL has no
+  way to give one, and there is no `tls_key_password` key. Add one (from
+  `${VAR}`, never stored inline) if someone's key is encrypted.
+  closed 2026-10-01, `2026-1001-1817-next-list-sweep`: `tls_key_password` must be a `${VAR}`/`$VAR` reference (a literal is refused, and it needs `tls_key`); the reference is what is stored and sent to the browser, and the variable is read when the pool opens. dbc decrypts the key itself (`db/tlskey.go`: legacy PEM and PKCS#8 PBES2/PBKDF2/AES, stdlib only; scrypt/DES refused with the `openssl pkcs8` fix); MySQL uses it in `mysqlTLS`, Postgres keeps the pair out of the DSN and attaches it after parsing (`pgClientCert`). Web form "Key password" field, `--tls-key-password`. Live-tested against cert-only Postgres 17 and a `REQUIRE X509` MySQL 8.4 user.
+
+- **N-072** · raised `2026-0930-1557-sidebar-table-row-counts` · value low
+  The sidebar's row counts refresh only on a connect (served from the
+  Manager's 2-minute cache), not on a timer or after a statement that writes.
+  Sitting on one connection for ten minutes leaves ten-minute-old numbers,
+  and an INSERT/DELETE/TRUNCATE the user just ran is not reflected. Could
+  drop the connection's cache and re-run the Counts job after a run whose
+  statement is not a plain read (db.Session.Stateful already judges that).
+  closed 2026-10-01, `2026-1001-1817-next-list-sweep`: a run that may have changed rows (`db.ChangesRows`: not a plain read, not session setup like SET/BEGIN; or a script) forgets the Manager's cached counts and recounts the listed tables (`RunDone.Counts`, run by the TUI and the web hub). A counting started before the forget is neither served nor cached (`forgotAt`), a superseded one lands Stale (`countGen`). SQLite counts read uncommitted on one connection: on a shared-cache database a read of a table written in an open transaction otherwise waited past its context (the full suite hung on it). No timer: raised N-090.
+
+- **N-071** · raised `2026-0930-1217-erd-ports-partitions-widening-raster` · value low
+  A big hub's lines stay between the boxes now (N-070), but each one gets
+  its own lane through every gap it crosses, so a 400-child star is 14%
+  taller than with ribbons (4426×4571 against 4426×4018). Lines that share
+  a port slot (all of a hub's keys to its id) could share a lane through a
+  gap and fan out only after it, like a bus, which would need no widening
+  at all for a star.
+  closed 2026-10-01, `2026-1001-1817-next-list-sweep`: lines from one port slot share a lane as a bus through every hole they take in common (a per-slot trie of routes, so lines fork but never merge back), holes cost per lane, `earlyTilt` makes a bus climb near its root, and shared stubs are stroked once (`erd/route.go`, `picture.go`). star(400) 4426×4571 → 4426×3411 with no widening; star(120) 2466×2099 → 2466×1935; demo unchanged. `TestBusSharesLane`, `TestBusesKeepStarsCompact`, a `fanOut` schema for `widen`. Raised N-092.
+
+- **N-063** · raised `2026-0928-1917-show-table-columns` · value low
+  Check `dbc web`'s "Show columns" in a browser: the tables menu item, the `c`
+  key on a selected table (and that ⌘C / Ctrl+C there still copies rather than
+  firing it), and a copy out of the resulting grid. Only the Go route test and
+  `node --check app.js` covered the page side.
+  closed 2026-10-01, `2026-1001-1817-next-list-sweep`: covered by N-051's `web/e2e` test: the tables menu item, `c` on a selected table, ⌘C/Ctrl+C there copying without firing it, and a copy out of the columns grid read back from the clipboard.
+
+- **N-051** · raised `2026-0925-1554-dbc-web-phases-3-4` · value low
+  Commit the `dbc web` browser checks as an opt-in test (go-rod against a
+  built binary, skipped unless asked for, like the `db/live_*` tests). Phases
+  2–6 were verified by throwaway scratch programs (283 checks for Phase 4,
+  63 for Phase 5 — with a fake ACP agent binary on `PATH` — and 53 for
+  Phase 6) that are gone after the session, so a regression in the page's
+  JavaScript is caught only by hand. Phase 6's run found three real bugs
+  (a disposed Monaco model, a console rejection, a rename redrawn away).
+  The connection form's Fields/DSN toggle and TLS section
+  (`2026-1001-1415-connection-tls-and-dsn-fields`, 23 checks) and the
+  sidebar's schema filter (`2026-1001-1439-sidebar-schema-filter`, against a
+  154-schema Postgres) were verified the same throwaway way, as was the
+  connections menu's Disconnect (`2026-1001-1704-disconnect-connection`), and the rename of a connection with derived tabs
+  (`2026-1001-1741-tui-navigator-disconnect-and-release-fixes`, 34 checks).
+  closed 2026-10-01, `2026-1001-1817-next-list-sweep`: `web/e2e/` is its own module (go-rod stays out of dbc's `go.mod`), skipped unless `DBC_E2E=1`: builds the binary, temp HOME, sign-in, run, tables, Show columns, copy chords, connection switch, Disconnect, the connection form's Fields/DSN rows, a Postgres schema picker step with `DBC_LIVE_PG_DSN`, tabs across a reload, and fails on any page error. Caught both of two bugs planted to test it. README "Tests".
+
+- **N-047** · raised `2026-0925-1425-workspace-extraction-web-phase1` · value low
+  Opt-in live `workspace` tests on Postgres/MySQL (same `DBC_LIVE_*` DSNs):
+  retry-once, session lost, cancel mid-statement and connection switch through
+  the workspace, not just `db`. Its own tests use in-memory SQLite only.
+  closed 2026-10-01, `2026-1001-1817-next-list-sweep`: workspace/live_test.go (opt-in, same DSNs): connect, retry-once, session lost, cancel (with and without a transaction), cancel of an explain, switch, and on Postgres a derived database (`Connected.Left`, pool closed) and `PickSchema`. They found two `db.Session` bugs, fixed in `db/sessionguard.go`: a pinned connection the server cut while idle failed the next run (now pinged after 1s idle, reported as `driver.ErrBadConn` and retried when stateless), and Stop left a MySQL statement running on the server (now `KILL <CONNECTION_ID()>`). Raised N-088, N-089.
 
 - **N-078** · raised `2026-1001-1537-postgres-database-schema-navigator` · value medium
   The TUI has no database or schema picker. It opens with

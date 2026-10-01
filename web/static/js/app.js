@@ -73,16 +73,17 @@
 
   // ── the sidebar ────────────────────────────────────────────────────────
   // connItem is the Connections list's row for name: its own, or, for a
-  // connection derived onto another of a Postgres server's databases
-  // ("ProdDr/analytics"), its base's — the longest row name that, with a
-  // "/", starts it — or null. The server resolves derived names the same
-  // way (config.ConnByName).
+  // connection derived onto another of a Postgres or MySQL server's
+  // databases ("ProdDr/analytics"), its base's — the longest row name that,
+  // with a "/", starts it — or null. The server resolves derived names the
+  // same way (config.ConnByName), and DERIVES is its SupportsDatabases.
+  const DERIVES = /^(postgres|postgresql|pg|pgx|mysql|mariadb)$/i;
   function connItem(name) {
     let best = null;
     for (const b of els.conns.querySelectorAll(".conn-item")) {
       const c = b.dataset.conn;
       if (c === name) return b;
-      if (/^(postgres|postgresql|pg|pgx)$/i.test(b.dataset.driver || "") && name.length > c.length + 1 &&
+      if (DERIVES.test(b.dataset.driver || "") && name.length > c.length + 1 &&
           name.startsWith(c + "/") && (!best || c.length > best.dataset.conn.length)) best = b;
     }
     return best;
@@ -444,7 +445,9 @@
 
   // ── the database picker ────────────────────────────────────────────────
   // Shown when the server holds more than one database the user may
-  // connect to (navigable servers only). Each row is a database; picking
+  // connect to (Postgres and MySQL, whose servers list theirs — on MySQL a
+  // database is its one schema, so no schema picker follows it, unless its
+  // tables happen to span more). Each row is a database; picking
   // one connects the tab to its connection — the configured one for the
   // database its DSN opens, "<conn>/<database>" for the others — which
   // closes the session on the database left, as any switch does.
@@ -459,7 +462,16 @@
       placeholder: () => (side.databases || []).length + " databases · type to filter",
       narrowed: () => false,
       choose: (conn) => { if (conn !== state.active) connect(conn); },
-      enter: () => els.tableSchema.focus(),
+      // Enter moves on to the next level down: the schema picker, or, with
+      // none shown (MySQL, a one-schema database), the tables themselves
+      enter: () => {
+        if (!els.tableFilter.hidden) {
+          els.tableSchema.focus();
+          return;
+        }
+        const first = els.tables.querySelector("li[data-name]");
+        if (first) pickTable(first);
+      },
     });
     return {
       draw() {

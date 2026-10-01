@@ -262,6 +262,88 @@ func TestLiveNavigatorPostgres(t *testing.T) {
 	}
 }
 
+// TestLiveNavigatorMySQL: on MySQL (opt-in, DBC_LIVE_MYSQL_DSN) the Tables
+// pane has the database row only — a MySQL database is its one schema, so
+// s says there is nothing to pick — and d switches onto a derived
+// connection and back, as on Postgres.
+func TestLiveNavigatorMySQL(t *testing.T) {
+	dsn := os.Getenv("DBC_LIVE_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("set DBC_LIVE_MYSQL_DSN to run against a live MySQL")
+	}
+	for _, k := range []string{cats.EnvMarker, cats.EnvPaneID, cats.EnvControlSocket, cats.EnvHookSocket} {
+		t.Setenv(k, "")
+	}
+	const other = "dbc_tui_nav_other"
+	cfg := &config.Config{
+		MaxRows: 1000, MaxDisplayRows: 2000, AIContextRows: config.DefaultAIContextRows,
+		DefaultConnection: "live",
+		Connections:       []config.Connection{{Name: "live", Driver: "mysql", DSN: dsn}},
+	}
+	mgr := db.NewManager(cfg)
+	t.Cleanup(mgr.Close)
+	for _, s := range []string{`DROP DATABASE IF EXISTS ` + other, `CREATE DATABASE ` + other} {
+		if _, err := mgr.Run("live", s); err != nil {
+			t.Fatalf("%s: %v", s, err)
+		}
+	}
+	t.Cleanup(func() {
+		mgr.Drop("live")
+		_, _ = mgr.Run("live", `DROP DATABASE IF EXISTS `+other)
+	})
+	derived := config.DerivedName("live", other)
+	if _, err := mgr.Run(derived, `CREATE TABLE only_there (id int)`); err != nil {
+		t.Fatalf("create on %s: %v", other, err)
+	}
+	mgr.Disconnect(derived)
+
+	clipLog, openLog = nil, nil
+	m := New(cfg, mgr, Options{NoPersist: true})
+	t.Cleanup(m.shutdown)
+	drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	drive(t, m, nil, m.Init())
+
+	if dbRow, schemaRow := m.navRows(); !dbRow || schemaRow {
+		t.Fatalf("rows: db %v schema %v (want the database row only)", dbRow, schemaRow)
+	}
+	findText(t, frame(m), "⛁ "+baseDatabase(m))
+
+	m.focus = focusTables
+	key(t, m, "s")
+	if m.modal != nil || !strings.Contains(logText(m), "no schemas to pick") {
+		t.Errorf("s on MySQL: modal %v\n%s", m.modal, logText(m))
+	}
+
+	key(t, m, "d")
+	if _, ok := m.modal.(*pickModal); !ok {
+		t.Fatalf("no database picker:\n%s", logText(m))
+	}
+	typeText(t, m, other)
+	key(t, m, "enter")
+	if m.ws.Active() != derived {
+		t.Fatalf("active = %q:\n%s", m.ws.Active(), logText(m))
+	}
+	if it := m.conns.items[m.conns.cur]; it.label != "live" || it.mark != "●" {
+		t.Errorf("connections row marked: %+v", it)
+	}
+	if len(m.tables.items) != 1 || !strings.Contains(m.tables.items[0].label, "only_there") {
+		t.Errorf("tables on %s: %+v", other, m.tables.items)
+	}
+	findText(t, frame(m), "⛁ "+other)
+
+	// back to the DSN's own database: the configured connection itself,
+	// and the derived pool closed once left
+	key(t, m, "d")
+	typeText(t, m, baseDatabase(m))
+	key(t, m, "enter")
+	if m.ws.Active() != "live" {
+		t.Fatalf("back: active %q:\n%s", m.ws.Active(), logText(m))
+	}
+	if mgr.Disconnect(derived) {
+		t.Errorf("%s's pool was still open after the switch away", derived)
+	}
+}
+
 // baseDatabase is the live DSN's own database, for picking it back.
 func baseDatabase(m *Model) string {
 	cc, _ := m.cfg.ConnByName("live")

@@ -271,11 +271,11 @@ func TestMySQLConnectorTLS(t *testing.T) {
 		if mode != config.TLSDisable {
 			opts.TLSCA = pki.caPEM
 		}
-		if _, err := mysqlConnector("u:p@tcp(db.internal:3306)/d?tls=skip-verify", opts); err != nil {
+		if _, err := mysqlConnector("u:p@tcp(db.internal:3306)/d?tls=skip-verify", opts, ""); err != nil {
 			t.Errorf("%s: %v", mode, err)
 		}
 	}
-	if _, err := mysqlConnector("not a dsn", config.TLSOpts{TLS: "require"}); err == nil {
+	if _, err := mysqlConnector("not a dsn", config.TLSOpts{TLS: "require"}, ""); err == nil {
 		t.Error("a bad DSN was accepted")
 	}
 }

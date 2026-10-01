@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
 	"github.com/rohanthewiz/serr"
 
@@ -29,10 +30,23 @@ import (
 //	pick a schema   ──► SchemaTablesQuery again
 //	pick a database ──► a connect to "<conn>/<database>" (config.DatabaseSep)
 //
-// The other engines have nothing to navigate: MySQL's catalog is scoped to
-// the DSN's database, SQLite has only main, and a bytdb file is one small
-// catalog. They keep loading their whole table list (TablesQuery), and their
-// Databases and SchemaSummary are empty.
+// MySQL has the top level only. Its "schema" is its database — one name,
+// one namespace — and dbc's catalog queries are scoped to DATABASE(), the
+// one the DSN connects to, so a MySQL sidebar lists a database's tables
+// whole (TablesQuery) and has no schema level, but its server's other
+// databases are another connection each, exactly as on Postgres:
+//
+//	connect ──► DatabasesQuery      every database on the server
+//	        ──► TablesQuery         this database's tables, whole
+//	pick a database ──► a connect to "<conn>/<database>"
+//
+// So two questions, two functions: HasDatabases (Postgres, MySQL) is
+// whether there is a database picker, Navigable (Postgres) whether the
+// tables come a schema at a time behind a schema picker.
+//
+// SQLite has only main, and a bytdb file is one small catalog: neither has
+// anything to navigate. They keep loading their whole table list, and
+// their Databases and SchemaSummary are empty.
 
 // maxCatalogRows bounds the sidebar's catalog read. It is the diagram's
 // bound rather than max_rows, for the diagram's reason: max_rows caps what
@@ -57,6 +71,16 @@ func Navigable(driver string) bool {
 	return err == nil && drv == "pgx"
 }
 
+// HasDatabases reports whether a driver's connection can list its server's
+// databases and be switched onto one of them, as "<conn>/<database>"
+// (config.DatabaseSep) — the database picker. It is
+// config.SupportsDatabases, which decides what ConnByName will derive, for
+// a known driver.
+func HasDatabases(driver string) bool {
+	_, err := driverFor(driver)
+	return err == nil && config.SupportsDatabases(driver)
+}
+
 // DatabaseInfo is one database on a connection's server.
 type DatabaseInfo struct {
 	Name    string
@@ -72,18 +96,35 @@ type SchemaInfo struct {
 
 // DatabasesQuery returns the statement that lists the databases a
 // connection's server holds and its user may connect to, as (name,
-// current), or "" for a driver that is not Navigable.
+// current), or "" for a driver without databases (HasDatabases).
 //
-// Templates are left out (nobody browses template1), as are databases that
-// refuse connections (datallowconn, e.g. one being dropped) and those the
-// user lacks CONNECT on: picking one would only fail. The privilege test
-// takes the oid, so a name needing quotes is not parsed as SQL.
+// Postgres: templates are left out (nobody browses template1), as are
+// databases that refuse connections (datallowconn, e.g. one being dropped)
+// and those the user lacks CONNECT on: picking one would only fail. The
+// privilege test takes the oid, so a name needing quotes is not parsed as
+// SQL.
+//
+// MySQL: information_schema.schemata already shows only the databases the
+// user holds some privilege in (all of them with SHOW DATABASES), which is
+// the CONNECT test's counterpart. The server's own databases are left out,
+// as Postgres's templates are — information_schema, performance_schema and
+// sys are views of the server, and mysql is its grant tables — unless the
+// DSN itself opened one, so the picker still names the database in use.
+// With no database in the DSN, DATABASE() is NULL and no row is current.
 func DatabasesQuery(driver string) (string, error) {
-	if _, err := driverFor(driver); err != nil {
+	drv, err := driverFor(driver)
+	if err != nil {
 		return "", err
 	}
-	if !Navigable(driver) {
+	if !HasDatabases(driver) {
 		return "", nil
+	}
+	if drv == "mysql" {
+		return `SELECT schema_name, COALESCE(schema_name = DATABASE(), 0) AS current
+FROM information_schema.schemata
+WHERE schema_name NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+   OR schema_name = DATABASE()
+ORDER BY schema_name`, nil
 	}
 	return `SELECT datname, datname = current_database() AS current
 FROM pg_catalog.pg_database
@@ -168,11 +209,12 @@ func (m *Manager) Catalog(ctx context.Context, name, schema string) (*model.Resu
 }
 
 // Databases lists the connection's server's databases per DatabasesQuery,
-// on the pool; nil with no error for a driver that is not Navigable.
+// on the pool; nil with no error for a driver without databases
+// (HasDatabases).
 func (m *Manager) Databases(ctx context.Context, name string) ([]DatabaseInfo, error) {
 	rows, err := m.navRows(ctx, name, DatabasesQuery, "list databases")
 	if err != nil || rows == nil {
-		return nil, err // nil rows: not Navigable, nothing to list
+		return nil, err // nil rows: no databases to list on this driver
 	}
 	out := make([]DatabaseInfo, 0, len(rows))
 	for _, r := range rows {
@@ -223,7 +265,8 @@ func (m *Manager) navRows(ctx context.Context, name string, query func(string) (
 }
 
 // pgBool reads a boolean cell as database/sql renders it to a string: pgx
-// gives "true"/"false" through sql.NullString.
+// gives "true"/"false" through sql.NullString, MySQL (which has no boolean
+// type) "1"/"0". Anything else, NULL included, is false.
 func pgBool(s string) bool {
 	b, _ := strconv.ParseBool(s)
 	return b
@@ -231,16 +274,27 @@ func pgBool(s string) bool {
 
 // DefaultDatabase is the database a connection's DSN opens, as the driver
 // resolves it — pgx falls back to PGDATABASE, then to the user name, when
-// the DSN names none — or "" when that cannot be told (an unparsable DSN, a
-// driver that is not Navigable). A database picker maps this one back to
-// the configured connection itself rather than to "<conn>/<database>", so
-// picking it does not open a second pool onto the same database.
+// the DSN names none; MySQL then opens on no database at all — or "" when
+// that cannot be told (an unparsable DSN, a driver without databases) or
+// there is none. A database picker maps this one back to the configured
+// connection itself rather than to "<conn>/<database>", so picking it does
+// not open a second pool onto the same database. A MySQL DSN naming no
+// database maps none back: every database it lists is a derived
+// connection, and the configured one stays the "no database" view.
 func DefaultDatabase(cc config.Connection) string {
-	if !Navigable(cc.Driver) {
+	drv, err := driverFor(cc.Driver)
+	if err != nil || !HasDatabases(cc.Driver) {
 		return ""
 	}
 	if cc.Database != "" {
 		return cc.Database
+	}
+	if drv == "mysql" {
+		mc, err := mysql.ParseDSN(cc.DSN)
+		if err != nil {
+			return ""
+		}
+		return mc.DBName
 	}
 	pcfg, err := pgx.ParseConfig(cc.DSN)
 	if err != nil {

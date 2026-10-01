@@ -93,12 +93,13 @@ type Event interface{ event() }
 type Connected struct {
 	Name    string
 	Catalog *model.Result // the connection's tables; nil if the catalog query failed
-	// Databases and Schemas are the levels above the tables, on a driver
-	// whose sidebar is loaded a level at a time (db.Navigable): the
-	// server's databases, and this database's schemas with their table
-	// counts. Schema is the one whose tables Catalog holds, "" for every
-	// schema's. All are empty on the other drivers, and Databases or
-	// Schemas is nil when its listing failed.
+	// Databases and Schemas are the levels above the tables: the server's
+	// databases, on a driver with a database picker (db.HasDatabases:
+	// Postgres, MySQL), and this database's schemas with their table
+	// counts, on one whose sidebar is loaded a schema at a time
+	// (db.Navigable: Postgres). Schema is the one whose tables Catalog
+	// holds, "" for every schema's. Each is empty on the other drivers,
+	// and Databases or Schemas is nil when its listing failed.
 	Databases []db.DatabaseInfo
 	Schemas   []db.SchemaInfo
 	Schema    string

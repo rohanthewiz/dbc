@@ -50,17 +50,24 @@ func TestTablesQueryPerDriver(t *testing.T) {
 	}
 }
 
-// Only Postgres is navigated a level at a time; for the others the
-// database and schema listings are "" and the tables are listed whole.
+// Only Postgres is navigated a level at a time; for the others the schema
+// listing is "" and the tables are listed whole. Postgres and MySQL both
+// list their server's databases (MySQL from information_schema.schemata,
+// with the server's own schemas left out); SQLite and bytdb have none.
 func TestNavigatorQueriesPerDriver(t *testing.T) {
 	for driver, want := range map[string]bool{
-		"postgres": true, "pg": true, "mysql": false, "sqlite": false, "bytdb": false,
+		"postgres": true, "pg": true, "mysql": false, "mariadb": false, "sqlite": false, "bytdb": false,
 	} {
 		if Navigable(driver) != want {
 			t.Errorf("Navigable(%q) = %v, want %v", driver, !want, want)
 		}
+		wantDBs := map[string]string{"postgres": "pg_database", "pg": "pg_database",
+			"mysql": "information_schema.schemata", "mariadb": "information_schema.schemata"}[driver]
+		if HasDatabases(driver) != (wantDBs != "") {
+			t.Errorf("HasDatabases(%q) = %v", driver, !(wantDBs != ""))
+		}
 		dq, err := DatabasesQuery(driver)
-		if err != nil || strings.Contains(dq, "pg_database") != want {
+		if err != nil || (wantDBs == "") != (dq == "") || (wantDBs != "" && !strings.Contains(dq, wantDBs)) {
 			t.Errorf("DatabasesQuery(%q) = %q, %v", driver, dq, err)
 		}
 		sq, err := SchemaSummaryQuery(driver)
@@ -81,6 +88,36 @@ func TestNavigatorQueriesPerDriver(t *testing.T) {
 	}
 	if _, err := DatabasesQuery("cassandra"); err == nil {
 		t.Error("an unknown driver should not yield a database query")
+	}
+	if HasDatabases("cassandra") {
+		t.Error("an unknown driver has no databases")
+	}
+	// the server's own MySQL schemas are hidden, but never the one in use
+	if q, _ := DatabasesQuery("mysql"); !strings.Contains(q, "'performance_schema'") || !strings.Contains(q, "OR schema_name = DATABASE()") {
+		t.Errorf("MySQL database query:\n%s", q)
+	}
+}
+
+// DefaultDatabase is the database the DSN opens: Postgres's per pgx's
+// fallbacks, MySQL's as named (none when it names none), a derived
+// connection's own, and nothing on a driver without databases.
+func TestDefaultDatabase(t *testing.T) {
+	for _, c := range []struct {
+		cc   config.Connection
+		want string
+	}{
+		{config.Connection{Driver: "postgres", DSN: "postgres://u@h/app"}, "app"},
+		{config.Connection{Driver: "postgres", DSN: "host=h user=u dbname=app"}, "app"},
+		{config.Connection{Driver: "mysql", DSN: "u:p@tcp(h:3306)/shop?parseTime=true"}, "shop"},
+		{config.Connection{Driver: "mariadb", DSN: "u:p@tcp(h:3306)/shop"}, "shop"},
+		{config.Connection{Driver: "mysql", DSN: "u:p@tcp(h:3306)/"}, ""},
+		{config.Connection{Driver: "mysql", DSN: "u:p@tcp(h:3306)/shop", Base: "my", Database: "other"}, "other"},
+		{config.Connection{Driver: "mysql", DSN: "not a dsn"}, ""},
+		{config.Connection{Driver: "sqlite", DSN: "file:x.db"}, ""},
+	} {
+		if got := DefaultDatabase(c.cc); got != c.want {
+			t.Errorf("DefaultDatabase(%s %q) = %q, want %q", c.cc.Driver, c.cc.DSN, got, c.want)
+		}
 	}
 }
 

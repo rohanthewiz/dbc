@@ -151,7 +151,8 @@ type Connection struct {
 // A Postgres connection is bound to one database — every catalog the
 // server has is per database, and there is no USE to move a session to
 // another — so reaching a second database on the same host means opening a
-// second pool. Naming that pool "<base>/<database>" lets everything keyed by
+// second pool. A MySQL pool is opened the same way, on the database its
+// sidebar lists (see SupportsDatabases). Naming that pool "<base>/<database>" lets everything keyed by
 // connection name (the Manager's pools and row counts, the pinned session,
 // history, saved tabs, the web layout's per-connection keys) keep working
 // with no second key, and a tab saved on a derived connection reopens on it
@@ -161,13 +162,22 @@ const DatabaseSep = "/"
 // DerivedName is the name of base's connection to database.
 func DerivedName(base, database string) string { return base + DatabaseSep + database }
 
-// supportsDatabases reports whether a driver's connections can be derived
-// onto another database. Postgres only, for now: MySQL scopes the catalog
-// by the DSN's database as well, and could be added the same way (its DSN
-// parser sets DBName), but nothing on it has asked for that yet.
-func supportsDatabases(driver string) bool {
+// SupportsDatabases reports whether a driver's connections can be derived
+// onto another database of their server: Postgres, and MySQL (MariaDB
+// too). Both tie what a connection's sidebar lists to the database its DSN
+// names — Postgres because every catalog is per database, MySQL because
+// dbc scopes its catalog queries to DATABASE() — so on both another
+// database is another connection. MySQL could USE its way across instead,
+// but a pool's connections are interchangeable and a USE would stick to
+// only one of them; setting the database the pool dials with keeps every
+// connection of it on the same one. SQLite and bytdb open one file, with
+// no server to hold a second database.
+//
+// db.HasDatabases (the database pickers) is this same set, so a picker
+// never offers a database ConnByName could not derive.
+func SupportsDatabases(driver string) bool {
 	switch strings.ToLower(driver) {
-	case "postgres", "postgresql", "pg", "pgx":
+	case "postgres", "postgresql", "pg", "pgx", "mysql", "mariadb":
 		return true
 	}
 	return false
@@ -430,13 +440,14 @@ func DemoBytdbPath() (string, error) {
 }
 
 // ConnByName finds a connection config by name. A name no connection has
-// exactly, of the form "<base>/<database>" where base is a Postgres
-// connection, is that connection derived onto database (see DatabaseSep):
-// a copy with Name set to name and Base and Database filled in.
+// exactly, of the form "<base>/<database>" where base is a Postgres or
+// MySQL connection (SupportsDatabases), is that connection derived onto
+// database (see DatabaseSep): a copy with Name set to name and Base and
+// Database filled in.
 //
 // The exact match is tried first, so a configured connection whose own
 // name contains a "/" is still found as itself. Then the name is matched
-// against each Postgres connection's name plus the separator, rather than
+// against each such connection's name plus the separator, rather than
 // split at a "/": a quoted Postgres database name may contain one, and so
 // may a connection's name. Of two bases that both match ("a" and "a/b" for
 // "a/b/c"), the longer wins, as the more specific.
@@ -451,7 +462,7 @@ func (c *Config) ConnByName(name string) (Connection, bool) {
 	best := -1
 	for i, cn := range c.Connections {
 		prefix := cn.Name + DatabaseSep
-		if cn.Base == "" && supportsDatabases(cn.Driver) && len(name) > len(prefix) &&
+		if cn.Base == "" && SupportsDatabases(cn.Driver) && len(name) > len(prefix) &&
 			strings.HasPrefix(name, prefix) && (best < 0 || len(cn.Name) > len(c.Connections[best].Name)) {
 			best = i
 		}

@@ -71,7 +71,8 @@ func (w *Workspace) Connect(name string) Start {
 // long one — the server's databases, this database's schemas, and the
 // tables of the one schema pick names — so a connect to a big server costs
 // what its sidebar shows, not what the server holds. Elsewhere it is the
-// whole table list, as it always was.
+// whole table list, as it always was — after, on MySQL, the server's
+// databases (db.HasDatabases), for the database picker.
 //
 // The connect runs under its own context, so Cancel can abandon it —
 // without that, only connect_timeout bounds it, and with connect_timeout =

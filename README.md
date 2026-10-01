@@ -214,17 +214,27 @@ server costs what the sidebar shows, not what the server holds:
   Names are schema-qualified whenever the database has more than one
   schema, so a preview works off the `search_path`.
 
+MySQL has the **db** level too: the server's databases you hold a privilege
+in (all of them with `SHOW DATABASES`), less the server's own
+`information_schema`, `mysql`, `performance_schema` and `sys` unless your
+DSN opened one. Picking one opens `<conn>/<database>` in the same way,
+TLS settings and all. A MySQL database is its one schema, so there is no
+schema level: the picked database's tables are listed whole. A DSN that
+names no database (`user:pw@tcp(host:3306)/`) lists no tables until you
+pick one.
+
 The terminal UI has the same two levels, as two rows at the top of its
-Tables pane: `⛁ analytics ▾` and `◫ sales · 40 ▾`. Click one, or press `d`
-or `s` in the Tables pane, for a list you can type into to narrow; `Enter`
-or a click picks. The schema picked is remembered per connection, across
-restarts too (in `~/.config/dbc/schema-picks.json`).
+Tables pane: `⛁ analytics ▾` and `◫ sales · 40 ▾` (on MySQL, the first
+only). Click one, or press `d` or `s` in the Tables pane, for a list you
+can type into to narrow; `Enter` or a click picks. The schema picked is
+remembered per connection, across restarts too (in
+`~/.config/dbc/schema-picks.json`).
 
 The assistant matches table names in the loaded schema, and also
 `schema.table` names in any other schema of the database. The ERD
 button diagrams the picked schema. No table list is cut at `max_rows`, which applies only to results you ask
-for (Ctrl+T included). MySQL, SQLite and bytdb list their tables whole, as
-before.
+for (Ctrl+T included). SQLite and bytdb list their tables whole, as before,
+with no database picker.
 
 ### Mouse
 
@@ -234,7 +244,7 @@ before.
 | toolbar | click | Run, Stop, Explain, Copy ▾, Export, History, Scripts, Tables, Assistant; `● conn ▾` switches connection |
 | connections | click | connects |
 | connections | right-click (or the toolbar's `● conn ▾`) | **Disconnect** the active connection, then the list to connect to |
-| tables | click `⛁ db ▾` / `◫ schema ▾` | *(Postgres)* pick another of the server's databases / another schema, from a list you can type into |
+| tables | click `⛁ db ▾` / `◫ schema ▾` | *(Postgres; MySQL has `⛁ db` only)* pick another of the server's databases / another schema, from a list you can type into |
 | tables | click / double-click / right-click | select / preview the first 100 rows / show columns, diagram it, diagram all tables, copy the ERD as Mermaid, insert name, copy name |
 | tables | `c` on the selected table | show its columns: its `information_schema.columns` rows (name, type, nullable, default, length) in the grid, ready to copy |
 | tables | `e` on the selected table | diagram it and its neighbours (an ERD, below), saved as a PNG and opened |
@@ -279,7 +289,7 @@ dragging.
 | `Ctrl+T` | List the tables and views on the active connection |
 | `Ctrl+L` | Jump to the connections list |
 | `x` | *(connections)* Disconnect without picking another connection. If the session may hold a transaction, dbc asks first, because disconnecting rolls it back |
-| `d` / `s` | *(tables, Postgres)* Pick a database / a schema |
+| `d` / `s` | *(tables, Postgres; `d` on MySQL too)* Pick a database / a schema |
 | `Ctrl+G` | *(inside Cats)* Hand the statement to an agent in another pane |
 | `y` / `Y` / `c` | *(results)* Copy the cell or range / the row / open the copy menu |
 | `<` / `>` / `=` | *(results)* Narrow / widen the column / fit it to its content |

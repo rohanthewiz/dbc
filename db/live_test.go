@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -356,6 +357,78 @@ func TestLiveDatabasesPostgres(t *testing.T) {
 	if DefaultDatabase(mustConn(t, mgr, "live")) == other {
 		t.Error("the base's default database should be its DSN's")
 	}
+}
+
+// The same on MySQL (N-079): its server's databases listed, the server's own
+// schemas left out, the DSN's marked current; a derived "live/<database>"
+// lands on its database — DATABASE() and the sidebar's catalog both — while
+// the base stays on its own; and the derived pool also opens through the
+// TLS connector, the other route a MySQL pool takes (DBC_LIVE_MYSQL_DSN's
+// server has TLS on by default, as mysql:8.4 does).
+func TestLiveDatabasesMySQL(t *testing.T) {
+	mgr := liveMgr(t, "DBC_LIVE_MYSQL_DSN", "mysql")
+	const other = "dbc_live_other"
+	drop := `DROP DATABASE IF EXISTS ` + other
+	liveExec(t, mgr, drop, `CREATE DATABASE `+other)
+	t.Cleanup(func() {
+		mgr.Drop("live")
+		_, _ = mgr.Run("live", drop)
+	})
+	base := DefaultDatabase(mustConn(t, mgr, "live"))
+	if base == "" || base == other {
+		t.Fatalf("the DSN's database is %q; the test wants a DSN naming one", base)
+	}
+
+	dbs, err := mgr.Databases(context.Background(), "live")
+	if err != nil {
+		t.Fatalf("databases: %v", err)
+	}
+	var found, current bool
+	for _, d := range dbs {
+		switch d.Name {
+		case other:
+			found = !d.Current
+		case base:
+			current = d.Current
+		case "information_schema", "mysql", "performance_schema", "sys":
+			t.Errorf("the server's own %s listed", d.Name)
+		}
+	}
+	if !found || !current {
+		t.Errorf("databases = %+v, want %s (not current) and %s current", dbs, other, base)
+	}
+
+	derived := config.DerivedName("live", other)
+	liveExec(t, mgr, `SELECT 1`) // the base pool is open before the derived one
+	if _, err := mgr.Run(derived, `CREATE TABLE only_here (id int)`); err != nil {
+		t.Fatalf("create on %s: %v", derived, err)
+	}
+	if res, err := mgr.Run(derived, `SELECT DATABASE()`); err != nil || res.Rows[0][0] != other {
+		t.Fatalf("%s is on %v (%v), want %s", derived, res, err, other)
+	}
+	cat, err := mgr.Catalog(context.Background(), derived, "")
+	if err != nil || len(cat.Rows) != 1 || cat.Rows[0][1] != "only_here" {
+		t.Errorf("%s catalog = %v, %v", derived, cat, err)
+	}
+	// the derived connection's own listing marks its database current
+	dbs, err = mgr.Databases(context.Background(), derived)
+	if err != nil || !slices.ContainsFunc(dbs, func(d DatabaseInfo) bool { return d.Name == other && d.Current }) {
+		t.Errorf("databases on %s = %+v, %v", derived, dbs, err)
+	}
+	if res, err := mgr.Run("live", `SELECT DATABASE()`); err != nil || res.Rows[0][0] != base {
+		t.Errorf("live is on %v (%v), want %s", res, err, base)
+	}
+
+	// the TLS route: a connector with both the TLS config and the database
+	tlsMgr := liveTLS(t, "DBC_LIVE_MYSQL_DSN", "mysql", config.TLSOpts{TLS: "require"})
+	res, err := tlsMgr.Run(derived, `SELECT DATABASE()`)
+	if err != nil || res.Rows[0][0] != other {
+		t.Fatalf("%s over TLS is on %v (%v), want %s", derived, res, err, other)
+	}
+	if res, err := tlsMgr.Run(derived, `SHOW SESSION STATUS LIKE 'Ssl_cipher'`); err != nil || res.Rows[0][1] == "" {
+		t.Errorf("%s over TLS has no cipher: %v (%v)", derived, res, err)
+	}
+	tlsMgr.Drop("live")
 }
 
 func mustConn(t *testing.T, mgr *Manager, name string) config.Connection {

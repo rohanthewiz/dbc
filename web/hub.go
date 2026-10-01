@@ -464,8 +464,10 @@ type connEvent struct {
 // On a driver whose sidebar is loaded a level at a time (db.Navigable,
 // Postgres) Tables is the one schema Schema names ("" for every schema,
 // which AllowAll says the database is small enough for), and picking a
-// schema is a round trip. Elsewhere Databases and Schemas are empty, Tables
-// is the whole catalog, and the page narrows it to a schema itself.
+// schema is a round trip. Elsewhere Schemas is empty, Tables is the whole
+// catalog, and the page narrows it to a schema itself. Databases is filled
+// on any driver with a database picker (db.HasDatabases): MySQL has one
+// too, with its database's tables listed whole below it.
 type sideState struct {
 	Tables []tabRef `json:"tables"`
 	// Base is the configured connection the sidebar's connection is, or is

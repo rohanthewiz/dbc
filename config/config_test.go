@@ -330,6 +330,7 @@ func TestConnByNameDerived(t *testing.T) {
 		{Name: "prod", Driver: "postgres", DSN: "host=h dbname=main", Demo: true},
 		{Name: "prod/reports", Driver: "postgres", DSN: "host=r"},
 		{Name: "my", Driver: "mysql", DSN: "u@tcp(h)/d"},
+		{Name: "lite", Driver: "sqlite", DSN: "x.db"},
 	}}
 	cn, ok := cfg.ConnByName("prod/analytics")
 	if !ok || cn.Name != "prod/analytics" || cn.Base != "prod" || cn.Database != "analytics" || cn.DSN != "host=h dbname=main" {
@@ -347,13 +348,31 @@ func TestConnByNameDerived(t *testing.T) {
 	if cn, ok := cfg.ConnByName("prod/a/b"); !ok || cn.Base != "prod" || cn.Database != "a/b" {
 		t.Errorf("a database name may hold a /: %+v", cn)
 	}
-	for _, name := range []string{"my/other", "prod/", "nope/x"} {
+	// MySQL connections derive the same way (N-079): the database picker
+	// is theirs too
+	if cn, ok := cfg.ConnByName("my/other"); !ok || cn.Base != "my" || cn.Database != "other" || cn.DSN != "u@tcp(h)/d" {
+		t.Errorf("my/other = %+v, %v", cn, ok)
+	}
+	for _, name := range []string{"prod/", "my/", "nope/x", "lite/x"} {
 		if cn, ok := cfg.ConnByName(name); ok {
 			t.Errorf("%q should not resolve, got %+v", name, cn)
 		}
 	}
 	// derived connections are never listed
-	if n := len(cfg.Conns()); n != 3 {
+	if n := len(cfg.Conns()); n != 4 {
 		t.Errorf("Conns() has %d entries", n)
+	}
+}
+
+// Only a server engine derives connections onto another database; a file
+// engine has none to derive onto.
+func TestSupportsDatabases(t *testing.T) {
+	for driver, want := range map[string]bool{
+		"postgres": true, "PG": true, "pgx": true, "mysql": true, "MariaDB": true,
+		"sqlite": false, "sqlite3": false, "bytdb": false, "": false,
+	} {
+		if got := SupportsDatabases(driver); got != want {
+			t.Errorf("SupportsDatabases(%q) = %v, want %v", driver, got, want)
+		}
 	}
 }

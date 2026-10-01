@@ -95,10 +95,12 @@ type Workspace struct {
 	active   string         // the active connection
 	catalog  *model.Result  // its tables, for a sidebar; nil until connected
 	tableIdx *db.TableIndex // the same catalog, indexed for the assistant
-	// The levels above the tables, on a driver whose sidebar is loaded a
-	// level at a time (db.Navigable); all empty otherwise. databases is the
-	// server's, schemas the active database's; schema is the one whose
-	// tables catalog holds, "" when it holds every schema's.
+	// The levels above the tables. databases is the server's, on a driver
+	// with a database picker (db.HasDatabases: Postgres, MySQL); schemas
+	// is the active database's, on a driver whose tables are loaded a
+	// schema at a time (db.Navigable: Postgres); each is empty otherwise.
+	// schema is the one whose tables catalog holds, "" when it holds every
+	// schema's.
 	databases    []db.DatabaseInfo
 	schemas      []db.SchemaInfo
 	schema       string
@@ -202,7 +204,7 @@ func (w *Workspace) Catalog() *model.Result {
 }
 
 // Databases is the active connection's server's databases, for a database
-// picker; nil on a driver that is not db.Navigable, or when the listing
+// picker; nil on a driver without databases (db.HasDatabases), or when the listing
 // failed. The slice is shared: read it, never write to it.
 func (w *Workspace) Databases() []db.DatabaseInfo {
 	w.mu.Lock()

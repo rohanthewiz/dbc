@@ -313,10 +313,24 @@ func (m *Manager) open(ctx context.Context, name string) (dbh *sql.DB, anchor *s
 // database, when set, is the database to open instead of the one the DSN
 // names: a connection derived onto another database of the same server
 // (config.DatabaseSep). It is set on the parsed config rather than spliced
-// into the DSN text, so it works the same for URL and keyword DSNs, and
-// after tlsOpen has rewritten the DSN. Only Postgres connections are ever
-// derived (config.supportsDatabases).
+// into the DSN text, so it works the same for URL and keyword DSNs, after
+// tlsOpen has rewritten a Postgres DSN, and for a MySQL DSN that names no
+// database at all. Only Postgres and MySQL connections are ever derived
+// (config.SupportsDatabases):
+//
+//	pgx    pgx.ParseConfig ─► Config.Database = database
+//	mysql  mysqlConnector  ─► Config.DBName   = database (and the TLS
+//	                          config, when t is set, on the same connector)
 func openPool(drv, dsn string, t config.TLSOpts, database string) (*sql.DB, error) {
+	if drv == "mysql" && database != "" {
+		// a derived MySQL pool always goes through a connector of its own,
+		// TLS or not: that is the one place a parsed DSN can be changed
+		c, err := mysqlConnector(dsn, t, database)
+		if err != nil {
+			return nil, err
+		}
+		return sql.OpenDB(c), nil
+	}
 	dsn, connector, err := tlsOpen(drv, dsn, t)
 	if err != nil {
 		return nil, err

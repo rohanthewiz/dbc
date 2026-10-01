@@ -60,7 +60,7 @@ func tlsOpen(drv, dsn string, t config.TLSOpts) (string, driver.Connector, error
 		out, err := pgTLSDSN(dsn, t)
 		return out, nil, err
 	case "mysql":
-		c, err := mysqlConnector(dsn, t)
+		c, err := mysqlConnector(dsn, t, "")
 		return dsn, c, err
 	}
 	return "", nil, serr.New("tls settings are for postgres and mysql — this driver opens a local file, with no connection to encrypt",
@@ -120,12 +120,33 @@ func pgTLSDSN(dsn string, t config.TLSOpts) (string, error) {
 	return b.String(), nil
 }
 
-// mysqlConnector parses a MySQL DSN and opens its connector with the TLS
-// config t asks for, replacing whatever the DSN's tls param said.
-func mysqlConnector(dsn string, t config.TLSOpts) (driver.Connector, error) {
+// mysqlConnector parses a MySQL DSN and opens its connector per
+// mysqlConfig: with the TLS config t asks for, and on database when that is
+// set.
+func mysqlConnector(dsn string, t config.TLSOpts, database string) (driver.Connector, error) {
+	mc, err := mysqlConfig(dsn, t, database)
+	if err != nil {
+		return nil, err
+	}
+	return mysql.NewConnector(mc)
+}
+
+// mysqlConfig parses a MySQL DSN and applies what the DSN's text does not
+// say: t's TLS config, when t is set, replacing whatever the DSN's tls param
+// said; and database, when set, replacing the DSN's database (a connection
+// derived onto another database, config.DatabaseSep). Unset, each leaves the
+// DSN's own setting alone. It is mysqlConnector's whole decision, apart
+// from the connector — whose Config is not exported — so tests read it here.
+func mysqlConfig(dsn string, t config.TLSOpts, database string) (*mysql.Config, error) {
 	mc, err := mysql.ParseDSN(dsn)
 	if err != nil {
 		return nil, err
+	}
+	if database != "" {
+		mc.DBName = database
+	}
+	if !t.Set() {
+		return mc, nil
 	}
 	host := mc.Addr
 	if h, _, splitErr := net.SplitHostPort(mc.Addr); splitErr == nil {
@@ -140,7 +161,7 @@ func mysqlConnector(dsn string, t config.TLSOpts) (driver.Connector, error) {
 	// driver's own spelling of no TLS, so disable needs no special case.
 	mc.TLS, mc.TLSConfig = tc, "false"
 	mc.AllowFallbackToPlaintext = t.TLS == config.TLSPrefer
-	return mysql.NewConnector(mc)
+	return mc, nil
 }
 
 // mysqlTLS builds the *tls.Config for a MySQL server at host, giving each

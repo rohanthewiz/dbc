@@ -37,12 +37,24 @@ import (
 // (userdata.SavePick), so going back to a database — in this run or the
 // next — reopens the schema the user was in, as the web does from its
 // saved layout.
+//
+// MySQL has the database row only (db.HasDatabases without db.Navigable):
+// a MySQL database is its one schema, listed whole, so there is no schema
+// level to pick from, but its server's other databases are derived
+// connections exactly as on Postgres.
 
-// navigable reports whether the active connection's sidebar is loaded a
-// level at a time, and so has the picker rows.
+// navigable reports whether the active connection's tables are loaded a
+// schema at a time, and so has the schema row.
 func (m *Model) navigable() bool {
 	cc, ok := m.cfg.ConnByName(m.ws.Active())
 	return ok && db.Navigable(cc.Driver)
+}
+
+// hasDatabases reports whether the active connection's server lists its
+// databases, and so has the database row.
+func (m *Model) hasDatabases() bool {
+	cc, ok := m.cfg.ConnByName(m.ws.Active())
+	return ok && db.HasDatabases(cc.Driver)
 }
 
 // baseOf is the configured connection a connection is, or is derived from:
@@ -80,10 +92,8 @@ func (m *Model) schemaTotal() int {
 // the database has more than one schema — with one, every table is in it,
 // and the workspace lists them without a pick (see resolvePick).
 func (m *Model) navRows() (dbRow, schemaRow bool) {
-	if !m.navigable() {
-		return false, false
-	}
-	return len(m.ws.Databases()) > 0, len(m.ws.Schemas()) > 1
+	return m.hasDatabases() && len(m.ws.Databases()) > 0,
+		m.navigable() && len(m.ws.Schemas()) > 1
 }
 
 // schemaLabel is what the schema row says: the schema listed and its table
@@ -156,7 +166,7 @@ func commas(n int) string {
 // them the same way).
 func (m *Model) openDatabasePicker() {
 	dbs := m.ws.Databases()
-	if !m.navigable() || len(dbs) == 0 {
+	if !m.hasDatabases() || len(dbs) == 0 {
 		m.log(logWarn, m.pickWhy("databases"))
 		return
 	}
@@ -248,7 +258,8 @@ func (m *Model) pickWhy(what string) string {
 	switch {
 	case m.ws.Active() == "":
 		return "not connected — pick a connection first"
-	case !m.navigable():
+	case what == "databases" && !m.hasDatabases(),
+		what == "schemas" && !m.navigable():
 		return m.ws.Active() + " lists its tables whole — there are no " + what + " to pick"
 	case what == "schemas":
 		return "this database has one schema — its tables are all listed"

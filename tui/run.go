@@ -108,8 +108,12 @@ func (m *Model) startRun(st workspace.Start, err error) tea.Cmd {
 
 // connectCmd opens the connection and fetches its catalog for the sidebar.
 // A newer connect supersedes one still dialing — see workspace.Connect.
+// It opens on the schema last picked on the connection (schemaPicks, which
+// persist across runs), so the first connect after a restart lands where
+// the user left off; a pick the database no longer has falls back to the
+// default schema (workspace.SchemaPick).
 func (m *Model) connectCmd(name string) tea.Cmd {
-	return job(m.ws.Connect(name).Job)
+	return job(m.ws.ConnectPick(name, m.schemaPicks[name]).Job)
 }
 
 // cancelConnect abandons the connect in flight. It reports false when there
@@ -123,7 +127,7 @@ func (m *Model) cancelConnect() bool {
 }
 
 // setActive switches to a connection, opening its sidebar on the schema last
-// picked there in this run (navigator.go), or the default.
+// picked there (navigator.go), or the default.
 func (m *Model) setActive(name string) tea.Cmd {
 	st := m.ws.SwitchPick(name, m.schemaPicks[name])
 	m.notes(st.Notes)
@@ -225,22 +229,25 @@ func (m *Model) tick(msg tickMsg) tea.Cmd {
 }
 
 // runDone draws a run's outcome, which the workspace has already landed.
+// A run that may have changed rows comes with a recount of the sidebar's
+// row counts (RunDone.Counts), started whatever the outcome.
 func (m *Model) runDone(ev *workspace.RunDone) tea.Cmd {
 	if ev.Stale {
 		return nil // a straggler from a run that was already written off
 	}
 	m.catsAfterTransition()
+	recount := job(ev.Counts)
 	if ev.Err != nil {
 		m.notes(ev.Notes)
 		m.setStatus(ev.Status)
-		return nil
+		return recount
 	}
 	if ev.Script {
 		m.notes(ev.Notes)
 		if r := m.ws.LastResult(); r != nil {
 			m.setStatus(resultStatus(r, m.cfg.MaxRows, m.grid.Rows()))
 		}
-		return nil
+		return recount
 	}
 	m.showResult(ev.Result)
 	if ev.Plan != nil {
@@ -249,7 +256,7 @@ func (m *Model) runDone(ev *workspace.RunDone) tea.Cmd {
 		m.log(logAccent, "that result is a query plan — shown in the ◈ Plan tab (p switches back to the raw rows)")
 	}
 	m.notes(ev.Notes)
-	return nil
+	return recount
 }
 
 // showResult puts a result in the grid and describes it in the status bar.

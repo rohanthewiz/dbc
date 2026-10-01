@@ -513,6 +513,11 @@ func (s *Server) handleConnEdit(ctx rweb.Context) error {
 				"saved query tabs on %q were not moved to %q, and will open on the window's connection: %v",
 				name, f.Name, err))
 		}
+		if err = s.moveSchemaPicks(name, f.Name); err != nil {
+			warns = append(warns, fmt.Sprintf(
+				"saved schema picks on %q were not moved to %q, and it will open on its default schema: %v",
+				name, f.Name, err))
+		}
 	}
 	if reconnects {
 		s.mgr.Drop(name)
@@ -639,6 +644,42 @@ func (h *hub) broadcast(typ string, data any) {
 	for _, w := range wins {
 		w.send(typ, "", data)
 	}
+}
+
+// schemaPickKey is the layout key prefix the page saves a connection's
+// schema pick under: "tableSchema.<conn>" (app.js PICK_KEY). The value is
+// the page's to read; the server only moves it on a rename.
+const schemaPickKey = "tableSchema."
+
+// moveSchemaPicks moves the saved schema picks of connection from — its own
+// and those of its other databases ("<from>/analytics") — to to's names.
+//
+// The page moves the picks its window holds (connRenamed), but a window
+// loads the layout only at boot, so a pick saved by a window that has since
+// closed, or that never connected to that database, is in no window to be
+// moved. The server reads the store's layout instead, which has all of
+// them. Both moves landing is harmless: the page writes the same value
+// under the same new key, and blanks an old key this has deleted.
+func (s *Server) moveSchemaPicks(from, to string) error {
+	saved, err := s.store.Layout()
+	if err != nil {
+		return err
+	}
+	moves := map[string]string{}
+	for k := range saved {
+		conn, isPick := strings.CutPrefix(k, schemaPickKey)
+		switch {
+		case !isPick:
+		case conn == from:
+			moves[k] = schemaPickKey + to
+		case derivedFrom(s.cfg, conn, from):
+			moves[k] = schemaPickKey + config.DerivedName(to, conn[len(from)+len(config.DatabaseSep):])
+		}
+	}
+	if len(moves) == 0 {
+		return nil
+	}
+	return s.store.MoveLayout(moves)
 }
 
 // derivedFrom reports whether conn is base's connection onto another of its

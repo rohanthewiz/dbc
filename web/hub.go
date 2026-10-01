@@ -641,6 +641,9 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 		if ev.Stale {
 			return
 		}
+		if ev.Counts != nil { // the run may have changed rows: recount the sidebar's
+			go func() { s.deliver(t, ev.Counts()) }()
+		}
 		t.notes(ev.Notes)
 		out := runEvent{
 			Tag: ev.Tag, Conn: ev.Conn, OK: ev.Err == nil,

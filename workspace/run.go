@@ -145,9 +145,15 @@ func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 	job := func() Event {
 		var res *model.Result
 		var err error
+		wrote := false
 		for i, stmt := range stmts {
 			w.stepTo(gen, i+1)
 			res, err = w.runOnSession(ctx, conn, stmt)
+			// A failed statement may still have written (a stop
+			// mid-INSERT on a driver without transactional DDL, a
+			// multi-row write cut short), so it counts as well as
+			// the ones that succeeded.
+			wrote = wrote || db.ChangesRows(stmt)
 			if err != nil {
 				if len(stmts) > 1 {
 					err = serr.Wrap(err, "statement", fmt.Sprintf("%d/%d", i+1, len(stmts)))
@@ -157,7 +163,7 @@ func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 			}
 		}
 		ev := &RunDone{Tag: tag, Conn: conn, Stmts: stmts, Result: res, Err: err}
-		w.landRun(ev, gen)
+		w.landRun(ev, gen, wrote)
 		return ev
 	}
 	return Start{
@@ -191,7 +197,9 @@ func (w *Workspace) RunScript(path string) (Start, error) {
 	).WithContext(ctx)
 	job := func() Event {
 		ev := &RunDone{Tag: tag, Conn: conn, Script: true, Err: script.Run(path, s)}
-		w.landRun(ev, gen)
+		// what a script ran is not known here, so it is taken to have
+		// written: a script is more often a data chore than a report
+		w.landRun(ev, gen, true)
 		return ev
 	}
 	return Start{Tag: tag, Gen: gen, Job: job, Notes: []Note{notef(Info, "running %s", tag)}}, nil
@@ -242,13 +250,18 @@ func (w *Workspace) runningStatusLocked() string {
 	return fmt.Sprintf("%s %s", w.runTag, took)
 }
 
-// landRun installs a run's outcome.
-func (w *Workspace) landRun(ev *RunDone, gen int) {
+// landRun installs a run's outcome. wrote is whether the run may have
+// changed rows (db.ChangesRows of any statement it reached, or a script),
+// for the sidebar's counts: see recountLocked.
+func (w *Workspace) landRun(ev *RunDone, gen int, wrote bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if gen != w.runGen {
 		ev.Stale = true // a straggler from a run that was already written off
 		return
+	}
+	if wrote {
+		ev.Counts = w.recountLocked(ev.Conn)
 	}
 	ev.Elapsed = w.endRunLocked()
 	if len(ev.Stmts) > 0 {
@@ -275,6 +288,36 @@ func (w *Workspace) landRun(ev *RunDone, gen int) {
 	if len(ev.Stmts) > 1 {
 		ev.Notes = append(ev.Notes, notef(Ok, "%d statements completed — showing the last result", len(ev.Stmts)))
 	}
+}
+
+// recountLocked makes the Job that refreshes the sidebar's row counts after
+// a run on conn that may have changed rows, or nil when the sidebar is not
+// showing conn's tables (the run's connection was left meanwhile, or its
+// catalog never loaded). The caller holds mu.
+//
+// The Manager's cached counts for conn are dropped first: they are shared,
+// cached for minutes, and would otherwise hand the same pre-write numbers
+// straight back. A counting already in flight for this sidebar is canceled
+// — it may have read the rows before the write — and lands Stale.
+//
+// The whole listed catalog is recounted, not just the tables the
+// statements name: a write reaches tables its text does not (a cascade, a
+// trigger, a function), and a sidebar lists at most one schema's tables on
+// a big server (db.Navigable), so this costs what a connect's counting does.
+//
+// A write inside an open transaction is not visible to the pool the counts
+// read through, so its recount shows the old numbers; the COMMIT that ends
+// it is itself a run that recounts (db.ChangesRows).
+func (w *Workspace) recountLocked(conn string) Job {
+	if conn != w.active || w.catalog == nil {
+		return nil
+	}
+	w.mgr.ForgetRowCounts(conn)
+	if w.countCancel != nil {
+		w.countCancel()
+		w.countCancel = nil
+	}
+	return w.countsJobLocked(conn, w.connGen, db.TableRefs(w.catalog.Rows))
 }
 
 // failedLocked writes a failed or stopped run's notes and status, and

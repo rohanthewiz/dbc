@@ -142,6 +142,10 @@ type RunDone struct {
 	// success it is "": the summary depends on how many rows the UI shows
 	// (see ResultStatus).
 	Status string
+	// Counts, when non-nil, refreshes the sidebar's row counts: the run may
+	// have changed rows (db.ChangesRows), failed or not. Its event is a
+	// *RowCounts, as Connected.Counts's is.
+	Counts Job
 }
 
 // ExplainDone lands an explain.

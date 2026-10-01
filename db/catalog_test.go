@@ -100,6 +100,21 @@ func TestTableIndexSetSchemas(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("Mentioned = %v, want %v", got, want)
 	}
+	// a quoted name keeps its case (Postgres would not fold it), and so
+	// does a quoted schema's real name; an unquoted one is folded, as
+	// Postgres folds it. A dot inside quotes is part of the name.
+	got = x.Mentioned(`SELECT * FROM billing."Invoices" JOIN "Billing"."Line.Items" ON true
+		JOIN hr.Staff ON true JOIN mydb.billing."Invoices" ON true`, "")
+	want = []TableRef{{Schema: "Billing", Name: "Invoices"}, {Schema: "Billing", Name: "Line.Items"},
+		{Schema: "hr", Name: "staff"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("Mentioned (quoted) = %v, want %v", got, want)
+	}
+	// prose has no quoting to read: folded
+	if got = x.Mentioned("", "how many rows in billing.Invoices?"); !slices.Equal(got,
+		[]TableRef{{Schema: "Billing", Name: "invoices"}}) {
+		t.Errorf("Mentioned (prose) = %v", got)
+	}
 	// with every schema loaded there is nothing to guess
 	full := NewTableIndex([]TableRef{{Schema: "public", Name: "cats"}}).SetSchemas([]string{"public"})
 	if got := full.Mentioned("SELECT 1 FROM c.x", ""); len(got) != 0 {

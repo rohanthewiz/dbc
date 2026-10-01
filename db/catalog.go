@@ -270,9 +270,11 @@ func (x *TableIndex) Lookup(qname string) (TableRef, bool) {
 // The column lookup that follows (Manager.Columns) is the check — a table
 // it finds no columns for is dropped before anything is sent. The word's
 // schema must be a real schema, which keeps a table alias ("c.name") from
-// becoming a guess. The name is taken in lower case, as Postgres folds an
-// unquoted one; a quoted mixed-case name would need its quotes, which the
-// words have lost, and is the case this cannot reach.
+// becoming a guess. The name is taken as Postgres would read it: in lower
+// case when unquoted (Postgres folds it), as written when quoted in the SQL
+// (billing."Invoices"), which is why sqlWords marks a quoted part rather
+// than dropping its quotes. Prose has no quoting to read, so its names are
+// folded.
 func (x *TableIndex) Mentioned(sql, prose string) []TableRef {
 	if x == nil || (len(x.tables) == 0 && len(x.unloaded) == 0) {
 		return nil
@@ -287,28 +289,34 @@ func (x *TableIndex) Mentioned(sql, prose string) []TableRef {
 		}
 	}
 	match := func(word string) {
-		word = strings.ToLower(strings.Trim(word, "."))
-		if word == "" {
+		parts := wordParts(word)
+		switch len(parts) {
+		case 0:
 			return
-		}
-		if dot := strings.LastIndexByte(word, '.'); dot >= 0 {
-			// db.schema.table (3 parts) keeps its last two
-			qual := word
-			if prev := strings.LastIndexByte(word[:dot], '.'); prev >= 0 {
-				qual = word[prev+1:]
-			}
-			if i, ok := x.byQual[qual]; ok {
+		case 1:
+			for _, i := range x.byName[strings.ToLower(parts[0].name)] {
 				add(i)
-			} else if dot := strings.IndexByte(qual, '.'); dot > 0 && !guessed[qual] {
-				if schema, ok := x.unloaded[qual[:dot]]; ok && dot < len(qual)-1 {
-					guessed[qual] = true
-					out = append(out, TableRef{Schema: schema, Name: qual[dot+1:]})
-				}
 			}
 			return
 		}
-		for _, i := range x.byName[word] {
+		// db.schema.table (3 parts) keeps its last two
+		sp, tp := parts[len(parts)-2], parts[len(parts)-1]
+		qual := strings.ToLower(sp.name) + "." + strings.ToLower(tp.name)
+		if i, ok := x.byQual[qual]; ok {
 			add(i)
+			return
+		}
+		schema, ok := x.unloaded[strings.ToLower(sp.name)]
+		if !ok || sp.name == "" || tp.name == "" {
+			return
+		}
+		name := tp.name
+		if !tp.quoted {
+			name = strings.ToLower(name)
+		}
+		if key := schema + "." + name; !guessed[key] {
+			guessed[key] = true
+			out = append(out, TableRef{Schema: schema, Name: name})
 		}
 	}
 	for _, w := range sqlWords(sql) {
@@ -321,8 +329,11 @@ func (x *TableIndex) Mentioned(sql, prose string) []TableRef {
 }
 
 // sqlWords is the words of a statement outside strings, comments, numbers
-// and parameters, with quoted identifiers unquoted in place so that
-// "public"."Cats" reads as public.Cats.
+// and parameters. A quoted identifier stays in its word with its delimiters
+// swapped for quoteOpen/quoteClose, so "public"."Cats" reads as one word
+// whose parts wordParts splits as public and Cats (quoted) — the quoting
+// is what says a name keeps its case (see Mentioned), and the markers also
+// keep a dot inside quotes ("my.table") from splitting the name.
 func sqlWords(sql string) []string {
 	b := []byte(sql)
 	for _, tk := range sqlsplit.Lex(sql) {
@@ -332,19 +343,67 @@ func sqlWords(sql string) []string {
 				b[i] = ' '
 			}
 		case sqlsplit.TokIdent:
-			// only the delimiters go; the name keeps its bytes (and
-			// its adjacency to a neighbouring dot)
-			b[tk.Start], b[tk.End-1] = '\x00', '\x00'
+			// the delimiters become markers; the name keeps its bytes
+			// (and its adjacency to a neighbouring dot)
+			b[tk.Start], b[tk.End-1] = quoteOpen, quoteClose
 		}
 	}
-	s := strings.ReplaceAll(string(b), "\x00", "")
-	return strings.FieldsFunc(s, notWordRune)
+	return strings.FieldsFunc(string(b), notWordRune)
 }
 
-// notWordRune separates words: anything but a letter, digit, _, $ or the dot
-// that joins a qualified name.
+// quoteOpen and quoteClose stand in for a quoted identifier's delimiters
+// inside a word (sqlWords). Control bytes, so no SQL text holds them; the
+// lexer has already found where each quoted name starts and ends, so a
+// doubled quote inside one ("a""b") needs no handling here.
+const (
+	quoteOpen  = '\x01'
+	quoteClose = '\x02'
+)
+
+// wordPart is one dot-separated part of a word: a schema or a table name,
+// and whether the SQL quoted it.
+type wordPart struct {
+	name   string
+	quoted bool
+}
+
+// wordParts splits a word on the dots outside quotes. A leading, trailing
+// or doubled dot makes no empty part ("cats." is cats); an empty quoted
+// name ("") is kept, as an empty part, so it cannot shift the parts around
+// it.
+func wordParts(word string) []wordPart {
+	var parts []wordPart
+	var cur strings.Builder
+	quoted, inQuote, has := false, false, false
+	flush := func() {
+		if has {
+			parts = append(parts, wordPart{name: cur.String(), quoted: quoted})
+		}
+		cur.Reset()
+		quoted, has = false, false
+	}
+	for _, r := range word {
+		switch {
+		case r == quoteOpen:
+			inQuote, quoted, has = true, true, true
+		case r == quoteClose:
+			inQuote = false
+		case r == '.' && !inQuote:
+			flush()
+		default:
+			cur.WriteRune(r)
+			has = true
+		}
+	}
+	flush()
+	return parts
+}
+
+// notWordRune separates words: anything but a letter, digit, _, $, the dot
+// that joins a qualified name, or sqlWords' quote markers.
 func notWordRune(r rune) bool {
-	return !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '$' || r == '.')
+	return !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '$' || r == '.' ||
+		r == quoteOpen || r == quoteClose)
 }
 
 // ColumnsQuery returns the statement that lists the columns of the given

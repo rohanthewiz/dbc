@@ -164,6 +164,20 @@ func TestLiveColumnsPostgres(t *testing.T) {
 	wantCols(t, got, "dbc_live.events", "id bigint", "at date")
 	wantCols(t, got, "dbc_live.MixedCase", "id integer", "Weird Col text")
 
+	// a sidebar loaded one schema at a time (SetSchemas) still reaches a
+	// table in another — a quoted mixed-case one included, which must keep
+	// its case to be found (N-081)
+	part := NewTableIndex([]TableRef{{Schema: "dbc_live2", Name: "cats"}}).
+		SetSchemas([]string{"dbc_live", "dbc_live2"})
+	refs := part.Mentioned(`SELECT * FROM dbc_live."MixedCase" JOIN dbc_live.CATS USING (id)`, "")
+	cols, err := mgr.Columns(context.Background(), "live", refs)
+	if err != nil {
+		t.Fatalf("Columns (unloaded schema): %v", err)
+	}
+	if len(refs) != 2 || len(cols) != 2 || len(cols[0]) != 2 || len(cols[1]) != 6 {
+		t.Errorf("unloaded schema: refs %v, columns %v", refs, cols)
+	}
+
 	// the sidebar and the assistant both read the matview as a view
 	q, _ := TablesQuery("postgres")
 	res, err := mgr.Run("live", q)

@@ -209,6 +209,80 @@ func TestRowCountsCache(t *testing.T) {
 	}
 }
 
+// ForgetRowCounts makes the next ask count afresh, inside the TTL; and a
+// counting that started before the forget is neither served nor cached,
+// as it may have read the rows before the write behind the forget.
+func TestRowCountsForget(t *testing.T) {
+	mgr := sqliteCountMgr(t, "rowcountforget")
+	ctx := context.Background()
+	refs := catalogRefs(t, mgr, "demo", "sqlite")
+	cats := TableRef{Schema: "main", Name: "cats"}
+	if c, err := mgr.RowCounts(ctx, "demo", refs); err != nil || c[cats].N != 3 {
+		t.Fatalf("first count: %v %v", c, err)
+	}
+	if _, err := mgr.Run("demo", `INSERT INTO cats (name) VALUES ('zed')`); err != nil {
+		t.Fatal(err)
+	}
+	mgr.ForgetRowCounts("demo")
+	if c, _ := mgr.RowCounts(ctx, "demo", refs); c[cats].N != 4 {
+		t.Errorf("after the forget: %d, want a fresh 4", c[cats].N)
+	}
+
+	// a cached counting that started just before a forget is stale
+	mgr.rows.mu.Lock()
+	mgr.rows.cache["demo"].at = time.Now().Add(-time.Second)
+	mgr.rows.mu.Unlock()
+	mgr.ForgetRowCounts("demo")
+	mgr.rows.mu.Lock()
+	mgr.rows.cache["demo"] = &rowCountCache{at: time.Now().Add(-time.Second),
+		asked: map[TableRef]struct{}{cats: {}}, counts: map[TableRef]RowCount{cats: {N: 1}}}
+	mgr.rows.mu.Unlock()
+	if c, _ := mgr.RowCounts(ctx, "demo", refs); c[cats].N != 4 {
+		t.Errorf("a pre-forget counting was served: %d", c[cats].N)
+	}
+}
+
+// A counting on a shared-cache SQLite database does not wait for a session
+// that holds a write transaction on the table — modernc's driver would wait
+// past every context — and counts what that transaction has written.
+func TestRowCountsBesideOpenTransaction(t *testing.T) {
+	mgr := sqliteCountMgr(t, "rowcounttx")
+	ctx := context.Background()
+	refs := catalogRefs(t, mgr, "demo", "sqlite")
+	cats := TableRef{Schema: "main", Name: "cats"}
+	s, err := mgr.Session(ctx, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, stmt := range []string{"BEGIN", "DELETE FROM cats"} {
+		if _, err := s.Run(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	done := make(chan map[TableRef]RowCount, 1)
+	go func() {
+		c, _ := mgr.RowCounts(ctx, "demo", refs)
+		done <- c
+	}()
+	select {
+	case c := <-done:
+		if c[cats].N != 0 {
+			t.Errorf("cats = %+v, want the open transaction's 0", c[cats])
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the counting waited on the open transaction")
+	}
+	_, _ = s.Run(ctx, "ROLLBACK")
+	// the pool's connection is back to reading committed rows (with the
+	// anchor and the session holding theirs, the pool has just the one
+	// the counting used)
+	res, err := mgr.Run("demo", `PRAGMA read_uncommitted`)
+	if err != nil || len(res.Rows) != 1 || res.Rows[0][0] != "0" {
+		t.Errorf("read_uncommitted after the counting: %v %v", res, err)
+	}
+}
+
 // Callers asking at once share one counting: every one of them gets the
 // very same map, which only the single-flight wait (or the cache it fills)
 // can hand out.
@@ -278,5 +352,21 @@ func TestRowCountsBytdb(t *testing.T) {
 	want := map[string]RowCount{"cats": {N: 2}, "empty": {N: 0}}
 	if !reflect.DeepEqual(byName, want) {
 		t.Errorf("counts = %v, want %v", byName, want)
+	}
+}
+
+// ChangesRows: writes, DDL and the end of a transaction count; reads and
+// session setup do not.
+func TestChangesRows(t *testing.T) {
+	for stmt, want := range map[string]bool{
+		"INSERT INTO t VALUES (1)": true, "delete from t": true, "TRUNCATE t": true,
+		"COMMIT": true, "ROLLBACK": true, "DROP TABLE t": true,
+		"WITH d AS (DELETE FROM t RETURNING *) SELECT count(*) FROM d": true,
+		"SELECT 1": false, "SET search_path = x": false, "BEGIN": false,
+		"start transaction": false, "SAVEPOINT a": false, "-- note\nSHOW work_mem": false,
+	} {
+		if got := ChangesRows(stmt); got != want {
+			t.Errorf("ChangesRows(%q) = %v, want %v", stmt, got, want)
+		}
 	}
 }

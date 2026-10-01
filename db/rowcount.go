@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"maps"
 	"strconv"
 	"strings"
@@ -10,6 +11,8 @@ import (
 
 	bytdbdrv "github.com/rohanthewiz/bytdb/stdlib"
 	"github.com/rohanthewiz/serr"
+
+	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
 // Row counts for the sidebar's tables list: "cats (1,234)".
@@ -280,14 +283,61 @@ type rowCounter struct {
 	mu       sync.Mutex
 	cache    map[string]*rowCountCache // by connection name
 	inflight map[string]chan struct{}  // closed when that connection's counting ends
+	// forgotAt is when each connection's counts were last forgotten. A
+	// counting that STARTED before then is not fresh, even if it ends
+	// after: it may have read the rows before the write that made the
+	// forget necessary. Without it, a counting another workspace had in
+	// flight across a forget would land and be served as current.
+	forgotAt map[string]time.Time
 }
 
 // forget drops a connection's cached counts: the connection was dropped or
-// edited, and may now point at another database.
+// edited, and may now point at another database, or a statement on it
+// changed rows (ForgetRowCounts).
 func (rc *rowCounter) forget(name string) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	delete(rc.cache, name)
+	if rc.forgotAt == nil {
+		rc.forgotAt = map[string]time.Time{}
+	}
+	rc.forgotAt[name] = time.Now()
+}
+
+// freshLocked reports whether c, name's cached counting, may still be
+// served: started within rowCountTTL, and not before the last forget. The
+// caller holds mu.
+func (rc *rowCounter) freshLocked(name string, c *rowCountCache) bool {
+	return c != nil && time.Since(c.at) < rowCountTTL && !c.at.Before(rc.forgotAt[name])
+}
+
+// ForgetRowCounts drops the named connection's cached row counts, so the
+// next RowCounts counts afresh. The workspace calls it after a run that
+// may have changed rows (ChangesRows): the cache would otherwise serve the
+// numbers from before it for up to rowCountTTL.
+func (m *Manager) ForgetRowCounts(name string) { m.rows.forget(name) }
+
+// sessionVerbs are statements that are not plain reads (IsRead) yet change
+// no table's rows: they set up the session or a transaction. ChangesRows
+// leaves them out so a SET or a BEGIN does not recount a sidebar. COMMIT
+// is not among them — it is what makes a transaction's writes visible to
+// the pool the counts are read through — and nor is ROLLBACK, which can
+// undo writes a counting inside the transaction's lifetime could not see
+// anyway, but costs one recount to be sure of.
+var sessionVerbs = map[string]bool{
+	"set": true, "reset": true, "begin": true, "start": true, "savepoint": true,
+	"release": true, "use": true, "discard": true, "listen": true, "unlisten": true,
+	"notify": true, "prepare": true, "deallocate": true, "declare": true, "fetch": true,
+	"move": true, "close": true, "lock": true, "unlock": true, "pragma": true,
+}
+
+// ChangesRows reports whether stmt may have changed the row count of a
+// table: it is not a plain read (IsRead), nor a statement that only sets up
+// the session (sessionVerbs). It errs toward yes — an UPDATE changes no
+// count, a CREATE INDEX none either — since being wrong that way costs one
+// recount, and the other way a stale number in the sidebar.
+func ChangesRows(stmt string) bool {
+	return !isRead(stmt) && !sessionVerbs[sqlsplit.Verbs(stmt).Main]
 }
 
 // RowCounts returns the row count of each of tables on the named
@@ -311,7 +361,7 @@ func (m *Manager) RowCounts(ctx context.Context, name string, tables []TableRef)
 	rc := &m.rows
 	for {
 		rc.mu.Lock()
-		if c := rc.cache[name]; c != nil && time.Since(c.at) < rowCountTTL && c.covers(tables) {
+		if c := rc.cache[name]; rc.freshLocked(name, c) && c.covers(tables) {
 			rc.mu.Unlock()
 			return c.counts, nil
 		}
@@ -336,7 +386,9 @@ func (m *Manager) RowCounts(ctx context.Context, name string, tables []TableRef)
 
 		rc.mu.Lock()
 		delete(rc.inflight, name)
-		if err == nil {
+		// A counting that started before a forget is this caller's answer
+		// but nobody else's: cached, it could replace a fresher one.
+		if err == nil && !start.Before(rc.forgotAt[name]) {
 			c := &rowCountCache{at: start, asked: make(map[TableRef]struct{}, len(tables)), counts: counts}
 			// A sidebar loaded a schema at a time asks for one schema's
 			// tables per counting, so a counting still fresh is merged
@@ -345,7 +397,7 @@ func (m *Manager) RowCounts(ctx context.Context, name string, tables []TableRef)
 			// merged cache keeps the OLDER start, as rowCountTTL bounds
 			// how stale any number in it may be. The maps are new ones,
 			// since the old are shared with earlier callers.
-			if old := rc.cache[name]; old != nil && time.Since(old.at) < rowCountTTL {
+			if old := rc.cache[name]; rc.freshLocked(name, old) {
 				c.at = old.at
 				c.counts = make(map[TableRef]RowCount, len(old.counts)+len(counts))
 				for t := range old.asked {
@@ -426,6 +478,41 @@ func (m *Manager) countRows(ctx context.Context, name string, tables []TableRef)
 	if drv == "pgx" || drv == "mysql" {
 		workers = networkCountWorkers
 	}
+	// q is what the counts run on: the pool, or for SQLite one connection
+	// set to read uncommitted rows.
+	//
+	// WHY, FOR SQLITE. A shared-cache database (every in-memory one, the
+	// demo included: "file:x?mode=memory&cache=shared") locks per table,
+	// and a table a session has written inside an open transaction is
+	// write-locked until it ends. Another connection's read of it then
+	// waits — in modernc's driver, past its context, for as long as the
+	// transaction stays open. A recount after the user's BEGIN; DELETE
+	// (workspace.recountLocked) would hang there. read_uncommitted is
+	// SQLite's way for a shared-cache reader to skip table read locks; it
+	// does nothing outside shared-cache mode, where a file database's
+	// readers already go on reading while a writer holds its RESERVED
+	// lock. The count may then include the open transaction's rows, which
+	// is what that user's own session sees anyway.
+	var q interface {
+		QueryRowContext(context.Context, string, ...any) *sql.Row
+	} = dbh
+	if drv == "sqlite" {
+		c, err := dbh.Conn(bctx)
+		if err != nil {
+			return nil, wrapRunErr(ctx, err, name, "op", "count rows")
+		}
+		defer func() {
+			// Back to the default before the connection returns to the
+			// pool, where a user's script may pick it up. Background, so
+			// a canceled counting still resets it.
+			_, _ = c.ExecContext(context.Background(), `PRAGMA read_uncommitted = 0`)
+			_ = c.Close()
+		}()
+		if _, err = c.ExecContext(bctx, `PRAGMA read_uncommitted = 1`); err != nil {
+			return nil, wrapRunErr(ctx, err, name, "op", "count rows")
+		}
+		q = c
+	}
 	exact := make([]int64, len(todo))
 	got := make([]bool, len(todo))
 	var next sync.Mutex
@@ -441,12 +528,12 @@ func (m *Manager) countRows(ctx context.Context, name string, tables []TableRef)
 				if j >= len(todo) || bctx.Err() != nil {
 					return
 				}
-				q, err := CountQuery(cc.Driver, todo[j])
+				stmt, err := CountQuery(cc.Driver, todo[j])
 				if err != nil {
 					continue
 				}
 				tctx, tcancel := context.WithTimeout(bctx, countTimeout)
-				err = dbh.QueryRowContext(tctx, q).Scan(&exact[j])
+				err = q.QueryRowContext(tctx, stmt).Scan(&exact[j])
 				tcancel()
 				got[j] = err == nil
 			}

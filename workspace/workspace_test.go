@@ -196,7 +196,7 @@ func TestStragglerIsDropped(t *testing.T) {
 	w.busy, w.runGen = true, 7
 	w.mu.Unlock()
 	ev := &RunDone{Tag: "old", Stmts: []string{"SELECT 2"}, Result: &model.Result{Columns: []string{"late"}}}
-	w.landRun(ev, 6)
+	w.landRun(ev, 6, true)
 	if !ev.Stale {
 		t.Error("the straggler was not marked stale")
 	}
@@ -606,6 +606,43 @@ func TestRowCountsStaleAfterSwitch(t *testing.T) {
 	}
 	if w.RowCounts() != nil {
 		t.Errorf("stale counts landed: %v", w.RowCounts())
+	}
+}
+
+// A run that changes rows recounts the sidebar past the Manager's cache, so
+// the new number shows at once; a read, a SET or a BEGIN does not. A
+// counting in flight from before the write is written off as Stale.
+func TestRunThatWritesRecounts(t *testing.T) {
+	w := newTestWorkspace(t)
+	cats := db.TableRef{Schema: "main", Name: "cats"}
+	before := w.Connect(demo).Job().(*Connected)
+	if rc := before.Counts().(*RowCounts); rc.Stale || w.RowCounts()[cats].N != 8 {
+		t.Fatalf("first counting: %+v", rc)
+	}
+
+	for _, read := range []string{"SELECT count(*) FROM cats", "PRAGMA foreign_keys"} {
+		if ev := run(t, w, read); ev.Counts != nil {
+			t.Errorf("%q recounts", read)
+		}
+	}
+
+	// a counting from before the write, still in flight
+	inflight := w.Connect(demo).Job().(*Connected).Counts
+	ev := run(t, w, "BEGIN", "INSERT INTO cats (name, breed, age) VALUES ('Zed', 'tabby', 1)", "COMMIT")
+	if ev.Err != nil || ev.Counts == nil {
+		t.Fatalf("insert: err %v, counts job %v", ev.Err, ev.Counts != nil)
+	}
+	if rc := inflight().(*RowCounts); !rc.Stale {
+		t.Errorf("the counting the write superseded landed: %+v", rc)
+	}
+	rc := ev.Counts().(*RowCounts)
+	if rc.Stale || rc.Counts[cats].N != 9 || w.RowCounts()[cats].N != 9 {
+		t.Errorf("after the insert: event %+v, workspace %v", rc, w.RowCounts()[cats])
+	}
+
+	// a failed statement may have written too: it still recounts
+	if ev := run(t, w, "DELETE FROM no_such_table"); ev.Err == nil || ev.Counts == nil {
+		t.Errorf("failed write: err %v, counts job %v", ev.Err, ev.Counts != nil)
 	}
 }
 

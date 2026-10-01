@@ -156,7 +156,11 @@ mouse gesture and every gesture has a key.
 The tables list shows each table's row count once it has been counted —
 `cats (8)` in `dbc web`, where hovering says "cats with 8 rows", and a
 right-aligned `8` in the terminal. The counts load after the list, never
-holding it up, and are cached per connection for two minutes. On Postgres
+holding it up, and are cached per connection for two minutes. A run that
+may have changed rows (an `INSERT`, `DELETE`, `TRUNCATE`, DDL, a `COMMIT`, a
+script) recounts the list straight away, past the cache; a `SELECT`, `SET`
+or `BEGIN` does not. A write inside an open transaction shows once it is
+committed, since the counts are read outside your session. On Postgres
 and MySQL a table the database's statistics put at a million rows or more
 shows that estimate, marked `~` (`~1.2M`), instead of being counted; the
 rest, and every table on SQLite and bytdb, are counted exactly. A count that
@@ -198,8 +202,8 @@ server costs what the sidebar shows, not what the server holds:
 The terminal UI has the same two levels, as two rows at the top of its
 Tables pane: `⛁ analytics ▾` and `◫ sales · 40 ▾`. Click one, or press `d`
 or `s` in the Tables pane, for a list you can type into to narrow; `Enter`
-or a click picks. The schema picked is remembered per connection until dbc
-exits.
+or a click picks. The schema picked is remembered per connection, across
+restarts too (in `~/.config/dbc/schema-picks.json`).
 
 The assistant matches table names in the loaded schema, and also
 `schema.table` names in any other schema of the database. The ERD

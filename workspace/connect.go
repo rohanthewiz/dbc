@@ -379,12 +379,19 @@ func (w *Workspace) PickSchema(pick SchemaPick) (Start, error) {
 // way is not cached, so switching straight back counts again rather than
 // finding half the numbers.
 //
+// A run that changed rows starts a recount of the same sidebar
+// (recountLocked), which cancels this one: countGen tells that canceled
+// counting, which has the same connGen, to land Stale rather than as
+// "row counts unavailable".
+//
 //	connect lands ─► Counts job ─► mgr.RowCounts ─► lands under mu
-//	                                                 ├─ gen still current → rowCounts set
-//	                                                 └─ superseded        → Stale
+//	                                                 ├─ gen and countGen current → rowCounts set
+//	                                                 └─ superseded               → Stale
 func (w *Workspace) countsJobLocked(name string, gen int, tables []db.TableRef) Job {
 	ctx, cancel := context.WithCancel(context.Background())
 	w.countCancel = cancel
+	w.countGen++
+	cg := w.countGen
 	mgr := w.mgr
 	return func() Event {
 		defer cancel()
@@ -392,8 +399,8 @@ func (w *Workspace) countsJobLocked(name string, gen int, tables []db.TableRef) 
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		ev := &RowCounts{Conn: name}
-		if gen != w.connGen {
-			ev.Stale = true // a later connect owns the sidebar now
+		if gen != w.connGen || cg != w.countGen {
+			ev.Stale = true // a later connect, or recount, owns the sidebar now
 			return ev
 		}
 		w.countCancel = nil

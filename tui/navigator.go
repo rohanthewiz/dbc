@@ -8,6 +8,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/userdata"
 	"github.com/rohanthewiz/dbc/workspace"
 )
 
@@ -32,9 +33,10 @@ import (
 // back to the configured connection itself, so it never gets a second pool.
 //
 // Picking a schema is workspace.PickSchema on the same connection. The pick
-// is remembered per connection for the rest of the run (schemaPicks), so
-// going back to a database reopens the schema the user was in, as the web
-// does from its saved layout.
+// is remembered per connection (schemaPicks) and saved to a small file
+// (userdata.SavePick), so going back to a database — in this run or the
+// next — reopens the schema the user was in, as the web does from its
+// saved layout.
 
 // navigable reports whether the active connection's sidebar is loaded a
 // level at a time, and so has the picker rows.
@@ -264,6 +266,12 @@ func (m *Model) pickSchema(pick workspace.SchemaPick) tea.Cmd {
 		return nil
 	}
 	m.schemaPicks[m.ws.Active()] = pick
+	// Saved now rather than at quit: a pick is rare and the file is small,
+	// and a dbc killed rather than quit (a closed terminal) keeps it.
+	if err := userdata.SavePick(m.picksFile, m.ws.Active(),
+		userdata.SchemaPick{Name: pick.Name, All: pick.All}); err != nil {
+		m.logf(logWarn, "the schema pick is not saved for next time: %v", err)
+	}
 	m.schemaLoading = pick.Name
 	if pick.All {
 		m.schemaLoading = "all schemas"

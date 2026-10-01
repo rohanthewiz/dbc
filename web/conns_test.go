@@ -315,6 +315,15 @@ func testConnEdit(t *testing.T, persistent bool) {
 	if err := e.srv.store.SaveTab(Tab{ID: "bg", Title: "Q", Conn: "scratch"}); err != nil {
 		t.Fatal(err)
 	}
+	// schema picks saved by some window, maybe closed since: the
+	// connection's own, one of its other databases', and another's
+	if err := e.srv.store.SetLayout(map[string]string{
+		"tableSchema.scratch":           "=main",
+		"tableSchema.scratch/analytics": "=mart",
+		"tableSchema.later":             "",
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// a test from the edit form with the DSN left empty tests the stored one
 	r := decodeData[probeResp](t, e.api("POST", "/api/v1/conns/test",
@@ -377,6 +386,21 @@ func testConnEdit(t *testing.T, persistent bool) {
 	for _, tb := range tabs {
 		if tb.ID == "bg" && tb.Conn != "renamed" {
 			t.Fatalf("saved tab still on %q", tb.Conn)
+		}
+	}
+	// ...and the schema picks, deleted under the old names (not blanked:
+	// "" is the "every schema" pick)
+	lay, _ := e.srv.store.Layout()
+	for k, want := range map[string]string{
+		"tableSchema.renamed": "=main", "tableSchema.renamed/analytics": "=mart", "tableSchema.later": "",
+	} {
+		if v, ok := lay[k]; !ok || v != want {
+			t.Errorf("layout %s = %q, %v; want %q", k, v, ok, want)
+		}
+	}
+	for _, k := range []string{"tableSchema.scratch", "tableSchema.scratch/analytics"} {
+		if v, ok := lay[k]; ok {
+			t.Errorf("layout %s still saved (%q)", k, v)
 		}
 	}
 

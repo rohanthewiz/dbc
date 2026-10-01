@@ -110,6 +110,7 @@ type Workspace struct {
 	// a sidebar about to be replaced.
 	rowCounts   map[db.TableRef]db.RowCount
 	countCancel context.CancelFunc
+	countGen    int // bumped by each Counts job made; see countsJobLocked
 
 	lastStmt string        // the statement the last run executed
 	lastErr  string        // what it failed with, "" if it worked

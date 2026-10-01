@@ -80,9 +80,12 @@ type Model struct {
 	status string // left half of the status bar
 
 	// schemaPicks is the schema pick last made on each connection (derived
-	// ones included), for this run: a switch back to a database reopens the
-	// schema the user was in. See navigator.go.
+	// ones included): a switch back to a database, or the next start of
+	// dbc, reopens the schema the user was in. See navigator.go.
 	schemaPicks map[string]workspace.SchemaPick
+	// picksFile is where schemaPicks persist ("" under Options.NoPersist:
+	// they then last only for the run).
+	picksFile string
 	// schemaLoading names the schema pick in flight ("" when none), for the
 	// schema row's "loading…" until its tables land.
 	schemaLoading string
@@ -151,6 +154,7 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Model {
 	if !opt.NoPersist {
 		hist = userdata.LoadHistory(userdata.HistoryFile())
 		m.chat.dir = userdata.ChatsDir()
+		m.loadPicks(userdata.PicksFile())
 	}
 	// The sink carries a script's s.Show / s.Print, which fire mid-run from
 	// the script's goroutine, to Update through m.send. It reads m.send when
@@ -180,6 +184,15 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Model {
 	m.startupLog()
 	m.setStatus("ready")
 	return m
+}
+
+// loadPicks makes path where schema picks persist, and takes the picks saved
+// there as the ones last made (see schemaPicks).
+func (m *Model) loadPicks(path string) {
+	m.picksFile = path
+	for conn, p := range userdata.LoadPicks(path) {
+		m.schemaPicks[conn] = workspace.SchemaPick{Name: p.Name, All: p.All}
+	}
 }
 
 // startupLog writes what a new user needs to know once: where the config

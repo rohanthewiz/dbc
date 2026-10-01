@@ -293,6 +293,73 @@ func (s *Store) SetLayout(values map[string]string) error {
 	return wrap(tx.Commit(), "op", "save layout")
 }
 
+// MoveLayout renames layout keys: each from key's value is stored under its
+// to key, replacing whatever was there, and the from key is deleted. A from
+// key with no saved value is skipped, so a missing one leaves its to key
+// alone. It is how a connection rename carries the "tableSchema.<conn>"
+// schema picks along (handleConnEdit) — including picks saved by a window
+// that has since closed, which no page is left to move.
+//
+// The moves are applied as one simultaneous rename: every from value is
+// read, then every from key deleted, then every to key written. A rename
+// onto a name under the old one ("a" → "a/b") makes chains — "a" → "a/b"
+// and "a/b" → "a/b/b" in one call — that applied one by one in map order
+// could read a value another move had just written.
+//
+// One transaction for the lot, so a rename's picks move together or not at
+// all. A delete, not a blank: the page's own move (connRenamed) can only
+// blank, as SetLayout has no delete, but "" is itself a pick ("every
+// schema") and would apply to a later connection given the old name.
+func (s *Store) MoveLayout(moves map[string]string) error {
+	if s.db == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		vals := map[string]string{}
+		for from, to := range moves {
+			if v, ok := s.layout[from]; ok {
+				vals[to] = v
+			}
+		}
+		for from := range moves {
+			delete(s.layout, from)
+		}
+		maps.Copy(s.layout, vals)
+		return nil
+	}
+	ctx, cancel := opCtx()
+	defer cancel()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return serr.Wrap(err, "op", "move layout")
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op after Commit
+	vals := map[string]string{}
+	for from, to := range moves {
+		var v string
+		err = tx.QueryRowContext(ctx, `SELECT value FROM layout WHERE key = $1`, from).Scan(&v)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return serr.Wrap(err, "op", "move layout", "key", from)
+		}
+		vals[to] = v
+	}
+	for from := range moves {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM layout WHERE key = $1`, from); err != nil {
+			return serr.Wrap(err, "op", "move layout", "key", from)
+		}
+	}
+	for to, v := range vals {
+		if _, err = tx.ExecContext(ctx, `
+			INSERT INTO layout (key, value) VALUES ($1, $2)
+			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, to, v); err != nil {
+			return serr.Wrap(err, "op", "move layout", "key", to)
+		}
+	}
+	return wrap(tx.Commit(), "op", "move layout")
+}
+
 // Conns lists the conns table's rows (see SavedConn), oldest first — the
 // order they were added, which moveStoreConns keeps in the file.
 func (s *Store) Conns() ([]SavedConn, error) {

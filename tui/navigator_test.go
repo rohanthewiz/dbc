@@ -2,6 +2,7 @@ package tui
 
 import (
 	"os"
+	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/rohanthewiz/dbc/cats"
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/userdata"
 )
 
 // x in the Connections pane leaves the connection without picking another:
@@ -178,6 +180,8 @@ func TestLiveNavigatorPostgres(t *testing.T) {
 	clipLog, openLog = nil, nil
 	m := New(cfg, mgr, Options{NoPersist: true})
 	t.Cleanup(m.shutdown)
+	picks := filepath.Join(t.TempDir(), "schema-picks.json")
+	m.loadPicks(picks)
 	drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	drive(t, m, nil, m.Init())
 
@@ -240,6 +244,21 @@ func TestLiveNavigatorPostgres(t *testing.T) {
 	key(t, m, "enter")
 	if m.ws.CatalogSchema() != "" {
 		t.Errorf("all schemas: listed %q", m.ws.CatalogSchema())
+	}
+
+	// the picks outlive the run: a new dbc's first connect opens on the
+	// last one (all schemas), not the default schema
+	if got := userdata.LoadPicks(picks); got["live"] != (userdata.SchemaPick{All: true}) {
+		t.Fatalf("saved picks = %+v", got)
+	}
+	m.shutdown()
+	next := New(cfg, mgr, Options{NoPersist: true})
+	t.Cleanup(next.shutdown)
+	next.loadPicks(picks)
+	drive(t, next, tea.WindowSizeMsg{Width: 120, Height: 40})
+	drive(t, next, nil, next.Init())
+	if next.ws.Active() != "live" || next.ws.CatalogSchema() != "" {
+		t.Errorf("restart: active %q schema %q", next.ws.Active(), next.ws.CatalogSchema())
 	}
 }
 

@@ -1017,7 +1017,9 @@
     if (state.active) state.active = move(state.active);
     // the schema picks follow the connection to its new name; an old key
     // is blanked, as the layout has no delete. One write for them all, so
-    // a rename is one layout save however many databases had a pick.
+    // a rename is one layout save however many databases had a pick. The
+    // server has already moved the saved ones (moveSchemaPicks), including
+    // picks no open window holds; this keeps this window's in step.
     const values = {};
     for (const name of Object.keys(schemaPicks)) {
       const next = move(name);

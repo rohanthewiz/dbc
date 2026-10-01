@@ -1298,6 +1298,12 @@
   // place on the edge is what brings the column back
   els.sideFold.addEventListener("click", () => setSideHidden(true));
 
+  // Ctrl+B / ⌘B from inside the editor, which Monaco must be given as a
+  // command of its own (editor.js bindKeys): on a Mac it takes Ctrl+B for
+  // its emacs-style cursor-left, so the key never reaches the document
+  // listener above.
+  dbc.cmd.toggleSidebar = () => setSideHidden(!sideHidden());
+
   // A press that only revealed the column must not have its second half
   // read as a double-click, which would also reset the width it revealed.
   let sideRevealedAt = 0;

@@ -301,6 +301,9 @@
     for (let n = 1; n <= 9; n++) ed.addCommand(K.Alt | C["Digit" + n], () => dbc.cmd.pickTab(n - 1));
     ed.addCommand(C.F1, () => dbc.cmd.help());
     bind(0, C.KeyO, () => dbc.cmd.scripts());
+    // the sidebar fold: on a Mac, Ctrl+B is otherwise Monaco's cursor-left
+    // and never reaches the page's own Ctrl+B / ⌘B
+    bind(0, C.KeyB, () => dbc.cmd.toggleSidebar && dbc.cmd.toggleSidebar());
     // the TUI's editor menu row, in Monaco's own right-click menu
     ed.addAction({
       id: "dbc.ask", label: "✦ Ask the assistant about this query", contextMenuGroupId: "navigation",

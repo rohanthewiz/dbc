@@ -45,6 +45,7 @@ func TestWeb(t *testing.T) {
 		{"connection form fields and DSN", connForm},
 		{"postgres schema picker", pgSchemaPicker},
 		{"tabs survive a reload", tabsSurviveReload},
+		{"sidebar fold keys", sidebarFoldKeys},
 	}
 	for _, s := range steps {
 		ok := t.Run(s.name, func(t *testing.T) {
@@ -425,4 +426,41 @@ func hasReq(reqs []string, method, tail string) bool {
 		}
 	}
 	return false
+}
+
+// sidebarFoldKeys: Ctrl+B and ⌘B fold the sidebar and bring it back, from
+// the page and from inside the editor. In the editor the key is Monaco's to
+// hand on (editor.js bindKeys): on a Mac it takes Ctrl+B for emacs-style
+// cursor-left, so before Ctrl+B was bound there it moved the caret instead
+// of folding — found driving Firefox (N-061), and the same in Chrome.
+func sidebarFoldKeys(t *testing.T, _ *env, p *rod.Page) {
+	folded := func() bool {
+		b, _ := eval(t, p, `() => document.querySelector(".app").classList.contains("side-off")`).(bool)
+		return b
+	}
+	for _, where := range []struct{ name, focus string }{
+		{"the page", `() => { document.activeElement && document.activeElement.blur(); }`},
+		{"the editor", `() => dbc.editor.focus()`},
+	} {
+		for _, m := range []struct {
+			name string
+			bit  int
+		}{{"Ctrl+B", modCtrl}, {"⌘B", modMeta}} {
+			if folded() {
+				t.Fatalf("folded before %s in %s", m.name, where.name)
+			}
+			eval(t, p, where.focus)
+			chord(t, p, m.bit, "b", "KeyB", 66)
+			if !folded() {
+				t.Fatalf("%s in %s did not fold the sidebar", m.name, where.name)
+			}
+			// a fold moves focus out of the column it hides, so this round's
+			// focus is set again before the key that brings it back
+			eval(t, p, where.focus)
+			chord(t, p, m.bit, "b", "KeyB", 66)
+			if folded() {
+				t.Fatalf("%s in %s did not bring the sidebar back", m.name, where.name)
+			}
+		}
+	}
 }

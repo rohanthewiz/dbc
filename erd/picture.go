@@ -114,8 +114,9 @@ func (s *Schema) Picture(opt Options) (*image.RGBA, error) {
 	// lines first, boxes over them: lines are routed around boxes, but a
 	// line's ends sit on its boxes' edges, and the boxes' borders should
 	// be drawn over the line's anti-aliased fringe there
+	drawn := map[[2]pt2]bool{}
 	for _, r := range s.Rels {
-		d.rel(r)
+		d.rel(r, drawn)
 	}
 	// markers after every line, so no line is drawn across another's
 	// marker
@@ -236,8 +237,32 @@ func (d drawer) marker(p pt2, dir float64, kind marker) {
 //
 // Only the line is drawn here; the markers are drawn by markers, after
 // every line, since several lines can share one marker (see setPorts).
-func (d drawer) rel(r *Rel) {
-	d.pt.Polyline(d.l.paths[r].pts, edgeW, d.pal.edge)
+//
+// Lines from one port slot share their way out of it (route.go's BUSES):
+// the same points, to the bit, up to where they part. Stroking that trunk
+// once per line would composite its anti-aliased fringe again and again —
+// a hub's trunk would come out bold — so drawn holds every segment already
+// stroked, and a line skips the run of them at its start and at its end
+// (a bus is a prefix from one end, never a stretch in the middle).
+func (d drawer) rel(r *Rel, drawn map[[2]pt2]bool) {
+	pts := d.l.paths[r].pts
+	if len(pts) < 2 {
+		return
+	}
+	seg := func(i int) [2]pt2 { return [2]pt2{pts[i], pts[i+1]} } // segment i: pts[i] → pts[i+1]
+	lo, hi := 0, len(pts)-1                                       // the points still to stroke
+	for lo < hi && drawn[seg(lo)] {
+		lo++
+	}
+	for hi > lo && drawn[seg(hi-1)] {
+		hi--
+	}
+	for i := 0; i < len(pts)-1; i++ {
+		drawn[seg(i)] = true
+	}
+	if lo < hi {
+		d.pt.Polyline(pts[lo:hi+1], edgeW, d.pal.edge)
+	}
 }
 
 // markers draws every line's two end markers, each distinct one once.

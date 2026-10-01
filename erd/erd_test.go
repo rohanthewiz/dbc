@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -449,7 +450,7 @@ func testLayout(t *testing.T, s *Schema) *layout {
 // or a wrapped column — and every line stays inside the picture, below
 // the title band.
 func TestRoutesMissBoxes(t *testing.T) {
-	for _, s := range []*Schema{fixture(), star(45), chain(12), farRanks(), star(400)} {
+	for _, s := range []*Schema{fixture(), star(45), chain(12), farRanks(), star(120), star(400), fanOut(60, 6)} {
 		l := testLayout(t, s)
 		for _, r := range s.Rels {
 			p := l.paths[r]
@@ -617,9 +618,11 @@ func TestPortsFanOutByMarker(t *testing.T) {
 // A column crossed by more lines than its gaps hold has those gaps widened
 // (widen), so the lines still pass between its boxes rather than over or
 // under the whole group. Before widening, 7 of star(120)'s lines and 98 of
-// star(400)'s went round.
+// star(400)'s went round. A star's lines now ride buses and fit its gaps
+// unwidened (TestBusesKeepStarsCompact); fanOut(60, 6)'s, each from a
+// slot of its own, still need the room: 19 of them go round without it.
 func TestCrowdedGapsWiden(t *testing.T) {
-	for _, s := range []*Schema{star(120), star(400)} {
+	for _, s := range []*Schema{star(120), star(400), fanOut(60, 6)} {
 		l := testLayout(t, s)
 		top, bot := math.Inf(1), math.Inf(-1)
 		for _, b := range l.boxes {
@@ -656,6 +659,148 @@ func TestCrowdedGapsWiden(t *testing.T) {
 					t.Errorf("%s: gap %.1f above %s, want stackGap", s.Conn, g, col[i].t.Label)
 				}
 			}
+		}
+	}
+}
+
+// fanOut is a root whose n keys k00…k(n-1) are each referenced by one
+// leaf, so every line leaves the root from a slot of its own: nothing to
+// share, as in a schema of many distinct foreign keys. Each leaf also
+// references one of m mid tables (children of the root's id), which puts
+// the leaves a rank past the mids: every line from a k row crosses the
+// mids' column. Its gaps are crowded by lines that cannot ride a bus, so
+// widen still has to make room.
+func fanOut(n, m int) *Schema {
+	s := &Schema{Conn: fmt.Sprintf("fanout%d", n)}
+	root := &Table{Name: "root", Label: "root", PK: []string{"id"}, Cols: []*Column{{Name: "id", Type: "int"}}}
+	for i := range n {
+		// each a unique key, as a foreign key's target is: key columns
+		// are always shown, so no line attaches at the header (where
+		// hidden rows' lines would share a slot) however big n is
+		k := fmt.Sprintf("k%02d", i)
+		root.Cols = append(root.Cols, &Column{Name: k, Type: "int"})
+		root.Uniques = append(root.Uniques, []string{k})
+	}
+	s.Tables = append(s.Tables, root)
+	var mids []*Table
+	for j := range m {
+		t := &Table{Name: fmt.Sprintf("mid%d", j), PK: []string{"id"},
+			Cols: []*Column{{Name: "id", Type: "int"}, {Name: "root_id", Type: "int"}, {Name: "a", Type: "text"}, {Name: "b", Type: "text"}}}
+		t.Label = t.Name
+		// tall, so the mids' column is the group's tallest and a line
+		// cannot slip past it through the open space above or below
+		for k := range 24 {
+			t.Cols = append(t.Cols, &Column{Name: fmt.Sprintf("c%02d", k), Type: "text"})
+		}
+		mids = append(mids, t)
+		s.Tables = append(s.Tables, t)
+		s.Rels = append(s.Rels, &Rel{Name: t.Name + "_fk", Child: t, Parent: root, ChildCols: []string{"root_id"}, ParentCols: []string{"id"}})
+	}
+	for i := range n {
+		c := &Table{Name: fmt.Sprintf("leaf%02d", i), PK: []string{"id"},
+			Cols: []*Column{{Name: "id", Type: "int"}, {Name: "k", Type: "int"}, {Name: "mid_id", Type: "int"}}}
+		c.Label = c.Name
+		s.Tables = append(s.Tables, c)
+		s.Rels = append(s.Rels,
+			&Rel{Name: c.Name + "_k", Child: c, Parent: root, ChildCols: []string{"k"}, ParentCols: []string{fmt.Sprintf("k%02d", i)}},
+			&Rel{Name: c.Name + "_mid", Child: c, Parent: mids[i%m], ChildCols: []string{"mid_id"}, ParentCols: []string{"id"}})
+	}
+	s.MarkKeys()
+	s.Sort()
+	return s
+}
+
+// The lines on one bus share one lane through a hole, and a hole is
+// charged for its lanes, not its lines: riding a bus already through it is
+// free, so a slot's lines gather rather than spread.
+func TestBusSharesLane(t *testing.T) {
+	h := &hole{top: 100, bot: 100 + stackGap}
+	hub, lone := &bus{shared: true}, &bus{}
+	trunk, own := hub.grow(h), lone.grow(h)
+	if hub.grow(h) != trunk || hub.step(h) != trunk || (*bus)(nil).step(h) != nil {
+		t.Fatal("grow and step must find the node already made")
+	}
+	x1 := &crossing{idx: 0, yl: 0, yr: 300, holes: []*hole{h}, buses: []*bus{trunk}}
+	x2 := &crossing{idx: 1, yl: 0, yr: 50, holes: []*hole{h}, buses: []*bus{trunk}}
+	x3 := &crossing{idx: 2, yl: 200, yr: 200, holes: []*hole{h}, buses: []*bus{own}}
+	for _, x := range []*crossing{x1, x2, x3} {
+		h.join(x, x.buses[0])
+	}
+	if h.lanes() != 2 {
+		t.Errorf("3 lines on 2 buses take %d lanes, want 2", h.lanes())
+	}
+	if c := h.cost(trunk); c != 0 {
+		t.Errorf("riding a bus already through the hole costs %.0f, want 0", c)
+	}
+	if c := h.cost(nil); c != 2*laneLoad {
+		t.Errorf("a new lane beside 2 costs %.0f, want %.0f", c, 2*laneLoad)
+	}
+	setLanes(h)
+	if h.lane[x1] != h.lane[x2] {
+		t.Errorf("one bus, two lanes: %.1f and %.1f", h.lane[x1], h.lane[x2])
+	}
+	// the bus comes from 0 and is headed to 300 and 50 (mean key 87.5),
+	// the lone line from 200 to 200: the bus is the upper lane
+	if h.lane[x1] >= h.lane[x3] {
+		t.Errorf("bus at %.1f, lone line at %.1f: the bus should be above", h.lane[x1], h.lane[x3])
+	}
+}
+
+// A hub's lines leave its one slot as buses (route.go's BUSES), so a big
+// star needs no widening: every gap between two boxes stays stackGap, and
+// still no line goes round the group (TestCrowdedGapsWiden) or through a
+// box (TestRoutesMissBoxes). Before buses, star(400)'s gaps were widened
+// to hold a lane per line, which made it 4426×4571 rather than 4426×3411.
+//
+// And the buses form a tree: two lines that share a lane through a hole
+// share every point before it, back to the hub. Lines that had parted are
+// never merged again, so a reader can follow a branch from the trunk.
+func TestBusesKeepStarsCompact(t *testing.T) {
+	for _, s := range []*Schema{star(45), star(120), star(400)} {
+		l := testLayout(t, s)
+		byX := map[float64][]*box{}
+		for _, b := range l.boxes {
+			byX[b.x] = append(byX[b.x], b)
+		}
+		for _, col := range byX {
+			sort.Slice(col, func(i, j int) bool { return col[i].y < col[j].y })
+			for i := 1; i < len(col); i++ {
+				if g := col[i].y - col[i-1].y - col[i-1].h; math.Abs(g-stackGap) > 0.01 {
+					t.Errorf("%s: gap %.1f above %s, want stackGap: a star should need no widening", s.Conn, g, col[i].t.Label)
+				}
+			}
+		}
+
+		// Every horizontal run through a column is a lane. Map each lane
+		// (its x span and height) to the points that lead into it; every
+		// line through it must have come the same way.
+		type lane struct{ x0, x1, y float64 }
+		prefix := map[lane][]pt2{}
+		runs := 0
+		for _, r := range s.Rels {
+			pts := l.paths[r].pts
+			for i := 1; i < len(pts); i++ {
+				a, b := pts[i-1], pts[i]
+				// a run through a hole is one straight segment as wide
+				// as its column (boxMinW at least); the stubs out of and
+				// into the two boxes are shorter
+				if a.Y != b.Y || b.X-a.X < boxMinW {
+					continue
+				}
+				runs++
+				k := lane{a.X, b.X, a.Y}
+				if want, ok := prefix[k]; !ok {
+					prefix[k] = pts[:i+1]
+				} else if !slices.Equal(want, pts[:i+1]) {
+					t.Errorf("%s: %s joins the lane at y %.1f by another way than the lines before it", s.Conn, r.Name, a.Y)
+				}
+			}
+		}
+		// with a lane per line, every run would be its own lane; on
+		// buses star(45) has 90 runs on 32 lanes, star(120) 420 on 98
+		// and star(400) 2765 on 359
+		if runs == 0 || len(prefix)*2 > runs {
+			t.Errorf("%s: %d runs through holes on %d lanes; a star's lines should share lanes", s.Conn, runs, len(prefix))
 		}
 	}
 }

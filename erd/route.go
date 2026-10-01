@@ -2,6 +2,7 @@ package erd
 
 import (
 	"math"
+	"slices"
 	"sort"
 
 	"github.com/rohanthewiz/dbc/raster"
@@ -59,15 +60,55 @@ import (
 //
 // A line routed above a column's top box can rise above the group's first
 // row of boxes; layGroup then moves the group down to make room.
+//
+// BUSES. Lines that leave one port slot (see setPorts) already start as
+// one: a hub's forty keys to its id all meet its row at one point, under
+// one marker. Between columns they used to part at once, each with its own
+// lane through every gap it crossed, so a 400-child star needed a lane per
+// line in its first wrapped column's gaps and widen stretched that column
+// to hold them. Such lines say the same thing at their shared end, so
+// they may also share the way out of it: lines from one slot that take
+// the same holes, in the same order, share ONE lane through each of them,
+// and part only where their holes do. The routes form a tree rooted at
+// the slot, and a reader follows a trunk from the hub and then the branch
+// to the box they want:
+//
+//	 hub        col 1          col 2          col 3
+//	┌───┐      ┌─────┐
+//	│ id│||──┬─┤     │
+//	└───┘    │ └─────┘
+//	         ╰───────────┬──────────────╮     ← one lane through col 1's
+//	           ┌─────┐   │ ┌─────┐      │       gap for every line that
+//	           │     │   │ │     │      │       took it; it forks in the gap
+//	           └─────┘   ╰<│ c2a │      │       after, never inside a hole
+//	                       └─────┘      ╰───<│ c3a │
+//
+// The shared run is the line's PREFIX from its anchored end: two lines
+// share a lane in a hole only if they share the slot and every hole
+// before it. Merging lines that had parted would join two branches back
+// into one, and a reader could no longer tell which branch went on where;
+// a prefix keeps it a tree. Each line's prefixes are nodes of a trie (bus)
+// rooted at its slot; a hole's lanes are its distinct nodes, not its
+// lines, and a line that joins a node already through a hole adds no lane
+// there (hole.cost charges it nothing), so lines from a slot gather into
+// trunks rather than spreading out. A line is anchored at whichever of its
+// ends shares its slot with more lines (the left on a tie), which for a
+// hub is the hub's end; holes are chosen from that end outward.
+//
+// A line whose slot it shares with no other line is a trie of one node per
+// hole: one lane, exactly as before buses.
 
 // Routing constants, in CSS pixels.
 const (
 	holePad  = 5.0 // kept clear between a lane and the boxes either side of it
 	laneGap  = 6.0 // between two lanes, when the hole has room
 	minLane  = 3.0 // closest two lanes of a crowded hole get
-	laneLoad = 6.0 // charge for each line already through a hole
+	laneLoad = 6.0 // charge for each lane already through a hole
 	overLoad = 120.0
 	growLoad = 12.0 // overLoad's stand-in while measuring: what widening a gap one lane costs
+	// earlyTilt breaks a shared slot's travel ties toward climbing early (see
+	// chooseHoles): per gap out, a fraction of the travel far below a pixel
+	earlyTilt = 1e-6
 )
 
 // column is one column of boxes in a group, as placed.
@@ -83,7 +124,57 @@ type hole struct {
 	top, bot float64     // the band; -Inf/+Inf for the open side above the top box / below the bottom one
 	users    []*crossing // the lines through it, in lane order once lanes are set
 	lane     map[*crossing]float64
-	measure  bool // routing to measure demand for widen: growLoad past capacity, not overLoad
+	buses    map[*bus]int // the lanes through it: each bus, with how many of users ride it
+	measure  bool         // routing to measure demand for widen: growLoad past capacity, not overLoad
+}
+
+// lanes is how many lanes the hole needs: one per bus through it, however
+// many lines ride each.
+func (h *hole) lanes() int { return len(h.buses) }
+
+// join puts x through the hole on bus b (its route's node at this hole).
+func (h *hole) join(x *crossing, b *bus) {
+	h.users = append(h.users, x)
+	if h.buses == nil {
+		h.buses = map[*bus]int{}
+	}
+	h.buses[b]++
+}
+
+// bus is one node of a slot's route trie (see BUSES above): the lines from
+// one port slot that took the same holes, in the same order, from their
+// anchored end up to and including this node's hole. They ride one lane
+// through that hole. The root is the slot itself, with no hole.
+type bus struct {
+	h    *hole
+	next map[*hole]*bus // the routes that go on from here, by their next hole
+	// shared is set on a root whose slot more than one line leaves: its
+	// lines choose holes with chooseHoles' early tilt
+	shared bool
+}
+
+// step is the existing node for going on from b through h, or nil when no
+// line has gone that way yet (or b is itself nil: a route no line has
+// taken has no continuations either). It never creates a node, so
+// chooseHoles can price any route without changing the trie.
+func (b *bus) step(h *hole) *bus {
+	if b == nil {
+		return nil
+	}
+	return b.next[h]
+}
+
+// grow is step's node, made if no line has gone that way yet.
+func (b *bus) grow(h *hole) *bus {
+	if n := b.next[h]; n != nil {
+		return n
+	}
+	if b.next == nil {
+		b.next = map[*hole]*bus{}
+	}
+	n := &bus{h: h}
+	b.next[h] = n
+	return n
 }
 
 // bounded reports whether the hole is between two boxes (so its lanes must
@@ -110,13 +201,18 @@ func (h *hole) capacity() int {
 	return int((h.bot-h.top-2*holePad)/minLane) + 1
 }
 
-// cost is the charge for one more line through the hole: laneLoad per line
-// already in it (a crowded hole pushes lanes toward its edges, and a line
-// through the open side is pushed further out), and a steep overLoad past
-// its capacity, so lines only share a lane's width when every hole near
-// them is full.
-func (h *hole) cost() float64 {
-	n := len(h.users)
+// cost is the charge for one more line through the hole on bus b (nil for
+// a route no line has taken yet). Riding a bus already through the hole
+// is free: it adds no lane, and its line is drawn over one that is there.
+// A new lane pays laneLoad per lane already in it (a crowded hole pushes
+// lanes toward its edges, and a line through the open side is pushed
+// further out), and a steep overLoad past its capacity, so lines only
+// share a lane's width when every hole near them is full.
+func (h *hole) cost(b *bus) float64 {
+	if b != nil && h.buses[b] > 0 {
+		return 0
+	}
+	n := h.lanes()
 	c := laneLoad * float64(n)
 	if over := n - h.capacity() + 1; over > 0 {
 		if h.measure {
@@ -148,6 +244,19 @@ type crossing struct {
 	l, rb  *box // the box on the left and the one on the right
 	yl, yr float64
 	holes  []*hole // one per column strictly between l's and rb's
+	buses  []*bus  // its route's node at each of holes: the lane it rides there
+}
+
+// laneOf is the bus x rides through h, which decides its lane: lines on
+// one bus share one. A crossing made without buses (a test's) rides a
+// lane of its own.
+func (x *crossing) laneOf(h *hole) any {
+	for i, y := range x.holes {
+		if y == h && i < len(x.buses) {
+			return x.buses[i]
+		}
+	}
+	return x
 }
 
 // laneKey orders the lines through h: by the heights the line comes from
@@ -198,7 +307,16 @@ func route(cols []*column, rels []*Rel, byT map[*Table]*box, in map[*box]bool, m
 	// different markers meet at one row.
 	ends := setPorts(rels, byT, in)
 
-	// 2. Choose each crossing line's holes.
+	// 2. Choose each crossing line's holes, from its anchored end (see
+	// BUSES): roots holds each slot's trie, made when a line first leaves
+	// the slot across a column.
+	roots := map[int]*bus{}
+	root := func(e *end) *bus {
+		if roots[e.slot] == nil {
+			roots[e.slot] = &bus{shared: e.share > 1}
+		}
+		return roots[e.slot]
+	}
 	var xs []*crossing
 	for i, r := range rels {
 		c, p := byT[r.Child], byT[r.Parent]
@@ -212,12 +330,27 @@ func route(cols []*column, rels []*Rel, byT map[*Table]*box, in map[*box]bool, m
 			continue
 		}
 		x := &crossing{r: r, idx: i, l: p, rb: c, yl: py, yr: cy}
+		el, er := ends[r][1], ends[r][0]
 		if c.col < p.col {
 			x.l, x.rb, x.yl, x.yr = c, p, cy, py
+			el, er = er, el
 		}
-		x.holes = chooseHoles(cols[x.l.col+1:x.rb.col], x.yl, x.yr)
-		for _, h := range x.holes {
-			h.users = append(h.users, x)
+		way := cols[x.l.col+1 : x.rb.col]
+		if er.share > el.share {
+			// anchored on the right: choose from the right end leftward,
+			// then put the holes (and their nodes) back left to right
+			back := make([]*column, len(way))
+			for k, c := range way {
+				back[len(way)-1-k] = c
+			}
+			x.holes, x.buses = chooseHoles(back, x.yr, x.yl, root(er))
+			slices.Reverse(x.holes)
+			slices.Reverse(x.buses)
+		} else {
+			x.holes, x.buses = chooseHoles(way, x.yl, x.yr, root(el))
+		}
+		for k, h := range x.holes {
+			h.join(x, x.buses[k])
 		}
 		xs = append(xs, x)
 	}
@@ -257,6 +390,8 @@ type end struct {
 	kind  marker
 	y     float64 // where it attaches: the row's centre, then its slot's
 	other float64 // the row the line's other end attaches to, for ordering slots
+	slot  int     // its slot's number, unique within one setPorts: the ends that share a point and a marker
+	share int     // how many ends are in that slot, itself included
 }
 
 // portKey names a port: one row of one box, on one side of it. Every line
@@ -342,12 +477,14 @@ func setPorts(rels []*Rel, byT map[*Table]*box, in map[*box]bool) map[*Rel][2]*e
 		out[r] = [2]*end{ce, pe}
 	}
 
+	nslots := 0
 	for _, k := range order {
 		es := ports[k]
 		// the port's distinct markers, each with the mean height of its
 		// lines' other ends
 		type slot struct {
 			kind   marker
+			id     int
 			sum    float64
 			n      int
 			offset float64
@@ -357,12 +494,17 @@ func setPorts(rels []*Rel, byT map[*Table]*box, in map[*box]bool) map[*Rel][2]*e
 		for _, e := range es {
 			s := byKind[e.kind]
 			if s == nil {
-				s = &slot{kind: e.kind}
+				s = &slot{kind: e.kind, id: nslots}
+				nslots++
 				byKind[e.kind] = s
 				slots = append(slots, s)
 			}
 			s.sum += e.other
 			s.n++
+		}
+		// every end learns its slot, which route anchors buses on
+		for _, e := range es {
+			e.slot, e.share = byKind[e.kind].id, byKind[e.kind].n
 		}
 		if len(slots) < 2 {
 			continue
@@ -407,7 +549,8 @@ func widen(cols []*column, extra [][]float64) bool {
 		// holes[j] is the gap above box j; holes[0] and the last are the
 		// open sides, which need no room
 		for j := 1; j < len(c.boxes); j++ {
-			n := len(c.holes[j].users)
+			// lanes, not lines: a bus of any size is one lane wide
+			n := c.holes[j].lanes()
 			need := 2*holePad + float64(n-1)*minLane - stackGap
 			if need > extra[i][j]+0.5 {
 				extra[i][j] = math.Ceil(need)
@@ -419,7 +562,10 @@ func widen(cols []*column, extra [][]float64) bool {
 }
 
 // chooseHoles picks one hole in each of cols (the columns between a line's
-// two boxes, left to right) for a line from height y0 to height y1.
+// two boxes, in order from its anchored end) for a line from height y0 (the
+// anchored end) to height y1, riding the buses of the trie at root where
+// it can. It returns the holes and, for each, the bus the line rides
+// through it, made where the line is the first to go that way.
 //
 // Dynamic programming over the columns: best[j] is the cheapest way to
 // reach column k's hole j from y0, where a step costs its vertical travel
@@ -428,13 +574,43 @@ func widen(cols []*column, extra [][]float64) bool {
 // whichever hole it picks. A column has at most a few dozen holes, so the
 // k·n² table is small; ties keep the earlier (upper) hole, so the choice
 // is deterministic.
-func chooseHoles(cols []*column, y0, y1 float64) []*hole {
+//
+// A hole's cost depends on the route to it (riding an existing bus is
+// free, and which bus that is depends on every hole before), so each cell
+// also carries the bus its own cheapest route reaches. That prices a hole
+// by the best route to its predecessor only, not by every route — the
+// table is no longer exact, but a cheaper route the table misses is one
+// that rides a bus its predecessor's best route did not, which costs at
+// most one lane's charge, and the order the lines are routed in already
+// decides more than that.
+//
+// EARLY TILT. Every route that only ever travels toward y1 travels the
+// same distance, so ties are common, and a lone line keeps the old rule:
+// the upper hole wins. A bus's lines are better served by doing their
+// climbing or falling early, in the gaps near the anchored end, where
+// they fan out of their slot anyway, and then running straight to their
+// boxes: the trunks are then one per row of targets, and each branch
+// leaves the trunk once, at its box. Taking the upper hole instead keeps
+// every line below the slot on one trunk at the slot's height until the
+// last moment, so each gap holds a comb of curves dropping from one point.
+// So for a shared slot's lines, the vertical travel in the k-th gap out
+// costs (1 + k·earlyTilt) times its length: far too little to outweigh a
+// pixel of real travel or any hole's charge, enough to break the tie.
+func chooseHoles(cols []*column, y0, y1 float64, root *bus) ([]*hole, []*bus) {
 	if len(cols) == 0 {
-		return nil
+		return nil, nil
 	}
+	tilt := 0.0
+	if root != nil && root.shared {
+		tilt = earlyTilt
+	}
+	// travel is the charge for climbing or falling d in the k-th gap out
+	// from the anchored end
+	travel := func(k int, d float64) float64 { return math.Abs(d) * (1 + float64(k)*tilt) }
 	type cell struct {
 		cost float64
 		from int
+		bus  *bus // the node this route reaches; nil once it leaves every existing route
 	}
 	table := make([][]cell, len(cols))
 	for k, c := range cols {
@@ -442,15 +618,17 @@ func chooseHoles(cols []*column, y0, y1 float64) []*hole {
 		for j, h := range c.holes {
 			best := cell{cost: math.Inf(1), from: -1}
 			if k == 0 {
-				best.cost = math.Abs(h.at() - y0)
+				best.cost = travel(0, h.at()-y0)
+				best.bus = root.step(h)
+				best.cost += h.cost(best.bus)
 			} else {
 				for i, ph := range cols[k-1].holes {
-					if v := table[k-1][i].cost + math.Abs(h.at()-ph.at()); v < best.cost {
-						best = cell{cost: v, from: i}
+					b := table[k-1][i].bus.step(h)
+					if v := table[k-1][i].cost + travel(k, h.at()-ph.at()) + h.cost(b); v < best.cost {
+						best = cell{cost: v, from: i, bus: b}
 					}
 				}
 			}
-			best.cost += h.cost()
 			table[k][j] = best
 		}
 	}
@@ -458,7 +636,7 @@ func chooseHoles(cols []*column, y0, y1 float64) []*hole {
 	last := len(cols) - 1
 	j, bestCost := 0, math.Inf(1)
 	for i, h := range cols[last].holes {
-		if v := table[last][i].cost + math.Abs(y1-h.at()); v < bestCost {
+		if v := table[last][i].cost + travel(last+1, y1-h.at()); v < bestCost {
 			j, bestCost = i, v
 		}
 	}
@@ -467,7 +645,15 @@ func chooseHoles(cols []*column, y0, y1 float64) []*hole {
 		out[k] = cols[k].holes[j]
 		j = table[k][j].from
 	}
-	return out
+	// the route joins the trie: the buses it rode, then new nodes from
+	// where it first went its own way
+	buses := make([]*bus, len(out))
+	at := root
+	for k, h := range out {
+		at = at.grow(h)
+		buses[k] = at
+	}
+	return out, buses
 }
 
 // setLanes orders a hole's lines (see crossing.laneKey) and gives each its
@@ -475,27 +661,63 @@ func chooseHoles(cols []*column, y0, y1 float64) []*hole {
 // closing up to fit when there are many; in the open space above or below
 // a column they stack outward from the box, laneGap apart, the first one
 // stackGap/2 out — as far as a band's middle lane is from its boxes.
+//
+// The lines riding one bus share its lane. A bus is ordered by the mean of
+// its lines' keys: they all come from one height on the anchored side and
+// fan out to several on the other, so the mean is where the bus is headed
+// on the whole.
 func setLanes(h *hole) {
-	n := len(h.users)
-	if n == 0 {
+	if len(h.users) == 0 {
 		return
 	}
-	sort.SliceStable(h.users, func(i, j int) bool {
-		a, b := h.users[i], h.users[j]
-		am, ap, an := a.laneKey(h)
-		bm, bp, bn := b.laneKey(h)
+	type lane struct {
+		mid, prev, nx float64
+		n             int
+		idx           int // its first line's place in the schema, for stable ties
+		lines         []*crossing
+	}
+	var lanes []*lane
+	byID := map[any]*lane{}
+	for _, x := range h.users {
+		id := x.laneOf(h)
+		ln := byID[id]
+		if ln == nil {
+			ln = &lane{idx: x.idx}
+			byID[id] = ln
+			lanes = append(lanes, ln)
+		}
+		m, p, nx := x.laneKey(h)
+		ln.mid += m
+		ln.prev += p
+		ln.nx += nx
+		ln.n++
+		ln.idx = min(ln.idx, x.idx)
+		ln.lines = append(ln.lines, x)
+	}
+	for _, ln := range lanes {
+		k := float64(ln.n)
+		ln.mid, ln.prev, ln.nx = ln.mid/k, ln.prev/k, ln.nx/k
+	}
+	sort.SliceStable(lanes, func(i, j int) bool {
+		a, b := lanes[i], lanes[j]
 		switch {
-		case am != bm:
-			return am < bm
-		case ap != bp:
-			return ap < bp
-		case an != bn:
-			return an < bn
+		case a.mid != b.mid:
+			return a.mid < b.mid
+		case a.prev != b.prev:
+			return a.prev < b.prev
+		case a.nx != b.nx:
+			return a.nx < b.nx
 		}
 		return a.idx < b.idx
 	})
-	h.lane = make(map[*crossing]float64, n)
-	for i, x := range h.users {
+	// users back in lane order, a bus's lines together
+	h.users = h.users[:0]
+	for _, ln := range lanes {
+		h.users = append(h.users, ln.lines...)
+	}
+	n := len(lanes)
+	h.lane = make(map[*crossing]float64, len(h.users))
+	for i, ln := range lanes {
 		var y float64
 		switch {
 		case math.IsInf(h.top, -1):
@@ -511,7 +733,9 @@ func setLanes(h *hole) {
 			}
 			y = (h.top+h.bot)/2 + (float64(i)-float64(n-1)/2)*sp
 		}
-		h.lane[x] = y
+		for _, x := range ln.lines {
+			h.lane[x] = y
+		}
 	}
 }
 

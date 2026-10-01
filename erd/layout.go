@@ -487,9 +487,11 @@ func layGroup(g []*box, rels []*Rel, byT map[*Table]*box, x0, y0 float64, paths 
 	place()
 
 	// 5. Route. First make room: a gap between two boxes holds about five
-	// lines, and a column that more lines cross than its gaps hold (the
-	// first wrapped column of a big hub's children) would send the rest
-	// over or under the whole column, in ribbons. So the lines are routed
+	// lanes, and a column that more lanes cross than its gaps hold would
+	// send the rest over or under the whole column, in ribbons. (A big
+	// hub's lines ride buses, a lane per trunk rather than per line — see
+	// route.go — so it is many distinct keys crossing one column that
+	// crowds it, not one hub's.) So the lines are routed
 	// once as if every gap were wide enough (measure), each gap is widened
 	// to the lanes that chose it, and the columns are placed again. Moving
 	// boxes moves the rows lines attach to, so a line may then prefer

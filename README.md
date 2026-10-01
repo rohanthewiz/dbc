@@ -21,6 +21,21 @@ Or install a tagged release with `go install github.com/rohanthewiz/dbc@latest`,
 through Cats ([As a Cats plugin](#as-a-cats-plugin)), or from the archives on
 the GitHub Releases page. `dbc version` (or `dbc --version`) prints the version.
 
+### Tests
+
+`go test ./...` runs the unit tests. Two opt-in suites need more than Go:
+
+- **Live databases** (`db/live_*`): set `DBC_LIVE_PG_DSN` and/or
+  `DBC_LIVE_MYSQL_DSN` to a throwaway Postgres or MySQL.
+- **dbc web in a browser** (`web/e2e`, a module of its own so go-rod never
+  enters dbc's dependencies): `cd web/e2e && DBC_E2E=1 go test -count=1 -v .`
+  It builds dbc, serves `dbc web` from a temporary HOME on two SQLite files,
+  and drives a headless Chrome through it: sign-in, a run, the Tables list,
+  Show columns, copies, switching, Disconnect, the connection form and tabs
+  across a reload. A JavaScript error on the page fails it. `DBC_E2E_CHROME`
+  names the browser, `DBC_E2E_HEADFUL=1` shows it, and `DBC_LIVE_PG_DSN`
+  adds the Postgres schema picker.
+
 ### Releasing
 
 Fast-forward the `release` branch to main and push it

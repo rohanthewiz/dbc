@@ -102,7 +102,12 @@
         dbc.editor.setDriver(state.driver);
       }
     }
-    if (!connecting) els.active.textContent = name;
+    if (!connecting) {
+      // a disconnected tab (Disconnect in the Connections menu) says so,
+      // muted, rather than leaving the header blank
+      els.active.textContent = name || "not connected";
+      els.active.classList.toggle("none", !name);
+    }
     els.stop.disabled = !state.busy && !connecting;
   }
 
@@ -596,6 +601,7 @@
         state.active = d.active;
         t.conn = d.active;
         markActive(d.active, "");
+        if (!d.active) { els.stateful.hidden = true; t.stateful = false; } // its session goes with it
         showSide(d);
         if (d.status) setStatus(d.status);
         else if (!state.busy) setStatus("ready on " + d.active);
@@ -730,6 +736,12 @@
       try { st = await api("GET", "/api/v1/ws/" + t.ws); } catch (_) { st = null; } // forgotten: open anew
     }
     if (state.tab !== t) return;
+    // A workspace this page already had, with no active connection, was
+    // disconnected on purpose (a new one always starts on the default
+    // connection): it is shown as it is rather than connected again
+    // behind the user's back. A new workspace — the first showing, or one
+    // the server forgot (a restart) — connects as before.
+    const disconnected = st && !st.active && !st.connecting;
     if (!st) {
       try {
         st = await api("POST", "/api/v1/ws", { win: state.win });
@@ -742,7 +754,7 @@
     }
     if (state.tab !== t) return;
     state.ws = t.ws;
-    if (st.connected || st.connecting) {
+    if (st.connected || st.connecting || disconnected) {
       applyState(st, true);
       return;
     }
@@ -788,7 +800,7 @@
     if (!st.busy) { els.stateful.hidden = !st.stateful; t.stateful = st.stateful; }
     if (st.busy) setStatus(st.status, "warn");
     else if (fresh && t.status) setStatus(t.status, t.level);
-    else setStatus("ready on " + st.active, "");
+    else setStatus(st.active ? "ready on " + st.active : "not connected", "");
     if (st.hasResult) {
       if (fresh) dbc.grid.restore(t.grid); else dbc.grid.load();
     }
@@ -806,6 +818,33 @@
     } catch (e) {
       log("err", e.message);
     }
+  }
+
+  // disconnect takes the tab off its connection, which stays in the list
+  // (POST /disconnect; the "conn" with no active connection empties the
+  // sidebar). The server closes the connection's pool too unless another
+  // query tab is still on it. A session that may hold a transaction is
+  // asked about first, as closing the tab is: the disconnect rolls it back.
+  function disconnect() {
+    const t = state.tab;
+    const go = async () => {
+      try {
+        await api("POST", dbc.wsPath("/disconnect"));
+      } catch (e) {
+        log(e.status === 409 ? "warn" : "err", e.message);
+      }
+    };
+    if (!t.stateful) { go(); return; }
+    const yes = el("button", { type: "button", class: "primary" }, "Disconnect");
+    const no = el("button", { type: "button" }, "Stay connected");
+    yes.addEventListener("click", () => { dbc.modal.close(); go(); });
+    no.addEventListener("click", () => dbc.modal.close());
+    dbc.modal.open({
+      title: "Disconnect from " + state.active + "?", focus: no,
+      body: el("div", "confirm", el("p", null, t.title + "'s session may hold a transaction, SET values or temp tables. " +
+        "Disconnecting closes the session — an open transaction is rolled back.")),
+      foot: el("div", "mfoot", yes, no),
+    });
   }
 
   // editorState is what a run or an explain sends: the buffer, the caret
@@ -967,7 +1006,7 @@
   }
 
   Object.assign(dbc.cmd, {
-    run, stop, history, preview, editorState, scripts, help, newTab, pickTab, connect, connRenamed,
+    run, stop, history, preview, editorState, scripts, help, newTab, pickTab, connect, disconnect, connRenamed,
     closeTab: () => closeTab(state.tab),
     exportMenu: () => dbc.grid.exportMenu(),
   });

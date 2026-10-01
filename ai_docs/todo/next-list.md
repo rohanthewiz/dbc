@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-083
+**Next ID:** N-084
 
 ## Open
 
@@ -53,7 +53,8 @@ ten session docs in `ai_docs/claude_sessions/`
   The connection form's Fields/DSN toggle and TLS section
   (`2026-1001-1415-connection-tls-and-dsn-fields`, 23 checks) and the
   sidebar's schema filter (`2026-1001-1439-sidebar-schema-filter`, against a
-  154-schema Postgres) were verified the same throwaway way.
+  154-schema Postgres) were verified the same throwaway way, as was the
+  connections menu's Disconnect (`2026-1001-1704-disconnect-connection`).
 - **N-061** · raised `2026-0928-0050-sidebar-splitter-fold-and-section-splitters` · value low
   Check `dbc web`'s splitters and sidebar fold in Safari and Firefox. They were
   verified only in Chrome, and the fix that lets a press reach the editor and
@@ -141,7 +142,15 @@ ten session docs in `ai_docs/claude_sessions/`
   stays open after the tab moves on, until `conn_idle_timeout` closes its idle
   connections (the `*sql.DB` itself lives until the base is edited or dbc
   exits). Browsing many databases on one server leaves a pool per database.
-  Closing a derived pool when no tab is on it would bound that.
+  Closing a derived pool when no tab is on it would bound that. An explicit
+  Disconnect (`2026-1001-1704-disconnect-connection`) now does close the pool,
+  derived ones with it, once no tab is on it; moving to another database or
+  connection still does not.
+- **N-083** · raised `2026-1001-1704-disconnect-connection` · value low
+  The TUI has no Disconnect: leaving a connection there still means picking
+  another. `workspace.Workspace.Disconnect` is UI-neutral, so the TUI needs
+  only a key or a menu entry, an empty sidebar, and a status line for "not
+  connected".
 
 ## Roadmap
 

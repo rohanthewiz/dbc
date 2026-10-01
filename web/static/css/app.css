@@ -59,6 +59,7 @@ button:focus-visible, textarea:focus-visible, li:focus-visible { outline: 1px so
 .topbar > *, .actions button { white-space: nowrap; }
 .brand { font-weight: 700; color: var(--accent); letter-spacing: .5px; }
 .active-conn { color: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.active-conn.none { color: var(--muted); font-family: inherit; }
 .badge {
   font-size: 11px;
   padding: 1px 7px;

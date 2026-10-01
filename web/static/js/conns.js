@@ -382,9 +382,14 @@
     });
   }
 
-  // The right-click menu: connect, or edit or remove one added here. For
+  // The right-click menu: connect (or, on the row this tab is on or is
+  // connecting to, disconnect), or edit or remove one added here. For
   // the config file's, Edit and Remove are shown and say why they cannot,
   // rather than being absent and leaving the user to wonder where they went.
+  //
+  // Disconnect acts on the tab, not the row's name: on a server's other
+  // database ("ProdDr/analytics") the base's row is the one marked, and
+  // what the tab leaves is the database it is on.
   conns.addEventListener("contextmenu", (e) => {
     const b = e.target.closest(".conn-item");
     if (!b) return;
@@ -393,7 +398,9 @@
     const fromFile = name + " comes from the config file (or is a built-in demo) — edit the file to ";
     dbc.menu.open(e.clientX, e.clientY, [
       { head: name },
-      { label: "Connect", act: () => dbc.cmd.connect(name) },
+      b.classList.contains("active") || b.classList.contains("connecting")
+        ? { label: "Disconnect", act: () => dbc.cmd.disconnect() }
+        : { label: "Connect", act: () => dbc.cmd.connect(name) },
       b.dataset.saved
         ? { label: "Edit…", act: () => openEdit(b) }
         : { label: "Edit…", why: fromFile + "change it" },

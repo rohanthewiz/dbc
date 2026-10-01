@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/rohanthewiz/rweb"
@@ -326,6 +327,48 @@ func (s *Server) handleConnect(ctx rweb.Context) error {
 	t.send("connecting", map[string]string{"name": req.Name})
 	s.launch(t, st)
 	return ok(ctx, map[string]any{"connecting": true})
+}
+
+// handleDisconnect takes the tab off its connection, keeping the connection
+// in the list (Workspace.Disconnect). The tab's sidebar empties at once (a
+// "conn" with no active connection); its session is closed off the request,
+// since that waits on the session lock.
+//
+// The pool is closed after that only when no query tab in any window is
+// still on the connection (or on one of its server's other databases, which
+// db.Manager.Disconnect closes with it): another tab's pinned session would
+// otherwise lose its connection, and any transaction on it, to this tab's
+// gesture. The log says which happened, so "disconnected" is never taken to
+// mean the server has no connection open when another tab still holds one.
+//
+//	POST /disconnect ─► ws.Disconnect ─► "conn" {active: ""}
+//	                       └─ go: session closed ─► tabsOn(left) == 0 ?
+//	                                                 ├─ yes ─► mgr.Disconnect
+//	                                                 └─ no ──► pool kept, said so
+func (s *Server) handleDisconnect(ctx rweb.Context) error {
+	t, err := s.hub.get(ctx.Request().PathParam("id"))
+	if err != nil {
+		return fail(ctx, err)
+	}
+	left, st, err := t.ws.Disconnect()
+	if err != nil {
+		return fail(ctx, err)
+	}
+	t.notes(st.Notes)
+	t.send("conn", connEvent{Active: "", Changed: true, Status: "disconnected", sideState: sidebar(s.cfg, t.ws)})
+	go func() {
+		s.deliver(t, st.Job())
+		// counted after the session is closed, so this tab is not among them.
+		// An in-memory database's pool is kept regardless (see
+		// db.Manager.Disconnect): that is where its contents live.
+		if n := s.hub.tabsOn(left); n > 0 {
+			t.send("log", logLine{Level: "muted", Text: fmt.Sprintf(
+				"%s still on %s: its connection stays open for %s", tabsAre(n), left, itThem(n))})
+		} else {
+			s.mgr.Disconnect(left)
+		}
+	}()
+	return ok(ctx, map[string]any{"disconnected": left})
 }
 
 // schemaReq is a schema pick: a schema's name, or All for every schema.

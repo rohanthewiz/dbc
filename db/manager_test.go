@@ -99,3 +99,38 @@ func TestSetMemoryPool(t *testing.T) {
 		t.Fatalf("later pool's cap = %d, want 16", got)
 	}
 }
+
+// Disconnect closes a pool — a later call opens a fresh one — but leaves a
+// shared in-memory database's open, since closing it would destroy it.
+func TestDisconnectSparesInMemory(t *testing.T) {
+	cfg := &config.Config{MaxRows: 1000, Connections: []config.Connection{
+		{Name: "file", Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "d.db")},
+		{Name: "mem", Driver: "sqlite", DSN: "file:" + memName(t) + "?mode=memory&cache=shared"},
+	}}
+	m := NewManager(cfg)
+	defer m.Close()
+	if m.Disconnect("file") {
+		t.Error("disconnecting a pool never opened reported closing one")
+	}
+	for _, name := range []string{"file", "mem"} {
+		if _, err := m.Run(name, "CREATE TABLE t (n INTEGER)"); err != nil {
+			t.Fatalf("%s: create: %v", name, err)
+		}
+	}
+	before, _ := m.DB("file")
+	if !m.Disconnect("file") {
+		t.Error("an open file database's pool was not closed")
+	}
+	if after, _ := m.DB("file"); after == before {
+		t.Error("the closed pool was handed out again")
+	}
+	if _, err := m.Run("file", "SELECT count(*) FROM t"); err != nil {
+		t.Errorf("the file database after a reopen: %v", err)
+	}
+	if m.Disconnect("mem") {
+		t.Error("an in-memory database's pool was closed")
+	}
+	if _, err := m.Run("mem", "SELECT count(*) FROM t"); err != nil {
+		t.Errorf("the in-memory database lost its table: %v", err)
+	}
+}

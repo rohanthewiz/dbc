@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -218,6 +219,20 @@ func (s *stream) await(t *testing.T, typ string) (sseEvent, []string) {
 			}
 		case <-timeout:
 			t.Fatalf("no %q event; saw logs %q", typ, logs)
+		}
+	}
+}
+
+// awaitLog reads events until a log line reading text arrives, returning
+// every log line seen on the way, that one included.
+func (s *stream) awaitLog(t *testing.T, text string) (sseEvent, []string) {
+	t.Helper()
+	var logs []string
+	for {
+		ev, seen := s.await(t, "log")
+		logs = append(logs, seen...)
+		if seen[len(seen)-1] == text {
+			return ev, logs
 		}
 	}
 }
@@ -682,5 +697,53 @@ func TestRowCountsFollowTheConnect(t *testing.T) {
 	st := decodeData[wsState](t, e.api("GET", "/api/v1/ws/"+id, "", 200))
 	if cats := find(st.Tables); cats.Rows != "8" {
 		t.Errorf("state's cats = %+v", cats)
+	}
+}
+
+// Disconnect takes a tab off its connection and keeps the connection: the
+// tab's sidebar empties, its session goes (the badge with it), the list
+// still has the connection, and a connect brings the tab back. While
+// another tab is on the connection, its pool stays open, and the log says so.
+func TestDisconnectKeepsTheConnection(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	e.connected() // another tab, in another window, on the same connection
+	e.api("POST", "/api/v1/ws/"+id+"/run", runBody("BEGIN", 0, false), 200)
+	s.await(t, "run")
+
+	e.api("POST", "/api/v1/ws/"+id+"/disconnect", "", 200)
+	ev, logs := s.await(t, "conn")
+	c := decodeData[connEvent](t, testEnvelope{Data: ev.Data})
+	if c.Active != "" || !c.Changed || c.Status != "disconnected" || len(c.Tables) != 0 {
+		t.Fatalf("conn event = %+v", c)
+	}
+	if !slices.Contains(logs, "disconnected from demo-sqlite") {
+		t.Errorf("logs = %q", logs)
+	}
+	// the session's release, then the pool's fate, follow off the request
+	_, logs = s.awaitLog(t, "1 query tab is still on demo-sqlite: its connection stays open for it")
+	if !slices.ContainsFunc(logs, func(l string) bool { return strings.HasPrefix(l, "left demo-sqlite") }) {
+		t.Errorf("the open transaction's rollback went unsaid: %q", logs)
+	}
+
+	st := decodeData[wsState](t, e.api("GET", "/api/v1/ws/"+id, "", 200))
+	if st.Active != "" || st.Connected || st.Stateful {
+		t.Errorf("state after = %+v", st)
+	}
+	list := decodeData[struct {
+		Conns []connInfo `json:"conns"`
+	}](t, e.api("GET", "/api/v1/conns", "", 200))
+	if !slices.ContainsFunc(list.Conns, func(c connInfo) bool { return c.Name == "demo-sqlite" }) {
+		t.Errorf("the connection left the list: %+v", list.Conns)
+	}
+	env := e.api("POST", "/api/v1/ws/"+id+"/disconnect", "", 400)
+	if !strings.Contains(env.Error, "not connected") {
+		t.Errorf("a second disconnect: %+v", env)
+	}
+
+	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"demo-sqlite"}`, 200)
+	ev, _ = s.await(t, "conn")
+	if c := decodeData[connEvent](t, testEnvelope{Data: ev.Data}); c.Active != "demo-sqlite" || len(c.Tables) == 0 {
+		t.Fatalf("reconnect = %+v", c)
 	}
 }

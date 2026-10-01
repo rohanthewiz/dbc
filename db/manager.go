@@ -427,6 +427,26 @@ func (m *Manager) Drop(name string) {
 	}
 }
 
+// Disconnect closes name's pool, and those derived from it, as Drop does —
+// the user hanging up, rather than a pool known to be unusable — and reports
+// whether it did. A shared in-memory SQLite database is left open: its
+// contents live only as long as its pool (see anchors), so closing it would
+// not disconnect from that database but destroy it. A later DB call opens a
+// closed pool afresh, as after Drop.
+func (m *Manager) Disconnect(name string) bool {
+	m.mu.Lock()
+	_, inMemory := m.anchors[name]
+	_, open := m.conns[name]
+	m.mu.Unlock()
+	if inMemory {
+		return false
+	}
+	// Between the check and Drop an open may cache a pool; Drop closes that
+	// one too, which is what a disconnect asked for.
+	m.Drop(name)
+	return open
+}
+
 // droppedWith is name and every open pool derived from it: the keys with
 // name + "/" in front that are not configured connections of their own (a
 // connection really named "a/b" is not a's). It reads the pools by key

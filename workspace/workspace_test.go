@@ -405,6 +405,62 @@ func TestSwitchReleasesTheOldSession(t *testing.T) {
 	}
 }
 
+// Disconnect leaves the connection without picking another: nothing
+// active, no catalog, every request refused as having no connection — and
+// its Job closes the session, rolling back what it left open, as a switch
+// does. Connecting again works as from a fresh start.
+func TestDisconnect(t *testing.T) {
+	w := newTestWorkspace(t)
+	run(t, w, "BEGIN")
+	run(t, w, "DELETE FROM cats")
+
+	left, st, err := w.Disconnect()
+	if err != nil || left != demo || len(st.Notes) != 1 || st.Notes[0].Text != "disconnected from demo-sqlite" {
+		t.Fatalf("disconnect = %q, %+v, %v", left, st.Notes, err)
+	}
+	if w.Active() != "" || w.Catalog() != nil || w.Schemas() != nil {
+		t.Errorf("after: active %q, catalog %v", w.Active(), w.Catalog() != nil)
+	}
+	rel, _ := st.Job().(*SessionReleased)
+	if rel == nil || !rel.Stateful || rel.Conn != demo {
+		t.Fatalf("release = %+v", rel)
+	}
+	if conn, _ := w.Session(); conn != "" {
+		t.Errorf("session on %q still pinned", conn)
+	}
+	res, err := w.mgr.Run(demo, "SELECT count(*) FROM cats")
+	if err != nil || res.Rows[0][0] == "0" {
+		t.Errorf("the DELETE survived the disconnect: %v %v", res, err)
+	}
+
+	_, err = w.RunStmts([]string{"SELECT 1"}, "query")
+	refusal(t, err, NoConnection)
+	_, _, err = w.Disconnect()
+	refusal(t, err, NoConnection)
+
+	if ev := w.Switch(demo).Job().(*Connected); ev.Err != nil || !ev.Changed || w.Catalog() == nil {
+		t.Fatalf("reconnect: %+v", ev)
+	}
+}
+
+// A run in flight is refused rather than canceled under it.
+func TestDisconnectRefusedWhileBusy(t *testing.T) {
+	w := newTestWorkspace(t)
+	first, err := w.RunStmts([]string{"SELECT 1"}, "query")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = w.Disconnect()
+	refusal(t, err, Busy)
+	if w.Active() != demo {
+		t.Errorf("a refused disconnect moved active to %q", w.Active())
+	}
+	first.Job()
+	if _, _, err = w.Disconnect(); err != nil {
+		t.Errorf("after the run landed: %v", err)
+	}
+}
+
 // blackholeDSN is a postgres DSN for a loopback listener that accepts and
 // never answers, so a connect to it waits in the handshake until canceled.
 func blackholeDSN(t *testing.T) string {
@@ -487,6 +543,26 @@ func TestNewerConnectSupersedesOlder(t *testing.T) {
 	ev := await(t, slow).(*Connected)
 	if !ev.Stale || len(ev.Notes) != 0 || w.Active() != "other" {
 		t.Errorf("superseded connect: %+v, active %q", ev, w.Active())
+	}
+}
+
+// Disconnecting mid-connect abandons the connect, which lands Stale and
+// switches nothing; what is left is the connection the tab was on.
+func TestDisconnectAbandonsConnect(t *testing.T) {
+	w := newTestWorkspace(t)
+	addConn(w, config.Connection{Name: "slow", Driver: "postgres", DSN: blackholeDSN(t)})
+	slow := async(w.Switch("slow").Job)
+	left, st, err := w.Disconnect()
+	if err != nil || left != demo {
+		t.Fatalf("disconnect = %q, %v", left, err)
+	}
+	st.Job()
+	ev := await(t, slow).(*Connected)
+	if !ev.Stale || w.Active() != "" {
+		t.Errorf("abandoned connect: %+v, active %q", ev, w.Active())
+	}
+	if _, ok := w.Connecting(); ok {
+		t.Error("still connecting after the disconnect")
 	}
 }
 

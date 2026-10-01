@@ -421,6 +421,60 @@ func (w *Workspace) cancelConnectLocked() (Note, bool) {
 	return notef(Warn, "canceling connect to %s…", w.connName), true
 }
 
+// Disconnect leaves the active connection without picking another: no
+// active connection, no catalog, and — through the Job — the pinned session
+// closed, rolling back whatever it left open, as a switch does. A connect
+// in flight is abandoned with it (connGen moves on, so it lands Stale), as
+// is the sidebar's counting and schema loading. It returns the connection
+// left: on a connect still dialing, the one being dialed when there was no
+// connection before it.
+//
+// A run in flight is refused rather than canceled: its session is the one
+// the disconnect would close, and a Stop first leaves the user to decide
+// what becomes of the statement. Nothing to disconnect from is refused too.
+//
+// The pool is not this workspace's to close — other workspaces may be on
+// the same connection (db.Manager is shared); a UI that knows they are not
+// closes it with db.Manager.Disconnect once the Job has run.
+//
+// The Job's event is a *SessionReleased, or nil when no session was open.
+func (w *Workspace) Disconnect() (left string, st Start, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	left = w.active
+	dialing := w.connCancel != nil
+	if left == "" && dialing {
+		left = w.connName
+	}
+	switch {
+	case left == "":
+		return "", Start{}, refuse(NoConnection, Warn, "not connected")
+	case w.busy:
+		return "", Start{}, refuse(Busy, Warn, "busy — %s is still running (Ctrl+K stops it, then disconnect)", w.runTag)
+	}
+	if dialing {
+		w.connCancel()
+		w.connCancel = nil
+	}
+	w.cancelCatalogWorkLocked()
+	w.connGen++ // anything of the old connection's still landing is Stale
+	w.active, w.databases, w.schemas, w.schema = "", nil, nil, ""
+	w.setCatalogLocked(nil)
+	return left, Start{
+		Notes: []Note{notef(Ok, "disconnected from %s", left)},
+		// Whatever session is open goes — unless, by the time the Job runs,
+		// a connect has landed and a run has pinned one to the new active
+		// connection: that one is the user's next work, not the old's.
+		// active is read here rather than passed as "" for that reason.
+		Job: func() Event {
+			w.mu.Lock()
+			keep := w.active
+			w.mu.Unlock()
+			return w.releaseJob(keep)()
+		},
+	}, nil
+}
+
 // releaseJob closes the session pinned to any connection other than keep, so
 // switching connections ends the old session — rolling back what it left
 // open — then and there, rather than holding its transaction and locks open

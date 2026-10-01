@@ -55,7 +55,7 @@ func Probe(ctx context.Context, cc config.Connection, timeout time.Duration) (Pr
 	}
 
 	start := time.Now()
-	dbh, err := openPool(drv, dsn, cc.TLSOpts)
+	dbh, err := openPool(drv, dsn, cc.TLSOpts, cc.Database)
 	if err != nil {
 		if errors.Is(err, bytdb.ErrLocked) {
 			return ProbeResult{}, inUse(cc.Name, err)

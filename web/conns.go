@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -497,7 +498,17 @@ func (s *Server) handleConnEdit(ctx rweb.Context) error {
 		// on a name that no longer exists it would fall back to whatever the
 		// window has active. A failure here is only that, so it is a warning
 		// rather than an undo of an edit the file already holds.
-		if err = s.store.RetagTabs(name, f.Name); err != nil {
+		err = s.store.RetagTabs(name, f.Name)
+		// tabs saved on one of its other databases ("<old>/analytics")
+		// follow it to "<new>/analytics"
+		if tabsSaved, lerr := s.store.Tabs(); err == nil && lerr == nil {
+			for _, st := range tabsSaved {
+				if derivedFrom(s.cfg, st.Conn, name) && err == nil {
+					err = s.store.RetagTabs(st.Conn, config.DerivedName(f.Name, st.Conn[len(name)+len(config.DatabaseSep):]))
+				}
+			}
+		}
+		if err != nil {
 			warns = append(warns, fmt.Sprintf(
 				"saved query tabs on %q were not moved to %q, and will open on the window's connection: %v",
 				name, f.Name, err))
@@ -594,6 +605,10 @@ func itThem(n int) string {
 // tabsOn counts the query tabs, in every window, on the named connection or
 // connecting to it. The tabs are gathered under hub.mu and asked outside
 // it, so hub.mu is never held while taking a workspace's lock.
+//
+// A tab on one of the connection's other databases ("<name>/analytics",
+// config.DatabaseSep) counts: that pool was opened with the connection's
+// host and credentials, and goes when it is edited (db.Manager.Drop).
 func (h *hub) tabsOn(name string) int {
 	h.mu.Lock()
 	all := make([]*tab, 0, len(h.tabs))
@@ -604,7 +619,8 @@ func (h *hub) tabsOn(name string) int {
 	n := 0
 	for _, t := range all {
 		connecting, busy := t.ws.Connecting()
-		if t.ws.Active() == name || (busy && connecting == name) {
+		on := func(c string) bool { return c == name || derivedFrom(t.ws.Config(), c, name) }
+		if on(t.ws.Active()) || (busy && on(connecting)) {
 			n++
 		}
 	}
@@ -623,4 +639,16 @@ func (h *hub) broadcast(typ string, data any) {
 	for _, w := range wins {
 		w.send(typ, "", data)
 	}
+}
+
+// derivedFrom reports whether conn is base's connection onto another of its
+// server's databases: "<base>/<database>", and not a configured connection
+// that happens to be named so. It reads the name rather than asking
+// ConnByName, which cannot resolve a derived name once its base is renamed
+// or removed — the cases it is asked about.
+func derivedFrom(cfg *config.Config, conn, base string) bool {
+	if !strings.HasPrefix(conn, base+config.DatabaseSep) || len(conn) == len(base)+len(config.DatabaseSep) {
+		return false
+	}
+	return !slices.ContainsFunc(cfg.Conns(), func(c config.Connection) bool { return c.Name == conn })
 }

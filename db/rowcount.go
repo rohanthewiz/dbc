@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"maps"
 	"strconv"
 	"strings"
 	"sync"
@@ -292,11 +293,28 @@ func (m *Manager) RowCounts(ctx context.Context, name string, tables []TableRef)
 		rc.mu.Lock()
 		delete(rc.inflight, name)
 		if err == nil {
-			asked := make(map[TableRef]struct{}, len(tables))
-			for _, t := range tables {
-				asked[t] = struct{}{}
+			c := &rowCountCache{at: start, asked: make(map[TableRef]struct{}, len(tables)), counts: counts}
+			// A sidebar loaded a schema at a time asks for one schema's
+			// tables per counting, so a counting still fresh is merged
+			// into rather than replaced: going back to the schema before
+			// is then served from the cache, not counted again. The
+			// merged cache keeps the OLDER start, as rowCountTTL bounds
+			// how stale any number in it may be. The maps are new ones,
+			// since the old are shared with earlier callers.
+			if old := rc.cache[name]; old != nil && time.Since(old.at) < rowCountTTL {
+				c.at = old.at
+				c.counts = make(map[TableRef]RowCount, len(old.counts)+len(counts))
+				for t := range old.asked {
+					c.asked[t] = struct{}{}
+				}
+				maps.Copy(c.counts, old.counts)
+				maps.Copy(c.counts, counts)
 			}
-			rc.cache[name] = &rowCountCache{at: start, asked: asked, counts: counts}
+			for _, t := range tables {
+				c.asked[t] = struct{}{}
+			}
+			rc.cache[name] = c
+			counts = c.counts
 		}
 		rc.mu.Unlock()
 		close(done)

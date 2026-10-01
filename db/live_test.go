@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -131,8 +133,8 @@ func TestLiveColumnsPostgres(t *testing.T) {
 		// the same table name in a second schema must not merge into the first
 		`CREATE TABLE dbc_live2.cats (id int, owner text)`,
 		`CREATE VIEW dbc_live.old_cats AS SELECT id, name FROM dbc_live.cats`,
-		// relkind 'm': information_schema.tables leaves it out, so it is
-		// found only through TablesQuery's pg_matviews half (N-042)
+		// relkind 'm': information_schema.tables leaves it out, so this
+		// checks TablesQuery reads pg_class rather than that view (N-042)
 		`CREATE MATERIALIZED VIEW dbc_live.cat_names AS SELECT id, name FROM dbc_live.cats`,
 		// relkind 'p' for the parent, 'r' for the partition
 		`CREATE TABLE dbc_live.events (id bigint, at date) PARTITION BY RANGE (at)`,
@@ -189,6 +191,166 @@ func TestLiveColumnsPostgres(t *testing.T) {
 	if len(info) != 2 || !strings.HasPrefix(info[1], "2 | name | character varying(80) | YES") {
 		t.Errorf("cat_names (matview) info columns = %q", info)
 	}
+}
+
+// The sidebar's catalog on a shared Postgres database, read as a role that
+// is not the owner of everything — the case that went wrong in real use:
+//
+//   - a schema whose tables belong to another role and were never granted
+//     listed as empty under information_schema.tables; pg_class lists them
+//   - a schema with no tables at all is still in the schema list
+//   - a catalog bigger than max_rows (10 here) comes back whole, where Run
+//     used to cut it, losing the schemas sorted after the cut
+func TestLiveCatalogPostgres(t *testing.T) {
+	mgr := liveMgr(t, "DBC_LIVE_PG_DSN", "postgres")
+	u, err := url.Parse(os.Getenv("DBC_LIVE_PG_DSN"))
+	if err != nil || u.Scheme == "" {
+		t.Skip("needs a URL-form DBC_LIVE_PG_DSN, to log in as a second role")
+	}
+	drop := []string{
+		`DROP SCHEMA IF EXISTS dbc_live_cat_a CASCADE`,
+		`DROP SCHEMA IF EXISTS dbc_live_cat_locked CASCADE`,
+		`DROP SCHEMA IF EXISTS dbc_live_cat_empty CASCADE`,
+		`DROP ROLE IF EXISTS dbc_live_reader`,
+	}
+	liveExec(t, mgr, drop...)
+	t.Cleanup(func() {
+		for _, s := range drop {
+			_, _ = mgr.Run("live", s)
+		}
+	})
+	liveExec(t, mgr,
+		`CREATE ROLE dbc_live_reader LOGIN PASSWORD 'pw'`,
+		`CREATE SCHEMA dbc_live_cat_a`,
+		`GRANT USAGE ON SCHEMA dbc_live_cat_a TO dbc_live_reader`,
+		// USAGE on the schema, but no grant on its table
+		`CREATE SCHEMA dbc_live_cat_locked`,
+		`GRANT USAGE ON SCHEMA dbc_live_cat_locked TO dbc_live_reader`,
+		`CREATE TABLE dbc_live_cat_locked.orders (id int)`,
+		`CREATE SCHEMA dbc_live_cat_empty`,
+	)
+	for i := range 12 {
+		liveExec(t, mgr, fmt.Sprintf(`CREATE TABLE dbc_live_cat_a.t%02d (id int)`, i))
+	}
+	liveExec(t, mgr, `GRANT SELECT ON ALL TABLES IN SCHEMA dbc_live_cat_a TO dbc_live_reader`)
+
+	u.User = url.UserPassword("dbc_live_reader", "pw")
+	reader := liveMgr(t, "DBC_LIVE_PG_DSN", "postgres", func(c *config.Config) {
+		c.MaxRows = 10
+		c.Connections[0].DSN = u.String()
+	})
+	res, err := reader.Catalog(context.Background(), "live", "")
+	if err != nil {
+		t.Fatalf("catalog: %v", err)
+	}
+	if res.Truncated {
+		t.Error("catalog cut short")
+	}
+	per := map[string]int{}
+	for _, r := range TableRefs(res.Rows) {
+		per[r.Schema]++
+	}
+	if per["dbc_live_cat_a"] != 12 {
+		t.Errorf("dbc_live_cat_a has %d tables listed, want all 12 despite max_rows = 10", per["dbc_live_cat_a"])
+	}
+	if per["dbc_live_cat_locked"] != 1 {
+		t.Errorf("dbc_live_cat_locked has %d tables listed, want its 1 ungranted table", per["dbc_live_cat_locked"])
+	}
+	// one schema's tables, as the sidebar loads them
+	one, err := reader.Catalog(context.Background(), "live", "dbc_live_cat_locked")
+	if err != nil || len(one.Rows) != 1 || one.Rows[0][1] != "orders" {
+		t.Errorf("dbc_live_cat_locked alone = %v, %v", one, err)
+	}
+	schemas, err := reader.SchemaSummary(context.Background(), "live")
+	if err != nil {
+		t.Fatalf("schemas: %v", err)
+	}
+	got := map[string]SchemaInfo{}
+	for _, s := range schemas {
+		got[s.Name] = s
+		if strings.HasPrefix(s.Name, "pg_") || s.Name == "information_schema" {
+			t.Errorf("system schema %s listed", s.Name)
+		}
+	}
+	for name, n := range map[string]int{"dbc_live_cat_a": 12, "dbc_live_cat_locked": 1, "dbc_live_cat_empty": 0} {
+		if s, ok := got[name]; !ok || s.Tables != n {
+			t.Errorf("schema %s = %+v (listed %v), want %d tables", name, s, ok, n)
+		}
+	}
+	if !got["public"].Default {
+		t.Errorf("public should be the search_path's first schema: %+v", schemas)
+	}
+	// the ungranted table is listed, and is what Postgres refuses to read —
+	// a count of it is simply left out, not a failed counting
+	counts, err := reader.RowCounts(context.Background(), "live", TableRefs(res.Rows))
+	if err != nil {
+		t.Fatalf("counts: %v", err)
+	}
+	if _, ok := counts[TableRef{Schema: "dbc_live_cat_a", Name: "t00"}]; !ok {
+		t.Error("a granted table should have a count")
+	}
+}
+
+// A second database on the same server: listed by Databases (the one the
+// DSN opens marked current), and reached through the derived connection
+// "live/<database>" — the same server and credentials, another pool.
+func TestLiveDatabasesPostgres(t *testing.T) {
+	mgr := liveMgr(t, "DBC_LIVE_PG_DSN", "postgres")
+	const other = "dbc_live_other"
+	drop := `DROP DATABASE IF EXISTS ` + other + ` WITH (FORCE)`
+	liveExec(t, mgr, drop, `CREATE DATABASE `+other)
+	t.Cleanup(func() {
+		mgr.Drop("live") // closes live/dbc_live_other's pool too, so the drop can go
+		_, _ = mgr.Run("live", drop)
+	})
+
+	dbs, err := mgr.Databases(context.Background(), "live")
+	if err != nil {
+		t.Fatalf("databases: %v", err)
+	}
+	var current, found bool
+	for _, d := range dbs {
+		if d.Name == other {
+			found = !d.Current
+		}
+		current = current || d.Current
+		if d.Name == "template0" || d.Name == "template1" {
+			t.Errorf("template %s listed", d.Name)
+		}
+	}
+	if !found || !current {
+		t.Errorf("databases = %+v, want %s (not current) and one current", dbs, other)
+	}
+
+	derived := config.DerivedName("live", other)
+	liveExec(t, mgr, `SELECT 1`) // the base pool is open before the derived one
+	if _, err := mgr.Run(derived, `CREATE TABLE only_here (id int)`); err != nil {
+		t.Fatalf("create on %s: %v", derived, err)
+	}
+	res, err := mgr.Run(derived, `SELECT current_database()`)
+	if err != nil || res.Rows[0][0] != other {
+		t.Fatalf("%s is on %v (%v), want %s", derived, res, err, other)
+	}
+	cat, err := mgr.Catalog(context.Background(), derived, "public")
+	if err != nil || len(cat.Rows) != 1 || cat.Rows[0][1] != "only_here" {
+		t.Errorf("%s catalog = %v, %v", derived, cat, err)
+	}
+	// the base still opens its own database
+	if res, err := mgr.Run("live", `SELECT current_database()`); err != nil || res.Rows[0][0] == other {
+		t.Errorf("live is on %v (%v)", res, err)
+	}
+	if DefaultDatabase(mustConn(t, mgr, "live")) == other {
+		t.Error("the base's default database should be its DSN's")
+	}
+}
+
+func mustConn(t *testing.T, mgr *Manager, name string) config.Connection {
+	t.Helper()
+	cc, ok := mgr.cfg.ConnByName(name)
+	if !ok {
+		t.Fatalf("no connection %s", name)
+	}
+	return cc
 }
 
 func TestLiveColumnsMySQL(t *testing.T) {

@@ -173,15 +173,16 @@ type wsState struct {
 	HasResult  bool     `json:"hasResult"`
 	HasPlan    bool     `json:"hasPlan"`  // the Plan tab has something to show
 	Stateful   bool     `json:"stateful"` // the "session state" badge; see runEvent
-	Tables     []tabRef `json:"tables"`
 	Warnings   []string `json:"warnings,omitempty"`
+	sideState
 }
 
 func (s *Server) state(t *tab) wsState {
 	st := wsState{
 		ID: t.id, Win: t.win.id, Active: t.ws.Active(), Connected: t.ws.Catalog() != nil,
 		Busy: t.ws.Busy(), Status: t.ws.RunningStatus(),
-		HasResult: t.ws.LastResult() != nil, HasPlan: t.planState().plan != nil, Tables: tables(t.ws),
+		HasResult: t.ws.LastResult() != nil, HasPlan: t.planState().plan != nil,
+		sideState: sidebar(s.cfg, t.ws),
 	}
 	if name, ok := t.ws.Connecting(); ok {
 		st.Connecting = name
@@ -291,8 +292,14 @@ func (s *Server) shown(r *model.Result) int {
 	return len(r.Rows)
 }
 
+// connectReq names the connection to switch to, and the schema to open its
+// sidebar on: the page's remembered pick for that connection, so the
+// connect loads those tables first rather than the default schema's and
+// then a second round trip's. Schema "" and All false is the default.
 type connectReq struct {
-	Name string `json:"name"`
+	Name   string `json:"name"`
+	Schema string `json:"schema"`
+	All    bool   `json:"all"`
 }
 
 // handleConnect switches the tab's connection. It answers at once; the
@@ -309,16 +316,45 @@ func (s *Server) handleConnect(ctx rweb.Context) error {
 	if _, known := s.cfg.ConnByName(req.Name); !known {
 		return fail(ctx, badRequest("unknown connection %q", req.Name))
 	}
-	st := t.ws.Switch(req.Name)
+	st := t.ws.SwitchPick(req.Name, workspace.SchemaPick{Name: req.Schema, All: req.All})
 	if st.Job == nil {
 		// already on it, catalog loaded: nothing to do, but the page may
 		// be reattaching and want its sidebar — send the state it has
-		t.send("conn", connEvent{Active: t.ws.Active(), Tables: tables(t.ws)})
+		t.send("conn", connEvent{Active: t.ws.Active(), sideState: sidebar(s.cfg, t.ws)})
 		return ok(ctx, map[string]any{"connecting": false})
 	}
 	t.send("connecting", map[string]string{"name": req.Name})
 	s.launch(t, st)
 	return ok(ctx, map[string]any{"connecting": true})
+}
+
+// schemaReq is a schema pick: a schema's name, or All for every schema.
+type schemaReq struct {
+	Schema string `json:"schema"`
+	All    bool   `json:"all"`
+}
+
+// handleSchema lists another schema's tables in the tab's sidebar
+// (Workspace.PickSchema). It answers at once; the tables arrive on the
+// stream as a "conn" event, and their row counts as "counts" after it.
+func (s *Server) handleSchema(ctx rweb.Context) error {
+	t, err := s.hub.get(ctx.Request().PathParam("id"))
+	if err != nil {
+		return fail(ctx, err)
+	}
+	var req schemaReq
+	if err = decode(ctx, &req); err != nil {
+		return fail(ctx, err)
+	}
+	st, err := t.ws.PickSchema(workspace.SchemaPick{Name: req.Schema, All: req.All})
+	if err != nil {
+		if r, isRefusal := asRefusal(err); isRefusal {
+			t.notes([]workspace.Note{r.Note})
+		}
+		return fail(ctx, err)
+	}
+	s.launch(t, st)
+	return ok(ctx, map[string]any{"loading": true})
 }
 
 // runReq is the editor at the moment of Run: the buffer, the caret and the

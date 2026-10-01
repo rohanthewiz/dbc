@@ -615,3 +615,77 @@ func TestScriptEventsReachTheSink(t *testing.T) {
 		t.Error("the last s.Show should be the last result")
 	}
 }
+
+// The sidebar's catalog is the app's, not a result a person asked for, so
+// max_rows does not cut it: it used to, and a big database lost every
+// schema past the first 1,000 tables. Ctrl+T, which is a result, keeps the
+// cap and says it was hit.
+func TestConnectCatalogIgnoresMaxRows(t *testing.T) {
+	w := newTestWorkspace(t)
+	if _, err := w.mgr.Run(demo, `CREATE TABLE zz_extra1 (id int)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.mgr.Run(demo, `CREATE TABLE zz_extra2 (id int)`); err != nil {
+		t.Fatal(err)
+	}
+	all := len(w.Catalog().Rows) + 2
+	w.cfg.MaxRows = 2
+	ev := w.Connect(demo).Job().(*Connected)
+	if ev.Err != nil || ev.Catalog == nil {
+		t.Fatalf("connect: %+v", ev)
+	}
+	if got := len(w.Catalog().Rows); got != all || w.Catalog().Truncated {
+		t.Errorf("catalog has %d rows (truncated %v), want all %d", got, w.Catalog().Truncated, all)
+	}
+	if w.Schemas() != nil {
+		t.Errorf("sqlite has no separate schema listing, got %v", w.Schemas())
+	}
+	st, err := w.ListTables()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rd := st.Job().(*RunDone); rd.Result == nil || !rd.Result.Truncated {
+		t.Errorf("Ctrl+T should still be capped by max_rows: %+v", rd)
+	}
+}
+
+// resolvePick: All within the limit is every schema, a named schema is
+// itself while it exists, and everything else is the default — the
+// search_path's first schema, else the first with tables.
+func TestResolvePick(t *testing.T) {
+	small := []db.SchemaInfo{{Name: "audit", Tables: 0}, {Name: "public", Tables: 3, Default: true}, {Name: "sales", Tables: 9}}
+	noPath := []db.SchemaInfo{{Name: "audit", Tables: 0}, {Name: "sales", Tables: 9}}
+	big := []db.SchemaInfo{{Name: "public", Tables: db.AllSchemasLimit, Default: true}, {Name: "sales", Tables: 1}}
+	cases := []struct {
+		name    string
+		schemas []db.SchemaInfo
+		pick    SchemaPick
+		want    string
+		note    bool
+	}{
+		{"default", small, SchemaPick{}, "public", false},
+		{"named", small, SchemaPick{Name: "sales"}, "sales", false},
+		{"named, gone", small, SchemaPick{Name: "hr"}, "public", true},
+		{"all, small", small, SchemaPick{All: true}, "", false},
+		{"all, too big", big, SchemaPick{All: true}, "public", true},
+		{"no search_path schema", noPath, SchemaPick{}, "sales", false},
+		{"empty search_path schema", []db.SchemaInfo{{Name: "public", Default: true}, {Name: "s1"}, {Name: "s2", Tables: 4}},
+			SchemaPick{}, "s2", false},
+		{"nothing anywhere", []db.SchemaInfo{{Name: "a"}, {Name: "public", Default: true}}, SchemaPick{}, "public", false},
+		{"one schema", small[:1], SchemaPick{Name: "x"}, "", false},
+	}
+	for _, c := range cases {
+		got, notes := resolvePick(c.schemas, c.pick)
+		if got != c.want || (len(notes) > 0) != c.note {
+			t.Errorf("%s: %q %v, want %q (note %v)", c.name, got, notes, c.want, c.note)
+		}
+	}
+}
+
+// On a driver that lists its tables whole, a schema pick is refused, not
+// attempted.
+func TestPickSchemaRefusedOffPostgres(t *testing.T) {
+	w := newTestWorkspace(t)
+	_, err := w.PickSchema(SchemaPick{Name: "main"})
+	refusal(t, err, Invalid)
+}

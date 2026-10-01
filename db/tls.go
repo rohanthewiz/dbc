@@ -20,7 +20,7 @@ import (
 // A connection's TLS settings (config.TLSOpts: tls, tls_ca, tls_cert,
 // tls_key) become each driver's own, here, as its pool is opened:
 //
-//	openPool(drv, dsn, opts)
+//	openPool(drv, dsn, opts, database)
 //	  │
 //	  ├─ pgx    ─► pgTLSDSN: the settings become the DSN's sslmode,
 //	  │            sslrootcert, sslcert and sslkey, replacing any it had;

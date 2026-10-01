@@ -15,25 +15,63 @@ import (
 // huge catalog must not hold the connect open.
 const catalogTimeout = 10 * time.Second
 
+// SchemaPick says which tables a sidebar on a db.Navigable driver lists
+// (Postgres: see db/navigate.go). The zero value is the default: the first
+// schema on search_path, which is what a bare table name means there.
+type SchemaPick struct {
+	// Name is the schema to list. One the database no longer has falls
+	// back to the default rather than to an empty list.
+	Name string
+	// All lists every schema's tables, where the database has at most
+	// db.AllSchemasLimit of them; past that, the default schema, with a
+	// note saying why.
+	All bool
+}
+
 // Switch is picking a connection: a connect with a line for the log, and
 // nothing at all when name is already active and its catalog loaded.
 func (w *Workspace) Switch(name string) Start {
+	return w.SwitchPick(name, w.defaultPick())
+}
+
+// SwitchPick is Switch, opening the sidebar on pick: a UI that remembers a
+// schema per connection asks for it here, rather than loading the default
+// schema's tables only to replace them with a PickSchema at once.
+func (w *Workspace) SwitchPick(name string, pick SchemaPick) Start {
 	w.mu.Lock()
 	same := name == w.active && w.catalog != nil
 	w.mu.Unlock()
 	if same {
 		return Start{}
 	}
-	st := w.Connect(name)
+	st := w.ConnectPick(name, pick)
 	if st.Job != nil {
 		st.Notes = append([]Note{notef(Info, "connecting to %s…", name)}, st.Notes...)
 	}
 	return st
 }
 
-// Connect opens the connection and fetches its catalog for a sidebar. The
-// catalog goes through the pool, not the pinned session: it is the app's
-// query, and must not land inside a transaction the user has open.
+// defaultPick is the pick a connect that names no schema makes: every
+// schema for a UI without a picker (Options.WholeCatalog), else the default.
+func (w *Workspace) defaultPick() SchemaPick {
+	return SchemaPick{All: w.wholeCatalog}
+}
+
+// Connect opens the connection and loads its sidebar, opening on the
+// default schema (see SchemaPick, Options.WholeCatalog).
+func (w *Workspace) Connect(name string) Start {
+	return w.ConnectPick(name, w.defaultPick())
+}
+
+// ConnectPick opens the connection and fetches its catalog for a sidebar.
+// The catalog goes through the pool, not the pinned session: it is the
+// app's query, and must not land inside a transaction the user has open.
+//
+// On a db.Navigable driver the catalog is three short reads rather than one
+// long one — the server's databases, this database's schemas, and the
+// tables of the one schema pick names — so a connect to a big server costs
+// what its sidebar shows, not what the server holds. Elsewhere it is the
+// whole table list, as it always was.
 //
 // The connect runs under its own context, so Cancel can abandon it —
 // without that, only connect_timeout bounds it, and with connect_timeout =
@@ -46,7 +84,7 @@ func (w *Workspace) Switch(name string) Start {
 //	pick B ──► connGen=2, cancel A, dial B ─► lands, active = B
 //
 // The Job's event is a *Connected.
-func (w *Workspace) Connect(name string) Start {
+func (w *Workspace) ConnectPick(name string, pick SchemaPick) Start {
 	if name == "" {
 		return Start{}
 	}
@@ -60,10 +98,7 @@ func (w *Workspace) Connect(name string) Start {
 	if w.connCancel != nil {
 		w.connCancel()
 	}
-	if w.countCancel != nil {
-		w.countCancel() // the old sidebar's numbers; see countsJob
-		w.countCancel = nil
-	}
+	w.cancelCatalogWorkLocked()
 	w.connGen++
 	gen := w.connGen
 	w.connCancel, w.connName = cancel, name
@@ -75,15 +110,142 @@ func (w *Workspace) Connect(name string) Start {
 		ev := &Connected{Name: name}
 		if _, err := mgr.DBContext(ctx, name); err != nil {
 			ev.Err = err
-		} else if q, err := db.TablesQuery(driver); err == nil {
+		} else if _, err := db.TablesQuery(driver); err == nil {
+			// One catalogTimeout bounds all three reads: it is the
+			// connect's budget for its sidebar, however it is spent. A
+			// failed list of databases only hides the database picker;
+			// a failed list of schemas is handled by loadTables.
 			tctx, tcancel := context.WithTimeout(ctx, catalogTimeout)
-			ev.Catalog, _ = mgr.RunContext(tctx, name, q)
+			ev.Databases, _ = mgr.Databases(tctx, name)
+			schemas, serr := mgr.SchemaSummary(tctx, name)
+			ev.Schemas = schemas
+			var notes []Note
+			ev.Catalog, ev.Schema, notes = loadTables(tctx, ctx, mgr, name, driver, schemas, serr, pick)
+			ev.Notes = append(ev.Notes, notes...)
 			tcancel()
 		}
 		w.landConnect(ev, gen)
 		return ev
 	}
 	return Start{Job: job}
+}
+
+// cancelCatalogWorkLocked stops the sidebar work a new connect or schema
+// pick replaces: the old list's row counting, and a schema load still in
+// flight. Both would only land Stale. The caller holds mu.
+func (w *Workspace) cancelCatalogWorkLocked() {
+	if w.countCancel != nil {
+		w.countCancel() // the old sidebar's numbers; see countsJob
+		w.countCancel = nil
+	}
+	if w.schemaCancel != nil {
+		w.schemaCancel()
+		w.schemaCancel = nil
+	}
+}
+
+// loadTables reads the tables a sidebar lists — those of the schema pick
+// resolves to, or every table on a driver that is not db.Navigable — and
+// returns them with that schema and the notes the reading earned. ctx bounds
+// the read; outer is the connect's or the pick's own context, which tells a
+// cancel (said elsewhere) from a failure (said here).
+//
+// A schema list that failed (schemasErr) leaves no schema to pick, so the
+// whole catalog is read instead, as before the sidebar was loaded by
+// schema: a long list beats an empty one.
+//
+// A table list that fails, or comes back cut at the catalog bound, still
+// lets a connect land — the connection works; only the sidebar is short —
+// but says so in the log.
+func loadTables(ctx, outer context.Context, mgr *db.Manager, name, driver string,
+	schemas []db.SchemaInfo, schemasErr error, pick SchemaPick) (*model.Result, string, []Note) {
+	var notes []Note
+	schema := ""
+	if db.Navigable(driver) {
+		if schemasErr == nil {
+			schema, notes = resolvePick(schemas, pick)
+		} else if outer.Err() == nil {
+			notes = append(notes, notef(Warn, "schema list unavailable, listing every table: %s", serr.StringFromErr(schemasErr)))
+		}
+	}
+	cat, err := mgr.Catalog(ctx, name, schema)
+	switch {
+	case err != nil && outer.Err() == nil:
+		notes = append(notes, notef(Warn, "tables list unavailable: %s", serr.StringFromErr(err)))
+	case err == nil && cat.Truncated:
+		notes = append(notes, notef(Warn, "tables list cut at %d tables", len(cat.Rows)))
+	}
+	if err != nil {
+		return nil, schema, notes
+	}
+	return cat, schema, notes
+}
+
+// resolvePick turns a pick into the schema to list, "" for every one:
+//
+//	All, and the database's tables ≤ AllSchemasLimit ─► "" (every schema)
+//	Name, and the database has that schema ──────────► Name
+//	otherwise ─► the default (defaultSchema): the search_path's first
+//	             schema if it has tables, else the first schema that does
+//
+// A database with one schema (or none) lists "" — every schema is that one,
+// and a UI then has no picker to show. The notes explain a pick that could
+// not be honoured, so a sidebar showing one schema of many is never a
+// surprise.
+func resolvePick(schemas []db.SchemaInfo, pick SchemaPick) (string, []Note) {
+	if len(schemas) <= 1 {
+		return "", nil
+	}
+	total := 0
+	for _, s := range schemas {
+		total += s.Tables
+	}
+	if pick.All && total <= db.AllSchemasLimit {
+		return "", nil
+	}
+	if pick.Name != "" && !pick.All {
+		for _, s := range schemas {
+			if s.Name == pick.Name {
+				return s.Name, nil
+			}
+		}
+	}
+	def := defaultSchema(schemas)
+	switch {
+	case pick.All:
+		return def, []Note{notef(Info, "%d tables in %d schemas, too many to list at once: listing %s", total, len(schemas), def)}
+	case pick.Name != "":
+		return def, []Note{notef(Info, "no schema %s here any more: listing %s", pick.Name, def)}
+	}
+	return def, nil
+}
+
+// defaultSchema is the schema a sidebar opens on: the first on search_path
+// (what a bare table name resolves to) if it has tables in it, else the
+// first schema that does, else the search_path's, else the first. An empty
+// public is common on a shared server whose tables all live in named
+// schemas, and opening on an empty list there would only make the user
+// pick again. schemas is not empty.
+func defaultSchema(schemas []db.SchemaInfo) string {
+	path, withTables := "", ""
+	for _, s := range schemas {
+		if s.Default {
+			if s.Tables > 0 {
+				return s.Name
+			}
+			path = s.Name
+		}
+		if withTables == "" && s.Tables > 0 {
+			withTables = s.Name
+		}
+	}
+	switch {
+	case withTables != "":
+		return withTables
+	case path != "":
+		return path
+	}
+	return schemas[0].Name
 }
 
 // landConnect installs a connect's outcome, unless a newer connect has
@@ -107,6 +269,8 @@ func (w *Workspace) landConnect(ev *Connected, gen int) {
 	}
 	ev.Changed = ev.Name != w.active
 	w.active = ev.Name
+	// the levels above go in first: the catalog's index reads the schemas
+	w.databases, w.schemas, w.schema = ev.Databases, ev.Schemas, ev.Schema
 	w.setCatalogLocked(ev.Catalog)
 	if ev.Catalog != nil {
 		ev.Counts = w.countsJobLocked(ev.Name, gen, db.TableRefs(ev.Catalog.Rows))
@@ -122,11 +286,83 @@ func (w *Workspace) landConnect(ev *Connected, gen int) {
 
 // setCatalogLocked installs a connection's catalog and its index. Row counts
 // belong to the catalog they were counted for, so they go with it.
+//
+// The index is told the database's whole schema list (w.schemas, which the
+// caller sets first), since the catalog may hold one schema's tables: names
+// are then qualified as on a many-schema database, and a schema.table in a
+// question can reach a schema the sidebar has not loaded (TableIndex.SetSchemas).
 func (w *Workspace) setCatalogLocked(tables *model.Result) {
 	w.catalog, w.tableIdx, w.rowCounts = tables, nil, nil
 	if tables != nil {
 		w.tableIdx = db.NewTableIndex(db.TableRefs(tables.Rows))
+		if len(w.schemas) > 0 {
+			names := make([]string, len(w.schemas))
+			for i, s := range w.schemas {
+				names[i] = s.Name
+			}
+			w.tableIdx.SetSchemas(names)
+		}
 	}
+}
+
+// PickSchema lists another schema's tables in the sidebar, on the active
+// connection, in place of the ones listed now. The tables load off the UI's
+// event loop (the Job), like a connect's; the event is a *SchemaLoaded, with
+// a Counts job for the new tables' row counts.
+//
+// It shares connGen with Connect, so whichever of a pick and a connect
+// starts later wins: a connect supersedes a pick in flight (another
+// database's schemas are not this one's), and a pick supersedes the old
+// list's counting and any earlier pick. A pick while a connect is still in
+// flight is refused — the schema list it would pick from is being replaced.
+//
+//	pick sales ──► gen=5, load sales ───────────── (canceled) ─► Stale
+//	pick hr    ──► gen=6, cancel sales, load hr ─► lands, schema = hr
+func (w *Workspace) PickSchema(pick SchemaPick) (Start, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	name := w.active
+	cc, ok := w.cfg.ConnByName(name)
+	switch {
+	case !ok:
+		return Start{}, refuse(NoConnection, Warn, "no active connection — pick one in the sidebar")
+	case w.connCancel != nil:
+		return Start{}, refuse(Busy, Warn, "still connecting to %s", w.connName)
+	case !db.Navigable(cc.Driver):
+		return Start{}, refuse(Invalid, Warn, "%s lists its tables whole, not by schema", name)
+	}
+	w.cancelCatalogWorkLocked()
+	w.connGen++
+	gen := w.connGen
+	ctx, cancel := context.WithCancel(context.Background())
+	w.schemaCancel = cancel
+	schemas, mgr, driver := w.schemas, w.mgr, cc.Driver
+
+	job := func() Event {
+		defer cancel()
+		tctx, tcancel := context.WithTimeout(ctx, catalogTimeout)
+		cat, schema, notes := loadTables(tctx, ctx, mgr, name, driver, schemas, nil, pick)
+		tcancel()
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		ev := &SchemaLoaded{Conn: name, Schema: schema, Catalog: cat, Notes: notes}
+		if gen != w.connGen {
+			ev.Stale = true
+			return ev
+		}
+		w.schemaCancel = nil
+		if cat == nil {
+			// the old list stays up, and so does the schema it is of: the
+			// picker must not claim a schema whose tables are not shown
+			ev.Schema = w.schema
+			return ev
+		}
+		w.schema = schema
+		w.setCatalogLocked(cat)
+		ev.Counts = w.countsJobLocked(name, gen, db.TableRefs(cat.Rows))
+		return ev
+	}
+	return Start{Job: job}, nil
 }
 
 // countsJobLocked makes the Job that counts the rows of the tables of the

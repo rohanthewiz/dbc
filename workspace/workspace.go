@@ -72,6 +72,14 @@ type Options struct {
 	// for long, and must not call back into the Workspace's start methods
 	// synchronously. nil drops them.
 	Sink func(Event)
+
+	// WholeCatalog is for a UI with no schema picker (the TUI): a connect
+	// that names no schema lists every schema's tables, as long as the
+	// database has at most db.AllSchemasLimit of them, instead of opening
+	// on the search_path's first schema. Past the limit it opens on that
+	// schema all the same, with a note: listing a huge catalog is the cost
+	// the per-schema load exists to avoid.
+	WholeCatalog bool
 }
 
 // Workspace is one person's working state. Its methods are safe for
@@ -87,6 +95,15 @@ type Workspace struct {
 	active   string         // the active connection
 	catalog  *model.Result  // its tables, for a sidebar; nil until connected
 	tableIdx *db.TableIndex // the same catalog, indexed for the assistant
+	// The levels above the tables, on a driver whose sidebar is loaded a
+	// level at a time (db.Navigable); all empty otherwise. databases is the
+	// server's, schemas the active database's; schema is the one whose
+	// tables catalog holds, "" when it holds every schema's.
+	databases    []db.DatabaseInfo
+	schemas      []db.SchemaInfo
+	schema       string
+	wholeCatalog bool               // Options.WholeCatalog
+	schemaCancel context.CancelFunc // cancels the schema load in flight; nil when none is
 	// rowCounts are the catalog's tables' row counts, once the Counts job
 	// of the connect that loaded it lands; nil until then. countCancel
 	// stops that job, which the next connect does: the counts would be for
@@ -139,7 +156,7 @@ func New(cfg *config.Config, mgr *db.Manager, hist *userdata.History, opt Option
 	if hist == nil {
 		hist = userdata.LoadHistory("")
 	}
-	w := &Workspace{cfg: cfg, mgr: mgr, hist: hist, sink: opt.Sink}
+	w := &Workspace{cfg: cfg, mgr: mgr, hist: hist, sink: opt.Sink, wholeCatalog: opt.WholeCatalog}
 	if _, ok := cfg.ConnByName(cfg.DefaultConnection); ok {
 		w.active = cfg.DefaultConnection
 	} else if conns := cfg.Conns(); len(conns) > 0 {
@@ -181,6 +198,32 @@ func (w *Workspace) Catalog() *model.Result {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.catalog
+}
+
+// Databases is the active connection's server's databases, for a database
+// picker; nil on a driver that is not db.Navigable, or when the listing
+// failed. The slice is shared: read it, never write to it.
+func (w *Workspace) Databases() []db.DatabaseInfo {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.databases
+}
+
+// Schemas is every schema of the active database, empty ones included,
+// with its table count; nil on a driver that is not db.Navigable. The
+// slice is shared: read it, never write to it.
+func (w *Workspace) Schemas() []db.SchemaInfo {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.schemas
+}
+
+// CatalogSchema is the schema whose tables Catalog holds, or "" when it
+// holds every schema's (always, on a driver that is not db.Navigable).
+func (w *Workspace) CatalogSchema() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.schema
 }
 
 // RowCounts is the row count of each of the catalog's tables that has one
@@ -323,6 +366,9 @@ func (w *Workspace) Stop() {
 	}
 	if w.countCancel != nil {
 		w.countCancel()
+	}
+	if w.schemaCancel != nil {
+		w.schemaCancel()
 	}
 }
 

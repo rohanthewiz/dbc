@@ -93,8 +93,17 @@ type Event interface{ event() }
 type Connected struct {
 	Name    string
 	Catalog *model.Result // the connection's tables; nil if the catalog query failed
-	Err     error         // the connect's failure (db.ErrCanceled when stopped); nil on success
-	Changed bool          // the active connection moved to Name
+	// Databases and Schemas are the levels above the tables, on a driver
+	// whose sidebar is loaded a level at a time (db.Navigable): the
+	// server's databases, and this database's schemas with their table
+	// counts. Schema is the one whose tables Catalog holds, "" for every
+	// schema's. All are empty on the other drivers, and Databases or
+	// Schemas is nil when its listing failed.
+	Databases []db.DatabaseInfo
+	Schemas   []db.SchemaInfo
+	Schema    string
+	Err       error // the connect's failure (db.ErrCanceled when stopped); nil on success
+	Changed   bool  // the active connection moved to Name
 	// Stale reports a connect superseded by a newer one: nothing landed,
 	// and a UI draws nothing.
 	Stale  bool
@@ -170,6 +179,22 @@ type RowCounts struct {
 	Notes []Note
 }
 
+// SchemaLoaded lands a schema pick (Workspace.PickSchema): the tables of
+// another schema of the active database, in place of the ones the sidebar
+// listed.
+type SchemaLoaded struct {
+	Conn    string
+	Schema  string        // the schema loaded; "" for every schema
+	Catalog *model.Result // its tables; nil when the load failed, and the old list stays
+	// Stale reports a load superseded by a later pick or connect: nothing
+	// landed, and a UI draws nothing.
+	Stale bool
+	Notes []Note
+	// Counts is the row counting of the new tables, as on Connected.
+	Counts Job
+}
+
+func (*SchemaLoaded) event()    {}
 func (*Connected) event()       {}
 func (*RowCounts) event()       {}
 func (*RunDone) event()         {}

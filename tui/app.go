@@ -145,8 +145,13 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Model {
 	// The sink carries a script's s.Show / s.Print, which fire mid-run from
 	// the script's goroutine, to Update through m.send. It reads m.send when
 	// it fires, not now: Run installs Program.Send after New returns.
+	//
+	// WholeCatalog: the TUI's sidebar has no schema picker yet, so it asks
+	// for every schema's tables (up to db.AllSchemasLimit) rather than the
+	// web's one schema at a time.
 	m.ws = workspace.New(cfg, mgr, hist, workspace.Options{
-		Sink: func(e workspace.Event) { m.send(e) },
+		Sink:         func(e workspace.Event) { m.send(e) },
+		WholeCatalog: true,
 	})
 	m.refreshConns()
 

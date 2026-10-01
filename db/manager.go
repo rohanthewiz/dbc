@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -238,7 +239,7 @@ func (m *Manager) open(ctx context.Context, name string) (dbh *sql.DB, anchor *s
 	if drv == "sqlite" {
 		dsn = sqliteDSN(dsn)
 	}
-	dbh, err = openPool(drv, dsn, cc.TLSOpts)
+	dbh, err = openPool(drv, dsn, cc.TLSOpts, cc.Database)
 	if err != nil {
 		if errors.Is(err, bytdb.ErrLocked) {
 			return nil, nil, inUse(name, err)
@@ -308,7 +309,14 @@ func (m *Manager) open(ctx context.Context, name string) (dbh *sql.DB, anchor *s
 // t is the connection's TLS settings, applied by tlsOpen (tls.go): folded
 // into the DSN for Postgres, a connector of its own for MySQL. Unset, it
 // changes nothing — TLS is then the DSN's business, as it always was.
-func openPool(drv, dsn string, t config.TLSOpts) (*sql.DB, error) {
+//
+// database, when set, is the database to open instead of the one the DSN
+// names: a connection derived onto another database of the same server
+// (config.DatabaseSep). It is set on the parsed config rather than spliced
+// into the DSN text, so it works the same for URL and keyword DSNs, and
+// after tlsOpen has rewritten the DSN. Only Postgres connections are ever
+// derived (config.supportsDatabases).
+func openPool(drv, dsn string, t config.TLSOpts, database string) (*sql.DB, error) {
 	dsn, connector, err := tlsOpen(drv, dsn, t)
 	if err != nil {
 		return nil, err
@@ -322,6 +330,9 @@ func openPool(drv, dsn string, t config.TLSOpts) (*sql.DB, error) {
 	pcfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
 		return nil, err
+	}
+	if database != "" {
+		pcfg.Database = database
 	}
 	return pgxstdlib.OpenDB(*pcfg, pgxstdlib.OptionShouldPing(pgShouldPing)), nil
 }
@@ -396,18 +407,44 @@ func sqliteDSN(dsn string) string {
 // opens a fresh one. Used when a connection is known to be unusable — an
 // embedded engine whose file could not be initialized, say — where leaving the
 // handle in the pool would only hand it back to the next caller.
+//
+// The pools derived from the connection onto its server's other databases
+// (config.DatabaseSep) go with it: an edit may have changed the host or the
+// credentials they were opened with, and a removal leaves them no base.
 func (m *Manager) Drop(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if dbh, ok := m.conns[name]; ok {
-		closeOpened(dbh, m.anchors[name])
-		delete(m.conns, name)
-		delete(m.anchors, name)
+	for _, key := range m.droppedWith(name) {
+		if dbh, ok := m.conns[key]; ok {
+			closeOpened(dbh, m.anchors[key])
+			delete(m.conns, key)
+			delete(m.anchors, key)
+		}
+		// The counts may describe the database the connection pointed at
+		// before an edit. rows.mu nests inside mu here, and is never held
+		// while taking mu, so the order cannot deadlock.
+		m.rows.forget(key)
 	}
-	// The counts may describe the database the connection pointed at before
-	// an edit. rows.mu nests inside mu here, and is never held while taking
-	// mu, so the order cannot deadlock.
-	m.rows.forget(name)
+}
+
+// droppedWith is name and every open pool derived from it: the keys with
+// name + "/" in front that are not configured connections of their own (a
+// connection really named "a/b" is not a's). It reads the pools by key
+// rather than asking ConnByName, which can no longer resolve a derived name
+// once its base is removed. The caller holds mu.
+func (m *Manager) droppedWith(name string) []string {
+	out := []string{name}
+	prefix := name + config.DatabaseSep
+	for key := range m.conns {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		configured := slices.ContainsFunc(m.cfg.Conns(), func(c config.Connection) bool { return c.Name == key })
+		if !configured {
+			out = append(out, key)
+		}
+	}
+	return out
 }
 
 // Close closes all open connections. A connection still being opened when

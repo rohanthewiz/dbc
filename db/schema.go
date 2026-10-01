@@ -436,27 +436,43 @@ func (m *Manager) Schema(ctx context.Context, name string) (*erd.Schema, error) 
 // "". Scanning into sql.NullString has database/sql convert every driver's
 // integers and byte slices to text.
 func stringRows(ctx context.Context, dbh *sql.DB, q string) ([][]string, error) {
-	rows, err := dbh.QueryContext(ctx, q)
+	_, rows, truncated, err := limitedRows(ctx, dbh, q, maxSchemaRows)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	cols, err := rows.Columns()
+	// a diagram of part of a catalog would be silently wrong, so for these
+	// callers running past the bound is a failure, not a shorter answer
+	if truncated {
+		return nil, serr.New("the catalog is too big to diagram", "rows", strconv.Itoa(maxSchemaRows))
+	}
+	return rows, nil
+}
+
+// limitedRows runs a catalog query and returns its column names and at most
+// limit rows of cells as strings, NULL as "". truncated reports that the
+// query had more rows than that; the rest are not read. It is the shared
+// reader behind stringRows (where more is an error) and Manager.Catalog
+// (where more is a note), and unlike Run it ignores max_rows.
+func limitedRows(ctx context.Context, dbh *sql.DB, q string, limit int) (cols []string, out [][]string, truncated bool, err error) {
+	rows, err := dbh.QueryContext(ctx, q)
 	if err != nil {
-		return nil, err
+		return nil, nil, false, err
+	}
+	defer rows.Close()
+	if cols, err = rows.Columns(); err != nil {
+		return nil, nil, false, err
 	}
 	cells := make([]sql.NullString, len(cols))
 	ptrs := make([]any, len(cols))
 	for i := range cells {
 		ptrs[i] = &cells[i]
 	}
-	var out [][]string
 	for rows.Next() {
-		if len(out) >= maxSchemaRows {
-			return nil, serr.New("the catalog is too big to diagram", "rows", strconv.Itoa(maxSchemaRows))
+		if len(out) >= limit {
+			return cols, out, true, nil
 		}
 		if err = rows.Scan(ptrs...); err != nil {
-			return nil, err
+			return nil, nil, false, err
 		}
 		row := make([]string, len(cols))
 		for i, c := range cells {
@@ -464,5 +480,8 @@ func stringRows(ctx context.Context, dbh *sql.DB, q string) ([][]string, error) 
 		}
 		out = append(out, row)
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, nil, false, err
+	}
+	return cols, out, false, nil
 }

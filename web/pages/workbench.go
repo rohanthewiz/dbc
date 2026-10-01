@@ -205,19 +205,35 @@ func (p Workbench) sidebar(b *element.Builder) any {
 				b.ButtonClass("hadd herd", "id", "erd-all", "type", "button",
 					"title", "Diagram the connection's tables and keys (ERD)", "aria-label", "Entity-relationship diagram").T("ERD"),
 			),
-			// the schema filter: narrows the list to one schema, so a
-			// catalog of thousands of tables across many schemas stays
-			// scannable. Hidden until a connection's catalog spans more
-			// than one schema. A type-to-filter combobox rather than a
-			// <select> (whose popup the page cannot make scroll or
-			// search): app.js fills schema-list as you type, and
-			// remembers the pick per connection
+			// the database and schema pickers: the levels above the
+			// tables, so a server with many databases, each with many
+			// schemas, is browsed a level at a time rather than listed
+			// whole (db/navigate.go). Each is hidden until there is more
+			// than one thing to pick. Type-to-filter comboboxes rather
+			// than <select>s (whose popup the page cannot make scroll or
+			// search): app.js fills each list as you type, and remembers
+			// the schema per connection. Picking a database connects to
+			// it; picking a schema loads its tables.
+			b.DivClass("tfilter", "id", "db-filter", "hidden", "hidden").R(
+				b.DivClass("trow").R(
+					b.LabelClass("tlabel", "for", "table-db").T("db"),
+					b.Input("id", "table-db", "type", "search", "role", "combobox",
+						"aria-label", "Database", "aria-autocomplete", "list",
+						"aria-expanded", "false", "aria-controls", "db-list",
+						"title", "Switch to another database on this server: type to find it, Enter to pick",
+						"spellcheck", "false", "autocomplete", "off").R(),
+				),
+				b.UlClass("schema-list", "id", "db-list", "role", "listbox", "hidden", "hidden").R(),
+			),
 			b.DivClass("tfilter", "id", "table-filter", "hidden", "hidden").R(
-				b.Input("id", "table-schema", "type", "search", "role", "combobox",
-					"aria-label", "Filter tables by schema", "aria-autocomplete", "list",
-					"aria-expanded", "false", "aria-controls", "schema-list",
-					"title", "Show the tables of one schema: type to find it, Enter to pick",
-					"spellcheck", "false", "autocomplete", "off").R(),
+				b.DivClass("trow").R(
+					b.LabelClass("tlabel", "for", "table-schema").T("schema"),
+					b.Input("id", "table-schema", "type", "search", "role", "combobox",
+						"aria-label", "Schema", "aria-autocomplete", "list",
+						"aria-expanded", "false", "aria-controls", "schema-list",
+						"title", "Show the tables of one schema: type to find it, Enter to pick",
+						"spellcheck", "false", "autocomplete", "off").R(),
+				),
 				b.UlClass("schema-list", "id", "schema-list", "role", "listbox", "hidden", "hidden").R(),
 			),
 			b.Ul("id", "tables").R(),

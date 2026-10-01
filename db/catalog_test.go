@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -13,8 +14,8 @@ func TestTablesQueryPerDriver(t *testing.T) {
 		driver string
 		want   string // a fragment only that driver's catalog query has
 	}{
-		{"postgres", "pg_matviews"},
-		{"pg", "pg_matviews"},
+		{"postgres", "pg_class"},
+		{"pg", "pg_class"},
 		{"mysql", "DATABASE()"},
 		{"mariadb", "DATABASE()"},
 		{"sqlite", "sqlite_master"},
@@ -38,12 +39,71 @@ func TestTablesQueryPerDriver(t *testing.T) {
 			}
 		}
 	}
-	// bytdb has no pg_matviews, so the Postgres query would fail there
-	if q, _ := TablesQuery("bytdb"); strings.Contains(q, "pg_matviews") {
-		t.Errorf("bytdb's catalog query reads pg_matviews:\n%s", q)
+	// information_schema.tables hides relations the user holds no
+	// privilege on, which emptied whole schemas on a shared database, so
+	// the Postgres listing must not go back to it
+	if q, _ := TablesQuery("postgres"); strings.Contains(q, "information_schema.tables") {
+		t.Errorf("the Postgres catalog query reads information_schema.tables:\n%s", q)
 	}
 	if _, err := TablesQuery("cassandra"); err == nil {
 		t.Error("an unknown driver should not yield a catalog query")
+	}
+}
+
+// Only Postgres is navigated a level at a time; for the others the
+// database and schema listings are "" and the tables are listed whole.
+func TestNavigatorQueriesPerDriver(t *testing.T) {
+	for driver, want := range map[string]bool{
+		"postgres": true, "pg": true, "mysql": false, "sqlite": false, "bytdb": false,
+	} {
+		if Navigable(driver) != want {
+			t.Errorf("Navigable(%q) = %v, want %v", driver, !want, want)
+		}
+		dq, err := DatabasesQuery(driver)
+		if err != nil || strings.Contains(dq, "pg_database") != want {
+			t.Errorf("DatabasesQuery(%q) = %q, %v", driver, dq, err)
+		}
+		sq, err := SchemaSummaryQuery(driver)
+		if err != nil || strings.Contains(sq, "pg_namespace") != want {
+			t.Errorf("SchemaSummaryQuery(%q) = %q, %v", driver, sq, err)
+		}
+		tq, err := SchemaTablesQuery(driver, "sales")
+		if want && (err != nil || !strings.Contains(tq, "n.nspname = 'sales'")) {
+			t.Errorf("SchemaTablesQuery(%q) = %q, %v", driver, tq, err)
+		}
+		if !want && err == nil {
+			t.Errorf("SchemaTablesQuery(%q) should refuse: its tables are listed whole", driver)
+		}
+	}
+	// the schema is a literal, quoted like every other name inlined
+	if q, _ := SchemaTablesQuery("postgres", "o'brien"); !strings.Contains(q, "'o''brien'") {
+		t.Errorf("schema not escaped:\n%s", q)
+	}
+	if _, err := DatabasesQuery("cassandra"); err == nil {
+		t.Error("an unknown driver should not yield a database query")
+	}
+}
+
+// An index built from one schema's tables qualifies names by the
+// database's schemas, and reports schema.table words that name a schema it
+// did not load — but not an alias.column, nor a table of a loaded schema
+// that does not exist.
+func TestTableIndexSetSchemas(t *testing.T) {
+	x := NewTableIndex([]TableRef{{Schema: "public", Name: "cats"}}).
+		SetSchemas([]string{"public", "Billing", "hr"})
+	if got := x.Display(TableRef{Schema: "public", Name: "cats"}); got != "public.cats" {
+		t.Errorf("Display = %q, want qualified on a three-schema database", got)
+	}
+	got := x.Mentioned(`SELECT * FROM cats c JOIN billing.invoices i ON i.id = c.id
+		JOIN public.nope n ON true JOIN hr.staff s ON true JOIN billing.invoices again ON true`, "")
+	want := []TableRef{{Schema: "public", Name: "cats"}, {Schema: "Billing", Name: "invoices"}, {Schema: "hr", Name: "staff"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("Mentioned = %v, want %v", got, want)
+	}
+	// with every schema loaded there is nothing to guess
+	full := NewTableIndex([]TableRef{{Schema: "public", Name: "cats"}}).SetSchemas([]string{"public"})
+	if got := full.Mentioned("SELECT 1 FROM c.x", ""); len(got) != 0 {
+		t.Errorf("Mentioned = %v, want nothing", got)
 	}
 }
 

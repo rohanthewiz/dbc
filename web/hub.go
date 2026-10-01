@@ -12,6 +12,7 @@ import (
 
 	"github.com/rohanthewiz/rweb"
 
+	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/workspace"
 )
@@ -445,12 +446,87 @@ type busyEvent struct {
 }
 
 // connEvent reports the tab's connection after a connect lands.
+//
+// It is also what a schema pick lands as (Changed false): the sidebar is
+// redrawn from it either way, so the page has one way to draw one.
 type connEvent struct {
-	Active  string   `json:"active"`
-	Changed bool     `json:"changed"`
-	Failed  bool     `json:"failed"`
-	Status  string   `json:"status,omitempty"`
-	Tables  []tabRef `json:"tables"`
+	Active  string `json:"active"`
+	Changed bool   `json:"changed"`
+	Failed  bool   `json:"failed"`
+	Status  string `json:"status,omitempty"`
+	sideState
+}
+
+// sideState is the sidebar below the Connections list, as the page draws it:
+// the database and schema pickers and the tables list. Embedded, its fields
+// sit flat in the event and in wsState.
+//
+// On a driver whose sidebar is loaded a level at a time (db.Navigable,
+// Postgres) Tables is the one schema Schema names ("" for every schema,
+// which AllowAll says the database is small enough for), and picking a
+// schema is a round trip. Elsewhere Databases and Schemas are empty, Tables
+// is the whole catalog, and the page narrows it to a schema itself.
+type sideState struct {
+	Tables []tabRef `json:"tables"`
+	// Base is the configured connection the sidebar's connection is, or is
+	// derived from (config.DatabaseSep): the Connections list's row to
+	// mark active while the tab is on another of its server's databases.
+	Base      string      `json:"base,omitempty"`
+	Databases []dbRef     `json:"databases,omitempty"`
+	Schemas   []schemaRef `json:"schemas,omitempty"`
+	Schema    string      `json:"schema"`
+	AllowAll  bool        `json:"allowAll,omitempty"`
+	// Navigable says the server sends one schema's tables at a time, so a
+	// schema pick goes to the server rather than filtering on the page.
+	Navigable bool `json:"navigable,omitempty"`
+}
+
+// dbRef is one database in the picker. Conn is the connection to switch to
+// for it: the configured one for the database its DSN opens, a derived
+// "<conn>/<database>" for every other.
+type dbRef struct {
+	Name    string `json:"name"`
+	Conn    string `json:"conn"`
+	Current bool   `json:"current,omitempty"`
+}
+
+// schemaRef is one schema in the picker, with its table count.
+type schemaRef struct {
+	Name    string `json:"name"`
+	Tables  int    `json:"tables"`
+	Default bool   `json:"default,omitempty"`
+}
+
+// sidebar is the tab's sideState now.
+func sidebar(cfg *config.Config, ws *workspace.Workspace) sideState {
+	st := sideState{Tables: tables(ws), Schema: ws.CatalogSchema()}
+	active := ws.Active()
+	cc, ok := cfg.ConnByName(active)
+	if !ok {
+		return st
+	}
+	st.Base, st.Navigable = active, db.Navigable(cc.Driver)
+	if cc.Base != "" {
+		st.Base = cc.Base
+	}
+	baseDB := ""
+	if base, ok := cfg.ConnByName(st.Base); ok {
+		baseDB = db.DefaultDatabase(base)
+	}
+	for _, d := range ws.Databases() {
+		r := dbRef{Name: d.Name, Conn: config.DerivedName(st.Base, d.Name), Current: d.Current}
+		if d.Name == baseDB {
+			r.Conn = st.Base
+		}
+		st.Databases = append(st.Databases, r)
+	}
+	total := 0
+	for _, s := range ws.Schemas() {
+		st.Schemas = append(st.Schemas, schemaRef{Name: s.Name, Tables: s.Tables, Default: s.Default})
+		total += s.Tables
+	}
+	st.AllowAll = total <= db.AllSchemasLimit
+	return st
 }
 
 // countsEvent brings the row counts, seconds after the "conn" that drew the
@@ -463,9 +539,10 @@ type countsEvent struct {
 }
 
 // tabRef is a sidebar row for a table or view. QName is the name to put in
-// SQL: schema-qualified only when the catalog spans several schemas, the
-// TUI's rule (tui/sidebar.go) — "public.cats" is noise when there is only
-// public, and necessary when there is also audit.cats.
+// SQL: schema-qualified only when the database has several schemas, the
+// TUI's rule (db.TableIndex.Display) — "public.cats" is noise when there is
+// only public, and necessary when there is also audit.cats, even while the
+// list shows only one of them.
 type tabRef struct {
 	Schema string `json:"schema"`
 	Name   string `json:"name"`
@@ -513,11 +590,20 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 		t.notes(ev.Notes)
 		t.send("conn", connEvent{
 			Active: t.ws.Active(), Changed: ev.Changed, Failed: ev.Err != nil,
-			Status: ev.Status, Tables: tables(t.ws),
+			Status: ev.Status, sideState: sidebar(s.cfg, t.ws),
 		})
 		if ev.Release != nil {
 			go func() { s.deliver(t, ev.Release()) }()
 		}
+		if ev.Counts != nil {
+			go func() { s.deliver(t, ev.Counts()) }()
+		}
+	case *workspace.SchemaLoaded:
+		if ev.Stale {
+			return // a later pick or connect will report
+		}
+		t.notes(ev.Notes)
+		t.send("conn", connEvent{Active: t.ws.Active(), Failed: ev.Catalog == nil, sideState: sidebar(s.cfg, t.ws)})
 		if ev.Counts != nil {
 			go func() { s.deliver(t, ev.Counts()) }()
 		}
@@ -589,17 +675,16 @@ func tables(ws *workspace.Workspace) []tabRef {
 	// Read apart from the catalog, so a connect landing in between could
 	// pair this catalog with no counts, or with the next one's. Counts are
 	// keyed by table, so the worst case is a row without its number until
-	// the "counts" event that follows every landing.
+	// the "counts" event that follows every landing. The index is read
+	// apart too; a landing in between can only make a name qualified by
+	// the next catalog's rule, which a "conn" event then redraws.
 	counts := ws.RowCounts()
-	schemas := map[string]bool{}
-	for _, r := range refs {
-		schemas[r.Schema] = true
-	}
+	idx := ws.TableIndex()
 	out := make([]tabRef, len(refs))
 	for i, r := range refs {
 		q := r.Name
-		if len(schemas) > 1 && r.Schema != "" {
-			q = r.Schema + "." + r.Name
+		if idx != nil {
+			q = idx.Display(r)
 		}
 		out[i] = tabRef{Schema: r.Schema, Name: r.Name, QName: q, View: r.View}
 		if c, ok := counts[r]; ok {

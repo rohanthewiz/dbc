@@ -169,8 +169,14 @@ body.row-dragging { cursor: row-resize; user-select: none; }
    over it, so .side-tables' overflow cannot clip it; it scrolls on its own
    past a third of the window. .tfilter is left a block so [hidden] hides it */
 .tfilter { flex: none; padding: 0 12px 4px; }
+/* a short muted label left of each box ("db", "schema"), the boxes lined
+   up by giving the labels one width */
+.tfilter .trow { display: flex; align-items: center; gap: 6px; }
+.tfilter .tlabel { flex: none; width: 3.6em; color: var(--muted); font-size: 11px; }
 .tfilter input {
   box-sizing: border-box;
+  flex: 1 1 auto;
+  min-width: 0;
   width: 100%;
   font: inherit;
   font-size: 12px;

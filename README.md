@@ -173,6 +173,34 @@ picking "all schemas" (or its `×`) shows everything again. The heading then
 reads `· 12 / 340`. The pick is remembered per connection, across reloads
 and windows. The heading and the filter stay put while the tables scroll.
 
+On Postgres the sidebar is loaded a level at a time, so connecting to a big
+server costs what the sidebar shows, not what the server holds:
+
+- **db**: the server's databases (those you may `CONNECT` to; templates
+  left out). Picking one switches the tab to it, using the same host,
+  credentials and TLS. A Postgres connection is bound to one database, so
+  this opens a connection named `<conn>/<database>` (e.g.
+  `ProdDr/analytics`). It shows in the header, and tabs, history and the
+  schema pick remember it like any connection.
+- **schema**: the database's schemas with their table counts, empty ones
+  included. A connect opens on the first schema on `search_path` if it has
+  tables (else the first schema that does), or on the schema last picked
+  for that connection. "all schemas" is offered while the database has at
+  most 5,000 tables.
+- **tables**: the picked schema's tables, read from `pg_catalog`. That
+  includes ones your role holds no grant on (as psql's `\dt` does), which
+  `information_schema.tables` would hide, making the schema look empty.
+  Names are schema-qualified whenever the database has more than one
+  schema, so a preview works off the `search_path`.
+
+The assistant matches table names in the loaded schema, and also
+`schema.table` names in any other schema of the database. The ERD
+button diagrams the picked schema. The terminal UI has no pickers yet: it
+lists every schema of the connection's own database, up to that limit.
+No table list is cut at `max_rows`, which applies only to results you ask
+for (Ctrl+T included). MySQL, SQLite and bytdb list their tables whole, as
+before.
+
 ### Mouse
 
 | Where | Gesture | Does |

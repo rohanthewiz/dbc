@@ -259,6 +259,12 @@ type Selection struct {
 	// Views keeps the views. A view named in Tables is kept regardless —
 	// asking for a diagram of a view is asking to see it.
 	Views bool
+	// Schema, when set and Tables is not, keeps only that schema's tables:
+	// "diagram everything" from a sidebar that shows one schema at a time
+	// means everything in that schema, not every table in the database.
+	// With Tables it is ignored, since a neighbourhood follows its keys
+	// into whatever schema they lead.
+	Schema string
 }
 
 // Select narrows the schema to sel. Names that do not resolve come back in
@@ -273,6 +279,9 @@ func (s *Schema) Select(sel Selection) (out *Schema, missing []string) {
 				named[t] = true
 			}
 		}
+	}
+	if len(sel.Tables) == 0 && sel.Schema != "" {
+		out = out.keep(func(t *Table) bool { return t.Schema == sel.Schema })
 	}
 	if !sel.Views {
 		out = out.keep(func(t *Table) bool { return !t.View || named[t] })

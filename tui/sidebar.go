@@ -56,16 +56,14 @@ func (m *Model) fillTables() {
 		return
 	}
 	counts := m.ws.RowCounts()
-	schemas := map[string]bool{}
-	for _, row := range r.Rows {
-		schemas[row[0]] = true
-	}
+	// The index's Display decides qualification, as the web's list and the
+	// assistant do: by the database's schemas, not just the listed ones,
+	// since a list of one schema of many still needs schema.name to work
+	// off the search_path.
+	idx := m.ws.TableIndex()
 	items := make([]listItem, 0, len(r.Rows))
 	for _, ref := range db.TableRefs(r.Rows) {
-		qualified := ref.Name
-		if len(schemas) > 1 && ref.Schema != "" {
-			qualified = ref.Schema + "." + ref.Name
-		}
+		qualified := idx.Display(ref)
 		it := listItem{label: qualified, data: qualified}
 		if ref.View {
 			it.sub, it.muted = "view", true

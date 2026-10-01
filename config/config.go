@@ -133,6 +133,44 @@ type Connection struct {
 	// connections are the file's to change. Every dbc merges the saved ones,
 	// so the TUI and headless runs list them too.
 	Web bool `toml:"-"`
+
+	// Base and Database describe a connection derived from a configured
+	// one: the same server, credentials and TLS, opened on another database
+	// of that server. ConnByName makes one up for a name of the form
+	// "<base>/<database>" (see DatabaseSep); none is ever stored, in the
+	// config or the saved-connections file. Database overrides whatever
+	// database the DSN names when the pool is opened (db.openPool); "" keeps
+	// the DSN's. Both are "" on a configured connection.
+	Base     string `toml:"-"`
+	Database string `toml:"-"`
+}
+
+// DatabaseSep joins a configured connection's name to one of its server's
+// databases, in a derived connection's name: "ProdDr/analytics".
+//
+// A Postgres connection is bound to one database — every catalog the
+// server has is per database, and there is no USE to move a session to
+// another — so reaching a second database on the same host means opening a
+// second pool. Naming that pool "<base>/<database>" lets everything keyed by
+// connection name (the Manager's pools and row counts, the pinned session,
+// history, saved tabs, the web layout's per-connection keys) keep working
+// with no second key, and a tab saved on a derived connection reopens on it
+// after a restart, because the name alone says how to rebuild it.
+const DatabaseSep = "/"
+
+// DerivedName is the name of base's connection to database.
+func DerivedName(base, database string) string { return base + DatabaseSep + database }
+
+// supportsDatabases reports whether a driver's connections can be derived
+// onto another database. Postgres only, for now: MySQL scopes the catalog
+// by the DSN's database as well, and could be added the same way (its DSN
+// parser sets DBName), but nothing on it has asked for that yet.
+func supportsDatabases(driver string) bool {
+	switch strings.ToLower(driver) {
+	case "postgres", "postgresql", "pg", "pgx":
+		return true
+	}
+	return false
 }
 
 // Config is the application configuration.
@@ -391,7 +429,17 @@ func DemoBytdbPath() (string, error) {
 	return filepath.Join(dir, "demo.bytdb"), nil
 }
 
-// ConnByName finds a connection config by name.
+// ConnByName finds a connection config by name. A name no connection has
+// exactly, of the form "<base>/<database>" where base is a Postgres
+// connection, is that connection derived onto database (see DatabaseSep):
+// a copy with Name set to name and Base and Database filled in.
+//
+// The exact match is tried first, so a configured connection whose own
+// name contains a "/" is still found as itself. Then the name is matched
+// against each Postgres connection's name plus the separator, rather than
+// split at a "/": a quoted Postgres database name may contain one, and so
+// may a connection's name. Of two bases that both match ("a" and "a/b" for
+// "a/b/c"), the longer wins, as the more specific.
 func (c *Config) ConnByName(name string) (Connection, bool) {
 	c.connMu.RLock()
 	defer c.connMu.RUnlock()
@@ -400,7 +448,24 @@ func (c *Config) ConnByName(name string) (Connection, bool) {
 			return cn, true
 		}
 	}
-	return Connection{}, false
+	best := -1
+	for i, cn := range c.Connections {
+		prefix := cn.Name + DatabaseSep
+		if cn.Base == "" && supportsDatabases(cn.Driver) && len(name) > len(prefix) &&
+			strings.HasPrefix(name, prefix) && (best < 0 || len(cn.Name) > len(c.Connections[best].Name)) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return Connection{}, false
+	}
+	cn := c.Connections[best]
+	cn.Base, cn.Database = cn.Name, name[len(cn.Name)+len(DatabaseSep):]
+	cn.Name = name
+	// a demo is seeded on open; a database derived from one is the user's
+	// own pick, and must not be
+	cn.Demo = false
+	return cn, true
 }
 
 // Conns is the connection list as it stands, for a reader that may run

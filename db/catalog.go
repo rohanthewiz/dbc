@@ -25,28 +25,35 @@ func TablesQuery(driver string) (string, error) {
 	}
 	switch drv {
 	case "pgx":
-		// information_schema.tables is the SQL standard's view, and the
-		// standard has no materialized views, so Postgres leaves them out
-		// of it; pg_matviews supplies them. Their type contains VIEW, so
-		// TableRefs and the sidebar both read them as views.
+		// pg_class, not information_schema.tables, for two reasons that
+		// both bite on a big shared database:
 		//
-		// information_schema.tables shows only relations the user holds
-		// some privilege on, while pg_matviews shows all of them; the
-		// has_table_privilege filter keeps the two halves to the same
-		// rule. A matview's only useful privilege is SELECT. The name is
-		// quoted, as that function parses its text argument as SQL.
+		//   - information_schema.tables shows only the relations the user
+		//     holds some privilege on. A schema whose tables belong to
+		//     another role (and were never granted) came out with no tables
+		//     at all, so a schema the user could see in psql (\dt s.*) was
+		//     missing from the sidebar, or counted 0 in the schema picker.
+		//     pg_class is readable by every role and lists everything, as
+		//     psql does; a table the user cannot SELECT then fails on
+		//     preview with Postgres's own "permission denied", which says
+		//     what is wrong, where an absent table said nothing.
+		//   - it is a view that calls the privilege functions per row and
+		//     joins several catalogs; on tens of thousands of relations it
+		//     is many times slower than this direct read, and the connect's
+		//     catalogTimeout is a bound on it.
 		//
-		// ORDER BY after a UNION applies to the whole result, by the
-		// first branch's column names.
-		return `SELECT table_schema, table_name, table_type
-FROM information_schema.tables
-WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-UNION ALL
-SELECT schemaname, matviewname, 'MATERIALIZED VIEW'
-FROM pg_catalog.pg_matviews
-WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
-  AND has_table_privilege(quote_ident(schemaname) || '.' || quote_ident(matviewname), 'SELECT')
-ORDER BY table_schema, table_name`, nil
+		// It also covers materialized views, which the standard's view
+		// leaves out (the standard has none), without a second branch.
+		//
+		// The type names are information_schema's, so Ctrl+T reads the
+		// same as before and TableRefs keeps reading "VIEW" in a view's
+		// type. relkind: r table, p partitioned table (a table to a reader,
+		// as in information_schema), v view, m matview, f foreign table.
+		// Partitions stay listed, as information_schema listed them; the
+		// ERD hides them itself (PartitionsQuery).
+		//
+		// pgUserSchemas says which schemas are the user's.
+		return pgTables(""), nil
 	case bytdbdrv.DriverName:
 		// The two catalog schemas are always there and never what was
 		// meant. bytdb serves the same information_schema.tables, views
@@ -74,6 +81,32 @@ ORDER BY type, name`, nil
 	}
 	return "", serr.New("no table listing for this driver", "driver", driver)
 }
+
+// pgTables is TablesQuery's Postgres statement, over every schema when
+// schema is "", or over that one schema — the sidebar's lazy load, see
+// SchemaTablesQuery. pgUserSchemas is the schema filter both share with
+// SchemaSummaryQuery, so the tables and the schema list agree on what a
+// user schema is.
+func pgTables(schema string) string {
+	where := pgUserSchemas
+	if schema != "" {
+		where = "n.nspname = " + sqlLit(schema, false)
+	}
+	return `SELECT n.nspname AS table_schema, c.relname AS table_name,
+       CASE c.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW'
+                      WHEN 'f' THEN 'FOREIGN' ELSE 'BASE TABLE' END AS table_type
+FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+  AND ` + where + `
+ORDER BY n.nspname, c.relname`
+}
+
+// pgUserSchemas is the WHERE condition that keeps a Postgres catalog query
+// to the user's schemas. The pg_ prefix is reserved for system schemas
+// (CREATE SCHEMA refuses it), so NOT LIKE 'pg\_%' drops pg_catalog, pg_toast
+// and every session's pg_temp_N / pg_toast_temp_N in one test.
+const pgUserSchemas = `n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\_%'`
 
 // TableRef names one table or view in a connection's catalog, as a row of
 // TablesQuery reports it.
@@ -113,6 +146,10 @@ type TableIndex struct {
 	byName  map[string][]int // lower(name) → every schema's table of that name
 	byQual  map[string]int   // lower(schema.name) → the one table
 	schemas int              // distinct schemas; 1 means names need no qualifier
+	// unloaded holds the database's schemas whose tables are NOT in the
+	// index (lower(name) → name), when the sidebar loads a schema at a
+	// time; see SetSchemas.
+	unloaded map[string]string
 }
 
 // NewTableIndex indexes a catalog.
@@ -126,6 +163,33 @@ func NewTableIndex(tables []TableRef) *TableIndex {
 		if !seen[t.Schema] {
 			seen[t.Schema] = true
 			x.schemas++
+		}
+	}
+	return x
+}
+
+// SetSchemas tells an index built from part of a database's catalog (one
+// schema's tables, as a Postgres sidebar loads them) what the whole
+// database's schemas are. Two rules follow from the whole, not the part:
+//
+//   - Display qualifies names whenever the DATABASE has several schemas,
+//     even though the index holds one schema's tables: on Postgres a bare
+//     name resolves through search_path, and the schema being browsed is
+//     often not on it, so "orders" would not find sales.orders.
+//   - Mentioned also reports a schema-qualified word naming one of the
+//     schemas it did not load ("billing.invoices") — see Mentioned.
+//
+// It returns x, for chaining onto NewTableIndex.
+func (x *TableIndex) SetSchemas(all []string) *TableIndex {
+	loaded := map[string]bool{}
+	for _, t := range x.tables {
+		loaded[t.Schema] = true
+	}
+	x.schemas = max(x.schemas, len(all))
+	x.unloaded = map[string]string{}
+	for _, s := range all {
+		if !loaded[s] {
+			x.unloaded[strings.ToLower(s)] = s
 		}
 	}
 	return x
@@ -198,10 +262,22 @@ func (x *TableIndex) Lookup(qname string) (TableRef, bool) {
 // A dotted word (public.cats, mydb.cats, c.name) matches only as
 // schema.table. It never falls back to its last part: in `c.name`, `c` is a
 // table alias and `name` a column, and a table called `name` is not meant.
+//
+// On an index that holds only some of the database's schemas (SetSchemas),
+// a dotted word whose schema is one of the others is reported too, as the
+// table it names, unverified: the index cannot know whether that table
+// exists, and loading the schema to find out is what the sidebar avoids.
+// The column lookup that follows (Manager.Columns) is the check — a table
+// it finds no columns for is dropped before anything is sent. The word's
+// schema must be a real schema, which keeps a table alias ("c.name") from
+// becoming a guess. The name is taken in lower case, as Postgres folds an
+// unquoted one; a quoted mixed-case name would need its quotes, which the
+// words have lost, and is the case this cannot reach.
 func (x *TableIndex) Mentioned(sql, prose string) []TableRef {
-	if x == nil || len(x.tables) == 0 {
+	if x == nil || (len(x.tables) == 0 && len(x.unloaded) == 0) {
 		return nil
 	}
+	guessed := map[string]bool{}
 	var out []TableRef
 	seen := map[int]bool{}
 	add := func(i int) {
@@ -223,6 +299,11 @@ func (x *TableIndex) Mentioned(sql, prose string) []TableRef {
 			}
 			if i, ok := x.byQual[qual]; ok {
 				add(i)
+			} else if dot := strings.IndexByte(qual, '.'); dot > 0 && !guessed[qual] {
+				if schema, ok := x.unloaded[qual[:dot]]; ok && dot < len(qual)-1 {
+					guessed[qual] = true
+					out = append(out, TableRef{Schema: schema, Name: qual[dot+1:]})
+				}
 			}
 			return
 		}

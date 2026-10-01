@@ -30,9 +30,16 @@ const DiagramTimeout = 30 * time.Second
 // A table in sel that is not in the schema is refused (Invalid) rather than
 // dropped quietly: a diagram "around orders" that silently shows the whole
 // database would be a confusing answer.
+//
+// A diagram of everything (sel naming no tables) is of the schema the
+// sidebar lists, when it lists one (CatalogSchema): on a big database "all"
+// means what the user is looking at, not every table the server holds.
 func (w *Workspace) Diagram(ctx context.Context, sel erd.Selection) (*erd.Schema, error) {
 	w.mu.Lock()
 	conn := w.active
+	if sel.Schema == "" {
+		sel.Schema = w.schema
+	}
 	w.mu.Unlock()
 	if conn == "" {
 		return nil, refuse(NoConnection, Warn, "no active connection — pick one in the sidebar")

@@ -321,3 +321,39 @@ dsn = "postgres://x"
 		t.Errorf("demo AIContextRows = %d", demo.AIContextRows)
 	}
 }
+
+// "<base>/<database>" resolves to the Postgres connection base, opened on
+// database; a connection really named so is found as itself, the longest
+// base wins, and only Postgres bases derive.
+func TestConnByNameDerived(t *testing.T) {
+	cfg := &Config{Connections: []Connection{
+		{Name: "prod", Driver: "postgres", DSN: "host=h dbname=main", Demo: true},
+		{Name: "prod/reports", Driver: "postgres", DSN: "host=r"},
+		{Name: "my", Driver: "mysql", DSN: "u@tcp(h)/d"},
+	}}
+	cn, ok := cfg.ConnByName("prod/analytics")
+	if !ok || cn.Name != "prod/analytics" || cn.Base != "prod" || cn.Database != "analytics" || cn.DSN != "host=h dbname=main" {
+		t.Errorf("prod/analytics = %+v, %v", cn, ok)
+	}
+	if cn.Demo {
+		t.Error("a derived connection must never be seeded as a demo")
+	}
+	if cn, ok := cfg.ConnByName("prod/reports"); !ok || cn.Base != "" || cn.DSN != "host=r" {
+		t.Errorf("a configured prod/reports should be found as itself: %+v", cn)
+	}
+	if cn, ok := cfg.ConnByName("prod/reports/2026"); !ok || cn.Base != "prod/reports" || cn.Database != "2026" {
+		t.Errorf("the longer base should win: %+v", cn)
+	}
+	if cn, ok := cfg.ConnByName("prod/a/b"); !ok || cn.Base != "prod" || cn.Database != "a/b" {
+		t.Errorf("a database name may hold a /: %+v", cn)
+	}
+	for _, name := range []string{"my/other", "prod/", "nope/x"} {
+		if cn, ok := cfg.ConnByName(name); ok {
+			t.Errorf("%q should not resolve, got %+v", name, cn)
+		}
+	}
+	// derived connections are never listed
+	if n := len(cfg.Conns()); n != 3 {
+		t.Errorf("Conns() has %d entries", n)
+	}
+}

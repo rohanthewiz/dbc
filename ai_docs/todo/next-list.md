@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-078
+**Next ID:** N-083
 
 ## Open
 
@@ -111,18 +111,37 @@ ten session docs in `ai_docs/claude_sessions/`
   works for Postgres only through the DSN's own `sslpassword`. MySQL has no
   way to give one, and there is no `tls_key_password` key. Add one (from
   `${VAR}`, never stored inline) if someone's key is encrypted.
-- **N-076** · raised `2026-1001-1439-sidebar-schema-filter` · value low
-  The Tables heading's ERD button diagrams every schema even while the list
-  is narrowed to one. On a catalog large enough to need the filter, that
-  diagram is the unreadable one. Pass the picked schema to
-  `GET …/erd` (`web/erd.go` has no schema selection yet) so ERD draws what
-  the list shows.
-- **N-077** · raised `2026-1001-1439-sidebar-schema-filter` · value low
-  The schema filter only narrows what is drawn. The server still loads and
-  row-counts the whole catalog, and on Postgres/MySQL every table under the
-  1M-row estimate gets an exact `count(*)` (3 s timeout each). On a catalog
-  of thousands of tables the counts job is long. It could count the picked
-  schema first, or estimate-only past some table count.
+- **N-078** · raised `2026-1001-1537-postgres-database-schema-navigator` · value medium
+  The TUI has no database or schema picker. It opens with
+  `Options.WholeCatalog`, listing every schema of the connection's own
+  database up to `db.AllSchemasLimit` (5,000 tables), and past that only the
+  default schema, with a note. It cannot reach another database on the
+  server or another schema past the limit. Give its sidebar the web's two
+  levels (`Workspace.Databases`/`Schemas`, `PickSchema`, and a connect to
+  `<conn>/<database>`).
+- **N-079** · raised `2026-1001-1537-postgres-database-schema-navigator` · value low
+  The database picker is Postgres-only (`config.supportsDatabases`,
+  `db.Navigable`). MySQL's catalog is scoped to the DSN's database as well,
+  and could be derived the same way: `mysql.ParseDSN`, then set `DBName` in
+  `openPool` and in `mysqlConnector` (TLS path), plus a
+  `SHOW DATABASES`-style `DatabasesQuery`.
+- **N-080** · raised `2026-1001-1537-postgres-database-schema-navigator` · value low
+  Renaming a connection in dbc web retags saved tabs on its derived
+  connections (`<old>/db` → `<new>/db`, `web/conns.go`). The page's
+  `connRenamed` moves only exact-name tabs and the exact `tableSchema.<conn>`
+  layout key, though. An unshown tab on `<old>/db` keeps its old name until
+  reload, and the schema picks saved for the derived names are lost.
+- **N-081** · raised `2026-1001-1537-postgres-database-schema-navigator` · value low
+  The assistant reaches `schema.table` in a schema the sidebar has not
+  loaded (`TableIndex.SetSchemas`), but the words have lost their quotes, so
+  the name is taken in lower case. A quoted mixed-case table there
+  (`billing."Invoices"`) gets no columns, and is dropped from what is sent.
+- **N-082** · raised `2026-1001-1537-postgres-database-schema-navigator` · value low
+  Each database picked opens its own pool (`<conn>/<database>`), and the pool
+  stays open after the tab moves on, until `conn_idle_timeout` closes its idle
+  connections (the `*sql.DB` itself lives until the base is edited or dbc
+  exits). Browsing many databases on one server leaves a pool per database.
+  Closing a derived pool when no tab is on it would bound that.
 
 ## Roadmap
 
@@ -161,6 +180,25 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-076** · raised `2026-1001-1439-sidebar-schema-filter` · value low
+  The Tables heading's ERD button diagrams every schema even while the list
+  is narrowed to one. On a catalog large enough to need the filter, that
+  diagram is the unreadable one. Pass the picked schema to
+  `GET …/erd` (`web/erd.go` has no schema selection yet) so ERD draws what
+  the list shows.
+  closed 2026-10-01, `2026-1001-1537-postgres-database-schema-navigator`: `workspace.Diagram` fills `erd.Selection.Schema`
+  from the schema the sidebar lists, so ERD with no tables named draws that
+  schema only (a neighbourhood still follows its keys across schemas).
+- **N-077** · raised `2026-1001-1439-sidebar-schema-filter` · value low
+  The schema filter only narrows what is drawn. The server still loads and
+  row-counts the whole catalog, and on Postgres/MySQL every table under the
+  1M-row estimate gets an exact `count(*)` (3 s timeout each). On a catalog
+  of thousands of tables the counts job is long. It could count the picked
+  schema first, or estimate-only past some table count.
+  closed 2026-10-01, `2026-1001-1537-postgres-database-schema-navigator`: on Postgres the sidebar now loads (and
+  counts) one schema's tables at a time, "all schemas" only up to 5,000
+  tables; a fresh count cache is merged across schema picks. MySQL still
+  counts its one database whole, which has no schema to narrow by.
 - **N-070** · raised `2026-0930-1152-erd-channel-routing` · value low
   ERD channel routing fits only about five lines through the 24 px gap between
   two boxes. When a column is crossed by more lines than its gaps hold (a

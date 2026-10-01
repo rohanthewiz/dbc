@@ -53,6 +53,7 @@
   const $ = (id) => document.getElementById(id);
   const els = {
     conns: $("conns"), tables: $("tables"), tableCount: $("table-count"),
+    tableFilter: $("table-filter"), tableSchema: $("table-schema"), schemaList: $("schema-list"),
     active: $("active-conn"), stateful: $("stateful"), busy: $("busy"),
     run: $("run"), runAll: $("run-all"), stop: $("stop"), history: $("history-btn"), scripts: $("scripts-btn"),
     qtabs: $("qtabs"), theme: $("theme-btn"), help: $("help-btn"),
@@ -88,22 +89,239 @@
   // information_schema.columns in the grid, e diagrams it and its
   // neighbours (erdview.js), and the right-click menu offers those and
   // inserts or copies the name. The heading's ERD button diagrams them all.
+  //
+  // The list is drawn from allTables, the connection's whole catalog as
+  // the server last sent it, through the schema filter (drawSchemaFilter)
+  // — so picking a schema re-filters on the page, with no round trip.
   function showTables(tables) {
+    allTables = tables;
+    drawSchemaFilter();
+    drawTables();
+  }
+
+  // drawTables (re)draws the list: allTables narrowed to the picked
+  // schema. The count beside the heading says "· shown / all" while a
+  // schema is picked, so a narrowed list is never mistaken for the whole.
+  function drawTables() {
+    const pick = schemaPick();
+    const shown = pick === null ? allTables : allTables.filter((t) => t.schema === pick);
     els.tables.replaceChildren();
-    els.tableCount.textContent = tables.length ? "· " + tables.length : "";
-    if (!tables.length) {
+    els.tableCount.textContent = !allTables.length ? ""
+      : pick === null ? "· " + allTables.length : "· " + shown.length + " / " + allTables.length;
+    if (!shown.length) {
       els.tables.append(el("li", "none", "no tables"));
       return;
     }
-    for (const t of tables) {
+    for (const t of shown) {
       const li = el("li", { class: t.view ? "view" : "", tabindex: "-1", "data-name": t.qname });
+      // the schema prefix is muted, and left off altogether while the
+      // list is narrowed to one schema: every row would repeat it.
+      // data-name keeps the qualified name either way — it is what
+      // previews, inserts and copies use
       const dot = t.qname.lastIndexOf(".");
-      if (dot > 0) li.append(el("span", "schema", t.qname.slice(0, dot + 1)), t.qname.slice(dot + 1));
+      if (dot > 0 && pick === null) li.append(el("span", "schema", t.qname.slice(0, dot + 1)), t.qname.slice(dot + 1));
+      else if (dot > 0) li.append(t.qname.slice(dot + 1));
       else li.append(t.qname);
       setRowCount(li, t);
       els.tables.append(li);
     }
   }
+
+  // ── the schema filter ──────────────────────────────────────────────────
+  // A type-to-filter box under the Tables heading, shown only when the
+  // catalog spans several schemas (a single-schema catalog, SQLite's or
+  // bytdb's, has nothing to narrow). Focusing it opens a list of the
+  // schemas, each with its table count; typing narrows that list, and
+  // Enter (or a click) picks the highlighted one.
+  //
+  //	┌ Tables · 12 / 340 ───── ERD ┐
+  //	│ [sa________________]        │  #table-schema: the pick, or the text typed
+  //	│ ┌─────────────────────────┐ │  #schema-list: open while the box has focus
+  //	│ │ sales                12 │ │    names starting with the text first,
+  //	│ │ analytics_sandbox     4 │ │    then names containing it; scrolls
+  //	│ └─────────────────────────┘ │
+  //	│ items (0)                   │  #tables: the picked schema's tables
+  //	└─────────────────────────────┘
+  //
+  // A combobox drawn by the page rather than a <select>: a native select's
+  // popup is the browser's (or the Mac app's WKWebView's) to draw, and on
+  // a catalog with hundreds of schemas it neither scrolls well nor lets
+  // you type more than a letter or two to jump. The list is laid out in
+  // the column's flow rather than floated over it, so the sidebar's
+  // overflow can never clip it.
+  //
+  // The pick is per connection — a warehouse's "analytics" means nothing
+  // to another connection — and kept in schemaPicks, saved in the layout
+  // as "tableSchema.<conn>": "=<schema>", or "" for every schema (the "="
+  // keeps a driver's empty schema apart from "all"). A reload, or another
+  // window, opens on it. A saved schema the catalog no longer has falls
+  // back to every schema rather than an empty list.
+  //
+  // Picking filters on the page (drawTables): the server still sends the
+  // whole catalog, which the assistant and the editor's completions use.
+  let allTables = [];
+  const schemaPicks = {};
+  const PICK_KEY = "tableSchema.";
+  // picked: the schema the list is narrowed to, null for every schema.
+  // schemaCounts: schema → its table count, sorted by name, for the list.
+  // schemaRows/schemaHi: the open list's rows (a schema, or null for "all
+  // schemas") and the highlighted one's index; -1 while nothing matches.
+  let picked = null;
+  let schemaCounts = new Map();
+  let schemaRows = [];
+  let schemaHi = -1;
+
+  const schemaLabel = (name) => name || "(none)";
+
+  // schemaPick is the schema the list is narrowed to, or null for all.
+  function schemaPick() {
+    return els.tableFilter.hidden ? null : picked;
+  }
+
+  // drawSchemaFilter reconciles the box with a newly drawn catalog: shown
+  // or hidden, and the connection's saved pick applied if it still exists.
+  function drawSchemaFilter() {
+    const counts = new Map();
+    for (const t of allTables) counts.set(t.schema, (counts.get(t.schema) || 0) + 1);
+    schemaCounts = new Map([...counts].sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0)));
+    const multi = schemaCounts.size > 1;
+    els.tableFilter.hidden = !multi;
+    closeSchemaList();
+    const saved = schemaPicks[state.active];
+    picked = multi && saved && schemaCounts.has(saved.slice(1)) ? saved.slice(1) : null;
+    showPick();
+  }
+
+  // showPick puts the pick back in the box — its name, or empty with the
+  // placeholder saying every schema is shown — dropping any text typed.
+  function showPick() {
+    els.tableSchema.value = picked === null ? "" : schemaLabel(picked);
+    els.tableSchema.placeholder = "all " + schemaCounts.size + " schemas · type to filter";
+    els.tableFilter.classList.toggle("on", picked !== null);
+  }
+
+  // chooseSchema narrows the tables list to name (null: every schema),
+  // remembers it for the connection and closes the list.
+  function chooseSchema(name) {
+    picked = name;
+    const v = name === null ? "" : "=" + name;
+    schemaPicks[state.active] = v;
+    saveLayout({ [PICK_KEY + state.active]: v });
+    closeSchemaList();
+    showPick();
+    drawTables();
+    els.tables.scrollTop = 0;
+  }
+
+  // openSchemaList (re)draws the list for the text typed. Matching ignores
+  // case; schemas whose name starts with the text come before those that
+  // only contain it, each group by name, so "sa" lists sales above
+  // analytics_sandbox. "all schemas" leads the list only while nothing is
+  // typed — once there is text, Enter should take the first match. fresh:
+  // the box was just focused, so the current pick is highlighted (Enter
+  // keeps it) rather than the first row.
+  function openSchemaList(text, fresh) {
+    const q = text.trim().toLowerCase();
+    const starts = [], contains = [];
+    for (const name of schemaCounts.keys()) {
+      const l = schemaLabel(name).toLowerCase();
+      if (!q || l.startsWith(q)) starts.push(name);
+      else if (l.includes(q)) contains.push(name);
+    }
+    schemaRows = q ? [...starts, ...contains] : [null, ...starts];
+    schemaHi = schemaRows.length ? 0 : -1;
+    if (fresh) schemaHi = Math.max(0, schemaRows.indexOf(picked));
+
+    els.schemaList.replaceChildren();
+    if (!schemaRows.length) els.schemaList.append(el("li", "none", "no schema matches"));
+    schemaRows.forEach((name, i) => {
+      const n = name === null ? allTables.length : schemaCounts.get(name);
+      els.schemaList.append(el("li", { id: "schema-opt-" + i, role: "option", "data-i": String(i),
+        class: name === null ? "all" : "" },
+        el("span", "sname", name === null ? "all schemas" : schemaLabel(name)), el("span", "scount", String(n))));
+    });
+    els.schemaList.hidden = false;
+    els.tableSchema.setAttribute("aria-expanded", "true");
+    markSchemaHi();
+  }
+
+  function closeSchemaList() {
+    els.schemaList.hidden = true;
+    els.schemaList.replaceChildren();
+    els.tableSchema.setAttribute("aria-expanded", "false");
+    els.tableSchema.removeAttribute("aria-activedescendant");
+    schemaRows = [];
+    schemaHi = -1;
+  }
+
+  // markSchemaHi shows the highlight and keeps it in view as the arrows
+  // walk a list taller than its box.
+  function markSchemaHi() {
+    for (const li of els.schemaList.querySelectorAll("li[data-i]")) {
+      const on = Number(li.dataset.i) === schemaHi;
+      li.classList.toggle("hi", on);
+      li.setAttribute("aria-selected", on ? "true" : "false");
+      if (on) {
+        li.scrollIntoView({ block: "nearest" });
+        els.tableSchema.setAttribute("aria-activedescendant", li.id);
+      }
+    }
+  }
+
+  els.tableSchema.addEventListener("focus", () => {
+    els.tableSchema.select(); // typing replaces the pick's name
+    openSchemaList("", true);
+  });
+  els.tableSchema.addEventListener("input", () => openSchemaList(els.tableSchema.value, false));
+  // leaving the box drops what was typed: the pick stands until another
+  // is chosen. A click on a row is not a leave (mousedown below).
+  els.tableSchema.addEventListener("blur", () => { closeSchemaList(); showPick(); });
+  els.tableSchema.addEventListener("keydown", (e) => {
+    const open = !els.schemaList.hidden;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!open) { openSchemaList(els.tableSchema.value, false); return; }
+      if (!schemaRows.length) return;
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      schemaHi = (schemaHi + step + schemaRows.length) % schemaRows.length;
+      markSchemaHi();
+    } else if (e.key === "PageDown" || e.key === "PageUp") {
+      if (!open || !schemaRows.length) return;
+      e.preventDefault();
+      const step = e.key === "PageDown" ? 10 : -10;
+      schemaHi = Math.min(schemaRows.length - 1, Math.max(0, schemaHi + step));
+      markSchemaHi();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (open && schemaHi >= 0) chooseSchema(schemaRows[schemaHi]);
+      // with the list closed (just picked), Enter moves on to the tables
+      else if (!open) {
+        const first = els.tables.querySelector("li[data-name]");
+        if (first) pickTable(first);
+      }
+    } else if (e.key === "Escape") {
+      // first press drops the typing, a second leaves the box
+      e.preventDefault();
+      if (open) { closeSchemaList(); showPick(); } else els.tableSchema.blur();
+    }
+  });
+  // the search box's own clear (×) shows every schema again. "search"
+  // fires for that and for Enter, which keydown has already handled (and
+  // whose pick leaves the box non-empty, or picked null)
+  els.tableSchema.addEventListener("search", () => {
+    if (els.tableSchema.value === "" && picked !== null) chooseSchema(null);
+  });
+  // a click in the box after a pick (focus never left it) reopens the list
+  els.tableSchema.addEventListener("click", () => {
+    if (els.schemaList.hidden) { els.tableSchema.select(); openSchemaList("", true); }
+  });
+  // mousedown would take focus from the box (closing the list under the
+  // click); kept, the click lands on the row
+  els.schemaList.addEventListener("mousedown", (e) => e.preventDefault());
+  els.schemaList.addEventListener("click", (e) => {
+    const li = e.target.closest("li[data-i]");
+    if (li) chooseSchema(schemaRows[Number(li.dataset.i)]);
+  });
 
   // setRowCount shows a table's row count after its name, "cats (1,234)",
   // and leads its tooltip with the count in words, "cats with 1,234 rows".
@@ -122,7 +340,14 @@
 
   // showCounts patches the counts into the rows on screen, by qname. A
   // table the list does not show (it has changed since) is skipped.
+  // The counts are also merged into allTables, so the rows of schemas the
+  // filter hides have theirs when it is changed.
   function showCounts(tables) {
+    const counted = new Map(tables.map((t) => [t.qname, t]));
+    for (const t of allTables) {
+      const c = counted.get(t.qname);
+      if (c) { t.rows = c.rows; t.rowsHint = c.rowsHint; }
+    }
     const byName = new Map([...els.tables.querySelectorAll("li[data-name]")].map((li) => [li.dataset.name, li]));
     for (const t of tables) {
       const li = byName.get(t.qname);
@@ -588,6 +813,13 @@
   function connRenamed(from, to) {
     for (const t of tabs) if (t.conn === from) t.conn = to;
     if (state.active === from) state.active = to;
+    // the schema pick follows the connection to its new name; the old key
+    // is blanked, as the layout has no delete
+    if (schemaPicks[from] !== undefined) {
+      schemaPicks[to] = schemaPicks[from];
+      delete schemaPicks[from];
+      saveLayout({ [PICK_KEY + to]: schemaPicks[to], [PICK_KEY + from]: "" });
+    }
   }
 
   Object.assign(dbc.cmd, {
@@ -1266,6 +1498,10 @@
         else setConnsHeight(Number(layout.connsHeight));
       }
       dbc.chat.boot(layout);
+      // the Tables list's schema picks, before the first list is drawn
+      for (const [k, v] of Object.entries(layout)) {
+        if (k.startsWith(PICK_KEY) && v) schemaPicks[k.slice(PICK_KEY.length)] = v;
+      }
 
       // the window: this browser tab's, if the server still has it — and
       // if it is not being shown by another browser tab right now, which

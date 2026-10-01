@@ -163,6 +163,16 @@ rest, and every table on SQLite and bytdb, are counted exactly. A count that
 takes over three seconds falls back to the estimate, or to no number. Views
 are not counted.
 
+When a connection's tables span more than one schema, `dbc web` puts a
+schema filter under the Tables heading, so a big catalog can be narrowed to
+the one you are working in. Click it (or tab to it) for the list of schemas,
+each with its table count; type to narrow the list — names starting with
+what you typed come first — then `Enter` or a click picks one, and `Enter`
+again moves to its tables. `Esc` drops the typing; emptying the box and
+picking "all schemas" (or its `×`) shows everything again. The heading then
+reads `· 12 / 340`. The pick is remembered per connection, across reloads
+and windows. The heading and the filter stay put while the tables scroll.
+
 ### Mouse
 
 | Where | Gesture | Does |

@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-076
+**Next ID:** N-078
 
 ## Open
 
@@ -51,8 +51,9 @@ ten session docs in `ai_docs/claude_sessions/`
   JavaScript is caught only by hand. Phase 6's run found three real bugs
   (a disposed Monaco model, a console rejection, a rename redrawn away).
   The connection form's Fields/DSN toggle and TLS section
-  (`2026-1001-1415-connection-tls-and-dsn-fields`, 23 checks) were verified
-  the same throwaway way.
+  (`2026-1001-1415-connection-tls-and-dsn-fields`, 23 checks) and the
+  sidebar's schema filter (`2026-1001-1439-sidebar-schema-filter`, against a
+  154-schema Postgres) were verified the same throwaway way.
 - **N-061** · raised `2026-0928-0050-sidebar-splitter-fold-and-section-splitters` · value low
   Check `dbc web`'s splitters and sidebar fold in Safari and Firefox. They were
   verified only in Chrome, and the fix that lets a press reach the editor and
@@ -71,7 +72,9 @@ ten session docs in `ai_docs/claude_sessions/`
   the plan's "open page" opens a second, signed-in window; the Copilot
   sign-in's GitHub link opens in the browser; copy (plain and "for Teams")
   reaches the clipboard from WKWebView; ⌘B/⌘R/⌘K reach the page, not the
-  menu; View ▸ Open in Browser signs the browser in. Launch, sign-in (the page
+  menu; View ▸ Open in Browser signs the browser in; the Tables schema
+  filter's list opens, scrolls and takes typing in WKWebView (the native
+  `<select>` it replaced did not scroll there). Launch, sign-in (the page
   opened a workspace), Quit, `kill -9` of the app, and the login-shell `PATH`
   were verified.
 - **N-071** · raised `2026-0930-1217-erd-ports-partitions-widening-raster` · value low
@@ -108,6 +111,18 @@ ten session docs in `ai_docs/claude_sessions/`
   works for Postgres only through the DSN's own `sslpassword`. MySQL has no
   way to give one, and there is no `tls_key_password` key. Add one (from
   `${VAR}`, never stored inline) if someone's key is encrypted.
+- **N-076** · raised `2026-1001-1439-sidebar-schema-filter` · value low
+  The Tables heading's ERD button diagrams every schema even while the list
+  is narrowed to one. On a catalog large enough to need the filter, that
+  diagram is the unreadable one. Pass the picked schema to
+  `GET …/erd` (`web/erd.go` has no schema selection yet) so ERD draws what
+  the list shows.
+- **N-077** · raised `2026-1001-1439-sidebar-schema-filter` · value low
+  The schema filter only narrows what is drawn. The server still loads and
+  row-counts the whole catalog, and on Postgres/MySQL every table under the
+  1M-row estimate gets an exact `count(*)` (3 s timeout each). On a catalog
+  of thousands of tables the counts job is long. It could count the picked
+  schema first, or estimate-only past some table count.
 
 ## Roadmap
 

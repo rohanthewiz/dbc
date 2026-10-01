@@ -185,7 +185,8 @@ func (p Workbench) topbar(b *element.Builder) any {
 //	│ …                   │
 //	├ side-hsplit ════════┤
 //	│ TABLES 12           │  side-tables: the rest
-//	│ …                   │
+//	│ [type a schema…]    │  tfilter: only when several schemas
+//	│ …                   │  #tables scrolls; the two lines above stay put
 //	└─────────────────────┘
 func (p Workbench) sidebar(b *element.Builder) any {
 	b.AsideClass("sidebar").R(
@@ -203,6 +204,21 @@ func (p Workbench) sidebar(b *element.Builder) any {
 				b.Span().R(b.T("Tables "), b.SpanClass("count", "id", "table-count").R()),
 				b.ButtonClass("hadd herd", "id", "erd-all", "type", "button",
 					"title", "Diagram the connection's tables and keys (ERD)", "aria-label", "Entity-relationship diagram").T("ERD"),
+			),
+			// the schema filter: narrows the list to one schema, so a
+			// catalog of thousands of tables across many schemas stays
+			// scannable. Hidden until a connection's catalog spans more
+			// than one schema. A type-to-filter combobox rather than a
+			// <select> (whose popup the page cannot make scroll or
+			// search): app.js fills schema-list as you type, and
+			// remembers the pick per connection
+			b.DivClass("tfilter", "id", "table-filter", "hidden", "hidden").R(
+				b.Input("id", "table-schema", "type", "search", "role", "combobox",
+					"aria-label", "Filter tables by schema", "aria-autocomplete", "list",
+					"aria-expanded", "false", "aria-controls", "schema-list",
+					"title", "Show the tables of one schema: type to find it, Enter to pick",
+					"spellcheck", "false", "autocomplete", "off").R(),
+				b.UlClass("schema-list", "id", "schema-list", "role", "listbox", "hidden", "hidden").R(),
 			),
 			b.Ul("id", "tables").R(),
 		),

@@ -93,12 +93,21 @@ button:focus-visible, textarea:focus-visible, li:focus-visible { outline: 1px so
   padding-top: 8px;
 }
 .side-conns.sized { flex: 0 0 var(--conns-h); max-height: none; }
+/* a column of its own: the heading and the schema filter stay put while
+   the tables list (#tables) scrolls under them — on a catalog of thousands
+   the filter must not scroll out of reach. A zero basis: it takes the room
+   Connections leaves. With "auto" its basis was its content's height, so a
+   catalog of hundreds of tables shrank Connections (flex 0 1) to nothing */
 .side-tables {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding-bottom: 8px;
 }
+.side-tables > h2 { flex: none; }
+.side-tables > #tables { flex: 1 1 auto; min-height: 0; overflow: auto; }
 /* the bar between them: a hairline with 3px of grab room either side */
 .side-hsplit {
   flex: 0 0 7px;
@@ -154,6 +163,49 @@ body.row-dragging { cursor: row-resize; user-select: none; }
 #tables li .rows { color: var(--muted); }
 #tables li.view::after { content: " (view)"; color: var(--muted); }
 #tables li.none { color: var(--muted); cursor: default; font-family: inherit; }
+/* the schema filter under the Tables heading: a search box styled like
+   the other inputs (.hfilter), and under it — while the box has focus —
+   the matching schemas. The list sits in the column's flow, not floated
+   over it, so .side-tables' overflow cannot clip it; it scrolls on its own
+   past a third of the window. .tfilter is left a block so [hidden] hides it */
+.tfilter { flex: none; padding: 0 12px 4px; }
+.tfilter input {
+  box-sizing: border-box;
+  width: 100%;
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 6px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.tfilter input:focus { outline: 1px solid var(--accent); }
+/* narrowed: the box's border says the list below is not the whole catalog */
+.tfilter.on input { border-color: var(--accent); }
+.sidebar ul.schema-list {
+  margin-top: 2px;
+  max-height: 33vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+}
+.schema-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 1px 6px;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.schema-list li .sname { overflow: hidden; text-overflow: ellipsis; }
+.schema-list li .scount { color: var(--muted); flex: none; }
+.schema-list li.all .sname { font-style: italic; }
+.schema-list li:hover { background: var(--panel2); }
+.schema-list li.hi { background: var(--sel); box-shadow: inset 2px 0 var(--accent); }
+.schema-list li.none { color: var(--muted); cursor: default; font-family: inherit; }
 .hbtns { display: flex; align-items: center; gap: 2px; }
 
 /* ── the sidebar edge ─────────────────────────────────────────────────────

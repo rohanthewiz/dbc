@@ -845,7 +845,7 @@ func resetFlags(t *testing.T) {
 	t.Helper()
 	t.Setenv("DBC_DEMO", "")
 	ptrs := []*string{&flagConfig, &flagConn, &flagFile, &flagFormat, &flagOut,
-		&flagDemo, &flagDriver, &flagDSN, &flagDir}
+		&flagDemo, &flagDriver, &flagDSN, &flagDir, &flagTLS, &flagTLSCA, &flagTLSCert, &flagTLSKey}
 	for _, p := range ptrs {
 		setFlag(t, p, "")
 	}

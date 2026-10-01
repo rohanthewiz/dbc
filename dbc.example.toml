@@ -64,6 +64,15 @@ migrations = "db/migrate"
 name   = "reporting-mysql"
 driver = "mysql"
 dsn    = "reporter:${MYSQL_PASS}@tcp(db.example.com:3306)/reports?parseTime=true"
+# TLS, for postgres and mysql alike (leave tls out to let the DSN decide).
+# Modes, by strictness: disable | prefer | require | verify-ca | verify-full.
+# Only verify-full checks that the certificate is for this host. Set, tls
+# wins over the DSN's own sslmode= / tls=. Paths take ~ and ${VAR}; relative
+# ones are relative to this file.
+tls      = "verify-full"
+tls_ca   = "certs/reporting-ca.pem"   # blank: the system's trusted CAs
+# tls_cert = "~/certs/me.pem"         # client certificate, if the server asks
+# tls_key  = "~/certs/me.key"         # ...and its private key
 
 [[connection]]
 name   = "scratch"

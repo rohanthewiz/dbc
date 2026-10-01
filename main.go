@@ -30,6 +30,11 @@
 //	                   (also $DBC_DEMO; only applies when there is no config file)
 //	--driver name      with --dsn: run against an ad-hoc connection instead of a
 //	--dsn string       configured one (no config file needed)
+//	--tls mode         with --dsn: TLS for it — disable|prefer|require|verify-ca|
+//	                   verify-full (a config file sets the same per connection)
+//	--tls-ca path      with --tls: CA certificate(s) to verify the server against
+//	--tls-cert path    with --tls: client certificate, and --tls-key its key
+//	--tls-key path
 //	--dir path         migrations directory for `dbc migrate`
 //	--allow-missing    let `migrate up` apply out-of-order migrations
 //
@@ -74,14 +79,19 @@ import (
 // threading *cli.Command through every helper — the headless paths and their
 // tests predate the cli package and only ever needed the values.
 var (
-	flagConfig  string
-	flagConn    string
-	flagFile    string
-	flagFormat  = "text"
-	flagOut     string
-	flagDemo    string
-	flagDriver  string
-	flagDSN     string
+	flagConfig string
+	flagConn   string
+	flagFile   string
+	flagFormat = "text"
+	flagOut    string
+	flagDemo   string
+	flagDriver string
+	flagDSN    string
+	// --tls and friends: the ad-hoc connection's config.TLSOpts
+	flagTLS     string
+	flagTLSCA   string
+	flagTLSCert string
+	flagTLSKey  string
 	flagDir     string
 	flagMissing bool
 	flagTx      bool
@@ -146,6 +156,15 @@ func newCLI() *cli.Command {
 				Usage: "with --dsn: `DRIVER` of an ad-hoc connection (postgres|mysql|sqlite|bytdb)", Destination: &flagDriver},
 			&cli.StringFlag{Name: "dsn", Category: "ad-hoc connection",
 				Usage: "ad-hoc connection `DSN`, used instead of any configured connection", Destination: &flagDSN},
+			&cli.StringFlag{Name: "tls", Category: "ad-hoc connection",
+				Usage:       "with --dsn: TLS `MODE` (disable|prefer|require|verify-ca|verify-full), overriding the DSN's own",
+				Destination: &flagTLS},
+			&cli.StringFlag{Name: "tls-ca", Category: "ad-hoc connection",
+				Usage: "with --tls: PEM `FILE` of CA certificates to verify the server against", Destination: &flagTLSCA},
+			&cli.StringFlag{Name: "tls-cert", Category: "ad-hoc connection",
+				Usage: "with --tls: PEM client certificate `FILE` (needs --tls-key)", Destination: &flagTLSCert},
+			&cli.StringFlag{Name: "tls-key", Category: "ad-hoc connection",
+				Usage: "with --tls: PEM private key `FILE` of the client certificate", Destination: &flagTLSKey},
 			&cli.StringFlag{Name: "dir", Category: "migrate",
 				Usage: "migrations `DIR` (default: the connection's migrations, else .)", Destination: &flagDir},
 			&cli.BoolFlag{Name: "allow-missing", Category: "migrate",
@@ -358,7 +377,7 @@ func setup(demos demoOpen) (*config.Config, *db.Manager) {
 		fail(err, "could not load config")
 	}
 	if err = addAdHocConn(cfg); err != nil {
-		fail(err, "bad --dsn/--driver")
+		fail(err, "bad ad-hoc connection flags (--dsn, --driver, --tls*)")
 	}
 	// The connections added in dbc web, for every command alike, so one
 	// added in the browser is there in the TUI and for `dbc -c name`. Last,
@@ -622,7 +641,15 @@ const adHocConnName = "dsn"
 // fresh server can `dbc --driver postgres --dsn "$DATABASE_URL" migrate up`
 // with no config file — goose's whole command line, one flag longer.
 func addAdHocConn(cfg *config.Config) error {
+	tlsOpts := config.TLSOpts{TLS: flagTLS, TLSCA: flagTLSCA, TLSCert: flagTLSCert, TLSKey: flagTLSKey}
 	if flagDSN == "" && flagDriver == "" {
+		// The --tls flags describe the ad-hoc connection only; a configured
+		// one takes its TLS from the config file. Ignoring them silently
+		// would leave the user believing a -c run was encrypted.
+		if tlsOpts.Set() {
+			return serr.New("--tls, --tls-ca, --tls-cert and --tls-key go with --dsn " +
+				"(a configured connection sets tls in the config file)")
+		}
 		return nil
 	}
 	if flagDSN == "" || flagDriver == "" {
@@ -634,8 +661,14 @@ func addAdHocConn(cfg *config.Config) error {
 	if _, taken := cfg.ConnByName(adHocConnName); taken {
 		return serr.New("a configured connection already uses the reserved name", "name", adHocConnName)
 	}
+	if err := tlsOpts.Check(); err != nil {
+		return serr.Wrap(err, "op", "--tls flags")
+	}
+	// base "": paths typed in the shell are relative to where it stands
+	tlsOpts, warns := config.ExpandTLS(adHocConnName, tlsOpts, "")
+	cfg.Warnings = append(cfg.Warnings, warns...)
 	cfg.Connections = append(cfg.Connections, config.Connection{
-		Name: adHocConnName, Driver: flagDriver, DSN: flagDSN,
+		Name: adHocConnName, Driver: flagDriver, DSN: flagDSN, TLSOpts: tlsOpts,
 	})
 	return nil
 }

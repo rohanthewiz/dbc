@@ -75,6 +75,43 @@ referencing an unset var warns by name at startup (a typo'd `${PGPASS}` will
 not silently become an empty password). Duplicate connection names and a
 `default_connection` that names no connection are rejected at load.
 
+### TLS
+
+Postgres and MySQL connections take TLS settings of their own, spelled the
+same way for both engines:
+
+```toml
+[[connection]]
+name     = "prod"
+driver   = "postgres"           # or mysql
+dsn      = "postgres://app:${PGPASS}@db.example.com:5432/app"
+tls      = "verify-full"        # disable | prefer | require | verify-ca | verify-full
+tls_ca   = "certs/ca.pem"       # CA to verify against (blank: the system's trusted CAs)
+tls_cert = "~/certs/client.pem" # client certificate, if the server asks for one
+tls_key  = "~/certs/client.key" # its private key (unencrypted PEM)
+```
+
+The modes are libpq's `sslmode` names, and mean the same on both engines:
+
+| `tls` | Encrypted | Server certificate checked |
+| --- | --- | --- |
+| `disable` | no | — |
+| `prefer` | if the server offers TLS (else plaintext) | no |
+| `require` | yes | no; with `tls_ca`, the chain (as `verify-ca`) |
+| `verify-ca` | yes | signed by the CA; host name not checked |
+| `verify-full` | yes | signed by the CA **and** issued for the host |
+
+Only `verify-full` stops a man in the middle. Leave `tls` out and TLS is up to
+the DSN, as before (`sslmode=…` for Postgres, `tls=…` for MySQL). Set, it wins
+over the DSN: `tls = "verify-full"` beside a copied `?sslmode=disable` still
+verifies. For MySQL this is the only way to name a CA file or a client
+certificate: its DSN cannot. Paths may use `~` and `${VAR}`; a relative path
+is relative to the config file. A misspelled mode, or a `tls_ca` with no
+`tls`, is rejected at load rather than silently connecting without TLS. A
+CA, certificate or key that cannot be read fails the connect and names the
+file. The same settings are in `dbc web`'s connection form, and for a
+one-off connection there are `--tls`, `--tls-ca`, `--tls-cert` and `--tls-key`.
+
 With **no config at all**, dbc starts on two built-in connections, one per
 embedded engine, each seeded with the same `cats` table — so you can try
 everything immediately, and compare the two engines on the same query:
@@ -680,7 +717,16 @@ the saved tabs the first is not showing, or a fresh one, with sessions of its
 own. Closing a browser tab frees its tabs for the next one opened.
 
 **Adding connections.** The **+** beside *Connections* opens a form: name,
-driver, DSN, and whether the assistant may see result rows (`ai_rows`).
+driver, the connection itself, [TLS](#tls), and whether the assistant may see
+result rows (`ai_rows`). *Enter as* switches between **Fields** (host, port,
+user, password, database and extra options, or a file for SQLite and bytdb)
+and the whole **DSN** as text. From fields, dbc writes the DSN for you and
+handles the quoting and escaping, so a password with `@`, `/` or spaces
+needs nothing special. Options are `key=value` pairs separated by spaces
+or `&` (for example `application_name=dbc` or `parseTime=true`). The password
+may be a `${VAR}`. The TLS section shows for Postgres and MySQL, and its file
+fields appear once a mode other than *disable* is picked. A relative path
+there is relative to `~/.config/dbc`.
 **Test connection** opens the DSN, pings it within `connect_timeout` and
 closes it again, so nothing is saved until you choose to. It reports how long
 the connect took, or the driver's error. For a SQLite or bytdb file that does
@@ -700,10 +746,16 @@ from its own environment, so set the variable wherever you run the TUI too.
 A DSN typed with the password inline is stored as typed, in a file only you
 can read (`0600`). A DSN is never sent back to the browser. Connections that
 an older `dbc web` kept in `web.bytdb` are moved to `connections.toml` the
-first time it starts. Connections added this way show a small dot. To
-change one, right-click it and pick *Edit…*: the same form, filled in, with
-the DSN field left empty. Leave it empty to keep the saved DSN (for a test
-too), or type a new one; changing the driver needs a new DSN. A rename keeps
+first time it starts. Connections added this way show a small dot, and any
+connection with TLS on says `· tls` beside its driver. To change one,
+right-click it and pick *Edit…*: the same form, filled in. In fields, every
+part of the saved DSN comes back except the password (a `${VAR}` password
+does come back, since it names the secret rather than being it). Leave the
+password empty to keep the saved one. If a DSN can't be split into fields
+(several Postgres hosts, a MySQL unix socket), the form opens on the DSN
+text instead and says why. As text, the DSN field starts empty. Leave it
+empty to keep the saved DSN (for a test too), or type a new one; changing
+the driver needs a new DSN. A rename keeps
 the connection's place in the list and moves the saved query tabs that were
 on it. To remove one, pick *Remove…*. A connection a tab is still on can't
 be removed, renamed or given a new DSN until you switch that tab away;
@@ -864,6 +916,7 @@ Everything works without the TUI, for cron jobs and shell pipelines:
 | `--config FILE` | config file (default `./dbc.toml`, then `~/.config/dbc/config.toml`) |
 | `--demo bytdb\|sqlite` | which demo starts active when there is no config (also `$DBC_DEMO`) |
 | `--driver NAME --dsn STRING` | a one-off connection that is in no config file |
+| `--tls MODE` (`--tls-ca`, `--tls-cert`, `--tls-key FILE`) | [TLS](#tls) for the `--dsn` connection, overriding the DSN's own |
 
 `dbc --help` lists them all. Long names take one dash or two (`-dsn` works),
 and flags may go before or after the SQL. With no SQL argument and no `-f`,

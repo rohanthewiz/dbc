@@ -211,6 +211,7 @@ func (s *Server) routes() {
 	r.Get("/api/v1/conns", s.handleConns)
 	r.Post("/api/v1/conns", s.handleConnAdd)
 	r.Post("/api/v1/conns/test", s.handleConnTest)
+	r.Get("/api/v1/conns/:name/parts", s.handleConnParts)
 	r.Put("/api/v1/conns/:name", s.handleConnEdit)
 	r.Delete("/api/v1/conns/:name", s.handleConnDelete)
 	r.Get("/api/v1/tabs", s.handleTabs)

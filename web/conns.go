@@ -31,9 +31,11 @@ import (
 //	startup:  cfg ◄──┤                                  ├── file's names win a clash
 //	(any dbc)        └── connections.toml ──────────────┘
 //
+//	GET    /api/v1/conns/:name/parts ► a saved connection's DSN as fields, for
+//	                             the edit form: db.SplitDSN, password withheld
 //	POST   /api/v1/conns/test ─► db.Probe: open, ping, close; nothing saved
 //	POST   /api/v1/conns ──────► cfg.AddConn, saved.Add, "conns" to every window
-//	PUT    /api/v1/conns/:name ► an edit (rename, driver, DSN, ai_rows); all but an
+//	PUT    /api/v1/conns/:name ► an edit (rename, driver, DSN, TLS, ai_rows); all but an
 //	                             ai_rows change refused while a query tab is on it;
 //	                             cfg.ReplaceConn, saved.Update, store.RetagTabs,
 //	                             mgr.Drop, "conns"
@@ -44,11 +46,23 @@ import (
 // makes, under the lock): a connection another dbc web adds meanwhile shows
 // up here at the next start. The TUI only reads the file.
 //
-// A DSN never goes back to the browser: the list says name, driver, ai_rows
-// and whether it was added here — enough to draw the sidebar, fill the edit
+// A DSN never goes back to the browser: the list says name, driver, ai_rows,
+// the TLS settings (file paths, not secrets) and whether it was added here — enough to draw the sidebar, fill the edit
 // form and offer Edit and Remove. So the edit form cannot show the DSN it
 // would change; it sends an empty one for "leave it as it is" and the
 // server takes the stored one (keepDSN).
+//
+// FIELDS. The form can also send the DSN as parts (host, port, user,
+// password, database, options — or a file), which the server writes into a
+// DSN with db.BuildDSN before anything else sees the form: from there on a
+// form of fields and a form with a typed DSN are the same request. Editing
+// in fields, the form gets the stored DSN taken apart (handleConnParts) —
+// every part but the password, which, like the DSN, never goes back. Left
+// empty it is kept (keep_password), taken again from the stored DSN.
+//
+//	browser                       server
+//	parts ──────────────────────► partsDSN: keep_password? stored one
+//	                               BuildDSN ─► f.DSN ─► check, probe, save
 
 // maxConnName bounds a connection name. It is shown in the sidebar, the
 // topbar and every history row: a name that long is a paste gone wrong.
@@ -111,7 +125,7 @@ func (s *Server) connList() map[string]any {
 	conns := s.cfg.Conns()
 	out := make([]connInfo, len(conns))
 	for i, c := range conns {
-		out[i] = connInfo{Name: c.Name, Driver: c.Driver, Saved: c.Web, AIRows: c.AIRows}
+		out[i] = connInfo{Name: c.Name, Driver: c.Driver, Saved: c.Web, AIRows: c.AIRows, TLSOpts: c.TLSOpts}
 	}
 	return map[string]any{"conns": out, "default": s.defaultConn()}
 }
@@ -122,10 +136,94 @@ type connForm struct {
 	Driver string `json:"driver"`
 	DSN    string `json:"dsn"`
 	AIRows bool   `json:"ai_rows"`
+	// TLS as typed: ${VAR}s unexpanded and a relative path relative, as the
+	// saved file keeps them (config.SavedConn); tlsFor resolves them.
+	config.TLSOpts
 	// From is, on a test from the edit form, the connection being edited:
 	// an empty DSN then means its stored one (keepDSN). An edit's save names
 	// the connection in its path instead.
 	From string `json:"from,omitempty"`
+
+	// Parts, when set, is the DSN as fields; it replaces DSN (partsDSN).
+	Parts *db.DSNParts `json:"parts,omitempty"`
+	// KeepPassword: editing in fields, the password field was left empty
+	// over a stored password the form was not given — keep that one.
+	KeepPassword bool `json:"keep_password,omitempty"`
+}
+
+// formDSN settles f.DSN, whichever way the form gave it: built from fields,
+// or kept from the stored connection from ("" when adding).
+func (s *Server) formDSN(f *connForm, from string) error {
+	if f.Parts != nil {
+		return s.partsDSN(f, from)
+	}
+	if from == "" {
+		return nil
+	}
+	return s.keepDSN(f, from)
+}
+
+// partsDSN writes f.Parts into f.DSN. With KeepPassword, the password is the
+// one in from's stored DSN — taken apart with the driver it was stored
+// under, so switching drivers (a postgres server moving to a mysql one, say)
+// still keeps it. BuildDSN's refusals name the field to fix; they go back as
+// a 400, which the form shows beside its buttons.
+func (s *Server) partsDSN(f *connForm, from string) error {
+	p := *f.Parts
+	if f.KeepPassword && p.Password == "" && from != "" {
+		sc, found, err := s.saved.Get(from)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return notFound("no saved connection named %q", from)
+		}
+		old, err := db.SplitDSN(sc.Driver, sc.DSN)
+		if err != nil {
+			return badRequest("%q's stored DSN cannot be taken apart to keep its password — type the password, or edit the DSN as text", from)
+		}
+		p.Password = old.Password
+	}
+	dsn, err := db.BuildDSN(strings.TrimSpace(f.Driver), p)
+	if err != nil {
+		return badRequest("%s", userMsg(err))
+	}
+	f.DSN = dsn
+	return nil
+}
+
+// handleConnParts is GET /api/v1/conns/:name/parts: a saved connection's
+// DSN as the form's fields. A password goes back only when it is a ${VAR}
+// reference, which says where the secret is rather than being it; any other
+// is withheld and reported as has_password, so the form can say "unchanged".
+// A DSN the fields cannot hold (db.ErrNotFields) answers parts: null and
+// why, and the form opens on the DSN text instead.
+//
+// Either way it carries the TLS settings as stored — ${VAR}s and relative
+// paths as typed — which the form puts in place of the resolved ones the
+// sidebar has, so saving an edit does not quietly pin them to today's
+// expansion.
+func (s *Server) handleConnParts(ctx rweb.Context) error {
+	name, err := url.PathUnescape(ctx.Request().PathParam("name"))
+	if err != nil {
+		return fail(ctx, badRequest("bad connection name in the path"))
+	}
+	sc, found, err := s.saved.Get(name)
+	if err != nil {
+		return fail(ctx, err)
+	}
+	if !found {
+		return fail(ctx, notFound("no saved connection named %q", name))
+	}
+	p, err := db.SplitDSN(sc.Driver, sc.DSN)
+	if err != nil {
+		return ok(ctx, map[string]any{"parts": nil, "reason": userMsg(err), "tls": sc.TLSOpts})
+	}
+	hasPassword := p.Password != "" && !db.IsEnvRef(p.Password)
+	if hasPassword {
+		p.Password = ""
+	}
+	return ok(ctx, map[string]any{"parts": p, "has_password": hasPassword, "tls": sc.TLSOpts})
 }
 
 // keepDSN fills an empty DSN in f with the one stored for the saved
@@ -174,7 +272,23 @@ func (f *connForm) check(needName bool) error {
 	if f.DSN == "" {
 		return badRequest("the DSN is empty")
 	}
+	if err := f.TLSOpts.Check(); err != nil {
+		return badRequest("%s", userMsg(err))
+	}
+	// The form hides the TLS fields for the embedded engines, so this is a
+	// stale form or a hand-made request; refused here rather than saved and
+	// then failing every connect (db.tlsOpen refuses it too).
+	if drv, _ := db.Driver(f.Driver); f.TLSOpts.Set() && drv != "pgx" && drv != "mysql" {
+		return badRequest("TLS settings are for postgres and mysql — %s opens a local file", f.Driver)
+	}
 	return nil
+}
+
+// tlsFor is f's TLS settings as a connect uses them: paths resolved the way
+// config.MergeSaved resolves a saved entry's, so what is tested here, what
+// runs now and what the next start merges are the same files.
+func (f *connForm) tlsFor(name string) (config.TLSOpts, []string) {
+	return config.ExpandTLS(name, f.TLSOpts, config.SavedDir())
 }
 
 // testTimeoutCap bounds a test when connect_timeout is 0 ("no limit"): a
@@ -190,10 +304,8 @@ func (s *Server) handleConnTest(ctx rweb.Context) error {
 	if err := decode(ctx, &f); err != nil {
 		return fail(ctx, err)
 	}
-	if f.From != "" {
-		if err := s.keepDSN(&f, f.From); err != nil {
-			return fail(ctx, err)
-		}
+	if err := s.formDSN(&f, f.From); err != nil {
+		return fail(ctx, err)
 	}
 	if err := f.check(false); err != nil {
 		return fail(ctx, err)
@@ -203,6 +315,8 @@ func (s *Server) handleConnTest(ctx rweb.Context) error {
 		name = "(new connection)"
 	}
 	dsn, warns := config.ExpandDSN(name, f.DSN)
+	tlsOpts, tw := f.tlsFor(name)
+	warns = append(warns, tw...)
 	timeout := s.cfg.ConnectTimeout
 	if timeout <= 0 {
 		timeout = testTimeoutCap
@@ -210,7 +324,7 @@ func (s *Server) handleConnTest(ctx rweb.Context) error {
 	// Bounded by the timeout alone: rweb gives a handler no context that
 	// ends when the client goes away, so a closed dialog leaves the dial to
 	// finish (or time out) on its own; its answer is then just not read.
-	res, err := db.Probe(context.Background(), config.Connection{Name: name, Driver: f.Driver, DSN: dsn}, timeout)
+	res, err := db.Probe(context.Background(), config.Connection{Name: name, Driver: f.Driver, DSN: dsn, TLSOpts: tlsOpts}, timeout)
 	out := map[string]any{"ok": res.OK, "warnings": warns}
 	if err != nil {
 		out["error"] = userMsg(err)
@@ -238,11 +352,16 @@ func (s *Server) handleConnAdd(ctx rweb.Context) error {
 	if err := decode(ctx, &f); err != nil {
 		return fail(ctx, err)
 	}
+	if err := s.formDSN(&f, ""); err != nil {
+		return fail(ctx, err)
+	}
 	if err := f.check(true); err != nil {
 		return fail(ctx, err)
 	}
 	dsn, warns := config.ExpandDSN(f.Name, f.DSN)
-	cn := config.Connection{Name: f.Name, Driver: f.Driver, DSN: dsn, AIRows: f.AIRows, Web: true}
+	tlsOpts, tw := f.tlsFor(f.Name)
+	warns = append(warns, tw...)
+	cn := config.Connection{Name: f.Name, Driver: f.Driver, DSN: dsn, TLSOpts: tlsOpts, AIRows: f.AIRows, Web: true}
 	if err := s.cfg.AddConn(cn); err != nil {
 		if errors.Is(err, config.ErrConnExists) {
 			return fail(ctx, conflict("a connection named %q already exists", f.Name))
@@ -250,7 +369,8 @@ func (s *Server) handleConnAdd(ctx rweb.Context) error {
 		return fail(ctx, err)
 	}
 	// the DSN as typed, ${VAR}s and all: see config.SavedConn
-	if err := s.saved.Add(config.SavedConn{Name: f.Name, Driver: f.Driver, DSN: f.DSN, AIRows: f.AIRows}); err != nil {
+	if err := s.saved.Add(config.SavedConn{Name: f.Name, Driver: f.Driver, DSN: f.DSN,
+		TLSOpts: f.TLSOpts, AIRows: f.AIRows}); err != nil {
 		s.cfg.RemoveConn(f.Name)
 		if errors.Is(err, config.ErrConnExists) {
 			return fail(ctx, conflict("a connection named %q was added by another dbc web — "+
@@ -281,7 +401,7 @@ func (s *Server) unsavedConnWarning(what string) string {
 }
 
 // handleConnEdit is PUT /api/v1/conns/:name: change a connection added in
-// the browser — its name, driver, DSN or ai_rows — in place. The body is the
+// the browser — its name, driver, DSN, TLS or ai_rows — in place. The body is the
 // add form's; an empty DSN keeps the stored one (keepDSN).
 //
 // Anything but ai_rows changes what the connection connects to, or what
@@ -320,20 +440,23 @@ func (s *Server) handleConnEdit(ctx rweb.Context) error {
 	if !cur.Web {
 		return fail(ctx, s.fileConnRefusal(name, "change"))
 	}
-	if err = s.keepDSN(&f, name); err != nil {
+	if err = s.formDSN(&f, name); err != nil {
 		return fail(ctx, err)
 	}
 	if err = f.check(true); err != nil {
 		return fail(ctx, err)
 	}
 	dsn, warns := config.ExpandDSN(f.Name, f.DSN)
-	next := config.Connection{Name: f.Name, Driver: f.Driver, DSN: dsn, AIRows: f.AIRows, Web: true}
+	tlsOpts, tw := f.tlsFor(f.Name)
+	warns = append(warns, tw...)
+	next := config.Connection{Name: f.Name, Driver: f.Driver, DSN: dsn, TLSOpts: tlsOpts, AIRows: f.AIRows, Web: true}
 
 	// Compared expanded, as the pool would see it: a DSN retyped to the same
 	// text, or kept, is no change; a ${VAR} whose value moved since startup
-	// is one, and the pool should pick it up.
+	// is one, and the pool should pick it up. TLS settings are part of how
+	// the pool dials, so a change to them reconnects too.
 	renamed := f.Name != name
-	reconnects := renamed || f.Driver != cur.Driver || dsn != cur.DSN
+	reconnects := renamed || f.Driver != cur.Driver || dsn != cur.DSN || tlsOpts != cur.TLSOpts
 	if reconnects {
 		if n := s.hub.tabsOn(name); n > 0 {
 			return fail(ctx, conflict("%s on %q — switch %s to another connection first "+
@@ -352,7 +475,8 @@ func (s *Server) handleConnEdit(ctx rweb.Context) error {
 		return fail(ctx, err)
 	}
 	// the DSN as typed (or as stored, when kept): see config.SavedConn
-	if err = s.saved.Update(name, config.SavedConn{Name: f.Name, Driver: f.Driver, DSN: f.DSN, AIRows: f.AIRows}); err != nil {
+	if err = s.saved.Update(name, config.SavedConn{Name: f.Name, Driver: f.Driver, DSN: f.DSN,
+		TLSOpts: f.TLSOpts, AIRows: f.AIRows}); err != nil {
 		// Put the config back as it was. That fails only if another window
 		// added a connection under the old name in the moment since it was
 		// given up; the edit then stands for this run and the file keeps

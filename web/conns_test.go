@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rohanthewiz/dbc/config"
+	"github.com/rohanthewiz/dbc/db"
 )
 
 // connListResp is GET /api/v1/conns and the add/remove responses.
@@ -421,5 +422,117 @@ func testConnEdit(t *testing.T, persistent bool) {
 	cev, _ := s.await(t, "conn")
 	if c := decodeData[connEvent](t, testEnvelope{Data: cev.Data}); c.Active != "renamed" || c.Failed {
 		t.Fatalf("connect after edit: %+v", c)
+	}
+}
+
+// partsResp is GET /api/v1/conns/:name/parts.
+type partsResp struct {
+	Parts       *db.DSNParts   `json:"parts"`
+	HasPassword bool           `json:"has_password"`
+	Reason      string         `json:"reason"`
+	TLS         config.TLSOpts `json:"tls"`
+}
+
+// TestConnFieldsAndTLS: a connection entered as fields is stored as the DSN
+// they make, with its TLS settings as typed; the edit form gets the fields
+// back without the password, and keeps the password when told to.
+func TestConnFieldsAndTLS(t *testing.T) {
+	e := newTestEnv(t)
+	e.connected()
+
+	// an embedded engine, from fields: the file and its options
+	e.api("POST", "/api/v1/conns", `{"name":"mem","driver":"sqlite",
+		"parts":{"file":"fieldsdb","options":"mode=memory cache=shared"}}`, 200)
+	if cc, _ := e.srv.cfg.ConnByName("mem"); cc.DSN != "file:fieldsdb?mode=memory&cache=shared" {
+		t.Fatalf("sqlite from fields: %q", cc.DSN)
+	}
+
+	// a server engine with TLS: a relative tls_ca resolves against the
+	// saved file's directory, as it will at the next start
+	env := e.api("POST", "/api/v1/conns", `{"name":"pg","driver":"postgres",
+		"parts":{"host":"db.internal","port":"5432","user":"app","password":"hunter2","database":"app"},
+		"tls":"verify-full","tls_ca":"certs/ca.pem"}`, 200)
+	if strings.Contains(string(env.Data), "hunter2") {
+		t.Fatalf("the add response carries the password: %s", env.Data)
+	}
+	list := decodeData[connListResp](t, env)
+	if c, _ := list.find("pg"); c.TLS != "verify-full" || c.TLSCA == "" {
+		t.Fatalf("the list lacks the TLS settings: %+v", c)
+	}
+	cc, _ := e.srv.cfg.ConnByName("pg")
+	if want := "host=db.internal port=5432 user=app password='hunter2' dbname=app"; cc.DSN != want {
+		t.Fatalf("pg DSN = %q, want %q", cc.DSN, want)
+	}
+	if want := filepath.Join(config.SavedDir(), "certs", "ca.pem"); config.SavedDir() != "" && cc.TLSCA != want {
+		t.Fatalf("tls_ca = %q, want %q", cc.TLSCA, want)
+	}
+	sc, _, _ := e.srv.saved.Get("pg")
+	if sc.TLSCA != "certs/ca.pem" || sc.TLS != "verify-full" {
+		t.Fatalf("saved TLS not as typed: %+v", sc.TLSOpts)
+	}
+
+	// the edit form's fields: everything but the password
+	env = e.api("GET", "/api/v1/conns/pg/parts", "", 200)
+	if strings.Contains(string(env.Data), "hunter2") {
+		t.Fatalf("parts carry the password: %s", env.Data)
+	}
+	pr := decodeData[partsResp](t, env)
+	if pr.Parts == nil || !pr.HasPassword || pr.Parts.Host != "db.internal" || pr.Parts.User != "app" {
+		t.Fatalf("parts = %+v", pr)
+	}
+	// TLS as typed, not as resolved: an edit saves back what was written
+	if pr.TLS.TLSCA != "certs/ca.pem" || pr.TLS.TLS != "verify-full" {
+		t.Fatalf("parts' TLS = %+v", pr.TLS)
+	}
+
+	// an edit in fields with the password left empty keeps the stored one;
+	// the TLS mode changes with it
+	e.api("PUT", "/api/v1/conns/pg", `{"name":"pg","driver":"postgres","keep_password":true,
+		"parts":{"host":"db2.internal","user":"app","database":"app"},"tls":"require"}`, 200)
+	cc, _ = e.srv.cfg.ConnByName("pg")
+	if !strings.Contains(cc.DSN, "host=db2.internal") || !strings.Contains(cc.DSN, "password='hunter2'") ||
+		cc.TLS != "require" || cc.TLSCA != "" {
+		t.Fatalf("after the edit: %q %+v", cc.DSN, cc.TLSOpts)
+	}
+
+	// a ${VAR} password is not a secret: the form gets it back
+	e.api("POST", "/api/v1/conns", `{"name":"env","driver":"mysql",
+		"parts":{"host":"h","user":"u","password":"${MYSQL_PASS}","database":"d"}}`, 200)
+	pr = decodeData[partsResp](t, e.api("GET", "/api/v1/conns/env/parts", "", 200))
+	if pr.HasPassword || pr.Parts.Password != "${MYSQL_PASS}" {
+		t.Fatalf("env parts = %+v", pr)
+	}
+
+	// a DSN the fields cannot hold: parts null, and why
+	e.api("POST", "/api/v1/conns", connBody("multi", "postgres", "postgres://u@h1,h2/app"), 200)
+	pr = decodeData[partsResp](t, e.api("GET", "/api/v1/conns/multi/parts", "", 200))
+	if pr.Parts != nil || pr.Reason == "" {
+		t.Fatalf("multi-host parts = %+v", pr)
+	}
+	e.api("GET", "/api/v1/conns/nosuch/parts", "", 404)
+
+	// a CA that cannot be read fails the test before any dial, naming it
+	r := decodeData[probeResp](t, e.api("POST", "/api/v1/conns/test", `{"driver":"postgres",
+		"parts":{"host":"127.0.0.1","port":"1"},"tls":"verify-full","tls_ca":"/surely/missing/ca.pem"}`, 200))
+	if r.OK || !strings.Contains(r.Error, "CA file") {
+		t.Fatalf("missing CA: %+v", r)
+	}
+
+	// refused forms, each with words for the field at fault
+	for _, tc := range []struct {
+		body, want string
+		status     int
+	}{
+		{`{"driver":"postgres","parts":{"port":"5432"}}`, "host", 400},
+		{`{"driver":"postgres","parts":{"host":"h","port":"x"}}`, "port", 400},
+		{`{"driver":"mysql","dsn":"u@tcp(h)/d","tls":"verify_full"}`, "unknown tls mode", 400},
+		{`{"driver":"mysql","dsn":"u@tcp(h)/d","tls_ca":"ca.pem"}`, "need a tls mode", 400},
+		{`{"driver":"sqlite","dsn":"file:x?mode=memory","tls":"require"}`, "postgres and mysql", 400},
+		{`{"driver":"postgres","parts":{"host":"h"},"keep_password":true,"from":"nosuch"}`, "no saved connection", 404},
+	} {
+		res := e.api("POST", "/api/v1/conns/test", tc.body, tc.status)
+		if !strings.Contains(res.Error, tc.want) {
+			t.Errorf("%s: error %q, want it to mention %q", tc.body, res.Error, tc.want)
+		}
 	}
 }

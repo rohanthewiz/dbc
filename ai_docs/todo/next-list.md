@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-074
+**Next ID:** N-076
 
 ## Open
 
@@ -50,6 +50,9 @@ ten session docs in `ai_docs/claude_sessions/`
   Phase 6) that are gone after the session, so a regression in the page's
   JavaScript is caught only by hand. Phase 6's run found three real bugs
   (a disposed Monaco model, a console rejection, a rename redrawn away).
+  The connection form's Fields/DSN toggle and TLS section
+  (`2026-1001-1415-connection-tls-and-dsn-fields`, 23 checks) were verified
+  the same throwaway way.
 - **N-061** · raised `2026-0928-0050-sidebar-splitter-fold-and-section-splitters` · value low
   Check `dbc web`'s splitters and sidebar fold in Safari and Firefox. They were
   verified only in Chrome, and the fix that lets a press reach the editor and
@@ -92,6 +95,19 @@ ten session docs in `ai_docs/claude_sessions/`
   big partitioned table that hits the 3 s timeout and shows no number. Sum
   the partitions' `reltuples` (pg_inherits) into the parent's estimate so it
   gets `~N` like any other large table.
+- **N-074** · raised `2026-1001-1415-connection-tls-and-dsn-fields` · value low
+  A Postgres DSN built from `dbc web`'s fields puts the password in libpq's
+  quoted keyword form (`password='${PGPASS}'`). `config.ExpandDSN` substitutes
+  the variable's value raw, after the quoting, so an environment password
+  holding `'` or `\` ends the quotes early and the DSN fails to parse. A
+  password typed into the field is escaped correctly. A fix would expand
+  `${VAR}`s per field before quoting, or escape the expansion when it lands
+  inside quotes.
+- **N-075** · raised `2026-1001-1415-connection-tls-and-dsn-fields` · value low
+  `tls_key` must be an unencrypted PEM key. A passphrase-protected client key
+  works for Postgres only through the DSN's own `sslpassword`. MySQL has no
+  way to give one, and there is no `tls_key_password` key. Add one (from
+  `${VAR}`, never stored inline) if someone's key is encrypted.
 
 ## Roadmap
 

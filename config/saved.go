@@ -64,6 +64,10 @@ type SavedConn struct {
 	Name   string `toml:"name"`
 	Driver string `toml:"driver"`
 	DSN    string `toml:"dsn"` // as typed: ${VAR}s unexpanded
+	// TLSOpts is Connection.TLSOpts, with its paths as typed too: ${VAR}s
+	// unexpanded and a relative path left relative (to SavedDir). Each
+	// process resolves them as it merges the entry, as it does the DSN.
+	TLSOpts
 	// AIRows is Connection.AIRows: the assistant may see result rows.
 	AIRows bool `toml:"ai_rows"`
 	// Added orders the sidebar in dbc web (after the config file's). It is
@@ -83,7 +87,8 @@ const savedHeader = `# Connections added in dbc web. Every dbc (the TUI, headles
 # reads them after config.toml's; a name config.toml also defines is skipped.
 # dbc rewrites this file whole when the browser adds, edits or removes one:
 # hand edits to entries are kept, comments are not. A DSN may reference
-# ${VAR}s, expanded from the environment of each dbc that reads it.
+# ${VAR}s, expanded from the environment of each dbc that reads it; so may
+# tls_ca, tls_cert and tls_key, where a relative path is relative to this file.
 
 `
 
@@ -147,7 +152,10 @@ func (c *Config) LoadSaved(path string, knownDriver func(string) bool) {
 //     form; so does the first of two saved entries by one name;
 //   - a driver knownDriver rejects. config cannot know the drivers itself
 //     (it is a leaf; db registers them), so the caller passes db's check.
-//     nil accepts every driver, and an unknown one fails at connect.
+//     nil accepts every driver, and an unknown one fails at connect;
+//   - TLS settings TLSOpts.Check refuses. Skipped rather than merged
+//     without them: a connection that was meant to verify its server must
+//     not quietly connect in plaintext instead.
 func (c *Config) MergeSaved(saved []SavedConn, knownDriver func(string) bool) []string {
 	var warns []string
 	for _, sc := range saved {
@@ -161,9 +169,14 @@ func (c *Config) MergeSaved(saved []SavedConn, knownDriver func(string) bool) []
 				"saved connection %q skipped: unknown driver %q", sc.Name, sc.Driver))
 			continue
 		}
+		if err := sc.TLSOpts.Check(); err != nil {
+			warns = append(warns, fmt.Sprintf("saved connection %q skipped: %v", sc.Name, err))
+			continue
+		}
 		dsn, w := ExpandDSN(sc.Name, sc.DSN)
+		tlsOpts, tw := ExpandTLS(sc.Name, sc.TLSOpts, SavedDir())
 		if err := c.AddConn(Connection{Name: sc.Name, Driver: sc.Driver, DSN: dsn,
-			AIRows: sc.AIRows, Web: true}); err != nil {
+			TLSOpts: tlsOpts, AIRows: sc.AIRows, Web: true}); err != nil {
 			warns = append(warns, fmt.Sprintf(
 				"saved connection %q skipped: a connection by that name is already defined "+
 					"(rename one of them, in the config file or in dbc web)", sc.Name))
@@ -171,6 +184,7 @@ func (c *Config) MergeSaved(saved []SavedConn, knownDriver func(string) bool) []
 		}
 		// only a merged entry's unset ${VAR}s are worth a word
 		warns = append(warns, w...)
+		warns = append(warns, tw...)
 	}
 	return warns
 }

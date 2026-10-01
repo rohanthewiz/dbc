@@ -133,6 +133,8 @@ body.row-dragging { cursor: row-resize; user-select: none; }
 .conn-item.connecting .name::after { content: " …"; color: var(--warn); }
 .conn-item .driver { color: var(--muted); font-size: 11px; }
 /* added in the browser (kept in web.bytdb, removable): a small accent dot */
+/* a connection with TLS set (other than disable) says so beside its driver */
+.conn-item[data-tls]:not([data-tls="disable"]) .driver::after { content: " · tls"; }
 .conn-item[data-saved] .driver::before { content: "● "; color: var(--accent); font-size: 8px; vertical-align: 1px; }
 .sidebar h2.hrow { display: flex; align-items: center; justify-content: space-between; }
 .hadd { border: 0; background: none; color: var(--muted); padding: 0 4px; font-size: 14px; line-height: 1; }
@@ -645,9 +647,12 @@ a.btnlink:hover { border-color: var(--accent); }
 .confirm { padding: 10px 14px; max-width: 460px; }
 
 /* the add-connection form: labels in one column, fields in the other */
+/* with TLS open the form is tall: it scrolls inside the modal, whose foot
+   (Test, Save) stays in view */
+.connbody { overflow: auto; min-height: 0; }
 .connform { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; align-items: center; padding: 12px 14px 6px; }
 .connform label { color: var(--muted); }
-.connform input[type="text"], .connform select {
+.connform input[type="text"], .connform input[type="password"], .connform select {
   font: inherit;
   padding: 5px 8px;
   color: var(--fg);
@@ -660,6 +665,14 @@ a.btnlink:hover { border-color: var(--accent); }
 .connform input:focus, .connform select:focus { outline: 1px solid var(--accent); }
 .connform .full { grid-column: 2; }
 .connform .check { display: flex; gap: 6px; align-items: center; color: var(--fg); }
+/* rows the driver or "Enter as" does not use are hidden as label + field;
+   [hidden] alone loses to the display rules above */
+.connform [hidden] { display: none !important; }
+.connform .check.full { gap: 14px; }
+.connform .check label.check { gap: 4px; }
+.connform .hostport { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.connform .hostport input:first-child { flex: 1; min-width: 0; }
+.connform .hostport input.port { width: 7ch; }
 .connresult { margin: 0 14px 10px; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--line); white-space: pre-wrap; word-break: break-word; }
 .connresult.ok { border-color: var(--accent); color: var(--accent); }
 .connresult.err { border-color: var(--err); color: var(--err); }

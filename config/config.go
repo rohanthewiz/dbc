@@ -97,6 +97,13 @@ type Connection struct {
 	Driver string `toml:"driver"` // postgres | mysql | sqlite | bytdb
 	DSN    string `toml:"dsn"`    // env vars are expanded, e.g. ${PGPASS}
 
+	// TLSOpts holds the tls, tls_ca, tls_cert and tls_key keys: TLS for
+	// postgres and mysql, one spelling for both — see tls.go. Embedded
+	// untagged so the keys sit flat beside dsn. Load leaves the paths
+	// absolute (ExpandTLS), so the db package never has to know which file
+	// they were written in.
+	TLSOpts
+
 	// Migrations is the directory `dbc migrate` reads for this connection,
 	// relative to the working directory. Per connection rather than global
 	// because a config typically lists several databases and each has its
@@ -253,6 +260,13 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 	if len(cfg.Connections) == 0 {
 		return nil, serr.New("config has no [[connection]] entries", "config_path", path)
 	}
+	// Relative tls_* paths are relative to the config file (see ExpandTLS).
+	// Made absolute here so a later chdir — none today, but a script may
+	// one day — cannot move what they point at.
+	cfgDir := filepath.Dir(path)
+	if abs, err := filepath.Abs(path); err == nil {
+		cfgDir = filepath.Dir(abs)
+	}
 	seen := make(map[string]bool, len(cfg.Connections))
 	for i := range cfg.Connections {
 		cn := &cfg.Connections[i]
@@ -263,6 +277,14 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 		seen[cn.Name] = true
 		var warns []string
 		cn.DSN, warns = ExpandDSN(cn.Name, cn.DSN)
+		cfg.Warnings = append(cfg.Warnings, warns...)
+		// A bad TLS setting fails the load, as a duplicate name does, rather
+		// than becoming a warning: carrying on would mean connecting with
+		// less protection than the file asked for.
+		if err := cn.TLSOpts.Check(); err != nil {
+			return nil, serr.Wrap(err, "connection", cn.Name, "config_path", path)
+		}
+		cn.TLSOpts, warns = ExpandTLS(cn.Name, cn.TLSOpts, cfgDir)
 		cfg.Warnings = append(cfg.Warnings, warns...)
 	}
 	if cfg.DefaultConnection != "" && !seen[cfg.DefaultConnection] {

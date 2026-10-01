@@ -11,6 +11,23 @@
 // The form sends one, and nothing ever sends one back — so the edit form
 // starts with the DSN field empty, and an empty DSN there means "leave it
 // as it is" (the server fills in the stored one).
+//
+// The form takes a connection two ways, switched by "Enter as":
+//
+//   Fields  host, port, user, password, database, options (a file for the
+//           embedded engines) — sent as parts; the server writes the DSN
+//           (db.BuildDSN), so the escaping is never the user's problem
+//   DSN     the whole DSN as text, as before
+//
+// Editing, the fields come from GET /conns/:name/parts — the stored DSN
+// taken apart, password withheld. Fields left untouched send no parts at
+// all, only "keep the DSN": rebuilt from the same fields the DSN would come
+// out in another spelling, and the server would see a change that would
+// reconnect — and be refused while a tab is on the connection. A password
+// left empty over a withheld one is kept (keep_password).
+//
+// TLS (postgres and mysql) is its own section, sent beside either way of
+// giving the DSN: the mode, and the CA / client certificate / key files.
 (function () {
   "use strict";
 
@@ -28,6 +45,27 @@
     ["bytdb", "notes.bytdb"],
   ];
 
+  // Defaults shown as placeholders in the fields: what the server engines
+  // listen on, and an example of each one's options.
+  const FIELD_HINTS = {
+    postgres: { port: "5432", options: "application_name=dbc connect_timeout=10" },
+    mysql: { port: "3306", options: "parseTime=true loc=Local" },
+    sqlite: { file: "scratch.db", options: "mode=memory cache=shared" },
+    bytdb: { file: "notes.bytdb" },
+  };
+  const isServer = (d) => d === "postgres" || d === "mysql";
+
+  // TLS modes, libpq's names (config/tls.go), with what each one checks. ""
+  // leaves TLS to the DSN — how every connection behaved before the setting.
+  const TLS_MODES = [
+    ["", "from the DSN"],
+    ["disable", "disable — no TLS"],
+    ["prefer", "prefer — TLS if offered, unchecked"],
+    ["require", "require — TLS, certificate unchecked"],
+    ["verify-ca", "verify-ca — certificate signed by the CA"],
+    ["verify-full", "verify-full — CA and host name (safest)"],
+  ];
+
   // ── the list ───────────────────────────────────────────────────────────
   // draw replaces the list with list (from GET /api/v1/conns or a "conns"
   // event). The active and connecting marks are app.js's; they are carried
@@ -40,6 +78,8 @@
       const b = el("button", { class: marks.get(c.name) || "conn-item", type: "button",
         "data-conn": c.name, "data-driver": c.driver,
         "data-saved": c.saved ? "1" : null, "data-airows": c.ai_rows ? "1" : null,
+        "data-tls": c.tls || null, "data-tls-ca": c.tls_ca || null,
+        "data-tls-cert": c.tls_cert || null, "data-tls-key": c.tls_key || null,
         title: c.saved ? c.name + " — added here; right-click to edit or remove" : null },
         el("span", "name", c.name), el("span", "driver", c.driver));
       conns.append(el("li", null, b));
@@ -61,35 +101,144 @@
   // keep a DSN written for the old one, so the placeholder then asks for a
   // new DSN instead (and the server refuses one left empty).
   function openForm(cur) {
-    const name = el("input", { type: "text", id: "cf-name", autocomplete: "off", spellcheck: "false",
-      maxlength: "64", placeholder: "prod-reports" });
+    const input = (id, attrs) => el("input", Object.assign({ type: "text", id, autocomplete: "off",
+      spellcheck: "false", autocapitalize: "off" }, attrs || {}));
+    const name = input("cf-name", { maxlength: "64", placeholder: "prod-reports" });
     const driver = el("select", { id: "cf-driver" });
     for (const [d] of DRIVERS) driver.append(el("option", { value: d }, d));
+
+    // "Enter as": fields, or the DSN as text
+    const asFields = el("input", { type: "radio", name: "cf-mode", id: "cf-mode-f", checked: "checked" });
+    const asDSN = el("input", { type: "radio", name: "cf-mode", id: "cf-mode-d" });
+    const modeRow = el("span", "check full",
+      el("label", { class: "check" }, asFields, "Fields"),
+      el("label", { class: "check" }, asDSN, "DSN"));
+
+    // the fields. A password field proper (masked), unlike the DSN's text
+    // one: here it holds nothing else to read and fix.
+    const host = input("cf-host", { placeholder: "localhost" });
+    const port = input("cf-port", { inputmode: "numeric", size: "6", class: "port" });
+    const user = input("cf-user");
+    const password = el("input", { type: "password", id: "cf-password", autocomplete: "new-password",
+      placeholder: "or ${VAR} from the environment" });
+    const database = input("cf-database");
+    const file = input("cf-file", { class: "mono" });
+    const options = input("cf-options", { class: "mono" });
     // a text field, not a password one: a DSN is a URL to read and fix, and
     // a password need not be in it at all — ${VAR} keeps it in the env
-    const dsn = el("input", { type: "text", id: "cf-dsn", class: "mono", autocomplete: "off",
-      spellcheck: "false", autocapitalize: "off" });
+    const dsn = input("cf-dsn", { class: "mono" });
+
+    // TLS
+    const tls = el("select", { id: "cf-tls" });
+    for (const [v, label] of TLS_MODES) tls.append(el("option", { value: v }, label));
+    const tlsCA = input("cf-tls-ca", { class: "mono", placeholder: "~/certs/ca.pem — blank: the system's trusted CAs" });
+    const tlsCert = input("cf-tls-cert", { class: "mono", placeholder: "only if the server asks for a client certificate" });
+    const tlsKey = input("cf-tls-key", { class: "mono", placeholder: "the client certificate's private key" });
+
     const aiRows = el("input", { type: "checkbox", id: "cf-airows" });
     const result = el("div", { class: "connresult", "aria-live": "polite", hidden: "hidden" });
+
+    // Each row is its label and its control, kept together so a group can
+    // be shown or hidden as one; show() below decides which are visible.
+    const row = (text, ctl) => [el("label", { for: ctl.id }, text), ctl];
+    const hostPort = el("span", "hostport", host, el("label", { for: "cf-port" }, "Port"), port);
+    const rows = {
+      mode: [el("label", null, "Enter as"), modeRow],
+      host: [el("label", { for: "cf-host" }, "Host"), hostPort],
+      user: row("User", user),
+      password: row("Password", password),
+      database: row("Database", database),
+      file: row("File", file),
+      options: row("Options", options),
+      dsn: row("DSN", dsn),
+      dsnHint: [el("span"), el("span", "hint full", "${VAR} is read from dbc web's environment — the way to keep a password out of the saved file.")],
+      tls: row("TLS", tls),
+      tlsCA: row("CA file", tlsCA),
+      tlsCert: row("Client cert", tlsCert),
+      tlsKey: row("Client key", tlsKey),
+      tlsHint: [el("span"), el("span", "hint full", "PEM files. ~ and ${VAR} work; a relative path is relative to ~/.config/dbc.")],
+    };
+
+    // hasPassword: editing, the stored DSN has a password the page was not
+    // given; an empty password field then keeps it. dirty: a field was
+    // touched since they were filled (see the top of the file).
+    let hasPassword = false;
+    let dirty = !cur;
+
     if (cur) {
       name.value = cur.name;
       driver.value = cur.driver;
       aiRows.checked = cur.aiRows;
+      tls.value = cur.tls || "";
+      tlsCA.value = cur.tlsCA || "";
+      tlsCert.value = cur.tlsCert || "";
+      tlsKey.value = cur.tlsKey || "";
     }
 
-    const placeholder = () => {
+    const fieldMode = () => asFields.checked;
+
+    function show() {
+      const d = driver.value;
+      const server = isServer(d);
+      const tlsFiles = server && tls.value !== "" && tls.value !== "disable";
+      const visible = {
+        mode: true,
+        host: fieldMode() && server, user: fieldMode() && server, password: fieldMode() && server,
+        database: fieldMode() && server,
+        file: fieldMode() && !server,
+        options: fieldMode() && d !== "bytdb",
+        dsn: !fieldMode(), dsnHint: true,
+        tls: server, tlsCA: tlsFiles, tlsCert: tlsFiles, tlsKey: tlsFiles, tlsHint: tlsFiles,
+      };
+      for (const k in rows) for (const e of rows[k]) e.hidden = !visible[k];
+
+      const h = FIELD_HINTS[d];
+      port.placeholder = h.port || "";
+      file.placeholder = h.file || "";
+      options.placeholder = h.options || "";
+      password.placeholder = hasPassword ? "unchanged — type to replace it" : "or ${VAR} from the environment";
       dsn.placeholder = cur && driver.value === cur.driver
         ? "unchanged — type a DSN to replace it"
-        : DRIVERS.find(([d]) => d === driver.value)[1];
-    };
-    driver.addEventListener("change", placeholder);
-    placeholder();
+        : DRIVERS.find(([x]) => x === d)[1];
+    }
+    for (const c of [driver, tls, asFields, asDSN]) c.addEventListener("change", show);
+    for (const c of [driver, host, port, user, password, database, file, options]) {
+      c.addEventListener("input", () => { dirty = true; });
+      c.addEventListener("change", () => { dirty = true; });
+    }
+
+    // Editing: fill the fields from the stored DSN, or — when the fields
+    // cannot hold it (several hosts, a unix socket) — open on the DSN text
+    // and say why.
+    if (cur) {
+      asDSN.checked = true; // until the parts arrive, or if they cannot
+      dbc.api("GET", "/api/v1/conns/" + encodeURIComponent(cur.name) + "/parts").then((r) => {
+        // the TLS settings as saved (${VAR}s, relative paths), in place of
+        // the resolved ones the sidebar's entry carried
+        const t = r.tls || {};
+        tls.value = t.tls || ""; tlsCA.value = t.tls_ca || "";
+        tlsCert.value = t.tls_cert || ""; tlsKey.value = t.tls_key || "";
+        if (!r.parts) {
+          say("", "This DSN is edited as text: " + r.reason);
+          return;
+        }
+        const p = r.parts;
+        host.value = p.host || ""; port.value = p.port || ""; user.value = p.user || "";
+        password.value = p.password || ""; database.value = p.database || "";
+        file.value = p.file || ""; options.value = p.options || "";
+        hasPassword = !!r.has_password;
+        asFields.checked = true;
+        dirty = false;
+        show();
+      }).catch((e) => say("err", "could not read the connection's fields: " + e.message)).finally(show);
+    }
+    show();
 
     const form = el("div", "connform",
-      el("label", { for: "cf-name" }, "Name"), name,
-      el("label", { for: "cf-driver" }, "Driver"), driver,
-      el("label", { for: "cf-dsn" }, "DSN"), dsn,
-      el("span", "hint full", "${VAR} is read from dbc web's environment — the way to keep a password out of the saved file."),
+      ...row("Name", name), ...row("Driver", driver),
+      ...rows.mode, ...rows.host, ...rows.user, ...rows.password, ...rows.database,
+      ...rows.file, ...rows.options, ...rows.dsn, ...rows.dsnHint,
+      ...rows.tls, ...rows.tlsCA, ...rows.tlsCert, ...rows.tlsKey, ...rows.tlsHint,
       el("span"), el("label", { class: "check full", title: "The assistant may see up to ai_context_rows result rows " +
         "from this connection. Off by default: rows are the database's contents." }, aiRows, "Let the assistant see result rows"),
     );
@@ -99,8 +248,29 @@
     const cancel = el("button", { type: "button" }, "Cancel");
     cancel.addEventListener("click", () => dbc.modal.close());
 
-    const body = () => ({ name: name.value, driver: driver.value, dsn: dsn.value, ai_rows: aiRows.checked,
-      from: cur ? cur.name : undefined });
+    // body is the request, for a test or a save. In fields mode, untouched
+    // fields of an edit send an empty DSN ("keep it") rather than parts —
+    // see the top of the file. The TLS settings go only for a server
+    // engine: the server refuses them for a local file.
+    function body() {
+      const b = { name: name.value, driver: driver.value, dsn: dsn.value, ai_rows: aiRows.checked,
+        from: cur ? cur.name : undefined };
+      if (fieldMode()) {
+        b.dsn = "";
+        if (dirty) {
+          b.parts = { host: host.value, port: port.value, user: user.value, password: password.value,
+            database: database.value, file: file.value, options: options.value };
+          b.keep_password = hasPassword && password.value === "";
+        }
+      }
+      if (isServer(driver.value) && tls.value) {
+        b.tls = tls.value;
+        if (tls.value !== "disable") {
+          b.tls_ca = tlsCA.value; b.tls_cert = tlsCert.value; b.tls_key = tlsKey.value;
+        }
+      }
+      return b;
+    }
 
     function say(level, text) {
       result.hidden = false;
@@ -166,12 +336,12 @@
 
     dbc.modal.open({
       title: cur ? "Edit " + cur.name : "Add a connection", focus: name,
-      body: el("div", null, form, result),
+      body: el("div", "connbody", form, result),
       foot: el("div", "mfoot", test, el("span", "hint", ""), save, cancel),
       // Enter saves from any field, as a form would; Ctrl/⌘+Enter tests.
       // A select's Enter opens its list, so it is left alone there.
       onKey: (e) => {
-        if (e.key !== "Enter" || e.target === driver || test.disabled) return false;
+        if (e.key !== "Enter" || e.target.tagName === "SELECT" || test.disabled) return false;
         if (e.ctrlKey || e.metaKey) runTest();
         else runSave();
         return true;
@@ -183,7 +353,8 @@
   const openAdd = () => openForm(null);
 
   // openEdit edits the sidebar entry b — a connection added here.
-  const openEdit = (b) => openForm({ name: b.dataset.conn, driver: b.dataset.driver, aiRows: !!b.dataset.airows });
+  const openEdit = (b) => openForm({ name: b.dataset.conn, driver: b.dataset.driver, aiRows: !!b.dataset.airows,
+    tls: b.dataset.tls, tlsCA: b.dataset.tlsCa, tlsCert: b.dataset.tlsCert, tlsKey: b.dataset.tlsKey });
 
   // ── removing ───────────────────────────────────────────────────────────
   // Only a connection added here can go; the server refuses the rest, and

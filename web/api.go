@@ -5,6 +5,7 @@ import (
 
 	"github.com/rohanthewiz/rweb"
 
+	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/workspace"
 )
@@ -39,6 +40,9 @@ type connInfo struct {
 	Driver string `json:"driver"`
 	Saved  bool   `json:"saved,omitempty"`
 	AIRows bool   `json:"ai_rows,omitempty"`
+	// TLS settings fill the edit form, and mark the sidebar entry. They are
+	// the resolved ones (absolute paths), which is what the form shows.
+	config.TLSOpts
 }
 
 func (s *Server) handleConns(ctx rweb.Context) error {

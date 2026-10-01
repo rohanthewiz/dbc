@@ -238,7 +238,7 @@ func (m *Manager) open(ctx context.Context, name string) (dbh *sql.DB, anchor *s
 	if drv == "sqlite" {
 		dsn = sqliteDSN(dsn)
 	}
-	dbh, err = openPool(drv, dsn)
+	dbh, err = openPool(drv, dsn, cc.TLSOpts)
 	if err != nil {
 		if errors.Is(err, bytdb.ErrLocked) {
 			return nil, nil, inUse(name, err)
@@ -304,7 +304,18 @@ func (m *Manager) open(ctx context.Context, name string) (dbh *sql.DB, anchor *s
 // connection, not by the next pooled dial. A bad DSN fails here, not at the
 // first ping. pgconn's parse error leaves the password out, as it did when
 // the error came from the ping.
-func openPool(drv, dsn string) (*sql.DB, error) {
+//
+// t is the connection's TLS settings, applied by tlsOpen (tls.go): folded
+// into the DSN for Postgres, a connector of its own for MySQL. Unset, it
+// changes nothing — TLS is then the DSN's business, as it always was.
+func openPool(drv, dsn string, t config.TLSOpts) (*sql.DB, error) {
+	dsn, connector, err := tlsOpen(drv, dsn, t)
+	if err != nil {
+		return nil, err
+	}
+	if connector != nil {
+		return sql.OpenDB(connector), nil
+	}
 	if drv != "pgx" {
 		return sql.Open(drv, dsn)
 	}

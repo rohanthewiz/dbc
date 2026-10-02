@@ -344,11 +344,13 @@ from the dialect's vocabulary:
 | `::▮` · `CAST(x AS ▮` | type names |
 | after a finished phrase | the clauses that can follow it: `WHERE`, `GROUP BY`, `ILIKE`, `ON CONFLICT` … |
 
-Each column shows its type and keys, and each table its DDL. Postgres (and
-bytdb) get Postgres's keywords and its everyday functions with their
-signatures — aggregates, window, string, regex, date/time, JSON/JSONB, array,
-full-text search and admin (`pg_size_pretty`, `pg_terminate_backend` …);
-MySQL and SQLite get their own. Names are quoted where the engine needs it
+Each column shows its type and keys, and each table its DDL. Postgres gets
+its keywords and its everyday functions with their signatures — aggregates,
+window, string, regex, date/time, JSON/JSONB, array, full-text search and
+admin (`pg_size_pretty`, `pg_terminate_backend` …). bytdb gets Postgres's
+keywords but only the functions and casts it implements (a test runs every
+one against bytdb), so nothing it would answer with "unknown function" is
+suggested. MySQL and SQLite get their own. Names are quoted where the engine needs it
 (`"Orders"`, `` `order` ``), and keywords follow the case you type in.
 
 In the terminal the list opens by itself after `.` or `::` and on the second

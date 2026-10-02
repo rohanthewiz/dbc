@@ -11,8 +11,16 @@ import (
 // Postgres gets the fullest vocabulary: it is the engine dbc is used with
 // most, and its function library is large enough that remembering the exact
 // name (jsonb_array_elements_text? regexp_matches?) is what a completion is
-// for. bytdb speaks Postgres's SQL and shares its list. MySQL and SQLite get
-// the common core plus their own everyday functions.
+// for. MySQL and SQLite get the common core plus their own everyday
+// functions.
+//
+// bytdb speaks Postgres's SQL — its keywords, clauses and quoting are
+// Postgres's — but implements a small fraction of its functions, and not
+// even all of the common core (no trim, replace, substr, abs or round). It
+// therefore gets its own function and type lists, of exactly what it
+// evaluates; TestBytdbFuncsEvaluate runs every one against an embedded
+// bytdb, so a bytdb upgrade that drops one, or a name added here that it
+// never had, fails the build rather than a user's query.
 type dialect struct {
 	name     string
 	starts   []string // what a statement begins with
@@ -94,13 +102,15 @@ func dialectFor(driver string) *dialect {
 		return mysqlD
 	case "sqlite", "sqlite3":
 		return sqliteD
+	case "bytdb":
+		return bytdbD
 	}
 	return pgD
 }
 
 var (
-	dialectsOnce         sync.Once
-	pgD, mysqlD, sqliteD *dialect
+	dialectsOnce                 sync.Once
+	pgD, mysqlD, sqliteD, bytdbD *dialect
 )
 
 // words splits a newline-separated list; a line may hold a phrase ("GROUP BY").
@@ -143,6 +153,14 @@ func buildDialects() {
 		keywords: append(words(commonKeywords), words(pgKeywords)...),
 		funcs:    append(funcs(commonFuncs), funcs(pgFuncs)...),
 		types:    words(pgTypes),
+	}
+	bytdbD = &dialect{
+		name: "bytdb", fold: 'l', defaultSchemas: []string{"public"},
+		starts:   pgD.starts,
+		clauses:  pgD.clauses,
+		keywords: pgD.keywords,
+		funcs:    funcs(bytdbFuncs),
+		types:    words(bytdbTypes),
 	}
 	mysqlD = &dialect{
 		name: "mysql", backtick: true,
@@ -565,6 +583,80 @@ regclass
 oid
 text[]
 integer[]
+`
+
+// ---------------------------------------------------------------------------
+// bytdb
+// ---------------------------------------------------------------------------
+
+// bytdbFuncs is what bytdb evaluates (its sql package: aggNames, winNames,
+// evalFunc, sysFuncs), with Postgres's signatures. Left out on purpose:
+// the pg_*_size functions, which bytdb answers with a constant 0 for psql's
+// sake (suggesting them would suggest a wrong answer), and the pg_get_*
+// catalog helpers psql calls, which are no one's to type.
+const bytdbFuncs = `
+count(expr) → bigint | rows where expr is not null; count(*) counts every row
+sum(expr) → numeric | the sum of the non-null values
+avg(expr) → numeric | the mean of the non-null values
+min(expr) → same type | the smallest non-null value
+max(expr) → same type | the largest non-null value
+row_number() → bigint | the row's number within its window partition, from 1
+rank() → bigint | the rank within the partition, with gaps for ties
+dense_rank() → bigint | the rank within the partition, without gaps
+lag(expr [, offset [, default]]) → same type | expr from offset rows before, in the window
+lead(expr [, offset [, default]]) → same type | expr from offset rows after, in the window
+first_value(expr) → same type | expr at the window frame's first row
+last_value(expr) → same type | expr at the window frame's last row
+nth_value(expr, n) → same type | expr at the window frame's nth row
+coalesce(a, b, …) → same type | the first argument that is not null
+nullif(a, b) → same type | null when a = b, else a
+lower(text) → text | lower-cased
+upper(text) → text | upper-cased
+length(text) → integer | the number of characters
+char_length(text) → integer | the number of characters
+array_to_string(array, delimiter [, null]) → text | the elements joined
+array_length(array, dim) → integer | the length of a dimension (1 for a plain array)
+now() → timestamptz | the transaction's start time
+transaction_timestamp() → timestamptz | the transaction's start time
+statement_timestamp() → timestamptz | the statement's start time
+clock_timestamp() → timestamptz | the current time
+gen_random_uuid() → uuid | a random (version 4) UUID
+nextval(sequence) → bigint | the sequence's next value
+currval(sequence) → bigint | the value nextval last gave this session
+setval(sequence, value) → bigint | sets the sequence's current value
+lastval() → bigint | the value nextval last gave this session, of any sequence
+version() → text | the server's version string
+current_database() → name | the database connected to
+current_schema() → name | the schema names resolve in (public)
+=CURRENT_DATE → date | today's date
+=CURRENT_TIMESTAMP → timestamptz | the transaction's start time
+=LOCALTIMESTAMP → timestamp | the transaction's start time, without a zone
+`
+
+// bytdbTypes are the casts bytdb gives a type of its own; any other name
+// casts to text, so offering one (interval, inet …) would promise a
+// conversion that does not happen.
+const bytdbTypes = `
+integer
+bigint
+smallint
+int
+boolean
+real
+float8
+numeric
+decimal
+text
+varchar
+char
+timestamp
+timestamptz
+date
+uuid
+json
+jsonb
+oid
+regclass
 `
 
 // ---------------------------------------------------------------------------

@@ -121,12 +121,6 @@ ten session docs in `ai_docs/claude_sessions/`
   than `public` (bare names outside it get qualified needlessly today), the
   first-load wait on a big catalog, and the "without the schema" note when
   the catalog is past the ERD's 250,000-row bound.
-- **N-096** · raised `2026-1002-0157-sql-completion-from-schema` · value low
-  bytdb gets Postgres's function list in completion
-  (`sqlcomplete/vocab.go`). Some of those functions (full-text search,
-  `pg_*` admin, `jsonb_path_*`) may not be served by bytdb, so completion
-  can suggest a call that fails. Trim the list to what bytdb implements, or
-  give it its own dialect.
 
 ## Roadmap
 
@@ -164,6 +158,14 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-096** · raised `2026-1002-0157-sql-completion-from-schema` · value low
+  bytdb gets Postgres's function list in completion
+  (`sqlcomplete/vocab.go`). Some of those functions (full-text search,
+  `pg_*` admin, `jsonb_path_*`) may not be served by bytdb, so completion
+  can suggest a call that fails. Trim the list to what bytdb implements, or
+  give it its own dialect.
+  closed 2026-10-02, `2026-1002-0157-sql-completion-from-schema`: bytdb has its own dialect in `sqlcomplete/vocab.go`, with Postgres's keywords, clauses and quoting but only the 36 functions bytdb evaluates (from its `aggNames`, `winNames`, `evalFunc` and `sysFuncs`) and the casts that give a real type. The `pg_*_size` stubs that always return 0 and the `pg_get_*` psql helpers are left out on purpose. `TestBytdbFuncsEvaluate` runs every offered function on an embedded bytdb and requires a sample call for each, so drift fails the build. A probe confirmed the old list suggested functions bytdb rejects (`trim`, `round`, `jsonb_agg`, `date_trunc`).
 
 - **N-095** · raised `2026-1002-0157-sql-completion-from-schema` · value low
   A sidebar schema pick drops the completion cache (`setCatalogLocked`),

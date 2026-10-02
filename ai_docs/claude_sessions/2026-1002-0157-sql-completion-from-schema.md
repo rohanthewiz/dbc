@@ -151,8 +151,21 @@ fails on the old code, and by an extended `TestLiveWorkspacePickSchema`,
 run against a throwaway database on a local Postgres 16 and dropped
 afterwards.
 
+## Follow-up in this session: N-096
+
+bytdb now gets its own completion dialect. It keeps Postgres's keywords,
+clauses and quoting, but offers only the functions bytdb actually
+evaluates: aggregates, window, coalesce/nullif, lower/upper/length, the
+now() family, gen_random_uuid, the array helpers, the sequence functions,
+version/current_database/current_schema, and CURRENT_DATE/TIMESTAMP and
+LOCALTIMESTAMP. Its types are limited to the casts that produce a real type
+(any other name casts to text). The `pg_*_size` functions are left out
+because bytdb stubs them to 0. `TestBytdbFuncsEvaluate` runs every offered
+function against an embedded bytdb, and a probe showed the old list had
+suggested functions bytdb rejects: trim, round, jsonb_agg, date_trunc.
+
 ## Next
 
-Closed: N-095. Declined: None. Raised: N-094, N-095, N-096.
+Closed: N-095, N-096. Declined: None. Raised: N-094, N-095, N-096.
 Deferred: None. Promoted: None.
 Updated: None. Full list: `ai_docs/todo/next-list.md`.

@@ -68,8 +68,9 @@
 
   // ── the list ───────────────────────────────────────────────────────────
   // draw replaces the list with list (from GET /api/v1/conns or a "conns"
-  // event). The active and connecting marks are app.js's; they are carried
-  // across by name, so a redraw mid-connect does not lose "…".
+  // event). The active, connecting and in-use marks are app.js's; they are
+  // carried across by name, so a redraw mid-connect does not lose "…" (the
+  // in-use tooltip is not, and app.js redraws it after each draw).
   function draw(list) {
     const marks = new Map();
     for (const b of conns.querySelectorAll(".conn-item")) marks.set(b.dataset.conn, b.className);

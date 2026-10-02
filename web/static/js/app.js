@@ -111,6 +111,60 @@
       els.active.classList.toggle("none", !name);
     }
     els.stop.disabled = !state.busy && !connecting;
+    markInUse();
+  }
+
+  // markInUse marks the rows OTHER query tabs are on — in this window or
+  // another — from the server's latest "inuse" snapshot (web/inuse.go): a
+  // dimmer copy of the active row's bar, and a tooltip naming them. Such a
+  // connection is open even when this tab is not on it, and this tab's
+  // Disconnect leaves it open (handleDisconnect), so a row without the
+  // bright bar is not "not connected" when it has this one.
+  //
+  // The snapshot lists every tab, the one on screen included: which tab
+  // that is changes without a round trip (a click on the strip), so it is
+  // left out here, by state.ws, and redrawn on each switch (renderTabs).
+  // A tab on another of a server's databases ("ProdDr/analytics") marks
+  // its base's row, as markActive does, and the tooltip names the database.
+  //
+  //   ┃ local-pg     postgres    this tab's connection (.active)
+  //   ╎ reports      postgres    another tab's (.inuse): "also open in Query 2"
+  //     demo-lite      sqlite    no tab on it
+  let inuse = [];
+  function markInUse() {
+    const on = new Map(); // row → {names: [own tabs' titles], away: other windows' tab count}
+    for (const u of inuse) {
+      if (u.ws && u.ws === state.ws) continue; // the tab on screen: markActive's bar
+      const b = connItem(u.conn);
+      if (!b) continue;
+      if (!on.has(b)) on.set(b, { names: [], away: 0 });
+      const who = on.get(b);
+      const db = u.conn !== b.dataset.conn ? " (" + u.conn.slice(b.dataset.conn.length + 1) + ")" : "";
+      const t = u.ws ? tabOf(u.ws) : null;
+      if (t) who.names.push(t.title + db);
+      else who.away++; // another window's tab: its title is that window's to know
+    }
+    for (const b of els.conns.querySelectorAll(".conn-item")) {
+      // the row's own tooltip (conns.js: "added here; …"), kept the first
+      // time through so redraws do not stack the in-use line onto it
+      if (!("baseTitle" in b.dataset)) b.dataset.baseTitle = b.title || "";
+      const who = on.get(b);
+      b.classList.toggle("inuse", !!who);
+      let line = "";
+      if (who) {
+        const parts = who.names.slice();
+        if (who.away) parts.push(who.away === 1 ? "a tab in another browser window" : who.away + " tabs in other browser windows");
+        const n = who.names.length + who.away;
+        line = "also open in " + listOf(parts) + " — its connection stays open while " +
+          (n > 1 ? "they are" : "that tab is") + " on it";
+      }
+      b.title = [line, b.dataset.baseTitle].filter(Boolean).join("\n");
+    }
+  }
+
+  // listOf joins words as a sentence does: "a", "a and b", "a, b and c".
+  function listOf(xs) {
+    return xs.length < 2 ? xs.join("") : xs.slice(0, -1).join(", ") + " and " + xs[xs.length - 1];
   }
 
   // The tables list: a click selects, a double-click (or Enter) previews
@@ -572,6 +626,10 @@
       if (ev.type === "conns") {
         dbc.conns.draw(d.conns);
         if (d.renamed) connRenamed(d.renamed.from, d.renamed.to);
+        markInUse(); // the rows are new: their marks and tooltips with them
+      } else if (ev.type === "inuse") {
+        inuse = d.tabs || [];
+        markInUse();
       } else if (ev.type.startsWith("chat.")) dbc.chat.onEvent(ev.type, d);
       return;
     }
@@ -679,6 +737,12 @@
       try { onEvent(JSON.parse(e.data)); } catch (err) { console.error("bad event", e.data, err); }
     };
     src.onopen = () => {
+      // the "inuse" announcements made before this stream was on (at boot,
+      // or while it was down) went to nobody here: start from the snapshot
+      api("GET", "/api/v1/win/" + state.win).then((w) => {
+        inuse = (w.inUse && w.inUse.tabs) || [];
+        markInUse();
+      }, () => {});
       if (!state.attached) {
         state.attached = true;
         activate(activeAtBoot);
@@ -780,7 +844,7 @@
     reclaim(); // a long drop may have let another browser tab take ours
     // a connection added or removed while the stream was down sent its
     // "conns" event to nobody here
-    api("GET", "/api/v1/conns").then((r) => dbc.conns.draw(r.conns), () => {});
+    api("GET", "/api/v1/conns").then((r) => { dbc.conns.draw(r.conns); markInUse(); }, () => {});
     const t = state.tab;
     try {
       const st = await api("GET", dbc.wsPath(""));
@@ -1512,6 +1576,7 @@
   let renaming = null;
 
   function renderTabs() {
+    markInUse(); // the tab on screen, or a title, may have changed
     if (renaming) return;
     const plus = $("qnew");
     els.qtabs.replaceChildren();

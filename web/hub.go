@@ -68,6 +68,10 @@ type hub struct {
 	wins map[string]*window
 	tabs map[string]*tab // every window's query tabs, by id
 
+	// inUseMu orders the "inuse" snapshots (inuse.go); taken before mu,
+	// never after it.
+	inUseMu sync.Mutex
+
 	// claims: saved tab key (web.bytdb) → the window showing it; see
 	// claims.go. A window's claims stand only while it is live.
 	claims     map[string]*window
@@ -273,6 +277,11 @@ func (h *hub) reap(now time.Time) {
 			}
 			w.sse.Close()
 		}()
+	}
+	// a forgotten window's tabs are off their connections now: the other
+	// windows' marks for them go
+	if len(forget) > 0 {
+		h.announceInUse()
 	}
 }
 
@@ -612,6 +621,9 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 			Active: t.ws.Active(), Changed: ev.Changed, Failed: ev.Err != nil,
 			Status: ev.Status, sideState: sidebar(s.cfg, t.ws),
 		})
+		// landed or failed, the tab is on another connection (or none) than
+		// the "connecting" announcement said
+		s.hub.announceInUse()
 		if ev.Release != nil {
 			left := ev.Left
 			go func() {

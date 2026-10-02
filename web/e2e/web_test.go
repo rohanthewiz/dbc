@@ -47,6 +47,7 @@ func TestWeb(t *testing.T) {
 		{"postgres schema picker", pgSchemaPicker},
 		{"tabs survive a reload", tabsSurviveReload},
 		{"sidebar fold keys", sidebarFoldKeys},
+		{"other tabs' connections", otherTabsConns},
 	}
 	for _, s := range steps {
 		ok := t.Run(s.name, func(t *testing.T) {
@@ -491,4 +492,67 @@ func sidebarFoldKeys(t *testing.T, _ *env, p *rod.Page) {
 			}
 		}
 	}
+}
+
+// otherTabsConns: a connection another query tab is on — in this window or
+// another browser window — has the dimmed bar (.inuse) and a tooltip naming
+// that tab (web/inuse.go, app.js markInUse); the tab on screen marks its own
+// with the bright bar alone, and a tab's Disconnect takes its mark away.
+//
+// It starts where tabsSurviveReload left the window: two query tabs, both
+// on lite, "Renamed tab" on screen and Query 1 reattached in the background.
+func otherTabsConns(t *testing.T, e *env, p *rod.Page) {
+	// marked waits until exactly the rows conns (in list order) are .inuse
+	marked := func(p *rod.Page, conns string) {
+		t.Helper()
+		waitFor(t, p, "in-use rows "+conns, `(w) =>
+		  [...document.querySelectorAll("#conns .conn-item.inuse")].map((b) => b.dataset.conn).join() === w`, conns)
+	}
+	tooltip := func(p *rod.Page, conn string) string {
+		t.Helper()
+		return evalStr(t, p, `(c) => document.querySelector('#conns .conn-item[data-conn="' + c + '"]').title`, conn)
+	}
+
+	// Renamed tab moves to lite2: lite is now Query 1's alone
+	p.MustElement(`#conns .conn-item[data-conn="lite2"]`).MustClick()
+	waitConnected(t, p, "lite2")
+	marked(p, "lite")
+	if got := tooltip(p, "lite"); !strings.HasPrefix(got, "also open in Query 1 — ") {
+		t.Fatalf("lite's tooltip = %q, want it to name Query 1", got)
+	}
+
+	// on Query 1 the marks swap: its own bar on lite, Renamed tab's on lite2
+	p.MustElementR("#qtabs .qtab .qt", "^Query 1$").MustClick()
+	waitConnected(t, p, "lite")
+	marked(p, "lite2")
+	if got := tooltip(p, "lite2"); !strings.HasPrefix(got, "also open in Renamed tab — ") {
+		t.Fatalf("lite2's tooltip = %q, want it to name Renamed tab", got)
+	}
+	if got := tooltip(p, "lite"); strings.Contains(got, "also open") {
+		t.Fatalf("lite's tooltip = %q: the tab on screen named itself", got)
+	}
+
+	// Query 1 disconnects: lite has no bar of either kind
+	rightClick(t, p, `#conns .conn-item[data-conn="lite"]`)
+	menuPick(t, p, "Disconnect")
+	waitFor(t, p, "not connected", `() => !document.querySelector("#conns .conn-item.active")`)
+	marked(p, "lite2")
+
+	// another browser window boots on lite (its saved tabs are this
+	// window's, so it gets a fresh one): this window marks lite for it,
+	// without a title — that tab is the other window's to name
+	q := e.page(t, "lite")
+	defer q.MustClose()
+	marked(p, "lite,lite2")
+	if got := tooltip(p, "lite"); !strings.HasPrefix(got, "also open in a tab in another browser window — ") {
+		t.Fatalf("lite's tooltip = %q, want another browser window", got)
+	}
+	// and that window sees both of this one's tabs' connections — Query 1
+	// is off lite, Renamed tab is on lite2
+	marked(q, "lite2")
+
+	// back on lite, as the step found it
+	p.MustActivate()
+	p.MustElement(`#conns .conn-item[data-conn="lite"]`).MustClick()
+	waitConnected(t, p, "lite")
 }

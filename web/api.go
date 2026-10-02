@@ -230,6 +230,7 @@ func (s *Server) handleClose(ctx rweb.Context) error {
 	if err != nil {
 		return fail(ctx, err)
 	}
+	s.hub.announceInUse() // its connection's mark goes from the other tabs' sidebars
 	return ok(ctx, map[string]any{"closed": t.id})
 }
 
@@ -238,6 +239,9 @@ func (s *Server) handleClose(ctx rweb.Context) error {
 type winState struct {
 	ID   string   `json:"id"`
 	Tabs []string `json:"tabs"`
+	// InUse is the "inuse" snapshot (inuse.go), for a page whose stream
+	// just (re)attached and so missed the announcements made meanwhile.
+	InUse inUseEvent `json:"inUse"`
 }
 
 func (s *Server) handleWindow(ctx rweb.Context) error {
@@ -245,7 +249,7 @@ func (s *Server) handleWindow(ctx rweb.Context) error {
 	if err != nil {
 		return fail(ctx, err)
 	}
-	st := winState{ID: w.id, Tabs: []string{}}
+	st := winState{ID: w.id, Tabs: []string{}, InUse: s.hub.inUseFor(w)}
 	for _, t := range s.hub.tabsOf(w) {
 		st.Tabs = append(st.Tabs, t.id)
 	}
@@ -325,6 +329,7 @@ func (s *Server) handleConnect(ctx rweb.Context) error {
 		return ok(ctx, map[string]any{"connecting": false})
 	}
 	t.send("connecting", map[string]string{"name": req.Name})
+	s.hub.announceInUse()
 	s.launch(t, st)
 	return ok(ctx, map[string]any{"connecting": true})
 }
@@ -356,6 +361,7 @@ func (s *Server) handleDisconnect(ctx rweb.Context) error {
 	}
 	t.notes(st.Notes)
 	t.send("conn", connEvent{Active: "", Changed: true, Status: "disconnected", sideState: sidebar(s.cfg, t.ws)})
+	s.hub.announceInUse()
 	go func() {
 		s.deliver(t, st.Job())
 		// counted after the session is closed, so this tab is not among them.

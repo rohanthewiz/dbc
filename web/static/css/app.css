@@ -139,13 +139,21 @@ body.row-dragging { cursor: row-resize; user-select: none; }
   text-align: left;
 }
 .conn-item:hover { background: var(--sel); }
+/* another query tab is on it (app.js markInUse): the active bar, dimmed —
+   connected, but not by the tab on screen. Before .active, which wins when
+   a row is both. */
+.conn-item.inuse { box-shadow: inset 2px 0 color-mix(in srgb, var(--accent) 45%, transparent); }
 .conn-item.active { background: var(--sel); box-shadow: inset 2px 0 var(--accent); }
 .conn-item.connecting .name::after { content: " …"; color: var(--warn); }
 .conn-item .driver { color: var(--muted); font-size: 11px; }
-/* added in the browser (kept in web.bytdb, removable): a small accent dot */
 /* a connection with TLS set (other than disable) says so beside its driver */
 .conn-item[data-tls]:not([data-tls="disable"]) .driver::after { content: " · tls"; }
-.conn-item[data-saved] .driver::before { content: "● "; color: var(--accent); font-size: 8px; vertical-align: 1px; }
+/* added in the browser (kept in connections.toml, editable and removable from
+   the right-click menu): a muted pencil before its driver. Not a dot, and not
+   in the accent: a green ● reads as "connected" — the TUI marks the active
+   connection exactly that way — and this mark is provenance, so it stayed lit
+   after a disconnect. Being on the connection is .active's inset accent bar. */
+.conn-item[data-saved] .driver::before { content: "✎ "; color: var(--muted); }
 .sidebar h2.hrow { display: flex; align-items: center; justify-content: space-between; }
 .hadd { border: 0; background: none; color: var(--muted); padding: 0 4px; font-size: 14px; line-height: 1; }
 .hadd:hover { color: var(--accent); }

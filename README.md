@@ -887,7 +887,10 @@ from its own environment, so set the variable wherever you run the TUI too.
 A DSN typed with the password inline is stored as typed, in a file only you
 can read (`0600`). A DSN is never sent back to the browser. Connections that
 an older `dbc web` kept in `web.bytdb` are moved to `connections.toml` the
-first time it starts. Connections added this way show a small dot, and any
+first time it starts. Connections added this way show a muted `✎` before their
+driver (the tab's connection is marked by the bar on its left; a dimmer bar
+marks one another query tab, here or in another browser window, is on — hover
+it to see which), and any
 connection with TLS on says `· tls` beside its driver. To change one,
 right-click it and pick *Edit…*: the same form, filled in. In fields, every
 part of the saved DSN comes back except the password (a `${VAR}` password

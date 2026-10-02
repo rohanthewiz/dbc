@@ -95,10 +95,6 @@ ten session docs in `ai_docs/claude_sessions/`
   cut): the active mark — the web's bar, the TUI's `●` — stays until the
   next statement fails. A cheap check (the session guard's ping, or a
   periodic one while idle) could clear or warn on the mark.
-- **N-100** · raised `2026-1002-1239-web-conn-marks` · value low
-  The web sidebar's in-use mark (`.conn-item.inuse`, a dimmed accent bar) is
-  subtle, and on adjacent rows the bars join into one line. If it is missed
-  in use: shorten each bar so rows read apart, or add a small glyph.
 
 ## Roadmap
 
@@ -145,6 +141,17 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-100** · raised `2026-1002-1239-web-conn-marks` · value low
+  The web sidebar's in-use mark (`.conn-item.inuse`, a dimmed accent bar) is
+  subtle, and on adjacent rows the bars join into one line. If it is missed
+  in use: shorten each bar so rows read apart, or add a small glyph.
+  closed 2026-10-02, `2026-1002-1336-web-inuse-dash`: shortened. The mark is now a `::before` dash inset 4px
+  top and bottom (`web/static/css/app.css`), so adjacent in-use rows show two
+  dashes with a gap, and its shorter shape also tells it apart from
+  `.active`'s full-height bar. Same dimmed accent; not drawn on an `.active`
+  row. No glyph. `web/e2e` passes; a screenshot of two adjacent in-use rows
+  showed separate 17px dashes with an 8px gap.
 
 - **N-094** · raised `2026-1002-0157-sql-completion-from-schema` · value medium
   Exercise editor completion on a live Postgres and MySQL. Only SQLite (TUI

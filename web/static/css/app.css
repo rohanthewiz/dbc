@@ -137,12 +137,32 @@ body.row-dragging { cursor: row-resize; user-select: none; }
   background: none;
   padding: 3px 12px;
   text-align: left;
+  position: relative; /* anchors the .inuse bar (::before) */
 }
 .conn-item:hover { background: var(--sel); }
 /* another query tab is on it (app.js markInUse): the active bar, dimmed —
-   connected, but not by the tab on screen. Before .active, which wins when
-   a row is both. */
-.conn-item.inuse { box-shadow: inset 2px 0 color-mix(in srgb, var(--accent) 45%, transparent); }
+   connected, but not by the tab on screen. It is a short, inset dash, not
+   .active's full-height inset shadow: on adjacent in-use rows full-height
+   bars joined into one line that read as a single mark. Inset 4px top and
+   bottom, each row's dash stands apart, and the shorter shape sets it apart
+   from the active bar too. A pseudo-element (absolutely placed, so not a flex
+   item between .name and .driver) rather than a background-image, which
+   :hover's `background` shorthand would wipe. Not drawn on an .active row:
+   the bright bar wins when a row is both.
+
+     ┃ local-pg     .active: full height, bright
+     ╷ reports      .inuse: shorter, dimmed, a gap
+     ╵ analytics      between neighbouring rows */
+.conn-item.inuse:not(.active)::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
 .conn-item.active { background: var(--sel); box-shadow: inset 2px 0 var(--accent); }
 .conn-item.connecting .name::after { content: " …"; color: var(--warn); }
 .conn-item .driver { color: var(--muted); font-size: 11px; }

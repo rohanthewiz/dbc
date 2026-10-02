@@ -90,12 +90,6 @@ ten session docs in `ai_docs/claude_sessions/`
   MySQL statements (a script's, the row counts', the catalog's) are
   abandoned by the driver but run on, as session statements did before
   `reapCanceled`. Each would need its connection's `CONNECTION_ID()`.
-- **N-093** · raised `2026-1001-1817-next-list-sweep` · value low
-  The pty + VT-emulator driver used for N-087 (creack/pty, charmbracelet/x/vt,
-  real keys and SGR mouse against the built binary) worked well, but lives
-  only in that session's scratchpad. Commit it as an opt-in test beside
-  `web/e2e` (its own module, skipped unless asked for), so the TUI's real
-  frames are checked, not just the harness's.
 - **N-094** · raised `2026-1002-0157-sql-completion-from-schema` · value medium
   Exercise editor completion on a live Postgres and MySQL. Only SQLite (TUI
   harness, workspace, headless Chrome) and a fake catalog (`sqlcomplete`
@@ -146,6 +140,14 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-093** · raised `2026-1001-1817-next-list-sweep` · value low
+  The pty + VT-emulator driver used for N-087 (creack/pty, charmbracelet/x/vt,
+  real keys and SGR mouse against the built binary) worked well, but lives
+  only in that session's scratchpad. Commit it as an opt-in test beside
+  `web/e2e` (its own module, skipped unless asked for), so the TUI's real
+  frames are checked, not just the harness's.
+  closed 2026-10-02, `2026-1002-0214-next-list-sweep-2`: the old driver was gone with its scratchpad, so it was rewritten as `tui/e2e`, a nested module like `web/e2e` (creack/pty, charmbracelet/x/vt), skipped unless `DBC_TUI_E2E=1`. It builds dbc, seeds two SQLite files through headless mode, runs the TUI at 140×45 in a pty, and pumps the emulator's replies back so keys and SGR mouse are encoded per the modes the app set. Seven steps, read off the screen: startup and row counts, Ctrl+R into the grid, completion (`c.` → `br` → Tab gives `c.breed`), a double-click preview, header-click sort both ways, a click to switch connection, Ctrl+Q. 3/3 runs pass in about 4s each. README's Tests section lists it.
 
 - **N-092** · raised `2026-1001-1817-next-list-sweep` · value low
   ERD: `fanOut(80, 8)` (80 distinct keys, so no buses) still sends 23 lines

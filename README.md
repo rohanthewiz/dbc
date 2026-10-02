@@ -23,7 +23,7 @@ the GitHub Releases page. `dbc version` (or `dbc --version`) prints the version.
 
 ### Tests
 
-`go test ./...` runs the unit tests. Two opt-in suites need more than Go:
+`go test ./...` runs the unit tests. Three opt-in suites need more than Go:
 
 - **Live databases** (`db/live_*`): set `DBC_LIVE_PG_DSN` and/or
   `DBC_LIVE_MYSQL_DSN` to a throwaway Postgres or MySQL.
@@ -35,6 +35,12 @@ the GitHub Releases page. `dbc version` (or `dbc --version`) prints the version.
   across a reload. A JavaScript error on the page fails it. `DBC_E2E_CHROME`
   names the browser, `DBC_E2E_HEADFUL=1` shows it, and `DBC_LIVE_PG_DSN`
   adds the Postgres schema picker.
+- **The TUI in a terminal** (`tui/e2e`, also a module of its own):
+  `cd tui/e2e && DBC_TUI_E2E=1 go test -count=1 -v .` It builds dbc, runs
+  the TUI in a 140×45 pseudo-terminal on two SQLite files, and reads the
+  screen through a VT emulator while it types and clicks: a run,
+  completion, a table preview by double-click, a sort by header click, a
+  connection switch and quitting.
 
 ### Releasing
 

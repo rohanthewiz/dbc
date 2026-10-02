@@ -85,11 +85,6 @@ ten session docs in `ai_docs/claude_sessions/`
   only past `sessionPingIdle` (1s) there, since go-sql-driver/mysql does
   not expose its socket for the early check Postgres gets (`sockQuiet`).
   The live workspace tests skip the "at once" retry case on MySQL for it.
-- **N-089** · raised `2026-1001-1817-next-list-sweep` · value low
-  Stop reaches the server only for a pinned session's statement: pooled
-  MySQL statements (a script's, the row counts', the catalog's) are
-  abandoned by the driver but run on, as session statements did before
-  `reapCanceled`. Each would need its connection's `CONNECTION_ID()`.
 - **N-094** · raised `2026-1002-0157-sql-completion-from-schema` · value medium
   Exercise editor completion on a live Postgres and MySQL. Only SQLite (TUI
   harness, workspace, headless Chrome) and a fake catalog (`sqlcomplete`
@@ -140,6 +135,13 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-089** · raised `2026-1001-1817-next-list-sweep` · value low
+  Stop reaches the server only for a pinned session's statement: pooled
+  MySQL statements (a script's, the row counts', the catalog's) are
+  abandoned by the driver but run on, as session statements did before
+  `reapCanceled`. Each would need its connection's `CONNECTION_ID()`.
+  closed 2026-10-02, `2026-1002-0214-next-list-sweep-2`: every MySQL pool now opens through `mysqlKillConnector` (`db/mysqlkill.go`; `openPool` no longer uses `sql.Open` for MySQL). Each connection learns its `CONNECTION_ID()` once, when dialed, and remembers its last statement's context. When database/sql closes a connection that the driver already dropped and that context was canceled (a Stop, or a row count's `countTimeout`), it sends `KILL <id>` over a fresh dial from the same connector, never the pool, which may be at its limit with the dying connection still counted. That covers scripts, row counts and catalog loads without wrapping Rows or Stmts. A Session reuses the id (no extra round trip) and marks the connection reaped so the KILL is not sent twice. `TestMySQLKillConnKillsACanceledPooledStatement` (a fake connector, pool of one) checks the KILL and that healthy closes send nothing. `TestLivePooledCancelReachesServer` passes on Postgres 16, but not run on MySQL: Docker Desktop's pulls hung in its proxy this session (see N-097).
 
 - **N-093** · raised `2026-1001-1817-next-list-sweep` · value low
   The pty + VT-emulator driver used for N-087 (creack/pty, charmbracelet/x/vt,

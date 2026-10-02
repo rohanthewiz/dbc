@@ -169,7 +169,13 @@ func mysqlConnector(dsn string, t config.TLSOpts, database string) (driver.Conne
 	if err != nil {
 		return nil, err
 	}
-	return mysql.NewConnector(mc)
+	c, err := mysql.NewConnector(mc)
+	if err != nil {
+		return nil, err
+	}
+	// every MySQL pool's connections kill a canceled statement on the
+	// server (mysqlkill.go)
+	return &mysqlKillConnector{inner: c}, nil
 }
 
 // mysqlConfig parses a MySQL DSN and applies what the DSN's text does not

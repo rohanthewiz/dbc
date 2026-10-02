@@ -115,6 +115,17 @@ func (s *Session) quiet() bool {
 // failure leaves killID empty: a canceled statement is then only abandoned
 // by the driver, as before, which is no reason to refuse the session.
 func (s *Session) learnKillID(ctx context.Context) {
+	// A connection from dbc's own MySQL connector learned its id when it
+	// was dialed (mysqlkill.go): no round trip.
+	_ = s.conn.Raw(func(dc any) error {
+		if kc, ok := dc.(*mysqlKillConn); ok {
+			s.killID = kc.id
+		}
+		return nil
+	})
+	if s.killID != "" {
+		return
+	}
 	var id string
 	if err := s.conn.QueryRowContext(ctx, `SELECT CONNECTION_ID()`).Scan(&id); err != nil {
 		return
@@ -148,4 +159,11 @@ func (s *Session) reapCanceled(err error) {
 	// "Unknown thread id") changes nothing the user can act on.
 	_, _ = s.m.RunContext(kctx, s.name, "KILL "+s.killID)
 	s.killID = "" // the connection is gone; never kill this id again
+	// and its Close, when the session is replaced, must not kill it again
+	_ = s.conn.Raw(func(dc any) error {
+		if kc, ok := dc.(*mysqlKillConn); ok {
+			kc.markReaped()
+		}
+		return nil
+	})
 }

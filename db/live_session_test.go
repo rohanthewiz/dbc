@@ -528,6 +528,47 @@ func TestLiveCutPooledConnReplaced(t *testing.T) {
 	})
 }
 
+// A canceled POOLED statement stops on the server too (N-089). A script's
+// statements, the row counts and the catalog run on the pool, where no
+// Session reaps them; on MySQL each pool connection now kills its own
+// canceled statement when database/sql closes it (mysqlkill.go). The pool
+// is held to one connection, so the id read first is the one the heavy
+// statement runs on, and a KILL that waited for the pool would hang.
+func TestLivePooledCancelReachesServer(t *testing.T) {
+	forLive(t, func(t *testing.T, e liveEngine) {
+		mgr := liveMgr(t, e.env, e.driver)
+		obs := liveMgr(t, e.env, e.driver)
+		dbh, err := mgr.DB("live")
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		dbh.SetMaxOpenConns(1)
+		id := liveVal(t, onPool(mgr), e.backend)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			_, err := mgr.RunContext(ctx, "live", e.heavy)
+			done <- err
+		}()
+		waitBusy(t, obs, e, id, "1", 5*time.Second)
+		cancel()
+		select {
+		case err = <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the canceled statement never returned")
+		}
+		if !errors.Is(err, ErrCanceled) {
+			t.Fatalf("err = %v, want ErrCanceled", err)
+		}
+		waitBusy(t, obs, e, id, "0", 3*time.Second)
+		// and the pool goes on
+		if got := liveVal(t, onPool(mgr), `SELECT 1`); got != "1" {
+			t.Errorf("SELECT 1 after the cancel = %q", got)
+		}
+	})
+}
+
 // connect_timeout bounds opening a connection and nothing after it: a real
 // server's handshake fits well inside a second, and a statement that runs
 // longer than that is not cut short. (The bound itself, against a server that

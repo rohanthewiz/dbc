@@ -324,9 +324,13 @@ func (m *Manager) open(ctx context.Context, name string) (dbh *sql.DB, anchor *s
 //	mysql  mysqlConnector  ─► Config.DBName   = database (and the TLS
 //	                          config, when t is set, on the same connector)
 func openPool(drv, dsn string, t config.TLSOpts, database string) (*sql.DB, error) {
-	if drv == "mysql" && database != "" {
-		// a derived MySQL pool always goes through a connector of its own,
-		// TLS or not: that is the one place a parsed DSN can be changed
+	if drv == "mysql" {
+		// A MySQL pool always goes through a connector of dbc's own, TLS
+		// or not: a derived pool's database can be changed only on a
+		// parsed DSN, and every pool's connections must know their server
+		// id to kill a canceled statement (mysqlkill.go), which a pool
+		// from sql.Open could not. sql.Open("mysql", dsn) is ParseDSN plus
+		// NewConnector, so nothing else changes.
 		c, err := mysqlConnector(dsn, t, database)
 		if err != nil {
 			return nil, err

@@ -96,13 +96,6 @@ ten session docs in `ai_docs/claude_sessions/`
   numbers until its next connect, and writes by other clients are never
   reflected without one (no timer). The hub could broadcast a "counts"
   event to every tab on the connection.
-- **N-091** · raised `2026-1001-1817-next-list-sweep` · value low
-  `TestChatSignInThenQueuedQuestionGoes` (web) failed once under the full
-  `-race` suite: the chat went dead with no ⎆ sign-in offer, so the exit's
-  error was not seen as `ai.ErrAuthRequired` (`needAuth`). It passed 5/5
-  alone. Likely an ordering race between the fake agent's refusal and its
-  exit; if real, a user would be told "click ⟲ new" instead of offered
-  sign-in.
 - **N-092** · raised `2026-1001-1817-next-list-sweep` · value low
   ERD: `fanOut(80, 8)` (80 distinct keys, so no buses) still sends 23 lines
   round the outside after `widen`'s four rounds. A limit that predates the
@@ -163,6 +156,15 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-091** · raised `2026-1001-1817-next-list-sweep` · value low
+  `TestChatSignInThenQueuedQuestionGoes` (web) failed once under the full
+  `-race` suite: the chat went dead with no ⎆ sign-in offer, so the exit's
+  error was not seen as `ai.ErrAuthRequired` (`needAuth`). It passed 5/5
+  alone. Likely an ordering race between the fake agent's refusal and its
+  exit; if real, a user would be told "click ⟲ new" instead of offered
+  sign-in.
+  closed 2026-10-02, `2026-1002-0214-next-list-sweep-2`: real, and in `ai.Chat`, not the web. A refused session/new made `connect` close the connection and send the explained (ErrAuthRequired) EventExit, but closing ended the read loop, whose `onExit` sent its own bare "Copilot exited" — two exits, in either order, and the pump stops at the first. `connect` now owns the exit while `connecting` (onExit only records `lost`), and `claimExit` makes the one exit the API promises. `ai/exit_test.go` (300 rounds) fails on the old code at round 0 with the second exit. Also fixed a second web flake found while repeating the chat tests: `assistant.close` left the chat able to save after it (a turn ending in the pump), so `TestChatStaleViewWithHiddenColumnsIsRefused` sometimes wrote into a TempDir being removed; `closed` now stops landing, saving and restarting.
 
 - **N-096** · raised `2026-1002-0157-sql-completion-from-schema` · value low
   bytdb gets Postgres's function list in completion

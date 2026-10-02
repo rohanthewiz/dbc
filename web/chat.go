@@ -100,6 +100,7 @@ type assistant struct {
 	first     bool   // the next turn is the conversation's first
 	pending   string // a prompt written before the handshake finished
 	needAuth  bool   // the agent refused for lack of sign-in
+	closed    bool   // close ran: nothing starts, lands or saves after it
 
 	signState string
 	signIn    *ai.SignIn
@@ -246,6 +247,9 @@ func (a *assistant) open() {
 
 // ensureLocked starts the agent unless one is starting or running.
 func (a *assistant) ensureLocked() {
+	if a.closed {
+		return // the window or server is gone; a new agent would leak
+	}
 	if a.c != nil && (a.state == chatStarting || a.state == chatReady) {
 		return
 	}
@@ -289,8 +293,8 @@ func (a *assistant) pump(c *ai.Chat, gen int) {
 func (a *assistant) onEvent(gen int, e ai.Event) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if gen != a.gen || a.c == nil {
-		return // an earlier connection's straggler
+	if gen != a.gen || a.c == nil || a.closed {
+		return // an earlier connection's straggler, or one after close
 	}
 	switch e.Kind {
 	case ai.EventReady:
@@ -533,7 +537,7 @@ func (a *assistant) worthSavingLocked() bool {
 // answer. Reports whether the conversation is now on disk.
 func (a *assistant) saveLocked() bool {
 	dir := a.srv.opt.ChatsDir
-	if dir == "" || !a.worthSavingLocked() {
+	if dir == "" || a.closed || !a.worthSavingLocked() {
 		return false
 	}
 	now := time.Now()
@@ -619,10 +623,19 @@ func (a *assistant) liveID() string {
 
 // close ends the conversation for good — the tab is forgotten, or dbc web
 // is stopping — saving it first, as quitting the TUI does.
+//
+// The save here is the last one: closed makes onEvent drop whatever the
+// pump was already holding (a turn's end would save again), so nothing is
+// written after close returns — not into a chats directory being removed,
+// nor over the file just saved.
 func (a *assistant) close() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return
+	}
 	a.saveLocked()
+	a.closed = true
 	if a.c != nil {
 		a.c.Close()
 	}

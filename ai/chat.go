@@ -118,6 +118,13 @@ type Chat struct {
 	ready      bool
 	turn       bool // a session/prompt is in flight
 	cancelSent bool // one session/cancel per turn is enough
+
+	// connecting is true from Start until the handshake's outcome is
+	// known; while it is, connect owns the EventExit (see connect).
+	connecting bool
+	lost       bool  // the transport ended while connecting
+	lostErr    error // its error, nil for a clean EOF
+	exitSent   bool  // the one EventExit has been sent (claimExit)
 }
 
 // ErrNotReady is returned by Send before EventReady, and after EventExit.
@@ -166,8 +173,9 @@ func startWith(agent Agent, opt Options, dial dialFunc) *Chat {
 		// read loop while the UI is mid-frame. Delivery still blocks when it
 		// is full — dropping a chunk would corrupt the answer — until the UI
 		// catches up or the Chat is closed.
-		events: make(chan Event, 256),
-		done:   make(chan struct{}),
+		events:     make(chan Event, 256),
+		done:       make(chan struct{}),
+		connecting: true,
 	}
 	go c.connect(opt, dial)
 	return c
@@ -195,6 +203,19 @@ func (c *Chat) emit(e Event) {
 }
 
 // connect spawns the agent and runs initialize and session/new.
+//
+// Exactly one EventExit is ever sent, and while the handshake runs connect
+// is the one to send it:
+//
+//	transport ends ──► onExit ──connecting?──yes──► record lost/lostErr; connect decides
+//	                                     └──no───► exited(err)
+//	handshake fails ──► claim the exit, close, send the explained error
+//	handshake ok but lost ──► exited(lostErr)
+//
+// The refused-handshake case is why: closing the connection ends the read
+// loop, whose onExit would otherwise race connect's explained error (the
+// one carrying ErrAuthRequired) with a bare "exited" — and a UI stops
+// reading at the first EventExit.
 func (c *Chat) connect(opt Options, dial dialFunc) {
 	onNotify := func(method string, params json.RawMessage) {
 		if method == "session/update" {
@@ -204,19 +225,17 @@ func (c *Chat) connect(opt Options, dial dialFunc) {
 	onExit := func(err error) {
 		c.mu.Lock()
 		c.ready, c.turn = false, false
-		c.mu.Unlock()
-		if err == nil {
-			select {
-			case <-c.done:
-				// a deliberate Close; the UI already knows
-			default:
-				err = fmt.Errorf("%s exited", c.agent.Name)
-			}
+		if c.connecting {
+			c.lost, c.lostErr = true, err
+			c.mu.Unlock()
+			return
 		}
-		c.emit(Event{Kind: EventExit, Err: err})
+		c.mu.Unlock()
+		c.exited(err)
 	}
 	conn, err := dial(onNotify, c.handleRequest, onExit)
 	if err != nil {
+		c.claimExit()
 		c.emit(Event{Kind: EventExit, Err: err})
 		return
 	}
@@ -234,15 +253,58 @@ func (c *Chat) connect(opt Options, dial dialFunc) {
 	}
 
 	sess, err := handshake(conn, opt)
-	if err != nil {
+	c.mu.Lock()
+	c.connecting = false
+	lost, lostErr := c.lost, c.lostErr
+	if err == nil && !lost {
+		c.sessionID, c.ready = sess.id, true
+	}
+	c.mu.Unlock()
+	switch {
+	case err != nil:
+		// Claimed before the close, so the read loop's onExit (now past
+		// connecting) finds the exit taken and stays quiet. The handshake's
+		// error wins even when the agent also hung up (lost): it says why.
+		c.claimExit()
 		conn.close()
 		c.emit(Event{Kind: EventExit, Err: c.explain(err)})
+	case lost:
+		// the handshake finished just as the transport went
+		c.exited(lostErr)
+	default:
+		c.emit(Event{Kind: EventReady, Models: sess.models, ModelID: sess.modelID})
+	}
+}
+
+// claimExit takes the conversation's one EventExit; it reports false when
+// it was already taken. Events promises nothing after EventExit, so connect
+// and the read loop must never both send one.
+func (c *Chat) claimExit() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.exitSent {
+		return false
+	}
+	c.exitSent = true
+	return true
+}
+
+// exited reports the transport's end, unless the exit was already sent.
+// A clean end (err nil) that Close did not cause is still news: the agent
+// went away on its own.
+func (c *Chat) exited(err error) {
+	if !c.claimExit() {
 		return
 	}
-	c.mu.Lock()
-	c.sessionID, c.ready = sess.id, true
-	c.mu.Unlock()
-	c.emit(Event{Kind: EventReady, Models: sess.models, ModelID: sess.modelID})
+	if err == nil {
+		select {
+		case <-c.done:
+			// a deliberate Close; the UI already knows
+		default:
+			err = fmt.Errorf("%s exited", c.agent.Name)
+		}
+	}
+	c.emit(Event{Kind: EventExit, Err: err})
 }
 
 // ErrAuthRequired matches (errors.Is) an EventExit or EventTurnDone error

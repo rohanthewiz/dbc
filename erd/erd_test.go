@@ -670,6 +670,17 @@ func TestCrowdedGapsWiden(t *testing.T) {
 // the leaves a rank past the mids: every line from a k row crosses the
 // mids' column. Its gaps are crowded by lines that cannot ride a bus, so
 // widen still has to make room.
+//
+// Keep m at 6 or so. With 8 mids (fanOut(80, 8), fanOut(100, 8)) they wrap
+// into three columns that start well above root's first key and end below
+// its last, so the lines from root's top and bottom keys meet a mid at
+// their own height and the open side over or under the column is the
+// shorter way, by hundreds of pixels against any gap: 20-odd lines then
+// leave the boxes' extent, and that is the router choosing travel, not
+// widen running out of room. Checked for N-092: more widen rounds (up to
+// 20) change nothing, a surcharge on the open sides while measuring
+// changes nothing (the choice is the final routing's), and with every
+// hole's charge removed 14 still go round.
 func fanOut(n, m int) *Schema {
 	s := &Schema{Conn: fmt.Sprintf("fanout%d", n)}
 	root := &Table{Name: "root", Label: "root", PK: []string{"id"}, Cols: []*Column{{Name: "id", Type: "int"}}}

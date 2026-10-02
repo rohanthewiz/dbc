@@ -90,10 +90,6 @@ ten session docs in `ai_docs/claude_sessions/`
   MySQL statements (a script's, the row counts', the catalog's) are
   abandoned by the driver but run on, as session statements did before
   `reapCanceled`. Each would need its connection's `CONNECTION_ID()`.
-- **N-092** · raised `2026-1001-1817-next-list-sweep` · value low
-  ERD: `fanOut(80, 8)` (80 distinct keys, so no buses) still sends 23 lines
-  round the outside after `widen`'s four rounds. A limit that predates the
-  bus lanes (N-071), which made stars need no widening at all.
 - **N-093** · raised `2026-1001-1817-next-list-sweep` · value low
   The pty + VT-emulator driver used for N-087 (creack/pty, charmbracelet/x/vt,
   real keys and SGR mouse against the built binary) worked well, but lives
@@ -150,6 +146,12 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-092** · raised `2026-1001-1817-next-list-sweep` · value low
+  ERD: `fanOut(80, 8)` (80 distinct keys, so no buses) still sends 23 lines
+  round the outside after `widen`'s four rounds. A limit that predates the
+  bus lanes (N-071), which made stars need no widening at all.
+  closed 2026-10-02, `2026-1002-0214-next-list-sweep-2`: not a widen limit, so no router change. With 8 mids the fixture's mids wrap into three columns that start ~180px above root's first key and end below its last; the lines from root's top and bottom keys meet a mid at their own height, and the open side over or under it is the shorter way by hundreds of pixels against any gap (they leave the boxes' extent by up to 60px at (80, 8), 88px at (100, 8)). Probes: 6, 10 and 20 widen rounds give the same 23; an open-side surcharge while measuring changes nothing, since the choice is the final routing's; with every hole charge removed 14 still go round. fanOut(60, 6) and (120, 10) stay at 0 and 1. Written into the `fanOut` fixture's doc so the next look starts there.
 
 - **N-090** · raised `2026-1001-1817-next-list-sweep` · value low
   The recount after a write (N-072) refreshes only the workspace that ran

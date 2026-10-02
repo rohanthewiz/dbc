@@ -168,4 +168,4 @@ suggested functions bytdb rejects: trim, round, jsonb_agg, date_trunc.
 
 Closed: N-095, N-096. Declined: None. Raised: N-094, N-095, N-096.
 Deferred: None. Promoted: None.
-Updated: None. Full list: `ai_docs/todo/next-list.md`.
+Updated: N-094. Full list: `ai_docs/todo/next-list.md`.

@@ -121,6 +121,11 @@ ten session docs in `ai_docs/claude_sessions/`
   than `public` (bare names outside it get qualified needlessly today), the
   first-load wait on a big catalog, and the "without the schema" note when
   the catalog is past the ERD's 250,000-row bound.
+  Updated `2026-1002-0157-sql-completion-from-schema`: for N-095,
+  `TestLiveWorkspacePickSchema` ran on a local Postgres 16. It loads
+  completion's schema, picks a schema, and checks that the cache stays and
+  the picked schema's tables rank first. The rest above (qualification,
+  quoting, search_path, a big catalog, MySQL) is still unchecked.
 
 ## Roadmap
 

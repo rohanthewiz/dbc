@@ -314,11 +314,39 @@ func (w *Workspace) recountLocked(conn string) Job {
 		return nil
 	}
 	w.mgr.ForgetRowCounts(conn)
+	return w.refreshCountsLocked()
+}
+
+// Recount refreshes the sidebar's row counts after another workspace's run
+// on conn may have changed rows, or returns nil when this sidebar is not
+// showing conn's tables. A UI that hosts several workspaces on one Manager
+// (dbc web's query tabs and windows) calls it on the others when a RunDone
+// carries Counts, so every sidebar on the connection shows the write, not
+// only the one that made it.
+//
+// Unlike recountLocked it does not drop the Manager's cached counts: the
+// writer's landRun already did, before its RunDone was delivered, so what
+// is cached now was counted after the write. Dropping again would only
+// make each workspace count afresh instead of sharing the writer's
+// counting (db.Manager.RowCounts waits for one in flight).
+func (w *Workspace) Recount(conn string) Job {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if conn != w.active || w.catalog == nil {
+		return nil
+	}
+	return w.refreshCountsLocked()
+}
+
+// refreshCountsLocked cancels a counting in flight for this sidebar (it
+// may have read the rows before the write) and makes the Job that counts
+// the listed catalog again.
+func (w *Workspace) refreshCountsLocked() Job {
 	if w.countCancel != nil {
 		w.countCancel()
 		w.countCancel = nil
 	}
-	return w.countsJobLocked(conn, w.connGen, db.TableRefs(w.catalog.Rows))
+	return w.countsJobLocked(w.active, w.connGen, db.TableRefs(w.catalog.Rows))
 }
 
 // failedLocked writes a failed or stopped run's notes and status, and

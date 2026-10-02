@@ -700,6 +700,33 @@ func TestRowCountsFollowTheConnect(t *testing.T) {
 	}
 }
 
+// A write in one query tab recounts every tab on that connection, in any
+// window (N-090): the other tab's stream gets a "counts" with the new
+// number, not only the writer's.
+func TestWriteRecountsOtherTabsOnTheConnection(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	_, other := e.connected() // another window, on the same connection
+	s.await(t, "counts")
+	other.await(t, "counts")
+
+	e.api("POST", "/api/v1/ws/"+id+"/run",
+		runBody("INSERT INTO cats (name, breed, age) VALUES ('Nova', 'tabby', 2)", 0, false), 200)
+	for _, st := range []*stream{s, other} {
+		ev, _ := st.await(t, "counts")
+		c := decodeData[countsEvent](t, testEnvelope{Data: ev.Data})
+		var rows string
+		for _, tr := range c.Tables {
+			if tr.QName == "cats" {
+				rows = tr.Rows
+			}
+		}
+		if rows != "9" {
+			t.Errorf("cats after the insert = %q, want 9", rows)
+		}
+	}
+}
+
 // Disconnect takes a tab off its connection and keeps the connection: the
 // tab's sidebar empties, its session goes (the badge with it), the list
 // still has the connection, and a connect brings the tab back. While

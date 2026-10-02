@@ -645,6 +645,7 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 		}
 		if ev.Counts != nil { // the run may have changed rows: recount the sidebar's
 			go func() { s.deliver(t, ev.Counts()) }()
+			s.recountOthers(t, ev.Conn)
 		}
 		t.notes(ev.Notes)
 		out := runEvent{
@@ -689,6 +690,32 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 		s.deliverExplain(t, ev)
 	case *workspace.SessionReleased:
 		t.notes(ev.Notes)
+	}
+}
+
+// recountOthers refreshes the row counts of every other query tab, in any
+// window, whose sidebar shows conn's tables: a write in one tab changes the
+// numbers all of them show. Each recount is that tab's own Job, landing
+// through deliver as a "counts" event on its own stream, exactly as after a
+// write of its own; a tab on another connection (or another database of
+// the same server, a derived name) is left alone by Workspace.Recount.
+//
+// Only dbc's own writes are seen. Another client's writes still show only
+// at the next connect, since nothing polls the server.
+func (s *Server) recountOthers(writer *tab, conn string) {
+	s.hub.mu.Lock()
+	others := make([]*tab, 0, len(s.hub.tabs))
+	for _, o := range s.hub.tabs {
+		if o != writer {
+			others = append(others, o)
+		}
+	}
+	s.hub.mu.Unlock()
+	// the Recount calls take each workspace's lock, so not under hub.mu
+	for _, o := range others {
+		if job := o.ws.Recount(conn); job != nil {
+			go func() { s.deliver(o, job()) }()
+		}
 	}
 }
 

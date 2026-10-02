@@ -189,8 +189,10 @@ right-aligned `8` in the terminal. The counts load after the list, never
 holding it up, and are cached per connection for two minutes. A run that
 may have changed rows (an `INSERT`, `DELETE`, `TRUNCATE`, DDL, a `COMMIT`, a
 script) recounts the list straight away, past the cache; a `SELECT`, `SET`
-or `BEGIN` does not. A write inside an open transaction shows once it is
-committed, since the counts are read outside your session. On Postgres
+or `BEGIN` does not. In `dbc web` every query tab on that connection, in
+any window, is recounted, not just the one that ran it; writes made by
+other clients show at the next connect. A write inside an open transaction
+shows once it is committed, since the counts are read outside your session. On Postgres
 and MySQL a table the database's statistics put at a million rows or more
 shows that estimate, marked `~` (`~1.2M`), instead of being counted; the
 rest, and every table on SQLite and bytdb, are counted exactly. A count that

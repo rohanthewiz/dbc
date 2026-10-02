@@ -90,12 +90,6 @@ ten session docs in `ai_docs/claude_sessions/`
   MySQL statements (a script's, the row counts', the catalog's) are
   abandoned by the driver but run on, as session statements did before
   `reapCanceled`. Each would need its connection's `CONNECTION_ID()`.
-- **N-090** · raised `2026-1001-1817-next-list-sweep` · value low
-  The recount after a write (N-072) refreshes only the workspace that ran
-  it: another dbc web tab or window on the same connection keeps its old
-  numbers until its next connect, and writes by other clients are never
-  reflected without one (no timer). The hub could broadcast a "counts"
-  event to every tab on the connection.
 - **N-092** · raised `2026-1001-1817-next-list-sweep` · value low
   ERD: `fanOut(80, 8)` (80 distinct keys, so no buses) still sends 23 lines
   round the outside after `widen`'s four rounds. A limit that predates the
@@ -156,6 +150,14 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-090** · raised `2026-1001-1817-next-list-sweep` · value low
+  The recount after a write (N-072) refreshes only the workspace that ran
+  it: another dbc web tab or window on the same connection keeps its old
+  numbers until its next connect, and writes by other clients are never
+  reflected without one (no timer). The hub could broadcast a "counts"
+  event to every tab on the connection.
+  closed 2026-10-02, `2026-1002-0214-next-list-sweep-2`: a RunDone that carries Counts now also calls `Server.recountOthers`, which asks every other query tab (any window) for `Workspace.Recount(conn)`; a tab whose sidebar shows conn's tables gets its own counts Job and "counts" event. `Recount` does not drop the Manager's cache again — the writer's `landRun` already did — so the tabs share one counting. Writes by other clients are still seen only at the next connect (no timer), now said in the README. `TestWriteRecountsOtherTabsOnTheConnection` fails without the fan-out.
 
 - **N-091** · raised `2026-1001-1817-next-list-sweep` · value low
   `TestChatSignInThenQueuedQuestionGoes` (web) failed once under the full

@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-098
+**Next ID:** N-101
 
 ## Open
 
@@ -90,6 +90,15 @@ ten session docs in `ai_docs/claude_sessions/`
   `driver.Connector`), and every Postgres live suite passes. Also N-094's
   MySQL half: editor completion on a real MySQL (backtick quoting, a
   `<conn>/<database>` pick, the first load), done on Postgres only.
+- **N-099** · raised `2026-1002-1239-web-conn-marks` · value low
+  Neither UI notices a connection the server dropped (a restart, a network
+  cut): the active mark — the web's bar, the TUI's `●` — stays until the
+  next statement fails. A cheap check (the session guard's ping, or a
+  periodic one while idle) could clear or warn on the mark.
+- **N-100** · raised `2026-1002-1239-web-conn-marks` · value low
+  The web sidebar's in-use mark (`.conn-item.inuse`, a dimmed accent bar) is
+  subtle, and on adjacent rows the bars join into one line. If it is missed
+  in use: shorten each bar so rows read apart, or add a small glyph.
 
 ## Roadmap
 
@@ -106,6 +115,15 @@ call.
   searched. A vector PDF would need the Go fonts embedded as CID fonts, and
   the layout drawn through a second backend. Only worth it if someone asks to
   search or copy from a shared PDF (`y` copies the plan as text today).
+- **N-098** · raised `2026-1002-1239-web-conn-marks` · value medium
+  Close a configured connection's pool when a tab switches away from it and
+  no other tab is on it, as is already done for a derived `<conn>/<database>`
+  (`web/hub.go` closeLeft, the TUI's releaseThenClose). Today a switch keeps
+  the pool, and its idle connection lingers on the server for up to
+  `conn_idle_timeout` (1h) with nothing in either UI showing it. Then
+  "focused" means "connected", and the web's in-use mark covers the rest.
+  The cost is a fresh dial on switching back. Deferred by the user ("for now"
+  the in-use mark alone).
 
 ## Non-goals
 

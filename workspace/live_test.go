@@ -279,9 +279,9 @@ func TestLiveWorkspaceConnect(t *testing.T) {
 
 // RETRY ONCE: a session that only ever ran queries, cut by the server while
 // it sat idle, is replaced and the statement run again on a fresh one — the
-// user sees the result, not the server's "terminating connection". On
-// Postgres the cut is seen at once (db.Session peeks at the socket); on
-// both, a run after a pause pings first, which is the case that matters: a
+// user sees the result, not the server's "terminating connection". The
+// cut is seen at once (db.Session peeks at the socket, on MySQL too since
+// N-088); a run after a pause pings first, which is the case that matters: a
 // person comes back to a session the server dropped while they were away.
 func TestLiveWorkspaceRetryOnce(t *testing.T) {
 	cases := []struct {
@@ -294,9 +294,6 @@ func TestLiveWorkspaceRetryOnce(t *testing.T) {
 	forLive(t, func(t *testing.T, e liveEngine) {
 		for _, c := range cases {
 			t.Run(c.name, func(t *testing.T) {
-				if !c.wait && e.driver != "postgres" {
-					t.Skip("no socket peek on this driver: the cut is found once the session has idled")
-				}
 				w, obs := liveWorkspace(t, e)
 				id := wsVal(t, w, e.backend)
 				used := time.Now()

@@ -617,8 +617,8 @@ func waitBusy(t *testing.T, obs *Manager, e liveEngine, id, want string, within 
 // statement retried (FaultRetry), and it still fails a stateful one as lost.
 //
 // Two ways in: "at once" is the socket peek, which sees the server's FATAL
-// and FIN within the idle threshold (Postgres only: the MySQL driver does
-// not expose its socket), and "idle" is the ping that follows any pause
+// (MySQL: its error packet) and FIN within the idle threshold, and "idle"
+// is the ping that follows any pause
 // longer than sessionPingIdle, which is the usual case — a person comes
 // back to a session the server dropped while they were away.
 func TestLiveSessionGuardFindsTheCut(t *testing.T) {
@@ -634,9 +634,6 @@ func TestLiveSessionGuardFindsTheCut(t *testing.T) {
 	forLive(t, func(t *testing.T, e liveEngine) {
 		for _, c := range cases {
 			t.Run(c.name, func(t *testing.T) {
-				if !c.wait && e.driver != "postgres" {
-					t.Skip("no socket peek on this driver: the cut is found once the session has idled")
-				}
 				ctx := context.Background()
 				mgr := liveMgr(t, e.env, e.driver)
 				liveTable(t, mgr)

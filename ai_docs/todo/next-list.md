@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-097
+**Next ID:** N-098
 
 ## Open
 
@@ -79,12 +79,6 @@ ten session docs in `ai_docs/claude_sessions/`
   person: how `⛁ ◫ ▾` and the counts render in real emulators (iTerm2,
   Terminal.app, Ghostty, kitty, a cats pane), wheel scrolling and drags
   with real mouse hardware.
-- **N-088** · raised `2026-1001-1817-next-list-sweep` · value low
-  On MySQL a pinned session the server cut less than a second after its
-  last statement still fails the next run once: `db/sessionguard.go` pings
-  only past `sessionPingIdle` (1s) there, since go-sql-driver/mysql does
-  not expose its socket for the early check Postgres gets (`sockQuiet`).
-  The live workspace tests skip the "at once" retry case on MySQL for it.
 - **N-094** · raised `2026-1002-0157-sql-completion-from-schema` · value medium
   Exercise editor completion on a live Postgres and MySQL. Only SQLite (TUI
   harness, workspace, headless Chrome) and a fake catalog (`sqlcomplete`
@@ -98,6 +92,15 @@ ten session docs in `ai_docs/claude_sessions/`
   completion's schema, picks a schema, and checks that the cache stays and
   the picked schema's tables rank first. The rest above (qualification,
   quoting, search_path, a big catalog, MySQL) is still unchecked.
+- **N-097** · raised `2026-1002-0214-next-list-sweep-2` · value medium
+  Run the live suites against a real MySQL (8.4), which this session could
+  not: Docker Desktop's pulls hung in its proxy, and only `postgres:16-alpine`
+  was cached. New or newly unskipped on MySQL: `TestLivePooledCancelReachesServer`
+  (N-089's KILL of a canceled pooled statement), and the "at once" cases of
+  `TestLiveSessionGuardFindsTheCut` and `TestLiveWorkspaceRetryOnce` (N-088's
+  socket peek). With `DBC_LIVE_MYSQL_DSN` set: `go test -race ./db ./workspace`.
+  Offline, both are covered by fakes (a v10-handshake server; a
+  `driver.Connector`), and every Postgres live suite passes.
 
 ## Roadmap
 
@@ -135,6 +138,14 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-088** · raised `2026-1001-1817-next-list-sweep` · value low
+  On MySQL a pinned session the server cut less than a second after its
+  last statement still fails the next run once: `db/sessionguard.go` pings
+  only past `sessionPingIdle` (1s) there, since go-sql-driver/mysql does
+  not expose its socket for the early check Postgres gets (`sockQuiet`).
+  The live workspace tests skip the "at once" retry case on MySQL for it.
+  closed 2026-10-02, `2026-1002-0214-next-list-sweep-2`: `Session.quiet` now peeks at a MySQL session's socket too. `mysqlNetConn` (`db/mysqlsock.go`) reads go-sql-driver's unexported `mysqlConn.netConn` with reflect plus unsafe, inside `sql.Conn.Raw`, which holds the connection exclusively. The lookup is by package, type name and field type, so a driver release that renames it returns nil (the old idle-threshold behavior), not a crash. `TestMySQLNetConnFindsTheSocket` connects go-sql-driver to a fake server (a v10 handshake and an OK), finds the socket, and sees the server's hang-up through `sockQuiet`; it is also the test that fails on such a rename. The MySQL skips of the "at once" cases in `TestLiveSessionGuardFindsTheCut` and `TestLiveWorkspaceRetryOnce` are gone. Not yet run against a real MySQL (N-097).
 
 - **N-089** · raised `2026-1001-1817-next-list-sweep` · value low
   Stop reaches the server only for a pinned session's statement: pooled

@@ -71,8 +71,8 @@ func (s *Session) guard(ctx context.Context, f func() error) error {
 // is still there. A fresh session needs no check: the pool vetted its
 // connection a moment ago when it handed it out. After that, the connection
 // is pinged when it has been idle past sessionPingIdle, or sooner when its
-// socket shows the server has sent something or hung up (Postgres only:
-// the MySQL driver does not expose its socket).
+// socket shows the server has sent something or hung up (Postgres and
+// MySQL; see quiet).
 //
 // A failed ping on a connection the driver now calls dead is returned as
 // driver.ErrBadConn: the statement was never sent, which is the one case
@@ -97,13 +97,18 @@ func (s *Session) ready(ctx context.Context) error {
 }
 
 // quiet reports whether nothing has arrived on the session's socket since
-// the last statement (sockQuiet). Only a pgx connection's socket can be
-// reached; any other counts as quiet, leaving it to the idle threshold.
+// the last statement (sockQuiet). A pgx connection's socket is reached
+// through pgconn, a go-sql-driver/mysql one through mysqlNetConn; any other
+// (SQLite and bytdb have no socket) counts as quiet, leaving it to the idle
+// threshold. On MySQL a server that ends a session (KILL, wait_timeout)
+// sends an error packet and a FIN, so the peek sees it as on Postgres.
 func (s *Session) quiet() bool {
 	quiet := true
 	_ = s.conn.Raw(func(dc any) error {
 		if pc, ok := dc.(*pgxstdlib.Conn); ok && !pc.Conn().IsClosed() {
 			quiet = sockQuiet(pc.Conn().PgConn().Conn())
+		} else if nc := mysqlNetConn(dc); nc != nil && driverConnAlive(dc) {
+			quiet = sockQuiet(nc)
 		}
 		return nil
 	})

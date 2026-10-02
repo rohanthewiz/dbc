@@ -360,6 +360,12 @@ keywords but only the functions and casts it implements (a test runs every
 one against bytdb), so nothing it would answer with "unknown function" is
 suggested. MySQL and SQLite get their own. Names are quoted where the engine needs it
 (`"Orders"`, `` `order` ``), and keywords follow the case you type in.
+A table goes in bare when its bare name finds it on the connection's
+Postgres `search_path` (read with the schema), and schema-qualified
+otherwise: with `search_path = app, public`, `app.users` goes in as
+`users`, and a `public.users` it shadows as `public.users`. That is the
+path a new connection gets from the role and database, not a
+`SET search_path` run in your session.
 
 In the terminal the list opens by itself after `.` or `::` and on the second
 letter of a word, and follows your typing; `Ctrl+Space` asks anywhere. `↑`/`↓`

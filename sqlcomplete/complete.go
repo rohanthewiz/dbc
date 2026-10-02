@@ -115,6 +115,11 @@ type Request struct {
 	// Focus is the schema the user is browsing (the sidebar's), whose
 	// tables are ranked first; "" when there is none.
 	Focus string
+	// SearchPath is the schemas a bare table name resolves through, in
+	// order (Postgres's current_schemas); nil means the dialect's default
+	// (public on Postgres and bytdb). A table in one of them is inserted
+	// bare unless a schema earlier on the path has a table of that name.
+	SearchPath []string
 	// Buffer is the whole editor text and Caret a byte offset into it.
 	Buffer string
 	Caret  int
@@ -687,13 +692,53 @@ func (c *completer) table(t *erd.Table, rank int, bare bool) {
 	c.add(Item{Label: t.Name, Kind: kind, Detail: detail, Doc: ddl(t, c.req.Schema), Insert: ins}, rank)
 }
 
-// tableRef is how a statement names t: bare where the dialect resolves the
-// bare name to it, schema-qualified otherwise.
+// tableRef is how a statement names t: bare where the bare name resolves
+// to it (see bare), schema-qualified otherwise.
 func (c *completer) tableRef(t *erd.Table) string {
-	if c.d.bare(t.Schema, len(c.schemas)) {
+	if c.bare(t) {
 		return c.d.quote(t.Name)
 	}
 	return c.d.quote(t.Schema) + "." + c.d.quote(t.Name)
+}
+
+// searchPath is the schemas a bare name resolves through, in order: the
+// connection's, else the dialect's default; nil when the dialect has no
+// such notion (every name is bare: MySQL and SQLite list one schema).
+func (c *completer) searchPath() []string {
+	if c.req.SearchPath != nil {
+		return c.req.SearchPath
+	}
+	return c.d.defaultSchemas
+}
+
+// bare reports whether t's bare name resolves to t: always with one schema
+// or no search path, otherwise when t's schema is on the path and no schema
+// before it there has a table of the same name, which the engine would
+// find first.
+//
+//	search_path = app, public      app.users, public.users, public.orders
+//	  users   → app.users          bare for app.users, qualified for public.users
+//	  orders  → public.orders      bare: app has no orders
+//	  audit.x                       qualified: audit is not on the path
+//
+// Names compare exactly, as the catalog holds them: the bare name is
+// inserted quoted where it needs to be, so it is matched as written.
+func (c *completer) bare(t *erd.Table) bool {
+	path := c.searchPath()
+	if len(c.schemas) <= 1 || path == nil {
+		return true
+	}
+	for _, s := range path {
+		if s == t.Schema {
+			return true
+		}
+		for _, o := range c.bySchema[strings.ToLower(s)] {
+			if o.Schema == s && o.Name == t.Name {
+				return false // shadowed by an earlier schema's table
+			}
+		}
+	}
+	return false
 }
 
 // columnsOf adds t's columns at rank. qual, when set, is shown and inserted
@@ -741,8 +786,8 @@ func (c *completer) column(col *erd.Column, t *erd.Table) Item {
 
 // resolve finds the table a name's parts ([schema,] name) refer to:
 // case-insensitively, an exact-case match preferred, and for a bare name the
-// browsed schema's table, then the dialect's default schema's, then the only
-// one of that name.
+// browsed schema's table, then the first search-path schema's that has one,
+// then any of that name.
 func (c *completer) resolve(parts []string) *erd.Table {
 	if len(parts) == 0 {
 		return nil
@@ -779,8 +824,12 @@ func (c *completer) resolve(parts []string) *erd.Table {
 		if t := pick(func(t *erd.Table) bool { return c.req.Focus != "" && t.Schema == c.req.Focus }); t != nil {
 			return t
 		}
-		if t := pick(func(t *erd.Table) bool { return c.d.bare(t.Schema, 2) }); t != nil {
-			return t
+		// then the first schema on the search path that has it, as the
+		// engine resolves it
+		for _, s := range c.searchPath() {
+			if t := pick(func(t *erd.Table) bool { return t.Schema == s }); t != nil {
+				return t
+			}
 		}
 	}
 	return pick(func(*erd.Table) bool { return true })

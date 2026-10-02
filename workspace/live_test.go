@@ -650,3 +650,173 @@ func TestLiveWorkspacePickSchema(t *testing.T) {
 		}
 	})
 }
+
+// liveWorkspaceDSN is liveWorkspace's workspace on a DSN of the test's own
+// (the env's with something added), with no table of its own: for checks
+// that need the connection set up differently, such as its search_path.
+func liveWorkspaceDSN(t *testing.T, e liveEngine, dsn string) *Workspace {
+	t.Helper()
+	cfg := &config.Config{
+		MaxRows: 1000, MaxDisplayRows: 2000, AIContextRows: config.DefaultAIContextRows,
+		DefaultConnection: "live", Connections: []config.Connection{{Name: "live", Driver: e.driver, DSN: dsn}},
+	}
+	mgr := db.NewManager(cfg)
+	t.Cleanup(mgr.Close)
+	w := New(cfg, mgr, nil, Options{})
+	t.Cleanup(w.Close)
+	if ev := w.Connect("live").Job().(*Connected); ev.Err != nil {
+		t.Fatalf("connect: %+v", ev)
+	}
+	return w
+}
+
+// completeAt is Workspace.Complete at the ▮ in buf, failing when the cache
+// is cold.
+func completeAt(t *testing.T, w *Workspace, buf string) map[string]sqlcompleteItem {
+	t.Helper()
+	i := strings.Index(buf, "▮")
+	res, ready := w.Complete(buf[:i]+buf[i+len("▮"):], i)
+	if !ready {
+		t.Fatal("completion's cache is cold")
+	}
+	out := map[string]sqlcompleteItem{}
+	for _, it := range res.Items {
+		// a label offered from two schemas is keyed by the detail too
+		out[it.Label+" · "+strings.SplitN(it.Detail, " ·", 2)[0]] = sqlcompleteItem{Insert: it.Insert, Detail: it.Detail}
+	}
+	return out
+}
+
+type sqlcompleteItem struct{ Insert, Detail string }
+
+// COMPLETION ON A REAL POSTGRES (N-094): a table outside public goes in
+// qualified and public's bare; a mixed-case name is quoted; and with a
+// search_path naming another schema first, that schema's tables go in
+// bare too — and a public table it shadows is qualified, since the bare
+// name would find the other one.
+func TestLiveWorkspaceCompletionNames(t *testing.T) {
+	pgOnly(t, func(t *testing.T, e liveEngine) {
+		w, obs := liveWorkspace(t, e)
+		drop := `DROP SCHEMA IF EXISTS dbc_live_wsc CASCADE`
+		obsExec(t, obs, drop,
+			`CREATE SCHEMA dbc_live_wsc`,
+			`CREATE TABLE dbc_live_wsc."MixedCase" ("Amount" numeric, id int)`,
+			`CREATE TABLE dbc_live_wsc.plain (id int)`,
+			`CREATE TABLE dbc_live_wsc.`+liveTable+` (other int)`) // shadows public's on the path below
+		t.Cleanup(func() { _, _ = obs.Run("live", drop) })
+		_, st, _ := w.Disconnect()
+		st.Job()
+		if ev := w.Connect("live").Job().(*Connected); ev.Err != nil {
+			t.Fatalf("reconnect: %+v", ev)
+		}
+		if err := w.LoadCompletions(context.Background()); err != nil {
+			t.Fatalf("load completions: %v", err)
+		}
+
+		// the default search_path ("$user", public)
+		got := completeAt(t, w, "SELECT * FROM ▮")
+		for key, want := range map[string]string{
+			liveTable + " · public":       liveTable,
+			liveTable + " · dbc_live_wsc": "dbc_live_wsc." + liveTable,
+			"MixedCase · dbc_live_wsc":    `dbc_live_wsc."MixedCase"`,
+			"plain · dbc_live_wsc":        "dbc_live_wsc.plain",
+		} {
+			if it, ok := got[key]; !ok || it.Insert != want {
+				t.Errorf("default path: %s inserts %q, want %q", key, it.Insert, want)
+			}
+		}
+		cols := completeAt(t, w, `SELECT m.▮ FROM dbc_live_wsc."MixedCase" m`)
+		if it, ok := cols["Amount · numeric"]; !ok || it.Insert != `"Amount"` {
+			t.Errorf(`m. → %v; want "Amount" quoted`, cols)
+		}
+
+		// search_path = dbc_live_wsc, public, set on the connection (pgx
+		// passes an unknown DSN parameter to the server as a setting)
+		dsn := os.Getenv(e.env)
+		sep := "?"
+		if strings.Contains(dsn, "?") {
+			sep = "&"
+		}
+		w2 := liveWorkspaceDSN(t, e, dsn+sep+"search_path=dbc_live_wsc,public")
+		if err := w2.LoadCompletions(context.Background()); err != nil {
+			t.Fatalf("load completions: %v", err)
+		}
+		got = completeAt(t, w2, "SELECT * FROM ▮")
+		for key, want := range map[string]string{
+			"plain · dbc_live_wsc":        "plain",
+			"MixedCase · dbc_live_wsc":    `"MixedCase"`,
+			liveTable + " · dbc_live_wsc": liveTable,
+			liveTable + " · public":       "public." + liveTable,
+		} {
+			if it, ok := got[key]; !ok || it.Insert != want {
+				t.Errorf("search_path wsc,public: %s inserts %q, want %q", key, it.Insert, want)
+			}
+		}
+		// and a bare dbc_live_ws in the statement is the path's first
+		cols = completeAt(t, w2, "SELECT x.▮ FROM "+liveTable+" x")
+		if _, ok := cols["other · integer"]; !ok {
+			t.Errorf("x. on the path's %s → %v; want dbc_live_wsc's column other", liveTable, cols)
+		}
+	})
+}
+
+// A BIG CATALOG (N-094), opt-in with DBC_LIVE_BIG=1 on top of the DSN, as
+// it builds thousands of tables: the first load of a catalog just under the
+// schema reader's 250,000-row bound succeeds in reasonable time (logged),
+// and one past it fails with the reason the UIs show as "completion is
+// without the schema", while completion goes on with the vocabulary.
+func TestLiveWorkspaceCompletionBigCatalog(t *testing.T) {
+	if os.Getenv("DBC_LIVE_BIG") == "" {
+		t.Skip("set DBC_LIVE_BIG=1 (with DBC_LIVE_PG_DSN) to build a 260,000-column catalog")
+	}
+	pgOnly(t, func(t *testing.T, e liveEngine) {
+		w, obs := liveWorkspace(t, e)
+		drop := `DROP SCHEMA IF EXISTS dbc_live_wsbig CASCADE`
+		obsExec(t, obs, drop, `CREATE SCHEMA dbc_live_wsbig`)
+		t.Cleanup(func() { _, _ = obs.Run("live", drop) })
+		// tables from..to, 100 int columns each
+		build := func(from, to int) {
+			t.Helper()
+			start := time.Now()
+			obsExec(t, obs, fmt.Sprintf(`DO $$
+DECLARE cols text := (SELECT string_agg('c' || j || ' int', ', ') FROM generate_series(1, 100) j);
+BEGIN
+  FOR i IN %d..%d LOOP
+    EXECUTE format('CREATE TABLE dbc_live_wsbig.t%%s (%%s)', i, cols);
+  END LOOP;
+END $$`, from, to))
+			t.Logf("built tables %d..%d in %s", from, to, time.Since(start).Round(time.Millisecond))
+		}
+		reload := func() error {
+			t.Helper()
+			_, st, _ := w.Disconnect()
+			st.Job()
+			if ev := w.Connect("live").Job().(*Connected); ev.Err != nil {
+				t.Fatalf("reconnect: %+v", ev)
+			}
+			start := time.Now()
+			err := w.LoadCompletions(context.Background())
+			t.Logf("first load: %s (err %v)", time.Since(start).Round(time.Millisecond), err)
+			return err
+		}
+
+		build(1, 2400) // 240,000 column rows, under the bound
+		if err := reload(); err != nil {
+			t.Fatalf("a catalog under the bound failed to load: %v", err)
+		}
+		got := completeAt(t, w, "SELECT * FROM dbc_live_wsbig.t239▮")
+		if _, ok := got["t2399 · dbc_live_wsbig"]; !ok {
+			t.Errorf("dbc_live_wsbig.t239 → %v", got)
+		}
+
+		build(2401, 2600) // 260,000: past it
+		err := reload()
+		if err == nil || !strings.Contains(err.Error(), "too big") {
+			t.Fatalf("a catalog past the bound: err = %v, want too big", err)
+		}
+		res, ready := w.Complete("SEL", 3)
+		if !ready || len(res.Items) == 0 || res.Items[0].Label != "SELECT" {
+			t.Errorf("after a failed load, completion offers %v (ready %v), want the vocabulary", res.Items, ready)
+		}
+	})
+}

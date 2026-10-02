@@ -63,6 +63,7 @@ type complState struct {
 	conn    string
 	gen     int           // the complGen it was loaded for
 	schema  *erd.Schema   // nil while loading, or when the load failed
+	path    []string      // the search path bare names resolve through; nil: the dialect's default
 	err     error         // what the load failed with
 	at      time.Time     // when the load ended
 	loading chan struct{} // closed when the load in flight ends; nil when none is
@@ -102,6 +103,7 @@ func (w *Workspace) Complete(buffer string, caret int) (res sqlcomplete.Result, 
 	w.mu.Lock()
 	conn, focus := w.active, w.schema
 	var sc *erd.Schema
+	var path []string
 	ready = true
 	if conn != "" {
 		c := w.compl
@@ -111,7 +113,7 @@ func (w *Workspace) Complete(buffer string, caret int) (res sqlcomplete.Result, 
 		case c.err != nil && time.Since(c.at) > complRetry:
 			ready = false // time to try again
 		default:
-			sc = c.schema
+			sc, path = c.schema, c.path
 		}
 	}
 	w.mu.Unlock()
@@ -123,7 +125,7 @@ func (w *Workspace) Complete(buffer string, caret int) (res sqlcomplete.Result, 
 		driver = cc.Driver
 	}
 	return sqlcomplete.Complete(sqlcomplete.Request{
-		Schema: sc, Driver: driver, Focus: focus, Buffer: buffer, Caret: caret,
+		Schema: sc, Driver: driver, Focus: focus, SearchPath: path, Buffer: buffer, Caret: caret,
 	}), true
 }
 
@@ -169,12 +171,19 @@ func (w *Workspace) LoadCompletions(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, CompletionTimeout)
 	defer cancel()
 	sc, err := w.mgr.Schema(ctx, conn)
+	var path []string
+	if err == nil {
+		// One more round trip, for which schemas' tables go in bare.
+		// Failing it is no reason to drop the schema just read: the
+		// dialect's default (public) is then assumed, as before.
+		path, _ = w.mgr.SearchPath(ctx, conn)
+	}
 
 	w.mu.Lock()
 	// a newer load (after the cache was dropped and asked for again) owns
 	// the state now; this one's outcome is for a schema that is gone
 	if w.compl.loading == done {
-		w.compl = complState{conn: conn, gen: gen, schema: sc, err: err, at: time.Now()}
+		w.compl = complState{conn: conn, gen: gen, schema: sc, path: path, err: err, at: time.Now()}
 	}
 	w.mu.Unlock()
 	close(done)

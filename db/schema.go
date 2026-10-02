@@ -432,6 +432,40 @@ func (m *Manager) Schema(ctx context.Context, name string) (*erd.Schema, error) 
 	return BuildSchema(cc.Driver, name, TableRefs(rows[0]), rows[1], rows[2], rows[3]), nil
 }
 
+// SearchPath returns the schemas a bare table name resolves through on the
+// named connection, in order: Postgres's current_schemas(false), which is
+// search_path with "$user" expanded and schemas that do not exist left out
+// (pg_catalog, always searched first, is not listed). Other engines have no
+// search path and get nil, as does a Postgres that will not say: callers
+// then fall back to the engine's default (public).
+//
+// It reads the path a fresh pooled connection gets — the role's and the
+// database's defaults — not a SET search_path run in the user's session.
+func (m *Manager) SearchPath(ctx context.Context, name string) ([]string, error) {
+	cc, ok := m.cfg.ConnByName(name)
+	if !ok {
+		return nil, serr.New("unknown connection", "name", name)
+	}
+	if drv, _ := driverFor(cc.Driver); drv != "pgx" {
+		return nil, nil
+	}
+	dbh, err := m.DBContext(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := stringRows(ctx, dbh, `SELECT s FROM unnest(current_schemas(false)) AS s`)
+	if err != nil {
+		return nil, wrapRunErr(ctx, err, name, "op", "read the search path")
+	}
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		if len(r) > 0 {
+			out = append(out, r[0])
+		}
+	}
+	return out, nil
+}
+
 // stringRows runs a catalog query and returns its cells as strings, NULL as
 // "". Scanning into sql.NullString has database/sql convert every driver's
 // integers and byte slices to text.
@@ -440,10 +474,12 @@ func stringRows(ctx context.Context, dbh *sql.DB, q string) ([][]string, error) 
 	if err != nil {
 		return nil, err
 	}
-	// a diagram of part of a catalog would be silently wrong, so for these
-	// callers running past the bound is a failure, not a shorter answer
+	// a diagram (or completion) of part of a catalog would be silently
+	// wrong, so for these callers running past the bound is a failure, not
+	// a shorter answer. Worded for both: completion reports it as
+	// "completion is without the schema: …".
 	if truncated {
-		return nil, serr.New("the catalog is too big to diagram", "rows", strconv.Itoa(maxSchemaRows))
+		return nil, serr.New("the catalog is too big to read whole", "rows", strconv.Itoa(maxSchemaRows))
 	}
 	return rows, nil
 }

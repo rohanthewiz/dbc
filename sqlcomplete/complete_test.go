@@ -125,6 +125,61 @@ func TestSchemaQualifier(t *testing.T) {
 	}
 }
 
+// The search path decides which tables go in bare (N-094): one on the path
+// is bare unless a schema earlier on it has a table of that name, and a bare
+// name in the statement resolves along the path. Without a path, the
+// dialect's default (public) is the path, as before.
+func TestSearchPath(t *testing.T) {
+	sc := shop()
+	shadow := &erd.Table{Schema: "sales", Name: "orders", Cols: []*erd.Column{{Name: "region", Type: "text"}}}
+	sc.Tables = append(sc.Tables, shadow)
+	complete := func(path []string, buf string) Result {
+		i := strings.Index(buf, "▮")
+		return Complete(Request{Schema: sc, Driver: "postgres", SearchPath: path,
+			Buffer: buf[:i] + buf[i+len("▮"):], Caret: i})
+	}
+	insert := func(r Result, label, detail string) string {
+		for _, it := range r.Items {
+			if it.Label == label && strings.HasPrefix(it.Detail, detail) {
+				return it.Insert
+			}
+		}
+		t.Fatalf("no %s (%s) in %v", label, detail, head(labels(r)))
+		return ""
+	}
+
+	// sales first: its tables bare, public's orders shadowed by sales.orders
+	r := complete([]string{"sales", "public"}, "SELECT * FROM ▮")
+	if got := insert(r, "Invoices", "sales"); got != `"Invoices"` {
+		t.Errorf("sales.Invoices with sales on the path → %s", got)
+	}
+	if got := insert(r, "orders", "sales"); got != "orders" {
+		t.Errorf("sales.orders, first on the path → %s", got)
+	}
+	if got := insert(r, "orders", "public"); got != "public.orders" {
+		t.Errorf("public.orders, shadowed by sales.orders → %s", got)
+	}
+	if got := insert(r, "customers", "public"); got != "customers" {
+		t.Errorf("public.customers, on the path, not shadowed → %s", got)
+	}
+	// and a bare orders in the statement is sales.orders
+	r = complete([]string{"sales", "public"}, "SELECT o.▮ FROM orders o")
+	if _, ok := find(r, "region"); !ok {
+		t.Errorf("orders with sales first on the path → %v", labels(r))
+	}
+
+	// no path given: public is the path, so sales.orders is qualified and a
+	// bare orders is public's
+	r = complete(nil, "SELECT * FROM ▮")
+	if got := insert(r, "orders", "sales"); got != "sales.orders" {
+		t.Errorf("sales.orders off the default path → %s", got)
+	}
+	r = complete(nil, "SELECT o.▮ FROM orders o")
+	if _, ok := find(r, "customer_id"); !ok {
+		t.Errorf("orders on the default path → %v", labels(r))
+	}
+}
+
 func TestExpressionScope(t *testing.T) {
 	// columns of the tables in scope come first, even before FROM is
 	// reached by the caret; an ambiguous name is qualified

@@ -79,19 +79,6 @@ ten session docs in `ai_docs/claude_sessions/`
   person: how `⛁ ◫ ▾` and the counts render in real emulators (iTerm2,
   Terminal.app, Ghostty, kitty, a cats pane), wheel scrolling and drags
   with real mouse hardware.
-- **N-094** · raised `2026-1002-0157-sql-completion-from-schema` · value medium
-  Exercise editor completion on a live Postgres and MySQL. Only SQLite (TUI
-  harness, workspace, headless Chrome) and a fake catalog (`sqlcomplete`
-  tests) have driven it. To check: a non-`public` table goes in qualified
-  and `public` bare, quoting of mixed-case names, a `search_path` with more
-  than `public` (bare names outside it get qualified needlessly today), the
-  first-load wait on a big catalog, and the "without the schema" note when
-  the catalog is past the ERD's 250,000-row bound.
-  Updated `2026-1002-0157-sql-completion-from-schema`: for N-095,
-  `TestLiveWorkspacePickSchema` ran on a local Postgres 16. It loads
-  completion's schema, picks a schema, and checks that the cache stays and
-  the picked schema's tables rank first. The rest above (qualification,
-  quoting, search_path, a big catalog, MySQL) is still unchecked.
 - **N-097** · raised `2026-1002-0214-next-list-sweep-2` · value medium
   Run the live suites against a real MySQL (8.4), which this session could
   not: Docker Desktop's pulls hung in its proxy, and only `postgres:16-alpine`
@@ -100,7 +87,9 @@ ten session docs in `ai_docs/claude_sessions/`
   `TestLiveSessionGuardFindsTheCut` and `TestLiveWorkspaceRetryOnce` (N-088's
   socket peek). With `DBC_LIVE_MYSQL_DSN` set: `go test -race ./db ./workspace`.
   Offline, both are covered by fakes (a v10-handshake server; a
-  `driver.Connector`), and every Postgres live suite passes.
+  `driver.Connector`), and every Postgres live suite passes. Also N-094's
+  MySQL half: editor completion on a real MySQL (backtick quoting, a
+  `<conn>/<database>` pick, the first load), done on Postgres only.
 
 ## Roadmap
 
@@ -138,6 +127,21 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-094** · raised `2026-1002-0157-sql-completion-from-schema` · value medium
+  Exercise editor completion on a live Postgres and MySQL. Only SQLite (TUI
+  harness, workspace, headless Chrome) and a fake catalog (`sqlcomplete`
+  tests) have driven it. To check: a non-`public` table goes in qualified
+  and `public` bare, quoting of mixed-case names, a `search_path` with more
+  than `public` (bare names outside it get qualified needlessly today), the
+  first-load wait on a big catalog, and the "without the schema" note when
+  the catalog is past the ERD's 250,000-row bound.
+  Updated `2026-1002-0157-sql-completion-from-schema`: for N-095,
+  `TestLiveWorkspacePickSchema` ran on a local Postgres 16. It loads
+  completion's schema, picks a schema, and checks that the cache stays and
+  the picked schema's tables rank first. The rest above (qualification,
+  quoting, search_path, a big catalog, MySQL) is still unchecked.
+  closed 2026-10-02, `2026-1002-0214-next-list-sweep-2`: Postgres done, MySQL moved to N-097. Fixed the defect it named: completion now follows the connection's search path. `Manager.SearchPath` reads `current_schemas(false)` alongside the schema, `Request.SearchPath` carries it, and `completer.bare` inserts a table bare when its schema is on the path and no earlier path schema has a table of that name; a bare name in the statement resolves along the path. Without one, public is the path, as before. Unit test `TestSearchPath`. Live on Postgres 16, `TestLiveWorkspaceCompletionNames`: a non-public table goes in qualified and public's bare, `"MixedCase"` and `"Amount"` are quoted, and with `search_path=dbc_live_wsc,public` (set through the DSN) that schema's tables go in bare while the public table it shadows is qualified. `TestLiveWorkspaceCompletionBigCatalog` (opt-in `DBC_LIVE_BIG=1`): 240,000 column rows load in about 0.2s and complete; 260,000 fail, and completion goes on with the vocabulary. The failure now reads "the catalog is too big to read whole" (was "…to diagram", odd under "completion is without the schema:"). README notes the search_path rule.
 
 - **N-088** · raised `2026-1001-1817-next-list-sweep` · value low
   On MySQL a pinned session the server cut less than a second after its

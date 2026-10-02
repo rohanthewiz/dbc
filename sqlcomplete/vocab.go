@@ -1,7 +1,6 @@
 package sqlcomplete
 
 import (
-	"slices"
 	"strings"
 	"sync"
 )
@@ -82,15 +81,6 @@ var quoteWords = map[string]bool{
 	"references": true, "unique": true, "constraint": true, "grant": true, "only": true,
 	"analyse": true, "analyze": true, "collate": true, "current_user": true, "session_user": true,
 	"current_date": true, "current_time": true, "current_timestamp": true, "desc": true, "key": true,
-}
-
-// bare reports whether a table in schema can be named without its schema.
-// schemas is how many schemas the catalog has: with one, every name is bare.
-func (d *dialect) bare(schema string, schemas int) bool {
-	if schemas <= 1 || d.defaultSchemas == nil {
-		return true
-	}
-	return slices.Contains(d.defaultSchemas, schema)
 }
 
 // dialectFor maps a configured driver name to its dialect. An unknown driver

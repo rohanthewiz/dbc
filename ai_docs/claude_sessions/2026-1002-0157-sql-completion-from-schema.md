@@ -140,8 +140,19 @@ dialect vocabularies, quoting, keys), plus Ctrl+Space in both key tables.
 - The sort key is `rank · match quality · label`. The server's order is kept
   in Monaco via `sortText`.
 
+## Follow-up in this session: N-095
+
+A schema pick no longer drops the completion cache. `Manager.Schema` reads
+every user schema, so a pick changes only the ranking focus, which
+`Complete` reads from `w.schema` on each ask. The drop moved out of
+`setCatalogLocked` into `landConnect` (a reconnect still reads afresh) and
+`Disconnect`. Covered by `TestCompletionCacheAcrossPickAndConnect`, which
+fails on the old code, and by an extended `TestLiveWorkspacePickSchema`,
+run against a throwaway database on a local Postgres 16 and dropped
+afterwards.
+
 ## Next
 
-Closed: None. Declined: None. Raised: N-094, N-095, N-096.
+Closed: N-095. Declined: None. Raised: N-094, N-095, N-096.
 Deferred: None. Promoted: None.
 Updated: None. Full list: `ai_docs/todo/next-list.md`.

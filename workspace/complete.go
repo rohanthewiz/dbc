@@ -25,11 +25,19 @@ import (
 //	                      asks again when it returns
 //
 // THE CACHE IS DROPPED (complGen bumped) whenever what it describes may have
-// changed: a connect or a schema pick lands (setCatalogLocked), the
-// connection is left, or a run that may have changed the schema lands — a
-// statement starting with a DDL verb, or any script. A load that was in
-// flight when the cache was dropped lands under its old generation and is
-// never answered from.
+// changed: a connect lands (landConnect — a reconnect to the same connection
+// included), the connection is left (Disconnect), or a run that may have
+// changed the schema lands — a statement starting with a DDL verb, or any
+// script. A load that was in flight when the cache was dropped lands under
+// its old generation and is never answered from.
+//
+// A SCHEMA PICK KEEPS IT. Manager.Schema reads every user schema of the
+// database, whichever one the sidebar shows, so a pick changes nothing the
+// cache holds — only which schema's tables rank first, and Complete reads
+// that (w.schema, the request's Focus) on every ask. Dropping it would make
+// each pick on a big Postgres catalog re-read the whole of it for the next
+// suggestion. (A database pick is a connect to a derived connection, a
+// different cache key, and reads afresh.)
 //
 // A FAILED LOAD is remembered for complRetry. A catalog too big to read (the
 // ERD's 250,000-row bound) or a server that is down would otherwise be asked

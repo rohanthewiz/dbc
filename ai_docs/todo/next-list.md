@@ -121,12 +121,6 @@ ten session docs in `ai_docs/claude_sessions/`
   than `public` (bare names outside it get qualified needlessly today), the
   first-load wait on a big catalog, and the "without the schema" note when
   the catalog is past the ERD's 250,000-row bound.
-- **N-095** · raised `2026-1002-0157-sql-completion-from-schema` · value low
-  A sidebar schema pick drops the completion cache (`setCatalogLocked`),
-  though `Manager.Schema` already read every schema and only `Focus` changed.
-  On a big Postgres catalog each pick re-reads it all for the next
-  suggestion. Keep the cache across picks on the same connection and
-  generation.
 - **N-096** · raised `2026-1002-0157-sql-completion-from-schema` · value low
   bytdb gets Postgres's function list in completion
   (`sqlcomplete/vocab.go`). Some of those functions (full-text search,
@@ -170,6 +164,14 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-095** · raised `2026-1002-0157-sql-completion-from-schema` · value low
+  A sidebar schema pick drops the completion cache (`setCatalogLocked`),
+  though `Manager.Schema` already read every schema and only `Focus` changed.
+  On a big Postgres catalog each pick re-reads it all for the next
+  suggestion. Keep the cache across picks on the same connection and
+  generation.
+  closed 2026-10-02, `2026-1002-0157-sql-completion-from-schema`: the cache drop moved out of `setCatalogLocked` (shared by connect, pick and disconnect) into `landConnect` and `Disconnect`; a pick keeps the cache and re-ranks through `w.schema` (the request's Focus), which `Complete` reads on every ask. A reconnect to the same connection still reads afresh. `TestCompletionCacheAcrossPickAndConnect` (fails on the old code), and `TestLiveWorkspacePickSchema` now loads once, picks, and checks the cache stayed and the picked schema's tables rank first — run on a local Postgres 16.
 
 - **N-086** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value medium
   Release what is on main: bump `version` in `cats-plugin.toml` and

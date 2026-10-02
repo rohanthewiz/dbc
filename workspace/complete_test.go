@@ -65,3 +65,28 @@ func TestCompletionWithoutConnection(t *testing.T) {
 		t.Errorf("ready=%v items=%v", ready, r.Items)
 	}
 }
+
+// A schema pick installs a new sidebar catalog (setCatalogLocked) but keeps
+// the completion cache, which already holds every schema; a connect, even
+// back to the same connection, drops it. The pick's landing is driven
+// directly here: PickSchema itself needs Postgres (live_test.go covers it).
+func TestCompletionCacheAcrossPickAndConnect(t *testing.T) {
+	w := newTestWorkspace(t)
+	if err := w.LoadCompletions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	w.mu.Lock()
+	w.schema = "main"
+	w.setCatalogLocked(w.catalog) // what a pick's landing does
+	w.mu.Unlock()
+	if _, ready := w.Complete("SELECT ", 7); !ready {
+		t.Fatal("a schema pick dropped the completion cache")
+	}
+
+	if ev := w.Connect(w.Active()).Job().(*Connected); ev.Err != nil {
+		t.Fatal(ev.Err)
+	}
+	if _, ready := w.Complete("SELECT ", 7); ready {
+		t.Error("a reconnect kept the completion cache")
+	}
+}

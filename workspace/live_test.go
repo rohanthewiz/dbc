@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -583,6 +584,12 @@ func TestLiveWorkspacePickSchema(t *testing.T) {
 			t.Fatalf("connect: %+v, want it on public, the default with tables", ev)
 		}
 
+		// completion's schema is read once here, before any pick: the picks
+		// below must keep it (they change only the ranking) — N-095
+		if err := w.LoadCompletions(context.Background()); err != nil {
+			t.Fatalf("load completions: %v", err)
+		}
+
 		pick := func(p SchemaPick) *SchemaLoaded {
 			t.Helper()
 			st, err := w.PickSchema(p)
@@ -599,6 +606,21 @@ func TestLiveWorkspacePickSchema(t *testing.T) {
 		ev := pick(SchemaPick{Name: "dbc_live_wsb"})
 		if ev.Schema != "dbc_live_wsb" || w.CatalogSchema() != "dbc_live_wsb" || len(ev.Catalog.Rows) != 2 {
 			t.Fatalf("pick wsb: schema %q, tables %v", ev.Schema, ev.Catalog.Rows)
+		}
+		// the pick kept completion's cache, and its tables now rank first
+		buf := "SELECT * FROM t"
+		res, ready := w.Complete(buf, len(buf))
+		if !ready {
+			t.Fatal("the schema pick dropped completion's cache")
+		}
+		order := map[string]int{}
+		for i, it := range res.Items {
+			if _, seen := order[it.Label]; !seen {
+				order[it.Label] = i
+			}
+		}
+		if i2, ok2 := order["t2"]; !ok2 || order["t1"] < i2 {
+			t.Errorf("after picking wsb, t2 should rank before t1: %v", order)
 		}
 		ref, ok := w.TableIndex().Lookup("dbc_live_wsb.t2")
 		if !ok {

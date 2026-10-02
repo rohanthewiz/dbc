@@ -276,6 +276,11 @@ func (w *Workspace) landConnect(ev *Connected, gen int) {
 	// the levels above go in first: the catalog's index reads the schemas
 	w.databases, w.schemas, w.schema = ev.Databases, ev.Schemas, ev.Schema
 	w.setCatalogLocked(ev.Catalog)
+	// a connect — even back to the same connection — reads the schema
+	// afresh for completion: it is how a user gets past a remembered
+	// failed load, or sees what another client changed. A schema pick
+	// does not (PickSchema): see complete.go.
+	w.dropCompletionsLocked()
 	if ev.Catalog != nil {
 		ev.Counts = w.countsJobLocked(ev.Name, gen, db.TableRefs(ev.Catalog.Rows))
 	}
@@ -297,9 +302,6 @@ func (w *Workspace) landConnect(ev *Connected, gen int) {
 // question can reach a schema the sidebar has not loaded (TableIndex.SetSchemas).
 func (w *Workspace) setCatalogLocked(tables *model.Result) {
 	w.catalog, w.tableIdx, w.rowCounts = tables, nil, nil
-	// a new catalog (a connect, a schema pick, a disconnect) is a new
-	// schema for the editor's completion too
-	w.dropCompletionsLocked()
 	if tables != nil {
 		w.tableIdx = db.NewTableIndex(db.TableRefs(tables.Rows))
 		if len(w.schemas) > 0 {
@@ -365,6 +367,8 @@ func (w *Workspace) PickSchema(pick SchemaPick) (Start, error) {
 			return ev
 		}
 		w.schema = schema
+		// the completion cache stays: it holds every schema already
+		// (complete.go), and the new w.schema re-ranks it on the next ask
 		w.setCatalogLocked(cat)
 		ev.Counts = w.countsJobLocked(name, gen, db.TableRefs(cat.Rows))
 		return ev
@@ -474,6 +478,7 @@ func (w *Workspace) Disconnect() (left string, st Start, err error) {
 	w.connGen++ // anything of the old connection's still landing is Stale
 	w.active, w.databases, w.schemas, w.schema = "", nil, nil, ""
 	w.setCatalogLocked(nil)
+	w.dropCompletionsLocked()
 	return left, Start{
 		Notes: []Note{notef(Ok, "disconnected from %s", left)},
 		// Whatever session is open goes — unless, by the time the Job runs,

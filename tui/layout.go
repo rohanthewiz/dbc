@@ -283,7 +283,7 @@ func (m *Model) render() (*Canvas, *caret) {
 	}
 	m.lay = m.computeLayout()
 	l := m.lay
-	var cur *caret
+	var cur, complAt *caret
 
 	m.drawToolbar(c.Sub(l.toolbar))
 	if !l.conns.Empty() {
@@ -302,6 +302,7 @@ func (m *Model) render() (*Canvas, *caret) {
 		m.drag.follow = false
 		if ok && m.focus == focusEditor && m.modal == nil && m.menu == nil {
 			cur = &caret{x, y}
+			complAt = cur
 		}
 	})
 	m.drawPane(c, l.results, m.resultsTitle(), focusGrid, m.st.base, func(s Surface) {
@@ -325,6 +326,11 @@ func (m *Model) render() (*Canvas, *caret) {
 	m.drawStatus(c.Sub(l.status))
 	m.drawSplitterHover(c)
 
+	// the completion popup hangs off the caret, so it is drawn only while
+	// the caret is (a scrolled-away caret, a modal or a menu hides it)
+	if m.complLive() != nil && complAt != nil {
+		m.compl.draw(c, m.st, complAt.x, complAt.y)
+	}
 	if m.modal != nil {
 		if p := m.drawModal(c); p != nil && m.menu == nil {
 			cur = p

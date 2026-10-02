@@ -301,6 +301,7 @@ dragging.
 | `Ctrl+E` | Export the result (format picker; file, or clipboard) |
 | `Ctrl+O` | Pick and run a Go script from `scripts_dir` |
 | `Ctrl+P` | Query history — filter, then `Enter` inserts (never runs) |
+| `Ctrl+Space` | *(editor)* Suggestions at the caret — they also open by themselves after `.`, `::` and two letters of a word (see below) |
 | `Ctrl+T` | List the tables and views on the active connection |
 | `Ctrl+L` | Jump to the connections list |
 | `x` | *(connections)* Disconnect without picking another connection. If the session may hold a transaction, dbc asks first, because disconnecting rolls it back |
@@ -325,6 +326,38 @@ scroll sideways rather than wrap, so a click lands exactly where you point.
 
 In terminals that deliver the kitty keyboard protocol, `⌘E`, `⌘P`, and
 `⌘G` are equivalents for export, history, and handing to an agent.
+
+### Completion
+
+The editor suggests what comes next from the connection's schema — its
+tables, columns, types and foreign keys, read once per connection — and
+from the dialect's vocabulary:
+
+| Where | Suggested |
+| --- | --- |
+| `FROM ▮` · `UPDATE ▮` · `INTO ▮` | tables and views (the browsed schema's first), schemas, the statement's CTEs |
+| `JOIN ▮` | first the tables a foreign key links to the ones already named, as whole clauses: `customers c ON c.id = o.customer_id` |
+| `ON ▮` | the foreign key's condition between the table just joined and the others |
+| `o.▮` | the columns of the table or CTE alias `o` stands for (a `SELECT *` CTE included); `public.▮` lists a schema's tables |
+| `SELECT ▮` · `WHERE ▮` · `= ▮` … | the columns of every table the statement names — written after the caret too, so `SELECT ▮ FROM orders` works — qualified when two share a name; then functions and keywords |
+| `INSERT INTO t (▮` | `t`'s columns |
+| `::▮` · `CAST(x AS ▮` | type names |
+| after a finished phrase | the clauses that can follow it: `WHERE`, `GROUP BY`, `ILIKE`, `ON CONFLICT` … |
+
+Each column shows its type and keys, and each table its DDL. Postgres (and
+bytdb) get Postgres's keywords and its everyday functions with their
+signatures — aggregates, window, string, regex, date/time, JSON/JSONB, array,
+full-text search and admin (`pg_size_pretty`, `pg_terminate_backend` …);
+MySQL and SQLite get their own. Names are quoted where the engine needs it
+(`"Orders"`, `` `order` ``), and keywords follow the case you type in.
+
+In the terminal the list opens by itself after `.` or `::` and on the second
+letter of a word, and follows your typing; `Ctrl+Space` asks anywhere. `↑`/`↓`
+choose, `Tab` picks, `Enter` picks only when that changes the text (at the
+end of a word already typed in full it is a new line), `Esc` closes. In dbc
+web it is Monaco's suggest list, fed by the same rules. Running DDL
+(`CREATE`, `ALTER`, `DROP` …) or a script makes the next suggestion read the
+schema again.
 
 ### Explaining a query
 
@@ -868,6 +901,7 @@ file's connections are changed in the file.
 | `Ctrl+K` | stop the run (in the assistant: stop the answer) |
 | `Ctrl+P` · `Ctrl+E` · `Ctrl+O` | history · export · scripts |
 | `Ctrl+I` | the assistant, and back (`Ctrl+A` stays select-all) |
+| `Ctrl+Space` | suggestions (they also open as you type — see [Completion](#completion)) |
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | new tab · close tab · go to tab |
 | `F1` or `?` | every key |
 

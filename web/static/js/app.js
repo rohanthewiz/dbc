@@ -104,6 +104,7 @@
       }
     }
     if (!connecting) {
+      dbc.editor.warm(name);
       // a disconnected tab (Disconnect in the Connections menu) says so,
       // muted, rather than leaving the header blank
       els.active.textContent = name || "not connected";
@@ -1682,6 +1683,8 @@
       ["Ctrl+O", "scripts — run a Go script from scripts_dir"],
       ["Ctrl+I", "the assistant — and back"],
       ["Ctrl+B", "hide the sidebar — and back"],
+      ["Ctrl+Space", "suggestions from the schema (also as you type, and after “.”)"],
+      ["Tab · Enter · Esc", "in the suggestions: pick · pick · close"],
     ]],
     ["Query tabs", [
       ["Alt+T", "new tab"], ["Alt+W", "close the tab"], ["Alt+1 … Alt+9", "go to tab N"],

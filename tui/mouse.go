@@ -93,6 +93,17 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 	x, y := msg.X, msg.Y
 	shift := msg.Mod&tea.ModShift != 0
 
+	// a click on a completion row picks it; anywhere else closes the popup
+	// and is a click as usual
+	if m.complLive() != nil {
+		if i := m.compl.itemAt(x, y); i >= 0 && msg.Button == tea.MouseLeft {
+			return m.complPick(i)
+		}
+		if m.compl.rect.Contains(x, y) {
+			return nil // its border
+		}
+		m.compl = nil
+	}
 	if m.menu != nil {
 		if m.menu.rect.Contains(x, y) {
 			if msg.Button == tea.MouseLeft {

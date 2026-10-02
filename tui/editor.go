@@ -287,6 +287,26 @@ func (e *editor) Insert(s string) {
 	e.goal = e.dispCol(e.cur)
 }
 
+// Replace swaps the byte range [from, to) of Text() for s as one undo step —
+// a completion's pick replacing the word being typed — and leaves the caret
+// at byte cursor of s, or after s when cursor is negative.
+func (e *editor) Replace(from, to int, s string, cursor int) {
+	e.anc, e.cur = e.posAt(from), e.posAt(to)
+	e.sel = from < to
+	e.lastKind = editOther // its own undo step, not merged into the typing before it
+	if s == "" {
+		e.checkpoint(editOther)
+		e.deleteSelection()
+	} else {
+		e.Insert(s)
+	}
+	e.lastKind = editOther // nor the typing after it
+	if cursor >= 0 && cursor <= len(s) {
+		e.cur = e.posAt(from + cursor)
+	}
+	e.goal = e.dispCol(e.cur)
+}
+
 // Newline breaks the line at the caret, carrying the current line's indent
 // onto the new one — SQL is written in indented clauses, and retyping the
 // indent on every line is the first thing an editor without this makes you

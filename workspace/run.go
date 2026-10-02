@@ -263,6 +263,7 @@ func (w *Workspace) landRun(ev *RunDone, gen int, wrote bool) {
 	if wrote {
 		ev.Counts = w.recountLocked(ev.Conn)
 	}
+	w.dropCompletionsAfterRunLocked(ev)
 	ev.Elapsed = w.endRunLocked()
 	if len(ev.Stmts) > 0 {
 		w.lastStmt = ev.Stmts[len(ev.Stmts)-1]

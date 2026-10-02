@@ -127,6 +127,11 @@ type Workspace struct {
 
 	histWarned bool // a history write failure has been reported once
 
+	// the editor's completion cache: the active connection's schema, and
+	// the generation that drops it (see complete.go)
+	compl    complState
+	complGen int
+
 	// the run slot — one run at a time
 	busy   bool
 	runGen int // bumped per run; a late outcome from an older run is dropped

@@ -333,6 +333,9 @@ func (m *Model) openEditorMenu(x, y int) {
 		{label: "Undo", key: "^Z", act: func(m *Model) tea.Cmd { m.editor.Undo(); return nil }},
 		heading(""),
 		{label: "History…", key: "^P", act: func(m *Model) tea.Cmd { m.openHistory(); return nil }},
+		// the right-click put the caret where it was clicked, so the
+		// suggestions are for that spot
+		{label: "Suggest…", key: "^Space", act: func(m *Model) tea.Cmd { return m.openCompletion(true) }},
 		{label: "✦ Ask the assistant about this query", key: "^A", why: runWhy,
 			act: func(m *Model) tea.Cmd { return m.askAbout("Explain this query.") }},
 	})

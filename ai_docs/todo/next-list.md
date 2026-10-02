@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-094
+**Next ID:** N-097
 
 ## Open
 
@@ -113,6 +113,26 @@ ten session docs in `ai_docs/claude_sessions/`
   only in that session's scratchpad. Commit it as an opt-in test beside
   `web/e2e` (its own module, skipped unless asked for), so the TUI's real
   frames are checked, not just the harness's.
+- **N-094** · raised `2026-1002-0157-sql-completion-from-schema` · value medium
+  Exercise editor completion on a live Postgres and MySQL. Only SQLite (TUI
+  harness, workspace, headless Chrome) and a fake catalog (`sqlcomplete`
+  tests) have driven it. To check: a non-`public` table goes in qualified
+  and `public` bare, quoting of mixed-case names, a `search_path` with more
+  than `public` (bare names outside it get qualified needlessly today), the
+  first-load wait on a big catalog, and the "without the schema" note when
+  the catalog is past the ERD's 250,000-row bound.
+- **N-095** · raised `2026-1002-0157-sql-completion-from-schema` · value low
+  A sidebar schema pick drops the completion cache (`setCatalogLocked`),
+  though `Manager.Schema` already read every schema and only `Focus` changed.
+  On a big Postgres catalog each pick re-reads it all for the next
+  suggestion. Keep the cache across picks on the same connection and
+  generation.
+- **N-096** · raised `2026-1002-0157-sql-completion-from-schema` · value low
+  bytdb gets Postgres's function list in completion
+  (`sqlcomplete/vocab.go`). Some of those functions (full-text search,
+  `pg_*` admin, `jsonb_path_*`) may not be served by bytdb, so completion
+  can suggest a call that fails. Trim the list to what bytdb implements, or
+  give it its own dialect.
 
 ## Roadmap
 

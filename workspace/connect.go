@@ -297,6 +297,9 @@ func (w *Workspace) landConnect(ev *Connected, gen int) {
 // question can reach a schema the sidebar has not loaded (TableIndex.SetSchemas).
 func (w *Workspace) setCatalogLocked(tables *model.Result) {
 	w.catalog, w.tableIdx, w.rowCounts = tables, nil, nil
+	// a new catalog (a connect, a schema pick, a disconnect) is a new
+	// schema for the editor's completion too
+	w.dropCompletionsLocked()
 	if tables != nil {
 		w.tableIdx = db.NewTableIndex(db.TableRefs(tables.Rows))
 		if len(w.schemas) > 0 {

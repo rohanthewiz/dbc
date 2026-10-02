@@ -21,6 +21,15 @@
 // it, so it is plain which statement Ctrl+Enter will run. The server finds
 // it (POST /api/v1/stmt) with the very splitter a run uses, rather than a
 // JavaScript copy of it that would disagree about some quote one day.
+//
+// COMPLETIONS come from the server for the same reason (POST
+// /api/v1/ws/:id/complete, package sqlcomplete): the columns of the tables
+// the statement names, join clauses from foreign keys, the tables after
+// FROM, the dialect's keywords, functions and types — the rules the TUI's
+// popup follows, computed once in Go from the connection's schema. Monaco
+// asks as a word starts and after "." or "::", and filters what came back
+// as the word grows; a list the server cut short (incomplete) is asked for
+// again on each keystroke instead.
 (function () {
   "use strict";
 
@@ -44,6 +53,8 @@
   // The plain textarea has no such state to keep, so it just swaps text.
   const docs = new Map(); // tab key → {model, view}
   let docKey = "";
+  let warmed = "";   // the connection completions were last warmed for
+  let lastNote = ""; // the last completion note logged, so it is logged once
 
   // ── the API the rest of the page uses ─────────────────────────────────
   const api = {
@@ -143,6 +154,14 @@
       const d = docs.get(key);
       if (d && key !== docKey) { d.model.dispose(); docs.delete(key); }
     },
+    // warm asks for completions once when the active connection changes,
+    // so its schema is read while the user is still looking at the page
+    // rather than on their first keystroke. The answer is thrown away.
+    warm(conn) {
+      if (!conn || conn === warmed || !dbc.state.ws) return;
+      warmed = conn;
+      dbc.api("POST", dbc.wsPath("/complete"), { buffer: "", caret: 0 }).then(noteOnce, () => {});
+    },
     // retheme re-reads the palette after the page's light/dark switch.
     retheme() {
       if (ed) { defineTheme(); monaco.editor.setTheme("dbc"); }
@@ -197,6 +216,84 @@
       });
     }
     decos.set(list);
+  }
+
+  // ── completions ────────────────────────────────────────────────────────
+  // noteOnce logs a completion answer's note — the schema could not be
+  // read, so only the vocabulary is offered — once, not on every keystroke.
+  function noteOnce(r) {
+    if (r && r.note && r.note !== lastNote) {
+      lastNote = r.note;
+      dbc.log("warn", r.note);
+    }
+  }
+
+  // snippet turns an item's insert text and cursor into a Monaco snippet
+  // with $0 where the caret should land (between a function's
+  // parentheses). Snippet syntax gives $, } and \ meaning, so they are
+  // escaped in the text around it.
+  const esc = (t) => t.replace(/[\\$}]/g, "\\$&");
+  function snippet(it) {
+    if (it.cursor < 0) return { text: it.insert, rules: undefined };
+    return {
+      text: esc(it.insert.slice(0, it.cursor)) + "$0" + esc(it.insert.slice(it.cursor)),
+      rules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+    };
+  }
+
+  // the server's kinds as Monaco's, for the icons
+  function kindOf(k) {
+    const K = monaco.languages.CompletionItemKind;
+    return ({
+      column: K.Field, table: K.Struct, view: K.Interface, schema: K.Module, alias: K.Variable,
+      join: K.Reference, keyword: K.Keyword, function: K.Function, type: K.TypeParameter,
+    })[k] ?? K.Text;
+  }
+
+  // a table's or a column's documentation is DDL, shown as SQL; a
+  // function's is a sentence, shown as text
+  const SQL_DOC = new Set(["table", "view", "column", "join"]);
+
+  function registerCompletion() {
+    const provider = {
+      triggerCharacters: [".", ":"],
+      async provideCompletionItems(model, position, _ctx, token) {
+        if (!dbc.state.ws) return { suggestions: [] };
+        let r;
+        try {
+          r = await dbc.api("POST", dbc.wsPath("/complete"), {
+            buffer: model.getValue(), caret: model.getOffsetAt(position),
+          });
+        } catch (_) {
+          return { suggestions: [] }; // a lost server is the status bar's to report
+        }
+        if (token.isCancellationRequested) return { suggestions: [] };
+        noteOnce(r);
+        const a = model.getPositionAt(r.from), b = model.getPositionAt(r.to);
+        const range = new monaco.Range(a.lineNumber, a.column, b.lineNumber, b.column);
+        return {
+          incomplete: !!r.incomplete,
+          suggestions: (r.items || []).map((it) => {
+            const sn = snippet(it);
+            return {
+              label: { label: it.label, description: it.detail || undefined },
+              kind: kindOf(it.kind),
+              detail: it.detail || undefined,
+              documentation: !it.doc ? undefined
+                : SQL_DOC.has(it.kind) ? { value: "```sql\n" + it.doc + "\n```" } : it.doc,
+              insertText: sn.text,
+              insertTextRules: sn.rules,
+              filterText: it.filter || undefined,
+              // the server's order is the context's: keep it
+              sortText: it.sort,
+              range,
+            };
+          }),
+        };
+      },
+    };
+    // a provider is per language, and setDriver moves models between these
+    for (const l of ["sql", "pgsql", "mysql"]) monaco.languages.registerCompletionItemProvider(l, provider);
   }
 
   // ── loading Monaco ─────────────────────────────────────────────────────
@@ -313,6 +410,7 @@
 
   function start() {
     defineTheme();
+    registerCompletion();
     ed = monaco.editor.create(host, {
       // The model is made here, not by the editor from a value: a model
       // the editor made itself is disposed when it switches to another
@@ -334,10 +432,17 @@
       lineDecorationsWidth: 8,
       fixedOverflowWidgets: true,
       padding: { top: 8 },
-      // SQL is typed by someone who knows what they want; the word-based
-      // popup that fires on every letter is noise here. Ctrl+Space asks.
-      quickSuggestions: false,
-      suggestOnTriggerCharacters: false,
+      // Suggestions as you type, from the schema (see registerCompletion)
+      // — but never Monaco's word-based ones: words already in the buffer,
+      // offered on every letter, were the noise that once kept this popup
+      // off altogether. Not in strings or comments. Enter accepts only a
+      // pick that changes the text ("smart"), so Enter at the end of a
+      // fully typed word still starts a new line. Ctrl+Space asks anywhere.
+      quickSuggestions: { other: true, comments: false, strings: false },
+      suggestOnTriggerCharacters: true,
+      wordBasedSuggestions: "off",
+      acceptSuggestionOnEnter: "smart",
+      suggest: { showWords: false, showStatusBar: false, preview: false },
       // Off, and not for looks: Monaco's word highlighter (the same word
       // marked elsewhere as the caret rests) disposes a pending delay when
       // the editor switches models — every query tab switch — and rejects

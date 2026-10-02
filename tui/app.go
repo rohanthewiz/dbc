@@ -57,6 +57,10 @@ type Model struct {
 	// reverse.
 	menu  *menu
 	modal modal
+	// compl is the editor's completion popup (complete.go), nil when
+	// closed; complSt its bookkeeping while the schema loads.
+	compl   *complPopup
+	complSt complState
 
 	// ws is the database side: the active connection and its catalog, the
 	// run slot (one run at a time), the pinned session, connects, history,
@@ -214,7 +218,7 @@ func (m *Model) startupLog() {
 		m.logf(logInfo, "loaded config from %s", m.cfg.Path)
 	}
 	m.log(logMuted, "keys: ^R run · ^⇧R/⌥R run all · ^X explain · ⌥X explain analyze · ^K stop · ^A assistant · ^E export · ^P history · ^O scripts · "+
-		"^T tables · ^L conns · x disconnect · d/s database/schema · Tab focus · y/Y/c copy · Enter inspect · -/+ hide/show column · ^Q quit")
+		"^Space suggest · ^T tables · ^L conns · x disconnect · d/s database/schema · Tab focus · y/Y/c copy · Enter inspect · -/+ hide/show column · ^Q quit")
 	m.log(logMuted, "mouse: click to focus · drag to select · right-click for menus · "+
 		"drag borders to resize · hold Shift (⌥ on macOS) to select terminal text")
 	for _, w := range m.cfg.Warnings {
@@ -297,6 +301,7 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		m.menu = nil // a menu placed for the old size may now be off screen
+		m.compl = nil
 		return nil
 	case tea.KeyPressMsg:
 		return m.key(msg)
@@ -334,6 +339,8 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 	case *workspace.ScriptPrint:
 		m.log(logInfo, msg.Text)
 		return nil
+	case complLoadedMsg:
+		return m.complLoaded(msg)
 	case tickMsg:
 		return m.tick(msg)
 	case clipDoneMsg:
@@ -390,7 +397,19 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		return cmd
 	}
 
+	// the completion popup sits on the editor: its keys come before the
+	// app's chords (Tab picks rather than moving focus), the rest go on
+	if m.complLive() != nil {
+		if cmd, used := m.complKey(k); used {
+			return cmd
+		}
+	}
+
 	switch s {
+	case "ctrl+space":
+		if m.focus == focusEditor {
+			return m.openCompletion(true)
+		}
 	case "ctrl+r":
 		return m.runQuery()
 	case "ctrl+shift+r", "alt+r":
@@ -442,8 +461,10 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 
 	switch m.focus {
 	case focusEditor:
+		ver := m.editor.version
 		m.editor.HandleKey(k)
 		m.drag.follow = true
+		return m.complAfterKey(k, ver)
 	case focusGrid:
 		if k.String() == "z" {
 			m.resZoom = !m.resZoom
@@ -590,6 +611,7 @@ func (m *Model) paste(s string) tea.Cmd {
 	case m.focus == focusEditor:
 		m.editor.Insert(s)
 		m.drag.follow = true
+		m.compl = nil // its word and range are not the buffer's any more
 	}
 	return nil
 }

@@ -35,6 +35,7 @@ func TestWeb(t *testing.T) {
 		{"signed-out page", signedOut},
 		{"boot", boot},
 		{"run a query", runQuery},
+		{"editor completion", completion},
 		{"tables sidebar", tablesSidebar},
 		{"show columns from the menu", columnsFromMenu},
 		{"show columns with c", columnsWithKey},
@@ -109,6 +110,33 @@ func runQuery(t *testing.T, _ *env, p *rod.Page) {
 			t.Fatalf("grid cells %q lack %s", cells, want)
 		}
 	}
+}
+
+// completion: typing "c." after the alias is in the statement opens
+// Monaco's suggest widget on the table's columns, from the schema
+// (POST …/complete, package sqlcomplete); typing on narrows it, and Tab
+// picks. A suggestion that never came, or came word-based, fails here.
+func completion(t *testing.T, _ *env, p *rod.Page) {
+	eval(t, p, `() => {
+	  dbc.editor.setText("SELECT  FROM cats c");
+	  const ed = monaco.editor.getEditors()[0];
+	  ed.setPosition({ lineNumber: 1, column: 8 });
+	  ed.focus();
+	}`)
+	p.Keyboard.MustType(input.KeyC, input.Period)
+	rows := `() => [...document.querySelectorAll(".suggest-widget.visible .monaco-list-row")]
+	  .map((r) => r.getAttribute("aria-label") || r.textContent).join("|")`
+	waitFor(t, p, "the suggest widget on cats' columns", `() => {
+	  const r = (`+rows+`)();
+	  return ["breed", "age", "name"].every((c) => r.includes(c));
+	}`)
+	p.Keyboard.MustType(input.KeyB, input.KeyR)
+	waitFor(t, p, "the list narrowed to breed", `() => {
+	  const r = (`+rows+`)();
+	  return r.includes("breed") && !r.includes("age");
+	}`)
+	p.Keyboard.MustType(input.Tab)
+	waitFor(t, p, "the pick in the editor", `() => dbc.editor.text() === "SELECT c.breed FROM cats c"`)
 }
 
 // tablesSidebar: the list holds the connection's table with its row count

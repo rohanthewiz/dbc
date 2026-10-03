@@ -90,11 +90,6 @@ ten session docs in `ai_docs/claude_sessions/`
   `driver.Connector`), and every Postgres live suite passes. Also N-094's
   MySQL half: editor completion on a real MySQL (backtick quoting, a
   `<conn>/<database>` pick, the first load), done on Postgres only.
-- **N-099** · raised `2026-1002-1239-web-conn-marks` · value low
-  Neither UI notices a connection the server dropped (a restart, a network
-  cut): the active mark — the web's bar, the TUI's `●` — stays until the
-  next statement fails. A cheap check (the session guard's ping, or a
-  periodic one while idle) could clear or warn on the mark.
 
 ## Roadmap
 
@@ -136,6 +131,12 @@ call.
 - **N-015** · declined `2026-0913-2158-dbc-migrate-replaces-goose` — After
   `down-to 0`, a church migration's Down apparently leaves one table behind.
   A church concern, not a dbc one.
+- **N-099** · declined 2026-10-03 (raised `2026-1002-1239-web-conn-marks`) —
+  Neither UI notices a connection the server dropped (a restart, a network
+  cut): the active mark — the web's bar, the TUI's `●` — stays until the
+  next statement fails. A cheap check (the session guard's ping, or a
+  periodic one while idle) could clear or warn on the mark. Declined by the
+  user; the next statement's failure stays what reports the drop.
 
 ## Closed
 

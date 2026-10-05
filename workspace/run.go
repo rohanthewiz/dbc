@@ -309,8 +309,42 @@ func (w *Workspace) landRun(ev *RunDone, gen int, wrote bool) {
 			ev.Plan, w.plan = p, p
 		}
 	}
+	ev.Notes = append(ev.Notes, doneNote(ev))
+}
+
+// doneNote is the log line that closes a successful run, the pair of
+// Run's "running … on …" note. The status bar also gets a summary, but it
+// sits away from the log and reads the same before and after a rerun that
+// returns the same count, so on its own a finished run looked like one
+// still going: the log's last line was still "running …".
+//
+// The time is the whole run's (Elapsed, the slot held), not the last
+// statement's Result.Duration: it is what the user waited. The rows are
+// the count fetched; the "showing N" cap is a UI's (max_display_rows), and
+// each UI logs that itself.
+//
+//	statement 3/3 completed on Pilot in 1.234s — 42 rows
+//	3 statements completed on Pilot in 2.5s — showing the last result: 1 affected
+func doneNote(ev *RunDone) Note {
+	took := ev.Elapsed.Round(time.Millisecond)
+	what := ev.Tag
 	if len(ev.Stmts) > 1 {
-		ev.Notes = append(ev.Notes, notef(Ok, "%d statements completed — showing the last result", len(ev.Stmts)))
+		what = fmt.Sprintf("%d statements", len(ev.Stmts))
+	}
+	summary := ""
+	if r := ev.Result; r != nil {
+		summary = fmt.Sprintf("%d rows", len(r.Rows))
+		if r.IsExec {
+			summary = fmt.Sprintf("%d affected", r.Affected)
+		}
+	}
+	switch {
+	case summary == "": // a driver handed back no result: say it finished all the same
+		return notef(Ok, "%s completed on %s in %s", what, ev.Conn, took)
+	case len(ev.Stmts) > 1:
+		return notef(Ok, "%s completed on %s in %s — showing the last result: %s", what, ev.Conn, took, summary)
+	default:
+		return notef(Ok, "%s completed on %s in %s — %s", what, ev.Conn, took, summary)
 	}
 }
 

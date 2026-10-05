@@ -140,6 +140,31 @@ func TestRunLandsItsOutcome(t *testing.T) {
 	}
 }
 
+// A successful run ends with an Ok note in the log, the pair of its
+// "running …" note — without it the log's last line said a finished run was
+// still going. It names the run, the connection and what came back.
+func TestRunLogsCompletion(t *testing.T) {
+	w := newTestWorkspace(t)
+	last := func(ev *RunDone) Note {
+		t.Helper()
+		if ev.Err != nil || len(ev.Notes) == 0 {
+			t.Fatalf("event = %+v", ev)
+		}
+		return ev.Notes[len(ev.Notes)-1]
+	}
+
+	n := last(run(t, w, "SELECT id FROM cats"))
+	if n.Level != Ok || !strings.HasPrefix(n.Text, "query completed on demo-sqlite in ") || !strings.HasSuffix(n.Text, " — 8 rows") {
+		t.Errorf("single statement: %+v", n)
+	}
+
+	n = last(run(t, w, "CREATE TEMP TABLE done_t (x INT)", "INSERT INTO done_t VALUES (1), (2)"))
+	if n.Level != Ok || !strings.HasPrefix(n.Text, "2 statements completed on demo-sqlite in ") ||
+		!strings.HasSuffix(n.Text, " — showing the last result: 2 affected") {
+		t.Errorf("several statements: %+v", n)
+	}
+}
+
 // ONE RUN AT A TIME: a second request is refused in words while the first
 // is in flight — but still recorded in the history.
 func TestBusyRefusal(t *testing.T) {

@@ -905,7 +905,8 @@ brings back what you left.
 
 Keep a whole scratchpad of SQL in the editor and run one statement at a time:
 `Ctrl+R` executes only the statement the cursor sits in, and the log says
-which one (`running statement 2/4 …`). Select a region first and `Ctrl+R`
+which one (`running statement 2/4 …`), then that it finished
+(`statement 2/4 completed on pg in 12ms — 3 rows`). Select a region first and `Ctrl+R`
 runs exactly that instead — a selection holding several statements runs them
 in order, stopping at the first failure, with the last result shown in the
 table.

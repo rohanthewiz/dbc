@@ -23,8 +23,10 @@ import (
 //	Update ◄── *workspace.RunDone (already landed in ws) ◄──┘
 //	  └─► runDone: grid, plan tab, log, status bar
 
-// tickMsg refreshes the status bar's elapsed time while run gen is in flight.
-type tickMsg struct{ gen int }
+// tickMsg refreshes the status bar's elapsed time while run gen is in flight
+// on tab tab. A tick for a tab not on screen is dropped; activating the tab
+// re-arms it (tabs.go).
+type tickMsg struct{ gen, tab int }
 
 // tickEvery is how often the status bar's elapsed time refreshes while a run
 // is in flight — often enough that a slow query looks alive, not hung.
@@ -99,7 +101,8 @@ func (m *Model) startRun(st workspace.Start, err error) tea.Cmd {
 	}
 	m.setStatus(m.ws.RunningStatus())
 	m.catsAfterTransition()
-	return tea.Batch(job(st.Job), tickCmd(st.Gen))
+	m.active().gen = st.Gen
+	return tea.Batch(m.tag(job(st.Job)), m.tickCmd(st.Gen))
 }
 
 // ---------------------------------------------------------------------------
@@ -113,7 +116,7 @@ func (m *Model) startRun(st workspace.Start, err error) tea.Cmd {
 // the user left off; a pick the database no longer has falls back to the
 // default schema (workspace.SchemaPick).
 func (m *Model) connectCmd(name string) tea.Cmd {
-	return job(m.ws.ConnectPick(name, m.schemaPicks[name]).Job)
+	return m.tag(job(m.ws.ConnectPick(name, m.schemaPicks[name]).Job))
 }
 
 // cancelConnect abandons the connect in flight. It reports false when there
@@ -131,7 +134,7 @@ func (m *Model) cancelConnect() bool {
 func (m *Model) setActive(name string) tea.Cmd {
 	st := m.ws.SwitchPick(name, m.schemaPicks[name])
 	m.notes(st.Notes)
-	return job(st.Job)
+	return m.tag(job(st.Job))
 }
 
 // connected draws a connect's outcome. On a switch, the session pinned to
@@ -154,7 +157,7 @@ func (m *Model) connected(ev *workspace.Connected) tea.Cmd {
 	m.refreshConns()
 	m.refreshTables()
 	m.catsAfterTransition()
-	return tea.Batch(m.releaseThenClose(ev), job(ev.Counts))
+	return tea.Batch(m.tag(m.releaseThenClose(ev)), m.tag(job(ev.Counts)))
 }
 
 // sessionReleased tells the user when a released session took state with
@@ -214,19 +217,25 @@ func (m *Model) runScript(path string) tea.Cmd {
 	return m.startRun(m.ws.RunScript(path))
 }
 
-// tickCmd schedules the next elapsed-time refresh for run gen.
-func tickCmd(gen int) tea.Cmd {
-	return tea.Tick(tickEvery, func(time.Time) tea.Msg { return tickMsg{gen: gen} })
+// tickCmd schedules the next elapsed-time refresh for run gen of the tab
+// on screen.
+func (m *Model) tickCmd(gen int) tea.Cmd {
+	tab := m.active().key
+	return tea.Tick(tickEvery, func(time.Time) tea.Msg { return tickMsg{gen: gen, tab: tab} })
 }
 
-// tick refreshes the running status and re-arms itself until the run ends.
+// tick refreshes the running status and re-arms itself until the run ends,
+// or until its tab leaves the screen (its status is not the one drawn).
 func (m *Model) tick(msg tickMsg) tea.Cmd {
+	if msg.tab != m.active().key {
+		return nil
+	}
 	status, ok := m.ws.Ticking(msg.gen)
 	if !ok {
 		return nil
 	}
 	m.setStatus(status)
-	return tickCmd(msg.gen)
+	return m.tickCmd(msg.gen)
 }
 
 // runDone draws a run's outcome, which the workspace has already landed.
@@ -237,7 +246,7 @@ func (m *Model) runDone(ev *workspace.RunDone) tea.Cmd {
 		return nil // a straggler from a run that was already written off
 	}
 	m.catsAfterTransition()
-	recount := job(ev.Counts)
+	recount := m.tag(job(ev.Counts))
 	if ev.Err != nil {
 		m.notes(ev.Notes)
 		m.setStatus(ev.Status)

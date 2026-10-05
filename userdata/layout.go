@@ -21,6 +21,20 @@ type Layout struct {
 	LogH       int     `json:"log_h,omitempty"`
 	EdFrac     float64 `json:"ed_frac,omitempty"`
 	SideHidden bool    `json:"side_hidden,omitempty"`
+
+	// Tabs are the query tabs, in strip order, and ActiveTab the index of
+	// the one on screen. Empty from an older dbc: one tab, as before.
+	Tabs      []LayoutTab `json:"tabs,omitempty"`
+	ActiveTab int         `json:"active_tab,omitempty"`
+}
+
+// LayoutTab is one saved query tab: what it is called, the connection it
+// was on, and the console it showed (a name within that connection's
+// database's consoles). The console's text is in its file, not here.
+type LayoutTab struct {
+	Title   string `json:"title"`
+	Conn    string `json:"conn,omitempty"`
+	Console string `json:"console,omitempty"`
 }
 
 // LayoutFile is where the TUI's layout persists, beside the schema picks.

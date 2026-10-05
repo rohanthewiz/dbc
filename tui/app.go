@@ -68,6 +68,17 @@ type Model struct {
 	// drawing and calls it to start work; see package workspace.
 	ws *workspace.Workspace
 
+	// tabs are the query tabs (tabs.go); tabs[curTab] is the one on screen,
+	// whose workspace and widgets are the fields above (m.ws, m.editor, …).
+	// nextTabKey numbers new tabs for tagging their events.
+	tabs       []*queryTab
+	curTab     int
+	nextTabKey int
+	// savedLayoutTabs / savedActiveTab are the tabs the last run saved,
+	// held from restoreLayout until New can rebuild them (restoreTabs).
+	savedLayoutTabs []userdata.LayoutTab
+	savedActiveTab  int
+
 	resTab  resultsTab // which tab the results pane shows: the grid or the plan
 	resZoom bool       // the results pane has the whole centre column (z)
 
@@ -188,17 +199,10 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Model {
 		m.layoutFile = userdata.LayoutFile()
 		m.restoreLayout(userdata.LoadLayout(m.layoutFile))
 	}
-	// The sink carries a script's s.Show / s.Print, which fire mid-run from
-	// the script's goroutine, to Update through m.send. It reads m.send when
-	// it fires, not now: Run installs Program.Send after New returns.
-	//
-	// No WholeCatalog: the Tables pane has the web's database and schema
-	// pickers (navigator.go), so a Postgres connection opens on its default
-	// schema, as in the web, and "all schemas" is a pick away rather than a
-	// catalog read of every schema on every connect.
-	m.ws = workspace.New(cfg, mgr, hist, workspace.Options{
-		Sink: func(e workspace.Event) { m.send(e) },
-	})
+	// the first query tab is the workspace and widgets built here; see
+	// newWorkspace for the sink and the catalog choice
+	m.initTabs()
+	m.ws = m.newWorkspace(m.active().key, hist)
 	m.refreshConns()
 
 	// The editor opens on the console of the connection about to be
@@ -216,6 +220,7 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Model {
 	case cfg.Demo:
 		m.editor.SetText("SELECT id, name, breed, age, adopted FROM cats ORDER BY age")
 	}
+	m.restoreTabs(m.savedLayoutTabs, m.savedActiveTab)
 
 	m.startupLog()
 	m.setStatus("ready")
@@ -260,7 +265,13 @@ func (m *Model) startupLog() {
 
 // Init starts the first connect, which also fills the tables sidebar.
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.connectCmd(m.ws.Active()), m.catsInit())
+	// a restored tab connects to the connection it was saved on (lazy, see
+	// restoreTabs); otherwise the workspace's default
+	conn := m.ws.Active()
+	if t := m.active(); t.lazy != "" {
+		conn, t.lazy = t.lazy, ""
+	}
+	return tea.Batch(m.connectCmd(conn), m.catsInit())
 }
 
 // Run builds the model and runs the program until the user quits.
@@ -280,9 +291,11 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 
 	m.shutdown()
 	m.saveLayout()
-	if werr := m.saveConsole(); werr != nil {
-		fmt.Fprintf(os.Stderr, "could not save the editor buffer: %v\n", werr)
-	}
+	m.forEachTab(func() {
+		if werr := m.saveConsole(); werr != nil {
+			fmt.Fprintf(os.Stderr, "could not save the editor buffer: %v\n", werr)
+		}
+	})
 	return err
 }
 
@@ -309,11 +322,15 @@ func (f lineWriter) Write(p []byte) (int, error) {
 // cats, save and stop the assistant, then release the pinned connection. A
 // connect still dialing is abandoned with the run.
 func (m *Model) shutdown() {
-	m.ws.Stop() // the run and any connect still dialing
+	for _, ws := range m.tabWorkspaces() {
+		ws.Stop() // the run and any connect still dialing, in every tab
+	}
 	m.catsClose()
 	m.chatSave() // before close: quitting must not discard the conversation
 	m.chat.close()
-	m.ws.Close() // releases the pinned connection
+	for _, ws := range m.tabWorkspaces() {
+		ws.Close() // releases each tab's pinned connection
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -351,6 +368,10 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 	case tea.BlurMsg:
 		m.hover = hoverState{}
 		return nil
+	case tabMsg:
+		// a workspace's event, tagged with the tab that started it: drawn
+		// now if that tab is on screen, kept for its activation if not
+		return m.routeTab(msg)
 
 	// the workspace's events: a Job's outcome, already landed, or a
 	// script's mid-run output from the sink
@@ -491,6 +512,15 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		return m.toggleChatFocus()
 	case "ctrl+g":
 		return m.openCatsAgents()
+	case "alt+t":
+		return m.newTab()
+	case "alt+w":
+		return m.closeTab(m.curTab, false)
+	case "alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8", "alt+9":
+		if i := int(s[len(s)-1] - '1'); i < len(m.tabs) {
+			return m.activate(i)
+		}
+		return nil
 	case "alt+n":
 		return m.newConsole()
 	case "alt+c":
@@ -690,7 +720,9 @@ func (m *Model) interrupt() tea.Cmd {
 
 // quitCmd cancels anything in flight and ends the program.
 func (m *Model) quitCmd() tea.Cmd {
-	m.ws.Stop()
+	for _, ws := range m.tabWorkspaces() {
+		ws.Stop()
+	}
 	m.quit = true
 	return nil
 }

@@ -181,13 +181,24 @@ func (m *Model) switchConsole(name string) {
 		return
 	}
 	cname := m.lastConsole[d]
-	if cname == "" {
-		cname = userdata.DefaultConsole
-		if names := userdata.ListConsoles(m.consoleDir, d, flat); len(names) > 0 {
-			cname = names[0]
-		}
+	if cname == "" || m.consoleShownElsewhere(d, cname) != nil {
+		// the first console no other query tab shows (tabs.go), else a
+		// new one: two tabs on one database never write one file
+		cname = m.freeConsole(d, userdata.ListConsoles(m.consoleDir, d, flat))
 	}
 	m.openInEditor(d, cname)
+}
+
+// freeConsole is the first of names (database d's consoles) that no other
+// query tab shows, or — all taken, or none — the next new console's name.
+// With one tab it is simply the first console, or DefaultConsole.
+func (m *Model) freeConsole(d userdata.ConsoleDB, names []string) string {
+	for _, n := range names {
+		if m.consoleShownElsewhere(d, n) == nil {
+			return n
+		}
+	}
+	return userdata.NextConsoleName(append(names, m.otherTabConsoles(d)...))
 }
 
 // consoleNames is the editor's database's consoles: those with a file, and
@@ -196,6 +207,13 @@ func (m *Model) consoleNames() []string {
 	names := userdata.ListConsoles(m.consoleDir, m.consoleDB, "")
 	if m.consoleName != "" && !slices.Contains(names, m.consoleName) {
 		names = append(names, m.consoleName)
+	}
+	// and the ones other query tabs show that have no file yet, so a new
+	// console's name never collides with a tab's unsaved one
+	for _, n := range m.otherTabConsoles(m.consoleDB) {
+		if !slices.Contains(names, n) {
+			names = append(names, n)
+		}
 	}
 	return names
 }
@@ -228,8 +246,17 @@ func (m *Model) nextConsole() tea.Cmd {
 		m.log(logInfo, "this database has one console — ⌥N adds another")
 		return nil
 	}
+	// the next one round that no other query tab shows: each console is in
+	// at most one tab's editor (tabs.go)
 	i := slices.Index(names, m.consoleName)
-	m.openInEditor(m.consoleDB, names[(i+1)%len(names)])
+	for step := 1; step < len(names); step++ {
+		n := names[(i+step)%len(names)]
+		if m.consoleShownElsewhere(m.consoleDB, n) == nil {
+			m.openInEditor(m.consoleDB, n)
+			return nil
+		}
+	}
+	m.log(logInfo, "the database's other consoles are open in other tabs — ⌥N adds another")
 	return nil
 }
 
@@ -244,6 +271,20 @@ func (m *Model) consoleMenuItems() []menuItem {
 		label, why := "  "+n, ""
 		if n == m.consoleName {
 			label, why = "● "+n, "it is the one in the editor"
+		}
+		// a console another tab shows is reached by going to that tab:
+		// two editors on one file would each overwrite the other's saves
+		if t := m.consoleShownElsewhere(m.consoleDB, n); t != nil {
+			key := t.key
+			items = append(items, menuItem{label: label + "  · in " + t.title, act: func(m *Model) tea.Cmd {
+				for i, o := range m.tabs {
+					if o.key == key {
+						return m.activate(i)
+					}
+				}
+				return nil
+			}})
+			continue
 		}
 		items = append(items, menuItem{label: label, why: why, act: func(m *Model) tea.Cmd {
 			m.openInEditor(m.consoleDB, n)
@@ -355,10 +396,7 @@ func (m *Model) deleteConsole() {
 	if m.lastConsole[d] == name {
 		delete(m.lastConsole, d)
 	}
-	next := userdata.DefaultConsole
-	if names := userdata.ListConsoles(m.consoleDir, d, ""); len(names) > 0 {
-		next = names[0]
-	}
+	next := m.freeConsole(d, userdata.ListConsoles(m.consoleDir, d, ""))
 	m.logf(logOk, "deleted console %s", name)
 	m.loadIntoEditor(d, next)
 }

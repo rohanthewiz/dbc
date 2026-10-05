@@ -88,9 +88,11 @@ func (m *Model) openCompletion(explicit bool) tea.Cmd {
 			m.setStatus("reading the schema for completion…")
 		}
 		ws := m.ws
-		return func() tea.Msg {
+		// tagged: the load is this tab's, and its popup must not open
+		// over another tab's editor (tabs.go)
+		return m.tag(func() tea.Msg {
 			return complLoadedMsg{err: ws.LoadCompletions(context.Background())}
-		}
+		})
 	}
 	if len(res.Items) == 0 {
 		m.compl = nil

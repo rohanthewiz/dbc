@@ -159,6 +159,9 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 		m.toggleSidebar()
 		return nil
 	}
+	if i, ok := m.tabChipAt(x, y); ok {
+		return m.tabClick(i, n)
+	}
 	if k := m.splitterAt(x, y); k != dragNone {
 		m.drag.kind = k
 		return nil
@@ -475,6 +478,10 @@ func (m *Model) pressButton(b button) tea.Cmd {
 // current selection — so the menu and the keyboard agree on its target.
 func (m *Model) rightClick(x, y int) tea.Cmd {
 	l := m.lay
+	if i, ok := m.tabChipAt(x, y); ok {
+		m.focus = focusEditor
+		return m.openTabMenu(i, x, y+1)
+	}
 	switch {
 	case l.editor.Contains(x, y):
 		m.focus = focusEditor

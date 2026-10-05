@@ -206,6 +206,9 @@ func (m *Model) catsSelfState() (state, status string) {
 	switch {
 	case m.ws.Busy():
 		return cats.StateWorking, m.ws.RunTag()
+	case m.anyBusy():
+		// a query tab left running in the background is still work
+		return cats.StateWorking, "query in another tab"
 	case m.chat.streaming:
 		return cats.StateWorking, "assistant answering"
 	}

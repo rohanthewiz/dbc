@@ -288,7 +288,7 @@ func (m *Model) pickSchema(pick workspace.SchemaPick) tea.Cmd {
 		m.schemaLoading = "all schemas"
 	}
 	m.notes(st.Notes)
-	return job(st.Job)
+	return m.tag(job(st.Job))
 }
 
 // schemaLoaded draws a schema pick's tables, then counts their rows. A load
@@ -303,7 +303,7 @@ func (m *Model) schemaLoaded(ev *workspace.SchemaLoaded) tea.Cmd {
 	if ev.Catalog != nil {
 		m.refreshTables()
 	}
-	return job(ev.Counts)
+	return m.tag(job(ev.Counts))
 }
 
 // ---------------------------------------------------------------------------
@@ -440,11 +440,11 @@ func (m *Model) disconnect(x, y int) tea.Cmd {
 }
 
 // disconnectNow is workspace.Disconnect, then — off the UI goroutine, since
-// it waits on the session lock — the session closed and the pool with it.
-// The TUI's workspace is the only one on its Manager, so the pool has no
-// other user to keep it open for (the web counts its tabs first). An
-// in-memory SQLite pool stays open regardless: db.Manager.Disconnect keeps
-// it, since its contents live there.
+// it waits on the session lock — the session closed, and the pool with it
+// when no other query tab is on that connection (each tab has its own
+// session over the shared pool, as dbc web's tabs do). An in-memory SQLite
+// pool stays open regardless: db.Manager.Disconnect keeps it, since its
+// contents live there.
 func (m *Model) disconnectNow() tea.Cmd {
 	left, st, err := m.ws.Disconnect()
 	if err != nil {
@@ -457,27 +457,39 @@ func (m *Model) disconnectNow() tea.Cmd {
 	m.refreshConns()
 	m.refreshTables()
 	m.catsAfterTransition()
-	mgr, release := m.mgr, st.Job
-	return func() tea.Msg {
+	mgr, release, shared := m.mgr, st.Job, m.tabOn(left)
+	return m.tag(func() tea.Msg {
 		var out tea.Msg
 		if ev := release(); ev != nil {
 			out = ev
 		}
-		mgr.Disconnect(left)
+		if !shared {
+			mgr.Disconnect(left)
+		}
 		return out
-	}
+	})
 }
 
 // releaseThenClose is a switch's Release job, followed — when the switch
 // left a derived connection ("<conn>/<database>") — by closing that pool,
 // so browsing a server's databases does not leave one open per database
 // visited (see workspace.Derived). The close is skipped when the sidebar is
-// back on that connection, or dialing it, by the time the release is done.
+// back on that connection, or dialing it, by the time the release is done,
+// and when another query tab is on it (tabs.go).
 func (m *Model) releaseThenClose(ev *workspace.Connected) tea.Cmd {
-	if ev.Left == "" || !m.ws.Derived(ev.Left) {
+	return m.releaseThenCloseOn(m.ws, ev)
+}
+
+// releaseThenCloseOn is releaseThenClose for ws, which may be a background
+// tab's (routeTab runs a background switch's release at once). Whether
+// another tab is on the connection left is read now, on the UI goroutine —
+// the tabs are the Model's — and the workspace's own state when the
+// release is done.
+func (m *Model) releaseThenCloseOn(ws *workspace.Workspace, ev *workspace.Connected) tea.Cmd {
+	if ev.Left == "" || !ws.Derived(ev.Left) || m.tabOn(ev.Left) {
 		return job(ev.Release)
 	}
-	ws, mgr, left, release := m.ws, m.mgr, ev.Left, ev.Release
+	mgr, left, release := m.mgr, ev.Left, ev.Release
 	return func() tea.Msg {
 		var out tea.Msg
 		if release != nil {

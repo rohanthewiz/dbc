@@ -55,6 +55,10 @@ type layout struct {
 	// while it is folded away (^B). Zero when the terminal is too narrow
 	// for a sidebar at all — there is nothing to fold or bring back.
 	foldTab Rect
+
+	// tabChips are the query tabs' chips on the editor's top border, as
+	// drawn (none with a single tab; see drawTabs in tabs.go)
+	tabChips []tabChip
 }
 
 // button is one clickable toolbar chip.
@@ -329,6 +333,7 @@ func (m *Model) render() (*Canvas, *caret) {
 		}
 		m.grid.Draw(s, m.st, m.focus == focusGrid, "run a query with Ctrl+R or ▶ Run — results appear here")
 	})
+	m.drawTabs(c)
 	m.drawResultsTabs(c, l.results)
 	if !l.logR.Empty() {
 		m.drawPane(c, l.logR, "Log", focusLog, m.st.base, func(s Surface) {
@@ -582,6 +587,7 @@ func (m *Model) restoreLayout(l userdata.Layout) {
 		m.edFrac = l.EdFrac
 	}
 	m.sideHidden = l.SideHidden
+	m.savedLayoutTabs, m.savedActiveTab = l.Tabs, l.ActiveTab
 }
 
 // saveLayout keeps the sizes and the fold for the next run. Saved once, at
@@ -591,5 +597,6 @@ func (m *Model) restoreLayout(l userdata.Layout) {
 func (m *Model) saveLayout() {
 	_ = userdata.SaveLayout(m.layoutFile, userdata.Layout{
 		SideW: m.sideW, ChatW: m.chatW, LogH: m.logH, EdFrac: m.edFrac, SideHidden: m.sideHidden,
+		Tabs: m.savedTabs(), ActiveTab: m.curTab,
 	})
 }

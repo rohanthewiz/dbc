@@ -200,7 +200,7 @@ written up in the session docs themselves.
   color (`synParam`, `.hl-p` → `--err`), the same as SQL bind parameters.
   If that reads as alarming next to real errors, give shell variables
   their own color: `codeStyle` in `tui/chat.go` and a rule in `app.css`.
-  closed 2026-10-05, branch `todo/n-108-shell-variables-in-answers-24dd`: shell variables are their own kind, `codehl.Var` (`"v"` in `hl.js`), drawn in the accent at regular weight — `synVar` in the TUI (`codeStyle`), `.cblock .hl-v` on the page. SQL bind parameters keep `Param`'s error color. Tests: `TestLex` shell cases (`V[$HOME]`), e2e `codeHighlight` (an `sh` block's `$HOME` is `.hl-v` in `--accent`, no `.hl-p`).
+  closed 2026-10-05, `2026-1005-1259-shell-vars-own-color`: shell variables are their own kind, `codehl.Var` (`"v"` in `hl.js`), drawn in the accent at regular weight — `synVar` in the TUI (`codeStyle`), `.cblock .hl-v` on the page. SQL bind parameters keep `Param`'s error color. Tests: `TestLex` shell cases (`V[$HOME]`), e2e `codeHighlight` (an `sh` block's `$HOME` is `.hl-v` in `--accent`, no `.hl-p`).
 - **N-112** · raised `2026-1005-1247-web-grid-transpose` · value low
   The transposed web grid gives every record one width (the widest shown
   column's auto width, or `=` to fit content); there is no drag-resize of

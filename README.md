@@ -272,7 +272,8 @@ with no database picker.
 | tables | `c` on the selected table | show its columns: its `information_schema.columns` rows (name, type, nullable, default, length) in the grid, ready to copy |
 | tables | `e` on the selected table | diagram it and its neighbours (an ERD, below), saved as a PNG and opened |
 | editor | click, drag, double-, triple-click | caret, selection, word, line |
-| editor | right-click | run, copy, cut, select all, undo, history, ask the assistant |
+| editor | right-click | run, copy, cut, select all, undo, history, ask the assistant; go to definition, usages, rename; the consoles |
+| editor | `Ctrl`+click | go to where the alias or CTE under the pointer is declared |
 | results | click, drag, shift-click | cell, rectangular range, extend |
 | results | row number click | selects the row |
 | results | header click | sorts by that column (again: descending; again: result order) |
@@ -310,6 +311,7 @@ dragging.
 | `Ctrl+O` | Pick and run a Go script from `scripts_dir` |
 | `Ctrl+P` | Query history — filter, then `Enter` inserts (never runs) |
 | `Alt+N` · `Alt+C` | A new console of the database · the database's next console (see [Consoles](#consoles-and-multi-statement-buffers)) |
+| `F12` · `Shift+F12` · `F2` | *(editor)* On an alias or CTE name: go to its declaration · mark its uses (again: the next one) · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename)) |
 | `Ctrl+Space` | *(editor)* Suggestions at the caret — they also open by themselves after `.`, `::` and two letters of a word (see below) |
 | `Ctrl+T` | List the tables and views on the active connection |
 | `Ctrl+L` | Jump to the connections list |
@@ -376,11 +378,20 @@ web it is Monaco's suggest list, fed by the same rules. Running DDL
 (`CREATE`, `ALTER`, `DROP` …) or a script makes the next suggestion read the
 schema again.
 
-### Go to definition, usages and rename *(dbc web)*
+### Go to definition, usages and rename
 
 On a table's alias or a CTE's name, `F12` (or `Ctrl`/`⌘`+click) goes to
 where it is declared, `Shift+F12` lists every use, and `F2` renames it. All
-three are also in the editor's right-click menu. They work within the
+three are also in the editor's right-click menu, in the terminal as in
+`dbc web`.
+
+In the terminal, `F12` (or `Ctrl`+click) selects the declaration.
+`Shift+F12` marks every use in the statement (underlined) and names their
+lines in the log; pressed again on the same name it moves the caret to the
+next use, wrapping round, and `Esc` or any edit clears the marks. `F2` opens
+a prompt holding the current name: type the new one and `Enter` renames
+every use as one edit, which one `Ctrl+Z` undoes. A refused rename keeps the
+prompt open and says why under the field. They work within the
 statement under the caret, and as SQL scopes names: a subquery that
 aliases a table `o` keeps its own `o` when you rename the outer one, and a
 correlated `o.id` inside it still follows the outer one. The new name is
@@ -1028,7 +1039,7 @@ file's connections are changed in the file.
 | `Ctrl+P` · `Ctrl+E` · `Ctrl+O` | history · export · scripts |
 | `Ctrl+I` | the assistant, and back (`Ctrl+A` stays select-all) |
 | `Ctrl+Space` | suggestions (they also open as you type — see [Completion](#completion)) |
-| `F12` · `Shift+F12` · `F2` | on an alias or CTE name: go to its declaration · list its uses · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename-dbc-web)) |
+| `F12` · `Shift+F12` · `F2` | on an alias or CTE name: go to its declaration · list its uses · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename)) |
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | new tab · close tab · go to tab |
 | `Alt+N` · `Alt+C` | new console · next console of the tab's database |
 | `F1` or `?` | every key |

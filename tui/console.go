@@ -28,6 +28,12 @@ import (
 //	⌥C ──► nextConsole      save, open the database's next console (wraps)
 //	quit ──► saveConsole                 editor ─► its console
 //
+// Every swap parks the console left — caret, selection, scroll and undo
+// (editor.View) — and a console reopened this run is restored from it
+// (editor.Restore) instead of opening at the top with no history. Should
+// its file have changed meanwhile, the new text comes in as one undoable
+// edit over the parked one, as dbc web loads a console saved elsewhere.
+//
 // The swap is on the connect LANDING (connected), not on the pick: a
 // connect that fails or is canceled leaves the connection where it was, and
 // the console must stay with it. Text typed while a connect dials belongs to
@@ -129,11 +135,28 @@ func (m *Model) openInEditor(d userdata.ConsoleDB, name string) bool {
 		m.logf(logWarn, "kept the editor's SQL: could not save its console: %s", serr.StringFromErr(err))
 		return false
 	}
+	// park the console being left with its caret, scroll and undo, so a
+	// switch back finds it as it was (keyed by file: one per console)
+	if m.console != "" {
+		if m.consoleViews == nil {
+			m.consoleViews = map[string]editorView{}
+		}
+		m.consoleViews[m.console] = m.editor.View()
+	}
 	m.setConsole(d, name)
 	text, _ := userdata.LoadConsole(m.console)
 	m.consoleText = text
 	m.compl = nil // a popup over the old text would complete into the new
-	m.editor.SetText(text)
+	if v, ok := m.consoleViews[m.console]; ok {
+		// a file changed since it was left (dbc web, an editor) comes in
+		// as one undoable edit over the parked text — see Restore. It is
+		// then exactly the file's text, so it is not written back unless
+		// the user edits or undoes.
+		delete(m.consoleViews, m.console)
+		m.editor.Restore(v, text)
+	} else {
+		m.editor.SetText(text)
+	}
 	m.logf(logMuted, "console: %s · %s · %s", d.Host, d.Database, name)
 	return true
 }

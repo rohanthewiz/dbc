@@ -610,6 +610,10 @@ func consolesPerDatabase(t *testing.T, e *env, p *rod.Page) {
 	p.MustElement(`#conns .conn-item[data-conn="lite"]`).MustClick()
 	waitConnected(t, p, "lite")
 	editorIs("lite's console back", "SELECT 'on lite'")
+	// and as it was left: the caret after what was typed, the typing still
+	// undoable — its document was kept, not reopened at the top afresh
+	waitFor(t, p, "lite's caret and undo kept", `(n) => dbc.editor.caret() === n &&
+	  monaco.editor.getEditors()[0].getModel().canUndo()`, len("SELECT 'on lite'"))
 
 	// Alt+N: a fresh console of lite, named on the tab
 	before := evalStr(t, p, `() => document.querySelector("#qtabs .qtab.on .qcon").textContent`)

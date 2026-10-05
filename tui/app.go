@@ -100,13 +100,16 @@ type Model struct {
 	// "" before any; consoleDB and consoleName say which it is, and
 	// consoleText is its text as last loaded or saved, so an unchanged
 	// console is not written back. lastConsole is the console last open on
-	// each database this run, which a switch back reopens. See console.go.
-	consoleDir  string
-	console     string
-	consoleDB   userdata.ConsoleDB
-	consoleName string
-	consoleText string
-	lastConsole map[userdata.ConsoleDB]string
+	// each database this run, which a switch back reopens. consoleViews
+	// parks each console left this run (by file) with its caret, scroll
+	// and undo, for the switch back. See console.go.
+	consoleDir   string
+	console      string
+	consoleDB    userdata.ConsoleDB
+	consoleName  string
+	consoleText  string
+	lastConsole  map[userdata.ConsoleDB]string
+	consoleViews map[string]editorView
 
 	// send delivers a message to the running program from outside a Cmd —
 	// the script engine's show/print callbacks, which fire mid-run. Run

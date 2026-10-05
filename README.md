@@ -800,6 +800,11 @@ seeds the console you start on; it is left in place, no longer written.
 console back only when you changed it, so one it merely had open does not
 overwrite what a browser tab saved meanwhile.
 
+A console you switch back to is as you left it: the caret, the selection, the
+scroll and the undo history come back with it (for as long as dbc runs). If its
+file changed while it was away, the new text comes in as one edit, so `Ctrl+Z`
+brings back what you left.
+
 Keep a whole scratchpad of SQL in the editor and run one statement at a time:
 `Ctrl+R` executes only the statement the cursor sits in, and the log says
 which one (`running statement 2/4 …`). Select a region first and `Ctrl+R`
@@ -908,7 +913,9 @@ are checked against the file: if it changed since this tab loaded it (another
 window, the TUI, an editor), it is not overwritten. The tab shows the file's
 text instead and says so in the log, and `Ctrl+Z` brings your text back to
 save over it. Another window's save shows up at once in a tab with no unsaved
-edits to that console. On the first start with consoles, each saved tab's
+edits to that console. A console keeps its caret, scroll and undo history in
+the window for as long as the page is open, even while no tab shows it, so a
+tab that comes back to it finds it as it was left. On the first start with consoles, each saved tab's
 text moves into a console of its database (without overwriting one that
 exists). The tab keeps its own copy too, so an older dbc still opens it.
 

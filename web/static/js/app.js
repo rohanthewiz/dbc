@@ -1569,6 +1569,24 @@
     adopt(c, d.text, d.rev);
   }
 
+  // leaveDoc is for document k once no tab here shows it. Its text is
+  // saved first (saveConsole reads it now, so nothing typed is lost). A
+  // console's document is then KEPT for the page's life, so a tab that
+  // comes back to the console — a connect back to its database, Alt+C, the
+  // tab menu, a new tab — finds its caret, scroll and undo history where
+  // they were, as the TUI does. That is safe because the document stays
+  // current while hidden: another window's save lands in it ("console" ─►
+  // adopt ─► replaceDoc works on any document, shown or not), and a save
+  // from it that meets a newer file loads that file as one undoable edit.
+  // The cost is one Monaco model per console opened, a handful of small
+  // texts. A tab's own document (no console) has no one to come back to
+  // it, and a deleted console's goes with it (onConsolesChanged), so those
+  // are dropped.
+  function leaveDoc(k) {
+    saveConsole(k);
+    if (!cons.has(k)) dbc.editor.dropDoc(k);
+  }
+
   // followConsole keeps tab t on a console of the database its connection
   // is on (ref, from a sidebar; null with no connection, when the tab keeps
   // the console it has). Chained per tab, so two connects in a row swap in
@@ -1612,11 +1630,8 @@
     t.buffer = c.text;
     if (t === state.tab) dbc.editor.useDoc(k, c.text);
     // the document left, if no tab here shows it now: anything typed into
-    // it while this was loading is saved before it goes
-    if (oldKey !== k && !tabs.some((o) => docOf(o) === oldKey)) {
-      saveConsole(oldKey);
-      dbc.editor.dropDoc(oldKey);
-    }
+    // it while this was loading is saved (leaveDoc)
+    if (oldKey !== k && !tabs.some((o) => docOf(o) === oldKey)) leaveDoc(oldKey);
     saveTab(t);
     if (seed) saveConsole(k);
     renderTabs();
@@ -1732,6 +1747,9 @@
     if (d.deleted) {
       const k = ckey(d, d.deleted);
       cons.delete(k); // nothing more is saved to it
+      // a document no tab here shows (kept by leaveDoc) goes now; one a
+      // tab shows goes once that tab has moved to another console
+      if (!tabs.some((o) => docOf(o) === k)) dbc.editor.dropDoc(k);
       for (const t of tabs.filter((o) => docOf(o) === k)) {
         const cdb = t.cdb;
         t.console = "";
@@ -2003,10 +2021,7 @@
     sessionStorage.removeItem(wsKey(t.key));
     // a console another tab here still shows keeps its document
     const k = docOf(t);
-    if (!tabs.some((o) => docOf(o) === k)) {
-      saveConsole(k); // reads the text now, so the drop below loses nothing
-      dbc.editor.dropDoc(k);
-    }
+    if (!tabs.some((o) => docOf(o) === k)) leaveDoc(k);
     if (t.ws) api("DELETE", "/api/v1/ws/" + t.ws).catch(() => { /* already gone */ });
     // a lost tab's saved copy is the other window's: closing it here
     // leaves that alone

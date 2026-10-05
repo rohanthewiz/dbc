@@ -50,7 +50,10 @@
   // ONE DOCUMENT PER QUERY TAB. With Monaco, each tab gets its own model,
   // so switching tabs keeps each one's undo history, cursor and scroll —
   // swapping the text in and out of one model would throw all three away.
-  // The plain textarea has no such state to keep, so it just swaps text.
+  // With consoles the document is the console's (app.js docOf), and it
+  // outlives the tabs showing it (app.js leaveDoc), so a console swapped
+  // out and back keeps all three too. The plain textarea has no such state
+  // to keep, so it just swaps text.
   const docs = new Map(); // tab key → {model, view}
   let docKey = "";
   let warmed = "";   // the connection completions were last warmed for
@@ -149,7 +152,8 @@
       ta.value = ed.getValue();
       scheduleMark();
     },
-    // dropDoc forgets a closed tab's document.
+    // dropDoc forgets a document no tab will show again: a closed tab's
+    // own, or a deleted console's. The one on screen is never dropped.
     dropDoc(key) {
       const d = docs.get(key);
       if (d && key !== docKey) { d.model.dispose(); docs.delete(key); }

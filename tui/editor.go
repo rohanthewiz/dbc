@@ -114,6 +114,56 @@ func (e *editor) SetText(s string) {
 	e.version++
 }
 
+// editorView is all SetText throws away besides the text: the caret, the
+// selection, the scroll and the undo history, with the text they belong
+// to. View and Restore carry it across a console swap (console.go), so a
+// console reopened later is where it was left rather than at the top.
+type editorView struct {
+	text            string // Text() when the view was taken
+	cur, anc        pos
+	sel             bool
+	top, left, goal int
+	undo, redo      []snapshot
+}
+
+// View captures the editor's state for a later Restore. The undo stacks
+// are handed over, not copied: the editor is about to get another buffer
+// by SetText or Restore, which drops its own references to them, and no
+// edit writes into a snapshot (swap moves them whole), so nothing mutates
+// them while they are parked.
+func (e *editor) View() editorView {
+	return editorView{
+		text: e.Text(), cur: e.cur, anc: e.anc, sel: e.sel,
+		top: e.top, left: e.left, goal: e.goal,
+		undo: e.undo, redo: e.redo,
+	}
+}
+
+// Restore loads text with v's caret, selection, scroll and undo history.
+// When text is still what v was taken over, that is all. When it changed
+// meanwhile (another writer saved over the file), v is put back over its
+// own text and the new text replaces it as ONE undo step — dbc web's rule
+// for a console changed elsewhere — so nothing in the history is lost and
+// Ctrl+Z brings back the version that was left. The caret then stays on
+// its row and column, clamped to the new text, rather than jumping to the
+// end the way Replace leaves it.
+func (e *editor) Restore(v editorView, text string) {
+	e.lines = splitLines(v.text) // v.text came from Text(): already normalized
+	e.cur, e.anc, e.sel = e.clamp(v.cur), e.clamp(v.anc), v.sel
+	e.top, e.left, e.goal = max(0, min(v.top, len(e.lines)-1)), v.left, v.goal
+	e.undo, e.redo = v.undo, v.redo
+	e.lastKind = editOther // what is typed next starts its own undo step
+	e.version++
+	if normalize(text, e.single) == v.text {
+		return
+	}
+	at := e.cur
+	e.Replace(0, len(v.text), text, -1)
+	e.cur, e.sel = e.clamp(at), false
+	e.top = min(e.top, len(e.lines)-1)
+	e.goal = e.dispCol(e.cur)
+}
+
 // normalize applies the input rules: CRLF to LF, tabs to spaces, and for a
 // one-line field, newlines to spaces.
 func normalize(s string, single bool) string {

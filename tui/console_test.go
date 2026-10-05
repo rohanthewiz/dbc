@@ -171,3 +171,44 @@ func TestConsoleUnchangedIsNotWrittenBack(t *testing.T) {
 		t.Errorf("the TUI wrote its unchanged copy over the web's: %q", text)
 	}
 }
+
+// A console swapped out and back keeps its caret, scroll and undo history
+// (N-103) — and a file changed meanwhile comes back as one undoable edit
+// over the text that was left, not as a fresh buffer with no history.
+func TestConsoleKeepsCaretAndUndoAcrossSwaps(t *testing.T) {
+	m, _ := consoleModel(t)
+	drive(t, m, nil, m.setActive("a"))
+	m.editor.Insert("SELECT 1;\nSELECT 2;\nSELECT 3;")
+	m.editor.move(pos{1, 4}, false)
+	m.editor.top = 1
+	left := m.console
+
+	drive(t, m, nil, m.setActive("b"))
+	if m.editor.cur != (pos{}) {
+		t.Fatalf("b's console opened with the caret at %v", m.editor.cur)
+	}
+	drive(t, m, nil, m.setActive("a"))
+	if m.editor.cur != (pos{1, 4}) || m.editor.top != 1 {
+		t.Errorf("back on a: caret %v top %d, want {1 4} and 1", m.editor.cur, m.editor.top)
+	}
+	if !m.editor.Undo() || m.editor.Text() != "" {
+		t.Errorf("back on a, undo gave %q — the history did not survive the swap", m.editor.Text())
+	}
+	m.editor.Redo()
+
+	// another writer saves over a's console while b is open
+	drive(t, m, nil, m.setActive("b"))
+	if err := userdata.SaveConsole(left, "SELECT 'web'"); err != nil {
+		t.Fatal(err)
+	}
+	drive(t, m, nil, m.setActive("a"))
+	if got := m.editor.Text(); got != "SELECT 'web'" {
+		t.Fatalf("back on a after a save elsewhere, editor = %q", got)
+	}
+	if m.editor.cur != (pos{0, 4}) {
+		t.Errorf("caret %v, want {0 4}: the old caret clamped to the new text", m.editor.cur)
+	}
+	if !m.editor.Undo() || m.editor.Text() != "SELECT 1;\nSELECT 2;\nSELECT 3;" {
+		t.Errorf("undo after the outside save gave %q, want the text that was left", m.editor.Text())
+	}
+}

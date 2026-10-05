@@ -9,6 +9,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/explain"
 	"github.com/rohanthewiz/dbc/theme"
+	"github.com/rohanthewiz/dbc/userdata"
 )
 
 // layout is where everything is on the current frame. It is computed once
@@ -48,6 +49,12 @@ type layout struct {
 	tabResults, tabPlan Rect
 
 	splitSide, splitChat, splitEd, splitLog Rect
+
+	// foldTab is the sidebar's fold control: ‹ on the Connections box's top
+	// border while the sidebar shows, › on the work column's left edge
+	// while it is folded away (^B). Zero when the terminal is too narrow
+	// for a sidebar at all — there is nothing to fold or bring back.
+	foldTab Rect
 }
 
 // button is one clickable toolbar chip.
@@ -114,13 +121,23 @@ func (m *Model) computeLayout() layout {
 	mainY, mainH := 1, max(h-2, 0)
 
 	x0, x1 := 0, w
-	if w >= sidebarWidth {
+	switch {
+	case w >= sidebarWidth && !m.sideHidden:
 		m.sideW = max(minSide, min(m.sideW, w/3))
 		connH := max(3, min(len(m.conns.items)+2, mainH/2))
 		l.conns = Rect{0, mainY, m.sideW, connH}
 		l.tables = Rect{0, mainY + connH, m.sideW, mainH - connH}
 		l.splitSide = Rect{m.sideW - 1, mainY, 1, mainH}
+		// right of the title, clear of the box's corner — only where it
+		// does not cover the title (a sidebar dragged narrow keeps ^B)
+		if m.sideW-4 > width("╭ Connections ") {
+			l.foldTab = Rect{m.sideW - 4, mainY, 3, 1}
+		}
 		x0 = m.sideW
+	case w >= sidebarWidth:
+		// folded: the › sits on the editor's left border, one row below
+		// its corner, where it reads as a tab pulled out of the edge
+		l.foldTab = Rect{0, mainY + 1, 1, 1}
 	}
 	if m.chat.open {
 		if m.chatW == 0 {
@@ -324,6 +341,7 @@ func (m *Model) render() (*Canvas, *caret) {
 		}
 	}
 	m.drawStatus(c.Sub(l.status))
+	m.drawFoldTab(c)
 	m.drawSplitterHover(c)
 
 	// the completion popup hangs off the caret, so it is drawn only while
@@ -521,4 +539,57 @@ func (m *Model) splitRect(k dragKind) Rect {
 		return m.lay.splitLog
 	}
 	return Rect{}
+}
+
+// drawFoldTab draws the sidebar's fold control where the layout put it.
+func (m *Model) drawFoldTab(c *Canvas) {
+	r := m.lay.foldTab
+	if r.Empty() {
+		return
+	}
+	if m.sideHidden {
+		c.Sub(r).Put(0, 0, "›", m.st.titleFocus.Bold())
+		return
+	}
+	c.Sub(r).Put(0, 0, " ‹ ", onBg(m.st.muted, m.st.panel))
+}
+
+// toggleSidebar folds the sidebar away or brings it back (^B, or a click on
+// ‹ / ›). The keyboard leaves a pane that is folding away for the editor,
+// so it never sits on a pane that is not drawn.
+func (m *Model) toggleSidebar() {
+	m.sideHidden = !m.sideHidden
+	if m.sideHidden && (m.focus == focusConns || m.focus == focusTables) {
+		m.focus = focusEditor
+	}
+	m.menu = nil // a menu placed by the old geometry may now point at the wrong pane
+}
+
+// restoreLayout takes the sizes and the fold saved by the last run. A zero
+// field keeps New's default; the rest are clamped by computeLayout on the
+// first frame, so sizes saved on a bigger terminal still fit a smaller one.
+func (m *Model) restoreLayout(l userdata.Layout) {
+	if l.SideW > 0 {
+		m.sideW = l.SideW
+	}
+	if l.ChatW > 0 {
+		m.chatW = l.ChatW
+	}
+	if l.LogH > 0 {
+		m.logH = l.LogH
+	}
+	if l.EdFrac > 0 && l.EdFrac < 1 {
+		m.edFrac = l.EdFrac
+	}
+	m.sideHidden = l.SideHidden
+}
+
+// saveLayout keeps the sizes and the fold for the next run. Saved once, at
+// quit, rather than on every drag: a drag is many motion events, and the
+// layout only matters to the next start. A failed write is not worth a
+// word on the way out — the next start just opens on the defaults.
+func (m *Model) saveLayout() {
+	_ = userdata.SaveLayout(m.layoutFile, userdata.Layout{
+		SideW: m.sideW, ChatW: m.chatW, LogH: m.logH, EdFrac: m.edFrac, SideHidden: m.sideHidden,
+	})
 }

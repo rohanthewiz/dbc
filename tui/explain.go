@@ -212,6 +212,8 @@ func (m *Model) openPlanMenu(x, y int) {
 		menuItem{label: "↗ Open in browser (interactive)", key: "b", act: func(m *Model) tea.Cmd { return m.planInBrowser() }},
 		menuItem{label: "⤓ Save as PDF", act: func(m *Model) tea.Cmd { return m.planFile("pdf") }},
 		menuItem{label: "⤓ Save as JPEG", act: func(m *Model) tea.Cmd { return m.planFile("jpg") }},
+		menuItem{label: "⤓ Save as PNG — lossless", act: func(m *Model) tea.Cmd { return m.planFile("png") }},
+		menuItem{label: "⤓ Save as Mermaid chart (.mmd)", act: func(m *Model) tea.Cmd { return m.planFile("mmd") }},
 		menuItem{label: "Copy as Mermaid chart", act: func(m *Model) tea.Cmd {
 			return m.copyString(p.Mermaid(), "the plan as a Mermaid chart")
 		}},
@@ -309,7 +311,7 @@ func (m *Model) planInBrowser() tea.Cmd {
 	return nil
 }
 
-// planFile saves the plan as a PDF or a JPEG — the graph and its findings,
+// planFile saves the plan as a PDF, a JPEG, a PNG or a Mermaid chart — the graph and its findings,
 // for a chat, a ticket or an email — beside the pages `b` writes, and opens
 // it in the system's viewer, which is where it gets shared from. It is
 // sized by the metric the plan view is showing, in the config's plan_theme:
@@ -327,15 +329,27 @@ func (m *Model) planFile(ext string) tea.Cmd {
 	opt := explain.PictureOptions{Metric: m.planv.metric, Palette: pal}
 	var data []byte
 	var err error
+	// the same four files dbc web's ⤓ Save menu offers; the Mermaid chart
+	// is text, so it needs neither the metric nor the palette
 	switch ext {
 	case "pdf":
 		data, err = p.PDF(opt)
+	case "png":
+		data, err = p.PNG(opt)
+	case "mmd":
+		data = []byte(p.Mermaid())
 	default:
 		data, err = p.JPEG(opt)
 	}
 	if err == nil {
 		var path string
 		if path, err = p.WriteFile(planDir(), ext, data); err == nil {
+			if ext == "mmd" {
+				// no system viewer is likely to know .mmd; the path is
+				// what gets pasted into a Mermaid editor or a README
+				m.logf(logOk, "saved the plan as a Mermaid chart: %s", path)
+				return nil
+			}
 			openURL("file://" + path)
 			m.logf(logOk, "saved the plan as %s — opened it", path)
 			return nil

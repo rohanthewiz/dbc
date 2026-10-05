@@ -77,6 +77,15 @@ type Model struct {
 	logH   int
 	edFrac float64 // the editor's share of the centre column above the log
 
+	// sideHidden folds the sidebar away (^B, or the ‹ / › tabs), as dbc
+	// web's Ctrl+B does: the work column takes its width. It is separate
+	// from the narrow-terminal rule (sidebarWidth), which hides the sidebar
+	// without the user asking and brings it back on a wider window.
+	sideHidden bool
+	// layoutFile is where the pane sizes and the fold persist ("" under
+	// Options.NoPersist); see restoreLayout.
+	layoutFile string
+
 	drag  dragState
 	click clickState
 	hover hoverState
@@ -176,6 +185,8 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Model {
 		hist = userdata.LoadHistory(userdata.HistoryFile())
 		m.chat.dir = userdata.ChatsDir()
 		m.loadPicks(userdata.PicksFile())
+		m.layoutFile = userdata.LayoutFile()
+		m.restoreLayout(userdata.LoadLayout(m.layoutFile))
 	}
 	// The sink carries a script's s.Show / s.Print, which fire mid-run from
 	// the script's goroutine, to Update through m.send. It reads m.send when
@@ -239,7 +250,7 @@ func (m *Model) startupLog() {
 		m.logf(logInfo, "loaded config from %s", m.cfg.Path)
 	}
 	m.log(logMuted, "keys: ^R run · ^⇧R/⌥R run all · ^X explain · ⌥X explain analyze · ^K stop · ^A assistant · ^E export · ^P history · ^O scripts · "+
-		"^Space suggest · ⌥N/⌥C new/next console · ^T tables · ^L conns · x disconnect · d/s database/schema · Tab focus · y/Y/c copy · Enter inspect · -/+ hide/show column · ^Q quit")
+		"^Space suggest · ⌥N/⌥C new/next console · ^T tables · ^L conns · ^B sidebar · F1 keys · x disconnect · d/s database/schema · Tab focus · y/Y/c copy · Enter inspect · -/+ hide/show column · ^Q quit")
 	m.log(logMuted, "mouse: click to focus · drag to select · right-click for menus · "+
 		"drag borders to resize · hold Shift (⌥ on macOS) to select terminal text")
 	for _, w := range m.cfg.Warnings {
@@ -268,6 +279,7 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 	_, err := p.Run()
 
 	m.shutdown()
+	m.saveLayout()
 	if werr := m.saveConsole(); werr != nil {
 		fmt.Fprintf(os.Stderr, "could not save the editor buffer: %v\n", werr)
 	}
@@ -466,7 +478,14 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+t":
 		return m.listTables()
 	case "ctrl+l":
+		m.sideHidden = false // the list asked for must be on screen
 		m.focus = focusConns
+		return nil
+	case "ctrl+b":
+		m.toggleSidebar()
+		return nil
+	case "f1":
+		m.openHelp()
 		return nil
 	case "ctrl+a":
 		return m.toggleChatFocus()
@@ -481,6 +500,13 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case "shift+tab":
 		m.cycleFocus(-1)
+		return nil
+	}
+
+	// ? is a typed character in the editor and the assistant's input, so
+	// it opens the keys only where nothing takes text (F1 works anywhere)
+	if s == "?" && m.focus != focusEditor && m.focus != focusChat {
+		m.openHelp()
 		return nil
 	}
 

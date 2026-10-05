@@ -152,6 +152,13 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 		}
 		return nil
 	}
+	// the fold tab sits on a pane border, so it is asked before the
+	// splitters (the ‹ shares a row with nothing draggable, the › with the
+	// editor's left border)
+	if l.foldTab.Contains(x, y) {
+		m.toggleSidebar()
+		return nil
+	}
 	if k := m.splitterAt(x, y); k != dragNone {
 		m.drag.kind = k
 		return nil

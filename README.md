@@ -282,7 +282,8 @@ with no database picker.
 | results | right-click | copy cell / row / range / whole result as **HTML table**, Markdown, CSV, TSV, JSON; sort; hide, fit, show columns; export; ask the assistant |
 | any pane | wheel, shift+wheel | scrolls what is under the pointer, vertically / sideways |
 | scrollbars | click, drag | jump, drag |
-| pane borders | drag | resize the sidebar, the editor/results split, the log, the assistant |
+| pane borders | drag | resize the sidebar, the editor/results split, the log, the assistant — the sizes are kept for the next start |
+| `‹` on Connections · `›` on the left edge | click | fold the sidebar away · bring it back (`Ctrl+B`) |
 | assistant | `⤓ insert` on a code block | puts that SQL in the editor at the caret |
 | results title | click `Results` / `◈ Plan` | switches the results pane between the grid and the plan |
 | plan | click / double-click / right-click | select a step (fold it) / step menu: copy, zoom the flame graph, ask the assistant |
@@ -313,6 +314,8 @@ dragging.
 | `Ctrl+Space` | *(editor)* Suggestions at the caret — they also open by themselves after `.`, `::` and two letters of a word (see below) |
 | `Ctrl+T` | List the tables and views on the active connection |
 | `Ctrl+L` | Jump to the connections list |
+| `Ctrl+B` | Fold the sidebar away / bring it back (also the `‹` on the Connections box and the `›` left on the edge) |
+| `F1` · `?` | Every key, in a dialog (`?` outside the editor and the assistant's input) |
 | `x` | *(connections)* Disconnect without picking another connection. If the session may hold a transaction, dbc asks first, because disconnecting rolls it back |
 | `d` / `s` | *(tables, Postgres; `d` on MySQL too)* Pick a database / a schema |
 | `Ctrl+G` | *(inside Cats)* Hand the statement to an agent in another pane |
@@ -480,8 +483,8 @@ works from the shell and on CI too).
 | Form | For | From |
 | --- | --- | --- |
 | PDF | a document, an email, a printer | web: ⤓ Save ▸ PDF · TUI: right-click ▸ **Save as PDF** · shell: `-t pdf -o plan.pdf` |
-| JPEG / PNG | a chat, a ticket, a slide | web: ⤓ Save ▸ JPEG / PNG · TUI: right-click ▸ **Save as JPEG** · shell: `-t jpeg` / `-t png` |
-| Mermaid | a pull request or wiki (GitHub, GitLab and Notion draw ` ```mermaid ` blocks) | web: `m` or ⤓ Save ▸ Copy as Mermaid · TUI: right-click ▸ **Copy as Mermaid chart** · shell: `-t mermaid` |
+| JPEG / PNG | a chat, a ticket, a slide | web: ⤓ Save ▸ JPEG / PNG · TUI: right-click ▸ **Save as JPEG** / **Save as PNG** · shell: `-t jpeg` / `-t png` |
+| Mermaid | a pull request or wiki (GitHub, GitLab and Notion draw ` ```mermaid ` blocks) | web: `m` or ⤓ Save ▸ Copy as Mermaid · TUI: right-click ▸ **Copy as Mermaid chart** or **Save as Mermaid chart (.mmd)** · shell: `-t mermaid` |
 
 The web's files are drawn as the view is showing them: sized by its metric,
 in its light or dark, with the before/after comparison when there is one.

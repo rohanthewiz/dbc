@@ -3,6 +3,7 @@ package tui
 import (
 	"image/jpeg"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -290,7 +291,7 @@ func TestPlanFilesFromTheMenu(t *testing.T) {
 	t.Cleanup(func() { planDir = prev })
 
 	key(t, m, "ctrl+x")
-	for ext, magic := range map[string]string{"pdf": "%PDF-1.4", "jpg": "\xff\xd8\xff"} {
+	for ext, magic := range map[string]string{"pdf": "%PDF-1.4", "jpg": "\xff\xd8\xff", "png": "\x89PNG"} {
 		openLog = nil
 		m.planFile(ext)
 		if len(openLog) != 1 || !strings.HasPrefix(openLog[0], "file://"+dir) || !strings.HasSuffix(openLog[0], "."+ext) {
@@ -300,6 +301,34 @@ func TestPlanFilesFromTheMenu(t *testing.T) {
 		if err != nil || !strings.HasPrefix(string(b), magic) {
 			t.Errorf("%s: %v, starts %.8q", ext, err, b)
 		}
+	}
+}
+
+// Save as Mermaid chart writes the .mmd beside the other files and logs its
+// path, without asking the system to open a file type it rarely knows.
+func TestPlanMermaidFile(t *testing.T) {
+	m := explainModel(t)
+	dir := t.TempDir()
+	prev := planDir
+	planDir = func() string { return dir }
+	t.Cleanup(func() { planDir = prev })
+
+	key(t, m, "ctrl+x")
+	openLog = nil
+	m.planFile("mmd")
+	if len(openLog) != 0 {
+		t.Fatalf("opened %v for a Mermaid chart", openLog)
+	}
+	files, _ := filepath.Glob(filepath.Join(dir, "*.mmd"))
+	if len(files) != 1 {
+		t.Fatalf("files %v\n%s", files, logText(m))
+	}
+	b, _ := os.ReadFile(files[0])
+	if !strings.Contains(string(b), "flowchart BT") {
+		t.Errorf("not a Mermaid chart: %.40q", b)
+	}
+	if !strings.Contains(logText(m), files[0]) {
+		t.Errorf("log does not name the file:\n%s", logText(m))
 	}
 }
 

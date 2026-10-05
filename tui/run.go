@@ -26,7 +26,7 @@ import (
 // tickMsg refreshes the status bar's elapsed time while run gen is in flight
 // on tab tab. A tick for a tab not on screen is dropped; activating the tab
 // re-arms it (tabs.go).
-type tickMsg struct{ gen, tab int }
+type tickMsg struct{ gen, tab, seq int }
 
 // tickEvery is how often the status bar's elapsed time refreshes while a run
 // is in flight — often enough that a slow query looks alive, not hung.
@@ -153,6 +153,7 @@ func (m *Model) connected(ev *workspace.Connected) tea.Cmd {
 	if ev.Err != nil {
 		return nil
 	}
+	m.active().unconnected = false
 	m.switchConsole(ev.Name) // the editor follows the database (console.go)
 	m.refreshConns()
 	m.refreshTables()
@@ -220,15 +221,15 @@ func (m *Model) runScript(path string) tea.Cmd {
 // tickCmd schedules the next elapsed-time refresh for run gen of the tab
 // on screen.
 func (m *Model) tickCmd(gen int) tea.Cmd {
-	tab := m.active().key
-	return tea.Tick(tickEvery, func(time.Time) tea.Msg { return tickMsg{gen: gen, tab: tab} })
+	tab, seq := m.active().key, m.active().tickSeq
+	return tea.Tick(tickEvery, func(time.Time) tea.Msg { return tickMsg{gen: gen, tab: tab, seq: seq} })
 }
 
 // tick refreshes the running status and re-arms itself until the run ends,
 // or until its tab leaves the screen (its status is not the one drawn).
 func (m *Model) tick(msg tickMsg) tea.Cmd {
-	if msg.tab != m.active().key {
-		return nil
+	if msg.tab != m.active().key || msg.seq != m.active().tickSeq {
+		return nil // another tab's, or an earlier visit's chain (tabs.go arrive)
 	}
 	status, ok := m.ws.Ticking(msg.gen)
 	if !ok {

@@ -69,8 +69,14 @@ type queryTab struct {
 	consoleDB                         userdata.ConsoleDB
 
 	// gen is the run generation last started on this tab, so its
-	// elapsed-time ticker can be re-armed when the tab comes back.
-	gen int
+	// elapsed-time ticker can be re-armed when the tab comes back; tickSeq
+	// numbers the tab's visits, so only this visit's ticker chain lives.
+	gen, tickSeq int
+	// unconnected marks a tab whose workspace has never connected (one
+	// opened while the current tab had no connection). Its workspace still
+	// reports the config's default as active (workspace.New), so without
+	// this the tab would look like it is on that connection.
+	unconnected bool
 	// pending holds the events that landed while the tab was in the
 	// background, replayed in order when it is activated.
 	pending []tea.Msg
@@ -155,6 +161,9 @@ func (m *Model) routeTab(tm tabMsg) tea.Cmd {
 	}
 	t := m.tabByKey(tm.key)
 	if t == nil {
+		// a closed tab's straggler draws nothing, but its run has ended,
+		// which may end "working" for the cats host
+		m.catsAfterTransition()
 		return nil
 	}
 	var cmd tea.Cmd
@@ -165,6 +174,7 @@ func (m *Model) routeTab(tm tabMsg) tea.Cmd {
 		// should not wait on a tab switch. The replay then has no
 		// release left to do.
 		if !ev.Stale && ev.Err == nil {
+			t.unconnected = false
 			cmd = m.tagFor(t, m.releaseThenCloseOn(t.ws, ev))
 			ev.Release, ev.Left = nil, ""
 			m.refreshConns() // its ○ in the connections list moved
@@ -220,8 +230,17 @@ func (m *Model) activate(i int) tea.Cmd {
 	}
 	m.park(m.active())
 	m.curTab = i
+	m.load(m.active())
+	return m.arrive()
+}
+
+// arrive is everything a tab coming on screen needs once its fields are
+// loaded — by a switch (activate) or because the tab beside it was closed
+// (closeTab): its marks cleared, what landed in the background replayed,
+// a restored tab's first connect, the ticker re-armed for a run still
+// going, and the cats state, which may read differently from this tab.
+func (m *Model) arrive() tea.Cmd {
 	t := m.active()
-	m.load(t)
 	m.menu = nil
 	t.done, t.failed = false, false
 	m.refreshConns() // the ● follows the tab's connection
@@ -238,6 +257,10 @@ func (m *Model) activate(i int) tea.Cmd {
 		t.lazy = ""
 		cmds = append(cmds, m.connectCmd(name))
 	}
+	// A new chain for this visit: ticks of an earlier visit still in
+	// flight (a quick A → B → A) carry the old number and are dropped, so
+	// chains do not pile up.
+	t.tickSeq++
 	if m.ws.Busy() {
 		m.setStatus(m.ws.RunningStatus())
 		cmds = append(cmds, m.tickCmd(t.gen))
@@ -245,6 +268,7 @@ func (m *Model) activate(i int) tea.Cmd {
 	if m.focus == focusChat && !m.chat.open {
 		m.focus = focusEditor
 	}
+	m.catsAfterTransition()
 	return tea.Batch(cmds...)
 }
 
@@ -281,6 +305,7 @@ func (m *Model) newTab() tea.Cmd {
 	m.openTabConsole(conn)
 	m.logf(logInfo, "%s — its own session; ⌥1…⌥9 switch, ⌥W closes", t.title)
 	if conn == "" {
+		t.unconnected = true
 		return nil
 	}
 	return m.connectCmd(conn)
@@ -317,7 +342,7 @@ func (m *Model) closeTab(i int, confirmed bool) tea.Cmd {
 	if i != m.curTab {
 		// work on it as the active tab, so its fields are the Model's; the
 		// replay's follow-up commands go with the tab
-		m.activate(i)
+		_ = m.activate(i)
 	}
 	t := m.active()
 	if conn, stateful := m.ws.Session(); stateful && !confirmed {
@@ -336,8 +361,11 @@ func (m *Model) closeTab(i int, confirmed bool) tea.Cmd {
 	m.tabs = append(m.tabs[:m.curTab], m.tabs[m.curTab+1:]...)
 	m.curTab = min(m.curTab, len(m.tabs)-1)
 	m.load(m.active())
-	m.refreshConns()
 	m.logf(logInfo, "closed %s", t.title)
+	// the neighbour now on screen arrives as a switch to it would (its
+	// queue, marks, first connect, ticker); arrive also re-reports cats,
+	// which may have been "working" only for the tab just closed
+	arrived := m.arrive()
 
 	// the workspace is let go off the UI goroutine: Close waits for a
 	// statement still running to return from its cancel. A derived
@@ -345,30 +373,30 @@ func (m *Model) closeTab(i int, confirmed bool) tea.Cmd {
 	// switch away from one does (releaseThenClose).
 	closeDerived := left != "" && ws.Derived(left) && !m.tabOn(left)
 	mgr := m.mgr
-	return func() tea.Msg {
+	return tea.Batch(arrived, func() tea.Msg {
 		ws.Close()
 		if closeDerived {
 			mgr.Disconnect(left)
 		}
 		return nil
-	}
+	})
 }
 
 // tabOn reports whether any open tab is on (or connecting to) connection
-// name.
+// name — or on one of its other databases ("<name>/<db>"), whose pool
+// db.Manager.Disconnect(name) would close along with name's (Drop takes
+// the derived pools with their base).
 func (m *Model) tabOn(name string) bool {
+	on := func(c string) bool { return c != "" && (c == name || m.baseOf(c) == name) }
 	for i, t := range m.tabs {
-		ws := t.ws
-		if i == m.curTab {
-			ws = m.ws
-		}
-		if ws == nil {
-			continue
-		}
-		if ws.Active() == name {
+		target, ws := m.tabTarget(i)
+		if on(target) {
 			return true
 		}
-		if c, ok := ws.Connecting(); ok && c == name {
+		if ws == nil || t.lazy != "" {
+			continue
+		}
+		if c, ok := ws.Connecting(); ok && on(c) {
 			return true
 		}
 	}
@@ -387,8 +415,8 @@ func (m *Model) tabTarget(i int) (string, *workspace.Workspace) {
 	if t.lazy != "" {
 		return t.lazy, ws
 	}
-	if ws == nil {
-		return "", nil
+	if ws == nil || t.unconnected {
+		return "", ws
 	}
 	return ws.Active(), ws
 }
@@ -644,15 +672,14 @@ func (m *Model) renameTab() {
 func (m *Model) savedTabs() []userdata.LayoutTab {
 	out := make([]userdata.LayoutTab, len(m.tabs))
 	for i, t := range m.tabs {
-		ws, console := t.ws, t.consoleName
+		console := t.consoleName
 		if i == m.curTab {
-			ws, console = m.ws, m.consoleName
+			console = m.consoleName
 		}
-		lt := userdata.LayoutTab{Title: t.title, Console: console, Conn: t.lazy}
-		if ws != nil && ws.Active() != "" {
-			lt.Conn = ws.Active()
-		}
-		out[i] = lt
+		// tabTarget: a lazy tab's saved connection, not the default its
+		// unconnected workspace reports
+		conn, _ := m.tabTarget(i)
+		out[i] = userdata.LayoutTab{Title: t.title, Console: console, Conn: conn}
 	}
 	return out
 }

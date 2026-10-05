@@ -112,12 +112,23 @@ ten session docs in `ai_docs/claude_sessions/`
   keyof`…). Offered alongside JSON and shell; the user picked those two.
   Only worth it once answers about app code (calling the database from TS)
   show up.
-- **N-110** · raised `2026-1005-1222-web-tab-groups` · value low
+- **N-110** · raised `2026-1005-1222-web-tab-groups` · value medium
   The e2e step "tabs survive a reload" timed out once on "its text back"
   (editor empty after the reload, status "ready on lite", no JS errors),
   then passed on five later runs with and without the tab-groups change.
   Likely a race between the reload and the console's load/save; worth a
   look if it recurs.
+  Updated `2026-1005-1450-tui-web-parity`: recurs (3 of 10 runs), and narrowed down. In that
+  step the new tab's typed text reaches the tab's saved buffer but never
+  its console file: 20s after typing, `dbc.state.tab.console` is
+  `console-2`, `dbc.editor.text()` is the typed SQL, and
+  `GET /api/v1/consoles/…/console-2` is still `{text: "", rev: ""}` —
+  so `scheduleSave`'s `saveConsole(docOf(tab))` writes nothing (the
+  editor is likely on a document other than `docOf(tab)`, or `cons` has no
+  entry for it). After the reload the tab's buffer and the empty console
+  race for the editor. A user typing straight into a new tab could lose
+  that text across a restart, so this is worth fixing in `followConsole` /
+  `showConsole`, not only in the test.
 
 - **N-114** · raised `2026-1005-1352-sql-alias-rename` · value low
   Resolve columns too, starting with the ones the statement itself names:

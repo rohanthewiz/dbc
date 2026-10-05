@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/userdata"
 )
 
@@ -279,5 +280,72 @@ func TestInterruptKeepsABackgroundRun(t *testing.T) {
 	m.interrupt() // not through drive: tea.Quit would re-fire forever there
 	if !m.quit {
 		t.Fatal("Ctrl+C with nothing running did not quit")
+	}
+}
+
+// Closing a tab brings its neighbour on screen as a switch would: a run
+// that landed there in the background is drawn and its mark cleared,
+// rather than left queued to replay stale on a later visit.
+func TestTabCloseArrivesAtTheNeighbour(t *testing.T) {
+	m := newTestModel(t)
+	m.editor.SetText("SELECT 41 + 1 AS answer")
+	run := m.runQuery()
+	key(t, m, "alt+t")
+	drive(t, m, nil, run) // lands in tab 1, in the background
+	if len(m.tabs[0].pending) == 0 {
+		t.Fatal("tab 1's run was not queued")
+	}
+	key(t, m, "alt+w")
+	if len(m.tabs) != 1 || m.grid.colName(0) != "answer" {
+		t.Fatalf("after the close: %d tabs, grid column %q", len(m.tabs), m.grid.colName(0))
+	}
+	if m.active().done || len(m.active().pending) != 0 {
+		t.Error("the neighbour kept its mark or its queue")
+	}
+}
+
+// A tab is on the connection it will dial (a restored one's) or on none
+// (one that never connected) — never on the default its fresh workspace
+// reports: the save keeps a lazy tab's connection, and the default is not
+// held by a tab that is not on it. A tab on <conn>/<db> holds <conn>'s
+// pool too, which a disconnect would close with it.
+func TestTabConnectionsAreTheirOwn(t *testing.T) {
+	m, _ := consoleModel(t)
+	def := m.ws.Active()
+	m.restoreTabs([]userdata.LayoutTab{{Title: "one", Conn: "a"}, {Title: "two", Conn: "b"}}, 1)
+	if saved := m.savedTabs(); saved[0].Conn != "a" {
+		t.Fatalf("a lazy tab re-saved on %q, want a", saved[0].Conn)
+	}
+	drive(t, m, nil, m.Init()) // tab two connects to b
+	if m.tabOn(def) {
+		t.Errorf("%s counted as in use, though no tab is on it", def)
+	}
+
+	key(t, m, "x") // focus is the editor: x types; disconnect through the call
+	m.editor.SetText("")
+	drive(t, m, nil, m.disconnectNow())
+	key(t, m, "alt+t") // a tab opened with no connection to follow
+	if target, _ := m.tabTarget(m.curTab); target != "" {
+		t.Errorf("an unconnected tab reads as on %q", target)
+	}
+
+	// configured only, never dialed: the derived name resolves by config
+	m.cfg.Connections = append(m.cfg.Connections,
+		config.Connection{Name: "pg", Driver: "postgres", DSN: "postgres://localhost/x"})
+	m.tabs[0].lazy = "pg/foo"
+	if !m.tabOn("pg") {
+		t.Error("a tab on pg/foo does not hold pg's pool")
+	}
+}
+
+// A quick A → B → A leaves one elapsed-time chain for A, not two: the
+// earlier visit's tick is dropped.
+func TestTabTickChainsDoNotPileUp(t *testing.T) {
+	m := newTestModel(t)
+	old := tickMsg{gen: 1, tab: m.active().key, seq: m.active().tickSeq}
+	key(t, m, "alt+t")
+	key(t, m, "alt+1")
+	if cmd := m.tick(old); cmd != nil {
+		t.Fatal("a tick from an earlier visit re-armed itself")
 	}
 }

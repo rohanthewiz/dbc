@@ -376,6 +376,24 @@ web it is Monaco's suggest list, fed by the same rules. Running DDL
 (`CREATE`, `ALTER`, `DROP` …) or a script makes the next suggestion read the
 schema again.
 
+### Go to definition, usages and rename *(dbc web)*
+
+On a table's alias or a CTE's name, `F12` (or `Ctrl`/`⌘`+click) goes to
+where it is declared, `Shift+F12` lists every use, and `F2` renames it. All
+three are also in the editor's right-click menu. They work within the
+statement under the caret, and as SQL scopes names: a subquery that
+aliases a table `o` keeps its own `o` when you rename the outer one, and a
+correlated `o.id` inside it still follows the outer one. The new name is
+quoted where the engine needs it (`"Ord"` on Postgres, `` `order` `` on
+MySQL). A rename is refused if the name is already taken in the same query.
+
+It works by scanning the text, not by parsing SQL, the same way
+completion does. Columns are not resolved. A table referenced without an
+alias is found (`orders.id` goes to `FROM orders`) but not renamed:
+renaming the text would not rename the table, only stop the query from
+finding it. An alias used bare, without a column (`SELECT o FROM orders o`,
+MySQL's `DELETE o FROM …`), is left alone.
+
 ### Explaining a query
 
 `Ctrl+X` (or `◈ Explain`) asks the database how it will run the statement
@@ -1010,6 +1028,7 @@ file's connections are changed in the file.
 | `Ctrl+P` · `Ctrl+E` · `Ctrl+O` | history · export · scripts |
 | `Ctrl+I` | the assistant, and back (`Ctrl+A` stays select-all) |
 | `Ctrl+Space` | suggestions (they also open as you type — see [Completion](#completion)) |
+| `F12` · `Shift+F12` · `F2` | on an alias or CTE name: go to its declaration · list its uses · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename-dbc-web)) |
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | new tab · close tab · go to tab |
 | `Alt+N` · `Alt+C` | new console · next console of the tab's database |
 | `F1` or `?` | every key |

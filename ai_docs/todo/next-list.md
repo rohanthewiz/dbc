@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-113
+**Next ID:** N-115
 
 ## Open
 
@@ -132,6 +132,23 @@ ten session docs in `ai_docs/claude_sessions/`
   `PlainCellsTransposed` for its copy/export, but its grid drawing
   (`tui/grid.go`) would need a sideways mode. The ask said "at least the
   html js version", so only the web was done.
+
+- **N-113** · raised `2026-1005-1352-sql-alias-rename` · value medium
+  Go to definition, usages and rename in the TUI editor. `dbc web` has them
+  (F12 / Shift+F12 / F2, from `sqlcomplete.Resolve` and `Rename`); the TUI
+  needs keys (one to jump to the declaration, one to step through the
+  uses, one to rename in place), a way to show the uses (highlight them
+  like the statement marker), and a small prompt for the new name. The
+  resolver is UI-free and works in byte offsets, as the TUI's completion
+  popup already does. The ask was "start with the resolver and web
+  rename", so the TUI was left for later.
+- **N-114** · raised `2026-1005-1352-sql-alias-rename` · value low
+  Resolve columns too, starting with the ones the statement itself names:
+  a CTE's or a derived table's output columns (`WITH t AS (SELECT count(*)
+  AS n …) SELECT t.n`) and select-list aliases used in ORDER BY. Catalog
+  columns would need the schema and a real idea of which table a bare
+  column belongs to. Also: the e2e step covers F12 and F2 but not
+  Shift+F12's references list.
 
 ## Roadmap
 

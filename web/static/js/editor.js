@@ -30,6 +30,10 @@
 // asks as a word starts and after "." or "::", and filters what came back
 // as the word grows; a list the server cut short (incomplete) is asked for
 // again on each keystroke instead.
+//
+// GO TO DEFINITION, USAGES AND RENAME of a table alias or a CTE name come
+// from the server too (POST /api/v1/ws/:id/symbol and …/rename), from the
+// scanner completion reads the statement with: F12, Shift+F12 and F2.
 (function () {
   "use strict";
 
@@ -336,6 +340,88 @@
     for (const l of ["sql", "pgsql", "mysql"]) monaco.languages.registerCompletionItemProvider(l, provider);
   }
 
+  // ── go to definition, usages, rename ───────────────────────────────────
+  // The server's resolver (POST …/symbol and …/rename, sqlcomplete's
+  // resolve.go) knows a table's alias and a CTE's name: where each is
+  // declared and every use of it in the caret's statement, a subquery's own
+  // alias kept apart from the outer one of the same name. Monaco's keys and
+  // right-click menu reach it: F12 or Ctrl/⌘+click goes to the declaration,
+  // Shift+F12 lists the uses, F2 renames. A catalog table is found but not
+  // renamed (renaming the text would only stop the query finding it), and
+  // a column is not resolved at all; the rename box says so rather than
+  // opening.
+  async function symbolAt(model, position) {
+    if (!dbc.state.ws) return null;
+    try {
+      const s = await dbc.api("POST", dbc.wsPath("/symbol"), {
+        buffer: model.getValue(), caret: model.getOffsetAt(position),
+      });
+      return s && s.kind ? s : null;
+    } catch (_) {
+      return null; // a lost server is the status bar's to report
+    }
+  }
+
+  // a {from, to} of UTF-16 offsets as a Monaco range
+  function rangeOf(model, sp) {
+    const a = model.getPositionAt(sp.from), b = model.getPositionAt(sp.to);
+    return new monaco.Range(a.lineNumber, a.column, b.lineNumber, b.column);
+  }
+
+  function registerSymbols() {
+    const definition = {
+      async provideDefinition(model, position) {
+        const s = await symbolAt(model, position);
+        return s ? { uri: model.uri, range: rangeOf(model, s.def) } : null;
+      },
+    };
+    const references = {
+      async provideReferences(model, position, ctx) {
+        const s = await symbolAt(model, position);
+        if (!s) return [];
+        return s.uses
+          .filter((u) => ctx.includeDeclaration || u.from !== s.def.from)
+          .map((u) => ({ uri: model.uri, range: rangeOf(model, u) }));
+      },
+    };
+    const rename = {
+      // where the rename box opens and what it holds — or why it does not
+      // open, said beside the caret
+      async resolveRenameLocation(model, position) {
+        const s = await symbolAt(model, position);
+        const here = new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column);
+        if (!s) return { range: here, text: "", rejectReason: "Rename works on a table alias or a CTE name." };
+        if (s.fixed) return { range: here, text: "", rejectReason: s.fixed };
+        return { range: rangeOf(model, s.at), text: s.name };
+      },
+      // The edits come from the server, which quotes the new name as the
+      // connection's dialect needs. versionId makes Monaco refuse them if
+      // the text changed while the request was out, rather than apply
+      // offsets that no longer point at the name.
+      async provideRenameEdits(model, position, newName) {
+        const versionId = model.getVersionId();
+        let r;
+        try {
+          r = await dbc.api("POST", dbc.wsPath("/rename"), {
+            buffer: model.getValue(), caret: model.getOffsetAt(position), name: newName,
+          });
+        } catch (err) {
+          return { edits: [], rejectReason: err.message };
+        }
+        return {
+          edits: (r.edits || []).map((e) => ({
+            resource: model.uri, versionId, textEdit: { range: rangeOf(model, e), text: e.text },
+          })),
+        };
+      },
+    };
+    for (const l of ["sql", "pgsql", "mysql"]) {
+      monaco.languages.registerDefinitionProvider(l, definition);
+      monaco.languages.registerReferenceProvider(l, references);
+      monaco.languages.registerRenameProvider(l, rename);
+    }
+  }
+
   // ── loading Monaco ─────────────────────────────────────────────────────
   // The AMD build: loader.js, then vs/editor/editor.main. Its web worker is
   // a same-origin file (static/js/monaco-worker.js) that points the worker
@@ -453,6 +539,7 @@
   function start() {
     defineTheme();
     registerCompletion();
+    registerSymbols();
     ed = monaco.editor.create(host, {
       // The model is made here, not by the editor from a value: a model
       // the editor made itself is disposed when it switches to another

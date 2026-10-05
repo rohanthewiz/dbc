@@ -36,6 +36,7 @@ func TestWeb(t *testing.T) {
 		{"boot", boot},
 		{"run a query", runQuery},
 		{"editor completion", completion},
+		{"go to an alias, rename it", aliasRename},
 		{"tables sidebar", tablesSidebar},
 		{"show columns from the menu", columnsFromMenu},
 		{"show columns with c", columnsWithKey},
@@ -142,6 +143,50 @@ func completion(t *testing.T, _ *env, p *rod.Page) {
 	}`)
 	p.Keyboard.MustType(input.Tab)
 	waitFor(t, p, "the pick in the editor", `() => dbc.editor.text() === "SELECT c.breed FROM cats c"`)
+}
+
+// aliasRename: F12 on a qualifier goes to where its alias is declared, and
+// F2 renames the alias — only the outer one, not the subquery's own alias
+// of the same name (POST …/symbol and …/rename, sqlcomplete's resolver).
+// The renamed statement still runs. F2 on a column says why no rename box
+// opens.
+func aliasRename(t *testing.T, _ *env, p *rod.Page) {
+	eval(t, p, `() => {
+	  dbc.editor.setText("SELECT c.name FROM cats c WHERE c.age > (SELECT avg(c.age) FROM cats c)");
+	  const ed = monaco.editor.getEditors()[0];
+	  ed.setPosition({ lineNumber: 1, column: 8 }); // on the first "c"
+	  ed.focus();
+	}`)
+	p.Keyboard.MustType(input.F12)
+	// the outer alias is the "c" after "cats ", at column 25
+	waitFor(t, p, "the caret on the alias's declaration",
+		`() => monaco.editor.getEditors()[0].getPosition().column === 25`)
+
+	p.Keyboard.MustType(input.F2)
+	// focused, not just shown: the box is drawn a moment before it takes
+	// the keyboard, and typing sooner lands in the editor
+	waitFor(t, p, "the rename box, holding the alias and focused", `() => {
+	  const i = document.querySelector(".rename-box input");
+	  return !!i && i.value === "c" && document.activeElement === i;
+	}`)
+	p.MustInsertText("kitty")
+	p.Keyboard.MustType(input.Enter)
+	waitFor(t, p, "the outer alias renamed, the subquery's left alone", `() => dbc.editor.text() ===
+	  "SELECT kitty.name FROM cats kitty WHERE kitty.age > (SELECT avg(c.age) FROM cats c)"`)
+
+	before := gridSeq(t, p)
+	p.MustElement("#run").MustClick()
+	waitResult(t, p, before, "name")
+
+	eval(t, p, `() => {
+	  const ed = monaco.editor.getEditors()[0];
+	  ed.setPosition({ lineNumber: 1, column: 15 }); // on "name"
+	  ed.focus();
+	}`)
+	p.Keyboard.MustType(input.F2)
+	waitFor(t, p, "the reason there is nothing to rename", `() => [...document.querySelectorAll(".monaco-editor-overlaymessage")]
+	  .some((m) => m.textContent.includes("Rename works on a table alias or a CTE name"))`)
+	p.Keyboard.MustType(input.Escape)
 }
 
 // tablesSidebar: the list holds the connection's table with its row count

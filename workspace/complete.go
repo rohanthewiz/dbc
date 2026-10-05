@@ -180,6 +180,18 @@ func (w *Workspace) Complete(buffer string, caret int) (res sqlcomplete.Result, 
 	}), true
 }
 
+// Rename renames the alias or CTE under caret in buffer to name
+// (sqlcomplete.Rename), quoting it as the active connection's dialect needs.
+// It needs no schema, so unlike Complete it never waits on a load. The
+// error is a sentence for the user: why there is nothing to rename.
+func (w *Workspace) Rename(buffer string, caret int, name string) ([]sqlcomplete.Edit, error) {
+	driver := ""
+	if cc, ok := w.cfg.ConnByName(w.Active()); ok {
+		driver = cc.Driver
+	}
+	return sqlcomplete.Rename(buffer, caret, name, driver)
+}
+
 // LoadCompletions reads the active connection's schema into the completion
 // cache, unless it is cached already. It blocks for the catalog round trips
 // (bounded by CompletionTimeout and ctx), so a UI calls it off its event

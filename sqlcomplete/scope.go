@@ -130,6 +130,12 @@ type ref struct {
 	table *erd.Table // the catalog table it names, nil when it is not one
 	cte   *cte       // the CTE it names, or the subquery's own columns
 	at    int        // byte offset where it was written
+
+	// Token indexes, for the resolver (resolve.go), which needs to know
+	// which token is the name and which the alias. nameTok is the name's
+	// last part (meaningful when parts is set), aliasTok the alias
+	// (meaningful when alias is set).
+	nameTok, aliasTok int
 }
 
 // cte is a WITH query (or a derived table) and the columns its SELECT list
@@ -137,6 +143,7 @@ type ref struct {
 type cte struct {
 	name string
 	cols []string
+	tok  int // index of the name's token, for the resolver; unset for a derived table
 }
 
 // handle is how the statement refers to the reference: its alias, or the
@@ -299,6 +306,7 @@ func (s *scope) parseRefs(toks []tok, i int, list bool, c *completer) int {
 				}
 				break
 			}
+			r.nameTok = i
 			i++
 			if i < len(toks) && toks[i].isPunct("(") {
 				// INSERT INTO t (cols), or a function in FROM
@@ -316,6 +324,7 @@ func (s *scope) parseRefs(toks []tok, i int, list bool, c *completer) int {
 		}
 		if i < len(toks) && toks[i].isName() && !(toks[i].kind == tWord && reserved[toks[i].low]) {
 			r.alias = toks[i].text
+			r.aliasTok = i
 			i++
 		}
 		s.add(r, c)
@@ -350,7 +359,7 @@ func (s *scope) parseCTEs(toks []tok, i int, c *completer) int {
 		i++
 	}
 	for i < len(toks) && toks[i].isName() {
-		ct := &cte{name: toks[i].text}
+		ct := &cte{name: toks[i].text, tok: i}
 		i++
 		if i < len(toks) && toks[i].isPunct("(") {
 			close := matching(toks, i)

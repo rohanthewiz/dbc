@@ -2172,6 +2172,9 @@
       ["Ctrl+B", "hide the sidebar — and back"],
       ["Ctrl+Space", "suggestions from the schema (also as you type, and after “.”)"],
       ["Tab · Enter · Esc", "in the suggestions: pick · pick · close"],
+      ["F12 · Ctrl+click", "on a table alias or a CTE name: go to where it is declared"],
+      ["Shift+F12", "list its uses in the statement"],
+      ["F2", "rename it everywhere in the statement (also in the right-click menu)"],
     ]],
     ["Query tabs", [
       ["Alt+T", "new tab"], ["Alt+W", "close the tab"], ["Alt+1 … Alt+9", "go to tab N"],

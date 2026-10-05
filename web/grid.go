@@ -412,6 +412,65 @@ func (s *Server) handleHistory(ctx rweb.Context) error {
 	return ok(ctx, es)
 }
 
+// tabHistory is GET /api/v1/ws/:id/history's answer: the listing, the scope
+// it is in, and the tab's database for the page's scope toggle ("" when the
+// tab has no connection: then only "all" exists).
+type tabHistory struct {
+	Entries []userdata.Entry `json:"entries"`
+	Scope   string           `json:"scope"` // "db" or "all"
+	DB      string           `json:"db"`    // the database's readable name
+}
+
+// handleTabHistory is GET /api/v1/ws/:id/history?q=…&scope=auto|db|all —
+// Ctrl+P from a query tab, scoped to the database the tab is on, as the
+// TUI's picker is (tui/modals.go historyModal). It is per tab because
+// "this database" is the tab's: two tabs on two databases see two lists.
+//
+//	scope=db   ─► entries recorded on the tab's database
+//	scope=all  ─► every entry (what /api/v1/history lists)
+//	scope=auto ─► db if that database has any entries, else all — the
+//	              picker's opening view, decided on the unfiltered history
+//	              so typing never flips the scope under the user
+//
+// The plain /api/v1/history stays as it was, unscoped, for anything that
+// already calls it.
+func (s *Server) handleTabHistory(ctx rweb.Context) error {
+	t, err := s.hub.get(ctx.Request().PathParam("id"))
+	if err != nil {
+		return fail(ctx, err)
+	}
+	req := ctx.Request()
+	all := s.opt.History.Recent()
+	key := t.ws.HistoryKey()
+	scope := req.QueryParam("scope")
+	switch {
+	case key == "":
+		scope = "all"
+	case scope == "db" || scope == "all":
+	default: // auto, or none given
+		scope = "all"
+		if len(userdata.HistoryIn(all, key)) > 0 {
+			scope = "db"
+		}
+	}
+	in := all
+	if scope == "db" {
+		in = userdata.HistoryIn(all, key)
+	}
+	es := userdata.MatchHistory(in, req.QueryParam("q"))
+	if len(es) > historyMax {
+		es = es[:historyMax]
+	}
+	if es == nil {
+		es = []userdata.Entry{}
+	}
+	label := key
+	if i := strings.LastIndexByte(key, '/'); i >= 0 {
+		label = key[i+1:]
+	}
+	return ok(ctx, tabHistory{Entries: es, Scope: scope, DB: label})
+}
+
 type previewReq struct {
 	Name string `json:"name"`
 }

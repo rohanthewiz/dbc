@@ -981,12 +981,32 @@
   // history is Ctrl+P: every statement run here or in the TUI (they share
   // the file), newest first, filtered as you type. Enter puts the chosen
   // one in the editor at the caret — never runs it.
+  //
+  // It opens scoped to the tab's database when that database has history
+  // (the server decides: scope "auto"), and the scope button — or Tab —
+  // flips between that database and all of them, keeping the filter. The
+  // TUI's picker does the same (tui/modals.go historyModal).
   function history() {
     const input = el("input", { type: "search", class: "hfilter", placeholder: "filter by SQL or connection…",
       "aria-label": "Filter history", spellcheck: "false", autocomplete: "off" });
     const list = el("ul", { class: "hlist", role: "listbox" });
     const count = el("span", "hint");
+    const scopeBtn = el("button", { type: "button", class: "linkish", title: "This database, or every database (Tab)" });
     let entries = [], cur = 0, timer = 0, seq = 0;
+    // scope is "auto" until the first answer, then whatever it settled on;
+    // db is the tab's database ("" with no connection: no toggle then)
+    let scope = "auto", db = "";
+
+    function drawScope() {
+      scopeBtn.hidden = !db;
+      scopeBtn.textContent = scope === "db" ? "● " + db + " · ○ all databases" : "○ " + db + " · ● all databases";
+    }
+    function flipScope() {
+      if (!db) return;
+      scope = scope === "db" ? "all" : "db";
+      fetchList();
+    }
+    scopeBtn.addEventListener("click", () => { flipScope(); input.focus(); });
 
     function draw() {
       list.replaceChildren();
@@ -998,7 +1018,8 @@
           el("span", "hsql", h.sql.replace(/\s+/g, " ").trim()));
         list.append(li);
       });
-      count.textContent = entries.length ? dbc.plural(entries.length, "statement") + " · ↑↓ pick · Enter inserts · Esc closes"
+      count.textContent = entries.length ? dbc.plural(entries.length, "statement") + " · ↑↓ pick · Enter inserts · Tab: scope · Esc closes"
+        : scope === "db" && input.value.trim() ? "no statements match on " + db + " — Tab searches every database"
         : "no statements match";
       const c = list.children[cur];
       if (c) c.scrollIntoView({ block: "nearest" });
@@ -1006,9 +1027,10 @@
     async function fetchList() {
       const n = ++seq;
       try {
-        const got = await api("GET", "/api/v1/history?q=" + encodeURIComponent(input.value));
+        const got = await api("GET", dbc.wsPath("/history?q=" + encodeURIComponent(input.value) + "&scope=" + scope));
         if (n !== seq) return;
-        entries = got; cur = 0; draw();
+        entries = got.entries; scope = got.scope; db = got.db; cur = 0;
+        drawScope(); draw();
       } catch (e) { log("err", "history: " + e.message); }
     }
     function pick(i) {
@@ -1024,11 +1046,14 @@
 
     dbc.modal.open({
       title: "History", cls: "wide", focus: input,
-      body: el("div", "history", input, list), foot: el("div", "mfoot", count),
+      body: el("div", "history", input, list), foot: el("div", "mfoot", count, scopeBtn),
       onKey: (e) => {
         if (e.key === "ArrowDown") { cur = Math.min(cur + 1, entries.length - 1); draw(); return true; }
         if (e.key === "ArrowUp") { cur = Math.max(cur - 1, 0); draw(); return true; }
         if (e.key === "Enter") { pick(cur); return true; }
+        // Tab flips the scope rather than walking focus out of the filter:
+        // the filter is the only field, and the button is a click away
+        if (e.key === "Tab" && db) { flipScope(); return true; }
         return false;
       },
       onClose: () => dbc.editor.focus(),
@@ -2165,7 +2190,7 @@
       ["Ctrl+X (nothing selected)", "explain the statement"],
       ["Ctrl+Shift+X · Alt+X", "explain analyze — runs it to time each step"],
       ["Ctrl+K", "stop the run or the connect"],
-      ["Ctrl+P", "history — insert a past statement"],
+      ["Ctrl+P", "history of the tab's database (Tab: every database) — insert a past statement"],
       ["Ctrl+E", "export the result"],
       ["Ctrl+O", "scripts — run a Go script from scripts_dir"],
       ["Ctrl+I", "the assistant — and back"],

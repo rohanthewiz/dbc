@@ -37,6 +37,19 @@ type Entry struct {
 	At   time.Time `json:"at"`
 	Conn string    `json:"conn"`
 	SQL  string    `json:"sql"`
+	// DB is the database the statement ran on, as ConsoleDB.Key — the same
+	// host ─► database identity the consoles are kept by, so "this
+	// database's history" and "this database's consoles" agree, and two
+	// connection names onto one database share both. It is a key rather
+	// than the connection's name because a name is only a label (renaming
+	// "prod" must not orphan its history) and one server holds many
+	// databases.
+	//
+	// omitempty leaves entries written before the field existed as they
+	// were, and an older dbc reading a new line ignores the unknown field.
+	// "" means "database unknown": such an entry shows only under "all
+	// databases", never under a database it might not belong to.
+	DB string `json:"db,omitempty"`
 }
 
 // History is the statements the user has run, oldest first, backed by a
@@ -106,16 +119,25 @@ func LoadHistory(path string) *History {
 // of the history. The entry is kept in memory whether or not the file write
 // works, so a read-only config directory costs persistence, not the session.
 func (h *History) Add(conn, sql string, at time.Time) error {
-	sql = strings.TrimSpace(sql)
-	if sql == "" {
+	return h.AddEntry(Entry{At: at, Conn: conn, SQL: sql})
+}
+
+// AddEntry is Add with the whole entry given — the database (Entry.DB)
+// included, which the workspace knows and Add's callers need not.
+//
+// The repeat check compares the database too: the same query run on one
+// database and then on another is two entries, or the second database's
+// scoped history would be missing a statement that ran on it.
+func (h *History) AddEntry(e Entry) error {
+	e.SQL = strings.TrimSpace(e.SQL)
+	if e.SQL == "" {
 		return nil
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if n := len(h.entries); n > 0 && h.entries[n-1].SQL == sql {
+	if n := len(h.entries); n > 0 && h.entries[n-1].SQL == e.SQL && h.entries[n-1].DB == e.DB {
 		return nil
 	}
-	e := Entry{At: at, Conn: conn, SQL: sql}
 	h.entries = append(h.entries, e)
 	return h.appendLine(e)
 }
@@ -184,6 +206,24 @@ func MatchHistory(entries []Entry, q string) []Entry {
 	for _, e := range entries {
 		if strings.Contains(strings.ToLower(e.SQL), q) ||
 			strings.Contains(strings.ToLower(e.Conn), q) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// HistoryIn keeps the entries recorded on database key (Entry.DB). An empty
+// key keeps everything: with no database to scope to (no connection,
+// consoles off), "this database" can only mean all of them. Entries with no
+// DB — written before the field existed — are in no database's scope; they
+// show under "all".
+func HistoryIn(entries []Entry, key string) []Entry {
+	if key == "" {
+		return entries
+	}
+	out := make([]Entry, 0, len(entries))
+	for _, e := range entries {
+		if e.DB == key {
 			out = append(out, e)
 		}
 	}

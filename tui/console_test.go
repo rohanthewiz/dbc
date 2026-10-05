@@ -212,3 +212,174 @@ func TestConsoleKeepsCaretAndUndoAcrossSwaps(t *testing.T) {
 		t.Errorf("undo after the outside save gave %q, want the text that was left", m.editor.Text())
 	}
 }
+
+// pickMenu runs the open menu's row whose label holds label.
+func pickMenu(t *testing.T, m *Model, label string) {
+	t.Helper()
+	if m.menu == nil {
+		t.Fatalf("no menu open to pick %q from", label)
+	}
+	for i, it := range m.menu.items {
+		if !it.head && strings.Contains(it.label, label) {
+			drive(t, m, nil, m.menuPick(i))
+			return
+		}
+	}
+	t.Fatalf("no menu row %q", label)
+}
+
+// Renaming the editor's console (N-102) moves its file, keeps the editor's
+// text and undo, and refuses a bad or taken name in the prompt, which stays
+// open to fix it.
+func TestRenameConsole(t *testing.T) {
+	m, _ := consoleModel(t)
+	drive(t, m, nil, m.setActive("a"))
+	m.editor.SetText("SELECT 'first'")
+	key(t, m, "alt+n")
+	m.editor.SetText("SELECT 'second'")
+	old := m.console
+
+	m.openEditorMenu(m.lay.editor.X+2, m.lay.editor.Y+1)
+	pickMenu(t, m, "Rename console")
+	p, ok := m.modal.(*promptModal)
+	if !ok {
+		t.Fatalf("modal = %T, want the rename prompt", m.modal)
+	}
+	if p.field.Text() != "console-2" {
+		t.Errorf("prompt prefilled %q", p.field.Text())
+	}
+
+	typeText(t, m, "console") // replaces the selected name: taken
+	key(t, m, "enter")
+	if m.modal == nil || !strings.Contains(p.errMsg, "already has a console named console") {
+		t.Fatalf("a taken name: modal %T, error %q", m.modal, p.errMsg)
+	}
+	p.field.SetText("../escape")
+	key(t, m, "enter")
+	if m.modal == nil || !strings.Contains(p.errMsg, "up to 64") {
+		t.Fatalf("a bad name: modal %T, error %q", m.modal, p.errMsg)
+	}
+	p.field.SetText("tuning")
+	key(t, m, "enter")
+	if m.modal != nil {
+		t.Fatalf("a good name left the prompt open: %q", p.errMsg)
+	}
+
+	if m.consoleName != "tuning" || m.editor.Text() != "SELECT 'second'" {
+		t.Fatalf("after rename: console %q, editor %q", m.consoleName, m.editor.Text())
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Errorf("the old file is still there: %v", err)
+	}
+	if text, _ := userdata.LoadConsole(m.console); text != "SELECT 'second'" {
+		t.Errorf("the renamed file holds %q — the latest text should go with it", text)
+	}
+	// a switch away and back reopens it under its new name
+	drive(t, m, nil, m.setActive("b"))
+	drive(t, m, nil, m.setActive("a"))
+	if m.consoleName != "tuning" || m.editor.Text() != "SELECT 'second'" {
+		t.Errorf("back on a: console %q, editor %q", m.consoleName, m.editor.Text())
+	}
+}
+
+// Deleting the editor's console (N-102) asks first, removes the file, and
+// moves the editor to the database's next console — or, the last one gone,
+// a fresh empty default with no file — without writing the deleted one back.
+func TestDeleteConsole(t *testing.T) {
+	m, _ := consoleModel(t)
+	drive(t, m, nil, m.setActive("a"))
+	m.editor.SetText("SELECT 'first'")
+	key(t, m, "alt+n")
+	m.editor.SetText("SELECT 'second'")
+	doomed := m.console
+
+	m.openEditorMenu(m.lay.editor.X+2, m.lay.editor.Y+1)
+	pickMenu(t, m, "Delete console")
+	pickMenu(t, m, "Keep it")
+	if m.consoleName != "console-2" {
+		t.Fatalf("Keep it deleted it anyway: console %q", m.consoleName)
+	}
+
+	m.openEditorMenu(m.lay.editor.X+2, m.lay.editor.Y+1)
+	pickMenu(t, m, "Delete console")
+	pickMenu(t, m, "✕ Delete")
+	if m.consoleName != "console" || m.editor.Text() != "SELECT 'first'" {
+		t.Fatalf("after delete: console %q, editor %q", m.consoleName, m.editor.Text())
+	}
+	if _, err := os.Stat(doomed); !os.IsNotExist(err) {
+		t.Errorf("the deleted console's file is back or still there: %v", err)
+	}
+
+	// the last one: the editor lands on a fresh default console, no file
+	first := m.console
+	m.confirmDeleteConsole()
+	pickMenu(t, m, "✕ Delete")
+	if m.consoleName != userdata.DefaultConsole || m.editor.Text() != "" {
+		t.Fatalf("after the last delete: console %q, editor %q", m.consoleName, m.editor.Text())
+	}
+	if err := m.saveConsole(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(first); !os.IsNotExist(err) {
+		t.Errorf("an empty fresh console got a file: %v", err)
+	}
+	// and a switch away does not resurrect the deleted console-2 either
+	drive(t, m, nil, m.setActive("b"))
+	if _, err := os.Stat(doomed); !os.IsNotExist(err) {
+		t.Errorf("switching away wrote the deleted console back: %v", err)
+	}
+}
+
+// History is scoped to the database (N-101): Ctrl+P opens on what ran on
+// the editor's database, Tab widens it to every database and back, and a
+// database with no history yet opens on all of them.
+func TestHistoryScopedToTheDatabase(t *testing.T) {
+	m, _ := consoleModel(t)
+	drive(t, m, nil, m.setActive("a"))
+	m.editor.SetText("SELECT 'on a'")
+	key(t, m, "ctrl+r")
+	drive(t, m, nil, m.setActive("b"))
+	m.editor.SetText("SELECT 'on b'")
+	key(t, m, "ctrl+r")
+
+	drive(t, m, nil, m.setActive("a-too")) // the same database as a
+	key(t, m, "ctrl+p")
+	h, ok := m.modal.(*historyModal)
+	if !ok {
+		t.Fatalf("modal = %T", m.modal)
+	}
+	if !h.scoped || len(h.shown) != 1 || h.shown[0].SQL != "SELECT 'on a'" {
+		t.Fatalf("scoped history = %v (scoped %v), want only a's statement", h.shown, h.scoped)
+	}
+	if !strings.Contains(h.title(), "a.db") {
+		t.Errorf("the title does not name the database: %q", h.title())
+	}
+	// the scope chip is drawn beside the filter, and a click on it flips
+	// the scope just as Tab does
+	x, y := findText(t, frame(m), "○ all")
+	click(t, m, x, y)
+	if h.scoped {
+		t.Fatal("a click on the scope chip did not widen the history")
+	}
+	key(t, m, "tab")
+	key(t, m, "tab")
+	if h.scoped || len(h.shown) < 2 {
+		t.Fatalf("after Tab: scoped %v, %d entries — want every database", h.scoped, len(h.shown))
+	}
+	typeText(t, m, "on b")
+	if len(h.shown) != 1 {
+		t.Errorf("the filter over all databases kept %d", len(h.shown))
+	}
+	key(t, m, "tab")
+	if !h.scoped || len(h.shown) != 0 {
+		t.Errorf("back on a, 'on b' should match nothing: %v", h.shown)
+	}
+	key(t, m, "esc")
+
+	// the demo database has run nothing: its picker opens on everything
+	drive(t, m, nil, m.setActive(config.DemoSQLite))
+	key(t, m, "ctrl+p")
+	if h := m.modal.(*historyModal); h.scoped || len(h.shown) < 2 {
+		t.Errorf("a database with no history opened scoped %v with %d entries", h.scoped, len(h.shown))
+	}
+}

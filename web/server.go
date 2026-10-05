@@ -261,6 +261,7 @@ func (s *Server) routes() {
 	r.Post("/api/v1/ws/:id/run", s.handleRun)
 	r.Post("/api/v1/ws/:id/preview", s.handlePreview)
 	r.Post("/api/v1/ws/:id/columns", s.handleColumns)
+	r.Get("/api/v1/ws/:id/history", s.handleTabHistory)
 	r.Post("/api/v1/ws/:id/complete", s.handleComplete)
 	r.Post("/api/v1/ws/:id/symbol", s.handleSymbol)
 	r.Post("/api/v1/ws/:id/rename", s.handleRename)

@@ -127,6 +127,18 @@ func (d ConsoleDB) Valid() bool {
 	return ValidConsoleName(d.Host) && ValidConsoleName(d.Database)
 }
 
+// Key is d as one string, "host/database": its two directory levels, which
+// ConsoleDBOf already made file-name safe, so neither holds a "/". It is
+// how a history entry records its database (Entry.DB) — stable across
+// connection renames, the same in the TUI and dbc web, and comparable as a
+// plain string. The zero ConsoleDB's key is "".
+func (d ConsoleDB) Key() string {
+	if d.Host == "" && d.Database == "" {
+		return ""
+	}
+	return d.Host + "/" + d.Database
+}
+
 // dir is d's directory under root.
 func (d ConsoleDB) dir(root string) string { return filepath.Join(root, d.Host, d.Database) }
 

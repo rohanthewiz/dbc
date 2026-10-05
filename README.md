@@ -308,7 +308,7 @@ dragging.
 | `Ctrl+A` | Open the assistant / move between it and the editor |
 | `Ctrl+E` | Export the result (format picker; file, or clipboard) |
 | `Ctrl+O` | Pick and run a Go script from `scripts_dir` |
-| `Ctrl+P` | Query history — filter, then `Enter` inserts (never runs) |
+| `Ctrl+P` | Query history of this database (`Tab`: every database) — filter, then `Enter` inserts (never runs) |
 | `Alt+N` · `Alt+C` | A new console of the database · the database's next console (see [Consoles](#consoles-and-multi-statement-buffers)) |
 | `Ctrl+Space` | *(editor)* Suggestions at the caret — they also open by themselves after `.`, `::` and two letters of a word (see below) |
 | `Ctrl+T` | List the tables and views on the active connection |
@@ -774,9 +774,20 @@ and `Enter` drops the statement into the editor at the cursor. It is *not* run:
 a recalled query can be edited first, which is usually why you went looking
 for it.
 
+The history is one list, but it opens on **this database**: the statements
+run on the database the editor is connected to — the same idea of "database"
+the consoles use, so two connection names onto one database share it, and a
+`<conn>/<database>` has its own. `Tab` (or the `● app · ○ all` chip beside
+the filter) widens it to every database and back, keeping what you typed. A
+database with no history yet opens on all of them. `dbc web`'s `Ctrl+P` does
+the same for the query tab's database (the scope button in its footer, or
+`Tab`). Statements recorded by a dbc from before this was kept belong to no
+database, and show only under "all".
+
 Each statement of a multi-statement run is recorded on its own, so any one of
-them is recallable. A statement identical to the one before it is not recorded
-twice, and the app's own catalog query (`Ctrl+T`) never is.
+them is recallable. A statement identical to the one before it on the same
+database is not recorded twice, and the app's own catalog query (`Ctrl+T`)
+never is.
 
 History lives in `~/.config/dbc/history.jsonl` — one JSON object per line, so
 multi-line SQL comes back exactly as it was written — capped at the last 500
@@ -797,7 +808,14 @@ fails leaves the console where it was.
 
 `⌥N` (`Alt+N`) opens a new console of the database, `⌥C` (`Alt+C`) moves to
 its next one, and the editor's right-click menu lists them all; the Query
-pane's title names the one you are in.
+pane's title names the one you are in. The same menu renames the console in
+the editor (**Rename console…**: a name of letters, digits, `.`, `-` and `_`,
+not one the database already has; the text, caret and undo stay) and deletes
+it (**Delete console…**, after asking; the editor moves to the database's
+next console, or a fresh empty one if it was the last). A `dbc web` tab
+showing that console finds out at its next save, which is refused because the
+file moved on; the tab then shows the file as it is, and `Ctrl+Z` brings its
+text back.
 
 Consoles are plain `.sql` files, readable only by you, under
 `~/.config/dbc/consoles/<host>/<database>/<name>.sql`:

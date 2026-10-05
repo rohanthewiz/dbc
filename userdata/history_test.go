@@ -177,3 +177,47 @@ func TestMatchHistory(t *testing.T) {
 		t.Errorf("MatchHistory clobbered its input: %v", entries)
 	}
 }
+
+// The database rides along in the file and back (N-101); an entry written
+// before the field existed loads with none, and HistoryIn keeps it out of
+// every database's scope while "" keeps everything. The same statement on
+// two databases is two entries, not a repeat.
+func TestHistoryScopedByDatabase(t *testing.T) {
+	h := tempHistory(t)
+	old := `{"at":"2026-07-31T19:30:00Z","conn":"demo","sql":"SELECT 'old'"}` + "\n"
+	if err := os.WriteFile(h.path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h = LoadHistory(h.path)
+	at := time.Now()
+	for _, e := range []Entry{
+		{At: at, Conn: "a", SQL: "SELECT 1", DB: "localhost_5432/app"},
+		{At: at, Conn: "b", SQL: "SELECT 1", DB: "localhost_5432/other"},
+		{At: at, Conn: "a2", SQL: "SELECT 1", DB: "localhost_5432/other"}, // a repeat on the same database
+	} {
+		if err := h.AddEntry(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all := LoadHistory(h.path).Recent()
+	if len(all) != 3 {
+		t.Fatalf("reloaded %d entries, want 3: %+v", len(all), all)
+	}
+	if all[2].DB != "" || all[0].DB != "localhost_5432/other" {
+		t.Errorf("databases did not round-trip: %+v", all)
+	}
+	if got := HistoryIn(all, "localhost_5432/app"); len(got) != 1 || got[0].Conn != "a" {
+		t.Errorf("HistoryIn(app) = %+v", got)
+	}
+	if got := HistoryIn(all, ""); len(got) != 3 {
+		t.Errorf("HistoryIn(\"\") kept %d, want all", len(got))
+	}
+	// the file stays readable as before: no "db" on an entry without one
+	bs, _ := os.ReadFile(h.path)
+	if first := strings.SplitN(string(bs), "\n", 2)[0]; strings.Contains(first, `"db"`) {
+		t.Errorf("an entry with no database grew a db field: %s", first)
+	}
+	if (ConsoleDB{}).Key() != "" || ConsoleDBOf("h:1", "app").Key() != "h_1/app" {
+		t.Errorf("Key: %q, %q", (ConsoleDB{}).Key(), ConsoleDBOf("h:1", "app").Key())
+	}
+}

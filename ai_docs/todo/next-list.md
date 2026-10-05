@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-120
+**Next ID:** N-121
 
 ## Open
 
@@ -137,6 +137,8 @@ ten session docs in `ai_docs/claude_sessions/`
   race for the editor. A user typing straight into a new tab could lose
   that text across a restart, so this is worth fixing in `followConsole` /
   `showConsole`, not only in the test.
+  Updated `2026-1005-1751-recent-chats-fold-v0.8.2`: still recurs — 1 of 3
+  runs on untouched `main` (37ff3d7) and 1 of 8 with that session's change.
 
 - **N-114** · raised `2026-1005-1352-sql-alias-rename` · value low
   Resolve columns too, starting with the ones the statement itself names:
@@ -177,6 +179,13 @@ ten session docs in `ai_docs/claude_sessions/`
 - **N-119** · raised `2026-1005-1450-tui-web-parity` · value low
   The TUI connection form's TLS mode chips are cut off on terminals under
   about 75 columns. Wrap them onto a second row, or switch to a picker.
+- **N-120** · raised `2026-1005-1751-recent-chats-fold-v0.8.2` · value medium
+  The e2e step "tab groups" (`web/e2e/web_test.go` `tabGroups`) times out
+  after ~21s in most runs: 2 of 3 on untouched `main` (37ff3d7), 3 of 8
+  with that session's change. Its failure dump showed status "ready on
+  lite2" and no JS errors; the step's waitFor message was not captured.
+  Together with N-110 it fails most full `DBC_E2E=1` runs, so the suite no
+  longer gives a clean signal after an app.js/CSS change.
 
 ## Roadmap
 

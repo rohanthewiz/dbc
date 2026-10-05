@@ -25,9 +25,9 @@ func (m *Model) refreshConns() {
 	items := make([]listItem, 0, len(m.cfg.Conns()))
 	on := m.baseOf(m.ws.Active())
 	others := map[string]bool{}
-	for i, t := range m.tabs {
-		if i != m.curTab && t.ws != nil && t.ws.Active() != "" {
-			others[m.baseOf(t.ws.Active())] = true
+	for i := range m.tabs {
+		if target, _ := m.tabTarget(i); i != m.curTab && target != "" {
+			others[m.baseOf(target)] = true
 		}
 	}
 	for i, c := range m.cfg.Conns() {

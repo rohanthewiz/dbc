@@ -83,6 +83,8 @@ type Model struct {
 	// held from restoreLayout until New can rebuild them (restoreTabs).
 	savedLayoutTabs []userdata.LayoutTab
 	savedActiveTab  int
+	// connTestSeq numbers connection-form tests across forms (connform.go)
+	connTestSeq int
 
 	resTab  resultsTab // which tab the results pane shows: the grid or the plan
 	resZoom bool       // the results pane has the whole centre column (z)

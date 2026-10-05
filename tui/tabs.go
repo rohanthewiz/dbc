@@ -375,6 +375,24 @@ func (m *Model) tabOn(name string) bool {
 	return false
 }
 
+// tabTarget is the connection tab i is on — or, for a restored tab not yet
+// looked at, the one it will connect to (lazy), since its workspace still
+// reports the default it was built with — and the tab's live workspace.
+func (m *Model) tabTarget(i int) (string, *workspace.Workspace) {
+	t := m.tabs[i]
+	ws := t.ws
+	if i == m.curTab {
+		ws = m.ws
+	}
+	if t.lazy != "" {
+		return t.lazy, ws
+	}
+	if ws == nil {
+		return "", nil
+	}
+	return ws.Active(), ws
+}
+
 // tabWorkspaces is every tab's workspace, the active one's live value.
 func (m *Model) tabWorkspaces() []*workspace.Workspace {
 	out := make([]*workspace.Workspace, 0, len(m.tabs))

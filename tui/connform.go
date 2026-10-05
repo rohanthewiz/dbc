@@ -685,13 +685,22 @@ func (cf *connFormModal) paste(m *Model, s string) {
 // is shown (connTestDone), so testing again after an edit never ends on
 // the old DSN's verdict.
 func (cf *connFormModal) test(m *Model) tea.Cmd {
-	cf.seq++
+	cf.seq = m.nextConnTestSeq()
 	seq, f, from, ed := cf.seq, cf.form(), cf.from, m.connEditor()
 	cf.say(logInfo, "connecting…")
 	return func() tea.Msg {
 		res, err := ed.Test(context.Background(), f, from)
 		return connTestMsg{seq: seq, res: res, err: err}
 	}
+}
+
+// nextConnTestSeq numbers a test (or a save) across every form this run,
+// not per form: a form closed with a test still out, and a new form whose
+// own first test got the same per-form number, would otherwise take the
+// old form's verdict for its own.
+func (m *Model) nextConnTestSeq() int {
+	m.connTestSeq++
+	return m.connTestSeq
 }
 
 // connTestDone shows a test's verdict in the form that asked, if it is still
@@ -732,7 +741,7 @@ func connErrText(err error) string {
 // user to fix; success closes it — and an added connection is connected to
 // at once, as dbc web switches its tab to one.
 func (cf *connFormModal) save(m *Model) (tea.Cmd, bool) {
-	cf.seq++ // a test still out must not overwrite what the save says
+	cf.seq = m.nextConnTestSeq() // a test still out must not overwrite what the save says
 	f, ed := cf.form(), m.connEditor()
 	to := strings.TrimSpace(f.Name)
 	if cf.from == "" {
@@ -775,15 +784,15 @@ func (m *Model) connInUse(forEdit bool) func(string) error {
 		on := func(c string) bool { return c != "" && (c == name || m.baseOf(c) == name) }
 		var user *queryTab
 		for i, t := range m.tabs {
-			ws := t.ws
-			if i == m.curTab {
-				ws = m.ws
+			target, ws := m.tabTarget(i)
+			if on(target) {
+				user = t
+				break
 			}
-			if ws == nil {
+			if ws == nil || t.lazy != "" {
 				continue
 			}
-			connecting, dialing := ws.Connecting()
-			if on(ws.Active()) || (dialing && on(connecting)) {
+			if connecting, dialing := ws.Connecting(); dialing && on(connecting) {
 				user = t
 				break
 			}
@@ -813,10 +822,30 @@ func (m *Model) connRenamed(from, to string) {
 			return to, true
 		}
 		rest, ok := strings.CutPrefix(conn, from+config.DatabaseSep)
-		if !ok || rest == "" || slices.ContainsFunc(m.cfg.Conns(), func(c config.Connection) bool { return c.Name == conn }) {
+		if !ok || rest == "" {
 			return "", false
 		}
+		// not derived from from when a configured connection has that very
+		// name, or a longer configured name is its base — config.ConnByName
+		// resolves a derived name by the longest base ("a/x/db" is "a/x"'s
+		// database, not "a"'s)
+		for _, c := range m.cfg.Conns() {
+			if c.Name == conn || (len(c.Name) > len(from) && config.SupportsDatabases(c.Driver) &&
+				strings.HasPrefix(conn, c.Name+config.DatabaseSep)) {
+				return "", false
+			}
+		}
 		return config.DerivedName(to, rest), true
+	}
+	// a restored tab not yet looked at keeps its connection by name
+	// (tabs.go): it follows the rename, or its first look would fail
+	for _, t := range m.tabs {
+		if t.lazy == "" {
+			continue
+		}
+		if nto, ok := rename(t.lazy); ok {
+			t.lazy = nto
+		}
 	}
 	for conn, p := range m.schemaPicks {
 		if nto, ok := rename(conn); ok {
@@ -839,6 +868,7 @@ func (m *Model) removeConn(name string, x, y int) tea.Cmd {
 		{label: "✕ Remove " + name, act: func(m *Model) tea.Cmd {
 			removed, err := m.connEditor().Delete(name, m.connInUse(false))
 			if removed {
+				m.connRemovedFromTabs(name)
 				m.refreshConns()
 				m.logf(logOk, "removed connection %s", name)
 			}
@@ -849,6 +879,27 @@ func (m *Model) removeConn(name string, x, y int) tea.Cmd {
 		}},
 	})
 	return nil
+}
+
+// connRemovedFromTabs points a restored tab not yet looked at, saved on
+// the removed connection (or one of its other databases), at the default
+// connection instead — its first look would otherwise fail on a name the
+// config no longer has.
+func (m *Model) connRemovedFromTabs(name string) {
+	for _, t := range m.tabs {
+		if t.lazy == "" {
+			continue
+		}
+		if _, ok := m.cfg.ConnByName(t.lazy); !ok {
+			t.lazy = m.cfg.DefaultConnection
+			if _, ok := m.cfg.ConnByName(t.lazy); !ok {
+				t.lazy = ""
+				if conns := m.cfg.Conns(); len(conns) > 0 {
+					t.lazy = conns[0].Name
+				}
+			}
+		}
+	}
 }
 
 // connMenuItems are the connections menu's rows for the connection target

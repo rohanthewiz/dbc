@@ -7,6 +7,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/connedit"
+	"github.com/rohanthewiz/dbc/userdata"
 	"github.com/rohanthewiz/dbc/workspace"
 )
 
@@ -246,5 +247,52 @@ func TestConnFormEditKeepsWhatItWasNotGiven(t *testing.T) {
 	m.openModal(cf)
 	if txt := frame(m).Text(); strings.Contains(txt, "hunter2") || !strings.Contains(txt, "•••••••") {
 		t.Fatalf("password not masked:\n%s", txt)
+	}
+}
+
+// A test still out when its form closes does not land in the next form,
+// even when that form's own first test is out too: tests are numbered
+// across forms, not per form.
+func TestConnFormStaleTestStaysWithItsForm(t *testing.T) {
+	m := newTestModel(t)
+	m.saved = config.OpenSaved(filepath.Join(t.TempDir(), "connections.toml"))
+	key(t, m, "ctrl+l")
+	key(t, m, "a")
+	stale := connFormOf(t, m).test(m) // form A's test, not yet answered
+	key(t, m, "esc")
+
+	key(t, m, "a")
+	b := connFormOf(t, m)
+	b.say(logOk, "B's own verdict")
+	drive(t, m, nil, stale)
+	if b.msg != "B's own verdict" {
+		t.Fatalf("form A's answer landed in form B: %q", b.msg)
+	}
+}
+
+// A restored tab not yet looked at counts as on the connection it will
+// connect to: removing that connection is refused, a rename carries the
+// tab along, and the ○ in the list marks it rather than the default.
+func TestConnFormSeesLazyTabs(t *testing.T) {
+	m := newTestModel(t)
+	m.saved = config.OpenSaved(filepath.Join(t.TempDir(), "connections.toml"))
+	m.cfg.Connections = append(m.cfg.Connections,
+		config.Connection{Name: "s1", Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "s1.db")})
+	m.restoreTabs([]userdata.LayoutTab{{Title: "one", Conn: m.ws.Active()}, {Title: "two", Conn: "s1"}}, 0)
+	if m.tabs[1].lazy != "s1" {
+		t.Fatalf("tab two connects to %q", m.tabs[1].lazy)
+	}
+	if err := m.connInUse(false)("s1"); err == nil || !strings.Contains(err.Error(), "tab two") {
+		t.Fatalf("in-use for a lazy tab's connection: %v", err)
+	}
+	m.refreshConns()
+	for _, it := range m.conns.items {
+		if it.label == "s1" && it.mark != "○" {
+			t.Errorf("s1's mark = %q, want ○ for tab two", it.mark)
+		}
+	}
+	m.connRenamed("s1", "s2")
+	if m.tabs[1].lazy != "s2" {
+		t.Fatalf("after the rename tab two connects to %q", m.tabs[1].lazy)
 	}
 }

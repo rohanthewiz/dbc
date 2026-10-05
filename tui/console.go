@@ -2,9 +2,11 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"slices"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/rohanthewiz/serr"
@@ -143,6 +145,15 @@ func (m *Model) openInEditor(d userdata.ConsoleDB, name string) bool {
 		}
 		m.consoleViews[m.console] = m.editor.View()
 	}
+	m.loadIntoEditor(d, name)
+	return true
+}
+
+// loadIntoEditor makes console name of d the editor's, from its file (or
+// its parked view), without saving or parking the one it replaces — the
+// second half of openInEditor, and all of what a delete needs, whose
+// console must not be written back or parked.
+func (m *Model) loadIntoEditor(d userdata.ConsoleDB, name string) {
 	m.setConsole(d, name)
 	text, _ := userdata.LoadConsole(m.console)
 	m.consoleText = text
@@ -158,7 +169,6 @@ func (m *Model) openInEditor(d userdata.ConsoleDB, name string) bool {
 		m.editor.SetText(text)
 	}
 	m.logf(logMuted, "console: %s · %s · %s", d.Host, d.Database, name)
-	return true
 }
 
 // switchConsole swaps the editor to name's database's console after a
@@ -241,5 +251,114 @@ func (m *Model) consoleMenuItems() []menuItem {
 		}})
 	}
 	return append(items,
-		menuItem{label: "+ New console", key: "⌥N", act: func(m *Model) tea.Cmd { return m.newConsole() }})
+		menuItem{label: "+ New console", key: "⌥N", act: func(m *Model) tea.Cmd { return m.newConsole() }},
+		menuItem{label: "Rename console…", act: func(m *Model) tea.Cmd { m.openRenameConsole(); return nil }},
+		menuItem{label: "Delete console…", act: func(m *Model) tea.Cmd { m.confirmDeleteConsole(); return nil }})
+}
+
+// Renaming and deleting a console act on the one in the editor, as dbc
+// web's tab menu acts on the tab's console. They work on the files
+// directly (userdata.RenameConsole / DeleteConsole), the same calls the web
+// server makes, so the two UIs leave the consoles tree in the same shape.
+//
+// A dbc web tab that has the console open is not told — the TUI has no
+// line to the server. It finds out at its next save: the file's revision no
+// longer matches the one it loaded, so the save is refused and the tab
+// shows the file as it now is (empty, for a console renamed or deleted
+// here), with Ctrl+Z bringing its own text back. That is the same rule as
+// for any edit made outside the server, and nothing is overwritten by it.
+
+// openRenameConsole asks for the editor's console's new name.
+func (m *Model) openRenameConsole() {
+	if m.console == "" {
+		m.log(logWarn, "no console to rename: connect to a database first")
+		return
+	}
+	m.openPrompt("Rename console "+m.consoleName,
+		"letters, digits, '.', '-' and '_' — up to 64", "Rename", m.consoleName,
+		func(m *Model, to string) error { return m.renameConsole(to) })
+}
+
+// renameConsole renames the editor's console to to. Its latest text is
+// saved first, so the rename carries it (a console never typed in has no
+// file, and is renamed by name alone). The returned error is for the
+// prompt to show; nil closes it.
+func (m *Model) renameConsole(to string) error {
+	to = strings.TrimSpace(to)
+	from := m.consoleName
+	switch {
+	case to == "" || to == from:
+		return nil // nothing to do: closing the prompt is the answer
+	case !userdata.ValidConsoleName(to):
+		return errors.New("a console name is up to 64 letters, digits, '.', '-' or '_', not starting with '.'")
+	case slices.Contains(m.consoleNames(), to):
+		return fmt.Errorf("%s already has a console named %s", m.consoleDB.Database, to)
+	}
+	if err := m.saveConsole(); err != nil {
+		return fmt.Errorf("could not save the console first: %s", serr.StringFromErr(err))
+	}
+	if err := userdata.RenameConsole(m.consoleDir, m.consoleDB, from, to); err != nil {
+		if errors.Is(err, userdata.ErrConsoleExists) {
+			// a file appeared under that name since the list was read
+			// (dbc web, an editor): refused, never overwritten
+			return fmt.Errorf("%s already has a console named %s", m.consoleDB.Database, to)
+		}
+		return errors.New(serr.StringFromErr(err))
+	}
+	// The editor keeps its text, caret and undo: only the file under it
+	// moved. setConsole would clear consoleText, which is still the
+	// file's text, so the fields are set directly.
+	m.consoleName = to
+	m.console = userdata.ConsolePath(m.consoleDir, m.consoleDB, to)
+	if m.lastConsole[m.consoleDB] == from {
+		m.lastConsole[m.consoleDB] = to
+	}
+	m.logf(logOk, "renamed console %s to %s", from, to)
+	return nil
+}
+
+// confirmDeleteConsole asks before deleting the editor's console, as the
+// Disconnect confirm does: a menu at the editor's top-left corner, with
+// keeping it the first (default) row, since a delete cannot be undone.
+func (m *Model) confirmDeleteConsole() {
+	if m.console == "" {
+		m.log(logWarn, "no console to delete: connect to a database first")
+		return
+	}
+	name := m.consoleName
+	m.openMenu(m.lay.editor.X+2, m.lay.editor.Y+1, []menuItem{
+		heading("delete console " + name + " and the SQL in it?"),
+		{label: "Keep it", act: func(m *Model) tea.Cmd { return nil }},
+		{label: "✕ Delete " + name, act: func(m *Model) tea.Cmd { m.deleteConsole(); return nil }},
+	})
+}
+
+// deleteConsole removes the editor's console and moves the editor to
+// another console of the database: the first one left, or — none left — a
+// fresh default console with no file yet. The deleted one is neither saved
+// on the way out (that would write it back) nor parked, and the database's
+// last-open entry, if it named it, is dropped.
+//
+//	delete X ──► file gone ──► others left? ── yes ─► open the first of them
+//	                                         └─ no ──► open DefaultConsole,
+//	                                                   empty, no file
+func (m *Model) deleteConsole() {
+	if m.console == "" {
+		return
+	}
+	d, name := m.consoleDB, m.consoleName
+	if err := userdata.DeleteConsole(m.consoleDir, d, name); err != nil {
+		m.logf(logErr, "could not delete console %s: %s", name, serr.StringFromErr(err))
+		return
+	}
+	delete(m.consoleViews, m.console)
+	if m.lastConsole[d] == name {
+		delete(m.lastConsole, d)
+	}
+	next := userdata.DefaultConsole
+	if names := userdata.ListConsoles(m.consoleDir, d, ""); len(names) > 0 {
+		next = names[0]
+	}
+	m.logf(logOk, "deleted console %s", name)
+	m.loadIntoEditor(d, next)
 }

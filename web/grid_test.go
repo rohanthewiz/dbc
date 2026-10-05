@@ -5,6 +5,9 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/rohanthewiz/dbc/userdata"
 )
 
 // The results grid's server half: the browser equivalents of the TUI's grid
@@ -388,4 +391,49 @@ func TestMultiStatementProgress(t *testing.T) {
 func itoa(n int) string {
 	b, _ := json.Marshal(n)
 	return string(b)
+}
+
+// A query tab's history is scoped to its database (N-101): scope=auto opens
+// on the tab's database when it has entries, else on all of them; db and
+// all are asked for outright; the filter applies within the scope.
+func TestTabHistoryScopedToTheDatabase(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	type answer struct {
+		Entries []struct{ Conn, SQL, DB string }
+		Scope   string
+		DB      string
+	}
+	get := func(q string) answer {
+		t.Helper()
+		return decodeData[answer](t, e.api("GET", "/api/v1/ws/"+id+"/history"+q, "", 200))
+	}
+
+	// another database's statement, and one from before databases were
+	// recorded: this tab's database has nothing yet, so auto is "all"
+	e.srv.opt.History.AddEntry(userdata.Entry{At: time.Now(), Conn: "elsewhere", SQL: "SELECT 'there'", DB: "h_1/other"})
+	e.srv.opt.History.AddEntry(userdata.Entry{At: time.Now(), Conn: "demo-sqlite", SQL: "SELECT 'old'"})
+	if a := get("?scope=auto"); a.Scope != "all" || len(a.Entries) != 2 {
+		t.Fatalf("no history here yet: %+v", a)
+	}
+
+	e.runAndWait(id, s, "SELECT count(*) FROM cats")
+	a := get("?scope=auto")
+	if a.Scope != "db" || a.DB != "demo-sqlite" || len(a.Entries) != 1 || a.Entries[0].SQL != "SELECT count(*) FROM cats" {
+		t.Fatalf("scoped = %+v", a)
+	}
+	if a := get("?scope=all"); a.Scope != "all" || len(a.Entries) != 3 {
+		t.Errorf("all = %+v", a)
+	}
+	if a := get("?scope=db&q=there"); a.Scope != "db" || len(a.Entries) != 0 {
+		t.Errorf("another database's statement matched in scope: %+v", a)
+	}
+	if a := get("?scope=all&q=there"); len(a.Entries) != 1 {
+		t.Errorf("filter over all = %+v", a)
+	}
+	// the unscoped listing is as it was: a plain array of everything
+	if all := decodeData[[]userdata.Entry](t, e.api("GET", "/api/v1/history", "", 200)); len(all) != 3 {
+		t.Errorf("/api/v1/history = %+v", all)
+	}
+	e.api("GET", "/api/v1/ws/nope/history", "", 404)
 }

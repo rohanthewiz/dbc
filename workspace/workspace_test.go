@@ -817,3 +817,23 @@ func TestDerived(t *testing.T) {
 		}
 	}
 }
+
+// Each history entry records the database it ran on (N-101), keyed as the
+// consoles are, and HistoryKey is that key for the active connection — what
+// the history pickers scope to.
+func TestHistoryRecordsTheDatabase(t *testing.T) {
+	w := newTestWorkspace(t)
+	run(t, w, "SELECT 1")
+	got := w.History().Recent()
+	want := w.HistoryKey()
+	// the in-memory demo database is kept per connection (db.ConsoleTarget)
+	if want != "memory/"+demo {
+		t.Errorf("HistoryKey = %q, want memory/%s", want, demo)
+	}
+	if len(got) == 0 || got[0].DB != want || got[0].Conn != demo {
+		t.Errorf("entry = %+v, want DB %q", got, want)
+	}
+	if w.dbKey("") != "" || w.dbKey("no-such-conn") != "" {
+		t.Error("no connection, or an unknown one, should have no database key")
+	}
+}

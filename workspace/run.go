@@ -15,6 +15,7 @@ import (
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/script"
 	"github.com/rohanthewiz/dbc/sdb"
+	"github.com/rohanthewiz/dbc/userdata"
 )
 
 // Running statements and scripts. The rules are the former tview UI's,
@@ -71,7 +72,7 @@ func (w *Workspace) record(stmt string) (Note, bool) {
 	w.mu.Lock()
 	conn := w.active
 	w.mu.Unlock()
-	err := w.hist.Add(conn, stmt, time.Now())
+	err := w.hist.AddEntry(userdata.Entry{At: time.Now(), Conn: conn, SQL: stmt, DB: w.dbKey(conn)})
 	if err == nil {
 		return Note{}, false
 	}
@@ -83,6 +84,28 @@ func (w *Workspace) record(stmt string) (Note, bool) {
 	w.histWarned = true
 	return notef(Warn, "query history is not being saved: %s", serr.StringFromErr(err)), true
 }
+
+// dbKey is the database connection conn lands on, as a history entry
+// records it (userdata.Entry.DB): db.ConsoleTarget's host and database,
+// keyed the way the consoles directory is, so a database's history and its
+// consoles are scoped alike. "" for no connection, or a name the config no
+// longer knows.
+func (w *Workspace) dbKey(conn string) string {
+	if conn == "" {
+		return ""
+	}
+	cc, ok := w.cfg.ConnByName(conn)
+	if !ok {
+		return ""
+	}
+	t := db.ConsoleTarget(cc)
+	return userdata.ConsoleDBOf(t.Host, t.Database).Key()
+}
+
+// HistoryKey is the active connection's database as history records it —
+// what the history pickers (the TUI's Ctrl+P, dbc web's) scope to when they
+// open on "this database".
+func (w *Workspace) HistoryKey() string { return w.dbKey(w.Active()) }
 
 // ListTables is Ctrl+T: the active driver's catalog query, through the same
 // path a run takes, so it lands in the grid and exports like any result. It

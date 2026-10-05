@@ -271,12 +271,33 @@ func (e *exportModal) run(m *Model, toClipboard bool) (tea.Cmd, bool) {
 // Enter (or a double-click) inserts the pick into the editor at the caret —
 // it never runs it: a recalled query is usually one you want to edit, and
 // auto-running someone's remembered DELETE is not a thing to do.
+//
+// SCOPE. History is one file across every database, while the editor's
+// text is per database (consoles) — so the picker opens on the statements
+// run on the database the editor is connected to, and Tab (or the scope
+// chip) widens it to every database and back:
+//
+//	open ──► entries recorded on this database? ── yes ─► "this database"
+//	                                            └─ no ──► "all databases"
+//	Tab / click the chip ──► flip the scope; the text filter is kept
+//
+// Opening on "all" when this database has nothing yet keeps Ctrl+P useful
+// on a fresh database instead of greeting the user with an empty list.
+// Entries from before the database was recorded (Entry.DB "") belong to
+// no database, so they show only under "all".
 type historyModal struct {
 	modalBase
 	all    []userdata.Entry
 	shown  []userdata.Entry
 	filter *editor
 	lst    *list
+
+	// dbKey is the active connection's database as history records it
+	// ("" with no connection: then there is only "all"); dbLabel names it
+	// for the chip. scoped is whether the list is narrowed to it.
+	dbKey, dbLabel string
+	scoped         bool
+	scopeBtn       Rect
 }
 
 func (m *Model) openHistory() {
@@ -287,12 +308,30 @@ func (m *Model) openHistory() {
 	}
 	md := &historyModal{all: entries, filter: newEditor(true), lst: newList()}
 	md.filter.placeholder = "filter by SQL or connection…"
+	if key := m.ws.HistoryKey(); key != "" {
+		md.dbKey, md.dbLabel = key, historyDBLabel(key)
+		md.scoped = len(userdata.HistoryIn(entries, key)) > 0
+	}
 	md.refilter()
 	m.openModal(md)
 }
 
+// historyDBLabel is the database part of a history key ("host/database"),
+// the readable half: the host level is a directory name ("localhost_5432")
+// that would only crowd the chip.
+func historyDBLabel(key string) string {
+	if i := strings.LastIndexByte(key, '/'); i >= 0 {
+		return key[i+1:]
+	}
+	return key
+}
+
 func (h *historyModal) refilter() {
-	h.shown = userdata.MatchHistory(h.all, h.filter.Text())
+	in := h.all
+	if h.scoped {
+		in = userdata.HistoryIn(in, h.dbKey)
+	}
+	h.shown = userdata.MatchHistory(in, h.filter.Text())
 	items := make([]listItem, len(h.shown))
 	for i, e := range h.shown {
 		items[i] = listItem{label: preview(e.SQL), sub: e.At.Local().Format("Jan 2 15:04") + " · " + e.Conn}
@@ -301,16 +340,56 @@ func (h *historyModal) refilter() {
 	h.lst.set(items)
 }
 
-func (h *historyModal) title() string { return "History · Enter inserts · double-click inserts" }
+// toggleScope flips between this database and all of them. With no
+// database to scope to there is nothing to flip.
+func (h *historyModal) toggleScope() {
+	if h.dbKey == "" {
+		return
+	}
+	h.scoped = !h.scoped
+	h.refilter()
+}
+
+func (h *historyModal) title() string {
+	if h.scoped {
+		return "History · " + h.dbLabel + " · Tab: all databases · Enter inserts"
+	}
+	return "History · all databases · Enter inserts · double-click inserts"
+}
 func (h *historyModal) size(w, hh int) (int, int) {
 	return max(60, w*3/4), max(12, hh*2/3)
+}
+
+// scopeLabel is the chip at the right of the filter row: the scope the
+// list is in, with the other one a click (or Tab) away.
+func (h *historyModal) scopeLabel() string {
+	if h.dbKey == "" {
+		return ""
+	}
+	if h.scoped {
+		return " ● " + h.dbLabel + " · ○ all "
+	}
+	return " ○ " + h.dbLabel + " · ● all "
 }
 
 func (h *historyModal) draw(m *Model, s Surface) *caret {
 	bg := m.st.panel
 	s.Put(1, 0, "⌕", onBg(m.st.accent, bg))
-	cx, cy, ok := h.filter.Draw(s.Sub(Rect{3, 0, s.W() - 4, 1}), m.st, m.st.raised, [2]int{}, true)
-	h.lst.draw(s.Sub(Rect{0, 2, s.W(), s.H() - 2}), m.st, bg, true, "no match")
+	fw := s.W() - 4
+	h.scopeBtn = Rect{}
+	if label := h.scopeLabel(); label != "" && width(label)+20 < fw {
+		// the chip takes the right end of the filter row; the field
+		// keeps at least 20 cells, else the chip is left out (Tab still
+		// flips the scope, and the title says which it is)
+		h.scopeBtn = chip(s, s.W()-1-width(label), 0, label, m.st.button)
+		fw -= width(label) + 1
+	}
+	cx, cy, ok := h.filter.Draw(s.Sub(Rect{3, 0, fw, 1}), m.st, m.st.raised, [2]int{}, true)
+	empty := "no match"
+	if h.scoped && len(h.shown) == 0 && strings.TrimSpace(h.filter.Text()) != "" {
+		empty = "no match on " + h.dbLabel + " — Tab searches every database"
+	}
+	h.lst.draw(s.Sub(Rect{0, 2, s.W(), s.H() - 2}), m.st, bg, true, empty)
 	if ok {
 		return &caret{cx, cy}
 	}
@@ -326,6 +405,11 @@ func (h *historyModal) key(m *Model, k tea.KeyPressMsg) (tea.Cmd, bool) {
 		return nil, false
 	case "enter":
 		return h.insert(m)
+	case "tab", "shift+tab":
+		// the filter is one line, so Tab has nothing to do in it: it
+		// is the scope switch
+		h.toggleScope()
+		return nil, false
 	}
 	before := h.filter.Text()
 	h.filter.HandleKey(k)
@@ -338,6 +422,10 @@ func (h *historyModal) key(m *Model, k tea.KeyPressMsg) (tea.Cmd, bool) {
 func (h *historyModal) click(m *Model, x, y, clicks int, shift bool) (tea.Cmd, bool) {
 	if m.modalClose().Contains(x, y) {
 		return nil, true
+	}
+	if h.scopeBtn.Contains(x, y) {
+		h.toggleScope()
+		return nil, false
 	}
 	if i := h.lst.indexAt(x, y); i >= 0 {
 		h.lst.cur = i

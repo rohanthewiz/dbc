@@ -20,21 +20,6 @@ func connFormOf(t *testing.T, m *Model) *connFormModal {
 	return cf
 }
 
-// pickMenu runs the open menu's row whose label starts with prefix.
-func pickMenu(t *testing.T, m *Model, prefix string) {
-	t.Helper()
-	if m.menu == nil {
-		t.Fatal("no menu open")
-	}
-	for i, it := range m.menu.items {
-		if strings.HasPrefix(it.label, prefix) {
-			drive(t, m, nil, m.menuPick(i))
-			return
-		}
-	}
-	t.Fatalf("no menu row %q", prefix)
-}
-
 // menuRow is the open menu's row whose label starts with prefix.
 func menuRow(t *testing.T, m *Model, prefix string) menuItem {
 	t.Helper()

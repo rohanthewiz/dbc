@@ -1107,6 +1107,9 @@
     const move = (name) => renamedConn(name, from, to);
     for (const t of tabs) if (t.conn) t.conn = move(t.conn);
     if (state.active) state.active = move(state.active);
+    // connection groups follow too (the server has moved the saved ones,
+    // moveGroupConns; this keeps this window's in step)
+    if (groups.renameConn(move)) { saveGroups(); renderTabs(); }
     // the schema picks follow the connection to its new name; an old key
     // is blanked, as the layout has no delete. One write for them all, so
     // a rename is one layout save however many databases had a pick. The
@@ -1135,13 +1138,25 @@
   // event (or the edit's response) has redrawn before this runs.
   function renamedConn(name, from, to) {
     if (name === from) return to;
-    const prefix = from + "/";
-    if (!name.startsWith(prefix) || name.length === prefix.length) return name;
-    for (const b of els.conns.querySelectorAll(".conn-item")) {
-      if (b.dataset.conn === name) return name;
-    }
-    return to + "/" + name.slice(prefix.length);
+    if (!derivedConn(name, from)) return name;
+    return to + "/" + name.slice(from.length + 1);
   }
+
+  // derivedConn reports whether name is base's connection onto another of
+  // its server's databases, "<base>/<database>" — and not a configured
+  // connection that only happens to be named so, which has a row of its own
+  // in the Connections list (the server's derivedFrom draws the same line).
+  function derivedConn(name, base) {
+    const prefix = base + "/";
+    if (!name.startsWith(prefix) || name.length === prefix.length) return false;
+    for (const b of els.conns.querySelectorAll(".conn-item")) {
+      if (b.dataset.conn === name) return false;
+    }
+    return true;
+  }
+
+  // connUnder: a connection group on base holds a tab on conn (tabgroups.js).
+  const connUnder = (conn, base) => conn === base || derivedConn(conn, base);
 
   Object.assign(dbc.cmd, {
     run, stop, history, preview, editorState, scripts, help, newTab, pickTab, connect, disconnect, connRenamed,
@@ -1908,27 +1923,69 @@
   // Click switches; double-click renames; × (or Alt+W) closes; + (Alt+T)
   // opens one; Alt+1…9 picks by position. The order and the active tab
   // are saved with the layout.
+  //
+  // Tab groups (tabgroups.js) put a chip in front of a group's tabs, which
+  // sit together and are underlined in its colour; the chip folds them
+  // (click) and opens the group's menu (right-click):
+  //   [prod][Query 1 ×][Query 3 ×] [wip +2][Query 4 ×] [+]
   // renaming is the tab whose title is being edited. The strip is not
   // redrawn under it — a double-click on a background tab starts the rename
   // while that tab's activation is still loading, and its redraw would
   // throw the field away mid-word — but once the rename ends.
   let renaming = null;
 
+  // groups are the strip's tab groups. The host is what the module needs
+  // of the strip; changed() is its one way back — every group edit saves
+  // the groups, and the redraw re-arranges (and saves the order if a tab
+  // moved).
+  const groups = dbc.groups.create({
+    tabs: () => tabs,
+    active: () => state.tab,
+    under: connUnder,
+    activate: (t) => activate(t),
+    close: (t) => reallyClose(t),
+    changed: () => { saveGroups(); renderTabs(); },
+    log,
+  });
+
+  // saveGroups writes the groups whole, as the "groups" layout key (see
+  // web/groups.go for its shape and the merge across windows).
+  function saveGroups() {
+    saveLayout({ groups: groups.encode() });
+  }
+
   function renderTabs() {
     markInUse(); // the tab on screen, or a title, may have changed
     if (renaming) return;
+    // Groups are contiguous because the array itself is reordered (see
+    // tabgroups.js), here at every redraw — a tab that switched onto a
+    // grouped connection, say, moves in beside its group. Only an actual
+    // move is saved.
+    const arranged = groups.arrange(tabs);
+    if (arranged !== tabs) { tabs = arranged; saveOrder(); }
     const plus = $("qnew");
     els.qtabs.replaceChildren();
     tabs.forEach((t, i) => {
+      const c = groups.chip(tabs, i);
+      if (c) {
+        els.qtabs.append(el("button", { type: "button", class: "qchip g" + groups.color(c.g) + (c.g.collapsed ? " folded" : ""),
+          "data-group": c.g.name, "aria-expanded": c.g.collapsed ? "false" : "true",
+          title: c.g.name + " — " + groups.describe(c.g) + " · click " + (c.g.collapsed ? "expands" : "collapses") +
+            ", right-click for the group's menu" }, c.text));
+      }
+      if (groups.hidden(t)) return; // folded into its chip
+      const g = groups.groupOf(t);
       const marks = el("span", "qmark");
       if (t.busy) marks.append(el("span", { class: "qbusy", title: "running" }, "●"));
       else if (t.done) marks.append(el("span", { class: t.failed ? "qfail" : "qdone", title: "finished in the background" }, "•"));
       if (t.stateful) marks.append(el("span", { class: "qstate", title: "its session may hold a transaction, SET values or temp tables" }, "◆"));
       if (t.lost) marks.append(el("span", { class: "qlost", title: "open in another browser tab of dbc web — not saved here" }, "⊘"));
-      const b = el("div", { class: "qtab" + (t === state.tab ? " on" : "") + (t.lost ? " lost" : ""), role: "tab", tabindex: "-1",
+      const b = el("div", { class: "qtab" + (t === state.tab ? " on" : "") + (t.lost ? " lost" : "") +
+          (g ? " grp g" + groups.color(g) : ""), role: "tab", tabindex: "-1",
         "aria-selected": t === state.tab ? "true" : "false", "data-key": t.key,
         title: t.title + (i < 9 ? " (Alt+" + (i + 1) + ")" : "") +
-          (t.console ? " — console " + t.cdb.label + " · " + t.console : "") + " — double-click renames" },
+          (t.console ? " — console " + t.cdb.label + " · " + t.console : "") + (g ? " — group " + g.name : "") +
+          " — double-click renames" },
       el("span", "qt", t.title), t.console ? el("span", "qcon", t.console) : null, marks,
       tabs.length > 1 ? el("button", { type: "button", class: "qx", title: "Close (Alt+W)", "data-close": t.key }, "×") : null);
       els.qtabs.append(b);
@@ -1936,7 +1993,19 @@
     els.qtabs.append(plus);
   }
 
+  // the chip: a click folds or unfolds its group; a right-click opens the
+  // group's menu (the tab's own menu carries the same rows)
+  const chipGroup = (e) => {
+    const c = e.target.closest(".qchip");
+    return c ? groups.byName(c.dataset.group) : null;
+  };
+
   els.qtabs.addEventListener("click", (e) => {
+    if (e.target.closest(".qchip")) {
+      const g = chipGroup(e);
+      if (g) groups.toggle(g);
+      return;
+    }
     const x = e.target.closest("[data-close]");
     if (x) { closeTab(tabs.find((t) => t.key === x.dataset.close)); return; }
     const b = e.target.closest(".qtab");
@@ -1954,6 +2023,8 @@
     if (b && e.button === 1) closeTab(tabs.find((x) => x.key === b.dataset.key));
   });
   els.qtabs.addEventListener("contextmenu", (e) => {
+    const g = chipGroup(e);
+    if (g) { e.preventDefault(); groups.openGroupMenu(g, e.clientX, e.clientY); return; }
     const b = e.target.closest(".qtab");
     if (!b) return;
     e.preventDefault();
@@ -1966,7 +2037,7 @@
         act: () => closeTab(t) },
       { head: "" },
       { label: "New query tab", key: "Alt+T", act: newTab },
-    ].concat(consoleItems(t));
+    ].concat(groups.tabItems(t, x, y), consoleItems(t));
     // the database's consoles as they are now — another window or the
     // TUI may have added one — but the menu does not wait long for them
     if (!t.cdb) { dbc.menu.open(x, y, items()); return; }
@@ -1987,6 +2058,9 @@
     while (used.has("Query " + n)) n++;
     const t = { key: newKey(), title: "Query " + n, conn: state.active, buffer: "", ws: "" };
     tabs.splice(tabs.indexOf(state.tab) + 1, 0, t);
+    // opened from a tab in an ad-hoc group, it joins that group (a
+    // connection group takes it by its connection anyway)
+    if (groups.joinNew(state.tab, t)) saveGroups();
     saveOrder();
     saveTab(t);
     activate(t);
@@ -2015,6 +2089,7 @@
     const i = tabs.indexOf(t);
     if (i < 0) return;
     tabs.splice(i, 1);
+    if (groups.forgetTab(t)) saveGroups();
     if (t === state.tab) activate(tabs[Math.min(i, tabs.length - 1)]);
     else renderTabs();
     saveOrder();
@@ -2102,6 +2177,8 @@
       ["Alt+T", "new tab"], ["Alt+W", "close the tab"], ["Alt+1 … Alt+9", "go to tab N"],
       ["Alt+N · Alt+C", "new console · next console of the tab's database (right-click a tab for the list)"],
       ["double-click a tab", "rename it"],
+      ["right-click a tab → Add to group…", "group tabs: by hand, or every tab on a connection"],
+      ["click · right-click a group's chip", "collapse or expand it · its menu (rename, ungroup, its tabs)"],
     ]],
     ["Results grid", [
       ["arrows · Shift+arrows", "move · extend the range"], ["g · G", "first · last row"],
@@ -2227,6 +2304,9 @@
           (saved.length ? "the rest" : "a fresh tab"));
       }
       savedPlans = layout.plans || "";
+      // the groups, against the tabs this window claimed; the first
+      // renderTabs gathers each group's tabs together
+      groups.restore(layout.groups);
       activeAtBoot = tabs.find((t) => t.key === layout.tab) || tabs[0];
 
       for (const t of tabs) {

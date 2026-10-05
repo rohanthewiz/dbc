@@ -50,6 +50,7 @@ func TestWeb(t *testing.T) {
 		{"other tabs' connections", otherTabsConns},
 		{"consoles per database", consolesPerDatabase},
 		{"code blocks highlighted", codeHighlight},
+		{"tab groups", tabGroups},
 	}
 	for _, s := range steps {
 		ok := t.Run(s.name, func(t *testing.T) {
@@ -670,4 +671,119 @@ func codeHighlight(t *testing.T, _ *env, p *rod.Page) {
 	if want := `func,return|true|true|italic|func f() { return "s" } // c`; got != want {
 		t.Fatalf("highlighted block = %q, want %q", got, want)
 	}
+}
+
+// tabGroups: tabs grouped by hand (ad-hoc) and by connection, gathered
+// behind their chip, folded by a click on it, and kept across a reload
+// (tabgroups.js, web/groups.go). It starts where consolesPerDatabase left
+// the window — Query 1 on lite, on screen; Renamed tab on lite2 — and
+// leaves no group behind.
+func tabGroups(t *testing.T, _ *env, p *rod.Page) {
+	// strip is the strip as drawn: a chip as [text], a tab as its title
+	strip := func(want string) {
+		t.Helper()
+		got := ""
+		for deadline := time.Now().Add(waitLimit); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			got = evalStr(t, p, `() => [...document.querySelectorAll("#qtabs > *")]
+			  .map((x) => x.classList.contains("qchip") ? "[" + x.textContent + "]" : x.querySelector(".qt") ? x.querySelector(".qt").textContent : "")
+			  .filter(Boolean).join(",")`)
+			if got == want {
+				return
+			}
+		}
+		dump := evalStr(t, p, `async () => [...document.querySelectorAll("#qtabs .qtab")].map((b) => b.dataset.key + ":" +
+		  b.querySelector(".qt").textContent + ":" + b.className).join(" | ") + "\n" +
+		  JSON.stringify((await (await fetch("/api/v1/layout")).json()).data) + "\n" +
+		  JSON.stringify((await (await fetch("/api/v1/tabs")).json()).data.map((t) => t.id + ":" + t.title + ":" + t.conn))`)
+		t.Fatalf("the strip is %s, want %s\n%s\n%s", got, want, dump, pageState(p))
+	}
+	// name answers the group-name dialog: the field's seed is selected, so
+	// typing replaces it
+	name := func(n string) {
+		t.Helper()
+		waitFor(t, p, "the name dialog", `() => document.activeElement && document.activeElement.matches("input.gname")`)
+		eval(t, p, `() => document.activeElement.select()`)
+		p.MustInsertText(n)
+		p.Keyboard.MustType(input.Enter)
+	}
+	// at clicks sel by its coordinates: renderTabs rebuilds the strip on
+	// many events (a tab's marks, the in-use dashes), so an element handle
+	// can be detached between finding it and clicking it
+	at := func(sel string, button proto.InputMouseButton) {
+		t.Helper()
+		waitFor(t, p, sel, `(s) => !!document.querySelector(s)`, sel)
+		box := eval(t, p, `(s) => { const r = document.querySelector(s).getBoundingClientRect();
+		  return [r.x + r.width / 2, r.y + r.height / 2]; }`, sel).([]any)
+		p.Mouse.MustMoveTo(box[0].(float64), box[1].(float64))
+		if err := p.Mouse.Click(button, 1); err != nil {
+			t.Fatalf("click %s: %v", sel, err)
+		}
+		if button == proto.InputMouseButtonRight {
+			waitFor(t, p, "a menu", `() => !!document.querySelector(".menu")`)
+		}
+	}
+	tabSel := func(title string) string {
+		return `#qtabs .qtab[data-key="` + evalStr(t, p, `(s) => [...document.querySelectorAll("#qtabs .qtab")]
+		  .find((b) => b.querySelector(".qt").textContent === s).dataset.key`, title) + `"]`
+	}
+
+	strip("Query 1,Renamed tab")
+
+	// a hand-made group; a name the dialog refuses says why and stays open
+	at(tabSel("Query 1"), proto.InputMouseButtonRight)
+	menuPick(t, p, "Add to group…")
+	menuPick(t, p, "New ad-hoc group…")
+	name("toolong123")
+	waitFor(t, p, "the refusal", `() => document.querySelector(".gprompt .gwhy").textContent.includes("at most 8")`)
+	name("wip")
+	strip("[wip],Query 1,Renamed tab")
+
+	// a tab opened from a grouped tab joins its group
+	at("#qnew", proto.InputMouseButtonLeft)
+	strip("[wip],Query 1,Query 2,Renamed tab")
+
+	// a connection group takes every tab on its connection — including one
+	// that switches to it later, which moves in beside it
+	at(tabSel("Renamed tab"), proto.InputMouseButtonRight)
+	menuPick(t, p, "Add to group…")
+	menuPick(t, p, "New connection group: lite2")
+	name("lite2")
+	strip("[wip],Query 1,Query 2,[lite2],Renamed tab")
+	at(tabSel("Query 2"), proto.InputMouseButtonRight)
+	menuPick(t, p, "Remove from group wip")
+	waitConnected(t, p, "lite")
+	p.MustElement(`#conns .conn-item[data-conn="lite2"]`).MustClick()
+	waitConnected(t, p, "lite2")
+	strip("[wip],Query 1,[lite2],Query 2,Renamed tab")
+
+	// a click on the chip folds its group to the chip and a count
+	at(`#qtabs .qchip[data-group="wip"]`, proto.InputMouseButtonLeft)
+	strip("[wip +1],[lite2],Query 2,Renamed tab")
+
+	// all of it survives a reload once the server holds it
+	waitFor(t, p, "the groups saved", `async () => {
+	  const l = (await (await fetch("/api/v1/layout")).json()).data || {};
+	  const gs = JSON.parse(l.groups || "[]");
+	  return gs.length === 2 && gs[0].name === "wip" && gs[0].collapsed && gs[1].conn === "lite2";
+	}`)
+	// The reload also claims the fresh "Query 1" the other browser window of
+	// otherTabsConns saved before it closed: it is free now, and lands last
+	// (the order key never named it) — ungrouped, on lite.
+	p.MustReload()
+	p.MustWaitLoad()
+	waitConnected(t, p, "lite2")
+	strip("[wip +1],[lite2],Query 2,Renamed tab,Query 1")
+
+	// the chip's menu: ungroup lite2; a second click unfolds wip; its
+	// menu ungroups it too
+	at(`#qtabs .qchip[data-group="lite2"]`, proto.InputMouseButtonRight)
+	menuPick(t, p, "Ungroup")
+	strip("[wip +1],Query 2,Renamed tab,Query 1")
+	at(`#qtabs .qchip[data-group="wip"]`, proto.InputMouseButtonLeft)
+	strip("[wip],Query 1,Query 2,Renamed tab,Query 1")
+	at(`#qtabs .qchip[data-group="wip"]`, proto.InputMouseButtonRight)
+	menuPick(t, p, "Ungroup")
+	strip("Query 1,Query 2,Renamed tab,Query 1")
+	waitFor(t, p, "no groups saved", `async () =>
+	  ((await (await fetch("/api/v1/layout")).json()).data || {}).groups === "[]"`)
 }

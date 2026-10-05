@@ -727,6 +727,44 @@ a.btnlink:hover { border-color: var(--accent); }
 .qx:hover { color: var(--err); }
 .qnew { border: 0; background: none; color: var(--muted); padding: 0 10px; font-size: 15px; }
 .qnew:hover { color: var(--accent); }
+/* ── tab groups (tabgroups.js) ─────────────────────────────────────────────
+   A group's chip sits in front of its tabs, which are underlined in its
+   colour. The six hues are the groups' own: the theme's palette has three
+   (accent, warn, err), too few to tell groups apart, so each theme gets six
+   here, picked to read under var(--bg) as the chip's text — light hues on
+   the dark slate, deep ones on the light paper. .g0 … .g5 set --gc for
+   whatever carries the colour. */
+:root {
+  --g0: #6ea8fe; --g1: #63c174; --g2: #e0b44c; --g3: #ef7f7c; --g4: #b48ef0; --g5: #4fc1c9;
+}
+:root[data-theme="light"] {
+  --g0: #2f6fd0; --g1: #2e8a58; --g2: #9a6400; --g3: #c53d3d; --g4: #7a4fc4; --g5: #13808a;
+}
+.g0 { --gc: var(--g0); } .g1 { --gc: var(--g1); } .g2 { --gc: var(--g2); }
+.g3 { --gc: var(--g3); } .g4 { --gc: var(--g4); } .g5 { --gc: var(--g5); }
+.qchip {
+  align-self: center;
+  margin: 0 2px 0 6px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--gc);
+  color: var(--bg);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.qchip:first-child { margin-left: 0; }
+.qchip:hover:not(:disabled) { filter: brightness(1.12); }
+/* folded: the chip alone stands for the group, so it reads as a pill */
+.qchip.folded { outline: 1px dashed var(--gc); outline-offset: 2px; }
+.qtab.grp { box-shadow: inset 0 -2px 0 var(--gc); }
+.gprompt { padding: 10px 14px; width: 380px; max-width: 100%; }
+.gprompt .hint { margin: 0 0 8px; }
+.gprompt .gname { width: 100%; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; }
+.gprompt .gname:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+.gprompt .gwhy { min-height: 1.4em; margin: 6px 0 0; color: var(--err); }
 .qrename { width: 120px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--accent); border-radius: 3px; padding: 0 4px; }
 
 .iconbtn { padding: 3px 8px; }

@@ -899,6 +899,16 @@ A tab keeps its result, its grid view (sort, hidden columns, widths) and its
 plan while another is on screen; a run left going in the background marks
 its tab (● running, • done) and names its log lines.
 
+**Tab groups** gather tabs behind a short coloured chip, as ced's do.
+Right-click a tab → *Add to group…* to start one: an **ad-hoc** group
+holds the tabs you put in it (a tab opened from one joins it), and a
+**connection** group holds every tab on its connection or on one of its
+other databases, including tabs that switch to it later. Click a chip to
+fold its group down to the chip (`wip +2`), and right-click it to rename,
+ungroup, close the group's tabs, or jump to one of them. Names are up to 8
+letters or digits. Groups are saved with the layout and follow a
+renamed connection.
+
 A tab's text is one of its database's **consoles** — the TUI's files (see
 [Consoles](#consoles-and-multi-statement-buffers)), so the terminal and the
 browser share each database's running SQL. The tab names its console after

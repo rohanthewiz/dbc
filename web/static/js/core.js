@@ -9,6 +9,7 @@
 //   plan.js    DbcPlan                              (the plan view, shared with the standalone page)
 //   hl.js      dbc.hl                               (code-block syntax highlighting)
 //   chat.js    dbc.chat                             (the assistant pane)
+//   tabgroups.js dbc.groups                         (query-tab groups: the model and its menus)
 //   app.js     boot, query tabs, the event stream, commands, keys
 //
 // dbc.cmd is the command table (run, stop, explain, history, …). app.js

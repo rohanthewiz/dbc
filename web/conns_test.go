@@ -321,6 +321,10 @@ func testConnEdit(t *testing.T, persistent bool) {
 		"tableSchema.scratch":           "=main",
 		"tableSchema.scratch/analytics": "=mart",
 		"tableSchema.later":             "",
+		// tab groups on the connection, one of its databases, another
+		// connection, and an ad-hoc one (groups.go)
+		groupsKey: `[{"name":"scr","conn":"scratch","color":0},{"name":"ana","conn":"scratch/analytics","color":1},` +
+			`{"name":"lat","conn":"later","color":2},{"name":"wip","members":["bg"],"color":3}]`,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -401,6 +405,18 @@ func testConnEdit(t *testing.T, persistent bool) {
 	for _, k := range []string{"tableSchema.scratch", "tableSchema.scratch/analytics"} {
 		if v, ok := lay[k]; ok {
 			t.Errorf("layout %s still saved (%q)", k, v)
+		}
+	}
+	// ...and the connection groups follow it, the others untouched
+	if gs, err := parseGroups(lay[groupsKey]); err != nil {
+		t.Errorf("groups: %v", err)
+	} else {
+		var conns []string
+		for _, g := range gs {
+			conns = append(conns, g.Name+"="+g.Conn)
+		}
+		if got := strings.Join(conns, ","); got != "scr=renamed,ana=renamed/analytics,lat=later,wip=" {
+			t.Errorf("groups after the rename: %s", got)
 		}
 	}
 

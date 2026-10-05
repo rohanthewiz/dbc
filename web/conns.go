@@ -518,6 +518,11 @@ func (s *Server) handleConnEdit(ctx rweb.Context) error {
 				"saved schema picks on %q were not moved to %q, and it will open on its default schema: %v",
 				name, f.Name, err))
 		}
+		if err = s.moveGroupConns(name, f.Name); err != nil {
+			warns = append(warns, fmt.Sprintf(
+				"saved tab groups on %q were not moved to %q, and will not gather its tabs: %v",
+				name, f.Name, err))
+		}
 	}
 	if reconnects {
 		s.mgr.Drop(name)

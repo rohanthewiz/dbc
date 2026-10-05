@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-109
+**Next ID:** N-111
 
 ## Open
 
@@ -125,6 +125,21 @@ ten session docs in `ai_docs/claude_sessions/`
   color (`synParam`, `.hl-p` → `--err`), the same as SQL bind parameters.
   If that reads as alarming next to real errors, give shell variables
   their own color: `codeStyle` in `tui/chat.go` and a rule in `app.css`.
+- **N-109** · raised `2026-1005-1222-web-tab-groups` · value low
+  Tab groups across browser windows: the server merges a window's
+  `groups` layout write by saved-tab keys (`mergeTabGroups`,
+  `web/groups.go`), so a group another window made after this one booted,
+  and that holds none of that window's tabs (an empty connection group),
+  is dropped by this window's next write. Likewise a rename in one window
+  leaves another window's members under the old name. Only matters with
+  two windows grouping at once; fix would be page-side deltas or a
+  per-group stamp.
+- **N-110** · raised `2026-1005-1222-web-tab-groups` · value low
+  The e2e step "tabs survive a reload" timed out once on "its text back"
+  (editor empty after the reload, status "ready on lite", no JS errors),
+  then passed on five later runs with and without the tab-groups change.
+  Likely a race between the reload and the console's load/save; worth a
+  look if it recurs.
 
 ## Roadmap
 

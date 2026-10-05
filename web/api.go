@@ -152,11 +152,13 @@ func (s *Server) handleSaveLayout(ctx rweb.Context) error {
 	}
 	// "tabs" (the strip's order) and "plans" list saved-tab keys, and a
 	// window lists only its own: keep the ones other windows hold (see
-	// mergeTabKeys). Only when another window holds any — the usual single
-	// window writes its values as they are, with no read first.
+	// mergeTabKeys). "groups" names saved-tab keys too, inside its groups
+	// (see mergeTabGroups). Only when another window holds any — the usual
+	// single window writes its values as they are, with no read first.
 	_, hasTabs := l["tabs"]
 	_, hasPlans := l["plans"]
-	if hasTabs || hasPlans {
+	_, hasGroups := l[groupsKey]
+	if hasTabs || hasPlans || hasGroups {
 		if elsewhere := s.hub.heldElsewhere(ctx.Request().QueryParam("win")); len(elsewhere) > 0 {
 			old, err := s.store.Layout()
 			if err != nil {
@@ -166,6 +168,9 @@ func (s *Server) handleSaveLayout(ctx rweb.Context) error {
 				if v, given := l[k]; given {
 					l[k] = mergeTabKeys(v, old[k], elsewhere)
 				}
+			}
+			if hasGroups {
+				l[groupsKey] = mergeTabGroups(l[groupsKey], old[groupsKey], elsewhere)
 			}
 		}
 	}

@@ -44,6 +44,7 @@ func TestWeb(t *testing.T) {
 		{"copy out of the columns grid", copyColumnsGrid},
 		{"transpose the grid", transposeGrid},
 		{"switch connections", switchConns},
+		{"history scoped to the database", historyScope},
 		{"disconnect and reconnect", disconnect},
 		{"connection form fields and DSN", connForm},
 		{"postgres schema picker", pgSchemaPicker},
@@ -474,6 +475,35 @@ func switchConns(t *testing.T, _ *env, p *rod.Page) {
 	p.MustElement(`#conns .conn-item[data-conn="lite"]`).MustClick()
 	waitConnected(t, p, "lite")
 	waitFor(t, p, "lite's tables", `() => !!document.querySelector('#tables li[data-name="cats"]')`)
+}
+
+// historyScope: the history opens on the tab's database when it has
+// statements there (N-101), and the scope button shows every database's.
+// lite has the earlier steps' queries; one run on lite2 makes it a
+// database with history of its own.
+func historyScope(t *testing.T, _ *env, p *rod.Page) {
+	p.MustElement(`#conns .conn-item[data-conn="lite2"]`).MustClick()
+	waitConnected(t, p, "lite2")
+	before := gridSeq(t, p)
+	eval(t, p, `() => dbc.editor.setText("SELECT 'only on lite2' AS here")`)
+	p.MustElement("#run").MustClick()
+	waitResult(t, p, before, "here")
+
+	p.MustElement("#history-btn").MustClick()
+	rows := `() => [...document.querySelectorAll(".history li")].map((l) => l.textContent).join("\n")`
+	waitFor(t, p, "lite2's statement alone", `() => {
+	  const r = (`+rows+`)();
+	  return r.includes("only on lite2") && !r.includes("FROM cats");
+	}`)
+	p.MustElement(".mfoot button.linkish").MustClick()
+	waitFor(t, p, "every database's statements", `() => {
+	  const r = (`+rows+`)();
+	  return r.includes("only on lite2") && r.includes("FROM cats");
+	}`)
+	eval(t, p, `() => dbc.modal.close()`)
+
+	p.MustElement(`#conns .conn-item[data-conn="lite"]`).MustClick()
+	waitConnected(t, p, "lite")
 }
 
 // disconnect: the connection menu's Disconnect takes the tab off its

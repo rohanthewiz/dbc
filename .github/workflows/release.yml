@@ -38,10 +38,13 @@ concurrency:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: the release build should change only when
+    # this line does, not when GitHub moves the label to a new image
+    # (ubuntu-latest → Ubuntu 26 from 2026-10-19). Bump it deliberately.
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # Full history: the version step diffs HEAD~1, and goreleaser needs
           # prior tags for the changelog.
@@ -49,7 +52,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -122,9 +125,12 @@ jobs:
           git push origin "v$NEW"
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
-          version: latest
+          # Any GoReleaser 2.x, the major .goreleaser.yml's `version: 2`
+          # is written for; "latest" would follow a v3 with breaking
+          # config changes into a release run.
+          version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

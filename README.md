@@ -333,7 +333,7 @@ dragging.
 | `z` | *(results)* Give the results pane the whole column / give it back |
 | `Tab` / `Shift+Tab` | Cycle focus through the panes |
 | `Esc` | Close a dialog or menu |
-| `Ctrl+C` | Stop what's running; quit when idle |
+| `Ctrl+C` | Stop what's running; quit when idle (a query running in another tab keeps it from quitting — `Ctrl+Q` quits anyway) |
 | `Ctrl+Q` | Quit |
 
 The editor is a code editor, not a text box: it keeps the indent on

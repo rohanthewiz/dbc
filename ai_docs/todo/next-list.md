@@ -99,11 +99,6 @@ ten session docs in `ai_docs/claude_sessions/`
   Rename and delete consoles in the TUI. `dbc web`'s tab menu has both; the
   TUI only has ⌥N (new) and ⌥C (next), so a TUI user renames or deletes
   the `.sql` file by hand.
-- **N-103** · raised `2026-1005-1035-sql-consoles-per-database` · value low
-  Remember the caret and scroll per console across switches. The TUI's
-  `SetText` puts the caret at the top on every swap, and `dbc web` drops a
-  console's document (undo history with it) once no tab of the window
-  shows it.
 - **N-104** · raised `2026-1005-1035-sql-consoles-per-database` · value low
   Check consoles by hand on real data. The first `dbc web` start moves the
   real `web.bytdb`'s tab buffers into consoles (`moveTabBuffers`, once,
@@ -165,6 +160,12 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-103** · raised `2026-1005-1035-sql-consoles-per-database` · value low
+  Remember the caret and scroll per console across switches. The TUI's
+  `SetText` puts the caret at the top on every swap, and `dbc web` drops a
+  console's document (undo history with it) once no tab of the window
+  shows it.
+  closed 2026-10-05, `2026-1005-1047-caret-per-console`: the TUI parks the console it leaves (`editor.View`: caret, selection, scroll, undo) in `Model.consoleViews` and `editor.Restore`s it on the way back; a file changed meanwhile comes in as one undoable edit. `dbc web` keeps a console's Monaco model for the page's life (`leaveDoc`), dropping only a tab's own document or a deleted console's. Tests: `TestConsoleKeepsCaretAndUndoAcrossSwaps`, e2e `consolesPerDatabase` (caret + `canUndo` after lite → lite2 → lite).
 - **N-100** · raised `2026-1002-1239-web-conn-marks` · value low
   The web sidebar's in-use mark (`.conn-item.inuse`, a dimmed accent bar) is
   subtle, and on adjacent rows the bars join into one line. If it is missed

@@ -162,6 +162,37 @@ INSERT INTO cats (name, breed, age) VALUES ('Tom', 'tabby', 3), ('Mia', 'siamese
 CREATE TABLE e2e_a.alpha (id int); CREATE TABLE e2e_b.beta (id int, label text)`)
 		t.Cleanup(func() { e.dbc(t, "pg", drop) })
 	}
+	e.seedChats(t)
+}
+
+// seedChats writes saved assistant conversations into HOME's archive
+// (~/.config/dbc/chats, userdata.ChatsDir) so the assistant's empty pane
+// has a Recent conversations list to draw. Seven: more than the five the
+// pane shows, so its "all N recent…" link is drawn too. The files are
+// written by hand, in userdata.Chat's JSON shape, because this module does
+// not depend on dbc's own packages.
+func (e *env) seedChats(t *testing.T) {
+	t.Helper()
+	dir := filepath.Join(e.home, ".config", "dbc", "chats")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().Add(-time.Hour)
+	for i := range 7 {
+		at := base.Add(time.Duration(i) * time.Minute)
+		id := fmt.Sprintf("%s-%09d", at.Format("20060102-150405"), i)
+		q := fmt.Sprintf("saved question %d", i+1)
+		bs, err := json.Marshal(map[string]any{
+			"id": id, "title": q, "conn": "lite", "started": at, "updated": at,
+			"msgs": []map[string]string{{"role": "user", "text": q}, {"role": "agent", "text": "an answer"}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(dir, id+".json"), bs, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // dbc runs one headless query on conn and fails the test if it fails.

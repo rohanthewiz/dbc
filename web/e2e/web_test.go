@@ -54,6 +54,7 @@ func TestWeb(t *testing.T) {
 		{"consoles per database", consolesPerDatabase},
 		{"code blocks highlighted", codeHighlight},
 		{"tab groups", tabGroups},
+		{"fold the recent conversations", foldRecentChats},
 	}
 	for _, s := range steps {
 		ok := t.Run(s.name, func(t *testing.T) {
@@ -1049,4 +1050,61 @@ func tabGroups(t *testing.T, _ *env, p *rod.Page) {
 	strip("Query 1,Query 2,Renamed tab,Query 1")
 	waitFor(t, p, "no groups saved", `async () =>
 	  ((await (await fetch("/api/v1/layout")).json()).data || {}).groups === "[]"`)
+}
+
+// foldRecentChats: the header of the assistant's Recent conversations list
+// folds it to the header (with the count) and back, and the fold is a
+// layout value — a reload draws the list folded.
+//
+// The pane is unhidden by hand rather than opened with Ctrl+I: opening
+// starts the configured agent, and this run has none (nor should it reach
+// a real one on the PATH). The empty pane is drawn at boot regardless —
+// fetchAll lists the saved conversations seedChats wrote — so unhiding it
+// shows exactly what an opened pane would.
+func foldRecentChats(t *testing.T, _ *env, p *rod.Page) {
+	unhide := `() => { document.getElementById("chat").hidden = false; }`
+	rows := func() float64 { return evalNum(t, p, `() => document.querySelectorAll("#chat-trans .crecent").length`) }
+	saved := func(want string) {
+		t.Helper()
+		waitFor(t, p, fmt.Sprintf("chatRecentFolded saved as %q", want), `async (want) => {
+		  const r = await (await fetch("/api/v1/layout")).json();
+		  return ((r.data || {}).chatRecentFolded || "") === want;
+		}`, want)
+	}
+
+	eval(t, p, unhide)
+	waitFor(t, p, "the recent list", `() => document.querySelectorAll("#chat-trans .crecent").length === 5`)
+	if got := evalStr(t, p, `() => document.querySelector("#chat-trans .cfold").textContent`); got != "▾ recent conversations" {
+		t.Fatalf("header = %q, want the unfolded one", got)
+	}
+
+	p.MustElement("#chat-trans .cfold").MustClick()
+	if n := rows(); n != 0 {
+		t.Fatalf("%v rows left after folding", n)
+	}
+	got := evalStr(t, p, `() => { const h = document.querySelector("#chat-trans .cfold");
+	  return [h.textContent, h.getAttribute("aria-expanded"), document.activeElement === h,
+	    !!document.querySelector("#chat-trans > .cempty > .linkish")].join("|"); }`)
+	if got != "▸ recent conversations · 7|false|true|false" {
+		t.Fatalf("folded header (text|expanded|focused|all-link) = %q", got)
+	}
+	saved("1")
+
+	p.MustReload()
+	p.MustWaitLoad()
+	eval(t, p, unhide)
+	waitFor(t, p, "the folded header after a reload", `() => {
+	  const h = document.querySelector("#chat-trans .cfold");
+	  return !!h && h.getAttribute("aria-expanded") === "false";
+	}`)
+	if n := rows(); n != 0 {
+		t.Fatalf("%v rows drawn after a reload, want the list still folded", n)
+	}
+
+	// back out, with the keyboard this time: the header is a button
+	eval(t, p, `() => document.querySelector("#chat-trans .cfold").focus()`)
+	p.Keyboard.MustType(input.Enter)
+	waitFor(t, p, "the list unfolded", `() => document.querySelectorAll("#chat-trans .crecent").length === 5`)
+	saved("")
+	eval(t, p, `() => { document.getElementById("chat").hidden = true; }`)
 }

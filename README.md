@@ -732,7 +732,9 @@ the Gemini CLI.
 JSON file per conversation, readable only by you, the last 30 kept) after
 every answer, on `⟲ new`, and on quit. The empty pane lists the most recent
 ones — click one to reopen it — and right-click the transcript for
-**Recent conversations…** to see them all. A reopened conversation is the
+**Recent conversations…** to see them all. Click the list's header to
+fold it down to the header and its count; it stays folded (across reloads
+in `dbc web`, across runs in the terminal) until you click it again. A reopened conversation is the
 transcript, not the agent's memory: it starts a fresh session, so quote what
 matters in a follow-up. To delete one, right-click its row (in the pane or
 the list) and pick **Delete conversation**, or press `d` twice on it in the

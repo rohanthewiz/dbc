@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -603,6 +604,44 @@ func TestAssistantRecentConversationsList(t *testing.T) {
 	if m.modal != nil || !strings.Contains(m.chat.transcriptText(), "> question 5") {
 		t.Errorf("picking the second row should open question 5:\n%s", m.chat.transcriptText())
 	}
+}
+
+// The empty pane's "recent conversations" header folds its rows away and
+// back, keeping the count while folded, and the fold is saved with the
+// layout so the next run opens folded.
+func TestRecentConversationsFold(t *testing.T) {
+	fakeAssistant(t, nil)
+	m := newTestModel(t)
+	m.layoutFile = filepath.Join(t.TempDir(), "tui-layout.json")
+	dir := keepChats(t, m)
+	seedChats(t, dir, 7)
+	key(t, m, "ctrl+a")
+	c := frame(m)
+	findText(t, c, "◷ question 6")
+	x, y := findText(t, c, "▾ recent conversations")
+
+	click(t, m, x+2, y)
+	c = frame(m)
+	findText(t, c, "▸ recent conversations · 7")
+	for _, gone := range []string{"◷ question 6", "all 7 recent…"} {
+		if strings.Contains(c.String(), gone) {
+			t.Errorf("folded, the pane still shows %q:\n%s", gone, c.String())
+		}
+	}
+	findText(t, c, "Ask about the query in the editor") // the hints move up
+	m.saveLayout()
+
+	m2 := newTestModel(t)
+	m2.restoreLayout(userdata.LoadLayout(m.layoutFile))
+	m2.chat.dir = dir
+	key(t, m2, "ctrl+a")
+	x, y = findText(t, frame(m2), "▸ recent conversations · 7")
+
+	click(t, m2, x+2, y)
+	c = frame(m2)
+	findText(t, c, "▾ recent conversations")
+	findText(t, c, "◷ question 6")
+	findText(t, c, "all 7 recent…")
 }
 
 // seedChats saves n conversations "question 0" … "question n-1", newest last.

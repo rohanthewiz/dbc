@@ -9,9 +9,10 @@ import (
 )
 
 // Layout is the terminal UI's pane geometry as the user left it: the
-// sizes dragged at the pane borders and whether the sidebar was folded away
-// (^B). dbc web keeps the same things in its store's layout; the TUI has no
-// store, so, like the schema picks, they get a small file of their own.
+// sizes dragged at the pane borders, whether the sidebar was folded away
+// (^B), and whether the assistant's recent conversations were folded. dbc
+// web keeps the same things in its store's layout; the TUI has no store,
+// so, like the schema picks, they get a small file of their own.
 //
 // Zero means "never set": New keeps its default for a zero field, so a file
 // from an older dbc (or one missing a field) costs only that field.
@@ -21,6 +22,10 @@ type Layout struct {
 	LogH       int     `json:"log_h,omitempty"`
 	EdFrac     float64 `json:"ed_frac,omitempty"`
 	SideHidden bool    `json:"side_hidden,omitempty"`
+
+	// ChatRecentFolded folds the assistant's empty-pane list of recent
+	// conversations down to its header.
+	ChatRecentFolded bool `json:"chat_recent_folded,omitempty"`
 
 	// Tabs are the query tabs, in strip order, and ActiveTab the index of
 	// the one on screen. Empty from an older dbc: one tab, as before.

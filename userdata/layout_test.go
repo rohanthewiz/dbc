@@ -14,7 +14,7 @@ func TestLayoutRoundTrip(t *testing.T) {
 	if got := LoadLayout(path); !reflect.DeepEqual(got, Layout{}) {
 		t.Fatalf("missing file: %+v", got)
 	}
-	want := Layout{SideW: 30, ChatW: 50, LogH: 9, EdFrac: 0.42, SideHidden: true,
+	want := Layout{SideW: 30, ChatW: 50, LogH: 9, EdFrac: 0.42, SideHidden: true, ChatRecentFolded: true,
 		Tabs: []LayoutTab{{Title: "Query 1", Conn: "a", Console: "console"}, {Title: "wip", Conn: "b"}}, ActiveTab: 1}
 	if err := SaveLayout(path, want); err != nil {
 		t.Fatal(err)

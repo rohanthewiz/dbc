@@ -123,6 +123,7 @@ type chatPane struct {
 	archiveID    string              // the live conversation's file; "" until its first save
 	archiveStart time.Time           // when the live conversation was first saved
 	recent       []userdata.ChatMeta // saved conversations, newest first, as last listed
+	recentFolded bool                // the empty pane shows only the recent list's header
 	saveErr      string              // the last save failure logged, so it is logged once
 
 	// transcript scroll, in visual rows
@@ -150,8 +151,9 @@ const (
 	targetInsert targetKind = iota
 	targetCopyCode
 	targetCopyReply
-	targetOpenSaved // a saved conversation offered in the empty pane; text is its id
-	targetAllSaved  // "all recent…" under those rows
+	targetOpenSaved  // a saved conversation offered in the empty pane; text is its id
+	targetAllSaved   // "all recent…" under those rows
+	targetFoldRecent // the "recent conversations" header: folds the rows under it away
 
 	// the sign-in row's chips — see chatsignin.go
 	targetSignIn
@@ -652,6 +654,11 @@ func (m *Model) chatTargetPress(t chatTarget) tea.Cmd {
 	case targetAllSaved:
 		m.openRecentChats()
 		return nil
+	case targetFoldRecent:
+		// the next frame draws the pane folded (or not); a target's press
+		// needs no other redraw
+		m.chat.recentFolded = !m.chat.recentFolded
+		return nil
 	case targetSignIn:
 		return m.chatSignIn()
 	case targetCopySignInCode:
@@ -959,10 +966,16 @@ func (m *Model) drawChat(c *Canvas, r Rect) *caret {
 // drawRecent offers the most recent saved conversations in the empty pane,
 // as clickable rows starting at row y, and returns the row after them.
 //
-//	recent conversations
-//	◷ why is this slow?               15:04 · 4 msgs
-//	◷ count adoptions by month       Sep 21 · 6 msgs
+//	▾ recent conversations                  ▸ recent conversations · 12
+//	◷ why is this slow?     15:04 · 4 msgs
+//	◷ count adoptions…     Sep 21 · 6 msgs   Ask about the query in the …
 //	  all 12 recent…
+//
+// The header is itself a target that folds the rows away (recentFolded),
+// as dbc web's header does: someone who never reopens old conversations
+// gets the hints back at the top. Folded, the header keeps the count, so
+// the list is out of the way but not forgotten. The fold is saved with the
+// TUI's layout (userdata.Layout.ChatRecentFolded) for the next run.
 //
 // Rows below the pane's bottom are neither drawn nor made clickable, so a
 // short pane cannot leave a target where nothing is visible.
@@ -991,8 +1004,16 @@ func (p *chatPane) drawRecent(m *Model, s Surface, y, w int) int {
 		abs := Rect{s.Rect().X + x0, s.Rect().Y + y, x1 - x0, 1}
 		p.targets = append(p.targets, chatTarget{r: abs, kind: kind, text: text})
 	}
-	put(1, "recent conversations", st.accent.Bold())
+	head := "▾ recent conversations"
+	if p.recentFolded {
+		head = fmt.Sprintf("▸ recent conversations · %d", len(chats))
+	}
+	target(1, 1+width(head), targetFoldRecent, "")
+	put(1, head, st.accent.Bold())
 	y++
+	if p.recentFolded {
+		return y + 1
+	}
 	for _, c := range chats[:min(len(chats), recentInPane)] {
 		// The title gets what the detail leaves, less "◷ " before it and a
 		// gap after. The detail sheds parts until the title keeps at least

@@ -587,6 +587,7 @@ func (m *Model) restoreLayout(l userdata.Layout) {
 		m.edFrac = l.EdFrac
 	}
 	m.sideHidden = l.SideHidden
+	m.chat.recentFolded = l.ChatRecentFolded
 	m.savedLayoutTabs, m.savedActiveTab = l.Tabs, l.ActiveTab
 }
 
@@ -597,6 +598,6 @@ func (m *Model) restoreLayout(l userdata.Layout) {
 func (m *Model) saveLayout() {
 	_ = userdata.SaveLayout(m.layoutFile, userdata.Layout{
 		SideW: m.sideW, ChatW: m.chatW, LogH: m.logH, EdFrac: m.edFrac, SideHidden: m.sideHidden,
-		Tabs: m.savedTabs(), ActiveTab: m.curTab,
+		ChatRecentFolded: m.chat.recentFolded, Tabs: m.savedTabs(), ActiveTab: m.curTab,
 	})
 }

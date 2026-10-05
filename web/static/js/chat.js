@@ -54,6 +54,7 @@
     msgs: [],
     agents: [],
     recent: null,   // saved conversations, as last listed (shown in the empty pane)
+    recentFolded: false, // the empty pane's recent list is folded to its header
     follow: true,   // keep the transcript scrolled to the end
   };
 
@@ -86,15 +87,35 @@
 
   // emptyPane is the hint for someone new — and, first, the saved
   // conversations for someone returning.
+  //
+  //   ▾ RECENT CONVERSATIONS           ▸ RECENT CONVERSATIONS · 12
+  //   ◷ why is this slow?   15:04      Ask about the query in the …
+  //   ◷ count adoptions…   Sep 21
+  //   all 12 recent…
+  //   Ask about the query in the …
+  //
+  // The header folds the list: someone who never reopens old conversations
+  // gets the pane's hints back at the top. Folded, it keeps the count, so
+  // the list is not forgotten — just out of the way. The fold is a layout
+  // value ("chatRecentFolded"), saved as the pane's width and openness are,
+  // so it holds across reloads and windows.
   function emptyPane() {
     const box = el("div", "cempty");
     if (c.recent && c.recent.length) {
-      box.append(el("div", "chead2", "recent conversations"));
-      for (const r of c.recent.slice(0, 5)) box.append(recentRow(r));
-      if (c.recent.length > 5) {
-        const all = el("button", { type: "button", class: "linkish" }, "all " + c.recent.length + " recent…");
-        all.addEventListener("click", recentModal);
-        box.append(all);
+      const folded = c.recentFolded;
+      const head = el("button", {
+        type: "button", class: "chead2 cfold", "aria-expanded": folded ? "false" : "true",
+        title: folded ? "Show the recent conversations" : "Fold the recent conversations",
+      }, (folded ? "▸ " : "▾ ") + "recent conversations" + (folded ? " · " + c.recent.length : ""));
+      head.addEventListener("click", () => setRecentFolded(!c.recentFolded));
+      box.append(head);
+      if (!folded) {
+        for (const r of c.recent.slice(0, 5)) box.append(recentRow(r));
+        if (c.recent.length > 5) {
+          const all = el("button", { type: "button", class: "linkish" }, "all " + c.recent.length + " recent…");
+          all.addEventListener("click", recentModal);
+          box.append(all);
+        }
       }
     }
     for (const p of [
@@ -106,6 +127,19 @@
       "Enter sends · Shift+Enter adds a line · Ctrl+K stops an answer · Esc returns to the editor · Ctrl+I toggles",
     ]) box.append(el("p", "hint", p));
     return box;
+  }
+
+  // setRecentFolded folds or unfolds the empty pane's recent list. The pane
+  // is redrawn whole (it is a handful of nodes), which drops the header the
+  // press landed on — focus moves to its replacement, so Enter or Space can
+  // toggle it straight back.
+  function setRecentFolded(fold) {
+    c.recentFolded = fold;
+    saveLayout({ chatRecentFolded: fold ? "1" : "" });
+    if (c.msgs.length) return; // the empty pane is not showing
+    renderAll();
+    const head = els.trans.querySelector(".cfold");
+    if (head) head.focus();
   }
 
   function renderMsg(m, i) {
@@ -611,6 +645,7 @@
     // boot: the saved layout, before the workspace is known
     boot(layout) {
       if (layout.chatWidth) setWidth(Number(layout.chatWidth));
+      c.recentFolded = layout.chatRecentFolded === "1";
       if (layout.chatOpen === "1") show(false);
     },
     // onState: the workspace is attached (new or reattached). A reattached

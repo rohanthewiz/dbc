@@ -398,7 +398,7 @@ func (m *Model) resultsTitle() string {
 	if r.IsExec {
 		return fmt.Sprintf("Results · %d affected · %s", r.Affected, r.Duration.Round(10_000))
 	}
-	t := fmt.Sprintf("Results · %d rows · %s", len(r.Rows), r.Duration.Round(10_000))
+	t := fmt.Sprintf("Results · %s · %s", plural(len(r.Rows), "row"), r.Duration.Round(10_000))
 	if r.Truncated {
 		t += " · truncated"
 	}

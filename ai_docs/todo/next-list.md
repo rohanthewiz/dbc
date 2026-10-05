@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-115
+**Next ID:** N-120
 
 ## Open
 
@@ -91,14 +91,6 @@ ten session docs in `ai_docs/claude_sessions/`
   MySQL half: editor completion on a real MySQL (backtick quoting, a
   `<conn>/<database>` pick, the first load), done on Postgres only.
 
-- **N-101** · raised `2026-1005-1035-sql-consoles-per-database` · value low
-  Scope query history (`Ctrl+P`, TUI and `dbc web`) to the console's
-  database, or offer that as a filter. History is still one list across
-  every database, while the editor's text is now per database (consoles).
-- **N-102** · raised `2026-1005-1035-sql-consoles-per-database` · value low
-  Rename and delete consoles in the TUI. `dbc web`'s tab menu has both; the
-  TUI only has ⌥N (new) and ⌥C (next), so a TUI user renames or deletes
-  the `.sql` file by hand.
 - **N-104** · raised `2026-1005-1035-sql-consoles-per-database` · value low
   Check consoles by hand on real data. The first `dbc web` start moves the
   real `web.bytdb`'s tab buffers into consoles (`moveTabBuffers`, once,
@@ -126,22 +118,7 @@ ten session docs in `ai_docs/claude_sessions/`
   then passed on five later runs with and without the tab-groups change.
   Likely a race between the reload and the console's load/save; worth a
   look if it recurs.
-- **N-111** · raised `2026-1005-1247-web-grid-transpose` · value low
-  Transpose in the TUI's grid. `dbc web` has it (`t`, ⇄ Transpose; copies
-  and exports follow); the TUI could reuse `export.Transpose` and
-  `PlainCellsTransposed` for its copy/export, but its grid drawing
-  (`tui/grid.go`) would need a sideways mode. The ask said "at least the
-  html js version", so only the web was done.
 
-- **N-113** · raised `2026-1005-1352-sql-alias-rename` · value medium
-  Go to definition, usages and rename in the TUI editor. `dbc web` has them
-  (F12 / Shift+F12 / F2, from `sqlcomplete.Resolve` and `Rename`); the TUI
-  needs keys (one to jump to the declaration, one to step through the
-  uses, one to rename in place), a way to show the uses (highlight them
-  like the statement marker), and a small prompt for the new name. The
-  resolver is UI-free and works in byte offsets, as the TUI's completion
-  popup already does. The ask was "start with the resolver and web
-  rename", so the TUI was left for later.
 - **N-114** · raised `2026-1005-1352-sql-alias-rename` · value low
   Resolve columns too, starting with the ones the statement itself names:
   a CTE's or a derived table's output columns (`WITH t AS (SELECT count(*)
@@ -149,6 +126,34 @@ ten session docs in `ai_docs/claude_sessions/`
   columns would need the schema and a real idea of which table a bare
   column belongs to. Also: the e2e step covers F12 and F2 but not
   Shift+F12's references list.
+
+- **N-115** · raised `2026-1005-1450-tui-web-parity` · value low
+  Drive the TUI's parity pieces by hand in real terminals (iTerm2,
+  Terminal.app, Ghostty, kitty, a cats pane): whether F12 / ⇧F12 / F2 and
+  F1 reach dbc (macOS may take F12; some terminals send ⇧F12 as F24, which
+  is accepted), Ctrl+click in the editor, ⌥T / ⌥W / ⌥1…9 (need Option as
+  Meta), the tab strip's `● • ◆` and the list's `○`, the `‹ / ›` fold tab,
+  typing in the connection form (masked password, TLS chips), and
+  transposed-grid drags with real mouse hardware. The pty e2e suite
+  (`tui/e2e`, xterm-256color through charmbracelet/x/vt) passes every new
+  step; glyph rendering and OS key capture it cannot see.
+- **N-116** · raised `2026-1005-1450-tui-web-parity` · value low
+  Tab groups in the TUI. dbc web has them (`tabgroups.js`: ad-hoc and
+  connection groups, collapse to a chip); the TUI's strip has no groups.
+  Only worth it once someone keeps more tabs than the strip shows.
+- **N-117** · raised `2026-1005-1450-tui-web-parity` · value low
+  A light/dark switch in the TUI. dbc web has one; the TUI takes the cats
+  host's palette or its own dark one (`theme.Light()` exists, used for plan
+  files). Would need a place to put it (no settings menu) and to decide how
+  it interacts with a live cats theme.
+- **N-118** · raised `2026-1005-1450-tui-web-parity` · value low
+  A references list for ⇧F12 in the TUI, like Monaco's peek: today the uses
+  are underlined, listed by line in the log, and ⇧F12 again steps through
+  them. A small modal list (line + text, Enter jumps) if stepping is not
+  enough.
+- **N-119** · raised `2026-1005-1450-tui-web-parity` · value low
+  The TUI connection form's TLS mode chips are cut off on terminals under
+  about 75 columns. Wrap them onto a second row, or switch to a picker.
 
 ## Roadmap
 
@@ -212,6 +217,33 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-113** · raised `2026-1005-1352-sql-alias-rename` · value medium
+  Go to definition, usages and rename in the TUI editor. `dbc web` has them
+  (F12 / Shift+F12 / F2, from `sqlcomplete.Resolve` and `Rename`); the TUI
+  needs keys (one to jump to the declaration, one to step through the
+  uses, one to rename in place), a way to show the uses (highlight them
+  like the statement marker), and a small prompt for the new name. The
+  resolver is UI-free and works in byte offsets, as the TUI's completion
+  popup already does. The ask was "start with the resolver and web
+  rename", so the TUI was left for later.
+  closed 2026-10-05, `2026-1005-1450-tui-web-parity`: `tui/symbol.go` — F12 (and Ctrl+click) selects the declaration, ⇧F12 underlines every use and steps through them (F24 too, for terminals that send it), F2 renames through the shared `promptModal` as one undoable edit, quoted per dialect by `workspace.Rename`; the three are in the editor's right-click menu with the web's refusals. Tests: `tui/symbol_test.go`, e2e step "F2 renames an alias in place" (real binary in a pty). No references list (see N-118).
+- **N-111** · raised `2026-1005-1247-web-grid-transpose` · value low
+  Transpose in the TUI's grid. `dbc web` has it (`t`, ⇄ Transpose; copies
+  and exports follow); the TUI could reuse `export.Transpose` and
+  `PlainCellsTransposed` for its copy/export, but its grid drawing
+  (`tui/grid.go`) would need a sideways mode. The ask said "at least the
+  html js version", so only the web was done.
+  closed 2026-10-05, `2026-1005-1450-tui-web-parity`: `tui/transpose.go` — `t` and the grid menu turn the grid; only the picture turns (cursor, sort, hidden columns keep their meaning), one shared record width plus a names column (keys, drags, double-click fit), copies/exports via `export.Transpose` (a single row as `column | value`), orientation kept across results as in the web. A turn starts the view at the left edge (`grid.reveal`). Tests: `tui/transpose_test.go`, e2e step "t transposes the grid and back".
+- **N-102** · raised `2026-1005-1035-sql-consoles-per-database` · value low
+  Rename and delete consoles in the TUI. `dbc web`'s tab menu has both; the
+  TUI only has ⌥N (new) and ⌥C (next), so a TUI user renames or deletes
+  the `.sql` file by hand.
+  closed 2026-10-05, `2026-1005-1450-tui-web-parity`: editor menu **Rename console…** (`promptModal`, `ValidConsoleName`, refused when taken, a file-less console renamed in memory) and **Delete console…** (confirm menu; the editor moves to the first free console, never writing the deleted one back). With query tabs, a console another tab shows is reached by going to that tab. Tests: `tui/console_test.go`.
+- **N-101** · raised `2026-1005-1035-sql-consoles-per-database` · value low
+  Scope query history (`Ctrl+P`, TUI and `dbc web`) to the console's
+  database, or offer that as a filter. History is still one list across
+  every database, while the editor's text is now per database (consoles).
+  closed 2026-10-05, `2026-1005-1450-tui-web-parity`: `userdata.Entry.DB` (the console key `host/database`, `omitempty`, old lines load as "all") recorded by the workspace; the TUI's Ctrl+P and dbc web's history (`GET /api/v1/ws/:id/history?scope=auto|db|all`) open on the tab's database when it has history, Tab or the `● db · ○ all` chip/button switches. Tests: userdata, workspace, web API tests, TUI harness, web e2e "history scoped to the database".
 - **N-108** · raised `2026-1005-1132-assistant-code-highlighting` · value low
   Shell `$variables` in answers are drawn as Param, which is the error
   color (`synParam`, `.hl-p` → `--err`), the same as SQL bind parameters.

@@ -651,7 +651,11 @@ original kept as the attribute's comment.
 Right-click a result (or `⧉ Copy ▾`) and pick **Table for Teams / Outlook /
 Docs (HTML)**: dbc puts a real HTML table on the clipboard, with inline
 styles, so it pastes into Teams, Outlook, Slack or Google Docs as a formatted
-table rather than as markup. Markdown, CSV, TSV and JSON are one row down.
+table rather than as markup. Where the table flavor cannot land — a target
+that pastes only text, or a copy over SSH that goes through the terminal —
+the paste is the same result as an aligned text table, never the HTML
+source (that is `Export → HTML page`). Markdown, CSV, TSV and JSON are one
+row down.
 The scope is the selected range when there is one, or the whole result.
 
 **Transposed.** `t` in the grid (or **Transpose** in its right-click menu;

@@ -677,7 +677,7 @@
       const o = await p;
       let how = "";
       if (html) how = rich ? " — paste into Teams, Outlook or a doc for a formatted table"
-        : " — as plain text (the browser would not take the HTML flavor)";
+        : " — as aligned text (the browser would not take the HTML flavor)";
       dbc.log("ok", "copied " + o.what + how);
     }, (e) => dbc.log("err", "copy failed: " + e.message));
   }

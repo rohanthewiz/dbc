@@ -312,6 +312,7 @@ dragging.
 | `Ctrl+E` | Export the result (format picker; file, or clipboard) |
 | `Ctrl+O` | Pick and run a Go script from `scripts_dir` |
 | `Ctrl+P` | Query history of this database (`Tab`: every database) — filter, then `Enter` inserts (never runs) |
+| `Alt+T` · `Alt+W` · `Alt+1`…`9` | A new query tab · close the tab · go to tab N (see [Query tabs](#query-tabs)) |
 | `Alt+N` · `Alt+C` | A new console of the database · the database's next console (see [Consoles](#consoles-and-multi-statement-buffers)) |
 | `F12` · `Shift+F12` · `F2` | *(editor)* On an alias or CTE name: go to its declaration · mark its uses (again: the next one) · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename)) |
 | `Ctrl+Space` | *(editor)* Suggestions at the caret — they also open by themselves after `.`, `::` and two letters of a word (see below) |
@@ -931,6 +932,40 @@ Other than the editor's pinned session, pooled connections that sit idle for
 `conn_idle_timeout` (default `"1h"`; `"0"` = never) are closed and reopened on
 demand.
 
+### Query tabs
+
+As in `dbc web`, the editor can hold several **query tabs**, each its own
+workspace: its own pinned session (a `BEGIN` in one does not leak into
+another), its own console, result, plan and Tables list. `⌥T` (`Alt+T`) opens
+a tab on the connection you are on, `⌥W` closes the tab (asking first when its
+session may hold a transaction, since closing rolls it back; the last tab
+stays), and `⌥1`…`⌥9` switch. The connections list, the log and the assistant
+are shared; the assistant always talks about the tab on screen.
+
+With two or more tabs, the editor's top border becomes a strip of them:
+
+```
+╭ Query 1 · console ● ─ wip • ─ Query 3 ◆ ─ + ──────────────╮
+```
+
+Click a tab to switch, double-click it to rename it, right-click it for
+rename, close, a new tab and its database's consoles; `+` opens one. A tab
+left running keeps running: `●` marks it while it runs and `•` once it has
+finished (in the error color if it failed), and its result is drawn when you
+come back to it. `◆` marks a tab whose session may hold a transaction, `SET`
+values or temp tables. In the connections list, `●` is the tab's connection
+and `○` one another tab is on; a connection a tab is on cannot be removed or
+re-pointed until that tab moves off it.
+
+Two tabs on one database get two consoles, never one file written by both: a
+new tab takes a console no other tab shows (or a new one), `⌥C` skips the
+ones other tabs show, and the console menu sends you to the tab that has one.
+
+Tabs are kept between sessions with the pane sizes, in
+`~/.config/dbc/tui-layout.json` — each tab's title, connection and console. On
+the next start only the tab on screen connects; the others connect the first
+time you look at them, so ten saved tabs do not dial ten connections.
+
 ### Stopping a long query
 
 While a query or script runs, the status bar shows a live elapsed time and a
@@ -984,7 +1019,7 @@ with `--secret` or `DBC_WEB_SECRET`). A `--listen` address off loopback is
 allowed, with a warning — it is a local tool, not a team server. The port is
 8450, or a free one when 8450 is taken.
 
-**Query tabs.** Each tab is its own workspace with its own pinned session,
+**Query tabs.** (The TUI has them too — see [Query tabs](#query-tabs).) Each tab is its own workspace with its own pinned session,
 so a `BEGIN` in one does not leak into another. `Alt+T` opens a tab, `Alt+W`
 closes it (asking first when its session may hold a transaction, since
 closing rolls it back), `Alt+1`…`Alt+9` switch, and a double-click renames.

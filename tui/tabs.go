@@ -167,6 +167,7 @@ func (m *Model) routeTab(tm tabMsg) tea.Cmd {
 		if !ev.Stale && ev.Err == nil {
 			cmd = m.tagFor(t, m.releaseThenCloseOn(t.ws, ev))
 			ev.Release, ev.Left = nil, ""
+			m.refreshConns() // its ○ in the connections list moved
 		}
 	case *workspace.RunDone:
 		if !ev.Stale {

@@ -240,3 +240,26 @@ func TestTabsRestore(t *testing.T) {
 		t.Fatalf("tab 1 on %q with %q", m2.ws.Active(), m2.editor.Text())
 	}
 }
+
+// The connections list marks the tab's connection ● and those other tabs
+// are on ○, and a connection another tab is on cannot be removed or have
+// what it dials changed — dbc web's "a query tab is on it".
+func TestTabsInConnectionsList(t *testing.T) {
+	m, _ := consoleModel(t)
+	key(t, m, "alt+t")
+	drive(t, m, nil, m.setActive("a"))
+	marks := map[string]string{}
+	for _, it := range m.conns.items {
+		marks[it.label] = it.mark
+	}
+	if marks["a"] != "●" || marks[m.tabs[0].ws.Active()] != "○" {
+		t.Fatalf("marks = %v", marks)
+	}
+	err := m.connInUse(false)(m.tabs[0].ws.Active())
+	if err == nil || !strings.Contains(err.Error(), "tab Query 1 is on") {
+		t.Fatalf("in-use for tab 1's connection: %v", err)
+	}
+	if err := m.connInUse(false)("b"); err != nil {
+		t.Fatalf("b is on no tab, but: %v", err)
+	}
+}

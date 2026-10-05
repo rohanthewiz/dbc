@@ -19,10 +19,17 @@ import (
 
 // refreshConns rebuilds the connections list, marking the active one — or,
 // while the sidebar is on another of its server's databases
-// ("<conn>/<database>"), the configured connection it is derived from.
+// ("<conn>/<database>"), the configured connection it is derived from —
+// with ●, and those other query tabs are on with ○.
 func (m *Model) refreshConns() {
 	items := make([]listItem, 0, len(m.cfg.Conns()))
 	on := m.baseOf(m.ws.Active())
+	others := map[string]bool{}
+	for i, t := range m.tabs {
+		if i != m.curTab && t.ws != nil && t.ws.Active() != "" {
+			others[m.baseOf(t.ws.Active())] = true
+		}
+	}
 	for i, c := range m.cfg.Conns() {
 		// as dbc web's sidebar: a muted ✎ marks one added from inside dbc
 		// (the connection form edits it), and · tls one that dials TLS
@@ -34,9 +41,14 @@ func (m *Model) refreshConns() {
 			sub += " · tls"
 		}
 		it := listItem{label: c.Name, sub: sub, data: c.Name}
-		if on != "" && c.Name == on {
+		switch {
+		case on != "" && c.Name == on:
 			it.mark = "●"
 			m.conns.cur = i
+		case others[c.Name]:
+			// another query tab is on it: dbc web's dimmer bar, as a
+			// hollow mark (tabs.go)
+			it.mark = "○"
 		}
 		items = append(items, it)
 	}

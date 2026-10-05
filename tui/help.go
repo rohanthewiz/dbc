@@ -63,6 +63,13 @@ var keyGroups = []keyGroup{
 		{"F1 · ?", "this list (? outside the editor and the assistant)"},
 		{"^C · ^Q", "stop what runs, else quit · quit"},
 	}},
+	{"Query tabs", [][2]string{
+		{"⌥T · ⌥W", "new tab (its own session and console) · close the tab"},
+		{"⌥1 … ⌥9", "go to tab N"},
+		{"click · double-click a tab", "switch to it · rename it"},
+		{"right-click a tab", "rename, close, new tab, its consoles"},
+		{"● · • · ◆", "running · finished in the background · may hold a transaction"},
+	}},
 	{"Results grid", [][2]string{
 		{"arrows · ⇧arrows", "move · extend the range"},
 		{"Enter · double-click", "inspect the value"},
@@ -86,8 +93,9 @@ var keyGroups = []keyGroup{
 	{"Sidebar", [][2]string{
 		{"Enter · click", "connect · preview a table's rows"},
 		{"x", "(connections) disconnect"},
-		{"a · +", "(connections) add a connection"},
+		{"a · + · e", "(connections) add a connection · edit the one under the cursor"},
 		{"right-click", "(connections) connect, edit, remove, add"},
+		{"● · ○", "(connections) this tab's connection · another tab's"},
 		{"d · s", "(tables) pick a database · a schema"},
 		{"c · e", "(tables) show its columns · diagram it (ERD)"},
 	}},

@@ -766,18 +766,35 @@ func (cf *connFormModal) save(m *Model) (tea.Cmd, bool) {
 	return nil, true
 }
 
-// connInUse is the TUI's in-use rule for connedit: the active connection —
-// or one of its other databases, whose pool shares its host and
-// credentials — and a connect still dialing. forEdit adds that ai_rows
-// alone may still change.
+// connInUse is the TUI's in-use rule for connedit, dbc web's "a query tab
+// is on it": a tab on the connection — or on one of its other databases,
+// whose pool shares its host and credentials — or still dialing it.
+// forEdit adds that ai_rows alone may still change.
 func (m *Model) connInUse(forEdit bool) func(string) error {
 	return func(name string) error {
 		on := func(c string) bool { return c != "" && (c == name || m.baseOf(c) == name) }
-		connecting, dialing := m.ws.Connecting()
-		if !on(m.ws.Active()) && !(dialing && on(connecting)) {
+		var user *queryTab
+		for i, t := range m.tabs {
+			ws := t.ws
+			if i == m.curTab {
+				ws = m.ws
+			}
+			if ws == nil {
+				continue
+			}
+			connecting, dialing := ws.Connecting()
+			if on(ws.Active()) || (dialing && on(connecting)) {
+				user = t
+				break
+			}
+		}
+		if user == nil {
 			return nil
 		}
 		msg := fmt.Sprintf("dbc is on %q — disconnect (x in Connections) or switch to another connection first", name)
+		if len(m.tabs) > 1 {
+			msg = fmt.Sprintf("tab %s is on %q — disconnect it (x in Connections) or switch it to another connection first", user.title, name)
+		}
 		if forEdit {
 			msg += " (the assistant's row access alone can change while it is in use)"
 		}

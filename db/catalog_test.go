@@ -74,6 +74,11 @@ func TestNavigatorQueriesPerDriver(t *testing.T) {
 		if err != nil || strings.Contains(sq, "pg_namespace") != want {
 			t.Errorf("SchemaSummaryQuery(%q) = %q, %v", driver, sq, err)
 		}
+		// the fallback reads pg_namespace alone: no pass over pg_class
+		nq, err := SchemaNamesQuery(driver)
+		if err != nil || strings.Contains(nq, "pg_namespace") != want || strings.Contains(nq, "pg_class") {
+			t.Errorf("SchemaNamesQuery(%q) = %q, %v", driver, nq, err)
+		}
 		tq, err := SchemaTablesQuery(driver, "sales")
 		if want && (err != nil || !strings.Contains(tq, "n.nspname = 'sales'")) {
 			t.Errorf("SchemaTablesQuery(%q) = %q, %v", driver, tq, err)

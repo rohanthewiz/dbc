@@ -89,10 +89,18 @@ type DatabaseInfo struct {
 
 // SchemaInfo is one schema of a database, as the sidebar's picker lists it.
 type SchemaInfo struct {
-	Name    string
-	Tables  int  // its tables, views, matviews and foreign tables
+	Name string
+	// Tables is its tables, views, matviews and foreign tables, or
+	// TablesUnknown when the list came from SchemaNames, which does not
+	// count them.
+	Tables  int
 	Default bool // the first schema on search_path: what a bare name means
 }
+
+// TablesUnknown is SchemaInfo.Tables for a schema whose tables were not
+// counted (SchemaNames). It is not 0: an uncounted schema may well hold
+// tables, and a picker must neither dim it as empty nor add it into a total.
+const TablesUnknown = -1
 
 // DatabasesQuery returns the statement that lists the databases a
 // connection's server holds and its user may connect to, as (name,
@@ -155,6 +163,34 @@ FROM pg_catalog.pg_namespace n
 LEFT JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
 WHERE ` + pgUserSchemas + `
 GROUP BY n.nspname
+ORDER BY n.nspname`, nil
+}
+
+// SchemaNamesQuery is SchemaSummaryQuery without the counts: the same
+// columns, with tables always TablesUnknown. It is the fallback for a
+// database whose summary does not finish in time.
+//
+// The counts are the summary's cost: a pass over the whole of pg_class,
+// which on a production database can hold millions of rows — every
+// partition of every partitioned table, each with its indexes and TOAST
+// table, plus whatever bloat churn (temp tables, partitions created and
+// dropped) has left in it — and has no index on relnamespace to narrow
+// the pass. pg_namespace has a row per schema and nothing else, so this
+// reads in milliseconds on any server, and the sidebar still gets its
+// schema picker: without one, a database too big to count is also a
+// database whose tables can only be read whole, the one read certain to
+// fail there.
+func SchemaNamesQuery(driver string) (string, error) {
+	if _, err := driverFor(driver); err != nil {
+		return "", err
+	}
+	if !Navigable(driver) {
+		return "", nil
+	}
+	return `SELECT n.nspname AS schema_name, ` + strconv.Itoa(TablesUnknown) + ` AS tables,
+       coalesce(n.nspname = (current_schemas(false))[1], false) AS is_default
+FROM pg_catalog.pg_namespace n
+WHERE ` + pgUserSchemas + `
 ORDER BY n.nspname`, nil
 }
 
@@ -229,8 +265,22 @@ func (m *Manager) Databases(ctx context.Context, name string) ([]DatabaseInfo, e
 // the pool; nil with no error for a driver that is not Navigable.
 func (m *Manager) SchemaSummary(ctx context.Context, name string) ([]SchemaInfo, error) {
 	rows, err := m.navRows(ctx, name, SchemaSummaryQuery, "list schemas")
-	if err != nil || rows == nil {
-		return nil, err // nil rows: not Navigable, nothing to list
+	return schemaInfos(rows), err
+}
+
+// SchemaNames lists the connection's schemas per SchemaNamesQuery — their
+// Tables TablesUnknown — on the pool; nil with no error for a driver that
+// is not Navigable.
+func (m *Manager) SchemaNames(ctx context.Context, name string) ([]SchemaInfo, error) {
+	rows, err := m.navRows(ctx, name, SchemaNamesQuery, "list schema names")
+	return schemaInfos(rows), err
+}
+
+// schemaInfos reads the (name, tables, is_default) rows the two schema
+// lists share; nil for no rows (a failed read, or not Navigable).
+func schemaInfos(rows [][]string) []SchemaInfo {
+	if rows == nil {
+		return nil
 	}
 	out := make([]SchemaInfo, 0, len(rows))
 	for _, r := range rows {
@@ -239,7 +289,7 @@ func (m *Manager) SchemaSummary(ctx context.Context, name string) ([]SchemaInfo,
 			out = append(out, SchemaInfo{Name: r[0], Tables: n, Default: pgBool(r[2])})
 		}
 	}
-	return out, nil
+	return out
 }
 
 // navRows runs one of the navigator's list queries on the pool, or returns

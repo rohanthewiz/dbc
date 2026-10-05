@@ -78,13 +78,27 @@ func (m *Model) currentDatabase() string {
 	return ""
 }
 
-// schemaTotal is the table count of every schema of the active database.
+// schemaTotal is the table count of every schema of the active database,
+// or db.TablesUnknown when the schemas came by name alone
+// (workspace.listSchemas): a sum of the counts known would be a total the
+// database does not have.
 func (m *Model) schemaTotal() int {
 	n := 0
 	for _, s := range m.ws.Schemas() {
+		if s.Tables == db.TablesUnknown {
+			return db.TablesUnknown
+		}
 		n += s.Tables
 	}
 	return n
+}
+
+// tablesCount is a schema picker's count, "" when it is db.TablesUnknown.
+func tablesCount(n int) string {
+	if n == db.TablesUnknown {
+		return ""
+	}
+	return commas(n)
 }
 
 // navRows lists the picker rows the Tables pane draws above its list: the
@@ -104,7 +118,7 @@ func (m *Model) schemaLabel() string {
 	}
 	if s := m.ws.CatalogSchema(); s != "" {
 		for _, si := range m.ws.Schemas() {
-			if si.Name == s {
+			if si.Name == s && si.Tables != db.TablesUnknown {
 				return fmt.Sprintf("%s · %s", s, commas(si.Tables))
 			}
 		}
@@ -215,7 +229,14 @@ func (m *Model) openSchemaPicker() {
 	listed := m.ws.CatalogSchema()
 	total := m.schemaTotal()
 	all := listItem{label: "all schemas", sub: commas(total), data: schemaChoice{pick: workspace.SchemaPick{All: true}}}
-	if total > db.AllSchemasLimit {
+	switch {
+	case total == db.TablesUnknown:
+		// names alone: the database was too slow to count, so it is no
+		// database to read whole either (resolvePick refuses it too)
+		all.muted = true
+		all.sub = "uncounted"
+		all.data = schemaChoice{why: "the tables could not be counted in time, so every schema at once is not offered — pick a schema"}
+	case total > db.AllSchemasLimit:
 		all.muted = true
 		all.sub = commas(total) + " — too many"
 		all.data = schemaChoice{why: fmt.Sprintf("%s tables are too many to list at once (the limit is %s) — pick a schema",
@@ -227,9 +248,9 @@ func (m *Model) openSchemaPicker() {
 	items := []listItem{all}
 	cur := 0
 	for _, s := range schemas {
-		it := listItem{label: s.Name, sub: commas(s.Tables), data: schemaChoice{pick: workspace.SchemaPick{Name: s.Name}}}
+		it := listItem{label: s.Name, sub: tablesCount(s.Tables), data: schemaChoice{pick: workspace.SchemaPick{Name: s.Name}}}
 		if s.Default {
-			it.sub = "default · " + it.sub
+			it.sub = strings.TrimSuffix("default · "+it.sub, " · ")
 		}
 		if s.Tables == 0 {
 			it.muted = true

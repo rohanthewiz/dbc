@@ -295,6 +295,17 @@ func TestLiveCatalogPostgres(t *testing.T) {
 	if !got["public"].Default {
 		t.Errorf("public should be the search_path's first schema: %+v", schemas)
 	}
+	// the names-only fallback lists the same schemas, default and all,
+	// with every count unknown
+	names, err := reader.SchemaNames(context.Background(), "live")
+	if err != nil || len(names) != len(schemas) {
+		t.Fatalf("schema names = %+v, %v; want the summary's %d schemas", names, err, len(schemas))
+	}
+	for i, s := range names {
+		if s.Name != schemas[i].Name || s.Default != schemas[i].Default || s.Tables != TablesUnknown {
+			t.Errorf("schema name %+v, want %+v without its count", s, schemas[i])
+		}
+	}
 	// the ungranted table is listed, and is what Postgres refuses to read —
 	// a count of it is simply left out, not a failed counting
 	counts, err := reader.RowCounts(context.Background(), "live", TableRefs(res.Rows))

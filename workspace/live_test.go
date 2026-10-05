@@ -555,6 +555,64 @@ func TestLiveWorkspaceDerivedDatabase(t *testing.T) {
 	})
 }
 
+// A schema summary that does not finish in time (forced here with a 1ns
+// budget; on ProdDr, a pass over a pg_class of millions of rows) leaves the
+// sidebar with its schema picker all the same: the schemas by name, counts
+// unknown, a note saying why — and the default schema's tables, read on a
+// budget of their own rather than whatever the summary left. "All schemas"
+// is not honoured on uncounted schemas, and a named pick still is.
+func TestLiveWorkspaceSchemaNamesFallback(t *testing.T) {
+	pgOnly(t, func(t *testing.T, e liveEngine) {
+		w, obs := liveWorkspace(t, e)
+		drop := `DROP SCHEMA IF EXISTS dbc_live_wsn CASCADE`
+		obsExec(t, obs, drop, `CREATE SCHEMA dbc_live_wsn`, `CREATE TABLE dbc_live_wsn.t1 (id int)`)
+		t.Cleanup(func() { _, _ = obs.Run("live", drop) })
+
+		old := schemaSummaryTimeout
+		schemaSummaryTimeout = time.Nanosecond
+		t.Cleanup(func() { schemaSummaryTimeout = old })
+
+		_, st, _ := w.Disconnect()
+		st.Job()
+		ev := w.ConnectPick("live", SchemaPick{All: true}).Job().(*Connected)
+		if ev.Err != nil || ev.Catalog == nil {
+			t.Fatalf("connect: %+v", ev)
+		}
+		if ev.Schema != "public" {
+			t.Errorf("listed %q, want public, the search_path's schema", ev.Schema)
+		}
+		var names []string
+		for _, s := range ev.Schemas {
+			names = append(names, s.Name)
+			if s.Tables != db.TablesUnknown {
+				t.Errorf("schema %+v counted; the summary was to time out", s)
+			}
+		}
+		if !slices.Contains(names, "dbc_live_wsn") || !slices.Contains(names, "public") {
+			t.Errorf("schemas %v, want public and dbc_live_wsn by name", names)
+		}
+		var said []string
+		for _, n := range ev.Notes {
+			said = append(said, n.Text)
+		}
+		joined := strings.Join(said, "\n")
+		if !strings.Contains(joined, "schema table counts unavailable") || !strings.Contains(joined, "could not be counted") {
+			t.Errorf("notes %q, want the fallback and the refused all-schemas said", said)
+		}
+		if strings.Contains(joined, "tables list unavailable") {
+			t.Errorf("the table list failed after the fallback: %q", said)
+		}
+
+		sst, err := w.PickSchema(SchemaPick{Name: "dbc_live_wsn"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sev := sst.Job().(*SchemaLoaded); sev.Catalog == nil || sev.Schema != "dbc_live_wsn" || len(sev.Catalog.Rows) != 1 {
+			t.Errorf("pick dbc_live_wsn: %+v", sev)
+		}
+	})
+}
+
 // A schema pick replaces the sidebar's tables with another schema's, on the
 // active connection, and counts their rows; "all schemas" lists every one;
 // a schema that is not there falls back to the default and says so. The

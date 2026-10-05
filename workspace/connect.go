@@ -11,9 +11,25 @@ import (
 	"github.com/rohanthewiz/dbc/model"
 )
 
-// catalogTimeout bounds the catalog query a connect runs for the sidebar: a
-// huge catalog must not hold the connect open.
+// catalogTimeout bounds the sidebar's table list — a connect's, or a schema
+// pick's: a huge catalog must not hold the connect open.
 const catalogTimeout = 10 * time.Second
+
+// The budgets of the two short lists a connect reads before the tables on a
+// db.Navigable driver. Each read has its own, rather than all three sharing
+// catalogTimeout: on a big production database a slow schema summary used
+// to spend the whole budget, and the table list after it then failed at
+// once on a context already past its deadline — the sidebar empty, and the
+// log blaming the table list for the summary's time.
+//
+// The summary's is the shorter, and a package var so a test can force the
+// fallback: when the summary is slow, the counts are what is slow
+// (db.SchemaNamesQuery), and a picker without them is worth more than the
+// seconds spent waiting for them.
+var (
+	navListTimeout       = 5 * time.Second // databases; schema names
+	schemaSummaryTimeout = 5 * time.Second // schemas with their table counts
+)
 
 // SchemaPick says which tables a sidebar on a db.Navigable driver lists
 // (Postgres: see db/navigate.go). The zero value is the default: the first
@@ -70,7 +86,10 @@ func (w *Workspace) Connect(name string) Start {
 // On a db.Navigable driver the catalog is three short reads rather than one
 // long one — the server's databases, this database's schemas, and the
 // tables of the one schema pick names — so a connect to a big server costs
-// what its sidebar shows, not what the server holds. Elsewhere it is the
+// what its sidebar shows, not what the server holds. Each has its own
+// budget (navListTimeout, schemaSummaryTimeout, catalogTimeout), and a
+// schema list too slow to count its tables falls back to their names
+// (listSchemas). Elsewhere it is the
 // whole table list, as it always was — after, on MySQL, the server's
 // databases (db.HasDatabases), for the database picker.
 //
@@ -112,15 +131,17 @@ func (w *Workspace) ConnectPick(name string, pick SchemaPick) Start {
 		if _, err := mgr.DBContext(ctx, name); err != nil {
 			ev.Err = err
 		} else if _, err := db.TablesQuery(driver); err == nil {
-			// One catalogTimeout bounds all three reads: it is the
-			// connect's budget for its sidebar, however it is spent. A
-			// failed list of databases only hides the database picker;
-			// a failed list of schemas is handled by loadTables.
-			tctx, tcancel := context.WithTimeout(ctx, catalogTimeout)
-			ev.Databases, _ = mgr.Databases(tctx, name)
-			schemas, serr := mgr.SchemaSummary(tctx, name)
+			// A failed list of databases only hides the database picker;
+			// a failed list of schemas is handled by listSchemas, then
+			// loadTables. ctx (the connect's own) is the parent of each
+			// read's budget, so Cancel still stops whichever is running.
+			dctx, dcancel := context.WithTimeout(ctx, navListTimeout)
+			ev.Databases, _ = mgr.Databases(dctx, name)
+			dcancel()
+			schemas, notes, serr := listSchemas(ctx, mgr, name)
 			ev.Schemas = schemas
-			var notes []Note
+			ev.Notes = append(ev.Notes, notes...)
+			tctx, tcancel := context.WithTimeout(ctx, catalogTimeout)
 			ev.Catalog, ev.Schema, notes = loadTables(tctx, ctx, mgr, name, driver, schemas, serr, pick)
 			ev.Notes = append(ev.Notes, notes...)
 			tcancel()
@@ -143,6 +164,36 @@ func (w *Workspace) cancelCatalogWorkLocked() {
 		w.schemaCancel()
 		w.schemaCancel = nil
 	}
+}
+
+// listSchemas reads a database's schemas for the sidebar's picker: with
+// their table counts (db.Manager.SchemaSummary) when that finishes within
+// schemaSummaryTimeout, else by name alone (db.Manager.SchemaNames), whose
+// Tables are db.TablesUnknown. Only an error from both is returned — and
+// then loadTables lists every table, as it did before the fallback.
+//
+//	summary ──ok──────────────────────────────► schemas with counts
+//	   └─fails─► names ──ok─────────────────► schemas, counts unknown (+ note)
+//	                └─fails──────────────────► err (loadTables reads whole)
+//
+// ctx is the connect's; a cancel of it is said elsewhere, so it earns no
+// note and no fallback here. A driver that is not db.Navigable gets nil
+// from both, at no cost: neither has a query for it.
+func listSchemas(ctx context.Context, mgr *db.Manager, name string) ([]db.SchemaInfo, []Note, error) {
+	sctx, scancel := context.WithTimeout(ctx, schemaSummaryTimeout)
+	schemas, err := mgr.SchemaSummary(sctx, name)
+	scancel()
+	if err == nil || ctx.Err() != nil {
+		return schemas, nil, err
+	}
+	nctx, ncancel := context.WithTimeout(ctx, navListTimeout)
+	defer ncancel()
+	names, nerr := mgr.SchemaNames(nctx, name)
+	if nerr != nil {
+		return nil, nil, err // the summary's error: the one worth reading
+	}
+	return names, []Note{notef(Warn, "schema table counts unavailable, listing schemas without them: %s",
+		serr.StringFromErr(err))}, nil
 }
 
 // loadTables reads the tables a sidebar lists — those of the schema pick
@@ -185,6 +236,8 @@ func loadTables(ctx, outer context.Context, mgr *db.Manager, name, driver string
 // resolvePick turns a pick into the schema to list, "" for every one:
 //
 //	All, and the database's tables ≤ AllSchemasLimit ─► "" (every schema)
+//	  (never when a count is db.TablesUnknown: a database too big to
+//	  count in time is no database to read whole)
 //	Name, and the database has that schema ──────────► Name
 //	otherwise ─► the default (defaultSchema): the search_path's first
 //	             schema if it has tables, else the first schema that does
@@ -197,11 +250,14 @@ func resolvePick(schemas []db.SchemaInfo, pick SchemaPick) (string, []Note) {
 	if len(schemas) <= 1 {
 		return "", nil
 	}
-	total := 0
+	total, counted := 0, true
 	for _, s := range schemas {
+		if s.Tables == db.TablesUnknown {
+			counted = false
+		}
 		total += s.Tables
 	}
-	if pick.All && total <= db.AllSchemasLimit {
+	if pick.All && counted && total <= db.AllSchemasLimit {
 		return "", nil
 	}
 	if pick.Name != "" && !pick.All {
@@ -213,6 +269,8 @@ func resolvePick(schemas []db.SchemaInfo, pick SchemaPick) (string, []Note) {
 	}
 	def := defaultSchema(schemas)
 	switch {
+	case pick.All && !counted:
+		return def, []Note{notef(Info, "%d schemas whose tables could not be counted, too many to chance at once: listing %s", len(schemas), def)}
 	case pick.All:
 		return def, []Note{notef(Info, "%d tables in %d schemas, too many to list at once: listing %s", total, len(schemas), def)}
 	case pick.Name != "":
@@ -227,11 +285,15 @@ func resolvePick(schemas []db.SchemaInfo, pick SchemaPick) (string, []Note) {
 // public is common on a shared server whose tables all live in named
 // schemas, and opening on an empty list there would only make the user
 // pick again. schemas is not empty.
+//
+// A count of db.TablesUnknown is not known to be empty, so the search_path's
+// schema is taken with one, as with tables: by name alone, it is the best
+// guess there is.
 func defaultSchema(schemas []db.SchemaInfo) string {
 	path, withTables := "", ""
 	for _, s := range schemas {
 		if s.Default {
-			if s.Tables > 0 {
+			if s.Tables > 0 || s.Tables == db.TablesUnknown {
 				return s.Name
 			}
 			path = s.Name

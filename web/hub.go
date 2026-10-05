@@ -505,7 +505,10 @@ type dbRef struct {
 	Current bool   `json:"current,omitempty"`
 }
 
-// schemaRef is one schema in the picker, with its table count.
+// schemaRef is one schema in the picker, with its table count —
+// db.TablesUnknown (-1) when the database was too slow to count them and
+// the picker lists names alone (workspace.listSchemas); the page then shows
+// no count, and adds none into its total.
 type schemaRef struct {
 	Name    string `json:"name"`
 	Tables  int    `json:"tables"`
@@ -544,12 +547,15 @@ func sidebar(cfg *config.Config, ws *workspace.Workspace) sideState {
 		}
 		st.Databases = append(st.Databases, r)
 	}
-	total := 0
+	// every schema at once only when the counts say it is small: uncounted
+	// schemas are what a database too big to count lists (resolvePick)
+	total, counted := 0, true
 	for _, s := range ws.Schemas() {
 		st.Schemas = append(st.Schemas, schemaRef{Name: s.Name, Tables: s.Tables, Default: s.Default})
 		total += s.Tables
+		counted = counted && s.Tables != db.TablesUnknown
 	}
-	st.AllowAll = total <= db.AllSchemasLimit
+	st.AllowAll = counted && total <= db.AllSchemasLimit
 	return st
 }
 

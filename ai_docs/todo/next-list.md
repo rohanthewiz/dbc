@@ -99,12 +99,20 @@ ten session docs in `ai_docs/claude_sessions/`
   `consoles/<host>_<port>/<database>/`, and the TUI and a browser tab
   editing one console at once (the TUI writes only a console it changed,
   last writer wins then; the web side is revision-checked).
-- **N-106** · raised `2026-1005-1109-completion-big-catalog` · value medium
+- **N-106** · raised `2026-1005-1109-completion-big-catalog` · value high
   Confirm completion on the real ProdDr connection, where it failed with
   "the catalog is too big to read whole" (rows 250000). Note whether the
   partition filter alone fixed it, or the scoped fallback kicked in (the
   error now names the query, e.g. `query[columns]`). The diagnostic query
   in the session doc counts its column rows on partitions vs. not.
+  2026-10-05: ProdDr's *sidebar* then failed too — no schema picker, "tables
+  list unavailable … op[read the catalog], cause[timeout]". The schema
+  summary (a pass over all of pg_class) ran out the shared 10s budget and
+  the fallback read every table. Now each read has its own budget and a
+  slow summary falls back to schema names (`db.SchemaNamesQuery`). Still to
+  confirm on ProdDr: the picker shows up, a schema's tables load within
+  `catalogTimeout` (that query scans pg_class too), and how big pg_class is
+  (`SELECT relkind, relispartition, count(*) FROM pg_class GROUP BY 1, 2`).
 - **N-107** · raised `2026-1005-1132-assistant-code-highlighting` · value low
   Highlight TypeScript blocks in the assistant's answers. `ts`/`tsx` would
   map onto the JS spec in `codehl` and `hl.js` plus a TS keyword list

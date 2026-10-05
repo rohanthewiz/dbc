@@ -790,11 +790,14 @@ func TestConnectCatalogIgnoresMaxRows(t *testing.T) {
 
 // resolvePick: All within the limit is every schema, a named schema is
 // itself while it exists, and everything else is the default — the
-// search_path's first schema, else the first with tables.
+// search_path's first schema, else the first with tables. Uncounted
+// schemas (db.TablesUnknown) are never listed all at once.
 func TestResolvePick(t *testing.T) {
 	small := []db.SchemaInfo{{Name: "audit", Tables: 0}, {Name: "public", Tables: 3, Default: true}, {Name: "sales", Tables: 9}}
 	noPath := []db.SchemaInfo{{Name: "audit", Tables: 0}, {Name: "sales", Tables: 9}}
 	big := []db.SchemaInfo{{Name: "public", Tables: db.AllSchemasLimit, Default: true}, {Name: "sales", Tables: 1}}
+	unk := db.TablesUnknown
+	uncounted := []db.SchemaInfo{{Name: "audit", Tables: unk}, {Name: "public", Tables: unk, Default: true}, {Name: "sales", Tables: unk}}
 	cases := []struct {
 		name    string
 		schemas []db.SchemaInfo
@@ -812,6 +815,12 @@ func TestResolvePick(t *testing.T) {
 			SchemaPick{}, "s2", false},
 		{"nothing anywhere", []db.SchemaInfo{{Name: "a"}, {Name: "public", Default: true}}, SchemaPick{}, "public", false},
 		{"one schema", small[:1], SchemaPick{Name: "x"}, "", false},
+		// names only (SchemaNames): never every schema, the search_path's
+		// schema by default even uncounted, a named one still itself
+		{"uncounted, all", uncounted, SchemaPick{All: true}, "public", true},
+		{"uncounted, default", uncounted, SchemaPick{}, "public", false},
+		{"uncounted, named", uncounted, SchemaPick{Name: "sales"}, "sales", false},
+		{"uncounted, no search_path schema", []db.SchemaInfo{uncounted[0], uncounted[2]}, SchemaPick{}, "audit", false},
 	}
 	for _, c := range cases {
 		got, notes := resolvePick(c.schemas, c.pick)

@@ -211,8 +211,14 @@
 
   // schemaTotal is how many tables the database has: the server's per-schema
   // counts where it sends them, else the list itself, which is then whole.
+  // null when the server could not count them in time and sent the schema
+  // names alone (each count -1, db.TablesUnknown): a big database's
+  // fallback, where a sum of what is known would claim a total it is not.
   function schemaTotal() {
-    return side.navigable ? (side.schemas || []).reduce((n, s) => n + s.tables, 0) : allTables.length;
+    if (!side.navigable) return allTables.length;
+    const schemas = side.schemas || [];
+    if (schemas.some((s) => s.tables < 0)) return null;
+    return schemas.reduce((n, s) => n + s.tables, 0);
   }
 
   // drawTables (re)draws the list: allTables narrowed to the picked
@@ -223,7 +229,9 @@
     const shown = side.navigable || pick === null ? allTables : allTables.filter((t) => t.schema === pick);
     const total = schemaTotal();
     els.tables.replaceChildren();
-    els.tableCount.textContent = !total ? "" : pick === null ? "· " + total : "· " + shown.length + " / " + total;
+    // uncounted (total null): the shown tables alone, with no "/ all"
+    els.tableCount.textContent = total === null ? (shown.length ? "· " + shown.length : "")
+      : !total ? "" : pick === null ? "· " + total : "· " + shown.length + " / " + total;
     if (loadingSchema) {
       els.tables.append(el("li", "none", "loading " + schemaLabel(pick === null ? "all schemas" : pick) + "…"));
       return;
@@ -486,7 +494,8 @@
   const schemaPicker = combo({
     input: els.tableSchema, list: els.schemaList, wrap: els.tableFilter,
     idPrefix: "schema-opt-", none: "no schema matches",
-    items: () => [...schemaCounts].map(([name, n]) => ({ value: name, label: schemaLabel(name), count: n })),
+    // an uncounted schema (-1) shows no count rather than a wrong one
+    items: () => [...schemaCounts].map(([name, n]) => ({ value: name, label: schemaLabel(name), count: n < 0 ? undefined : n })),
     lead: () => (offersAll() ? { value: null, label: "all schemas", count: schemaTotal(), cls: "all" } : null),
     current: () => schemaPick(),
     label: () => (schemaPick() === null ? "" : schemaLabel(schemaPick())),

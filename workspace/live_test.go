@@ -12,6 +12,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/erd"
 )
 
 // The live workspace tests drive the workspace's rules against real
@@ -768,7 +769,8 @@ func TestLiveWorkspaceCompletionNames(t *testing.T) {
 // the search path's — which succeeds while the sidebar is on public; on
 // the big schema itself even that is past the bound, and the load fails
 // with the reason the UIs show as "completion is without the schema",
-// while completion goes on with the vocabulary.
+// while completion goes on with the vocabulary. A diagram past the bound
+// (N-105) falls back to a scoped read the same way.
 func TestLiveWorkspaceCompletionBigCatalog(t *testing.T) {
 	if os.Getenv("DBC_LIVE_BIG") == "" {
 		t.Skip("set DBC_LIVE_BIG=1 (with DBC_LIVE_PG_DSN) to build a 260,000-column catalog")
@@ -827,6 +829,36 @@ END $$`, from, to))
 			t.Errorf("a schema outside the scope completes: %v", got)
 		}
 
+		// a diagram past the bound (N-105), with completion's mark cleared
+		// so the diagram meets the overflow itself: it falls back to a
+		// scoped read and marks the connection — public's everything
+		// draws, and a table named in the big schema is read with that
+		// schema, which is itself past the bound
+		obsExec(t, obs, `CREATE TABLE IF NOT EXISTS public.dbc_live_wsbig_small (id int PRIMARY KEY)`)
+		t.Cleanup(func() { _, _ = obs.Run("live", `DROP TABLE IF EXISTS public.dbc_live_wsbig_small`) })
+		w.mu.Lock()
+		delete(w.complScoped, "live")
+		w.mu.Unlock()
+		start := time.Now()
+		sc, err := w.Diagram(context.Background(), erd.Selection{Schema: "public"})
+		t.Logf("diagram of public, whole then scoped: %s (err %v)", time.Since(start).Round(time.Millisecond), err)
+		if err != nil {
+			t.Fatalf("a diagram of public past the bound: %v", err)
+		}
+		w.mu.Lock()
+		marked := w.complScoped["live"]
+		w.mu.Unlock()
+		if !marked {
+			t.Error("a diagram past the bound did not mark the connection too big")
+		}
+		if _, ok := sc.Find("dbc_live_wsbig_small"); !ok {
+			t.Errorf("the diagram of public lacks dbc_live_wsbig_small: %d tables", len(sc.Tables))
+		}
+		if _, err = w.Diagram(context.Background(), erd.Selection{Tables: []string{"dbc_live_wsbig.t1"}}); err == nil ||
+			!strings.Contains(err.Error(), "too big") {
+			t.Errorf("a diagram around a table in the big schema: err = %v, want too big", err)
+		}
+
 		// the sidebar on the big schema: not covered, so not ready; its
 		// own scoped read is past the bound too
 		w.mu.Lock()
@@ -835,8 +867,8 @@ END $$`, from, to))
 		if _, ready := w.Complete("SEL", 3); ready {
 			t.Error("a scoped cache without the sidebar's schema answered")
 		}
-		start := time.Now()
-		err := w.LoadCompletions(context.Background())
+		start = time.Now()
+		err = w.LoadCompletions(context.Background())
 		t.Logf("scoped load of the big schema: %s (err %v)", time.Since(start).Round(time.Millisecond), err)
 		if err == nil || !strings.Contains(err.Error(), "too big") {
 			t.Fatalf("the big schema scoped: err = %v, want too big", err)

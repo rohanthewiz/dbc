@@ -132,8 +132,9 @@ type Workspace struct {
 	compl    complState
 	complGen int
 	// complScoped holds the connections whose whole schema was too big to
-	// read for completion (db.ErrCatalogTooBig); they are read scoped from
-	// then on, without paying for the failing whole read again
+	// read (db.ErrCatalogTooBig), for completion or a diagram; both read
+	// them scoped from then on, without paying for the failing whole read
+	// again
 	complScoped map[string]bool
 
 	// the run slot — one run at a time

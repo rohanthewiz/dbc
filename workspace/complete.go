@@ -51,7 +51,8 @@ import (
 // of the others completes as nothing, as it did when the load failed. The
 // connection is remembered as too big (complScoped), so later loads go
 // straight to the scoped read rather than paying for the failing whole one
-// first. A pick of a schema the scoped cache does not hold reads again.
+// first; a diagram that met the overflow (Diagram) marks it the same way.
+// A pick of a schema the scoped cache does not hold reads again.
 //
 //	load ──► whole (Manager.Schema) ──ok──────────────► cache, scope nil
 //	           │ ErrCatalogTooBig

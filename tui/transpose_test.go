@@ -270,3 +270,24 @@ func menuHas(m *Model, label string) bool {
 	}
 	return false
 }
+
+// Turning the grid and back with the cursor on a later column keeps every
+// column in view when they all fit — the turn starts the view at the left
+// edge and scrolls only when the cursor would be off screen.
+func TestTransposeBackKeepsColumnsInView(t *testing.T) {
+	m := newTestModel(t)
+	key(t, m, "ctrl+r")
+	m.focus = focusGrid
+	key(t, m, "right")
+	key(t, m, "right")
+	key(t, m, "t")
+	frame(m)
+	key(t, m, "t")
+	frame(m)
+	if m.grid.leftCol != 0 {
+		t.Fatalf("upright again, the view starts at column %d", m.grid.leftCol)
+	}
+	if !strings.Contains(frame(m).Text(), " id │ name") {
+		t.Errorf("the id column scrolled away:\n%s", frame(m).Text())
+	}
+}

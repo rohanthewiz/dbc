@@ -122,7 +122,7 @@ type helpLine struct {
 
 // keyColW is the key column's width — wide enough for the longest key in
 // keyGroups, so the descriptions line up.
-const keyColW = 22
+const keyColW = 28
 
 func (m *Model) openHelp() { m.openModal(&helpModal{}) }
 

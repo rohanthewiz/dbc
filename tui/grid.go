@@ -62,6 +62,9 @@ type grid struct {
 	sel      bool
 
 	top, leftCol int
+	// reveal asks the next Draw to bring the cursor's column into view once
+	// it knows the column geometry (set by Transpose, which cannot)
+	reveal bool
 
 	// Geometry of the last draw, in canvas coordinates, for hit-testing.
 	view   Rect  // the data rows
@@ -805,6 +808,17 @@ func (g *grid) vbarJump(y int) {
 
 // Draw paints the grid into s (the inside of the Results pane).
 func (g *grid) Draw(s Surface, st styles, focused bool, empty string) {
+	if g.reveal {
+		// after a turn (Transpose): lay out once from the left edge, then
+		// scroll to the cursor only if that layout left it off screen
+		g.reveal = false
+		g.Draw(s, st, focused, empty)
+		before := g.leftCol
+		g.ensureVisible()
+		if g.leftCol == before {
+			return
+		}
+	}
 	s.Fill(st.base)
 	g.colX, g.colW = g.colX[:0], g.colW[:0]
 	g.view, g.head, g.gutter, g.vbar, g.hbar = Rect{}, Rect{}, Rect{}, Rect{}, Rect{}

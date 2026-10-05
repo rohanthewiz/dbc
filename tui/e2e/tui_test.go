@@ -72,6 +72,63 @@ func TestTUI(t *testing.T) {
 		u.waitFor("● lite2", " dogs ", "Tables · 1")
 	})
 
+	step(t, "F1 opens the keys dialog, Esc closes it", func() {
+		u.key(uv.KeyF1)
+		u.waitFor("Keys · F1 or ?", "Editor", "Query tabs")
+		u.key(uv.KeyEscape)
+		u.waitGone("Keys · F1 or ?")
+	})
+
+	step(t, "Ctrl+B folds the sidebar away and back", func() {
+		u.ctrl('b')
+		u.waitGone("Connections")
+		u.ctrl('b')
+		u.waitFor("Connections", "● lite2")
+	})
+
+	step(t, "t transposes the grid and back", func() {
+		u.click("│ Bo ", 3) // the grid has the keyboard now
+		u.key('t')
+		u.waitFor("· transposed (t)") // the grid's bottom strip
+		u.key('t')
+		u.waitGone("· transposed (t)")
+		u.waitFor("id │ name") // upright, with every column back in view
+	})
+
+	step(t, "Alt+T opens a tab with its own result; Alt+1 / Alt+2 switch", func() {
+		u.key('t', uv.ModAlt)
+		u.waitUntil("a strip with both tabs", func(string) bool {
+			l := u.lineWith("Query 2")
+			return strings.Contains(l, "Query 1") && strings.Contains(l, " + ")
+		})
+		u.typeText("SELECT 7 AS seven;")
+		u.ctrl('r')
+		u.waitFor("seven │") // the grid's header; the log names the query too
+		u.key('1', uv.ModAlt)
+		u.waitFor("│ Ada ")
+		u.waitGone("seven │")
+		u.key('2', uv.ModAlt)
+		u.waitFor("seven │")
+	})
+
+	step(t, "F2 renames an alias in place", func() {
+		u.key(uv.KeyEnter)
+		u.typeText("SELECT d.name FROM dogs d")
+		u.key(uv.KeyF2)
+		u.waitFor("Rename alias d")
+		u.typeText("dg")
+		u.key(uv.KeyEnter)
+		u.waitFor("SELECT dg.name FROM dogs dg")
+	})
+
+	step(t, "a in Connections opens the add-connection form", func() {
+		u.ctrl('l')
+		u.key('a')
+		u.waitFor("Add a connection", "Test connection")
+		u.key(uv.KeyEscape)
+		u.waitGone("Add a connection")
+	})
+
 	step(t, "Ctrl+Q quits", func() {
 		u.quit()
 	})

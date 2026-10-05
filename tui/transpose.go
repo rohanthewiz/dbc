@@ -55,14 +55,15 @@ func (g *grid) Transpose() {
 	g.hover, g.hoverH, g.hoverB, g.hoverNB = cell2{-1, -1}, -1, -1, false
 	// The view's axes just swapped, so the old offsets mean nothing. The
 	// last draw's column geometry is of the other orientation too: cleared,
-	// ensureVisible fixes the line axis now, and the cursor's screen column
-	// is put at the left edge — the next draw has it in view either way.
+	// ensureVisible fixes the line axis now. The view starts at the left
+	// edge, and the next draw scrolls right only if the cursor's screen
+	// column turns out not to fit (reveal) — pinning that column to the
+	// left edge instead would hide every column before it even when the
+	// whole result fits the pane.
 	g.colX, g.colW = g.colX[:0], g.colW[:0]
-	g.top, g.leftCol = 0, g.cur.col
-	if g.flip {
-		g.leftCol = g.cur.row
-	}
+	g.top, g.leftCol = 0, 0
 	g.ensureVisible()
+	g.reveal = true
 }
 
 // recWidth is the content width every record column is drawn at.

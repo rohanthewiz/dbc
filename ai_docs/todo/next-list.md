@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-101
+**Next ID:** N-105
 
 ## Open
 
@@ -90,6 +90,28 @@ ten session docs in `ai_docs/claude_sessions/`
   `driver.Connector`), and every Postgres live suite passes. Also N-094's
   MySQL half: editor completion on a real MySQL (backtick quoting, a
   `<conn>/<database>` pick, the first load), done on Postgres only.
+
+- **N-101** · raised `2026-1005-1035-sql-consoles-per-database` · value low
+  Scope query history (`Ctrl+P`, TUI and `dbc web`) to the console's
+  database, or offer that as a filter. History is still one list across
+  every database, while the editor's text is now per database (consoles).
+- **N-102** · raised `2026-1005-1035-sql-consoles-per-database` · value low
+  Rename and delete consoles in the TUI. `dbc web`'s tab menu has both; the
+  TUI only has ⌥N (new) and ⌥C (next), so a TUI user renames or deletes
+  the `.sql` file by hand.
+- **N-103** · raised `2026-1005-1035-sql-consoles-per-database` · value low
+  Remember the caret and scroll per console across switches. The TUI's
+  `SetText` puts the caret at the top on every swap, and `dbc web` drops a
+  console's document (undo history with it) once no tab of the window
+  shows it.
+- **N-104** · raised `2026-1005-1035-sql-consoles-per-database` · value low
+  Check consoles by hand on real data. The first `dbc web` start moves the
+  real `web.bytdb`'s tab buffers into consoles (`moveTabBuffers`, once,
+  marker `consoles.moved`); the TUI's first start seeds from `buffer.sql`.
+  Also check a live Postgres `<conn>/<database>` switch landing in
+  `consoles/<host>_<port>/<database>/`, and the TUI and a browser tab
+  editing one console at once (the TUI writes only a console it changed,
+  last writer wins then; the web side is revision-checked).
 
 ## Roadmap
 

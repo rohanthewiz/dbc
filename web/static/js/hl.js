@@ -263,7 +263,7 @@
   // lexShell is codehl's: words run to whitespace or an operator (so
   // --if-exists is one word), # comments only at a word start, '…' without
   // and "…" with escapes — both may span lines, but an unclosed one ends at
-  // its own line — $variables as p, heredoc bodies as strings, and no
+  // its own line — $variables as v (not p: that is the error color), heredoc bodies as strings, and no
   // numbers (in shell they are arguments).
   function lexShell(s) {
     const out = [];
@@ -323,7 +323,7 @@
         emit(i, j, "s"); i = j;
       } else if (c === "$") {
         const j = variable(i);
-        emit(i, j, "p"); i = Math.max(j, i + 1);
+        emit(i, j, "v"); i = Math.max(j, i + 1);
       } else if (s.startsWith("<<<", i)) {
         i += 3; // a here-string: its word is an argument
       } else if (s.startsWith("<<", i)) {

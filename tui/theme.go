@@ -48,6 +48,7 @@ type styles struct {
 	synComment Style
 	synIdent   Style
 	synParam   Style
+	synVar     Style // a shell $variable in an answer's code block
 
 	// chat transcript
 	chatUser  Style
@@ -104,6 +105,10 @@ func newStyles(p theme.Palette) styles {
 		synComment: on(muted, bg).Italic(),
 		synIdent:   on(fg, bg).Underline(),
 		synParam:   on(errc, bg),
+		// a shell $variable: the accent without the keywords' bold. Not
+		// synParam's error color — a shell block has a $var on most lines,
+		// and they are not mistakes
+		synVar: on(accent, bg),
 
 		chatUser:  on(accent, bg).Bold(),
 		chatAgent: on(fg, bg),

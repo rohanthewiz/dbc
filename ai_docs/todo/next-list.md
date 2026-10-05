@@ -120,11 +120,6 @@ ten session docs in `ai_docs/claude_sessions/`
   keyof`…). Offered alongside JSON and shell; the user picked those two.
   Only worth it once answers about app code (calling the database from TS)
   show up.
-- **N-108** · raised `2026-1005-1132-assistant-code-highlighting` · value low
-  Shell `$variables` in answers are drawn as Param, which is the error
-  color (`synParam`, `.hl-p` → `--err`), the same as SQL bind parameters.
-  If that reads as alarming next to real errors, give shell variables
-  their own color: `codeStyle` in `tui/chat.go` and a rule in `app.css`.
 - **N-110** · raised `2026-1005-1222-web-tab-groups` · value low
   The e2e step "tabs survive a reload" timed out once on "its text back"
   (editor empty after the reload, status "ready on lite", no JS errors),
@@ -200,6 +195,12 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-108** · raised `2026-1005-1132-assistant-code-highlighting` · value low
+  Shell `$variables` in answers are drawn as Param, which is the error
+  color (`synParam`, `.hl-p` → `--err`), the same as SQL bind parameters.
+  If that reads as alarming next to real errors, give shell variables
+  their own color: `codeStyle` in `tui/chat.go` and a rule in `app.css`.
+  closed 2026-10-05, branch `todo/n-108-shell-variables-in-answers-24dd`: shell variables are their own kind, `codehl.Var` (`"v"` in `hl.js`), drawn in the accent at regular weight — `synVar` in the TUI (`codeStyle`), `.cblock .hl-v` on the page. SQL bind parameters keep `Param`'s error color. Tests: `TestLex` shell cases (`V[$HOME]`), e2e `codeHighlight` (an `sh` block's `$HOME` is `.hl-v` in `--accent`, no `.hl-p`).
 - **N-112** · raised `2026-1005-1247-web-grid-transpose` · value low
   The transposed web grid gives every record one width (the widest shown
   column's auto width, or `=` to fit content); there is no drag-resize of

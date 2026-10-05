@@ -38,7 +38,12 @@ const (
 	Number       // a numeric literal
 	Comment      // line or block comment
 	Ident        // a quoted SQL identifier ("…" or `…`)
-	Param        // a SQL bind parameter ($1, ?, :name) or a shell $variable
+	Param        // a SQL bind parameter ($1, ?, :name)
+	// Var is a shell variable ($HOME, ${X:-1}, $?). It was once drawn as
+	// Param, which both front ends color as an error (bind parameters are
+	// rare enough in SQL to deserve the alarm); in a shell block $vars are
+	// on most lines, and a page of error red read as a page of mistakes.
+	Var
 )
 
 // Span is one classified run, as byte offsets into the source. Spans are

@@ -1211,6 +1211,8 @@ func codeStyle(st styles, k codehl.Kind) Style {
 		s = st.synIdent
 	case codehl.Param:
 		s = st.synParam
+	case codehl.Var:
+		s = st.synVar
 	default:
 		return st.chatCode
 	}

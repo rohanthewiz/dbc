@@ -10,7 +10,7 @@ import "strings"
 //     are not comments)
 //   - '…' has no escapes, "…" does, and both may span lines
 //   - $NAME, ${…} and the special parameters ($?, $1, $@ …) are variables,
-//     drawn as Param
+//     drawn as Var
 //   - a heredoc (<<EOF … EOF) is a string from the line after its opener to
 //     its terminator line — psql <<SQL is how a DB answer runs a script
 //
@@ -60,7 +60,7 @@ func lexShell(src string) []Span {
 			i = j
 		case c == '$':
 			j := shellVar(src, i)
-			emit(i, j, Param)
+			emit(i, j, Var)
 			i = max(j, i+1) // a bare $ (a prompt, $(…)) is plain text
 		case strings.HasPrefix(src[i:], "<<<"):
 			// a here-string, whose word is just an argument; consumed

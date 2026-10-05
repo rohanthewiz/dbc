@@ -630,6 +630,9 @@ button.primary { border-color: var(--accent); }
 .cblock .hl-c { color: var(--muted); font-style: italic; }
 .cblock .hl-i { text-decoration: underline; }
 .cblock .hl-p { color: var(--err); }
+/* shell $variables: the accent without the keywords' weight, not the error
+   color bind parameters get — they are on most lines of a shell block */
+.cblock .hl-v { color: var(--accent); }
 .cfoot { margin-top: -2px; }
 button.linkish { border: 0; background: none; padding: 0; color: var(--accent); font-size: 12px; }
 button.linkish:hover { text-decoration: underline; }

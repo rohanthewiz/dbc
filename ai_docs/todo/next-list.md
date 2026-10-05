@@ -120,11 +120,6 @@ ten session docs in `ai_docs/claude_sessions/`
   keyof`…). Offered alongside JSON and shell; the user picked those two.
   Only worth it once answers about app code (calling the database from TS)
   show up.
-- **N-108** · raised `2026-1005-1132-assistant-code-highlighting` · value low
-  Shell `$variables` in answers are drawn as Param, which is the error
-  color (`synParam`, `.hl-p` → `--err`), the same as SQL bind parameters.
-  If that reads as alarming next to real errors, give shell variables
-  their own color: `codeStyle` in `tui/chat.go` and a rule in `app.css`.
 - **N-109** · raised `2026-1005-1222-web-tab-groups` · value low
   Tab groups across browser windows: the server merges a window's
   `groups` layout write by saved-tab keys (`mergeTabGroups`,
@@ -193,6 +188,12 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-108** · raised `2026-1005-1132-assistant-code-highlighting` · value low
+  Shell `$variables` in answers are drawn as Param, which is the error
+  color (`synParam`, `.hl-p` → `--err`), the same as SQL bind parameters.
+  If that reads as alarming next to real errors, give shell variables
+  their own color: `codeStyle` in `tui/chat.go` and a rule in `app.css`.
+  closed 2026-10-05, branch `todo/n-108-shell-variables-in-answers-24dd`: shell variables are their own kind, `codehl.Var` (`"v"` in `hl.js`), drawn in the accent at regular weight — `synVar` in the TUI (`codeStyle`), `.cblock .hl-v` on the page. SQL bind parameters keep `Param`'s error color. Tests: `TestLex` shell cases (`V[$HOME]`), e2e `codeHighlight` (an `sh` block's `$HOME` is `.hl-v` in `--accent`, no `.hl-p`).
 - **N-105** · raised `2026-1005-1109-completion-big-catalog` · value medium
   Scope the ERD's schema read on a catalog too big to read whole.
   `Workspace.Diagram` still calls `Manager.Schema` (every schema), which

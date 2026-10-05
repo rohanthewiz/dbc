@@ -664,11 +664,15 @@ func codeHighlight(t *testing.T, _ *env, p *rod.Page) {
 	    css(".hl-s").color === rgb(v("warn")),
 	    css(".hl-c").fontStyle,
 	    pre.textContent,
-	  ].join("|");
+	  ];
+	  // a shell $variable is the accent (hl-v), not the error color bind
+	  // parameters (hl-p) get
+	  pre.replaceChildren(dbc.hl("sh", "echo $HOME"));
+	  out.push(box.querySelector(".hl-v").textContent, css(".hl-v").color === rgb(v("accent")), !box.querySelector(".hl-p"));
 	  box.remove();
-	  return out;
+	  return out.join("|");
 	}`)
-	if want := `func,return|true|true|italic|func f() { return "s" } // c`; got != want {
+	if want := `func,return|true|true|italic|func f() { return "s" } // c|$HOME|true|true`; got != want {
 		t.Fatalf("highlighted block = %q, want %q", got, want)
 	}
 }

@@ -12,7 +12,7 @@ func classes(tag, src string) string {
 	at := 0
 	for _, s := range Lex(tag, src) {
 		b.WriteString(src[at:s.Start])
-		b.WriteString("KSNCIP"[s.Kind-1 : s.Kind])
+		b.WriteString("KSNCIPV"[s.Kind-1 : s.Kind])
 		b.WriteString("[" + src[s.Start:s.End] + "]")
 		at = s.End
 	}
@@ -49,9 +49,9 @@ func TestLex(t *testing.T) {
 		{"", `select '{"a":1}'`, `K[select] S['{"a":1}']`},   // …but not inside SQL
 
 		{"bash", "if [ -f \"$F\" ]; then echo $HOME ${X:-1} $? # c\nfi",
-			"K[if] [ -f S[\"$F\"] ]; K[then] echo P[$HOME] P[${X:-1}] P[$?] C[# c]\nK[fi]"},
+			"K[if] [ -f S[\"$F\"] ]; K[then] echo V[$HOME] V[${X:-1}] V[$?] C[# c]\nK[fi]"},
 		{"sh", "psql --if-exists ./for.sh a#b ${#arr} 2>&1 -p 5432",
-			"psql --if-exists ./for.sh a#b P[${#arr}] 2>&1 -p 5432"},
+			"psql --if-exists ./for.sh a#b V[${#arr}] 2>&1 -p 5432"},
 		{"shell", "psql -c \"\n  SELECT 1;\n\" 'it''s'", "psql -c S[\"\n  SELECT 1;\n\"] S['it']S['s']"},
 		{"console", "$ psql\nit doesn't work\nok", "$ psql\nit doesnS['t work]\nok"}, // stray apostrophe: one line
 		{"bash", "psql <<'SQL' | tee out\nSELECT 'x';\n  SQL\necho done", "psql <<S['SQL'] | tee out\nS[SELECT 'x';\n  SQL]\necho K[done]"},

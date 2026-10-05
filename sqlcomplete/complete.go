@@ -723,9 +723,15 @@ func (c *completer) searchPath() []string {
 //
 // Names compare exactly, as the catalog holds them: the bare name is
 // inserted quoted where it needs to be, so it is matched as written.
+//
+// One schema in the cache is bare without a look at the path — unless the
+// server reported the path. Then the path decides: a cache scoped to the
+// schemas of a catalog too big to read whole may hold one schema the path
+// does not name (the sidebar's sales, the path's public having no tables),
+// and its tables need their schema all the same.
 func (c *completer) bare(t *erd.Table) bool {
 	path := c.searchPath()
-	if len(c.schemas) <= 1 || path == nil {
+	if path == nil || (len(c.schemas) <= 1 && c.req.SearchPath == nil) {
 		return true
 	}
 	for _, s := range path {

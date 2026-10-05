@@ -561,6 +561,35 @@ func TestLiveSchemaPostgres(t *testing.T) {
 	if strings.Join(keys, " ") != "dbc_erd.cats→dbc_erd.cats dbc_erd.weigh_notes→dbc_erd.weighs dbc_erd.weighs→dbc_erd.cats" {
 		t.Errorf("keys around weighs: %q", keys)
 	}
+
+	// Scoped to dbc_erd2 (completion's read of a catalog too big for the
+	// whole): its one table, its partitions still hidden, and nothing of
+	// dbc_erd — the SQL runs on a real server, the IN list included.
+	s, err = mgr.SchemaIn(context.Background(), "live", []string{"dbc_erd2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names = nil
+	for _, tb := range s.Tables {
+		names = append(names, tb.Schema+"."+tb.Name)
+	}
+	if strings.Join(names, " ") != "dbc_erd2.cats" {
+		t.Errorf("scoped to dbc_erd2: %q", names)
+	}
+	// scoped to dbc_erd: weighs and its key to cats, as read whole
+	s, err = mgr.SchemaIn(context.Background(), "live", []string{"dbc_erd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Find("dbc_erd2.cats"); ok {
+		t.Error("scoped to dbc_erd: dbc_erd2.cats is in it")
+	}
+	if _, ok := s.Find("dbc_erd.weighs_2026"); ok {
+		t.Error("scoped to dbc_erd: a partition is in it")
+	}
+	if a, _ := s.Around([]string{"dbc_erd.weighs"}, 1); len(a.Rels) != 3 {
+		t.Errorf("scoped to dbc_erd, around weighs: %d keys, want 3", len(a.Rels))
+	}
 }
 
 // TestLiveSchemaMySQL reads petsDDL back through information_schema's

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -762,9 +763,12 @@ func TestLiveWorkspaceCompletionNames(t *testing.T) {
 
 // A BIG CATALOG (N-094), opt-in with DBC_LIVE_BIG=1 on top of the DSN, as
 // it builds thousands of tables: the first load of a catalog just under the
-// schema reader's 250,000-row bound succeeds in reasonable time (logged),
-// and one past it fails with the reason the UIs show as "completion is
-// without the schema", while completion goes on with the vocabulary.
+// schema reader's 250,000-row bound succeeds in reasonable time (logged).
+// Past it the load falls back to a scoped read — the sidebar's schema and
+// the search path's — which succeeds while the sidebar is on public; on
+// the big schema itself even that is past the bound, and the load fails
+// with the reason the UIs show as "completion is without the schema",
+// while completion goes on with the vocabulary.
 func TestLiveWorkspaceCompletionBigCatalog(t *testing.T) {
 	if os.Getenv("DBC_LIVE_BIG") == "" {
 		t.Skip("set DBC_LIVE_BIG=1 (with DBC_LIVE_PG_DSN) to build a 260,000-column catalog")
@@ -810,9 +814,32 @@ END $$`, from, to))
 		}
 
 		build(2401, 2600) // 260,000: past it
-		err := reload()
+		if err := reload(); err != nil {
+			t.Fatalf("a catalog past the bound, sidebar on public: err = %v, want a scoped load", err)
+		}
+		w.mu.Lock()
+		scope, focus := w.compl.scope, w.schema
+		w.mu.Unlock()
+		if scope == nil || !slices.Contains(scope, "public") {
+			t.Errorf("past the bound: scope %v (sidebar on %q), want a scoped load with public", scope, focus)
+		}
+		if got := completeAt(t, w, "SELECT * FROM dbc_live_wsbig.t239▮"); got["t2399 · dbc_live_wsbig"].Insert != "" {
+			t.Errorf("a schema outside the scope completes: %v", got)
+		}
+
+		// the sidebar on the big schema: not covered, so not ready; its
+		// own scoped read is past the bound too
+		w.mu.Lock()
+		w.schema = "dbc_live_wsbig"
+		w.mu.Unlock()
+		if _, ready := w.Complete("SEL", 3); ready {
+			t.Error("a scoped cache without the sidebar's schema answered")
+		}
+		start := time.Now()
+		err := w.LoadCompletions(context.Background())
+		t.Logf("scoped load of the big schema: %s (err %v)", time.Since(start).Round(time.Millisecond), err)
 		if err == nil || !strings.Contains(err.Error(), "too big") {
-			t.Fatalf("a catalog past the bound: err = %v, want too big", err)
+			t.Fatalf("the big schema scoped: err = %v, want too big", err)
 		}
 		res, ready := w.Complete("SEL", 3)
 		if !ready || len(res.Items) == 0 || res.Items[0].Label != "SELECT" {

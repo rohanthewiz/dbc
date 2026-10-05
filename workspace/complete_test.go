@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/rohanthewiz/dbc/sqlcomplete"
@@ -88,5 +89,56 @@ func TestCompletionCacheAcrossPickAndConnect(t *testing.T) {
 	}
 	if _, ready := w.Complete("SELECT ", 7); ready {
 		t.Error("a reconnect kept the completion cache")
+	}
+}
+
+// A scoped cache (a catalog too big to read whole) answers only while the
+// sidebar shows one of the schemas it read; a pick of another makes it not
+// ready, so the UI loads again for that schema. A whole cache covers every
+// pick. The cache is set directly: a scoped load needs Postgres
+// (live_test.go covers it).
+func TestCompletionScopedCache(t *testing.T) {
+	w := newTestWorkspace(t)
+	if err := w.LoadCompletions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	set := func(scope []string, focus string) {
+		w.mu.Lock()
+		w.compl.scope, w.schema = scope, focus
+		w.mu.Unlock()
+	}
+	for _, c := range []struct {
+		scope []string
+		focus string
+		ready bool
+	}{
+		{nil, "billing", true}, // whole: every schema
+		{[]string{"sales", "public"}, "sales", true},
+		{[]string{"sales", "public"}, "public", true},
+		{[]string{"sales", "public"}, "", true}, // no schema shown
+		{[]string{"sales", "public"}, "billing", false},
+	} {
+		set(c.scope, c.focus)
+		if _, ready := w.Complete("SELECT ", 7); ready != c.ready {
+			t.Errorf("scope %v, sidebar on %q: ready = %v", c.scope, c.focus, ready)
+		}
+	}
+}
+
+func TestComplScope(t *testing.T) {
+	for _, c := range []struct {
+		focus string
+		path  []string
+		want  string
+	}{
+		{"sales", []string{"app", "public"}, "sales app public"},
+		{"app", []string{"app", "public"}, "app public"}, // no duplicate
+		{"sales", nil, "sales public"},                   // the default path
+		{"", nil, "public"},
+		{"sales", []string{}, "sales"}, // a path the server reported empty
+	} {
+		if got := strings.Join(complScope(c.focus, c.path), " "); got != c.want {
+			t.Errorf("complScope(%q, %v) = %q, want %q", c.focus, c.path, got, c.want)
+		}
 	}
 }

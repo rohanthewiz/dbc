@@ -2,8 +2,11 @@ package workspace
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"time"
 
+	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/erd"
 	"github.com/rohanthewiz/dbc/sqlcomplete"
 	"github.com/rohanthewiz/dbc/sqlsplit"
@@ -37,7 +40,25 @@ import (
 // that (w.schema, the request's Focus) on every ask. Dropping it would make
 // each pick on a big Postgres catalog re-read the whole of it for the next
 // suggestion. (A database pick is a connect to a derived connection, a
-// different cache key, and reads afresh.)
+// different cache key, and reads afresh.) The exception is a scoped cache,
+// below, that does not hold the picked schema.
+//
+// A CATALOG TOO BIG TO READ WHOLE (db.ErrCatalogTooBig: some query past
+// 250,000 rows) is read SCOPED instead, on Postgres: the sidebar's schema
+// and the search path's (the default public when the path is unknown) —
+// the schemas a statement most likely names. Completion then knows those
+// schemas' tables and columns, and not the others'; a schema.table in one
+// of the others completes as nothing, as it did when the load failed. The
+// connection is remembered as too big (complScoped), so later loads go
+// straight to the scoped read rather than paying for the failing whole one
+// first. A pick of a schema the scoped cache does not hold reads again.
+//
+//	load ──► whole (Manager.Schema) ──ok──────────────► cache, scope nil
+//	           │ ErrCatalogTooBig
+//	           ▼
+//	         complScoped[conn] = true
+//	           ▼
+//	         scoped (Manager.SchemaIn: focus + path) ──► cache, scope set
 //
 // A FAILED LOAD is remembered for complRetry. A catalog too big to read (the
 // ERD's 250,000-row bound) or a server that is down would otherwise be asked
@@ -64,9 +85,36 @@ type complState struct {
 	gen     int           // the complGen it was loaded for
 	schema  *erd.Schema   // nil while loading, or when the load failed
 	path    []string      // the search path bare names resolve through; nil: the dialect's default
+	scope   []string      // the schemas a scoped load read; nil: every schema
 	err     error         // what the load failed with
 	at      time.Time     // when the load ended
 	loading chan struct{} // closed when the load in flight ends; nil when none is
+}
+
+// covers reports whether the cache holds the schema the sidebar shows:
+// always, unless it is a scoped load of other schemas.
+func (c complState) covers(focus string) bool {
+	return c.scope == nil || focus == "" || slices.Contains(c.scope, focus)
+}
+
+// complScope is the schemas a scoped load reads: the sidebar's, then the
+// search path's, or the dialect's default (public) when the path is
+// unknown — what sqlcomplete assumes then too. The order is only for
+// reading the cache in a debugger; the queries take the list as a set.
+func complScope(focus string, path []string) []string {
+	if path == nil {
+		path = []string{"public"}
+	}
+	scope := make([]string, 0, len(path)+1)
+	if focus != "" {
+		scope = append(scope, focus)
+	}
+	for _, s := range path {
+		if !slices.Contains(scope, s) {
+			scope = append(scope, s)
+		}
+	}
+	return scope
 }
 
 // ddlVerbs start a statement that may change what the catalog holds.
@@ -110,6 +158,8 @@ func (w *Workspace) Complete(buffer string, caret int) (res sqlcomplete.Result, 
 		switch {
 		case c.conn != conn || c.gen != w.complGen || c.loading != nil:
 			ready = false
+		case !c.covers(focus):
+			ready = false // a scoped load of other schemas: read this one
 		case c.err != nil && time.Since(c.at) > complRetry:
 			ready = false // time to try again
 		default:
@@ -139,11 +189,12 @@ func (w *Workspace) Complete(buffer string, caret int) (res sqlcomplete.Result, 
 // with the vocabulary alone either way.
 func (w *Workspace) LoadCompletions(ctx context.Context) error {
 	w.mu.Lock()
-	conn, gen := w.active, w.complGen
+	conn, gen, focus := w.active, w.complGen, w.schema
 	if conn == "" {
 		w.mu.Unlock()
 		return nil
 	}
+	scoped := w.complScoped[conn]
 	c := w.compl
 	if c.conn == conn && c.gen == gen {
 		switch {
@@ -159,6 +210,8 @@ func (w *Workspace) LoadCompletions(ctx context.Context) error {
 			err := w.compl.err
 			w.mu.Unlock()
 			return err
+		case !c.covers(focus):
+			// a scoped load of other schemas: read again, for this one
 		case c.err == nil || time.Since(c.at) <= complRetry:
 			w.mu.Unlock()
 			return nil // cached, or failed recently: nothing to do
@@ -168,24 +221,67 @@ func (w *Workspace) LoadCompletions(ctx context.Context) error {
 	w.compl = complState{conn: conn, gen: gen, loading: done}
 	w.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(ctx, CompletionTimeout)
-	defer cancel()
-	sc, err := w.mgr.Schema(ctx, conn)
-	var path []string
-	if err == nil {
-		// One more round trip, for which schemas' tables go in bare.
-		// Failing it is no reason to drop the schema just read: the
-		// dialect's default (public) is then assumed, as before.
-		path, _ = w.mgr.SearchPath(ctx, conn)
-	}
+	sc, path, scope, err := w.readCompletions(ctx, conn, focus, scoped)
 
 	w.mu.Lock()
 	// a newer load (after the cache was dropped and asked for again) owns
 	// the state now; this one's outcome is for a schema that is gone
 	if w.compl.loading == done {
-		w.compl = complState{conn: conn, gen: gen, schema: sc, path: path, err: err, at: time.Now()}
+		w.compl = complState{conn: conn, gen: gen, schema: sc, path: path, scope: scope, err: err, at: time.Now()}
 	}
 	w.mu.Unlock()
 	close(done)
 	return err
+}
+
+// readCompletions reads what the completion cache holds: the schema, whole
+// or scoped (see A CATALOG TOO BIG above), and the search path. scope is
+// the schemas a scoped read covered, nil after a whole read; on an error
+// the schema and scope are nil.
+//
+// The path is read first, being cheap and what a scoped read is scoped by.
+// Failing it is no reason to go without the schema: the dialect's default
+// (public) is then assumed, as sqlcomplete does.
+//
+// Each read of the schema gets CompletionTimeout of its own, so a whole
+// read that ran long before it overflowed does not leave the scoped one
+// none.
+func (w *Workspace) readCompletions(ctx context.Context, conn, focus string, scoped bool) (*erd.Schema, []string, []string, error) {
+	pctx, pcancel := context.WithTimeout(ctx, CompletionTimeout)
+	path, _ := w.mgr.SearchPath(pctx, conn)
+	pcancel()
+
+	if !scoped {
+		sctx, scancel := context.WithTimeout(ctx, CompletionTimeout)
+		sc, err := w.mgr.Schema(sctx, conn)
+		scancel()
+		if !errors.Is(err, db.ErrCatalogTooBig) || !w.navigable(conn) {
+			if err != nil {
+				return nil, path, nil, err
+			}
+			return sc, path, nil, nil
+		}
+		w.mu.Lock()
+		if w.complScoped == nil {
+			w.complScoped = map[string]bool{}
+		}
+		w.complScoped[conn] = true
+		w.mu.Unlock()
+	}
+
+	scope := complScope(focus, path)
+	sctx, scancel := context.WithTimeout(ctx, CompletionTimeout)
+	defer scancel()
+	sc, err := w.mgr.SchemaIn(sctx, conn, scope)
+	if err != nil {
+		return nil, path, nil, err
+	}
+	return sc, path, scope, nil
+}
+
+// navigable reports whether conn's driver lists its tables by schema
+// (db.Navigable), the only kind a scoped read narrows.
+func (w *Workspace) navigable(conn string) bool {
+	cc, ok := w.cfg.ConnByName(conn)
+	return ok && db.Navigable(cc.Driver)
 }

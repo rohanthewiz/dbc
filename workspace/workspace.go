@@ -131,6 +131,10 @@ type Workspace struct {
 	// the generation that drops it (see complete.go)
 	compl    complState
 	complGen int
+	// complScoped holds the connections whose whole schema was too big to
+	// read for completion (db.ErrCatalogTooBig); they are read scoped from
+	// then on, without paying for the failing whole read again
+	complScoped map[string]bool
 
 	// the run slot — one run at a time
 	busy   bool

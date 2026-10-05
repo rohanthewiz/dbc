@@ -92,6 +92,32 @@ func pgTables(schema string) string {
 	if schema != "" {
 		where = "n.nspname = " + sqlLit(schema, false)
 	}
+	return pgTablesWhere(where)
+}
+
+// pgTablesIn is pgTables over several named schemas: the tables of a schema
+// read scoped to some schemas (Manager.SchemaIn), for completion on a
+// database too big to read whole.
+func pgTablesIn(schemas []string) string {
+	return pgTablesWhere(pgSchemaIn(schemas))
+}
+
+// pgSchemaIn is the WHERE condition keeping a Postgres catalog query (one
+// that aliases pg_namespace as n) to the named schemas. No schemas is no
+// rows — FALSE rather than an empty IN (), which is a syntax error.
+func pgSchemaIn(schemas []string) string {
+	if len(schemas) == 0 {
+		return "FALSE"
+	}
+	lits := make([]string, len(schemas))
+	for i, s := range schemas {
+		lits[i] = sqlLit(s, false)
+	}
+	return "n.nspname IN (" + strings.Join(lits, ", ") + ")"
+}
+
+// pgTablesWhere is the Postgres table listing under a schema condition.
+func pgTablesWhere(where string) string {
 	return `SELECT n.nspname AS table_schema, c.relname AS table_name,
        CASE c.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW'
                       WHEN 'f' THEN 'FOREIGN' ELSE 'BASE TABLE' END AS table_type

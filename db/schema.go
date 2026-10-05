@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"sort"
 	"strconv"
 	"strings"
@@ -53,19 +54,42 @@ import (
 // Postgres and bytdb — what pg_constraint's key arrays refer to — and the
 // ordinal position elsewhere.
 func SchemaColumnsQuery(driver string) (string, error) {
+	return schemaColumnsQuery(driver, nil)
+}
+
+// schemaColumnsQuery is SchemaColumnsQuery, kept to the scope schemas on
+// Postgres when scope is non-nil (see Manager.SchemaIn); other engines read
+// their one schema whatever scope says.
+//
+// On Postgres it also leaves out the columns of partitions. BuildSchema
+// would drop them anyway (PartitionsQuery), but only after reading them,
+// and on a big partitioned database they are most of the catalog: every
+// partition repeats its parent's columns, so a 40-column table split by
+// day over three years is 40,000 rows, all of them thrown away. Read in
+// full they were what pushed a production catalog past maxSchemaRows.
+// bytdb shares the statement but has no partitions, and its pg_class need
+// not carry relispartition, so it keeps the unfiltered one.
+func schemaColumnsQuery(driver string, scope []string) (string, error) {
 	drv, err := driverFor(driver)
 	if err != nil {
 		return "", err
 	}
 	switch drv {
 	case "pgx", bytdbdrv.DriverName:
+		where := ""
+		if drv == "pgx" {
+			where = "\n  AND NOT c.relispartition"
+			if scope != nil {
+				where += " AND " + pgSchemaIn(scope)
+			}
+		}
 		return `SELECT n.nspname, c.relname, a.attname, format_type(a.atttypid, a.atttypmod),
        CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END, a.attnum
 FROM pg_catalog.pg_attribute a
 JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 WHERE a.attnum > 0 AND NOT a.attisdropped AND c.relkind IN ('r', 'v', 'm', 'p', 'f')
-  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')` + where + `
 ORDER BY 1, 2, a.attnum`, nil
 	case "mysql":
 		// column_type is the declared type (int unsigned, enum(...))
@@ -85,12 +109,32 @@ ORDER BY m.name, p.cid`, nil
 // SchemaKeysQuery returns the statement listing every primary, unique and
 // foreign key, in the shape described at the top of this file.
 func SchemaKeysQuery(driver string) (string, error) {
+	return schemaKeysQuery(driver, nil)
+}
+
+// schemaKeysQuery is SchemaKeysQuery, kept to the scope schemas on
+// Postgres when scope is non-nil. Only the key's own table is scoped: a
+// foreign key from a scoped table to one outside the scope is still read,
+// and BuildSchema drops it for want of a box at the far end.
+//
+// On Postgres it leaves out, for schemaColumnsQuery's reason, the keys
+// Postgres clones onto partitions (on the partition, or referencing one),
+// which BuildSchema would drop: "IS NOT TRUE" keeps the p and u rows,
+// whose fc is NULL.
+func schemaKeysQuery(driver string, scope []string) (string, error) {
 	drv, err := driverFor(driver)
 	if err != nil {
 		return "", err
 	}
 	switch drv {
 	case "pgx", bytdbdrv.DriverName:
+		where := ""
+		if drv == "pgx" {
+			where = "\n  AND NOT c.relispartition AND fc.relispartition IS NOT TRUE"
+			if scope != nil {
+				where += " AND " + pgSchemaIn(scope)
+			}
+		}
 		// ::text renders the int2[] arrays as {1,2} on Postgres; bytdb
 		// already stores them as that text. The LEFT JOINs keep p and u
 		// rows, which have no referenced table; COALESCE keeps their
@@ -102,7 +146,7 @@ JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 LEFT JOIN pg_catalog.pg_class fc ON fc.oid = con.confrelid
 LEFT JOIN pg_catalog.pg_namespace fn ON fn.oid = fc.relnamespace
-WHERE con.contype IN ('p', 'u', 'f') AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+WHERE con.contype IN ('p', 'u', 'f') AND n.nspname NOT IN ('pg_catalog', 'information_schema')` + where + `
 ORDER BY 1, 2, 3`, nil
 	case "mysql":
 		// key_column_usage lists the columns of every key, and on a
@@ -163,6 +207,12 @@ ORDER BY 1, 2, 3, 5`, nil
 // partitioning, and its pg_class need not carry the column, so it gets no
 // query.
 func PartitionsQuery(driver string) (string, error) {
+	return partitionsQuery(driver, nil)
+}
+
+// partitionsQuery is PartitionsQuery, kept to the scope schemas when scope
+// is non-nil.
+func partitionsQuery(driver string, scope []string) (string, error) {
 	drv, err := driverFor(driver)
 	if err != nil {
 		return "", err
@@ -170,10 +220,14 @@ func PartitionsQuery(driver string) (string, error) {
 	if drv != "pgx" {
 		return "", nil
 	}
+	where := ""
+	if scope != nil {
+		where = " AND " + pgSchemaIn(scope)
+	}
 	return `SELECT n.nspname, c.relname
 FROM pg_catalog.pg_class c
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-WHERE c.relispartition`, nil
+WHERE c.relispartition` + where, nil
 }
 
 // BuildSchema assembles the diagram's model from the catalog queries' rows.
@@ -390,29 +444,54 @@ func pgArray(s string) []string {
 // runaway catalog from eating memory.
 const maxSchemaRows = 250_000
 
+// ErrCatalogTooBig is what Schema fails with when one of its catalog
+// queries runs past maxSchemaRows. Callers test for it with errors.Is:
+// completion then reads the schema scoped to a few schemas (SchemaIn)
+// rather than going without.
+var ErrCatalogTooBig = errors.New("the catalog is too big to read whole")
+
 // Schema reads the connection's schema for a diagram: its tables and views
 // (as the sidebar lists them), their columns and their keys. It runs on
 // the pool, like the sidebar's catalog query, so it never lands inside a
 // transaction the user has open on their session, and it reads rows
 // itself rather than through Run so the max_rows cap does not apply.
 func (m *Manager) Schema(ctx context.Context, name string) (*erd.Schema, error) {
+	return m.SchemaIn(ctx, name, nil)
+}
+
+// SchemaIn is Schema kept to the named schemas, when scope is non-nil, on
+// a driver whose tables are listed by schema (Navigable: Postgres). Other
+// drivers read their one schema whole whatever scope says. A foreign key
+// from a scoped table to a table outside the scope is left out, having no
+// box at the far end.
+//
+// It is for a database whose whole catalog is too big to read (or to read
+// often): completion reads the schemas a statement most likely names —
+// the sidebar's and the search path's — rather than none.
+func (m *Manager) SchemaIn(ctx context.Context, name string, scope []string) (*erd.Schema, error) {
 	cc, ok := m.cfg.ConnByName(name)
 	if !ok {
 		return nil, serr.New("unknown connection", "name", name)
+	}
+	if !Navigable(cc.Driver) {
+		scope = nil
 	}
 	tq, err := TablesQuery(cc.Driver)
 	if err != nil {
 		return nil, err
 	}
-	cq, err := SchemaColumnsQuery(cc.Driver)
+	if scope != nil {
+		tq = pgTablesIn(scope)
+	}
+	cq, err := schemaColumnsQuery(cc.Driver, scope)
 	if err != nil {
 		return nil, err
 	}
-	kq, err := SchemaKeysQuery(cc.Driver)
+	kq, err := schemaKeysQuery(cc.Driver, scope)
 	if err != nil {
 		return nil, err
 	}
-	pq, err := PartitionsQuery(cc.Driver)
+	pq, err := partitionsQuery(cc.Driver, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -421,12 +500,15 @@ func (m *Manager) Schema(ctx context.Context, name string) (*erd.Schema, error) 
 		return nil, err
 	}
 	var rows [4][][]string
+	// the names go in the error, so a catalog too big says which part of
+	// it was: on Postgres columns is the usual one, a row per column
+	what := [4]string{"tables", "columns", "keys", "partitions"}
 	for i, q := range []string{tq, cq, kq, pq} {
 		if q == "" {
 			continue // an engine with nothing to hide
 		}
 		if rows[i], err = stringRows(ctx, dbh, q); err != nil {
-			return nil, wrapRunErr(ctx, err, name, "op", "read the schema")
+			return nil, wrapRunErr(ctx, err, name, "op", "read the schema", "query", what[i])
 		}
 	}
 	return BuildSchema(cc.Driver, name, TableRefs(rows[0]), rows[1], rows[2], rows[3]), nil
@@ -479,7 +561,7 @@ func stringRows(ctx context.Context, dbh *sql.DB, q string) ([][]string, error) 
 	// a shorter answer. Worded for both: completion reports it as
 	// "completion is without the schema: …".
 	if truncated {
-		return nil, serr.New("the catalog is too big to read whole", "rows", strconv.Itoa(maxSchemaRows))
+		return nil, serr.Wrap(ErrCatalogTooBig, "rows", strconv.Itoa(maxSchemaRows))
 	}
 	return rows, nil
 }

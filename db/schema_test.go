@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -311,5 +313,67 @@ func TestSchemaQueriesPerDriver(t *testing.T) {
 	}
 	if _, err := SchemaKeysQuery("oracle"); err == nil {
 		t.Error("an unknown driver has no key query")
+	}
+}
+
+// On Postgres the column and key queries leave partitions out in SQL (they
+// were most of a big partitioned catalog, read only to be dropped), and a
+// scope keeps them, the tables and the partitions to the named schemas.
+// bytdb shares the statements but has no relispartition, so it keeps the
+// unfiltered ones, and ignores a scope as every non-Postgres engine does.
+func TestSchemaQueriesScoped(t *testing.T) {
+	scope := []string{"sales", "o'brien"}
+	in := `n.nspname IN ('sales', 'o''brien')`
+	cq, _ := schemaColumnsQuery("postgres", nil)
+	kq, _ := schemaKeysQuery("postgres", nil)
+	if !strings.Contains(cq, "NOT c.relispartition") || strings.Contains(cq, "nspname IN") {
+		t.Errorf("postgres columns, whole:\n%s", cq)
+	}
+	if !strings.Contains(kq, "fc.relispartition IS NOT TRUE") || strings.Contains(kq, "nspname IN") {
+		t.Errorf("postgres keys, whole:\n%s", kq)
+	}
+	for what, q := range map[string]func(string, []string) (string, error){
+		"columns": schemaColumnsQuery, "keys": schemaKeysQuery, "partitions": partitionsQuery,
+	} {
+		if got, err := q("postgres", scope); err != nil || !strings.Contains(got, in) {
+			t.Errorf("postgres %s, scoped: %v\n%s", what, err, got)
+		}
+		if got, _ := q("bytdb", scope); strings.Contains(got, "relispartition") || strings.Contains(got, "nspname IN") {
+			t.Errorf("bytdb %s:\n%s", what, got)
+		}
+	}
+	if got := pgTablesIn(scope); !strings.Contains(got, in) {
+		t.Errorf("tables, scoped:\n%s", got)
+	}
+	// no schemas is no rows, not an empty IN () the server refuses
+	if got := pgSchemaIn(nil); got != "FALSE" {
+		t.Errorf("pgSchemaIn(nil) = %q", got)
+	}
+	// the exported queries are the whole ones
+	if q, _ := SchemaColumnsQuery("postgres"); q != cq {
+		t.Error("SchemaColumnsQuery is not the unscoped query")
+	}
+}
+
+// A catalog query past maxSchemaRows fails with ErrCatalogTooBig, which
+// completion tests for (errors.Is) to fall back to a scoped read.
+func TestStringRowsTooBig(t *testing.T) {
+	cfg := &config.Config{Connections: []config.Connection{{
+		Name: "big", Driver: "sqlite", DSN: "file:toobig?mode=memory&cache=shared",
+	}}}
+	mgr := NewManager(cfg)
+	defer mgr.Close()
+	dbh, err := mgr.DBContext(context.Background(), "big")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := func(n int) string {
+		return fmt.Sprintf(`WITH RECURSIVE r(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM r WHERE i < %d) SELECT i FROM r`, n)
+	}
+	if rows, err := stringRows(context.Background(), dbh, count(maxSchemaRows)); err != nil || len(rows) != maxSchemaRows {
+		t.Fatalf("at the bound: %d rows, %v", len(rows), err)
+	}
+	if _, err := stringRows(context.Background(), dbh, count(maxSchemaRows+1)); !errors.Is(err, ErrCatalogTooBig) {
+		t.Errorf("past the bound: %v, want ErrCatalogTooBig", err)
 	}
 }

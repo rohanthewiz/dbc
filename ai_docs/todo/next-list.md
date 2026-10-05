@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-105
+**Next ID:** N-107
 
 ## Open
 
@@ -107,6 +107,20 @@ ten session docs in `ai_docs/claude_sessions/`
   `consoles/<host>_<port>/<database>/`, and the TUI and a browser tab
   editing one console at once (the TUI writes only a console it changed,
   last writer wins then; the web side is revision-checked).
+- **N-105** · raised `2026-1005-1109-completion-big-catalog` · value medium
+  Scope the ERD's schema read on a catalog too big to read whole.
+  `Workspace.Diagram` still calls `Manager.Schema` (every schema), which
+  now skips partitions' columns and keys but can still fail with
+  `db.ErrCatalogTooBig` on a database big for other reasons (many schemas,
+  wide tables). Completion falls back to `Manager.SchemaIn` (the sidebar's
+  schema + search_path); a diagram could do the same with `sel.Schema` plus
+  the schemas of the tables `sel` names.
+- **N-106** · raised `2026-1005-1109-completion-big-catalog` · value medium
+  Confirm completion on the real ProdDr connection, where it failed with
+  "the catalog is too big to read whole" (rows 250000). Note whether the
+  partition filter alone fixed it, or the scoped fallback kicked in (the
+  error now names the query, e.g. `query[columns]`). The diagnostic query
+  in the session doc counts its column rows on partitions vs. not.
 
 ## Roadmap
 

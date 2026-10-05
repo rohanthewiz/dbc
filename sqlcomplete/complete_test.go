@@ -178,6 +178,21 @@ func TestSearchPath(t *testing.T) {
 	if _, ok := find(r, "customer_id"); !ok {
 		t.Errorf("orders on the default path → %v", labels(r))
 	}
+
+	// a schema holding one schema, off the path the server reported (a
+	// cache scoped to the sidebar's sales, the path's public having no
+	// tables): qualified all the same. Without a reported path, one
+	// schema is bare, as on MySQL and SQLite.
+	sc = &erd.Schema{Driver: "postgres", Tables: []*erd.Table{shadow}}
+	if got := insert(complete([]string{"public"}, "SELECT * FROM ▮"), "orders", "table"); got != "sales.orders" {
+		t.Errorf("one schema, off the reported path → %s", got)
+	}
+	if got := insert(complete([]string{"sales"}, "SELECT * FROM ▮"), "orders", "table"); got != "orders" {
+		t.Errorf("one schema, on the reported path → %s", got)
+	}
+	if got := insert(complete(nil, "SELECT * FROM ▮"), "orders", "table"); got != "orders" {
+		t.Errorf("one schema, no reported path → %s", got)
+	}
 }
 
 func TestExpressionScope(t *testing.T) {

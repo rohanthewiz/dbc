@@ -94,6 +94,13 @@ type Model struct {
 	// schema row's "loading…" until its tables land.
 	schemaLoading string
 
+	// consoleDir is where the per-database SQL consoles live ("" under
+	// Options.NoPersist: the editor then keeps one buffer that is never
+	// swapped or saved). console is the file of the one in the editor now,
+	// "" before any. See console.go.
+	consoleDir string
+	console    string
+
 	// send delivers a message to the running program from outside a Cmd —
 	// the script engine's show/print callbacks, which fire mid-run. Run
 	// installs Program.Send; tests install a recorder.
@@ -124,7 +131,7 @@ var focusOrder = []focusID{focusEditor, focusGrid, focusConns, focusTables, focu
 
 // Options configure New beyond what the config holds.
 type Options struct {
-	// NoPersist keeps the history, buffer and conversations off disk —
+	// NoPersist keeps the history, consoles and conversations off disk —
 	// tests, which must not read or clobber the developer's real
 	// ~/.config/dbc.
 	NoPersist bool
@@ -173,9 +180,13 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Model {
 	})
 	m.refreshConns()
 
+	// The editor opens on the console of the connection about to be
+	// connected (console.go), so the first connect — landing on that same
+	// database — has nothing to swap.
 	saved := ""
 	if !opt.NoPersist {
-		saved = userdata.LoadBuffer(userdata.BufferFile())
+		m.consoleDir = userdata.ConsolesDir()
+		saved = m.openConsole(m.ws.Active(), userdata.BufferFile())
 	}
 	switch {
 	case strings.TrimSpace(saved) != "":
@@ -247,7 +258,7 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 	_, err := p.Run()
 
 	m.shutdown()
-	if werr := userdata.SaveBuffer(userdata.BufferFile(), m.editor.Text()); werr != nil {
+	if werr := m.saveConsole(); werr != nil {
 		fmt.Fprintf(os.Stderr, "could not save the editor buffer: %v\n", werr)
 	}
 	return err

@@ -1,6 +1,7 @@
 // Package userdata is the state dbc keeps for the user between sessions:
-// the query history, the editor buffer, the assistant's conversations and
-// the terminal UI's schema picks, all under ~/.config/dbc.
+// the query history, the editor's per-database SQL consoles (and the single
+// editor buffer they replaced), the assistant's conversations and the
+// terminal UI's schema picks, all under ~/.config/dbc.
 //
 // It started life inside the former tview UI (package ui, since removed),
 // and kept that UI's on-disk format — same paths, same JSON-lines shape — so

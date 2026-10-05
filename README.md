@@ -684,7 +684,7 @@ result starts fresh.
 the tables and views into the results as `table_schema · table_name ·
 table_type` — the same three columns on all four drivers.
 
-The editor buffer, the query history and the assistant's conversations
+The editor's per-database consoles, the query history and the assistant's conversations
 persist between sessions under `~/.config/dbc`.
 
 The interface wears a muted green theme — dark gray-green surfaces with a
@@ -752,11 +752,25 @@ History lives in `~/.config/dbc/history.jsonl` — one JSON object per line, so
 multi-line SQL comes back exactly as it was written — capped at the last 500
 entries and readable only by you. Delete the file to forget everything.
 
-### Multi-statement buffers
+### Consoles and multi-statement buffers
 
-The editor buffer persists across sessions: it is saved to
-`~/.config/dbc/buffer.sql` on quit and restored at the next launch, so the
-scratchpad is still there tomorrow.
+The editor is a **console**: a running SQL file kept per database — per
+host and port plus database name on Postgres and MySQL, per file on SQLite
+and bytdb — not one buffer for everything. Switch connections and, once the
+connect lands, the editor saves what you were writing to the old database's
+console and opens the new one's; the log says which (`console:
+db.example.com:5432 · app`). Two connections onto the same database (another
+name, another role) share a console, and a derived `<conn>/<database>` gets
+its own. A connect that fails leaves the console where it was.
+
+Consoles are plain `.sql` files in `~/.config/dbc/consoles/`, named for
+their host and database (`db.example.com_5432--app-3f9c1a2b.sql`, the suffix
+keeping apart names a filename would fold together), readable only by you
+and saved on every switch and on quit, so each database's scratchpad is
+still there tomorrow. A database you only looked at gets no file. On the
+first launch with consoles, the old single `~/.config/dbc/buffer.sql` seeds
+the console you start on; it is left in place, no longer written. `dbc web`
+keeps its own buffer per query tab, as before.
 
 Keep a whole scratchpad of SQL in the editor and run one statement at a time:
 `Ctrl+R` executes only the statement the cursor sits in, and the log says

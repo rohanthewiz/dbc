@@ -150,6 +150,7 @@ func (m *Model) connected(ev *workspace.Connected) tea.Cmd {
 	if ev.Err != nil {
 		return nil
 	}
+	m.switchConsole(ev.Name) // the editor follows the database (console.go)
 	m.refreshConns()
 	m.refreshTables()
 	m.catsAfterTransition()

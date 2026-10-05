@@ -439,7 +439,7 @@ func (m *Model) pressButton(b button) tea.Cmd {
 	case btnAssistant:
 		return m.toggleChat()
 	case btnConn:
-		m.openConnMenu(b.r.X, b.r.Y+1)
+		m.openConnMenu(b.r.X, b.r.Y+1, "")
 	}
 	return nil
 }
@@ -491,7 +491,14 @@ func (m *Model) rightClick(x, y int) tea.Cmd {
 		}
 	case l.conns.Contains(x, y):
 		m.focus = focusConns
-		m.openConnMenu(x, y)
+		// the menu's Edit/Remove act on the row clicked, so the cursor
+		// moves there first, as the tables menu does
+		target := ""
+		if i := m.conns.indexAt(x, y); i >= 0 {
+			m.conns.cur = i
+			target = m.conns.items[i].data.(string)
+		}
+		m.openConnMenu(x, y, target)
 	case l.logR.Contains(x, y):
 		m.focus = focusLog
 		m.openLogMenu(x, y)

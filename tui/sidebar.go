@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/workspace"
 )
@@ -20,10 +21,19 @@ import (
 // while the sidebar is on another of its server's databases
 // ("<conn>/<database>"), the configured connection it is derived from.
 func (m *Model) refreshConns() {
-	items := make([]listItem, 0, len(m.cfg.Connections))
+	items := make([]listItem, 0, len(m.cfg.Conns()))
 	on := m.baseOf(m.ws.Active())
-	for i, c := range m.cfg.Connections {
-		it := listItem{label: c.Name, sub: c.Driver, data: c.Name}
+	for i, c := range m.cfg.Conns() {
+		// as dbc web's sidebar: a muted ✎ marks one added from inside dbc
+		// (the connection form edits it), and · tls one that dials TLS
+		sub := c.Driver
+		if c.Web {
+			sub = "✎ " + sub
+		}
+		if c.TLS != "" && c.TLS != config.TLSDisable {
+			sub += " · tls"
+		}
+		it := listItem{label: c.Name, sub: sub, data: c.Name}
 		if on != "" && c.Name == on {
 			it.mark = "●"
 			m.conns.cur = i

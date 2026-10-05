@@ -17,7 +17,8 @@ import (
 	"github.com/rohanthewiz/serr"
 )
 
-// Saved connections: the ones added in dbc web's browser UI, kept in a file
+// Saved connections: the ones added in dbc web's browser UI or the TUI's
+// connection form (package connedit has the logic both share), kept in a file
 // of their own, ~/.config/dbc/connections.toml, so that every way of running
 // dbc — the TUI, a headless run, script, migrate, explain, and dbc web
 // itself — sees them.
@@ -43,7 +44,7 @@ import (
 //	                           the rename below means a reader sees the old
 //	                           file or the new one, never half of one
 //
-//	writers (dbc web)     ──► AcquireLock(file) — the sidecar connections.toml.lock
+//	writers (dbc web, TUI) ─► AcquireLock(file) — the sidecar connections.toml.lock
 //	                           read ─► change ─► write a temp file ─► fsync ─► rename over
 //	                           release
 //
@@ -83,9 +84,9 @@ type savedDoc struct {
 
 // savedHeader starts every write. The file is rewritten whole, so it says
 // what that costs a hand edit.
-const savedHeader = `# Connections added in dbc web. Every dbc (the TUI, headless runs, dbc web)
-# reads them after config.toml's; a name config.toml also defines is skipped.
-# dbc rewrites this file whole when the browser adds, edits or removes one:
+const savedHeader = `# Connections added in dbc web or the TUI. Every dbc (the TUI, headless runs,
+# dbc web) reads them after config.toml's; a name config.toml also defines is
+# skipped. dbc rewrites this file whole when either adds, edits or removes one:
 # hand edits to entries are kept, comments are not. A DSN may reference
 # ${VAR}s, expanded from the environment of each dbc that reads it; so may
 # tls_ca, tls_cert and tls_key, where a relative path is relative to this file.

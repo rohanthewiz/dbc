@@ -46,6 +46,10 @@ type editor struct {
 	single      bool   // one line only: Enter is not ours, newlines paste as spaces
 	sqlMode     bool   // syntax highlighting and the current-statement marker
 	placeholder string // shown dimmed while the text is empty
+	// mask, when set, is drawn in place of every rune (a password field).
+	// Each masked rune is one cell wide, so the caret and a click map onto
+	// the dots drawn rather than onto the hidden text's own widths.
+	mask rune
 
 	undo, redo []snapshot
 	lastKind   editKind  // what the previous edit was, for coalescing typing
@@ -557,11 +561,19 @@ func runeWidth(r rune) int {
 	return max(w, 0)
 }
 
+// cellWidth is r's width as this editor draws it: one cell under a mask.
+func (e *editor) cellWidth(r rune) int {
+	if e.mask != 0 {
+		return 1
+	}
+	return runeWidth(r)
+}
+
 // dispCol is p's display column.
 func (e *editor) dispCol(p pos) int {
 	w := 0
 	for _, r := range e.lines[p.row][:min(p.col, len(e.lines[p.row]))] {
-		w += runeWidth(r)
+		w += e.cellWidth(r)
 	}
 	return w
 }
@@ -572,7 +584,7 @@ func (e *editor) dispCol(p pos) int {
 func (e *editor) colAtDisp(row, d int) int {
 	w := 0
 	for i, r := range e.lines[row] {
-		rw := runeWidth(r)
+		rw := e.cellWidth(r)
 		if d < w+rw {
 			if d-w >= (rw+1)/2 && rw > 1 {
 				return i + 1
@@ -825,6 +837,9 @@ func (e *editor) Draw(s Surface, st styles, bg Style, curStmt [2]int, follow boo
 			}
 			if hasSel && inRange(pos{row, i}, selA, selB) {
 				cs = cs.WithBg(st.selRange.Bg)
+			}
+			if e.mask != 0 {
+				r = e.mask
 			}
 			x = text.Put(x, y, string(r), cs)
 			if x >= text.W() {

@@ -6,6 +6,33 @@ import (
 	"testing"
 )
 
+// TestMovePicks renames a connection's pick and its derived databases'
+// picks, keeping every other connection's.
+func TestMovePicks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "picks.json")
+	for conn, p := range map[string]SchemaPick{"a": {Name: "s1"}, "a/db": {Name: "s2"}, "b": {All: true}} {
+		if err := SavePick(path, conn, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err := MovePicks(path, func(conn string) (string, bool) {
+		switch conn {
+		case "a":
+			return "z", true
+		case "a/db":
+			return "z/db", true
+		}
+		return "", false
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := LoadPicks(path)
+	if len(got) != 3 || got["z"].Name != "s1" || got["z/db"].Name != "s2" || !got["b"].All {
+		t.Fatalf("picks after move = %+v", got)
+	}
+}
+
 // TestPicksRoundTrip saves picks one connection at a time and reads them
 // back: each save keeps the others, including one written to the file by
 // someone else (another dbc) after this one loaded it.

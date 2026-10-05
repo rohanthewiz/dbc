@@ -68,6 +68,35 @@ func SavePick(path, conn string, pick SchemaPick) error {
 	}
 	all := LoadPicks(path)
 	all[conn] = pick
+	return writePicks(path, all)
+}
+
+// MovePicks renames the picks rename maps to a new name (ok true), keeping
+// the rest — a connection renamed in the TUI's form takes its pick, and
+// those of its other databases ("<old>/analytics"), with it. Like SavePick
+// it re-reads the file, so another TUI's picks since startup are kept.
+func MovePicks(path string, rename func(conn string) (to string, ok bool)) error {
+	if path == "" {
+		return nil
+	}
+	all := LoadPicks(path)
+	moved := false
+	for conn, p := range all {
+		if to, ok := rename(conn); ok && to != conn {
+			delete(all, conn)
+			all[to] = p
+			moved = true
+		}
+	}
+	if !moved {
+		return nil
+	}
+	return writePicks(path, all)
+}
+
+// writePicks replaces the file with all, through a temp file renamed over
+// it (see SavePick).
+func writePicks(path string, all map[string]SchemaPick) error {
 	bs, err := json.MarshalIndent(all, "", "  ")
 	if err != nil {
 		return serr.Wrap(err, "op", "encode schema picks")

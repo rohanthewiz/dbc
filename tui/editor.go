@@ -59,6 +59,11 @@ type editor struct {
 	version int
 	hlVer   int
 	hl      [][]Style
+
+	// marks are the uses of a symbol (Shift+F12, symbol.go), drawn while
+	// marksVer is still the edit version they were found at.
+	marks    []editorMark
+	marksVer int
 }
 
 // pos is a caret position: row, and column in runes.
@@ -800,6 +805,16 @@ func (e *editor) Draw(s Surface, st styles, bg Style, curStmt [2]int, follow boo
 	}
 	selA, selB := e.ordered()
 	hasSel := e.sel && e.cur != e.anc
+	// the marks as positions, once per frame: there are a handful, and
+	// comparing positions per rune is cheaper than offsets per rune
+	type markPos struct {
+		a, b pos
+		def  bool
+	}
+	var marks []markPos
+	for _, mk := range e.liveMarks() {
+		marks = append(marks, markPos{e.posAt(mk.from), e.posAt(mk.to), mk.def})
+	}
 
 	for y := 0; y < s.H(); y++ {
 		row := e.top + y
@@ -822,6 +837,14 @@ func (e *editor) Draw(s Surface, st styles, bg Style, curStmt [2]int, follow boo
 			cs := bg
 			if hl != nil && i < len(hl[row]) {
 				cs = hl[row][i]
+			}
+			for _, mk := range marks {
+				if inRange(pos{row, i}, mk.a, mk.b) {
+					cs = cs.WithBg(st.hover.Bg).Underline()
+					if mk.def {
+						cs = cs.Bold()
+					}
+				}
 			}
 			if hasSel && inRange(pos{row, i}, selA, selB) {
 				cs = cs.WithBg(st.selRange.Bg)

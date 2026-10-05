@@ -250,7 +250,7 @@ func (m *Model) startupLog() {
 		m.logf(logInfo, "loaded config from %s", m.cfg.Path)
 	}
 	m.log(logMuted, "keys: ^R run · ^⇧R/⌥R run all · ^X explain · ⌥X explain analyze · ^K stop · ^A assistant · ^E export · ^P history · ^O scripts · "+
-		"^Space suggest · ⌥N/⌥C new/next console · ^T tables · ^L conns · ^B sidebar · F1 keys · x disconnect · d/s database/schema · Tab focus · y/Y/c copy · Enter inspect · -/+ hide/show column · ^Q quit")
+		"^Space suggest · F12/⇧F12/F2 definition/uses/rename · ⌥N/⌥C new/next console · ^T tables · ^L conns · ^B sidebar · F1 keys · x disconnect · d/s database/schema · Tab focus · y/Y/c copy · Enter inspect · -/+ hide/show column · ^Q quit")
 	m.log(logMuted, "mouse: click to focus · drag to select · right-click for menus · "+
 		"drag borders to resize · hold Shift (⌥ on macOS) to select terminal text")
 	for _, w := range m.cfg.Warnings {
@@ -512,6 +512,9 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 
 	switch m.focus {
 	case focusEditor:
+		if cmd, used := m.symbolKey(k); used { // F12, Shift+F12, F2, Esc (symbol.go)
+			return cmd
+		}
 		ver := m.editor.version
 		m.editor.HandleKey(k)
 		m.drag.follow = true

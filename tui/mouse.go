@@ -173,6 +173,12 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 		m.focus = focusEditor
 		if m.editor.view.Contains(x, y) || x >= m.editor.view.X {
 			m.editor.Click(x, y, n, shift)
+			// Ctrl+click is go to definition, as in dbc web and most code
+			// editors: the click has put the caret on the name. No drag
+			// follows it — the press is spent on the jump.
+			if msg.Mod&tea.ModCtrl != 0 && n == 1 {
+				return m.gotoDefinition()
+			}
 			m.drag.kind = dragEditor
 		}
 	case l.results.Contains(x, y):

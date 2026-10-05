@@ -727,6 +727,15 @@ func (m *Model) interrupt() tea.Cmd {
 		m.chatStop()
 		return nil
 	}
+	// a query left running in another tab is something running too: Ctrl+C
+	// is the gentle key, so it says where rather than quitting over it
+	// (Ctrl+Q still quits, stopping every tab's run)
+	for i, t := range m.tabs {
+		if i != m.curTab && t.ws != nil && t.ws.Busy() {
+			m.logf(logWarn, "%s is still running a query — ⌥%d goes there; ^Q quits anyway", t.title, i+1)
+			return nil
+		}
+	}
 	return m.quitCmd()
 }
 

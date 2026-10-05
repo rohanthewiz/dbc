@@ -263,3 +263,21 @@ func TestTabsInConnectionsList(t *testing.T) {
 		t.Fatalf("b is on no tab, but: %v", err)
 	}
 }
+
+// Ctrl+C on an idle tab does not quit over a query still running in
+// another tab: it says where, and Ctrl+Q is the way out anyway.
+func TestInterruptKeepsABackgroundRun(t *testing.T) {
+	m := newTestModel(t)
+	m.editor.SetText("SELECT 1")
+	run := m.runQuery() // tab 1 busy until run is driven
+	key(t, m, "alt+t")
+	key(t, m, "ctrl+c")
+	if m.quit || !strings.Contains(logText(m), "Query 1 is still running") {
+		t.Fatalf("quit %v; log:\n%s", m.quit, logText(m))
+	}
+	drive(t, m, nil, run)
+	m.interrupt() // not through drive: tea.Quit would re-fire forever there
+	if !m.quit {
+		t.Fatal("Ctrl+C with nothing running did not quit")
+	}
+}

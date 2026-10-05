@@ -600,7 +600,9 @@ name — the easy way to read, or share, one wide record. Copies and exports
 follow what the grid shows, so **Table for Teams** pastes the vertical table
 (names as row headers; a single row comes out as `column | value`), and
 `⤓ Export ▾ → HTML page` downloads it. Sorting, hiding and selecting work as
-they do upright; the arrow keys follow the screen.
+they do upright; the arrow keys follow the screen. Every record shares one
+width: drag any record's border to widen them all, or the border beside
+`column` to widen the names; a double-click on either fits it.
 
 The rich copy needs the local clipboard (macOS, Windows, or Linux with an
 X11 display or `wl-copy` on Wayland). Over SSH dbc falls back to the terminal's clipboard

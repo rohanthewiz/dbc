@@ -330,10 +330,93 @@ func transposeGrid(t *testing.T, _ *env, p *rod.Page) {
 		}
 	}
 
+	// N-112: a record's border widens every record, and stays under the
+	// pointer — three narrow records cannot scroll, so the drag is shared
+	// by the two widths that carry record 2's border; the release is no
+	// click (record 3 stays selected)
+	rec0 := evalNum(t, p, `() => dbc.grid.view().recW`)
+	edgeJS := `() => document.querySelector('#grid .gh [data-r="1"]').getBoundingClientRect().right`
+	edge0 := evalNum(t, p, edgeJS)
+	x, y := handleCenter(t, p, `#grid .gh [data-rzr="1"]`)
+	drag(t, p, x, y, x+40)
+	if got := evalNum(t, p, `() => dbc.grid.view().recW`); got < rec0+19 || got > rec0+21 {
+		t.Fatalf("record width %v → %v after a 40px drag of record 2's border, want +20", rec0, got)
+	}
+	if edge := evalNum(t, p, edgeJS); edge < edge0+40-2 || edge > edge0+40+2 {
+		t.Fatalf("record 2's border %v → %v, want it to follow the pointer's 40px", edge0, edge)
+	}
+	if b := evalStr(t, p, `() => dbc.grid.view().bounds.join()`); b != "2,0,2,2" {
+		t.Fatalf("the drag's release acted as a click: bounds %s", b)
+	}
+	// the names gutter: dragged wider, then a double-click fits it back
+	// to the longest name
+	fn0 := evalNum(t, p, `() => dbc.grid.view().fnW`)
+	x, y = handleCenter(t, p, `#grid .gh [data-rzn]`)
+	drag(t, p, x, y, x+30)
+	if got := evalNum(t, p, `() => dbc.grid.view().fnW`); got < fn0+29 || got > fn0+31 {
+		t.Fatalf("names gutter %v → %v after a 30px drag, want +30", fn0, got)
+	}
+	x, y = handleCenter(t, p, `#grid .gh [data-rzn]`)
+	p.Mouse.MustMoveTo(x, y)
+	p.Mouse.MustClick(proto.InputMouseButtonLeft) // a double-click is two presses (grid.js counts them)
+	if err := p.Mouse.Click(proto.InputMouseButtonLeft, 2); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, p, "the names fitted", `(w) => dbc.grid.view().fnW < w`, fn0+30)
+
+	// a result wider than the pane, scrolled: the drag scrolls to keep the
+	// dragged record's left edge put, so every record takes the whole 40px
+	// and the border still follows the pointer. (The grid stays transposed
+	// over a rerun, so the header holds numbers: wait on the info line.)
+	before = gridSeq(t, p)
+	eval(t, p, `() => dbc.editor.setText("WITH RECURSIVE n(v) AS (SELECT 1 UNION ALL SELECT v + 1 FROM n WHERE v < 200) SELECT v, 'x' AS t FROM n")`)
+	p.MustElement("#run").MustClick()
+	waitFor(t, p, "200 records, transposed", `(after) => dbc.grid.view().seq > after && dbc.grid.view().flip &&
+	  document.getElementById("grid-info").textContent.startsWith("200 rows")`, before)
+	eval(t, p, `() => { const g = document.getElementById("grid"); g.scrollLeft = 30 * dbc.grid.view().recW; }`)
+	waitFor(t, p, "record 34 drawn", `() => !!document.querySelector('#grid .gh [data-r="33"]')`)
+	rec0 = evalNum(t, p, `() => dbc.grid.view().recW`)
+	edgeJS = `() => document.querySelector('#grid .gh [data-r="33"]').getBoundingClientRect().right`
+	edge0 = evalNum(t, p, edgeJS)
+	x, y = handleCenter(t, p, `#grid .gh [data-rzr="33"]`)
+	drag(t, p, x, y, x+40)
+	if got := evalNum(t, p, `() => dbc.grid.view().recW`); got != rec0+40 {
+		t.Fatalf("scrolled: record width %v → %v, want +40", rec0, got)
+	}
+	if edge := evalNum(t, p, edgeJS); edge < edge0+40-2 || edge > edge0+40+2 {
+		t.Fatalf("scrolled: record 34's border %v → %v, want it to follow the pointer's 40px", edge0, edge)
+	}
+
 	// and back upright, as the later steps expect
 	p.MustElement("#grid").MustFocus()
 	p.Keyboard.MustType(input.KeyT)
 	waitFor(t, p, "the grid upright", `() => !dbc.grid.view().flip && !document.querySelector("#grid .gh .hc.rec")`)
+}
+
+// handleCenter is the screen center of the element sel matches.
+func handleCenter(t *testing.T, p *rod.Page, sel string) (float64, float64) {
+	t.Helper()
+	box := eval(t, p, `(s) => { const r = document.querySelector(s).getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }`, sel).([]any)
+	return box[0].(float64), box[1].(float64)
+}
+
+// drag presses at (x, y), moves to x2 in steps, as a hand would, and
+// releases.
+func drag(t *testing.T, p *rod.Page, x, y, x2 float64) {
+	t.Helper()
+	p.Mouse.MustMoveTo(x, y)
+	p.Mouse.MustDown(proto.InputMouseButtonLeft)
+	if err := p.Mouse.MoveLinear(proto.Point{X: x2, Y: y}, 8); err != nil {
+		t.Fatal(err)
+	}
+	p.Mouse.MustUp(proto.InputMouseButtonLeft)
+	time.Sleep(450 * time.Millisecond) // past the double-click window, so the next press is a new one
+}
+
+func evalNum(t *testing.T, p *rod.Page, js string, args ...any) float64 {
+	t.Helper()
+	n, _ := eval(t, p, js, args...).(float64)
+	return n
 }
 
 // switchConns: a click on another connection moves the tab there and

@@ -125,15 +125,6 @@ ten session docs in `ai_docs/claude_sessions/`
   color (`synParam`, `.hl-p` → `--err`), the same as SQL bind parameters.
   If that reads as alarming next to real errors, give shell variables
   their own color: `codeStyle` in `tui/chat.go` and a rule in `app.css`.
-- **N-109** · raised `2026-1005-1222-web-tab-groups` · value low
-  Tab groups across browser windows: the server merges a window's
-  `groups` layout write by saved-tab keys (`mergeTabGroups`,
-  `web/groups.go`), so a group another window made after this one booted,
-  and that holds none of that window's tabs (an empty connection group),
-  is dropped by this window's next write. Likewise a rename in one window
-  leaves another window's members under the old name. Only matters with
-  two windows grouping at once; fix would be page-side deltas or a
-  per-group stamp.
 - **N-110** · raised `2026-1005-1222-web-tab-groups` · value low
   The e2e step "tabs survive a reload" timed out once on "its text back"
   (editor empty after the reload, status "ready on lite", no JS errors),
@@ -146,11 +137,6 @@ ten session docs in `ai_docs/claude_sessions/`
   `PlainCellsTransposed` for its copy/export, but its grid drawing
   (`tui/grid.go`) would need a sideways mode. The ask said "at least the
   html js version", so only the web was done.
-- **N-112** · raised `2026-1005-1247-web-grid-transpose` · value low
-  The transposed web grid gives every record one width (the widest shown
-  column's auto width, or `=` to fit content); there is no drag-resize of
-  record columns, and the names gutter is capped at 40 characters with no
-  way to widen it. Add a resize handle if a long name or value bites.
 
 ## Roadmap
 
@@ -176,6 +162,16 @@ call.
   "focused" means "connected", and the web's in-use mark covers the rest.
   The cost is a fresh dial on switching back. Deferred by the user ("for now"
   the in-use mark alone).
+
+- **N-109** · raised `2026-1005-1222-web-tab-groups` · value low
+  Tab groups across browser windows: the server merges a window's
+  `groups` layout write by saved-tab keys (`mergeTabGroups`,
+  `web/groups.go`), so a group another window made after this one booted,
+  and that holds none of that window's tabs (an empty connection group),
+  is dropped by this window's next write. Likewise a rename in one window
+  leaves another window's members under the old name. Only matters with
+  two windows grouping at once; fix would be page-side deltas or a
+  per-group stamp.
 
 ## Non-goals
 
@@ -204,6 +200,12 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-112** · raised `2026-1005-1247-web-grid-transpose` · value low
+  The transposed web grid gives every record one width (the widest shown
+  column's auto width, or `=` to fit content); there is no drag-resize of
+  record columns, and the names gutter is capped at 40 characters with no
+  way to widen it. Add a resize handle if a long name or value bites.
+  closed 2026-10-05, `2026-1005-1254-web-transpose-resize`: transposed header gets resize handles — a record's border (`data-rzr`) sets the shared `recFit`, scrolling by j × Δw so the dragged record's left edge stays put (shared over j+1 widths when the browser cannot scroll); the `column` corner's border (`data-rzn`) sets `fnFit`, past the 40-char cap; double-click fits either. Kept per tab in the grid snapshot. e2e "transpose the grid" covers the unscrollable drag, a scrolled 200-row drag, the names drag + fit, and that a release is no click.
 - **N-105** · raised `2026-1005-1109-completion-big-catalog` · value medium
   Scope the ERD's schema read on a catalog too big to read whole.
   `Workspace.Diagram` still calls `Manager.Schema` (every schema), which

@@ -428,8 +428,8 @@ body.side-dragging { cursor: col-resize; user-select: none; }
 /* the resize handle sits INSIDE the cell's right edge: .hc clips its
    overflow (for the ellipsis), so a handle straddling the border would be
    half cut off and the half under the next column would sort it instead */
-.hc .rz { position: absolute; top: 0; right: 0; width: 7px; height: 100%; cursor: col-resize; z-index: 1; }
-.hc .rz:hover, .gh.resizing .rz { background: color-mix(in srgb, var(--accent) 50%, transparent); }
+.hc .rz, .hrn .rz { position: absolute; top: 0; right: 0; width: 7px; height: 100%; cursor: col-resize; z-index: 1; }
+.hc .rz:hover, .hrn .rz:hover, .gh.resizing .rz { background: color-mix(in srgb, var(--accent) 50%, transparent); }
 .rn {
   position: sticky;
   left: 0;

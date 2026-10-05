@@ -38,8 +38,9 @@
 //   2 │ 2  │ bob         name   │ ann │ bob
 //
 // Every record column has ONE width (the widest of the shown columns' auto
-// widths), so the columns in view are found by division rather than a walk
-// — a 50,000-row result is 50,000 columns here.
+// widths, until a drag or a fit sets it), so the columns in view are found
+// by division rather than a walk — a 50,000-row result is 50,000 columns
+// here. Dragging any record's border resizes them all (flipResizeMove).
 (function () {
   "use strict";
 
@@ -80,7 +81,8 @@
     cur: { row: 0, col: 0 }, anc: { row: 0, col: 0 }, sel: false,
     flip: false,       // transposed: records across, columns down
     fnW: 0, recW: 0,   // transposed: the names gutter's width and every record column's, px
-    recFit: 0,         // transposed: a record width set by "fit", px; 0 = auto
+    recFit: 0,         // transposed: a record width set by a drag or "fit", px; 0 = auto
+    fnFit: 0,          // transposed: a names-gutter width set by a drag or a fit, px; 0 = auto
   };
 
   // charW is the width of one character of the grid's font — measured, not
@@ -141,7 +143,7 @@
       total: d.total, rows: d.rows, sort: -1, desc: false,
       cur: { row: 0, col: 0 }, anc: { row: 0, col: 0 }, sel: false,
     });
-    if (!same) { g.hidden = new Set(); g.userW = new Map(); g.recFit = 0; }
+    if (!same) { g.hidden = new Set(); g.userW = new Map(); g.recFit = 0; g.fnFit = 0; }
     g.pages = new Map([[0, d.cells]]);
     g.pending = new Set();
     if (d.exec) {
@@ -176,7 +178,7 @@
   function snapshot() {
     if (!g.seq) return null;
     return { seq: g.seq, sort: g.sort, desc: g.desc, hidden: [...g.hidden], userW: [...g.userW],
-      cur: Object.assign({}, g.cur), top: root.scrollTop, left: root.scrollLeft, flip: g.flip, recFit: g.recFit };
+      cur: Object.assign({}, g.cur), top: root.scrollTop, left: root.scrollLeft, flip: g.flip, recFit: g.recFit, fnFit: g.fnFit };
   }
 
   async function restore(snap) {
@@ -199,7 +201,7 @@
     adopt(d);
     if (snap && d.seq === snap.seq && d.columns.length) {
       Object.assign(g, { sort: snap.sort, desc: snap.desc, hidden: new Set(snap.hidden), userW: new Map(snap.userW),
-        recFit: snap.recFit || 0 });
+        recFit: snap.recFit || 0, fnFit: snap.fnFit || 0 });
       g.cur = { row: Math.min(snap.cur.row, Math.max(g.total - 1, 0)), col: snap.cur.col };
       g.anc = Object.assign({}, g.cur);
       rebuildVis();
@@ -295,7 +297,7 @@
       nameCh = Math.max(nameCh, g.cols[rc].length + 2);
       recCh = Math.max(recCh, g.auto[rc]);
     }
-    g.fnW = Math.round(Math.min(nameCh, NAME_CH) * charW) + PAD;
+    g.fnW = g.fnFit || Math.round(Math.min(nameCh, NAME_CH) * charW) + PAD;
     g.recW = g.recFit || Math.round(recCh * charW) + PAD;
   }
 
@@ -405,11 +407,16 @@
       for (let p = Math.floor(j0 / PAGE); p <= Math.floor(j1 / PAGE); p++) if (!g.pages.has(p)) page(p);
     }
 
-    let h = '<div class="rn hrn fn" style="width:' + gw + 'px">column</div>';
+    // resize handles, as upright: the corner's widens the names gutter
+    // (data-rzn), a record's widens EVERY record (data-rzr = its index,
+    // which the drag needs to keep that record's left edge in place)
+    let h = '<div class="rn hrn fn" style="width:' + gw + 'px">column' +
+      '<span class="rz" data-rzn="1" title="Drag to resize the names · double-click to fit the longest"></span></div>';
     for (let j = j0; j <= j1; j++) {
       const cls = "hc rec" + (g.sel && j >= s0 && j <= s1 ? " in" : "");
       h += '<div class="' + cls + '" data-r="' + j + '" style="left:' + (gw + j * W) + "px;width:" + W +
-        'px" title="Row ' + (j + 1) + ' — click to select it, right-click for more">' + (j + 1) + "</div>";
+        'px" title="Row ' + (j + 1) + ' — click to select it, right-click for more">' + (j + 1) +
+        '<span class="rz" data-rzr="' + j + '" title="Drag to resize every row · double-click to fit"></span></div>';
     }
     if (h !== lastHead) head.innerHTML = lastHead = h;
 
@@ -896,8 +903,10 @@
   });
 
   head.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    if (g.flip && flipResizeStart(e)) return;
     const rz = e.target.closest("[data-rz]");
-    if (!rz || e.button !== 0) return;
+    if (!rz) return;
     e.preventDefault();
     const c = +rz.dataset.rz;
     if (isDouble(e, "rz" + c)) { fit(c); return; } // double-click a border: fit
@@ -909,10 +918,86 @@
   });
   head.addEventListener("pointermove", (e) => {
     if (!resize) return;
+    if (resize.kind) { flipResizeMove(e); return; }
     g.userW.set(resize.rc, clampW(resize.w0 + e.clientX - resize.x0));
     layout();
     render();
   });
+
+  // Transposed resizing. Two borders can be dragged, and a double-click
+  // on either fits it, as upright:
+  //
+  //   column ┃ 1       │ 2       │ 3 …     ┃ = the names gutter's border (data-rzn)
+  //   id     ┃ 1       │ 2       │         │ = a record's border (data-rzr = j)
+  //
+  // Every record shares ONE width (that is what lets drawFlip find the
+  // records in view by division), so dragging record j's border widens all
+  // of them — and records 0…j-1 widen too, which would carry j's border
+  // away from the pointer, j times faster than it moves. The drag scrolls
+  // to compensate: scrollLeft grows by j × the width change, so record j's
+  // left edge stays put on screen and its right border tracks the pointer,
+  // the way an upright column's does.
+  function flipResizeStart(e) {
+    const rn = e.target.closest("[data-rzn]"), rr = e.target.closest("[data-rzr]");
+    if (!rn && !rr) return false;
+    e.preventDefault();
+    if (rn) {
+      if (isDouble(e, "rzn")) { fitNames(); return true; }
+      resize = { kind: "names", x0: e.clientX, w0: g.fnW };
+    } else {
+      const j = +rr.dataset.rzr;
+      if (isDouble(e, "rzr" + j)) { fit(g.cur.col); return true; }
+      resize = { kind: "rec", j, x0: e.clientX, w0: g.recW, sl0: root.scrollLeft };
+    }
+    head.setPointerCapture(e.pointerId);
+    head.classList.add("resizing");
+    return true;
+  }
+
+  //
+  // The scroll cannot always compensate: a result narrower than the pane
+  // has nothing to scroll, and narrowing near either end hits a limit.
+  // Then the records left of j move the border as well, so the drag is
+  // shared among the j+1 widths that carry it, less whatever scroll the
+  // browser did give: with s the scroll it settled on,
+  //
+  //   border on screen = (j+1)·W − s   (plus constants)
+  //   ⇒ W = w0 + (dx + s − sl0) / (j+1)   keeps it under the pointer
+  //
+  // One correction pass is enough: s barely moves between the two.
+  function flipResizeMove(e) {
+    const dx = e.clientX - resize.x0;
+    if (resize.kind === "names") {
+      g.fnFit = clampW(resize.w0 + dx);
+      layout();
+      render();
+      return;
+    }
+    const { j, w0, sl0 } = resize;
+    const apply = (w) => {
+      g.recFit = Math.round(w); // whole px: drawFlip divides by it
+      layout();
+      // grow the scroll area now — draw runs a frame later — or the
+      // browser clamps the compensating scrollLeft to the old width
+      head.style.width = body.style.width = g.fnW + g.total * g.recW + "px";
+      root.scrollLeft = sl0 + j * (g.recW - w0);
+    };
+    const want = clampW(w0 + dx);
+    apply(want);
+    const s = root.scrollLeft;
+    if (Math.abs(s - (sl0 + j * (want - w0))) > 1) apply(clampW(w0 + (dx + s - sl0) / (j + 1)));
+    render();
+  }
+
+  // fitNames widens (or narrows) the names gutter to the longest shown name
+  // plus room for the sort arrow — past the auto cap, as a fit is.
+  function fitNames() {
+    let ch = 0;
+    for (const rc of g.vis) ch = Math.max(ch, g.cols[rc].length + 2);
+    g.fnFit = clampW(Math.round(ch * charW) + PAD);
+    layout();
+    render();
+  }
   const endResize = () => {
     if (!resize) return;
     resize = null;
@@ -923,7 +1008,7 @@
   head.addEventListener("pointerup", endResize);
   head.addEventListener("pointercancel", endResize);
   head.addEventListener("click", (e) => {
-    if (justResized || e.target.closest("[data-rz]")) return;
+    if (justResized || e.target.closest(".rz")) return;
     const rec = e.target.closest("[data-r]");
     if (rec) { // transposed: a record's number selects it whole
       root.focus({ preventScroll: true });
@@ -1001,7 +1086,7 @@
     exportMenu: () => exportMenuAt(...under(document.getElementById("export-btn"))),
     transpose,
     // the view, for tests and for the assistant's context (chat.js)
-    view: () => ({ seq: g.seq, sort: g.sort, desc: g.desc, hidden: [...g.hidden], vis: g.vis.slice(), flip: g.flip,
+    view: () => ({ seq: g.seq, sort: g.sort, desc: g.desc, hidden: [...g.hidden], vis: g.vis.slice(), flip: g.flip, recW: g.recW, fnW: g.fnW,
       cur: Object.assign({}, g.cur), sel: g.sel, bounds: bounds(), widths: g.vis.map(widthOf) }),
   };
   clear();

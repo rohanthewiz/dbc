@@ -40,6 +40,11 @@ type Model struct {
 	mgr *db.Manager
 	st  styles
 
+	// saved is the saved-connections file (connections.toml) the
+	// connection form adds to, edits and removes from (connform.go);
+	// memory-only under Options.NoPersist.
+	saved *config.SavedStore
+
 	w, h int
 	lay  layout
 
@@ -192,7 +197,9 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Model {
 	m.aiAgent, _ = ai.AgentByID(cfg.AIAgent)
 
 	hist := userdata.LoadHistory("")
+	m.saved = config.OpenSaved("")
 	if !opt.NoPersist {
+		m.saved = config.OpenSaved(config.SavedFile())
 		hist = userdata.LoadHistory(userdata.HistoryFile())
 		m.chat.dir = userdata.ChatsDir()
 		m.loadPicks(userdata.PicksFile())
@@ -416,6 +423,8 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 		return m.chatSignInDone(msg)
 	case catsMsg:
 		return m.catsHandle(msg)
+	case connTestMsg:
+		return m.connTestDone(msg)
 	}
 	return nil
 }
@@ -562,6 +571,9 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		if k.String() == "x" {
 			// below the list's cursor row, where a confirm menu stays in view
 			return m.disconnect(m.conns.view.X+2, m.conns.view.Y+m.conns.cur-m.conns.top+1)
+		}
+		if m.connKey(k) { // a/+ add, e edit (connform.go)
+			return nil
 		}
 		return m.listKey(m.conns, k, m.connPicked)
 	case focusTables:

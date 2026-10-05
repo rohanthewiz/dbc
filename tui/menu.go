@@ -365,8 +365,10 @@ func (m *Model) openEditorMenu(x, y int) {
 
 // openConnMenu lists the connections; picking one connects. While the
 // sidebar is on (or dialing) a connection, Disconnect leads: it is the one
-// action on that row the list itself does not offer.
-func (m *Model) openConnMenu(x, y int) {
+// action on that row the list itself does not offer. Last come the
+// connection form's rows (connform.go): edit and remove target, the row
+// right-clicked ("" from the toolbar or off the rows), and add.
+func (m *Model) openConnMenu(x, y int, target string) {
 	var items []menuItem
 	if on := m.connOn(); on != "" {
 		items = append(items, menuItem{label: "⏏ Disconnect " + on, key: "x",
@@ -383,7 +385,7 @@ func (m *Model) openConnMenu(x, y int) {
 		items = append(items, menuItem{label: label, key: c.Driver,
 			act: func(m *Model) tea.Cmd { return m.setActive(name) }})
 	}
-	m.openMenu(x, y, items)
+	m.openMenu(x, y, append(items, m.connMenuItems(target, x, y)...))
 }
 
 // openTableMenu is the tables list's context menu. onRow says the click

@@ -266,7 +266,7 @@ with no database picker.
 | anywhere | click | focuses that pane — the keyboard follows the mouse |
 | toolbar | click | Run, Stop, Explain, Copy ▾, Export, History, Scripts, Tables, Assistant; `● conn ▾` switches connection |
 | connections | click | connects |
-| connections | right-click (or the toolbar's `● conn ▾`) | **Disconnect** the active connection, then the list to connect to |
+| connections | right-click (or the toolbar's `● conn ▾`) | **Disconnect** the active connection, then the list to connect to; on a row, **Edit…** and **Remove…** for a connection added in dbc (below); **Add a connection…** |
 | tables | click `⛁ db ▾` / `◫ schema ▾` | *(Postgres; MySQL has `⛁ db` only)* pick another of the server's databases / another schema, from a list you can type into |
 | tables | click / double-click / right-click | select / preview the first 100 rows / show columns, diagram it, diagram all tables, copy the ERD as Mermaid, insert name, copy name |
 | tables | `c` on the selected table | show its columns: its `information_schema.columns` rows (name, type, nullable, default, length) in the grid, ready to copy |
@@ -320,6 +320,7 @@ dragging.
 | `Ctrl+B` | Fold the sidebar away / bring it back (also the `‹` on the Connections box and the `›` left on the edge) |
 | `F1` · `?` | Every key, in a dialog (`?` outside the editor and the assistant's input) |
 | `x` | *(connections)* Disconnect without picking another connection. If the session may hold a transaction, dbc asks first, because disconnecting rolls it back |
+| `a` / `+` · `e` | *(connections)* Add a connection · edit the one under the cursor (see [Adding connections](#adding-connections-in-the-terminal)) |
 | `d` / `s` | *(tables, Postgres; `d` on MySQL too)* Pick a database / a schema |
 | `Ctrl+G` | *(inside Cats)* Hand the statement to an agent in another pane |
 | `y` / `Y` / `c` | *(results)* Copy the cell or range / the row / open the copy menu |
@@ -342,6 +343,31 @@ scroll sideways rather than wrap, so a click lands exactly where you point.
 
 In terminals that deliver the kitty keyboard protocol, `⌘E`, `⌘P`, and
 `⌘G` are equivalents for export, history, and handing to an agent.
+
+#### Adding connections in the terminal
+
+`a` (or `+`) in the Connections pane, or **Add a connection…** in its
+right-click menu, opens the same form as `dbc web`'s **+** (see
+[the browser workbench](#the-browser-workbench-dbc-web)): name, driver,
+*Enter as* **Fields** (host, port, user, password, database and options —
+or a file for SQLite and bytdb) or the whole **DSN**, TLS for Postgres and
+MySQL, and whether the assistant may see result rows. `Tab`/`Shift+Tab` (or
+`↑`/`↓`) move between the controls, `←`/`→` or `Space` change a choice,
+and a click works everywhere. **Test connection** (`Ctrl+T`) dials, pings
+and closes, and says how long it took or the driver's error, inside the
+form; `Enter` saves, `Esc` cancels. A save adds the connection to
+`~/.config/dbc/connections.toml` and connects to it.
+
+Connections added this way — here or in `dbc web`; they share the file —
+show a muted `✎` before their driver (`· tls` after it when TLS is on). `e`
+on one, or **Edit…** in its right-click menu, opens the form filled in, the
+password withheld as in the browser (leave it empty to keep it; the DSN as
+text starts empty, meaning "keep the saved one"). **Remove…** asks first.
+The connection dbc is on can't be renamed, given a new DSN, driver or TLS,
+or removed — disconnect (`x`) or switch first — though whether the
+assistant may see its rows can change at any time. A rename takes the
+connection's schema picks along. The config file's connections are changed
+in the file: their Edit and Remove rows say so.
 
 ### Completion
 
@@ -1053,7 +1079,9 @@ rolls it back. The connection to the server closes when no other tab is
 on it. A connection a tab is still on can't
 be removed, renamed or given a new DSN until you switch that tab away;
 whether the assistant may see its rows can be changed at any time. The
-file's connections are changed in the file.
+file's connections are changed in the file. The TUI has the same form —
+`a` in its Connections pane (see
+[Adding connections in the terminal](#adding-connections-in-the-terminal)).
 
 **Keys.** The TUI's, bent where a browser keeps the chord for itself:
 

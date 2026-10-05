@@ -41,6 +41,12 @@
 //     browser's tab group does (dbc's own choice: ced opens files, not
 //     siblings). A connection group needs no help: the new tab is on the
 //     same connection.
+//   - Where a new tab lands is never a guess (dbc's own choice): the strip's
+//     + wears the colour of the group Alt+T would put the tab in, and says
+//     so in its tooltip; a right-click on + — or a group's own menu ("New
+//     tab in <group>") — opens the tab in any group, not only the one the
+//     tab on screen belongs to. A tab opened into a group starts on that
+//     group's connection (connFor), so it lands where it was asked to.
 //
 // The model and its menus live here; app.js owns the strip and hands this
 // module what it needs (create's host). Every mutation calls host.changed,
@@ -62,6 +68,7 @@
   //   active()          the tab on screen
   //   under(conn, base) conn is base, or one of base's other databases
   //   activate(t)       show t
+//   newTab(g)         open a query tab in group g (connFor's connection)
   //   close(t)          close t at once (no stateful-session question)
   //   changed()         a group changed: save the groups, redraw the strip
   //   log(level, text)
@@ -86,6 +93,42 @@
     }
 
     const members = (g) => host.tabs().filter((t) => groupOf(t) === g);
+
+    // landing is the group a plain new tab (Alt+T, a click on +) joins when
+    // it is opened from fromTab onto conn: fromTab's ad-hoc group (joinNew),
+    // else whichever connection group claims conn. The probe has no key —
+    // the new tab's key is fresh, so no group's exclusion can name it, even
+    // when fromTab itself was taken out of that connection group.
+    function landing(fromTab, conn) {
+      const g = groupOf(fromTab);
+      if (g && !isConn(g)) return g;
+      return conn ? groupOf({ key: "", conn }) : null;
+    }
+
+    // connFor is the connection a tab opened INTO g starts on: a connection
+    // group's own; for an ad-hoc group, the tab on screen's when it is a
+    // member, else its last member's (the strip's newest place the group
+    // was working). fallback covers an ad-hoc group with no tab here, which
+    // dropEmpty normally rules out.
+    function connFor(g, fallback) {
+      if (isConn(g)) return g.conn;
+      const ms = members(g);
+      if (ms.includes(host.active())) return host.active().conn || fallback;
+      return (ms.length && ms[ms.length - 1].conn) || fallback;
+    }
+
+    // ordered is the groups in strip order — chip by chip, left to right —
+    // then any with no tab here (a connection group waiting for its first),
+    // so a menu listing them reads like the strip.
+    function ordered() {
+      const out = [];
+      for (const t of host.tabs()) {
+        const g = groupOf(t);
+        if (g && !out.includes(g)) out.push(g);
+      }
+      for (const g of groups) if (!out.includes(g)) out.push(g);
+      return out;
+    }
 
     // arrange returns tabs reordered so each group's members sit together at
     // its first member's place; ungrouped tabs keep their places relative
@@ -294,6 +337,7 @@
       const ms = members(g);
       const items = [
         { head: g.name + " — " + describe(g) },
+        { label: "New tab in " + g.name, act: () => host.newTab(g) },
         { label: g.collapsed ? "Expand group" : "Collapse group", act: () => toggle(g) },
         { label: "Rename group…", act: () => promptName({ g }) },
         isConn(g) ? { label: "Make ad-hoc group", act: () => makeAdhoc(g) }
@@ -440,7 +484,11 @@
 
     return {
       groupOf, arrange, forgetTab, chip, hidden, describe, renameConn, encode, restore,
-      tabItems, openGroupMenu, toggle,
+      tabItems, openGroupMenu, toggle, landing, connFor, ordered,
+      // place puts a tab opened into g there by add's rules: out of any
+      // ad-hoc group, and let past a deeper connection group that would
+      // otherwise claim it
+      place: (t, g) => add(t, g),
       // the group a new tab opened from t should join: t's ad-hoc group
       joinNew(fromTab, t) {
         const g = groupOf(fromTab);

@@ -970,6 +970,34 @@ func tabGroups(t *testing.T, _ *env, p *rod.Page) {
 	menuPick(t, p, "New connection group: lite2")
 	name("lite2")
 	strip("[wip],Query 1,Query 2,[lite2],Renamed tab")
+
+	// the + says where a new tab lands: in the colour and name of the
+	// group Alt+T would put it in — wip, the tab on screen's
+	plusIn := func(group string) {
+		t.Helper()
+		waitFor(t, p, "+ marked for "+group, `(g) => { const b = document.querySelector("#qnew");
+		  return b.classList.contains("grp") && b.title.includes("in group " + g); }`, group)
+	}
+	plusIn("wip")
+	// a right-click on + opens the tab in another group, on its connection
+	at("#qnew", proto.InputMouseButtonRight)
+	p.MustElementR(".menu .mitem .ml", `^lite2 `).MustClick()
+	strip("[wip],Query 1,Query 2,[lite2],Renamed tab,Query 3")
+	waitConnected(t, p, "lite2")
+	plusIn("lite2")
+	// and a group's own menu does the same — into the leftmost group, from
+	// a tab in the other one
+	at(`#qtabs .qchip[data-group="wip"]`, proto.InputMouseButtonRight)
+	menuPick(t, p, "New tab in wip")
+	strip("[wip],Query 1,Query 2,Query 4,[lite2],Renamed tab,Query 3")
+	waitConnected(t, p, "lite")
+	plusIn("wip")
+	// back to where the rest starts: the two gone, Query 2 on screen
+	at(tabSel("Query 3")+" [data-close]", proto.InputMouseButtonLeft)
+	at(tabSel("Query 4")+" [data-close]", proto.InputMouseButtonLeft)
+	strip("[wip],Query 1,Query 2,[lite2],Renamed tab")
+	at(tabSel("Query 2"), proto.InputMouseButtonLeft)
+	waitConnected(t, p, "lite")
 	at(tabSel("Query 2"), proto.InputMouseButtonRight)
 	menuPick(t, p, "Remove from group wip")
 	waitConnected(t, p, "lite")

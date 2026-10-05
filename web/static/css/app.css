@@ -776,6 +776,9 @@ a.btnlink:hover { border-color: var(--accent); }
 /* folded: the chip alone stands for the group, so it reads as a pill */
 .qchip.folded { outline: 1px dashed var(--gc); outline-offset: 2px; }
 .qtab.grp { box-shadow: inset 0 -2px 0 var(--gc); }
+/* the + in the colour of the group a new tab joins (app.js markNew) */
+.qnew.grp, .qnew.grp:hover { color: var(--gc); box-shadow: inset 0 -2px 0 var(--gc); }
+.qnew.grp:hover { filter: brightness(1.2); }
 .gprompt { padding: 10px 14px; width: 380px; max-width: 100%; }
 .gprompt .hint { margin: 0 0 8px; }
 .gprompt .gname { width: 100%; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; }

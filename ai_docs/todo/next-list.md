@@ -152,6 +152,10 @@ ten session docs in `ai_docs/claude_sessions/`
   Tab groups in the TUI. dbc web has them (`tabgroups.js`: ad-hoc and
   connection groups, collapse to a chip); the TUI's strip has no groups.
   Only worth it once someone keeps more tabs than the strip shows.
+  Updated `2026-1005-1533-new-tab-group-target`: the web strip's + now
+  shows the group a new tab joins (its colour, its tooltip), and a
+  right-click on + or a group's "New tab in <group>" opens a tab in any
+  group, on that group's connection. A TUI port should carry both.
 - **N-117** · raised `2026-1005-1450-tui-web-parity` · value low
   A light/dark switch in the TUI. dbc web has one; the TUI takes the cats
   host's palette or its own dark one (`theme.Light()` exists, used for plan

@@ -1953,6 +1953,8 @@
   // sit together and are underlined in its colour; the chip folds them
   // (click) and opens the group's menu (right-click):
   //   [prod][Query 1 ×][Query 3 ×] [wip +2][Query 4 ×] [+]
+  // The + is drawn in the colour of the group a new tab would join, and a
+  // right-click on it opens the tab in any group instead.
   // renaming is the tab whose title is being edited. The strip is not
   // redrawn under it — a double-click on a background tab starts the rename
   // while that tab's activation is still loading, and its redraw would
@@ -1968,6 +1970,7 @@
     active: () => state.tab,
     under: connUnder,
     activate: (t) => activate(t),
+    newTab: (g) => newTab(g),
     close: (t) => reallyClose(t),
     changed: () => { saveGroups(); renderTabs(); },
     log,
@@ -2016,6 +2019,19 @@
       els.qtabs.append(b);
     });
     els.qtabs.append(plus);
+    markNew(plus);
+  }
+
+  // markNew tells, on the + itself, where Alt+T or a click puts the new
+  // tab: the button takes the landing group's colour (and underline, as its
+  // tabs have) and its tooltip names the group and the connection. With
+  // several groups on the strip, a plain + read as "somewhere".
+  function markNew(plus) {
+    const g = groups.landing(state.tab, state.active);
+    plus.className = "qnew" + (g ? " grp g" + groups.color(g) : "");
+    plus.title = "New query tab" + (g ? " in group " + g.name : "") +
+      " on " + (state.active || "the default connection") + " (Alt+T)" +
+      (groups.count() ? " · right-click picks another group" : "");
   }
 
   // the chip: a click folds or unfolds its group; a right-click opens the
@@ -2048,6 +2064,7 @@
     if (b && e.button === 1) closeTab(tabs.find((x) => x.key === b.dataset.key));
   });
   els.qtabs.addEventListener("contextmenu", (e) => {
+    if (e.target.closest("#qnew")) { e.preventDefault(); openNewMenu(e.clientX, e.clientY); return; }
     const g = chipGroup(e);
     if (g) { e.preventDefault(); groups.openGroupMenu(g, e.clientX, e.clientY); return; }
     const b = e.target.closest(".qtab");
@@ -2068,24 +2085,49 @@
     if (!t.cdb) { dbc.menu.open(x, y, items()); return; }
     refreshNames(t.cdb).finally(() => dbc.menu.open(x, y, items()));
   });
-  $("qnew").addEventListener("click", newTab);
+  $("qnew").addEventListener("click", () => newTab());
+
+  // openNewMenu is the + button's right-click menu: a new tab in any group,
+  // listed as the strip shows them (left to right), the one a plain click
+  // would pick marked ●; then the plain click itself, beside the tab on
+  // screen, for when no group is wanted to steer it.
+  function openNewMenu(x, y) {
+    const land = groups.landing(state.tab, state.active);
+    const items = [{ head: "new query tab in" }];
+    for (const g of groups.ordered()) {
+      items.push({ label: (g === land ? "● " : "") + g.name + "  · " + groups.describe(g), act: () => newTab(g) });
+    }
+    if (!groups.count()) items.push({ label: "no groups yet — right-click a tab → Add to group…", why: "nothing to pick" });
+    items.push({ head: "" }, { label: "Beside " + state.tab.title + (land ? " (" + land.name + ")" : ""), key: "Alt+T", act: () => newTab() });
+    dbc.menu.open(x, y, items);
+  }
 
   // newKey mints a saved tab's key: it sorts after the saved ones. Unique
   // enough — one person, one click at a time.
   const newKey = () => Date.now().toString(36);
 
-  // newTab opens a query tab on the active tab's connection. Its title is
-  // the lowest "Query N" not in use; its first save claims it for this
-  // window.
-  function newTab() {
+  // newTab opens a query tab on the active tab's connection — or, given a
+  // group g (the group menu, the + button's right-click), in g, on g's
+  // connection (tabgroups.js connFor). Its title is the lowest "Query N"
+  // not in use; its first save claims it for this window.
+  function newTab(g) {
     const used = new Set(tabs.map((t) => t.title));
     let n = 1;
     while (used.has("Query " + n)) n++;
-    const t = { key: newKey(), title: "Query " + n, conn: state.active, buffer: "", ws: "" };
-    tabs.splice(tabs.indexOf(state.tab) + 1, 0, t);
-    // opened from a tab in an ad-hoc group, it joins that group (a
-    // connection group takes it by its connection anyway)
-    if (groups.joinNew(state.tab, t)) saveGroups();
+    const t = { key: newKey(), title: "Query " + n, conn: g ? groups.connFor(g, state.active) : state.active, buffer: "", ws: "" };
+    // Beside the tab on screen; into a group, after its last tab — where
+    // the redraw's arrange would gather it anyway, and a connection group
+    // with no tab here gets it beside the tab on screen.
+    const ms = g ? tabs.filter((x) => groups.groupOf(x) === g) : [];
+    tabs.splice(ms.length ? tabs.indexOf(ms[ms.length - 1]) + 1 : tabs.indexOf(state.tab) + 1, 0, t);
+    if (g) {
+      groups.place(t, g);
+      saveGroups();
+    } else if (groups.joinNew(state.tab, t)) {
+      // opened from a tab in an ad-hoc group, it joins that group (a
+      // connection group takes it by its connection anyway)
+      saveGroups();
+    }
     saveOrder();
     saveTab(t);
     activate(t);
@@ -2206,6 +2248,7 @@
       ["Alt+N · Alt+C", "new console · next console of the tab's database (right-click a tab for the list)"],
       ["double-click a tab", "rename it"],
       ["right-click a tab → Add to group…", "group tabs: by hand, or every tab on a connection"],
+      ["right-click +", "new tab in a group of your choice (+ is coloured for the group Alt+T joins)"],
       ["click · right-click a group's chip", "collapse or expand it · its menu (rename, ungroup, its tabs)"],
     ]],
     ["Results grid", [

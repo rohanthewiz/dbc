@@ -175,6 +175,11 @@ func TestGridCopyHTMLHasTheRichFlavor(t *testing.T) {
 	if !strings.Contains(out.HTML, "<table style=") || strings.Count(out.HTML, "<tr>") != 9 {
 		t.Errorf("html = %.200s", out.HTML)
 	}
+	// the plain flavor — what pastes when the rich one is lost — is the
+	// aligned table, not the markup
+	if strings.Contains(out.Text, "<td") || !strings.HasPrefix(out.Text, "id") || !strings.Contains(out.Text, "name") {
+		t.Errorf("text = %.200s", out.Text)
+	}
 	if out.What != "the result (8 rows) as a table" {
 		t.Errorf("what = %q", out.What)
 	}

@@ -136,8 +136,11 @@
   // the caller says whether this copy is HTML.
   //
   // Fallbacks, in order: writeText (no ClipboardItem, or the rich write was
-  // refused), then a hidden textarea and execCommand("copy") for a page
-  // the browser does not treat as a secure context.
+  // refused), then execCommand("copy") for a page the browser does not
+  // treat as a secure context — dbc web reached over plain http by a LAN
+  // address, where navigator.clipboard does not exist at all. That last
+  // one still carries the HTML flavor (see legacyCopy), so a table copy
+  // pastes as a table there too.
   async function copy(content, isHTML) {
     const p = Promise.resolve(content);
     if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
@@ -158,19 +161,37 @@
         return { rich: false };
       } catch (_) { /* fall through */ }
     }
-    if (legacyCopy(c.text)) return { rich: false };
+    const legacy = legacyCopy(c.text, isHTML ? c.html : "");
+    if (legacy.ok) return { rich: legacy.rich };
     throw new Error("the browser refused the clipboard");
   }
 
-  function legacyCopy(text) {
+  // legacyCopy is execCommand("copy") on a hidden textarea. The textarea
+  // gives the command a selection to act on (no selection, no copy event in
+  // some browsers); the one-shot copy listener then REPLACES what the
+  // browser would have copied with our flavors via clipboardData.setData —
+  // the only way this old API sets text/html. Without html it leaves the
+  // event alone and the textarea's text is what lands, as before. Returns
+  // {ok, rich}: whether anything was copied, and whether the HTML went too.
+  function legacyCopy(text, html) {
     const ta = el("textarea", { class: "offscreen", "aria-hidden": "true" });
     ta.value = text;
     document.body.append(ta);
     ta.select();
+    let rich = false;
+    const onCopy = (e) => {
+      if (!html || !e.clipboardData) return;
+      rich = true;
+      e.clipboardData.setData("text/plain", text);
+      e.clipboardData.setData("text/html", html);
+      e.preventDefault(); // keep the browser from overwriting our flavors
+    };
+    document.addEventListener("copy", onCopy, true);
     let ok = false;
     try { ok = document.execCommand("copy"); } catch (_) { ok = false; }
+    document.removeEventListener("copy", onCopy, true);
     ta.remove();
-    return ok;
+    return { ok, rich: ok && rich };
   }
 
   // copyText copies plain text and logs it: "copied <what>".

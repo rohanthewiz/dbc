@@ -22,8 +22,9 @@ import (
 //
 // When nothing reaches the local clipboard (SSH, a container), the text goes
 // out through the terminal with OSC 52 instead, which Bubble Tea emits for
-// us. That fallback is plain text by protocol, so an HTML copy arrives as its
-// markup, and the log line says that too.
+// us. That fallback is plain text by protocol, so a table copy arrives as its
+// plain flavor — the aligned text table, never the HTML markup (see
+// export.ClipContent) — and the log line says that too.
 
 // copyFormat is what a copy renders as.
 type copyFormat int
@@ -176,7 +177,7 @@ func (m *Model) clipDone(msg clipDoneMsg) tea.Cmd {
 		case msg.html && msg.rich:
 			how = " — paste into Teams, Outlook or a doc for a formatted table"
 		case msg.html:
-			how = " — as plain text (no HTML clipboard on this system)"
+			how = " — as aligned text (no HTML clipboard on this system)"
 		}
 		m.logf(logOk, "copied %s%s", msg.what, how)
 		return nil
@@ -187,7 +188,7 @@ func (m *Model) clipDone(msg clipDoneMsg) tea.Cmd {
 	}
 	note := ""
 	if msg.html {
-		note = " (HTML source: a formatted table needs a local clipboard)"
+		note = " (as aligned text: a formatted table needs a local clipboard)"
 	}
 	m.logf(logOk, "copied %s via the terminal%s", msg.what, note)
 	return tea.SetClipboard(msg.text)

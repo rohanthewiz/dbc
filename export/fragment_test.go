@@ -100,8 +100,10 @@ func TestClipContent(t *testing.T) {
 	if html.HTML == "" || html.HTML != HTMLFragment(r) {
 		t.Error("an HTML copy must carry the fragment as its rich flavor")
 	}
-	if html.Text != html.HTML {
-		t.Error("an HTML copy's plain flavor is its source, for editors")
+	// the plain flavor is what shows when the rich one is lost: a readable
+	// table, never the markup
+	if html.Text != TextTable(r) || strings.Contains(html.Text, "<td") {
+		t.Errorf("an HTML copy's plain flavor should be the aligned table, got:\n%s", html.Text)
 	}
 	for _, f := range []Format{CSV, Markdown, TSV, JSON, Text} {
 		c, err := ClipContent(r, f)

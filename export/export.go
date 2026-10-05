@@ -272,16 +272,28 @@ func ToClipboard(r *model.Result, f Format) error {
 // the HTML flavor is the inline-styled fragment (HTMLFragment), not the
 // full-page export with its <style> block that paste targets strip.
 //
-// The plain-text flavor of an HTML copy is the same fragment's source. A
-// developer pasting into an editor asked for HTML and gets HTML; everything
-// that understands the rich flavor never looks at it.
+// The plain-text flavor of an HTML copy is the aligned text table (TextTable),
+// NOT the fragment's source. The plain flavor is what the user sees whenever
+// the rich one does not make it — a paste target that takes text, the OSC 52
+// fallback over SSH, a system with no rich writer, dbc web on a plain-http
+// page — and in every one of those the user asked for a TABLE: a screenful of
+// <td style="…"> tags is the one outcome that is never useful. An aligned
+// table still reads as a table in a monospace target and stays legible in a
+// proportional one. (The fragment used to be the plain flavor too, "for
+// editors"; that turned every lost rich flavor into a wall of markup. The
+// HTML source is still one step away: Export → HTML page.)
+//
+//	clipboard entry for one "Table for Teams" copy
+//	┌────────────────────────┬──────────────────────────────────┐
+//	│ text/html  (rich)      │ HTMLFragment: inline-styled table │ ← Teams, Outlook, Docs
+//	│ text/plain (fallback)  │ TextTable: aligned columns        │ ← terminals, editors, OSC 52
+//	└────────────────────────┴──────────────────────────────────┘
 func ClipContent(r *model.Result, f Format) (clip.Content, error) {
 	if r == nil {
 		return clip.Content{}, serr.New("no result to copy")
 	}
 	if f == HTML {
-		frag := HTMLFragment(r)
-		return clip.Content{Text: frag, HTML: frag}, nil
+		return clip.Content{Text: TextTable(r), HTML: HTMLFragment(r)}, nil
 	}
 	out, err := Render(r, f)
 	if err != nil {

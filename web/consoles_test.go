@@ -1,11 +1,13 @@
 package web
 
 import (
+	"database/sql"
 	"encoding/json"
 	"path/filepath"
 	"slices"
 	"testing"
 
+	bytdbdrv "github.com/rohanthewiz/bytdb/stdlib"
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/userdata"
 )
@@ -261,5 +263,44 @@ func TestStoreTabConsole(t *testing.T) {
 	}
 	if tabs, _ = st.Tabs(); tabs[0].Console != "" {
 		t.Errorf("a deleted tab's console came back: %q", tabs[0].Console)
+	}
+}
+
+// A store from before tabs.console — the console names in a tab_consoles
+// table of their own — opens with the names moved onto their tabs and the
+// old table gone; a name whose tab was deleted goes with it.
+func TestStoreMigratesTabConsoles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "web.bytdb")
+	old, err := sql.Open(bytdbdrv.DriverName, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE tabs (id TEXT PRIMARY KEY, title TEXT NOT NULL, conn TEXT NOT NULL,
+			buffer TEXT NOT NULL, updated TIMESTAMPTZ NOT NULL)`,
+		`CREATE TABLE tab_consoles (id TEXT PRIMARY KEY, console TEXT NOT NULL)`,
+		`INSERT INTO tabs VALUES ('a', 'A', 'c', 'b', now()), ('b', 'B', 'c', 'b', now())`,
+		`INSERT INTO tab_consoles VALUES ('a', 'reports'), ('gone', 'stale')`,
+	} {
+		if _, err = old.Exec(q); err != nil {
+			_ = old.Close()
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	_ = old.Close()
+
+	st, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	tabs, err := st.Tabs()
+	if err != nil || len(tabs) != 2 || tabs[0].Console != "reports" || tabs[1].Console != "" {
+		t.Fatalf("tabs = %+v, %v", tabs, err)
+	}
+	var n int
+	if err = st.db.QueryRow(`SELECT count(*) FROM information_schema.tables
+		WHERE table_name = 'tab_consoles'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("tab_consoles still there: count %d, %v", n, err)
 	}
 }

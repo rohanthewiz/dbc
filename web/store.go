@@ -104,13 +104,13 @@ var storeSchema = []string{
 		key   TEXT PRIMARY KEY,
 		value TEXT NOT NULL
 	)`,
-	// a tab's console name: a table of its own rather than a column of
-	// tabs, because bytdb's ALTER TABLE has no IF NOT EXISTS to keep the
-	// schema's create-on-every-open idempotent
-	`CREATE TABLE IF NOT EXISTS tab_consoles (
-		id      TEXT PRIMARY KEY,
-		console TEXT NOT NULL
-	)`,
+	// a tab's console name (Tab.Console). A later column, so an ALTER;
+	// bytdb v0.21.0+ takes ADD COLUMN IF NOT EXISTS, which keeps it
+	// idempotent with the rest. The DEFAULT backfills the rows a store
+	// from before the column already has, which NOT NULL alone would
+	// refuse. Before v0.21.0 the name had a table of its own,
+	// tab_consoles — see migrateTabConsoles.
+	`ALTER TABLE tabs ADD COLUMN IF NOT EXISTS console TEXT NOT NULL DEFAULT ''`,
 	`CREATE TABLE IF NOT EXISTS conns (
 		name    TEXT PRIMARY KEY,
 		driver  TEXT NOT NULL,
@@ -154,8 +154,73 @@ func OpenStore(path string) (*Store, error) {
 			return st, serr.Wrap(err, "path", path, "op", "schema")
 		}
 	}
+	if err = migrateTabConsoles(ctx, dbh); err != nil {
+		_ = dbh.Close()
+		return st, serr.Wrap(err, "path", path)
+	}
 	st.db = dbh
 	return st, nil
+}
+
+// migrateTabConsoles folds the tab_consoles table, where a store from before
+// tabs.console kept each tab's console name, into that column, then drops
+// it. A store that never had the table, or has already been migrated, costs
+// one catalog read.
+//
+// bytdb runs no DDL inside a transaction, so this is two steps: the copy, as
+// one transaction, then the DROP. A crash between them leaves the table for
+// the next open to copy again, which is harmless: the values are the same
+// ones. An older dbc web run against the store in the meantime recreates the
+// table (its schema has it) and writes the names there, not to the column it
+// does not know; copying them over the column is then the right thing too,
+// since they are the newer ones.
+func migrateTabConsoles(ctx context.Context, dbh *sql.DB) error {
+	// information_schema rather than probing with a SELECT, so "no such
+	// table" never has to be told apart from a real failure by its text
+	var n int
+	if err := dbh.QueryRowContext(ctx, `SELECT count(*) FROM information_schema.tables
+		WHERE table_name = 'tab_consoles'`).Scan(&n); err != nil {
+		return serr.Wrap(err, "op", "find tab_consoles")
+	}
+	if n == 0 {
+		return nil
+	}
+	tx, err := dbh.BeginTx(ctx, nil)
+	if err != nil {
+		return serr.Wrap(err, "op", "migrate tab consoles")
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op after Commit
+	// Read every row before the first UPDATE: the store runs on one
+	// connection (see OpenStore), so open rows and a write cannot overlap.
+	rows, err := tx.QueryContext(ctx, `SELECT id, console FROM tab_consoles`)
+	if err != nil {
+		return serr.Wrap(err, "op", "read tab_consoles")
+	}
+	byID := map[string]string{}
+	for rows.Next() {
+		var id, c string
+		if err = rows.Scan(&id, &c); err != nil {
+			_ = rows.Close()
+			return serr.Wrap(err, "op", "scan tab_consoles")
+		}
+		byID[id] = c
+	}
+	_ = rows.Close()
+	if err = rows.Err(); err != nil {
+		return serr.Wrap(err, "op", "read tab_consoles")
+	}
+	// A row whose tab is gone (an older dbc deleted the two separately)
+	// matches nothing and drops with the table.
+	for id, c := range byID {
+		if _, err = tx.ExecContext(ctx, `UPDATE tabs SET console = $1 WHERE id = $2`, c, id); err != nil {
+			return serr.Wrap(err, "op", "copy tab console", "tab", id)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return serr.Wrap(err, "op", "migrate tab consoles")
+	}
+	_, err = dbh.ExecContext(ctx, `DROP TABLE IF EXISTS tab_consoles`)
+	return wrap(err, "op", "drop tab_consoles")
 }
 
 // Persistent reports whether the store writes to disk.
@@ -196,7 +261,8 @@ func (s *Store) Tabs() ([]Tab, error) {
 	}
 	ctx, cancel := opCtx()
 	defer cancel()
-	rows, err := s.db.QueryContext(ctx, `SELECT id, title, conn, buffer, updated FROM tabs ORDER BY id`)
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, title, conn, buffer, updated, console FROM tabs ORDER BY id`)
 	if err != nil {
 		return nil, serr.Wrap(err, "op", "list tabs")
 	}
@@ -204,36 +270,12 @@ func (s *Store) Tabs() ([]Tab, error) {
 	var out []Tab
 	for rows.Next() {
 		var t Tab
-		if err = rows.Scan(&t.ID, &t.Title, &t.Conn, &t.Buffer, &t.Updated); err != nil {
+		if err = rows.Scan(&t.ID, &t.Title, &t.Conn, &t.Buffer, &t.Updated, &t.Console); err != nil {
 			return nil, serr.Wrap(err, "op", "scan tab")
 		}
 		out = append(out, t)
 	}
-	if err = rows.Err(); err != nil {
-		return nil, serr.Wrap(err, "op", "list tabs")
-	}
-	return out, s.tabConsoles(ctx, out)
-}
-
-// tabConsoles fills in each tab's Console from the tab_consoles table.
-func (s *Store) tabConsoles(ctx context.Context, tabs []Tab) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, console FROM tab_consoles`)
-	if err != nil {
-		return serr.Wrap(err, "op", "list tab consoles")
-	}
-	defer rows.Close()
-	byID := map[string]string{}
-	for rows.Next() {
-		var id, c string
-		if err = rows.Scan(&id, &c); err != nil {
-			return serr.Wrap(err, "op", "scan tab console")
-		}
-		byID[id] = c
-	}
-	for i := range tabs {
-		tabs[i].Console = byID[tabs[i].ID]
-	}
-	return wrap(rows.Err(), "op", "list tab consoles")
+	return out, wrap(rows.Err(), "op", "list tabs")
 }
 
 // SaveTab writes a tab, replacing any saved under the same id.
@@ -249,25 +291,16 @@ func (s *Store) SaveTab(t Tab) error {
 	}
 	ctx, cancel := opCtx()
 	defer cancel()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return serr.Wrap(err, "op", "save tab", "tab", t.ID)
-	}
-	defer func() { _ = tx.Rollback() }() // a no-op after Commit
-	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO tabs (id, title, conn, buffer, updated) VALUES ($1, $2, $3, $4, $5)
+	// one row now (see storeSchema), so one statement: the transaction the
+	// two-table write needed is gone with tab_consoles
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO tabs (id, title, conn, buffer, updated, console) VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (id) DO UPDATE SET
 			title = EXCLUDED.title, conn = EXCLUDED.conn,
-			buffer = EXCLUDED.buffer, updated = EXCLUDED.updated`,
-		t.ID, t.Title, t.Conn, t.Buffer, t.Updated); err != nil {
-		return serr.Wrap(err, "op", "save tab", "tab", t.ID)
-	}
-	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO tab_consoles (id, console) VALUES ($1, $2)
-		ON CONFLICT (id) DO UPDATE SET console = EXCLUDED.console`, t.ID, t.Console); err != nil {
-		return serr.Wrap(err, "op", "save tab console", "tab", t.ID)
-	}
-	return wrap(tx.Commit(), "op", "save tab", "tab", t.ID)
+			buffer = EXCLUDED.buffer, updated = EXCLUDED.updated,
+			console = EXCLUDED.console`,
+		t.ID, t.Title, t.Conn, t.Buffer, t.Updated, t.Console)
+	return wrap(err, "op", "save tab", "tab", t.ID)
 }
 
 // DeleteTab forgets a saved tab. A missing one is success: the caller
@@ -281,11 +314,8 @@ func (s *Store) DeleteTab(id string) error {
 	}
 	ctx, cancel := opCtx()
 	defer cancel()
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM tabs WHERE id = $1`, id); err != nil {
-		return serr.Wrap(err, "op", "delete tab", "tab", id)
-	}
-	_, err := s.db.ExecContext(ctx, `DELETE FROM tab_consoles WHERE id = $1`, id)
-	return wrap(err, "op", "delete tab console", "tab", id)
+	_, err := s.db.ExecContext(ctx, `DELETE FROM tabs WHERE id = $1`, id)
+	return wrap(err, "op", "delete tab", "tab", id)
 }
 
 // Layout returns every saved layout value (pane sizes and the like), keyed

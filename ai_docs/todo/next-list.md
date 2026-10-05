@@ -107,14 +107,6 @@ ten session docs in `ai_docs/claude_sessions/`
   `consoles/<host>_<port>/<database>/`, and the TUI and a browser tab
   editing one console at once (the TUI writes only a console it changed,
   last writer wins then; the web side is revision-checked).
-- **N-105** · raised `2026-1005-1109-completion-big-catalog` · value medium
-  Scope the ERD's schema read on a catalog too big to read whole.
-  `Workspace.Diagram` still calls `Manager.Schema` (every schema), which
-  now skips partitions' columns and keys but can still fail with
-  `db.ErrCatalogTooBig` on a database big for other reasons (many schemas,
-  wide tables). Completion falls back to `Manager.SchemaIn` (the sidebar's
-  schema + search_path); a diagram could do the same with `sel.Schema` plus
-  the schemas of the tables `sel` names.
 - **N-106** · raised `2026-1005-1109-completion-big-catalog` · value medium
   Confirm completion on the real ProdDr connection, where it failed with
   "the catalog is too big to read whole" (rows 250000). Note whether the
@@ -186,6 +178,15 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-105** · raised `2026-1005-1109-completion-big-catalog` · value medium
+  Scope the ERD's schema read on a catalog too big to read whole.
+  `Workspace.Diagram` still calls `Manager.Schema` (every schema), which
+  now skips partitions' columns and keys but can still fail with
+  `db.ErrCatalogTooBig` on a database big for other reasons (many schemas,
+  wide tables). Completion falls back to `Manager.SchemaIn` (the sidebar's
+  schema + search_path); a diagram could do the same with `sel.Schema` plus
+  the schemas of the tables `sel` names.
+  closed 2026-10-05, `2026-1005-1135-erd-big-catalog-scoped`: `Workspace.Diagram` falls back to `Manager.SchemaIn` on `ErrCatalogTooBig` (Postgres) over `diagramScope` — the sidebar schema alone for a diagram of everything, else focus + search path + the schemas of `schema.table` names — and marks the connection in `complScoped`, now shared with completion. Tests: `TestDiagramScope`, `TestDiagramRememberedTooBig`, live `TestLiveWorkspaceCompletionBigCatalog` (diagram past the bound).
 - **N-103** · raised `2026-1005-1035-sql-consoles-per-database` · value low
   Remember the caret and scroll per console across switches. The TUI's
   `SetText` puts the caret at the top on every swap, and `dbc web` drops a

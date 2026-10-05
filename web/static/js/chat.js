@@ -196,7 +196,7 @@
     const cp = el("button", { type: "button", class: "linkish" }, "⧉ copy");
     cp.addEventListener("click", () => dbc.clip.copyText(code, "the code block"));
     head.append(cp);
-    return el("div", "cblock", head, el("pre", null, code));
+    return el("div", "cblock", head, el("pre", null, dbc.hl(lang, code)));
   }
 
   // A streamed chunk redraws its message once per frame, not per chunk.

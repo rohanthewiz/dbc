@@ -49,6 +49,7 @@ func TestWeb(t *testing.T) {
 		{"sidebar fold keys", sidebarFoldKeys},
 		{"other tabs' connections", otherTabsConns},
 		{"consoles per database", consolesPerDatabase},
+		{"code blocks highlighted", codeHighlight},
 	}
 	for _, s := range steps {
 		ok := t.Run(s.name, func(t *testing.T) {
@@ -640,5 +641,33 @@ func consolesPerDatabase(t *testing.T, e *env, p *rod.Page) {
 	waitFor(t, p, "the conflict logged", `() => document.getElementById("log").textContent.includes("was changed elsewhere")`)
 	if b, _ := os.ReadFile(liteFile); string(b) != "SELECT 'from the tui'" {
 		t.Fatalf("the page overwrote the TUI's save: %q", b)
+	}
+}
+
+// codeHighlight: an answer's code block is drawn by hl.js in the editor's
+// colors. The block is built with chat.js's own path (dbc.hl inside a
+// .cblock) in the live page, so the check covers the script being loaded
+// and the stylesheet's rules, not just the lexer.
+func codeHighlight(t *testing.T, _ *env, p *rod.Page) {
+	got := evalStr(t, p, `() => {
+	  const pre = dbc.el("pre", null, dbc.hl("go", "func f() { return \"s\" } // c"));
+	  const box = dbc.el("div", "cblock", pre);
+	  document.body.append(box);
+	  const css = (sel) => getComputedStyle(box.querySelector(sel));
+	  const v = (n) => getComputedStyle(document.documentElement).getPropertyValue("--" + n).trim();
+	  const rgb = (hex) => { const d = document.createElement("i"); d.style.color = hex; document.body.append(d);
+	    const c = getComputedStyle(d).color; d.remove(); return c; };
+	  const out = [
+	    [...box.querySelectorAll(".hl-k")].map((x) => x.textContent).join(","),
+	    css(".hl-k").color === rgb(v("accent")),
+	    css(".hl-s").color === rgb(v("warn")),
+	    css(".hl-c").fontStyle,
+	    pre.textContent,
+	  ].join("|");
+	  box.remove();
+	  return out;
+	}`)
+	if want := `func,return|true|true|italic|func f() { return "s" } // c`; got != want {
+		t.Fatalf("highlighted block = %q, want %q", got, want)
 	}
 }

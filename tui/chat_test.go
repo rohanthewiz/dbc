@@ -10,6 +10,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/ai"
 	"github.com/rohanthewiz/dbc/ai/aitest"
+	"github.com/rohanthewiz/dbc/codehl"
 	"github.com/rohanthewiz/dbc/userdata"
 )
 
@@ -320,6 +321,51 @@ func TestAgentMarkdownRendering(t *testing.T) {
 	}
 	if strings.Contains(joined, "**") || strings.Contains(joined, "`") || strings.Contains(joined, "```") {
 		t.Errorf("markers should be consumed:\n%s", joined)
+	}
+}
+
+// A fenced block is drawn in the editor's syntax colors on the code
+// background, even where a multi-line construct (a Go raw string) and a
+// wrapped row split it, and an unknown language stays plain.
+func TestAgentCodeIsHighlighted(t *testing.T) {
+	p := newChatPane()
+	st := newStyles(themeDefault())
+	rows := p.agentRows(st, "```go\nfunc f() string { return `a\nb` } // done\n```\n```text\nfunc\n```", 30)
+	styleOf := func(text string) (Style, bool) {
+		for _, r := range rows {
+			for _, s := range r.segs {
+				if s.text == text {
+					return s.st, true
+				}
+			}
+		}
+		return Style{}, false
+	}
+	want := map[string]Style{
+		"func":           codeStyle(st, codehl.Keyword),
+		"return":         codeStyle(st, codehl.Keyword),
+		"`a":             codeStyle(st, codehl.String), // the raw string's first line…
+		"b`":             codeStyle(st, codehl.String), // …and its second
+		"// done":        codeStyle(st, codehl.Comment),
+		" f() string { ": st.chatCode,
+	}
+	for text, ws := range want {
+		got, ok := styleOf(text)
+		if !ok {
+			t.Errorf("no segment %q", text)
+			continue
+		}
+		if got != ws {
+			t.Errorf("%q drawn %+v, want %+v", text, got, ws)
+		}
+		if got.Bg != st.chatCode.Bg {
+			t.Errorf("%q left the code background", text)
+		}
+	}
+	// the text block's lone "func" is the last row's only word: plain
+	last := rows[len(rows)-1].segs
+	if got := last[len(last)-1]; got.text != "func" || got.st != st.chatCode {
+		t.Errorf("an untagged-language block should be plain, got %+v", got)
 	}
 }
 

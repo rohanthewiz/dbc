@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-107
+**Next ID:** N-109
 
 ## Open
 
@@ -121,6 +121,18 @@ ten session docs in `ai_docs/claude_sessions/`
   partition filter alone fixed it, or the scoped fallback kicked in (the
   error now names the query, e.g. `query[columns]`). The diagnostic query
   in the session doc counts its column rows on partitions vs. not.
+- **N-107** · raised `2026-1005-1132-assistant-code-highlighting` · value low
+  Highlight TypeScript blocks in the assistant's answers. `ts`/`tsx` would
+  map onto the JS spec in `codehl` and `hl.js` plus a TS keyword list
+  (`interface type enum implements readonly declare namespace abstract
+  keyof`…). Offered alongside JSON and shell; the user picked those two.
+  Only worth it once answers about app code (calling the database from TS)
+  show up.
+- **N-108** · raised `2026-1005-1132-assistant-code-highlighting` · value low
+  Shell `$variables` in answers are drawn as Param, which is the error
+  color (`synParam`, `.hl-p` → `--err`), the same as SQL bind parameters.
+  If that reads as alarming next to real errors, give shell variables
+  their own color: `codeStyle` in `tui/chat.go` and a rule in `app.css`.
 
 ## Roadmap
 

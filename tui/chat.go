@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/rohanthewiz/dbc/ai"
+	"github.com/rohanthewiz/dbc/codehl"
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/userdata"
 	"github.com/rohanthewiz/dbc/workspace"
@@ -57,6 +58,10 @@ import (
 // it into the editor at the caret) and ⧉ copy. There is no "run" button on
 // purpose: a statement the model wrote should pass through the editor, where
 // the user reads it, before it goes anywhere near the database.
+//
+// CODE IS HIGHLIGHTED in the editor's syntax colors: SQL, Go, Python,
+// JavaScript, JSON and shell blocks are lexed by codehl (SQL through the
+// editor's own sqlsplit scanner), other languages are drawn plain.
 //
 // CONVERSATIONS ARE KEPT. Each is saved as it goes and the recent ones are
 // offered back when the pane is empty — see chatarchive.go.
@@ -1086,10 +1091,21 @@ func (p *chatPane) agentRows(st styles, text string, w int) []chatRow {
 			i = j
 			body := strings.Join(code, "\n")
 			rows = append(rows, codeHeader(st, lang, body, w))
+			// The block is lexed whole, not line by line: a Go raw string,
+			// a Python docstring or a /* comment */ spans lines. Each
+			// wrapped part then picks its colors by its byte offset into
+			// body, which works because wrap only splits — its parts
+			// concatenate back to the line exactly.
+			kinds := codeKinds(lang, body)
+			off := 0
 			for _, cl := range code {
+				at := off
 				for _, part := range wrap(cl, w-2) {
-					rows = append(rows, chatRow{segs: []seg{{" " + part, st.chatCode}}, fill: st.chatCode, hasF: true})
+					segs := append([]seg{{" ", st.chatCode}}, codeSegs(st, part, kinds, at)...)
+					rows = append(rows, chatRow{segs: segs, fill: st.chatCode, hasF: true})
+					at += len(part)
 				}
+				off += len(cl) + 1 // the newline Join put back
 			}
 			continue
 		}
@@ -1134,6 +1150,71 @@ func codeHeader(st styles, lang, body string, w int) chatRow {
 	head.segs = append(head.segs, seg{" ⧉ copy ", st.button})
 	head.tgts = append(head.tgts, rowTarget{copyX, copyX + 8, targetCopyCode, body})
 	return head
+}
+
+// codeKinds classifies every byte of a code block, or returns nil for a
+// language codehl does not highlight. A flat per-byte table (rather than
+// walking the span list alongside the wrapped parts) keeps codeSegs a plain
+// lookup; code blocks are small, so the table is too.
+func codeKinds(lang, body string) []codehl.Kind {
+	spans := codehl.Lex(lang, body)
+	if spans == nil {
+		return nil
+	}
+	kinds := make([]codehl.Kind, len(body))
+	for _, s := range spans {
+		for i := s.Start; i < s.End; i++ {
+			kinds[i] = s.Kind
+		}
+	}
+	return kinds
+}
+
+// codeSegs splits part, which starts at byte at of the block, into runs of
+// one kind each. Runs break only where a span does, and spans sit on rune
+// boundaries, so no rune is ever cut.
+func codeSegs(st styles, part string, kinds []codehl.Kind, at int) []seg {
+	if kinds == nil || part == "" {
+		return []seg{{part, st.chatCode}}
+	}
+	kindAt := func(i int) codehl.Kind {
+		if at+i < len(kinds) {
+			return kinds[at+i]
+		}
+		return codehl.Text
+	}
+	var segs []seg
+	start := 0
+	for i := 1; i <= len(part); i++ {
+		if i == len(part) || kindAt(i) != kindAt(start) {
+			segs = append(segs, seg{part[start:i], codeStyle(st, kindAt(start))})
+			start = i
+		}
+	}
+	return segs
+}
+
+// codeStyle is the editor's syntax color for a kind, laid on the code
+// block's background — so SQL in an answer looks as it will once inserted.
+func codeStyle(st styles, k codehl.Kind) Style {
+	var s Style
+	switch k {
+	case codehl.Keyword:
+		s = st.synKeyword
+	case codehl.String:
+		s = st.synString
+	case codehl.Number:
+		s = st.synNumber
+	case codehl.Comment:
+		s = st.synComment
+	case codehl.Ident:
+		s = st.synIdent
+	case codehl.Param:
+		s = st.synParam
+	default:
+		return st.chatCode
+	}
+	return s.WithBg(st.chatCode.Bg)
 }
 
 // isSQLLang reports whether a fence's language tag means SQL. Untagged

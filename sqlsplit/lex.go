@@ -1,6 +1,9 @@
 package sqlsplit
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // Token classes for syntax highlighting.
 //
@@ -142,3 +145,15 @@ var keywords = func() map[string]bool {
 	}
 	return m
 }()
+
+// Keywords returns the highlighted vocabulary, sorted. Other highlighters
+// (codehl, and through its test the web pane's hl.js) read it from here so
+// a SQL keyword is colored the same in the editor and in an answer.
+func Keywords() []string {
+	out := make([]string, 0, len(keywords))
+	for w := range keywords {
+		out = append(out, w)
+	}
+	slices.Sort(out)
+	return out
+}

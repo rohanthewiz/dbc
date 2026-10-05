@@ -623,6 +623,13 @@ button.primary { border-color: var(--accent); }
 .chead3 { display: flex; align-items: center; gap: 10px; padding: 2px 8px; border-bottom: 1px solid var(--line); font-size: 11px; }
 .clang { color: var(--muted); margin-right: auto; }
 .cblock pre { margin: 0; padding: 6px 8px; overflow: auto; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* code-block syntax colors (hl.js): the editor's Monaco theme and the TUI's
+   syn* styles, so a block reads the same in the answer and once inserted */
+.cblock .hl-k { color: var(--accent); font-weight: 700; }
+.cblock .hl-s, .cblock .hl-n { color: var(--warn); }
+.cblock .hl-c { color: var(--muted); font-style: italic; }
+.cblock .hl-i { text-decoration: underline; }
+.cblock .hl-p { color: var(--err); }
 .cfoot { margin-top: -2px; }
 button.linkish { border: 0; background: none; padding: 0; color: var(--accent); font-size: 12px; }
 button.linkish:hover { text-decoration: underline; }

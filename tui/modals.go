@@ -141,6 +141,9 @@ func (e *exportModal) draw(m *Model, s Surface) *caret {
 	if e.format() == export.HTML {
 		s.Put(1, 2, "copies as a formatted table (Teams, Outlook, Docs); saves as a styled page", onBg(m.st.muted, bg).Italic())
 	}
+	if m.grid.flip {
+		s.Put(1, 3, "the grid is transposed — the export comes out on its side (t in the grid turns it back)", onBg(m.st.muted, bg).Italic())
+	}
 
 	s.Put(1, 4, "File", onBg(m.st.muted, bg))
 	field := s.Sub(Rect{1, 5, s.W() - 2, 1})
@@ -234,7 +237,7 @@ func (e *exportModal) paste(m *Model, s string) { e.onPath = true; e.path.Insert
 func (e *exportModal) run(m *Model, toClipboard bool) (tea.Cmd, bool) {
 	f := e.format()
 	if toClipboard {
-		r, what := m.grid.Selected(true)
+		r, what := m.gridView()
 		return m.copyResult(r, what, copyFormatFor(f)), true
 	}
 	path := strings.TrimSpace(e.path.Text())
@@ -246,8 +249,8 @@ func (e *exportModal) run(m *Model, toClipboard bool) (tea.Cmd, bool) {
 	// The file takes the same view of the result as the clipboard button
 	// beside it — every row, in display order, hidden columns left out — so
 	// the two ways out of this dialog never disagree about what "the
-	// result" is.
-	r, what := m.grid.Selected(true)
+	// result" is — transposed too, when the grid is.
+	r, what := m.gridView()
 	if r == nil {
 		m.log(logWarn, noResult)
 		return nil, false

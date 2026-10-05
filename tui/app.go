@@ -581,8 +581,9 @@ func (m *Model) gridKey(k tea.KeyPressMsg) tea.Cmd {
 	case "y":
 		return m.copyGrid(copyText, false)
 	case "Y":
-		r, what := m.grid.RowResult()
-		return m.copyResult(r, what, copyText)
+		return m.copyRow(copyText)
+	case "t":
+		return m.transposeGrid()
 	case "c", "menu":
 		x, y := m.grid.cursorScreen()
 		m.openGridMenu(x, y+1) // just below the cell, so it stays visible

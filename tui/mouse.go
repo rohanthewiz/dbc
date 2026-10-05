@@ -235,7 +235,18 @@ func (m *Model) gridClick(x, y, n int, shift bool) tea.Cmd {
 		}
 		g.startResize(h.col)
 		m.drag.kind = dragGridCol
+	case hitNameBorder:
+		// transposed only: the names column's border, which works like a
+		// header border — double-click fits, a drag resizes
+		if n == 2 {
+			g.FitNames()
+			return nil
+		}
+		g.startNamesResize()
+		m.drag.kind = dragGridCol
 	case hitRowNum:
+		// (transposed, a record's number in the header band: the same
+		// "select the record whole")
 		// a click on a row number selects the whole row, as in a spreadsheet
 		g.moveTo(h.row, 0, shift)
 		if !shift {
@@ -295,7 +306,7 @@ func (m *Model) mouseMotion(msg tea.MouseMotionMsg) tea.Cmd {
 
 	// hover feedback
 	m.hover = hoverState{}
-	m.grid.hover, m.grid.hoverH, m.grid.hoverB = cell2{-1, -1}, -1, -1
+	m.grid.hover, m.grid.hoverH, m.grid.hoverB, m.grid.hoverNB = cell2{-1, -1}, -1, -1, false
 	m.conns.hover, m.tables.hover = -1, -1
 	if m.menu != nil {
 		if i := m.menu.itemAt(y); m.menu.rect.Contains(x, y) && i >= 0 {
@@ -326,6 +337,8 @@ func (m *Model) mouseMotion(msg tea.MouseMotionMsg) tea.Cmd {
 			m.grid.hoverH = h.col
 		case hitBorder:
 			m.grid.hoverB = h.col
+		case hitNameBorder:
+			m.grid.hoverNB = true
 		}
 	}
 	m.conns.hover = m.conns.indexAt(x, y)
@@ -485,9 +498,23 @@ func (m *Model) rightClick(x, y int) tea.Cmd {
 			// whose menu then hides the range's columns. The cursor is set
 			// directly rather than with moveTo, which does nothing on a
 			// zero-row result, where hiding a column still makes sense.
+			//
+			// Transposed, hitHeader is a name in the gutter — that
+			// line's "header" — so the same holds; a record's border
+			// (hitBorder) is not a column, and leaves the cursor be.
+			if g.flip && h.kind == hitBorder {
+				break
+			}
 			_, c0, _, c1 := g.bounds()
 			if !g.sel || h.col < c0 || h.col > c1 {
 				g.cur.col, g.sel = h.col, false
+			}
+		case h.kind == hitRowNum && g.flip:
+			// a record's number: "this row" in the menu means that
+			// record, unless it is one of the range's
+			r0, _, r1, _ := g.bounds()
+			if !g.sel || h.row < r0 || h.row > r1 {
+				g.cur.row, g.sel = h.row, false
 			}
 		}
 		m.openGridMenu(x, y)

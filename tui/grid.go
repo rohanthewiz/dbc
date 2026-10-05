@@ -80,7 +80,26 @@ type grid struct {
 	// left edge at the press. The edge is fixed for the whole drag — only
 	// the column's own width changes, and leftCol does not move — so the
 	// new width is simply pointer x minus that edge.
+	//
+	// Transposed, resizeCol is instead the dragged record's place among
+	// the records drawn (0 = the first one in view) and resizeX the first
+	// drawn record's left edge; resizeNames marks a drag of the names
+	// column's border. See resizeTo.
 	resizeCol, resizeX int
+	resizeNames        bool
+
+	// Transposed (t): the grid drawn on its side. See transpose.go for the
+	// layout and for why only the picture turns.
+	flip bool
+	// valW is each result column's widest value, values only (no header),
+	// capped at maxColWidth: what a record column auto-sizes to, since
+	// transposed the header is a row number and the name is in the gutter.
+	valW []int
+	// recW and namesW are hand-set widths while transposed (a drag, the
+	// < > keys, a fit), content cells; 0 = auto. Every record shares recW.
+	recW, namesW int
+	// hoverNB: the names column's border is under the mouse (transposed).
+	hoverNB bool
 }
 
 // cell2 is a grid position: display row and column index.
@@ -127,7 +146,7 @@ func (g *grid) SetResult(r *model.Result, displayCap int) {
 	g.cur, g.anc, g.sel = cell2{}, cell2{}, false
 	g.top, g.leftCol = 0, 0
 	if r == nil {
-		g.order, g.widths, g.numeric, g.cols, g.hidden, g.userW = nil, nil, nil, nil, nil, nil
+		g.order, g.widths, g.numeric, g.cols, g.hidden, g.userW, g.valW = nil, nil, nil, nil, nil, nil, nil
 		return
 	}
 	n := len(r.Rows)
@@ -141,12 +160,19 @@ func (g *grid) SetResult(r *model.Result, displayCap int) {
 	}
 	g.numeric = export.NumericColumns(r)
 	g.widths = make([]int, len(r.Columns))
+	g.valW = make([]int, len(r.Columns))
 	for c := range r.Columns {
 		g.widths[c] = min(g.contentWidth(c), maxColWidth)
+		g.valW[c] = min(g.valuesWidth(c), maxColWidth)
 	}
+	// The orientation (flip) is NOT reset: as in dbc web it belongs to the
+	// pane, not to one result, so a re-run — or a different query — comes
+	// back on its side. The transposed widths go with the rest of the
+	// layout: kept for the same columns, fresh for any other result.
 	if !keep {
 		g.hidden = make([]bool, len(r.Columns))
 		g.userW = make([]int, len(r.Columns))
+		g.recW, g.namesW = 0, 0
 	}
 	// cols still maps the OLD result; cleared, rebuildCols has no stale
 	// result column to carry the (reset) cursor onto
@@ -155,23 +181,30 @@ func (g *grid) SetResult(r *model.Result, displayCap int) {
 }
 
 // contentWidth measures result column c: its header (plus room for the sort
-// arrow) and the first widthSample values, uncapped — or every value, for a
-// numeric column. Auto-sizing caps it; a double-click on the border (fit)
-// does not.
+// arrow) and its values (valuesWidth), uncapped. Auto-sizing caps it; a
+// double-click on the border (fit) does not.
 func (g *grid) contentWidth(c int) int {
-	w := width(g.res.Columns[c]) + 2 // room for the sort arrow
+	return max(width(g.res.Columns[c])+2, g.valuesWidth(c)) // +2: room for the sort arrow
+}
+
+// valuesWidth measures result column c's values alone — the first
+// widthSample of them, or every value of a numeric column — uncapped and
+// at least minColWidth. Split from contentWidth because a transposed
+// record column holds values only: its header is a row number.
+func (g *grid) valuesWidth(c int) int {
+	w := minColWidth
 	if c < len(g.numeric) && g.numeric[c] {
 		// numbers are ASCII, never multi-line: a byte length over every row
 		// is exact and cheap, where the sampled loop below would miss a
 		// wider value past row widthSample
-		return max(minColWidth, w, workspace.WidestNumeric(g.res, c))
+		return max(w, workspace.WidestNumeric(g.res, c))
 	}
 	for i := 0; i < min(len(g.res.Rows), widthSample); i++ {
 		if c < len(g.res.Rows[i]) {
 			w = max(w, width(flatten(g.res.Rows[i][c])))
 		}
 	}
-	return max(minColWidth, w)
+	return w
 }
 
 // colWidth is result column rc's content width as drawn: the hand-set
@@ -359,8 +392,16 @@ func (g *grid) RowResult() (*model.Result, string) {
 // display indices shift when a column before them comes or goes. One that
 // was itself hidden moves to the next visible column to its right (or the
 // last one), the way deleting a spreadsheet column moves the cursor.
+//
+// Transposed, display columns are LINES, so it is the view's top line that
+// stays on its result column, and leftCol — a record there — is left alone.
 func (g *grid) rebuildCols() {
-	curRC, ancRC, leftRC := g.resultCol(g.cur.col), g.resultCol(g.anc.col), g.resultCol(g.leftCol)
+	curRC, ancRC := g.resultCol(g.cur.col), g.resultCol(g.anc.col)
+	edge := &g.leftCol // the view's edge counted in display columns
+	if g.flip {
+		edge = &g.top
+	}
+	edgeRC := g.resultCol(*edge)
 	g.cols = g.cols[:0]
 	for c, h := range g.hidden {
 		if !h {
@@ -368,10 +409,10 @@ func (g *grid) rebuildCols() {
 		}
 	}
 	g.cur.col, g.anc.col = g.displayOf(curRC), g.displayOf(ancRC)
-	// the cursor must not end up left of the view; its right side is put
+	// the cursor must not end up before the view; its far side is put
 	// right by the next ensureVisible, which needs a fresh draw's geometry
-	g.leftCol = min(g.displayOf(leftRC), g.cur.col)
-	g.hover, g.hoverH, g.hoverB = cell2{-1, -1}, -1, -1
+	*edge = min(g.displayOf(edgeRC), g.cur.col)
+	g.hover, g.hoverH, g.hoverB, g.hoverNB = cell2{-1, -1}, -1, -1, false
 }
 
 // displayOf is the display column showing result column rc, or the first
@@ -450,8 +491,13 @@ func (g *grid) ShowAll() int {
 	return n
 }
 
-// Resize adds delta cells to display column col's width.
+// Resize adds delta cells to display column col's width — transposed, to
+// every record's (they share one width).
 func (g *grid) Resize(col, delta int) {
+	if g.flip {
+		g.recW = clampUserW(g.recWidth() + delta)
+		return
+	}
 	if rc := g.resultCol(col); rc >= 0 {
 		g.setWidth(rc, g.colWidth(rc)+delta)
 	}
@@ -461,17 +507,29 @@ func (g *grid) Resize(col, delta int) {
 // header border. Unlike auto-sizing it is not capped at maxColWidth: asking
 // to see a column whole is exactly when the cap is in the way.
 func (g *grid) Fit(col int) {
+	if g.flip {
+		g.fitRecords()
+		return
+	}
 	if rc := g.resultCol(col); rc >= 0 {
 		g.setWidth(rc, g.contentWidth(rc))
 	}
 }
 
 func (g *grid) setWidth(rc, w int) {
-	g.userW[rc] = max(minColWidth, min(w, maxUserWidth))
+	g.userW[rc] = clampUserW(w)
 }
+
+// clampUserW bounds a width set by hand (see minColWidth, maxUserWidth).
+func clampUserW(w int) int { return max(minColWidth, min(w, maxUserWidth)) }
 
 // startResize begins a border drag on display column col.
 func (g *grid) startResize(col int) {
+	g.resizeNames = false
+	if g.flip {
+		g.startFlipResize(col)
+		return
+	}
 	g.resizeCol, g.resizeX = col, -1
 	if i := col - g.leftCol; i >= 0 && i < len(g.colX) {
 		g.resizeX = g.colX[i]
@@ -486,6 +544,10 @@ func (g *grid) startResize(col int) {
 //	resizeX                 x
 //	│ pad │ content … │ pad │ border
 func (g *grid) resizeTo(x int) {
+	if g.flip {
+		g.flipResizeTo(x)
+		return
+	}
 	rc := g.resultCol(g.resizeCol)
 	if rc < 0 || g.resizeX < 0 {
 		return
@@ -516,21 +578,29 @@ func (g *grid) moveTo(row, col int, extend bool) {
 }
 
 // ensureVisible scrolls so the cursor cell is on screen.
+//
+// It works in SCREEN terms — the cursor's line against top, its screen
+// column against leftCol — which upright are its row and column and,
+// transposed, its column and record (see transpose.go).
 func (g *grid) ensureVisible() {
+	line, scol := g.cur.row, g.cur.col
+	if g.flip {
+		line, scol = g.cur.col, g.cur.row
+	}
 	if g.visRow > 0 {
-		if g.cur.row < g.top {
-			g.top = g.cur.row
-		} else if g.cur.row >= g.top+g.visRow {
-			g.top = g.cur.row - g.visRow + 1
+		if line < g.top {
+			g.top = line
+		} else if line >= g.top+g.visRow {
+			g.top = line - g.visRow + 1
 		}
 	}
-	if g.cur.col < g.leftCol {
-		g.leftCol = g.cur.col
-	} else if n := len(g.colX); n > 0 && g.cur.col >= g.leftCol+n {
+	if scol < g.leftCol {
+		g.leftCol = scol
+	} else if n := len(g.colX); n > 0 && scol >= g.leftCol+n {
 		// the column is past the last one drawn; step until it fits — a
 		// few steps at most, since columns are capped in width
-		g.leftCol = g.cur.col - max(n-1, 0)
-	} else if n > 0 && g.cur.col == g.leftCol+n-1 && g.colPartial() {
+		g.leftCol = scol - max(n-1, 0)
+	} else if n > 0 && scol == g.leftCol+n-1 && g.colPartial() {
 		g.leftCol++
 	}
 }
@@ -552,23 +622,34 @@ func (g *grid) HandleKey(k tea.KeyPressMsg) bool {
 	s := k.String()
 	ext := strings.Contains(s, "shift")
 	page := max(g.visRow-1, 1)
+	// The arrows follow the SCREEN, as in dbc web: down is the next line,
+	// whatever a line is. Upright a line is a row; transposed it is a
+	// column, and the rows run across. vert and horiz move n that way
+	// (moveTo clamps, so a huge n is "to the far end").
+	vert := func(n int) { g.moveTo(g.cur.row+n, g.cur.col, ext) }
+	horiz := func(n int) { g.moveTo(g.cur.row, g.cur.col+n, ext) }
+	if g.flip {
+		vert, horiz = func(n int) { g.moveTo(g.cur.row, g.cur.col+n, ext) },
+			func(n int) { g.moveTo(g.cur.row+n, g.cur.col, ext) }
+	}
+	const far = 1 << 30
 	switch strings.TrimPrefix(s, "shift+") {
 	case "up", "k":
-		g.moveTo(g.cur.row-1, g.cur.col, ext)
+		vert(-1)
 	case "down", "j":
-		g.moveTo(g.cur.row+1, g.cur.col, ext)
+		vert(1)
 	case "left", "h":
-		g.moveTo(g.cur.row, g.cur.col-1, ext)
+		horiz(-1)
 	case "right", "l":
-		g.moveTo(g.cur.row, g.cur.col+1, ext)
+		horiz(1)
 	case "pgup":
-		g.moveTo(g.cur.row-page, g.cur.col, ext)
+		vert(-page)
 	case "pgdown":
-		g.moveTo(g.cur.row+page, g.cur.col, ext)
+		vert(page)
 	case "home":
-		g.moveTo(g.cur.row, 0, ext)
+		horiz(-far)
 	case "end":
-		g.moveTo(g.cur.row, g.Cols()-1, ext)
+		horiz(far)
 	case "ctrl+home", "g":
 		g.moveTo(0, g.cur.col, ext)
 	case "ctrl+end", "G":
@@ -585,10 +666,17 @@ func (g *grid) HandleKey(k tea.KeyPressMsg) bool {
 }
 
 // Scroll moves the view without moving the cursor — the wheel.
+//
+// rows and cols are screen directions: lines down, columns across — which,
+// transposed, are the result's columns and its records.
 func (g *grid) Scroll(rows, cols int) {
-	maxTop := max(g.Rows()-g.visRow, 0)
+	lines, across := g.Rows(), g.Cols()
+	if g.flip {
+		lines, across = g.Cols(), g.Rows()
+	}
+	maxTop := max(lines-g.visRow, 0)
 	g.top = max(0, min(g.top+rows, maxTop))
-	g.leftCol = max(0, min(g.leftCol+cols, max(g.Cols()-1, 0)))
+	g.leftCol = max(0, min(g.leftCol+cols, max(across-1, 0)))
 }
 
 // ---------------------------------------------------------------------------
@@ -611,12 +699,18 @@ const (
 	hitRowNum
 	hitVBar
 	hitBorder // a header's right border: drag to resize, double-click to fit
+	// hitNameBorder is the names column's right border, transposed: drag
+	// to resize the names, double-click to fit them.
+	hitNameBorder
 )
 
 // hitAt resolves a canvas cell against the geometry of the last draw.
 func (g *grid) hitAt(x, y int) gridHit {
 	if g.res == nil {
 		return gridHit{}
+	}
+	if g.flip {
+		return g.flipHitAt(x, y)
 	}
 	if g.vbar.Contains(x, y) {
 		return gridHit{kind: hitVBar}
@@ -662,6 +756,10 @@ func (g *grid) dragTo(x, y int) {
 	if g.Rows() == 0 {
 		return
 	}
+	if g.flip {
+		g.flipDragTo(x, y)
+		return
+	}
 	row, col := g.cur.row, g.cur.col
 	switch {
 	case y < g.view.Y:
@@ -689,12 +787,16 @@ func (g *grid) dragTo(x, y int) {
 // vbarJump scrolls so the thumb centers on y — a click or drag on the
 // scrollbar track.
 func (g *grid) vbarJump(y int) {
-	if g.vbar.H <= 0 || g.Rows() <= g.visRow {
+	lines := g.Rows()
+	if g.flip {
+		lines = g.Cols() // transposed, the lines are the result's columns
+	}
+	if g.vbar.H <= 0 || lines <= g.visRow {
 		return
 	}
 	frac := float64(y-g.vbar.Y) / float64(max(g.vbar.H-1, 1))
 	frac = max(0, min(frac, 1))
-	g.top = int(frac * float64(g.Rows()-g.visRow))
+	g.top = int(frac * float64(lines-g.visRow))
 }
 
 // ---------------------------------------------------------------------------
@@ -709,6 +811,10 @@ func (g *grid) Draw(s Surface, st styles, focused bool, empty string) {
 	if g.res == nil || len(g.res.Columns) == 0 {
 		msg := empty
 		s.Put(max((s.W()-width(msg))/2, 1), s.H()/2, msg, st.muted)
+		return
+	}
+	if g.flip {
+		g.drawFlip(s, st, focused)
 		return
 	}
 	rows := g.Rows()
@@ -894,6 +1000,13 @@ func drawVBar(s Surface, st styles, top, vis, total int) {
 // a context menu opened from the keyboard anchors to, so it appears where the
 // user is looking rather than at a corner.
 func (g *grid) cursorScreen() (int, int) {
+	if g.flip {
+		i := g.cur.row - g.leftCol
+		if i < 0 || i >= len(g.colX) || g.cur.col < g.top || g.cur.col >= g.top+g.visRow {
+			return g.view.X, g.view.Y
+		}
+		return g.colX[i] + 1, g.view.Y + (g.cur.col - g.top)
+	}
 	i := g.cur.col - g.leftCol
 	if i < 0 || i >= len(g.colX) || g.cur.row < g.top || g.cur.row >= g.top+g.visRow {
 		return g.view.X, g.view.Y

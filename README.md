@@ -279,7 +279,8 @@ with no database picker.
 | results | header border drag / double-click | resizes the column / fits it to its content (past the 40-cell auto-size cap) |
 | results | header right-click | hide that column (or the selected range's); hidden ones are listed there to show again |
 | results | double-click | inspects the value in full (JSON is pretty-printed) |
-| results | right-click | copy cell / row / range / whole result as **HTML table**, Markdown, CSV, TSV, JSON; sort; hide, fit, show columns; export; ask the assistant |
+| results | right-click | copy cell / row / range / whole result as **HTML table**, Markdown, CSV, TSV, JSON; sort; transpose; hide, fit, show columns; export; ask the assistant |
+| results, transposed | name click · row-number click · border drag | sorts by that column · selects the row · widens every row (or, beside `column`, the names) — see [Transposed](#copying-results--including-into-teams) |
 | any pane | wheel, shift+wheel | scrolls what is under the pointer, vertically / sideways |
 | scrollbars | click, drag | jump, drag |
 | pane borders | drag | resize the sidebar, the editor/results split, the log, the assistant |
@@ -320,6 +321,7 @@ dragging.
 | `<` / `>` / `=` | *(results)* Narrow / widen the column / fit it to its content |
 | `-` / `+` | *(results)* Hide the column (or the range's columns) / show every hidden column |
 | `Enter` | *(results)* Inspect the value under the cursor |
+| `t` | *(results)* Transpose: each row a column, each column a line — copies and exports follow; `t` again turns it upright |
 | `p` | *(results)* Switch between the result grid and the plan |
 | `z` | *(results)* Give the results pane the whole column / give it back |
 | `Tab` / `Shift+Tab` | Cycle focus through the panes |
@@ -611,16 +613,20 @@ styles, so it pastes into Teams, Outlook, Slack or Google Docs as a formatted
 table rather than as markup. Markdown, CSV, TSV and JSON are one row down.
 The scope is the selected range when there is one, or the whole result.
 
-**Transposed.** In `dbc web`, `t` in the grid (or `⇄ Transpose` on the
-results bar) turns the result on its side, as psql's `\x` does: each row
-becomes a column headed by its number, and each column a line led by its
-name — the easy way to read, or share, one wide record. Copies and exports
-follow what the grid shows, so **Table for Teams** pastes the vertical table
-(names as row headers; a single row comes out as `column | value`), and
-`⤓ Export ▾ → HTML page` downloads it. Sorting, hiding and selecting work as
-they do upright; the arrow keys follow the screen. Every record shares one
-width: drag any record's border to widen them all, or the border beside
-`column` to widen the names; a double-click on either fits it.
+**Transposed.** `t` in the grid (or **Transpose** in its right-click menu;
+`⇄ Transpose` on the results bar in `dbc web`) turns the result on its side,
+as psql's `\x` does: each row becomes a column headed by its number, and
+each column a line led by its name — the easy way to read, or share, one
+wide record. Copies and exports follow what the grid shows, so **Table for
+Teams** pastes the vertical table (names as row headers; a single row comes
+out as `column | value`), `y`/`Y` copy the values in the grid's
+orientation, and an export (`Ctrl+E`; `⤓ Export ▾ → HTML page` in `dbc
+web`) writes it. Sorting, hiding and selecting work as they do upright; the
+arrow keys follow the screen. Click a name to sort by that column, a row's
+number to select it whole. Every record shares one width: drag any record's
+border to widen them all (in the terminal `<` `>` step it and `=` fits it),
+or the border beside `column` to widen the names; a double-click on either
+fits it. The grid stays turned for the next result until `t` turns it back.
 
 The rich copy needs the local clipboard (macOS, Windows, or Linux with an
 X11 display or `wl-copy` on Wayland). Over SSH dbc falls back to the terminal's clipboard

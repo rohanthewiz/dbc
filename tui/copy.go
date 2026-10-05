@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/rohanthewiz/serr"
 
@@ -83,14 +85,21 @@ type clipDoneMsg struct {
 	err  error
 }
 
-// copyGrid copies the grid's selection (or cursor cell), or the whole result.
+// copyGrid copies the grid's selection (or cursor cell), or the whole result
+// — as the grid shows it, so transposed it comes out on its side.
 func (m *Model) copyGrid(f copyFormat, whole bool) tea.Cmd {
 	r, what := m.grid.Selected(whole)
 	if r == nil {
 		m.log(logWarn, noResult)
 		return nil
 	}
-	return m.copyResult(r, what, f)
+	return m.copyPiece(r, what, m.grid.selFirst(whole), f)
+}
+
+// copyRow copies the cursor's row (Y), as the grid shows it.
+func (m *Model) copyRow(f copyFormat) tea.Cmd {
+	r, what := m.grid.RowResult()
+	return m.copyPiece(r, what, m.grid.cur.row+1, f)
 }
 
 // copyResult renders r in format f and copies it.
@@ -99,24 +108,7 @@ func (m *Model) copyResult(r *model.Result, what string, f copyFormat) tea.Cmd {
 		m.log(logWarn, noResult)
 		return nil
 	}
-	var c clip.Content
-	var err error
-	switch f {
-	case copyText:
-		c.Text = export.PlainCells(r)
-	case copyHTML:
-		c, err = export.ClipContent(r, export.HTML)
-	case copyMarkdown:
-		c, err = export.ClipContent(r, export.Markdown)
-	case copyCSV:
-		c, err = export.ClipContent(r, export.CSV)
-	case copyTSV:
-		c, err = export.ClipContent(r, export.TSV)
-	case copyJSON:
-		c, err = export.ClipContent(r, export.JSON)
-	case copyAligned:
-		c, err = export.ClipContent(r, export.Text)
-	}
+	c, err := renderCopy(r, f)
 	if err != nil {
 		m.logf(logErr, "copy failed: %s", serr.StringFromErr(err))
 		return nil
@@ -124,7 +116,30 @@ func (m *Model) copyResult(r *model.Result, what string, f copyFormat) tea.Cmd {
 	if f != copyText {
 		what += " as " + f.name()
 	}
+	if r.Transposed && !strings.Contains(what, "transposed") {
+		// dbc web's words: "the result (8 rows) as a table, transposed"
+		what += ", transposed"
+	}
 	return clipCmd(c, what)
+}
+
+// renderCopy is r in format f as clipboard content.
+func renderCopy(r *model.Result, f copyFormat) (clip.Content, error) {
+	switch f {
+	case copyText:
+		return clip.Content{Text: export.PlainCells(r)}, nil
+	case copyHTML:
+		return export.ClipContent(r, export.HTML)
+	case copyMarkdown:
+		return export.ClipContent(r, export.Markdown)
+	case copyCSV:
+		return export.ClipContent(r, export.CSV)
+	case copyTSV:
+		return export.ClipContent(r, export.TSV)
+	case copyJSON:
+		return export.ClipContent(r, export.JSON)
+	}
+	return export.ClipContent(r, export.Text)
 }
 
 // copyString copies plain text.

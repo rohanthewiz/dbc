@@ -182,6 +182,16 @@ func copyItems(whole bool, why string) []menuItem {
 	}
 }
 
+// copyHead is a copy heading, saying "transposed" while the grid is — the
+// copies come out on their side then, and the menu says so before the
+// paste does ("copy selection, transposed, as", dbc web's words).
+func copyHead(g *grid, head string) string {
+	if !g.flip {
+		return head
+	}
+	return strings.TrimSuffix(head, " as") + ", transposed, as"
+}
+
 // openGridMenu is the results pane's context menu.
 func (m *Model) openGridMenu(x, y int) {
 	why := ""
@@ -195,23 +205,30 @@ func (m *Model) openGridMenu(x, y int) {
 		items = append(items,
 			menuItem{label: fmt.Sprintf("Copy %d×%d cells", r1-r0+1, c1-c0+1), key: "y", why: why,
 				act: func(m *Model) tea.Cmd { return m.copyGrid(copyText, false) }},
-			heading("copy selection as"))
+			heading(copyHead(g, "copy selection as")))
 		items = append(items, copyItems(false, why)...)
 	} else {
 		items = append(items,
 			menuItem{label: "Copy value", key: "y", why: why,
 				act: func(m *Model) tea.Cmd { return m.copyGrid(copyText, false) }},
 			menuItem{label: "Copy row", key: "Y", why: why,
-				act: func(m *Model) tea.Cmd { r, w := m.grid.RowResult(); return m.copyResult(r, w, copyText) }},
+				act: func(m *Model) tea.Cmd { return m.copyRow(copyText) }},
 			menuItem{label: "Inspect value", key: "Enter", why: why,
 				act: func(m *Model) tea.Cmd { m.openInspect(); return nil }})
 	}
-	items = append(items, heading("copy whole result as"))
+	items = append(items, heading(copyHead(g, "copy whole result as")))
 	items = append(items, copyItems(true, why)...)
+	flipLabel := "Transpose (each row a column)"
+	if g.flip {
+		flipLabel = "Turn upright (rows across)"
+	}
 	items = append(items,
 		heading(""),
 		menuItem{label: "Sort by this column", why: why,
 			act: func(m *Model) tea.Cmd { m.grid.Sort(m.grid.cur.col); return nil }},
+		// no why: turning the grid with no result sets the orientation the
+		// next one arrives in, as in dbc web
+		menuItem{label: flipLabel, key: "t", act: func(m *Model) tea.Cmd { return m.transposeGrid() }},
 	)
 	items = append(items, columnItems(g, why)...)
 	if m.planv.plan != nil {
@@ -246,10 +263,14 @@ func columnItems(g *grid, why string) []menuItem {
 	if hideWhy == "" && c1-c0+1 >= g.Cols() {
 		hideWhy = "can't hide every column — at least one has to stay"
 	}
+	fit := "Fit column to its content"
+	if g.flip {
+		fit = "Fit the rows to their content" // every record shares one width
+	}
 	items := []menuItem{
 		{label: hide, key: "-", why: hideWhy,
 			act: func(m *Model) tea.Cmd { m.hideColumns(); return nil }},
-		{label: "Fit column to its content", key: "=", why: why,
+		{label: fit, key: "=", why: why,
 			act: func(m *Model) tea.Cmd { m.grid.Fit(m.grid.cur.col); return nil }},
 	}
 	hidden := g.HiddenCols()
@@ -275,11 +296,12 @@ func (m *Model) openCopyMenu(x, y int) {
 	if m.ws.LastResult() == nil {
 		why = noResult
 	}
-	items := []menuItem{heading("copy result as")}
-	items = append(items, copyItems(!m.grid.sel, why)...)
-	if m.grid.sel {
-		items[0] = heading("copy selection as")
-		items = append(items, heading("copy whole result as"))
+	g := m.grid
+	items := []menuItem{heading(copyHead(g, "copy result as"))}
+	items = append(items, copyItems(!g.sel, why)...)
+	if g.sel {
+		items[0] = heading(copyHead(g, "copy selection as"))
+		items = append(items, heading(copyHead(g, "copy whole result as")))
 		items = append(items, copyItems(true, why)...)
 	}
 	m.openMenu(x, y, items)

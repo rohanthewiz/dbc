@@ -18,7 +18,7 @@ import (
 //	Shift+F12 ─────────► Resolve ──► mark every use (editor.marks)
 //	   again, on the same symbol ──► caret to the next use (wraps)
 //	F2 ────────────────► Resolve: refusal? ─► the log says why
-//	                        └─► rename prompt (renameModal), name filled in
+//	                        └─► rename prompt (promptModal), name filled in
 //	                              Enter ─► ws.Rename ─► one undoable edit
 //
 // The resolver reads only the statement: no schema, no connection round
@@ -234,112 +234,40 @@ func (m *Model) startRename() tea.Cmd {
 		m.log(logWarn, sym.Fixed)
 		return nil
 	}
-	md := &renameModal{sym: sym, caret: m.editor.Caret(), field: newEditor(true), hoverBtn: -1}
-	md.field.SetText(sym.Name)
-	md.field.SelectAll() // typing replaces the old name; an arrow key keeps it to edit
+	// The edits are worked out on Enter, from the editor's text then —
+	// the text the prompt opened on, since a modal holds the keyboard and
+	// paste. A refusal (the name is taken in the query, it is empty) keeps
+	// the prompt open with the reason under the field (promptModal), so the
+	// name can be fixed rather than retyped.
+	caret := m.editor.Caret()
 	m.compl = nil
-	m.openModal(md)
+	m.openPrompt("Rename "+symbolWhat(sym),
+		"every use in the statement is renamed; quoted if the name needs it",
+		"Rename", sym.Name, func(m *Model, text string) error {
+			return m.applyRename(sym, caret, text)
+		})
 	return nil
 }
 
-// ---------------------------------------------------------------------------
-// The rename prompt
-// ---------------------------------------------------------------------------
-
-// renameModal asks for the new name. The edits are worked out when Enter is
-// pressed, not when it opens, from the editor's text then — which is the
-// text it opened on, since a modal holds the keyboard and paste. A refusal
-// (the name is taken in the query, it is empty) keeps the prompt open with
-// the reason under the field, so the name can be fixed rather than retyped.
-type renameModal struct {
-	modalBase
-	sym      sqlcomplete.Symbol
-	caret    int // the editor's caret when F2 was pressed: what to rename
-	field    *editor
-	errText  string
-	fieldR   Rect
-	okBtn    Rect
-	hoverBtn int
-}
-
-func (r *renameModal) title() string            { return "Rename " + symbolWhat(r.sym) }
-func (r *renameModal) size(w, h int) (int, int) { return 60, 8 }
-
-func (r *renameModal) draw(m *Model, s Surface) *caret {
-	bg := m.st.panel
-	s.Put(1, 0, "New name", onBg(m.st.muted, bg))
-	field := s.Sub(Rect{1, 1, s.W() - 2, 1})
-	r.fieldR = field.Rect()
-	cx, cy, ok := r.field.Draw(field, m.st, m.st.raised, [2]int{}, true)
-	if r.errText != "" {
-		s.Put(1, 3, truncate(r.errText, s.W()-2), onBg(m.st.err, bg))
-	} else {
-		s.Put(1, 3, "every use in the statement is renamed; quoted if the name needs it", onBg(m.st.muted, bg).Italic())
+// applyRename renames sym (found at caret) to name: one undoable edit of
+// every use. The quoting is the resolver's, by the active connection's
+// driver (workspace.Rename), as in dbc web: "Ord" on Postgres, `order` on
+// MySQL. An error keeps the prompt open with it shown.
+func (m *Model) applyRename(sym sqlcomplete.Symbol, caret int, name string) error {
+	name = strings.TrimSpace(name)
+	if name == sym.Name {
+		return nil // nothing to change: closing is the answer
 	}
-	y := s.H() - 1
-	r.okBtn = chip(s, 1, y, " ✎ Rename ", pick(r.hoverBtn == 0, m.st.buttonHover, m.st.buttonHot))
-	s.PutRight(s.W()-1, y, "Enter renames · Esc cancels", onBg(m.st.muted, bg))
-	if ok {
-		return &caret{cx, cy}
-	}
-	return nil
-}
-
-func (r *renameModal) key(m *Model, k tea.KeyPressMsg) (tea.Cmd, bool) {
-	switch k.String() {
-	case "esc":
-		return nil, true
-	case "enter":
-		return nil, r.apply(m)
-	}
-	before := r.field.Text()
-	r.field.HandleKey(k)
-	if r.field.Text() != before {
-		r.errText = ""
-	}
-	return nil, false
-}
-
-func (r *renameModal) click(m *Model, x, y, clicks int, shift bool) (tea.Cmd, bool) {
-	switch {
-	case m.modalClose().Contains(x, y):
-		return nil, true
-	case r.okBtn.Contains(x, y):
-		return nil, r.apply(m)
-	case r.fieldR.Contains(x, y):
-		r.field.Click(x, y, clicks, shift)
-	}
-	return nil, false
-}
-
-func (r *renameModal) hover(m *Model, x, y int) {
-	r.hoverBtn = -1
-	if r.okBtn.Contains(x, y) {
-		r.hoverBtn = 0
-	}
-}
-
-func (r *renameModal) paste(m *Model, s string) { r.field.Insert(s); r.errText = "" }
-
-// apply renames, reporting whether the prompt is done. The quoting is the
-// resolver's, by the active connection's driver (workspace.Rename), as in
-// dbc web: "Ord" on Postgres, `order` on MySQL.
-func (r *renameModal) apply(m *Model) bool {
-	name := strings.TrimSpace(r.field.Text())
-	if name == r.sym.Name {
-		return true // nothing to change: closing is the answer
-	}
-	edits, err := m.ws.Rename(m.editor.Text(), r.caret, name)
+	edits, err := m.ws.Rename(m.editor.Text(), caret, name)
 	if err != nil {
-		r.errText = err.Error()
 		m.logf(logWarn, "rename: %s", err.Error())
-		return false
+		return err
 	}
 	m.editor.ApplyEdits(edits)
 	m.focus = focusEditor
 	m.drag.follow = true
-	m.logf(logOk, "renamed %s to %s — %s · ^Z undoes it", symbolWhat(r.sym), edits[0].Text, plural(len(edits), "place"))
-	return true
+	m.logf(logOk, "renamed %s to %s — %s · ^Z undoes it", symbolWhat(sym), edits[0].Text, plural(len(edits), "place"))
+	return nil
 }
 
 // symbolMenuItems are the editor menu's rows for the name under the caret

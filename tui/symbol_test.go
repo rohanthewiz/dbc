@@ -101,7 +101,7 @@ func TestShiftF12MarksUsesAndStepsThroughThem(t *testing.T) {
 func TestF2RenamesAsOneUndoStep(t *testing.T) {
 	m := symbolModel(t, symSQL, "o.total >", 0)
 	drive(t, m, fkey(tea.KeyF2, false))
-	rm, ok := m.modal.(*renameModal)
+	rm, ok := m.modal.(*promptModal)
 	if !ok {
 		t.Fatalf("modal = %T, want the rename prompt", m.modal)
 	}
@@ -111,7 +111,7 @@ func TestF2RenamesAsOneUndoStep(t *testing.T) {
 	typeText(t, m, "ord") // replaces the selected old name
 	key(t, m, "enter")
 	if m.modal != nil {
-		t.Fatalf("prompt still open: %s", rm.errText)
+		t.Fatalf("prompt still open: %s", rm.errMsg)
 	}
 	want := "SELECT ord.id, ord.total\nFROM orders ord\nWHERE ord.total > 10"
 	if got := m.editor.Text(); got != want {
@@ -148,8 +148,8 @@ func TestF2RefusesATakenNameAndATable(t *testing.T) {
 	drive(t, m, fkey(tea.KeyF2, false))
 	typeText(t, m, "c")
 	key(t, m, "enter")
-	rm, ok := m.modal.(*renameModal)
-	if !ok || !strings.Contains(rm.errText, "already a name") {
+	rm, ok := m.modal.(*promptModal)
+	if !ok || !strings.Contains(rm.errMsg, "already a name") {
 		t.Fatalf("a taken name should keep the prompt open with why; modal %T", m.modal)
 	}
 	key(t, m, "esc")

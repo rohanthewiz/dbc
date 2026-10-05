@@ -620,6 +620,20 @@ func pgSchemaPicker(t *testing.T, e *env, p *rod.Page) {
 		t.Fatalf("grid info = %q, want 2 rows (id, label)", info)
 	}
 
+	// Tab completes to the one match left, as Enter would, and keeps the
+	// box focused — rather than moving on and leaving the box back on the
+	// schema picked before (e2e_b)
+	box.MustClick()
+	waitFor(t, p, "the schema list again", `() => !document.getElementById("schema-list").hidden`)
+	box.MustInput("e2e_a")
+	waitFor(t, p, "the list narrowed to e2e_a", `() =>
+	  [...document.querySelectorAll("#schema-list li[data-i]")].map((li) => li.textContent).join().startsWith("e2e_a")`)
+	p.Keyboard.MustType(input.Tab)
+	waitFor(t, p, "e2e_a's tables after Tab", `() =>
+	  document.activeElement === document.getElementById("table-schema") &&
+	  document.getElementById("table-schema").value === "e2e_a" &&
+	  [...document.querySelectorAll("#tables li[data-name]")].map((l) => l.dataset.name).join() === "e2e_a.alpha"`)
+
 	p.MustElement(`#conns .conn-item[data-conn="lite"]`).MustClick()
 	waitConnected(t, p, "lite")
 }

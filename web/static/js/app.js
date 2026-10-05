@@ -279,7 +279,8 @@
   //   enter()       Enter with the list closed, i.e. just after a pick
   // Matching ignores case; rows whose label starts with the text come
   // before those that only contain it, so "sa" lists sales above
-  // analytics_sandbox — once there is text, Enter takes the first match.
+  // analytics_sandbox — once there is text, Enter takes the first match,
+  // and so does Tab, completing to it.
   function combo(o) {
     const { input, list, wrap } = o;
     let rows = [], hi = -1;
@@ -340,6 +341,10 @@
       }
     }
 
+    // typed: the box holds text the user typed, not the pick's name that
+    // show() (or a fresh focus) put there.
+    const typed = () => input.value.trim() !== "" && input.value !== o.label();
+
     function pick(i) {
       const r = rows[i];
       close();
@@ -374,6 +379,17 @@
         e.preventDefault();
         if (isOpen && hi >= 0) pick(hi);
         else if (!isOpen && o.enter) o.enter();
+      } else if (e.key === "Tab" && !e.shiftKey && isOpen && hi >= 0 && typed()) {
+        // Tab completes to the highlighted row, as a shell's would. Left to
+        // the browser, Tab moves focus on, and the blur below puts the box
+        // back to the pick standing before — which reads as Tab choosing
+        // that other schema. Focus stays in the box (as after Enter), so a
+        // second Tab, with the list closed, moves on as usual.
+        //
+        // Only once something is typed: on a box just focused the list is
+        // open on the current pick, and Tab there should still move focus.
+        e.preventDefault();
+        pick(hi);
       } else if (e.key === "Escape") {
         // first press drops the typing, a second leaves the box
         e.preventDefault();

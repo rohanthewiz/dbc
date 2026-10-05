@@ -706,6 +706,8 @@ a.btnlink:hover { border-color: var(--accent); }
 .qtab:hover { color: var(--fg); background: var(--panel); }
 .qtab.on { color: var(--fg); background: var(--bg); border-color: var(--line); margin-bottom: -1px; }
 .qtab .qt { overflow: hidden; text-overflow: ellipsis; }
+/* the console the tab shows, after its title */
+.qtab .qcon { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
 .qmark { display: flex; gap: 3px; font-size: 10px; }
 .qbusy { color: var(--warn); animation: pulse 1s ease-in-out infinite; }
 .qdone { color: var(--accent); font-size: 16px; line-height: 10px; }

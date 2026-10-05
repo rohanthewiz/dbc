@@ -490,6 +490,10 @@ type sideState struct {
 	// Navigable says the server sends one schema's tables at a time, so a
 	// schema pick goes to the server rather than filtering on the page.
 	Navigable bool `json:"navigable,omitempty"`
+	// Console is the database the connection is on, as a set of SQL
+	// consoles: the page swaps the tab's console when it changes. nil with
+	// no connection (the tab keeps the console it had) or consoles off.
+	Console *consoleRef `json:"console,omitempty"`
 }
 
 // dbRef is one database in the picker. Conn is the connection to switch to
@@ -508,7 +512,16 @@ type schemaRef struct {
 	Default bool   `json:"default,omitempty"`
 }
 
-// sidebar is the tab's sideState now.
+// sidebar is the tab's sideState now, with its console database.
+func (s *Server) sidebar(ws *workspace.Workspace) sideState {
+	st := sidebar(s.cfg, ws)
+	if ws.Active() != "" {
+		st.Console = s.consoleFor(ws.Active())
+	}
+	return st
+}
+
+// sidebar is the tab's sideState now, but for its console.
 func sidebar(cfg *config.Config, ws *workspace.Workspace) sideState {
 	st := sideState{Tables: tables(ws), Schema: ws.CatalogSchema()}
 	active := ws.Active()
@@ -619,7 +632,7 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 		t.notes(ev.Notes)
 		t.send("conn", connEvent{
 			Active: t.ws.Active(), Changed: ev.Changed, Failed: ev.Err != nil,
-			Status: ev.Status, sideState: sidebar(s.cfg, t.ws),
+			Status: ev.Status, sideState: s.sidebar(t.ws),
 		})
 		// landed or failed, the tab is on another connection (or none) than
 		// the "connecting" announcement said
@@ -639,7 +652,7 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 			return // a later pick or connect will report
 		}
 		t.notes(ev.Notes)
-		t.send("conn", connEvent{Active: t.ws.Active(), Failed: ev.Catalog == nil, sideState: sidebar(s.cfg, t.ws)})
+		t.send("conn", connEvent{Active: t.ws.Active(), Failed: ev.Catalog == nil, sideState: s.sidebar(t.ws)})
 		if ev.Counts != nil {
 			go func() { s.deliver(t, ev.Counts()) }()
 		}

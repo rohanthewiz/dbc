@@ -354,11 +354,17 @@ func (m *Model) drawPane(c *Canvas, r Rect, title string, f focusID, bg Style, b
 	body(c.Sub(r.Inset(1)))
 }
 
+// editorTitle names the console in the editor, when there is one, and what
+// ^R would run when that is not simply "the query".
 func (m *Model) editorTitle() string {
-	if stmts, tag := m.stmtsToRun(); len(stmts) > 0 && tag != "query" {
-		return "Query · ^R runs " + tag
+	title := "Query"
+	if m.console != "" {
+		title += " · " + m.consoleName
 	}
-	return "Query"
+	if stmts, tag := m.stmtsToRun(); len(stmts) > 0 && tag != "query" {
+		return title + " · ^R runs " + tag
+	}
+	return title
 }
 
 func (m *Model) resultsTitle() string {

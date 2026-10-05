@@ -55,14 +55,32 @@ func (s *Server) handleConns(ctx rweb.Context) error {
 // ---------------------------------------------------------------------------
 
 func (s *Server) handleTabs(ctx rweb.Context) error {
-	tabs, err := s.store.Tabs()
+	saved, err := s.store.Tabs()
 	if err != nil {
 		return fail(ctx, err)
 	}
-	if tabs == nil {
-		tabs = []Tab{}
+	return ok(ctx, s.savedTabs(saved))
+}
+
+// savedTabs is saved as the page boots from it: each tab with its
+// connection's console database, so the page can show a tab's console
+// before the tab has connected.
+func (s *Server) savedTabs(saved []Tab) []savedTab {
+	tabs := make([]savedTab, 0, len(saved))
+	for _, t := range saved {
+		st := savedTab{Tab: t}
+		if t.Conn != "" {
+			st.ConsoleDB = s.consoleFor(t.Conn)
+		}
+		tabs = append(tabs, st)
 	}
-	return ok(ctx, tabs)
+	return tabs
+}
+
+// savedTab is a saved tab as the page boots from it.
+type savedTab struct {
+	Tab
+	ConsoleDB *consoleRef `json:"consoleDb,omitempty"`
 }
 
 // maxBuffer caps a saved editor buffer. A buffer is typed or pasted SQL;
@@ -183,7 +201,7 @@ func (s *Server) state(t *tab) wsState {
 		ID: t.id, Win: t.win.id, Active: t.ws.Active(), Connected: t.ws.Catalog() != nil,
 		Busy: t.ws.Busy(), Status: t.ws.RunningStatus(),
 		HasResult: t.ws.LastResult() != nil, HasPlan: t.planState().plan != nil,
-		sideState: sidebar(s.cfg, t.ws),
+		sideState: s.sidebar(t.ws),
 	}
 	if name, ok := t.ws.Connecting(); ok {
 		st.Connecting = name
@@ -325,7 +343,7 @@ func (s *Server) handleConnect(ctx rweb.Context) error {
 	if st.Job == nil {
 		// already on it, catalog loaded: nothing to do, but the page may
 		// be reattaching and want its sidebar — send the state it has
-		t.send("conn", connEvent{Active: t.ws.Active(), sideState: sidebar(s.cfg, t.ws)})
+		t.send("conn", connEvent{Active: t.ws.Active(), sideState: s.sidebar(t.ws)})
 		return ok(ctx, map[string]any{"connecting": false})
 	}
 	t.send("connecting", map[string]string{"name": req.Name})
@@ -360,7 +378,7 @@ func (s *Server) handleDisconnect(ctx rweb.Context) error {
 		return fail(ctx, err)
 	}
 	t.notes(st.Notes)
-	t.send("conn", connEvent{Active: "", Changed: true, Status: "disconnected", sideState: sidebar(s.cfg, t.ws)})
+	t.send("conn", connEvent{Active: "", Changed: true, Status: "disconnected", sideState: s.sidebar(t.ws)})
 	s.hub.announceInUse()
 	go func() {
 		s.deliver(t, st.Job())

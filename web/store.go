@@ -56,6 +56,11 @@ type Tab struct {
 	Conn    string    `json:"conn"`   // the connection it was on; "" before any
 	Buffer  string    `json:"buffer"` // the editor's text
 	Updated time.Time `json:"updated"`
+	// Console is the name of the console of Conn's database the tab shows
+	// (consoles.go); "" before it has one, or with consoles off. Its text
+	// is the console's file; Buffer keeps a copy, so a dbc from before
+	// consoles still opens the tab as it was.
+	Console string `json:"console"`
 }
 
 // SavedConn is a row of the conns table, where dbc web kept connections
@@ -98,6 +103,13 @@ var storeSchema = []string{
 	`CREATE TABLE IF NOT EXISTS layout (
 		key   TEXT PRIMARY KEY,
 		value TEXT NOT NULL
+	)`,
+	// a tab's console name: a table of its own rather than a column of
+	// tabs, because bytdb's ALTER TABLE has no IF NOT EXISTS to keep the
+	// schema's create-on-every-open idempotent
+	`CREATE TABLE IF NOT EXISTS tab_consoles (
+		id      TEXT PRIMARY KEY,
+		console TEXT NOT NULL
 	)`,
 	`CREATE TABLE IF NOT EXISTS conns (
 		name    TEXT PRIMARY KEY,
@@ -197,7 +209,31 @@ func (s *Store) Tabs() ([]Tab, error) {
 		}
 		out = append(out, t)
 	}
-	return out, wrap(rows.Err(), "op", "list tabs")
+	if err = rows.Err(); err != nil {
+		return nil, serr.Wrap(err, "op", "list tabs")
+	}
+	return out, s.tabConsoles(ctx, out)
+}
+
+// tabConsoles fills in each tab's Console from the tab_consoles table.
+func (s *Store) tabConsoles(ctx context.Context, tabs []Tab) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, console FROM tab_consoles`)
+	if err != nil {
+		return serr.Wrap(err, "op", "list tab consoles")
+	}
+	defer rows.Close()
+	byID := map[string]string{}
+	for rows.Next() {
+		var id, c string
+		if err = rows.Scan(&id, &c); err != nil {
+			return serr.Wrap(err, "op", "scan tab console")
+		}
+		byID[id] = c
+	}
+	for i := range tabs {
+		tabs[i].Console = byID[tabs[i].ID]
+	}
+	return wrap(rows.Err(), "op", "list tab consoles")
 }
 
 // SaveTab writes a tab, replacing any saved under the same id.
@@ -213,13 +249,25 @@ func (s *Store) SaveTab(t Tab) error {
 	}
 	ctx, cancel := opCtx()
 	defer cancel()
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return serr.Wrap(err, "op", "save tab", "tab", t.ID)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op after Commit
+	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO tabs (id, title, conn, buffer, updated) VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (id) DO UPDATE SET
 			title = EXCLUDED.title, conn = EXCLUDED.conn,
 			buffer = EXCLUDED.buffer, updated = EXCLUDED.updated`,
-		t.ID, t.Title, t.Conn, t.Buffer, t.Updated)
-	return wrap(err, "op", "save tab", "tab", t.ID)
+		t.ID, t.Title, t.Conn, t.Buffer, t.Updated); err != nil {
+		return serr.Wrap(err, "op", "save tab", "tab", t.ID)
+	}
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO tab_consoles (id, console) VALUES ($1, $2)
+		ON CONFLICT (id) DO UPDATE SET console = EXCLUDED.console`, t.ID, t.Console); err != nil {
+		return serr.Wrap(err, "op", "save tab console", "tab", t.ID)
+	}
+	return wrap(tx.Commit(), "op", "save tab", "tab", t.ID)
 }
 
 // DeleteTab forgets a saved tab. A missing one is success: the caller
@@ -233,8 +281,11 @@ func (s *Store) DeleteTab(id string) error {
 	}
 	ctx, cancel := opCtx()
 	defer cancel()
-	_, err := s.db.ExecContext(ctx, `DELETE FROM tabs WHERE id = $1`, id)
-	return wrap(err, "op", "delete tab", "tab", id)
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM tabs WHERE id = $1`, id); err != nil {
+		return serr.Wrap(err, "op", "delete tab", "tab", id)
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM tab_consoles WHERE id = $1`, id)
+	return wrap(err, "op", "delete tab console", "tab", id)
 }
 
 // Layout returns every saved layout value (pane sizes and the like), keyed

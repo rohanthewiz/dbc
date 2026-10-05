@@ -310,7 +310,7 @@ func (m *Model) openEditorMenu(x, y int) {
 	case slices.Equal(allStmts, stmts):
 		allWhy = "the selection already covers every statement"
 	}
-	m.openMenu(x, y, []menuItem{
+	m.openMenu(x, y, append([]menuItem{
 		{label: "▶ Run " + orDefault(tag, "statement"), key: "^R", why: runWhy,
 			act: func(m *Model) tea.Cmd { return m.runQuery() }},
 		{label: "▶ Run " + allLabel, key: "^⇧R", why: allWhy,
@@ -338,7 +338,7 @@ func (m *Model) openEditorMenu(x, y int) {
 		{label: "Suggest…", key: "^Space", act: func(m *Model) tea.Cmd { return m.openCompletion(true) }},
 		{label: "✦ Ask the assistant about this query", key: "^A", why: runWhy,
 			act: func(m *Model) tea.Cmd { return m.askAbout("Explain this query.") }},
-	})
+	}, m.consoleMenuItems()...))
 }
 
 // openConnMenu lists the connections; picking one connects. While the

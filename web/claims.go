@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/rohanthewiz/rweb"
+
+	"github.com/rohanthewiz/dbc/userdata"
 )
 
 // Claims: which window (browser tab) is showing each saved query tab.
@@ -195,9 +197,9 @@ type claimReq struct {
 // claimResp is what a window got: the saved tabs it now holds (a boot
 // draws them) and the keys another window holds.
 type claimResp struct {
-	Tabs    []Tab    `json:"tabs"`
-	Claimed []string `json:"claimed"`
-	Held    []string `json:"held"`
+	Tabs    []savedTab `json:"tabs"`
+	Claimed []string   `json:"claimed"`
+	Held    []string   `json:"held"`
 }
 
 // handleClaim is POST /api/v1/win/:id/tabs.
@@ -228,18 +230,20 @@ func (s *Server) handleClaim(ctx rweb.Context) error {
 	} else {
 		got, held = s.hub.claim(w, keys)
 	}
-	out := claimResp{Tabs: []Tab{}, Claimed: got, Held: held}
+	out := claimResp{Claimed: got, Held: held}
 	if out.Claimed == nil {
 		out.Claimed = []string{}
 	}
 	if out.Held == nil {
 		out.Held = []string{}
 	}
+	var mine []Tab
 	for _, t := range saved {
 		if slices.Contains(got, t.ID) {
-			out.Tabs = append(out.Tabs, t)
+			mine = append(mine, t)
 		}
 	}
+	out.Tabs = s.savedTabs(mine)
 	return ok(ctx, out)
 }
 
@@ -253,6 +257,13 @@ func (s *Server) handleRelease(ctx rweb.Context) error {
 	id := ctx.Request().PathParam("id")
 	var req struct {
 		Save *Tab `json:"save"`
+		// Console is the shown tab's console, saved as a PUT would (the
+		// page's last edits ride here, as its tab's do on Save)
+		Console *struct {
+			userdata.ConsoleDB
+			Name string `json:"name"`
+			consoleSave
+		} `json:"console"`
 	}
 	if err := decode(ctx, &req); err != nil {
 		return fail(ctx, err)
@@ -260,6 +271,15 @@ func (s *Server) handleRelease(ctx rweb.Context) error {
 	if req.Save != nil {
 		if err := s.saveTab(id, *req.Save); err != nil {
 			return fail(ctx, err)
+		}
+	}
+	if c := req.Console; c != nil && s.opt.ConsolesDir != "" {
+		// a conflict is not written, and there is no page left to tell:
+		// the file's newer text stands, as it would have on screen
+		if path := userdata.ConsolePath(s.opt.ConsolesDir, c.ConsoleDB, c.Name); path != "" {
+			if _, err := s.saveConsole(id, c.ConsoleDB, c.Name, path, c.consoleSave); err != nil {
+				return fail(ctx, err)
+			}
 		}
 	}
 	if w, err := s.hub.window(id); err == nil {

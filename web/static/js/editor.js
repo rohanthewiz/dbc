@@ -154,6 +154,42 @@
       const d = docs.get(key);
       if (d && key !== docKey) { d.model.dispose(); docs.delete(key); }
     },
+    // A document is a query tab's own, or — with consoles — a console's,
+    // shared by every tab of the window showing that console (app.js
+    // docOf). The three below let app.js reach one that is not on screen.
+    //
+    // docKey is the key of the document on screen.
+    docKey: () => docKey,
+    // docText is key's text: the editor's for the one on screen, the
+    // model's for another; null for a document the textarea editor does
+    // not keep (it has one text, swapped on useDoc) or never opened.
+    docText(key) {
+      if (key === docKey) return api.text();
+      const d = docs.get(key);
+      return d ? d.model.getValue() : null;
+    },
+    // replaceDoc puts text in key's document as ONE EDIT, so Ctrl+Z brings
+    // back what it replaced: a console saved elsewhere lands this way, and
+    // the user's own version is an undo away. A document not opened yet
+    // is left alone; it will be opened with the new text. Firing the
+    // change (on screen) lets the page save what the user undoes to.
+    replaceDoc(key, text) {
+      const d = docs.get(key);
+      if (ed && d) {
+        if (d.model.getValue() === text) return;
+        d.model.pushEditOperations([], [{ range: d.model.getFullModelRange(), text }], () => null);
+        d.model.pushStackElement();
+        return;
+      }
+      if (key === docKey) { ta.value = text; }
+    },
+    // renameDoc moves key's document to a new key (a console renamed),
+    // keeping its undo history, caret and scroll.
+    renameDoc(from, to) {
+      const d = docs.get(from);
+      if (d && !docs.has(to)) { docs.delete(from); docs.set(to, d); }
+      if (docKey === from) docKey = to;
+    },
     // warm asks for completions once when the active connection changes,
     // so its schema is read while the user is still looking at the page
     // rather than on their first keystroke. The answer is thrown away.
@@ -395,6 +431,8 @@
     // command palette on F1 (still in its right-click menu)
     ed.addCommand(K.Alt | C.KeyT, () => dbc.cmd.newTab());
     ed.addCommand(K.Alt | C.KeyW, () => dbc.cmd.closeTab());
+    ed.addCommand(K.Alt | C.KeyN, () => dbc.cmd.newConsole());
+    ed.addCommand(K.Alt | C.KeyC, () => dbc.cmd.nextConsole());
     for (let n = 1; n <= 9; n++) ed.addCommand(K.Alt | C["Digit" + n], () => dbc.cmd.pickTab(n - 1));
     ed.addCommand(C.F1, () => dbc.cmd.help());
     bind(0, C.KeyO, () => dbc.cmd.scripts());

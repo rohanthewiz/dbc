@@ -48,6 +48,7 @@ func TestWeb(t *testing.T) {
 		{"tabs survive a reload", tabsSurviveReload},
 		{"sidebar fold keys", sidebarFoldKeys},
 		{"other tabs' connections", otherTabsConns},
+		{"consoles per database", consolesPerDatabase},
 	}
 	for _, s := range steps {
 		ok := t.Run(s.name, func(t *testing.T) {
@@ -555,4 +556,85 @@ func otherTabsConns(t *testing.T, e *env, p *rod.Page) {
 	p.MustActivate()
 	p.MustElement(`#conns .conn-item[data-conn="lite"]`).MustClick()
 	waitConnected(t, p, "lite")
+}
+
+// consolesPerDatabase: a tab's text is a console of the database it is on —
+// a file under consoles/<host>/<database>/ — and follows the tab's
+// connection there and back; Alt+N adds a console of the database, Alt+C
+// cycles through them, and a console changed on disk (the TUI saving it)
+// is loaded rather than written over.
+func consolesPerDatabase(t *testing.T, e *env, p *rod.Page) {
+	setText := func(s string) {
+		t.Helper()
+		eval(t, p, `() => { dbc.editor.setText(""); dbc.editor.focus(); }`)
+		p.MustInsertText(s)
+	}
+	// onDisk waits for a console of an embedded database to hold text, and
+	// returns its file
+	onDisk := func(text string) string {
+		t.Helper()
+		deadline := time.Now().Add(waitLimit)
+		for {
+			files, _ := filepath.Glob(filepath.Join(e.home, ".config", "dbc", "consoles", "local", "*", "*.sql"))
+			for _, f := range files {
+				if b, err := os.ReadFile(f); err == nil && string(b) == text {
+					return f
+				}
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("no console file holds %q (have %v)\n%s", text, files, pageState(p))
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	editorIs := func(what, text string) {
+		t.Helper()
+		waitFor(t, p, what, `(s) => dbc.editor.text() === s`, text)
+	}
+
+	waitConnected(t, p, "lite")
+	setText("SELECT 'on lite'")
+	liteFile := onDisk("SELECT 'on lite'")
+	if db := filepath.Base(filepath.Dir(liteFile)); !strings.HasPrefix(db, "lite.db-") {
+		t.Fatalf("lite's console is in %s, want local/lite.db-<hash>/", liteFile)
+	}
+
+	// another database: another console; back again: this one's text
+	p.MustElement(`#conns .conn-item[data-conn="lite2"]`).MustClick()
+	waitConnected(t, p, "lite2")
+	waitFor(t, p, "lite2's console", `() => dbc.editor.text() !== "SELECT 'on lite'"`)
+	setText("SELECT 'on lite2'")
+	if f := onDisk("SELECT 'on lite2'"); filepath.Dir(f) == filepath.Dir(liteFile) {
+		t.Fatalf("lite2's console %s is in lite's directory", f)
+	}
+	p.MustElement(`#conns .conn-item[data-conn="lite"]`).MustClick()
+	waitConnected(t, p, "lite")
+	editorIs("lite's console back", "SELECT 'on lite'")
+
+	// Alt+N: a fresh console of lite, named on the tab
+	before := evalStr(t, p, `() => document.querySelector("#qtabs .qtab.on .qcon").textContent`)
+	chord(t, p, modAlt, "n", "KeyN", 78)
+	waitFor(t, p, "a new console", `(b) => dbc.editor.text() === "" &&
+	  document.querySelector("#qtabs .qtab.on .qcon").textContent !== b`, before)
+	setText("SELECT 'another'")
+	if f := onDisk("SELECT 'another'"); filepath.Dir(f) != filepath.Dir(liteFile) {
+		t.Fatalf("the new console %s is not lite's", f)
+	}
+	// Alt+C from the newest wraps round to the first, lite's "console"
+	chord(t, p, modAlt, "c", "KeyC", 67)
+	editorIs("Alt+C back to the first console", "SELECT 'on lite'")
+
+	// the TUI saves the console meanwhile: the next save here meets the
+	// newer file, which the editor then shows (Ctrl+Z would bring this
+	// tab's text back) — the file is not overwritten
+	if err := os.WriteFile(liteFile, []byte("SELECT 'from the tui'"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	eval(t, p, `() => dbc.editor.focus()`)
+	p.MustInsertText(" -- edited here")
+	editorIs("the file's text loaded", "SELECT 'from the tui'")
+	waitFor(t, p, "the conflict logged", `() => document.getElementById("log").textContent.includes("was changed elsewhere")`)
+	if b, _ := os.ReadFile(liteFile); string(b) != "SELECT 'from the tui'" {
+		t.Fatalf("the page overwrote the TUI's save: %q", b)
+	}
 }

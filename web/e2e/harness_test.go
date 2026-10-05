@@ -518,6 +518,7 @@ func chord(t *testing.T, p *rod.Page, mod int, key, code string, vk int, command
 
 // CDP modifier bits (Input.dispatchKeyEvent).
 const (
+	modAlt  = 1
 	modCtrl = 2
 	modMeta = 4
 )

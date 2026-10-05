@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -89,6 +90,11 @@ type Options struct {
 	// archive (userdata.ChatsDir), so a conversation had in either is
 	// offered in both. "" keeps them in memory only.
 	ChatsDir string
+	// ConsolesDir is where the SQL consoles live — the TUI's
+	// (userdata.ConsolesDir), so a query tab and the terminal share each
+	// database's running SQL files. "" turns consoles off: every tab keeps
+	// a buffer of its own (see consoles.go).
+	ConsolesDir string
 	// StartChat starts an assistant conversation; nil is ai.Start. Tests
 	// hand in a scripted agent (package aitest): the real one would need
 	// installing and signing in, and would spend Copilot requests.
@@ -110,6 +116,10 @@ type Server struct {
 	rw    *rweb.Server
 	ready chan struct{}
 	ver   string // asset version for cache busting
+
+	// consoleMu makes a console save's read-compare-write one step (see
+	// consoles.go), and orders renames and deletes with it.
+	consoleMu sync.Mutex
 }
 
 //go:embed all:static
@@ -166,7 +176,10 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) (*Server, error) {
 	// connections file; see moveStoreConns. Its warnings go to the terminal
 	// and join the config's, which a new window's page logs (handleOpen) —
 	// appending is safe here, as nothing is serving yet.
-	for _, w := range s.moveStoreConns() {
+	// Before consoles each saved tab kept its own buffer; at the first start
+	// with consoles those move into them (moveTabBuffers), after the saved
+	// connections are in place to say which database each tab was on.
+	for _, w := range append(s.moveStoreConns(), s.moveTabBuffers()...) {
 		opt.Logf("warning: %s", w)
 		cfg.Warnings = append(cfg.Warnings, w)
 	}
@@ -217,6 +230,11 @@ func (s *Server) routes() {
 	r.Get("/api/v1/tabs", s.handleTabs)
 	r.Put("/api/v1/tabs/:id", s.handleSaveTab)
 	r.Delete("/api/v1/tabs/:id", s.handleDeleteTab)
+	r.Get("/api/v1/consoles/:host/:db", s.handleConsoles)
+	r.Get("/api/v1/consoles/:host/:db/:name", s.handleConsole)
+	r.Put("/api/v1/consoles/:host/:db/:name", s.handleSaveConsole)
+	r.Delete("/api/v1/consoles/:host/:db/:name", s.handleDeleteConsole)
+	r.Post("/api/v1/consoles/:host/:db/:name/rename", s.handleRenameConsole)
 	r.Get("/api/v1/layout", s.handleLayout)
 	r.Put("/api/v1/layout", s.handleSaveLayout)
 	r.Get("/api/v1/history", s.handleHistory)

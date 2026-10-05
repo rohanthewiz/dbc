@@ -39,9 +39,13 @@
   const wsKey = (key) => "dbc.ws." + key;
 
   // tabs are the query tabs, in strip order:
-  //   {key, title, conn, buffer, ws, busy, done, failed, stateful, status, level, grid, planOpen, lost}
+  //   {key, title, conn, buffer, ws, busy, done, failed, stateful, status, level, grid, planOpen, lost,
+  //    cdb, console}
   // key is the saved tab's id (web.bytdb); ws its workspace, "" until
   // first shown. buffer is kept only while the tab is in the background.
+  // cdb and console: the SQL console the tab shows — its database
+  // {host, database, label, names} and its name — unset before the tab's
+  // connection has said which database it is on (see "consoles" below).
   // planOpen: its results pane was on the plan — saved in the layout's
   // "plans" key (see savePlans), so a reload lands back on it.
   // lost: another browser tab of dbc web took this tab over (the server
@@ -630,6 +634,10 @@
       } else if (ev.type === "inuse") {
         inuse = d.tabs || [];
         markInUse();
+      } else if (ev.type === "console") {
+        onConsoleSaved(d);
+      } else if (ev.type === "consoles") {
+        onConsolesChanged(d);
       } else if (ev.type.startsWith("chat.")) dbc.chat.onEvent(ev.type, d);
       return;
     }
@@ -677,6 +685,7 @@
         if (d.status) setStatus(d.status);
         else if (!state.busy) setStatus("ready on " + d.active);
         if (d.changed) saveTab(t);
+        followConsole(t, d.console);
         dbc.chat.refresh(); // another catalog: other tables' schema
         break;
       case "counts":
@@ -725,6 +734,7 @@
       case "conn":
         t.conn = d.active;
         if (d.changed) saveTab(t);
+        followConsole(t, d.console);
         break;
     }
     trackTab(t, type, d);
@@ -792,14 +802,18 @@
     const prev = state.tab;
     if (prev && prev !== t) {
       prev.buffer = dbc.editor.text();
+      const pc = cons.get(docOf(prev));
+      if (pc) pc.text = prev.buffer; // what a textarea editor reopens it with
       prev.grid = dbc.grid.snapshot();
       prev.planOpen = dbc.cmd.planOpen();
       saveTab(prev);
+      saveConsole(docOf(prev));
     }
     state.tab = t;
     state.ws = t.ws;
     t.done = false;
-    dbc.editor.useDoc(t.key, t.buffer || "");
+    const c = cons.get(docOf(t));
+    dbc.editor.useDoc(docOf(t), c ? c.text : t.buffer || "");
     renderTabs();
     saveLayout(Object.assign({ tab: t.key }, plansChanged()));
     dbc.cmd.resetPlan();
@@ -870,6 +884,7 @@
     const t = state.tab;
     state.active = st.active;
     t.conn = st.active;
+    followConsole(t, st.console);
     markActive(st.active, st.connecting || "");
     showSide(st);
     setBusy(st.busy);
@@ -1131,6 +1146,8 @@
   Object.assign(dbc.cmd, {
     run, stop, history, preview, editorState, scripts, help, newTab, pickTab, connect, disconnect, connRenamed,
     closeTab: () => closeTab(state.tab),
+    newConsole: () => newConsole(state.tab),
+    nextConsole: () => nextConsole(state.tab),
     exportMenu: () => dbc.grid.exportMenu(),
   });
 
@@ -1147,6 +1164,8 @@
     if (e.altKey && !e.ctrlKey && !e.metaKey) {
       if (e.code === "KeyT") { e.preventDefault(); newTab(); return; }
       if (e.code === "KeyW") { e.preventDefault(); closeTab(state.tab); return; }
+      if (e.code === "KeyN") { e.preventDefault(); newConsole(state.tab); return; }
+      if (e.code === "KeyC") { e.preventDefault(); nextConsole(state.tab); return; }
       const n = /^Digit([1-9])$/.exec(e.code);
       if (n) { e.preventDefault(); pickTab(+n[1] - 1); return; }
     }
@@ -1434,20 +1453,316 @@
     saveLayout({ sideWidth: "" });
   });
 
+  // ── consoles: a tab's text is one of its database's SQL consoles ───────
+  // The running .sql files the TUI keeps too (web/consoles.go), namespaced
+  // host ─► database ─► name. A tab shows ONE console of the database its
+  // connection is on, and follows the connection:
+  //
+  //   "conn" {console: {host, database, label, names}} ─► followConsole(t)
+  //      same database as the tab's console ─► nothing
+  //      another ─► save the old console, then show, of the new database,
+  //                 the first console no other tab here shows — or a new
+  //                 one ("console-2"…), which gets its file once typed in
+  //
+  // A tab from before consoles (its own buffer, never moved in because it
+  // had no connection then) seeds a new console with that buffer instead.
+  //
+  // Documents are per console, not per tab (docOf): two tabs here showing
+  // one console share it, edits and all. The files are shared with other
+  // windows, the TUI and any editor, so a save says the revision it was
+  // made from, and the server refuses to overwrite a file that moved on:
+  //
+  //   PUT {text, base: rev} ─► {rev}                 saved
+  //                         ─► {conflict, text, rev} not saved: the file's
+  //                            text is loaded as ONE undoable edit, so
+  //                            Ctrl+Z gets this tab's text back (and the
+  //                            next save, from the new rev, writes it)
+  //
+  // Another window's save arrives as "console" and is loaded the same way
+  // when this window has no unsaved edits to that console; with some, the
+  // next save meets the conflict above.
+  //
+  // cons: doc key ─► {cdb, name, rev, saved, text, saving, again}
+  //   rev: the file's revision as last loaded or saved ("" = no file)
+  //   saved: the text at that revision; text: the text when last seen
+  //   (what a textarea editor reopens it with); saving: the PUT in flight
+  const cons = new Map();
+  const ckey = (cdb, name) => "c:" + cdb.host + "/" + cdb.database + "/" + name;
+  const cpath = (cdb, name) => "/api/v1/consoles/" + encodeURIComponent(cdb.host) + "/" +
+    encodeURIComponent(cdb.database) + (name === undefined ? "" : "/" + encodeURIComponent(name));
+  const sameDB = (a, b) => !!a && !!b && a.host === b.host && a.database === b.database;
+  // docOf is the editor document a tab shows: its console's, else its own
+  const docOf = (t) => (t.console && t.cdb ? ckey(t.cdb, t.console) : t.key);
+
+  // textOf is a tab's text: its document's, wherever that is
+  function textOf(t) {
+    const v = dbc.editor.docText(docOf(t));
+    if (v !== null) return v;
+    const c = cons.get(docOf(t));
+    return c ? c.text : t.buffer || "";
+  }
+
+  // nextConsoleName is userdata.NextConsoleName: "console" if free, else
+  // the lowest free "console-n"
+  function nextConsoleName(taken) {
+    if (!taken.includes("console")) return "console";
+    let n = 2;
+    while (taken.includes("console-" + n)) n++;
+    return "console-" + n;
+  }
+
+  // loadConsole reads a console once; later calls get the copy here, which
+  // the saves and "console" events keep current.
+  async function loadConsole(cdb, name) {
+    const k = ckey(cdb, name);
+    if (cons.has(k)) return cons.get(k);
+    const r = await api("GET", cpath(cdb, name));
+    if (!cons.has(k)) cons.set(k, { cdb, name, rev: r.rev, saved: r.text, text: r.text, saving: null, again: false });
+    return cons.get(k);
+  }
+
+  // saveConsole writes document k's console if it changed. One PUT at a
+  // time per console: a second save waits for the first's revision rather
+  // than send a stale base and meet a conflict of its own making.
+  function saveConsole(k, keepalive) {
+    const c = cons.get(k);
+    if (!c) return Promise.resolve(); // not a console's document
+    if (c.saving) { c.again = true; return c.saving; }
+    const text = dbc.editor.docText(k) ?? c.text;
+    c.text = text;
+    if (text === c.saved) return Promise.resolve();
+    c.saving = fetch(cpath(c.cdb, c.name) + winQuery(), {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, base: c.rev }), keepalive: !!keepalive,
+    }).then((res) => res.json()).then((env) => {
+      if (!env.success) { log("warn", "console " + c.name + " not saved: " + env.error); return; }
+      const r = env.data;
+      if (r.conflict) {
+        adopt(c, r.text, r.rev);
+        log("warn", "console " + c.cdb.label + " · " + c.name + " was changed elsewhere (another window, the TUI or " +
+          "an editor) — this tab now shows that version; Ctrl+Z brings back yours, which then saves over it");
+        return;
+      }
+      c.rev = r.rev;
+      c.saved = text;
+    }).catch(() => { /* best effort: the next edit saves again */ }).finally(() => {
+      c.saving = null;
+      if (c.again) { c.again = false; saveConsole(ckey(c.cdb, c.name)); } // its key may have been renamed meanwhile
+    });
+    return c.saving;
+  }
+
+  // adopt makes text, at rev, the console's — in its document as one edit.
+  function adopt(c, text, rev) {
+    c.rev = rev;
+    c.saved = text;
+    c.text = text;
+    dbc.editor.replaceDoc(ckey(c.cdb, c.name), text);
+  }
+
+  // onConsoleSaved is another window's save: loaded here unless this window
+  // has edits of its own to the console still unsaved.
+  function onConsoleSaved(d) {
+    if (d.win === state.win) return;
+    const c = cons.get(ckey(d, d.name));
+    if (!c || c.saving || (dbc.editor.docText(ckey(d, d.name)) ?? c.text) !== c.saved) return;
+    adopt(c, d.text, d.rev);
+  }
+
+  // followConsole keeps tab t on a console of the database its connection
+  // is on (ref, from a sidebar; null with no connection, when the tab keeps
+  // the console it has). Chained per tab, so two connects in a row swap in
+  // order.
+  function followConsole(t, ref) {
+    if (!ref) return;
+    if (t.console && sameDB(t.cdb, ref)) {
+      t.cdb.names = ref.names; // the freshest list
+      return;
+    }
+    t.chain = (t.chain || Promise.resolve()).then(() => {
+      if (!tabs.includes(t) || (t.console && sameDB(t.cdb, ref))) return;
+      const text = t.console ? "" : textOf(t);
+      const seed = text.trim() !== "" ? text : "";
+      const used = tabs.filter((o) => o !== t && o.console && sameDB(o.cdb, ref)).map((o) => o.console);
+      let name = seed ? "" : ref.names.find((n) => !used.includes(n));
+      if (!name) name = nextConsoleName(ref.names.concat(used));
+      return showConsole(t, ref, name, seed).then((shown) => {
+        if (shown && t === state.tab) log("info", "console: " + ref.label + " · " + name);
+      });
+    });
+  }
+
+  // showConsole puts console name of database cdb in tab t, saving the one
+  // it showed. seed, for a console with no text yet, becomes its first
+  // text (and is saved). It reports whether the console could be read.
+  async function showConsole(t, cdb, name, seed) {
+    const oldKey = docOf(t);
+    if (t.console) await saveConsole(oldKey);
+    let c;
+    try {
+      c = await loadConsole(cdb, name);
+    } catch (e) {
+      log("err", "could not open console " + name + ": " + e.message);
+      return false;
+    }
+    t.cdb = cdb;
+    t.console = name;
+    const k = docOf(t);
+    if (seed && c.text === "" && dbc.editor.docText(k) === null) c.text = seed;
+    t.buffer = c.text;
+    if (t === state.tab) dbc.editor.useDoc(k, c.text);
+    // the document left, if no tab here shows it now: anything typed into
+    // it while this was loading is saved before it goes
+    if (oldKey !== k && !tabs.some((o) => docOf(o) === oldKey)) {
+      saveConsole(oldKey);
+      dbc.editor.dropDoc(oldKey);
+    }
+    saveTab(t);
+    if (seed) saveConsole(k);
+    renderTabs();
+    return true;
+  }
+
+  // refreshNames re-reads a database's console list into cdb.names, giving
+  // up quietly: the list on hand is only a little stale.
+  function refreshNames(cdb) {
+    return api("GET", cpath(cdb)).then((r) => { cdb.names = r.names; }, () => {});
+  }
+
+  // consoleNames is the console list a menu or Alt+C offers for t: the
+  // database's files, plus consoles tabs here show that have none yet.
+  function consoleNames(t) {
+    const names = (t.cdb.names || []).slice();
+    for (const o of tabs) {
+      if (o.console && sameDB(o.cdb, t.cdb) && !names.includes(o.console)) names.push(o.console);
+    }
+    return names;
+  }
+
+  // consoleItems are the tab menu's console rows: the database's consoles
+  // (the tab's marked, others' tabs named), and new, rename and delete.
+  function consoleItems(t) {
+    if (!t.cdb) return [];
+    const items = [{ head: "consoles · " + t.cdb.label }];
+    for (const n of consoleNames(t)) {
+      const other = tabs.find((o) => o !== t && o.console === n && sameDB(o.cdb, t.cdb));
+      items.push({ label: (n === t.console ? "● " : "   ") + n + (other ? "  · in " + other.title : ""),
+        why: n === t.console ? "it is the one in this tab" : "", act: () => showConsole(t, t.cdb, n, "") });
+    }
+    return items.concat([
+      { label: "+ New console", key: "Alt+N", act: () => newConsole(t) },
+      { label: "Next console", key: "Alt+C", act: () => nextConsole(t) },
+      { label: "Rename console…", act: () => renameConsole(t) },
+      { label: "Delete console…", act: () => deleteConsole(t) },
+    ]);
+  }
+
+  // newConsole (Alt+N) puts a fresh console of the tab's database in it.
+  async function newConsole(t) {
+    if (!t || !t.cdb) { log("warn", "no console to add to: connect to a database first"); return; }
+    await refreshNames(t.cdb);
+    await showConsole(t, t.cdb, nextConsoleName(consoleNames(t)), "");
+    if (t === state.tab) { log("info", "console: " + t.cdb.label + " · " + t.console); dbc.editor.focus(); }
+  }
+
+  // nextConsole (Alt+C) moves the tab to its database's next console.
+  async function nextConsole(t) {
+    if (!t || !t.cdb) { log("warn", "no consoles: connect to a database first"); return; }
+    await refreshNames(t.cdb);
+    const names = consoleNames(t);
+    if (names.length < 2) { log("info", "this database has one console — Alt+N adds another"); return; }
+    await showConsole(t, t.cdb, names[(names.indexOf(t.console) + 1) % names.length], "");
+    if (t === state.tab) { log("info", "console: " + t.cdb.label + " · " + t.console); dbc.editor.focus(); }
+  }
+
+  // renameConsole asks for a new name. The server tells every window, and
+  // each moves its tabs along (onConsolesChanged).
+  function renameConsole(t) {
+    if (!t.cdb || !t.console) return;
+    const input = el("input", { class: "hfilter", value: t.console, maxlength: "64", "aria-label": "Console name", spellcheck: "false" });
+    const go = el("button", { type: "button", class: "primary" }, "Rename");
+    const no = el("button", { type: "button" }, "Cancel");
+    const submit = async () => {
+      const to = input.value.trim();
+      dbc.modal.close();
+      if (!to || to === t.console) return;
+      await saveConsole(docOf(t)); // its latest text goes with it
+      api("POST", cpath(t.cdb, t.console) + "/rename", { to }).catch((e) => log("err", "rename: " + e.message));
+    };
+    go.addEventListener("click", submit);
+    no.addEventListener("click", () => dbc.modal.close());
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } });
+    dbc.modal.open({ title: "Rename console " + t.console, focus: input,
+      body: el("div", "confirm", el("p", null, "Letters, digits, '.', '-' and '_'. Every tab showing it follows."), input),
+      foot: el("div", "mfoot", go, no) });
+  }
+
+  // deleteConsole removes the tab's console file, after asking. Tabs
+  // showing it, in every window, move to another console of the database.
+  function deleteConsole(t) {
+    if (!t.cdb || !t.console) return;
+    const name = t.console, cdb = t.cdb;
+    const yes = el("button", { type: "button", class: "primary" }, "Delete");
+    const no = el("button", { type: "button" }, "Keep it");
+    yes.addEventListener("click", () => {
+      dbc.modal.close();
+      api("DELETE", cpath(cdb, name)).catch((e) => log("err", "delete: " + e.message));
+    });
+    no.addEventListener("click", () => dbc.modal.close());
+    dbc.modal.open({ title: "Delete console " + name + "?", focus: no,
+      body: el("div", "confirm", el("p", null, "The console " + cdb.label + " · " + name + " and the SQL in it are deleted, " +
+        "here, in other windows and for the TUI. Tabs showing it move to another console.")),
+      foot: el("div", "mfoot", yes, no) });
+  }
+
+  // onConsolesChanged is the "consoles" event: a database's consoles were
+  // renamed or deleted, by this window or another.
+  function onConsolesChanged(d) {
+    for (const t of tabs) if (t.cdb && sameDB(t.cdb, d)) t.cdb.names = d.names;
+    if (d.renamed) {
+      const from = ckey(d, d.renamed.from), to = ckey(d, d.renamed.to);
+      const c = cons.get(from);
+      if (c) { cons.delete(from); c.name = d.renamed.to; cons.set(to, c); }
+      dbc.editor.renameDoc(from, to);
+      for (const t of tabs) {
+        if (t.cdb && sameDB(t.cdb, d) && t.console === d.renamed.from) { t.console = d.renamed.to; saveTab(t); }
+      }
+      renderTabs();
+    }
+    if (d.deleted) {
+      const k = ckey(d, d.deleted);
+      cons.delete(k); // nothing more is saved to it
+      for (const t of tabs.filter((o) => docOf(o) === k)) {
+        const cdb = t.cdb;
+        t.console = "";
+        t.buffer = "";
+        // as a connect would, but with nothing to seed: the SQL went with
+        // the console, on purpose
+        const used = tabs.filter((o) => o.console && sameDB(o.cdb, cdb)).map((o) => o.console);
+        const name = d.names.find((n) => !used.includes(n)) || nextConsoleName(d.names.concat(used));
+        t.chain = (t.chain || Promise.resolve()).then(() => showConsole(t, cdb, name, "")).then(() => {
+          if (!tabs.some((o) => docOf(o) === k)) dbc.editor.dropDoc(k);
+        });
+      }
+    }
+  }
+
   // ── saving tabs: every tab's buffer, title and connection survive a restart
   let saveTimer = 0;
 
   function scheduleSave() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => saveTab(state.tab), 600);
+    saveTimer = setTimeout(() => { saveTab(state.tab); saveConsole(docOf(state.tab)); }, 600);
   }
 
-  // tabBody is what a save sends for t: the editor's text when it is on
-  // screen, else the buffer kept for it.
+  // tabBody is what a save sends for t: its text (the editor's when it is
+  // on screen) and the console it shows. With a console the text is the
+  // console's, kept in the tab's buffer too, so a dbc from before consoles
+  // still opens the tab as it was.
   function tabBody(t) {
     const active = t === state.tab;
     return { title: t.title, conn: (active ? state.active : t.conn) || "",
-      buffer: active ? dbc.editor.text() : t.buffer || "" };
+      buffer: active ? dbc.editor.text() : textOf(t), console: t.console || "" };
   }
 
   // winQuery names this window on a save, a delete or a layout write: the
@@ -1511,8 +1826,14 @@
     const t = state.tab;
     clearTimeout(saveTimer);
     const save = t && !t.lost ? Object.assign({ id: t.key }, tabBody(t)) : undefined;
+    // the shown console's last edits, if any are unsaved (a background
+    // tab's were saved when it was left)
+    const c = t && cons.get(docOf(t));
+    const text = c && dbc.editor.text();
+    const console = c && text !== c.saved && !c.saving
+      ? { host: c.cdb.host, database: c.cdb.database, name: c.name, text, base: c.rev } : undefined;
     fetch("/api/v1/win/" + encodeURIComponent(state.win) + "/release", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ save }), keepalive: true,
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ save, console }), keepalive: true,
     }).catch(() => { /* the claims lapse on their own after the grace */ });
   }
 
@@ -1588,8 +1909,9 @@
       if (t.lost) marks.append(el("span", { class: "qlost", title: "open in another browser tab of dbc web — not saved here" }, "⊘"));
       const b = el("div", { class: "qtab" + (t === state.tab ? " on" : "") + (t.lost ? " lost" : ""), role: "tab", tabindex: "-1",
         "aria-selected": t === state.tab ? "true" : "false", "data-key": t.key,
-        title: t.title + (i < 9 ? " (Alt+" + (i + 1) + ")" : "") + " — double-click renames" },
-      el("span", "qt", t.title), marks,
+        title: t.title + (i < 9 ? " (Alt+" + (i + 1) + ")" : "") +
+          (t.console ? " — console " + t.cdb.label + " · " + t.console : "") + " — double-click renames" },
+      el("span", "qt", t.title), t.console ? el("span", "qcon", t.console) : null, marks,
       tabs.length > 1 ? el("button", { type: "button", class: "qx", title: "Close (Alt+W)", "data-close": t.key }, "×") : null);
       els.qtabs.append(b);
     });
@@ -1618,14 +1940,19 @@
     if (!b) return;
     e.preventDefault();
     const t = tabs.find((x) => x.key === b.dataset.key);
-    dbc.menu.open(e.clientX, e.clientY, [
+    const x = e.clientX, y = e.clientY;
+    const items = () => [
       { head: t.title },
       { label: "Rename…", act: () => rename(t) },
       { label: "Close tab", key: "Alt+W", why: tabs.length > 1 ? "" : "the last tab stays — clear its editor instead",
         act: () => closeTab(t) },
       { head: "" },
       { label: "New query tab", key: "Alt+T", act: newTab },
-    ]);
+    ].concat(consoleItems(t));
+    // the database's consoles as they are now — another window or the
+    // TUI may have added one — but the menu does not wait long for them
+    if (!t.cdb) { dbc.menu.open(x, y, items()); return; }
+    refreshNames(t.cdb).finally(() => dbc.menu.open(x, y, items()));
   });
   $("qnew").addEventListener("click", newTab);
 
@@ -1674,7 +2001,12 @@
     else renderTabs();
     saveOrder();
     sessionStorage.removeItem(wsKey(t.key));
-    dbc.editor.dropDoc(t.key);
+    // a console another tab here still shows keeps its document
+    const k = docOf(t);
+    if (!tabs.some((o) => docOf(o) === k)) {
+      saveConsole(k); // reads the text now, so the drop below loses nothing
+      dbc.editor.dropDoc(k);
+    }
     if (t.ws) api("DELETE", "/api/v1/ws/" + t.ws).catch(() => { /* already gone */ });
     // a lost tab's saved copy is the other window's: closing it here
     // leaves that alone
@@ -1753,6 +2085,7 @@
     ]],
     ["Query tabs", [
       ["Alt+T", "new tab"], ["Alt+W", "close the tab"], ["Alt+1 … Alt+9", "go to tab N"],
+      ["Alt+N · Alt+C", "new console · next console of the tab's database (right-click a tab for the list)"],
       ["double-click a tab", "rename it"],
     ]],
     ["Results grid", [
@@ -1858,8 +2191,14 @@
       const plans = new Set((layout.plans || "").split(","));
       tabs = order.map((k) => {
         const t = byKey.get(k);
-        return { key: t.id, title: t.title || "Query", conn: t.conn, buffer: t.buffer, ws: "", planOpen: plans.has(t.id) };
+        return { key: t.id, title: t.title || "Query", conn: t.conn, buffer: t.buffer, ws: "", planOpen: plans.has(t.id),
+          cdb: t.console && t.consoleDb ? t.consoleDb : null, console: t.console && t.consoleDb ? t.console : "" };
       });
+      // each tab's console, read before any is shown; one that cannot be
+      // read leaves its tab on the buffer saved with it, and the tab's
+      // connection gives it a console once it lands
+      await Promise.all(tabs.filter((t) => t.console).map((t) => loadConsole(t.cdb, t.console)
+        .then((c) => { t.buffer = c.text; }, () => { t.console = ""; t.cdb = null; })));
       // no tab to show: the first boot, or every saved tab is open in
       // another browser tab of dbc web — this one starts a fresh tab of
       // its own. Its key is new, never "1": a key another window holds

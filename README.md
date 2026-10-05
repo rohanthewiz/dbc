@@ -309,6 +309,7 @@ dragging.
 | `Ctrl+E` | Export the result (format picker; file, or clipboard) |
 | `Ctrl+O` | Pick and run a Go script from `scripts_dir` |
 | `Ctrl+P` | Query history — filter, then `Enter` inserts (never runs) |
+| `Alt+N` · `Alt+C` | A new console of the database · the database's next console (see [Consoles](#consoles-and-multi-statement-buffers)) |
 | `Ctrl+Space` | *(editor)* Suggestions at the caret — they also open by themselves after `.`, `::` and two letters of a word (see below) |
 | `Ctrl+T` | List the tables and views on the active connection |
 | `Ctrl+L` | Jump to the connections list |
@@ -684,7 +685,7 @@ result starts fresh.
 the tables and views into the results as `table_schema · table_name ·
 table_type` — the same three columns on all four drivers.
 
-The editor's per-database consoles, the query history and the assistant's conversations
+The editor's consoles, the query history and the assistant's conversations
 persist between sessions under `~/.config/dbc`.
 
 The interface wears a muted green theme — dark gray-green surfaces with a
@@ -754,23 +755,50 @@ entries and readable only by you. Delete the file to forget everything.
 
 ### Consoles and multi-statement buffers
 
-The editor is a **console**: a running SQL file kept per database — per
-host and port plus database name on Postgres and MySQL, per file on SQLite
-and bytdb — not one buffer for everything. Switch connections and, once the
-connect lands, the editor saves what you were writing to the old database's
-console and opens the new one's; the log says which (`console:
-db.example.com:5432 · app`). Two connections onto the same database (another
-name, another role) share a console, and a derived `<conn>/<database>` gets
-its own. A connect that fails leaves the console where it was.
+The editor holds a **console**: a running SQL file of the database you are
+connected to, not one buffer for everything. Consoles are kept per host, then
+per database on it, and a database can have as many as you like — one per
+line of work. Switch connections and, once the connect lands, the editor
+saves what you were writing to the old database's console and opens one of
+the new database's (the one you last had open there this session, else its
+first); the log says which (`console: db.example.com:5432 · app · console`).
+Two connections onto the same database (another name, another role) share
+its consoles, and a derived `<conn>/<database>` has its own. A connect that
+fails leaves the console where it was.
 
-Consoles are plain `.sql` files in `~/.config/dbc/consoles/`, named for
-their host and database (`db.example.com_5432--app-3f9c1a2b.sql`, the suffix
-keeping apart names a filename would fold together), readable only by you
-and saved on every switch and on quit, so each database's scratchpad is
-still there tomorrow. A database you only looked at gets no file. On the
-first launch with consoles, the old single `~/.config/dbc/buffer.sql` seeds
-the console you start on; it is left in place, no longer written. `dbc web`
-keeps its own buffer per query tab, as before.
+`⌥N` (`Alt+N`) opens a new console of the database, `⌥C` (`Alt+C`) moves to
+its next one, and the editor's right-click menu lists them all; the Query
+pane's title names the one you are in.
+
+Consoles are plain `.sql` files, readable only by you, under
+`~/.config/dbc/consoles/<host>/<database>/<name>.sql`:
+
+```
+consoles/
+  localhost_5432/          host and port
+    app/                   a database on it
+      console.sql          its first console
+      console-2.sql
+    analytics/
+      console.sql
+  db.example.com_5432/
+    app/                   another server's "app": consoles of its own
+      console.sql
+  local/                   SQLite and bytdb: the file, by name + path hash
+    scratch.db-0b5e9f12/
+      console.sql
+```
+
+A host or database name that is not already a safe file name (a socket path,
+a database with a space in it, an embedded database's full path) gets a short
+hash of the original added, so two names that fold together stay apart. A
+console is saved on every switch and on quit, so each database's scratchpad is
+still there tomorrow; one that never had anything typed into it gets no file.
+On the first launch with consoles, the old single `~/.config/dbc/buffer.sql`
+seeds the console you start on; it is left in place, no longer written.
+`dbc web` edits the same files (see [the browser workbench](#the-browser-workbench-dbc-web)): the TUI writes a
+console back only when you changed it, so one it merely had open does not
+overwrite what a browser tab saved meanwhile.
 
 Keep a whole scratchpad of SQL in the editor and run one statement at a time:
 `Ctrl+R` executes only the statement the cursor sits in, and the log says
@@ -864,8 +892,27 @@ closes it (asking first when its session may hold a transaction, since
 closing rolls it back), `Alt+1`…`Alt+9` switch, and a double-click renames.
 A tab keeps its result, its grid view (sort, hidden columns, widths) and its
 plan while another is on screen; a run left going in the background marks
-its tab (● running, • done) and names its log lines. Tabs, their text and
-connection, the pane sizes and light/dark are saved in
+its tab (● running, • done) and names its log lines.
+
+A tab's text is one of its database's **consoles** — the TUI's files (see
+[Consoles](#consoles-and-multi-statement-buffers)), so the terminal and the
+browser share each database's running SQL. The tab names its console after
+its title. When the tab's connection lands on another database, the tab
+saves its console and shows one of the new database's that no other tab of
+the window is showing, or a new one, so two tabs on one database get two
+consoles. `Alt+N` gives the tab a new console of its database, `Alt+C` moves
+to the next one, and right-clicking the tab lists the database's consoles
+(and which tab shows each) with new, rename and delete. A rename or a delete
+reaches every window; tabs showing a deleted console move to another. Saves
+are checked against the file: if it changed since this tab loaded it (another
+window, the TUI, an editor), it is not overwritten. The tab shows the file's
+text instead and says so in the log, and `Ctrl+Z` brings your text back to
+save over it. Another window's save shows up at once in a tab with no unsaved
+edits to that console. On the first start with consoles, each saved tab's
+text moves into a console of its database (without overwriting one that
+exists). The tab keeps its own copy too, so an older dbc still opens it.
+
+Tabs, their connection and console, the pane sizes and light/dark are saved in
 `~/.config/dbc/web.bytdb`; a reload keeps every tab's session. A saved tab
 is shown by one browser tab of dbc web at a time: a second browser tab gets
 the saved tabs the first is not showing, or a fresh one, with sessions of its
@@ -936,6 +983,7 @@ file's connections are changed in the file.
 | `Ctrl+I` | the assistant, and back (`Ctrl+A` stays select-all) |
 | `Ctrl+Space` | suggestions (they also open as you type — see [Completion](#completion)) |
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | new tab · close tab · go to tab |
+| `Alt+N` · `Alt+C` | new console · next console of the tab's database |
 | `F1` or `?` | every key |
 
 On a Mac, `⌘` works wherever `Ctrl` is listed.

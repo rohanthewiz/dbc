@@ -90,6 +90,9 @@ func webAction(ctx context.Context, cmd *cli.Command) error {
 		History: userdata.LoadHistory(userdata.HistoryFile()),
 		// the TUI's archive, so a conversation had in either is offered in both
 		ChatsDir: userdata.ChatsDir(),
+		// the TUI's consoles: a query tab and the terminal share each
+		// database's running SQL files
+		ConsolesDir: userdata.ConsolesDir(),
 		Ready: func(login string) {
 			fmt.Fprintf(os.Stderr, "dbc web is serving — open this link to sign in:\n\n  %s\n\nCtrl+C stops it.\n", login)
 			if !flagNoOpen {

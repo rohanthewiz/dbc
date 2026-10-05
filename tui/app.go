@@ -97,9 +97,16 @@ type Model struct {
 	// consoleDir is where the per-database SQL consoles live ("" under
 	// Options.NoPersist: the editor then keeps one buffer that is never
 	// swapped or saved). console is the file of the one in the editor now,
-	// "" before any. See console.go.
-	consoleDir string
-	console    string
+	// "" before any; consoleDB and consoleName say which it is, and
+	// consoleText is its text as last loaded or saved, so an unchanged
+	// console is not written back. lastConsole is the console last open on
+	// each database this run, which a switch back reopens. See console.go.
+	consoleDir  string
+	console     string
+	consoleDB   userdata.ConsoleDB
+	consoleName string
+	consoleText string
+	lastConsole map[userdata.ConsoleDB]string
 
 	// send delivers a message to the running program from outside a Cmd —
 	// the script engine's show/print callbacks, which fire mid-run. Run
@@ -229,7 +236,7 @@ func (m *Model) startupLog() {
 		m.logf(logInfo, "loaded config from %s", m.cfg.Path)
 	}
 	m.log(logMuted, "keys: ^R run · ^⇧R/⌥R run all · ^X explain · ⌥X explain analyze · ^K stop · ^A assistant · ^E export · ^P history · ^O scripts · "+
-		"^Space suggest · ^T tables · ^L conns · x disconnect · d/s database/schema · Tab focus · y/Y/c copy · Enter inspect · -/+ hide/show column · ^Q quit")
+		"^Space suggest · ⌥N/⌥C new/next console · ^T tables · ^L conns · x disconnect · d/s database/schema · Tab focus · y/Y/c copy · Enter inspect · -/+ hide/show column · ^Q quit")
 	m.log(logMuted, "mouse: click to focus · drag to select · right-click for menus · "+
 		"drag borders to resize · hold Shift (⌥ on macOS) to select terminal text")
 	for _, w := range m.cfg.Warnings {
@@ -462,6 +469,10 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		return m.toggleChatFocus()
 	case "ctrl+g":
 		return m.openCatsAgents()
+	case "alt+n":
+		return m.newConsole()
+	case "alt+c":
+		return m.nextConsole()
 	case "tab":
 		m.cycleFocus(1)
 		return nil

@@ -23,6 +23,23 @@
 // The VIEW (sort, hidden, widths, cursor, range) lives here and travels
 // with each request that needs it — a copy names its columns and rows, the
 // sort and the result's seq, and the server projects exactly that.
+//
+// TRANSPOSED (t, or ⇄ Transpose): the grid on its side — each record a
+// column, each result column a line with its name in the gutter, as psql's
+// \x shows a wide row. Only the PICTURE turns. The cursor, the range, the
+// sort and the hidden set stay in the coordinates above (row = record,
+// col = result column), so hiding, sorting, inspecting and copying need no
+// second implementation; drawing, hit-testing and the arrow keys swap axes,
+// and a copy or export asks the server to turn its piece the same way.
+//
+//   upright              transposed
+//   # │ id │ name        column │ 1   │ 2
+//   1 │ 1  │ ann    ⇒    id     │ 1   │ 2
+//   2 │ 2  │ bob         name   │ ann │ bob
+//
+// Every record column has ONE width (the widest of the shown columns' auto
+// widths), so the columns in view are found by division rather than a walk
+// — a 50,000-row result is 50,000 columns here.
 (function () {
   "use strict";
 
@@ -35,6 +52,7 @@
   const PAD = 18;        // a cell's padding (8 + 8) and its border (1), plus 1 px of slack, so a value that fits is not ellipsized
   const MIN_CH = 3;      // the narrowest a column can be dragged, in characters
   const MAX_CH = 400;    // the widest (a runaway drag cannot build absurd layouts)
+  const NAME_CH = 40;    // transposed: the widest the gutter of column names grows, in characters
   const NO_RESULT = "nothing to copy yet — run a query first";
 
   const root = document.getElementById("grid");
@@ -60,6 +78,9 @@
     pages: new Map(),  // page index → rows (arrays of cells; null is NULL)
     pending: new Set(),
     cur: { row: 0, col: 0 }, anc: { row: 0, col: 0 }, sel: false,
+    flip: false,       // transposed: records across, columns down
+    fnW: 0, recW: 0,   // transposed: the names gutter's width and every record column's, px
+    recFit: 0,         // transposed: a record width set by "fit", px; 0 = auto
   };
 
   // charW is the width of one character of the grid's font — measured, not
@@ -120,7 +141,7 @@
       total: d.total, rows: d.rows, sort: -1, desc: false,
       cur: { row: 0, col: 0 }, anc: { row: 0, col: 0 }, sel: false,
     });
-    if (!same) { g.hidden = new Set(); g.userW = new Map(); }
+    if (!same) { g.hidden = new Set(); g.userW = new Map(); g.recFit = 0; }
     g.pages = new Map([[0, d.cells]]);
     g.pending = new Set();
     if (d.exec) {
@@ -155,11 +176,15 @@
   function snapshot() {
     if (!g.seq) return null;
     return { seq: g.seq, sort: g.sort, desc: g.desc, hidden: [...g.hidden], userW: [...g.userW],
-      cur: Object.assign({}, g.cur), top: root.scrollTop, left: root.scrollLeft };
+      cur: Object.assign({}, g.cur), top: root.scrollTop, left: root.scrollLeft, flip: g.flip, recFit: g.recFit };
   }
 
   async function restore(snap) {
     clear();
+    // the orientation belongs to the tab whatever became of its result: a
+    // tab left transposed comes back transposed, even to a rerun's rows
+    g.flip = !!(snap && snap.flip);
+    syncFlip();
     const ws = dbc.state.ws;
     let d;
     try {
@@ -173,7 +198,8 @@
     if (!d) { clear(); return; }
     adopt(d);
     if (snap && d.seq === snap.seq && d.columns.length) {
-      Object.assign(g, { sort: snap.sort, desc: snap.desc, hidden: new Set(snap.hidden), userW: new Map(snap.userW) });
+      Object.assign(g, { sort: snap.sort, desc: snap.desc, hidden: new Set(snap.hidden), userW: new Map(snap.userW),
+        recFit: snap.recFit || 0 });
       g.cur = { row: Math.min(snap.cur.row, Math.max(g.total - 1, 0)), col: snap.cur.col };
       g.anc = Object.assign({}, g.cur);
       rebuildVis();
@@ -259,6 +285,18 @@
       x += w;
     }
     g.width = x;
+
+    // transposed: the gutter fits the longest shown name (plus room for a
+    // sort arrow), capped so one long name cannot crowd out the records;
+    // a record column fits the widest shown column — the auto widths are
+    // already capped, so one long TEXT value cannot make every record wide
+    let nameCh = 0, recCh = String(Math.max(g.total, 1)).length + 1;
+    for (const rc of g.vis) {
+      nameCh = Math.max(nameCh, g.cols[rc].length + 2);
+      recCh = Math.max(recCh, g.auto[rc]);
+    }
+    g.fnW = Math.round(Math.min(nameCh, NAME_CH) * charW) + PAD;
+    g.recW = g.recFit || Math.round(recCh * charW) + PAD;
   }
 
   // ── drawing ────────────────────────────────────────────────────────────
@@ -275,6 +313,7 @@
 
   function draw() {
     if (!g.seq || root.hidden) return;
+    if (g.flip) { drawFlip(); return; }
     const full = g.rnW + g.width;
     head.style.width = body.style.width = full + "px";
     body.style.height = g.total * ROW_H + "px";
@@ -339,6 +378,74 @@
     drawInfo();
   }
 
+  // drawFlip is draw on its side: screen line i is display column i (its
+  // name in the sticky gutter), screen column j is display row j. The
+  // header numbers the records; a click there selects one, as a click on a
+  // row number does upright, and a click on a name sorts by it, as a click
+  // on a header does.
+  function drawFlip() {
+    const W = g.recW, gw = g.fnW, nf = g.vis.length;
+    head.style.width = body.style.width = gw + g.total * W + "px";
+    body.style.height = nf * ROW_H + "px";
+
+    // the records in view: uniform widths make this a division
+    const left = root.scrollLeft, vw = root.clientWidth - gw;
+    const j0 = Math.min(Math.floor(left / W), Math.max(g.total - 1, 0));
+    const j1 = Math.min(g.total - 1, Math.floor((left + vw) / W));
+    // the columns (lines) in view
+    const top = root.scrollTop, vh = root.clientHeight - ROW_H;
+    const i0 = Math.max(0, Math.floor(top / ROW_H) - OVERSCAN);
+    const i1 = Math.min(nf - 1, Math.ceil((top + vh) / ROW_H) + OVERSCAN);
+
+    const [s0, sc0, s1, sc1] = bounds();
+    const focused = document.activeElement === root;
+
+    // the pages the records in view live on; page() fetches each once
+    if (j1 >= j0) {
+      for (let p = Math.floor(j0 / PAGE); p <= Math.floor(j1 / PAGE); p++) if (!g.pages.has(p)) page(p);
+    }
+
+    let h = '<div class="rn hrn fn" style="width:' + gw + 'px">column</div>';
+    for (let j = j0; j <= j1; j++) {
+      const cls = "hc rec" + (g.sel && j >= s0 && j <= s1 ? " in" : "");
+      h += '<div class="' + cls + '" data-r="' + j + '" style="left:' + (gw + j * W) + "px;width:" + W +
+        'px" title="Row ' + (j + 1) + ' — click to select it, right-click for more">' + (j + 1) + "</div>";
+    }
+    if (h !== lastHead) head.innerHTML = lastHead = h;
+
+    let b = "";
+    for (let i = i0; i <= i1; i++) {
+      const rc = g.vis[i];
+      let ncls = "rn fn";
+      if (rc === g.sort) ncls += " sorted";
+      if (g.sel && i >= sc0 && i <= sc1) ncls += " in";
+      const arrow = rc === g.sort ? (g.desc ? " ▼" : " ▲") : "";
+      // a hidden column between this line and the next: the upright ║,
+      // turned — a heavier rule under the line (.gr.gap)
+      b += '<div class="gr' + (i % 2 ? " odd" : "") + (hiddenAfter(i) ? " gap" : "") + '" style="top:' + i * ROW_H +
+        'px"><div class="' + ncls + '" style="width:' + gw + 'px" data-fn="' + i + '" title="' + esc(g.cols[rc]) +
+        ' — click to sort, right-click for more">' + esc(g.cols[rc]) + arrow + "</div>";
+      const inCols = i >= sc0 && i <= sc1;
+      for (let j = j0; j <= j1; j++) {
+        const rows = g.pages.get(Math.floor(j / PAGE));
+        const row = rows && rows[j % PAGE];
+        // values stay left-aligned on their side: a record column mixes
+        // numbers and text, and right-aligning only some would be ragged
+        let cls = "gc";
+        let text;
+        if (!row) { text = "…"; cls += " wait"; }
+        else if (row[rc] === null) { text = "NULL"; cls += " null"; }
+        else text = flat(row[rc]);
+        if (g.sel && inCols && j >= s0 && j <= s1) cls += " in";
+        if (j === g.cur.row && i === g.cur.col) cls += focused ? " cur" : " cur blur";
+        b += '<div class="' + cls + '" style="left:' + (gw + j * W) + "px;width:" + W + 'px">' + esc(text) + "</div>";
+      }
+      b += "</div>";
+    }
+    if (b !== lastBody) body.innerHTML = lastBody = b;
+    drawInfo();
+  }
+
   // hiddenAfter: a hidden column sits between display col c and the next
   // one, which the TUI marks with ║ — here a heavier border.
   function hiddenAfter(c) {
@@ -350,6 +457,7 @@
     const parts = [g.total < g.rows ? "showing " + g.total + " of " + g.rows + " rows" : dbc.plural(g.rows, "row")];
     if (g.sort >= 0) parts.push("sorted by " + g.cols[g.sort] + (g.desc ? " desc" : " asc"));
     if (g.hidden.size) parts.push(g.hidden.size + " hidden");
+    if (g.flip) parts.push("transposed");
     if (g.sel) {
       const [r0, c0, r1, c1] = bounds();
       parts.push((r1 - r0 + 1) + "×" + (c1 - c0 + 1) + " selected");
@@ -378,6 +486,16 @@
   // ensureVisible scrolls the cursor's cell into view, clear of the sticky
   // header and gutter.
   function ensureVisible() {
+    if (g.flip) {
+      // on its side: the record is the screen column, the result column the line
+      const y = g.cur.col * ROW_H, vh = root.clientHeight - ROW_H;
+      if (y < root.scrollTop) root.scrollTop = y;
+      else if (y + ROW_H > root.scrollTop + vh) root.scrollTop = y + ROW_H - vh;
+      const x = g.cur.row * g.recW, w = g.recW, vw = root.clientWidth - g.fnW;
+      if (x < root.scrollLeft) root.scrollLeft = x;
+      else if (x + w > root.scrollLeft + vw) root.scrollLeft = Math.min(x, x + w - vw);
+      return;
+    }
     const y = g.cur.row * ROW_H, vh = root.clientHeight - ROW_H;
     if (y < root.scrollTop) root.scrollTop = y;
     else if (y + ROW_H > root.scrollTop + vh) root.scrollTop = y + ROW_H - vh;
@@ -386,14 +504,35 @@
     else if (x + w > root.scrollLeft + vw) root.scrollLeft = Math.min(x, x + w - vw);
   }
 
-  // hit finds the display cell under a pointer.
+  // hit finds the display cell under a pointer. The gutter is judged on
+  // SCREEN x, against the grid's own left edge: it is sticky, so once the
+  // grid scrolls sideways it sits over cells whose content x is far past
+  // it, and a content-x test would read a click on a row number (or, on
+  // its side, a column name) as a click on the cell underneath.
   function hit(e) {
     const r = body.getBoundingClientRect();
+    const gutter = e.clientX - root.getBoundingClientRect().left < (g.flip ? g.fnW : g.rnW);
+    if (g.flip) {
+      const x = e.clientX - r.left - g.fnW, y = e.clientY - r.top;
+      const col = Math.max(0, Math.min(Math.floor(y / ROW_H), g.vis.length - 1));
+      // in the gutter the record stays the cursor's: a name names a line, not a record
+      const row = gutter ? g.cur.row : Math.max(0, Math.min(Math.floor(x / g.recW), g.total - 1));
+      return { row, col, gutter };
+    }
     const x = e.clientX - r.left - g.rnW, y = e.clientY - r.top;
     const row = Math.max(0, Math.min(Math.floor(y / ROW_H), g.total - 1));
     let col = 0;
     while (col < g.vis.length - 1 && x >= g.colX[col] + g.colW[col]) col++;
-    return { row, col, gutter: x < 0 };
+    return { row, col, gutter };
+  }
+
+  // selectRow selects display row r whole — a click on its number upright,
+  // on its header transposed.
+  function selectRow(r) {
+    g.anc = { row: r, col: 0 };
+    g.cur = { row: r, col: g.vis.length - 1 };
+    g.sel = g.vis.length > 1;
+    render();
   }
 
   // ── sorting, hiding, resizing ──────────────────────────────────────────
@@ -457,11 +596,48 @@
   // fit sizes a column to its content — not capped as auto-sizing is:
   // asking to see a column whole is exactly when the cap is in the way.
   function fit(col) {
+    if (g.flip) {
+      // on its side every record shares one width: fit it to the widest
+      // shown column's content, past the auto cap, as an upright fit does
+      let ch = 0;
+      for (const rc of g.vis) ch = Math.max(ch, g.content[rc]);
+      g.recFit = clampW(Math.round(ch * charW) + PAD);
+      layout();
+      render();
+      return;
+    }
     const rc = g.vis[col];
     if (rc === undefined) return;
     g.userW.set(rc, clampW(Math.round(g.content[rc] * charW) + PAD));
     layout();
     render();
+  }
+
+  // ── transposing ────────────────────────────────────────────────────────
+  const flipBtn = document.getElementById("flip-btn");
+
+  // syncFlip shows the orientation on the ⇄ Transpose button.
+  function syncFlip() {
+    flipBtn.setAttribute("aria-pressed", g.flip ? "true" : "false");
+  }
+
+  // transpose turns the grid on its side, or back. Allowed with no result:
+  // it is then the orientation the next result arrives in. The scroll goes
+  // home — its axes just swapped, so the old offsets mean nothing — and
+  // the cursor's cell is brought back into view.
+  function transpose() {
+    g.flip = !g.flip;
+    syncFlip();
+    root.scrollTop = 0;
+    root.scrollLeft = 0;
+    if (g.seq) {
+      layout();
+      ensureVisible();
+      render();
+    }
+    viewChanged();
+    dbc.log("info", g.flip ? "transposed — each row is a column now; copies and exports come out the same way (t turns it back)"
+      : "upright again — rows across");
   }
 
   // ── copying, exporting, inspecting ─────────────────────────────────────
@@ -479,7 +655,8 @@
   // the y key's copy: values, tab-separated, no header.
   function copy(format, scope) {
     if (!g.seq || !g.total && scope !== "whole") { dbc.log("warn", NO_RESULT); return; }
-    const req = { seq: g.seq, sort: g.sort, desc: g.desc, format, hidden: g.hidden.size };
+    // transpose: the piece comes back on its side, as the grid shows it
+    const req = { seq: g.seq, sort: g.sort, desc: g.desc, format, hidden: g.hidden.size, transpose: g.flip };
     if (scope === "whole") req.cols = g.vis.slice();
     else if (scope === "row") { req.cols = g.vis.slice(); req.rows = [g.cur.row, g.cur.row]; req.row = true; }
     else {
@@ -509,7 +686,7 @@
   async function exportAs(format, label) {
     if (!g.seq) { dbc.log("warn", "no result to export — run a query first"); return; }
     const url = dbc.wsPath("/export?format=" + format + "&seq=" + g.seq + "&sort=" + g.sort +
-      "&desc=" + (g.desc ? 1 : 0) + "&cols=" + g.vis.join(","));
+      "&desc=" + (g.desc ? 1 : 0) + "&cols=" + g.vis.join(",") + (g.flip ? "&t=1" : ""));
     try {
       const res = await fetch(url);
       if (!res.ok) {
@@ -526,6 +703,7 @@
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
       let what = "the result (" + dbc.plural(g.rows, "row");
       if (g.hidden.size) what += ", " + dbc.plural(g.hidden.size, "column") + " hidden";
+      if (g.flip) what += ", transposed";
       dbc.log("ok", "downloaded " + name + " — " + what + ") as " + label);
     } catch (e) {
       dbc.log("err", "export failed: " + e.message);
@@ -579,15 +757,16 @@
     if (g.sel) {
       const [r0, c0, r1, c1] = bounds();
       items.push({ label: "Copy " + (r1 - r0 + 1) + "×" + (c1 - c0 + 1) + " cells", key: "y", why: why(), act: () => copy("plain", "sel") },
-        { head: "copy selection as" }, ...copyItems("sel"));
+        { head: g.flip ? "copy selection, transposed, as" : "copy selection as" }, ...copyItems("sel"));
     } else {
       items.push({ label: "Copy value", key: "y", why: why(), act: () => copy("plain", "sel") },
         { label: "Copy row", key: "Y", why: why(), act: () => copy("plain", "row") },
         { label: "Inspect value", key: "Enter", why: why(), act: inspect });
     }
-    items.push({ head: "copy whole result as" }, ...copyItems("whole"),
+    items.push({ head: wholeHead() }, ...copyItems("whole"),
       { head: "" }, { label: "Sort by this column", why: why(), act: () => sortBy(g.cur.col) },
-      ...columnItems());
+      ...columnItems(),
+      { head: "" }, { label: g.flip ? "Turn upright (rows across)" : "Transpose (each row a column)", key: "t", act: transpose });
     if (dbc.cmd.showPlan && dbc.cmd.hasPlan && dbc.cmd.hasPlan()) {
       items.push({ head: "" }, { label: "◈ Show the plan", key: "p", act: dbc.cmd.showPlan });
     }
@@ -596,6 +775,11 @@
         act: () => dbc.cmd.askAbout("Explain this result — anything notable in it?") });
     dbc.menu.open(x, y, items);
   }
+
+  // wholeHead heads the whole-result copies, saying so when they will come
+  // out on their side — a copy that does not look like the result it was
+  // pasted from should not be a surprise.
+  const wholeHead = () => (g.flip ? "copy whole result, transposed, as" : "copy whole result as");
 
   // columnItems: hide the cursor's column (or the range's), fit it, and
   // bring hidden ones back — by name, since after hiding several the user
@@ -622,14 +806,15 @@
   // copyMenuAt is the ⧉ Copy dropdown: the selection when there is one,
   // and the whole result.
   function copyMenuAt(x, y) {
-    const items = g.sel ? [{ head: "copy selection as" }, ...copyItems("sel"), { head: "copy whole result as" }]
-      : [{ head: "copy result as" }];
+    const items = g.sel ? [{ head: g.flip ? "copy selection, transposed, as" : "copy selection as" }, ...copyItems("sel"),
+      { head: wholeHead() }]
+      : [{ head: g.flip ? "copy result, transposed, as" : "copy result as" }];
     items.push(...copyItems("whole"));
     dbc.menu.open(x, y, items);
   }
 
   function exportMenuAt(x, y) {
-    dbc.menu.open(x, y, [{ head: "download the result as" },
+    dbc.menu.open(x, y, [{ head: g.flip ? "download the result, transposed, as" : "download the result as" },
       ...EXPORTS.map(([label, f]) => ({ label, why: g.seq ? "" : "no result to export — run a query first", act: () => exportAs(f, label) }))]);
   }
 
@@ -662,11 +847,11 @@
       inspect();
       return;
     }
-    if (h.gutter) { // a row number: the whole row
-      g.anc = { row: h.row, col: 0 };
-      g.cur = { row: h.row, col: g.vis.length - 1 };
-      g.sel = g.vis.length > 1;
-      render();
+    if (h.gutter) {
+      // transposed, the gutter holds the column names — the header's
+      // part, so a click sorts; upright it holds row numbers: the whole row
+      if (g.flip) sortBy(h.col);
+      else selectRow(h.row);
       return;
     }
     moveTo(h.row, h.col, e.shiftKey);
@@ -680,6 +865,9 @@
     const r = root.getBoundingClientRect();
     if (e.clientY > r.bottom - 4) root.scrollTop += ROW_H;
     else if (e.clientY < r.top + ROW_H + 4) root.scrollTop -= ROW_H;
+    // on its side the rows run sideways, so a range grows past the side edges too
+    if (g.flip && e.clientX > r.right - 4) root.scrollLeft += g.recW;
+    else if (g.flip && e.clientX < r.left + g.fnW + 4) root.scrollLeft -= g.recW;
     if (h.row !== g.cur.row || h.col !== g.cur.col) moveTo(h.row, h.col, true);
   });
   const endDrag = () => { drag = null; };
@@ -690,7 +878,11 @@
     e.preventDefault();
     root.focus({ preventScroll: true });
     const hc = e.target.closest(".hc");
-    if (hc) {
+    if (hc && g.flip) {
+      // a record's header: "this row" in the menu means that one
+      const r = +hc.dataset.r;
+      if (!g.sel || r < bounds()[0] || r > bounds()[2]) { g.cur.row = r; g.anc.row = r; g.sel = false; render(); }
+    } else if (hc) {
       const c = +hc.dataset.c;
       if (!g.sel || c < bounds()[1] || c > bounds()[3]) { g.cur.col = c; g.anc.col = c; g.sel = false; render(); }
     } else if (body.contains(e.target) && g.total) {
@@ -732,6 +924,12 @@
   head.addEventListener("pointercancel", endResize);
   head.addEventListener("click", (e) => {
     if (justResized || e.target.closest("[data-rz]")) return;
+    const rec = e.target.closest("[data-r]");
+    if (rec) { // transposed: a record's number selects it whole
+      root.focus({ preventScroll: true });
+      selectRow(+rec.dataset.r);
+      return;
+    }
     const hc = e.target.closest(".hc");
     if (hc) sortBy(+hc.dataset.c);
   });
@@ -741,22 +939,28 @@
     if (!g.seq || e.defaultPrevented) return;
     const k = e.key, shift = e.shiftKey, mod = e.ctrlKey || e.metaKey;
     const pageRows = Math.max(1, Math.floor((root.clientHeight - ROW_H) / ROW_H) - 1);
+    // The arrows follow the SCREEN: down is the next line, whatever that
+    // is. Upright a line is a row; transposed it is a column, and the rows
+    // run across. vert/horiz move n that way (moveTo clamps, so ±Infinity
+    // is "to the far end").
+    const vert = (n) => (g.flip ? moveTo(g.cur.row, g.cur.col + n, shift) : moveTo(g.cur.row + n, g.cur.col, shift));
+    const horiz = (n) => (g.flip ? moveTo(g.cur.row + n, g.cur.col, shift) : moveTo(g.cur.row, g.cur.col + n, shift));
     let done = true;
     if (mod) {
       if (k === "c" && !String(window.getSelection())) copy("plain", "sel");
       else if (k === "a") { g.anc = { row: 0, col: 0 }; g.cur = { row: g.total - 1, col: g.vis.length - 1 }; g.sel = true; render(); }
-      else if (k === "Home") moveTo(0, g.cur.col, shift);
-      else if (k === "End") moveTo(g.total - 1, g.cur.col, shift);
+      else if (k === "Home") vert(-Infinity);
+      else if (k === "End") vert(Infinity);
       else done = false;
     } else switch (k) {
-      case "ArrowUp": moveTo(g.cur.row - 1, g.cur.col, shift); break;
-      case "ArrowDown": moveTo(g.cur.row + 1, g.cur.col, shift); break;
-      case "ArrowLeft": moveTo(g.cur.row, g.cur.col - 1, shift); break;
-      case "ArrowRight": moveTo(g.cur.row, g.cur.col + 1, shift); break;
-      case "PageUp": moveTo(g.cur.row - pageRows, g.cur.col, shift); break;
-      case "PageDown": moveTo(g.cur.row + pageRows, g.cur.col, shift); break;
-      case "Home": moveTo(g.cur.row, 0, shift); break;
-      case "End": moveTo(g.cur.row, g.vis.length - 1, shift); break;
+      case "ArrowUp": vert(-1); break;
+      case "ArrowDown": vert(1); break;
+      case "ArrowLeft": horiz(-1); break;
+      case "ArrowRight": horiz(1); break;
+      case "PageUp": vert(-pageRows); break;
+      case "PageDown": vert(pageRows); break;
+      case "Home": horiz(-Infinity); break;
+      case "End": horiz(Infinity); break;
       case "g": moveTo(0, g.cur.col, false); break;
       case "G": moveTo(g.total - 1, g.cur.col, false); break;
       case "Escape": if (g.sel) { g.sel = false; render(); } else done = false; break;
@@ -767,11 +971,17 @@
       case "+": showAll(); break;
       case "=": fit(g.cur.col); break;
       case "s": sortBy(g.cur.col); break;
+      case "t": transpose(); break;
       case "p": dbc.cmd.showPlan(); break; // the TUI's p: over to the plan
       case "ContextMenu": case "c": {
         const r = root.getBoundingClientRect();
-        gridMenu(r.left + g.rnW + g.colX[g.cur.col] - root.scrollLeft + 10,
-          r.top + ROW_H * (g.cur.row + 2) - root.scrollTop);
+        if (g.flip) {
+          gridMenu(r.left + g.fnW + g.cur.row * g.recW - root.scrollLeft + 10,
+            r.top + ROW_H * (g.cur.col + 2) - root.scrollTop);
+        } else {
+          gridMenu(r.left + g.rnW + g.colX[g.cur.col] - root.scrollLeft + 10,
+            r.top + ROW_H * (g.cur.row + 2) - root.scrollTop);
+        }
         break;
       }
       default: done = false;
@@ -781,6 +991,7 @@
 
   document.getElementById("copy-btn").addEventListener("click", (e) => copyMenuAt(...under(e.currentTarget)));
   document.getElementById("export-btn").addEventListener("click", (e) => exportMenuAt(...under(e.currentTarget)));
+  flipBtn.addEventListener("click", transpose);
 
   dbc.grid = {
     load, clear, snapshot, restore,
@@ -788,8 +999,9 @@
     hasResult: () => !!g.seq,
     onView: (fn) => viewFns.push(fn),
     exportMenu: () => exportMenuAt(...under(document.getElementById("export-btn"))),
+    transpose,
     // the view, for tests and for the assistant's context (chat.js)
-    view: () => ({ seq: g.seq, sort: g.sort, desc: g.desc, hidden: [...g.hidden], vis: g.vis.slice(),
+    view: () => ({ seq: g.seq, sort: g.sort, desc: g.desc, hidden: [...g.hidden], vis: g.vis.slice(), flip: g.flip,
       cur: Object.assign({}, g.cur), sel: g.sel, bounds: bounds(), widths: g.vis.map(widthOf) }),
   };
   clear();

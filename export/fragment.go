@@ -81,6 +81,14 @@ func HTMLFragment(r *model.Result) string {
 		}
 		sb.WriteString("<tr>")
 		for ci, v := range row {
+			// A transposed result's column 0 holds the source's column
+			// names: drawn as row headers, in the header row's colors, so
+			// the names read as labels down the left edge and not as data.
+			if r.Transposed && ci == 0 {
+				sb.WriteString(`<th scope="row" style="` + fragCellStyle(fragHeadBg, fragHeadFg, numeric, ci) +
+					`;font-weight:600">` + esc(v) + "</th>")
+				continue
+			}
 			if isNullAt(r, ri, ci) {
 				sb.WriteString(`<td style="` + fragCellStyle(bg, fragNullFg, numeric, ci) +
 					`;font-style:italic">NULL</td>`)

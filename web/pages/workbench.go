@@ -35,7 +35,7 @@ type Workbench struct {
 //	├ sidebar ──────┬ [Query 1][Query 2 ●][+]   query tabs ────────────────┬┬ assistant (Ctrl+I) ──────┤
 //	│               ├ editor (textarea, upgraded to Monaco) ────────────────┤│                          │
 //	│ Connections   ├ ═ splitter (drag; the height is saved) ═══════════════┤│ ✦ Copilot · model ▾  ⟲ ✕ │
-//	│ Tables        │ results bar: [Results][◈ Plan] · 8 rows   ⧉ Copy ⤓ Export ││ transcript               │
+//	│ Tables        │ results bar: [Results][◈ Plan] · 8 rows ⇄ ⧉ Copy ⤓ Export ││ transcript               │
 //	│               │ the grid (virtualized) — or the plan view             ││ [✓] with: query, …       │
 //	│               ├ ═ log-split (drag; the log's height is saved) ═════════┤│                          │
 //	│               │ log                                                   ││ composer          ⏎ send │
@@ -99,6 +99,10 @@ func (p Workbench) Render() string {
 							),
 							b.SpanClass("grid-info", "id", "grid-info", "aria-live", "polite").R(),
 							b.DivClass("ractions").R(
+								// a toggle: aria-pressed carries its state, for the
+								// CSS that lights it and for a screen reader
+								b.Button("id", "flip-btn", "type", "button", "aria-pressed", "false",
+									"title", "Transpose: each row becomes a column — copies and exports follow (t)").T("⇄ Transpose"),
 								b.Button("id", "copy-btn", "type", "button", "title", "Copy the result or the selection").T("⧉ Copy ▾"),
 								b.Button("id", "export-btn", "type", "button", "title", "Download the result (Ctrl+E)").T("⤓ Export ▾"),
 							),

@@ -28,13 +28,19 @@ import (
 // keeps it in its grid) and travels with each request that depends on it:
 //
 //	GET  …/result?from=&n=&sort=&desc=   a page of display rows (sorted here)
-//	POST …/copy   {seq, sort, desc, cols, rows, format}  → {text, html, what}
-//	GET  …/export?format=&sort=&desc=&cols=&seq=         → a download
+//	POST …/copy   {seq, sort, desc, cols, rows, format, transpose}  → {text, html, what}
+//	GET  …/export?format=&sort=&desc=&cols=&seq=&t=1               → a download
 //
 // Sorting happens HERE, with workspace.SortRows — the TUI's comparison — so a
 // copy of "sorted by age desc" holds the same rows in the same order from
 // either UI. Hiding is simpler: the page just leaves hidden columns out of
 // cols, and workspace.Project takes what is listed.
+//
+// TRANSPOSING is the page's too: a grid turned on its side (records down,
+// columns as lines) still selects by result row and column, so slice
+// projects exactly as it would upright, and only the rendering differs —
+// copy and export turn the projected piece with export.Transpose, so what
+// lands on the clipboard has the orientation the grid showed.
 //
 // Every response carries the result's SEQ, a per-tab number that moves when
 // the result does. A copy or export names the seq it was made against, and
@@ -213,6 +219,20 @@ type viewReq struct {
 	Row    bool    `json:"row"`    // the range is the cursor's whole row ("row 3")
 	Hidden int     `json:"hidden"` // columns hidden in the grid, for the words
 	Format string  `json:"format"` // "plain" (cells, tab-separated) or an export format
+
+	// Transpose renders the piece on its side, as the grid shows it when
+	// transposed: one line per column, one column per row.
+	Transpose bool `json:"transpose"`
+}
+
+// firstRow is the 1-based display number of the piece's first row — what a
+// transposed piece heads its first record with, so "row 17" in the copy is
+// row 17 in the grid.
+func (req viewReq) firstRow() int {
+	if req.Rows == nil {
+		return 1
+	}
+	return req.Rows[0] + 1
 }
 
 // slice resolves a viewReq to the Result it names and the words for the
@@ -291,17 +311,24 @@ func (s *Server) handleCopy(ctx rweb.Context) error {
 		return fail(ctx, err)
 	}
 	if req.Format == "" || req.Format == "plain" {
+		if req.Transpose {
+			return ok(ctx, copyOut{Text: export.PlainCellsTransposed(r), What: what + ", transposed"})
+		}
 		return ok(ctx, copyOut{Text: export.PlainCells(r), What: what})
 	}
 	f, err := export.ParseFormat(req.Format)
 	if err != nil {
 		return fail(ctx, badRequest("%s", serr.StringFromErr(err)))
 	}
+	how := ""
+	if req.Transpose {
+		r, how = export.Transpose(r, req.firstRow()), ", transposed"
+	}
 	c, err := export.ClipContent(r, f)
 	if err != nil {
 		return fail(ctx, err)
 	}
-	return ok(ctx, copyOut{Text: c.Text, HTML: c.HTML, What: what + " as " + formatNames[f]})
+	return ok(ctx, copyOut{Text: c.Text, HTML: c.HTML, What: what + " as " + formatNames[f] + how})
 }
 
 // exportTypes are a download's extension and media type, by format.
@@ -331,10 +358,14 @@ func (s *Server) handleExport(ctx rweb.Context) error {
 	req := viewReq{
 		Seq: intParam(q.QueryParam("seq"), 0), Sort: intParam(q.QueryParam("sort"), -1),
 		Desc: q.QueryParam("desc") == "1", Cols: intList(q.QueryParam("cols")),
+		Transpose: q.QueryParam("t") == "1",
 	}
 	r, _, err := t.slice(req)
 	if err != nil {
 		return fail(ctx, err)
+	}
+	if req.Transpose {
+		r = export.Transpose(r, req.firstRow())
 	}
 	out, err := export.Render(r, f)
 	if err != nil {

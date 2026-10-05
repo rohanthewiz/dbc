@@ -218,11 +218,19 @@ func summary(r *model.Result) string {
 	if r.IsExec {
 		return fmt.Sprintf("%d rows affected in %s", r.Affected, d)
 	}
-	s := fmt.Sprintf("%d rows in %s", len(r.Rows), d)
-	if r.Truncated {
-		s += " (truncated)"
+	// a transposed result's rows are its source's columns: the rows the
+	// statement returned are its columns, less the one of names
+	if r.Transposed {
+		return fmt.Sprintf("%d rows in %s, transposed", max(len(r.Columns)-1, 0), d) + truncNote(r)
 	}
-	return s
+	return fmt.Sprintf("%d rows in %s", len(r.Rows), d) + truncNote(r)
+}
+
+func truncNote(r *model.Result) string {
+	if r.Truncated {
+		return " (truncated)"
+	}
+	return ""
 }
 
 func textBanner(r *model.Result, pos string) string {
@@ -480,7 +488,14 @@ func htmlDocAll(rs []*model.Result, at []int, total int) string {
 					b.TBody().R(
 						element.ForEach(r.Rows, func(row []string) {
 							b.Tr().R(
-								element.ForEach(row, func(v string) {
+								element.ForEach2(row, func(v string, ci int) {
+									// a transposed result's names column is
+									// row headers (see Transpose); the page's
+									// th style already marks them as labels
+									if r.Transposed && ci == 0 {
+										b.Th("scope", "row").T(esc(v))
+										return
+									}
 									b.Td().T(esc(v))
 								}),
 							)

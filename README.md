@@ -593,6 +593,15 @@ styles, so it pastes into Teams, Outlook, Slack or Google Docs as a formatted
 table rather than as markup. Markdown, CSV, TSV and JSON are one row down.
 The scope is the selected range when there is one, or the whole result.
 
+**Transposed.** In `dbc web`, `t` in the grid (or `⇄ Transpose` on the
+results bar) turns the result on its side, as psql's `\x` does: each row
+becomes a column headed by its number, and each column a line led by its
+name — the easy way to read, or share, one wide record. Copies and exports
+follow what the grid shows, so **Table for Teams** pastes the vertical table
+(names as row headers; a single row comes out as `column | value`), and
+`⤓ Export ▾ → HTML page` downloads it. Sorting, hiding and selecting work as
+they do upright; the arrow keys follow the screen.
+
 The rich copy needs the local clipboard (macOS, Windows, or Linux with an
 X11 display or `wl-copy` on Wayland). Over SSH dbc falls back to the terminal's clipboard
 protocol, which carries plain text only, and says so in the log.

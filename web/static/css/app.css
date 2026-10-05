@@ -377,6 +377,7 @@ body.side-dragging { cursor: col-resize; user-select: none; }
 .grid-info { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
 .ractions { display: flex; gap: 6px; }
 .ractions button { font-size: 12px; padding: 1px 8px; }
+.ractions button[aria-pressed="true"] { color: var(--accent); background: var(--sel); border-color: var(--accent); }
 .rpane { position: relative; flex: 1 1 auto; min-height: 0; display: flex; }
 .grid-msg { padding: 16px; color: var(--muted); }
 /* the Plan tab: the view fills its pane; the grid's info and actions are
@@ -442,6 +443,18 @@ body.side-dragging { cursor: col-resize; user-select: none; }
   cursor: pointer;
 }
 .hrn { cursor: default; }
+/* transposed (grid.js drawFlip): the gutter holds column names — read as
+   headers, so they wear the header's colors and sit flush left — and the
+   header holds record numbers, which read as the gutter's did */
+.rn.fn { text-align: left; color: var(--accent); font-weight: 600; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+.rn.fn.sorted { color: var(--fg); }
+.rn.fn.in { background: color-mix(in srgb, var(--accent) 18%, var(--panel2)); }
+.hrn.fn { color: var(--muted); font-weight: 400; }
+.hc.rec { color: var(--muted); font-weight: 400; }
+.hc.rec.in { color: var(--fg); }
+/* a hidden column between two lines: the upright ║ turned on its side. An
+   overlay, since a real border would make the line taller than ROW_H */
+.gr.gap::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; border-bottom: 3px double var(--muted); pointer-events: none; z-index: 2; }
 .grid .probe { position: absolute; visibility: hidden; white-space: pre; }
 
 /* ── menus and dialogs ─────────────────────────────────────────────────── */

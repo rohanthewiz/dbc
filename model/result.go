@@ -13,6 +13,11 @@ type Result struct {
 	Truncated bool          // true when the row limit was hit
 	IsExec    bool          // true for non-query statements (INSERT/UPDATE/...)
 	Affected  int64         // rows affected, when IsExec
+
+	// Transposed marks a result turned on its side (export.Transpose): each
+	// row is one of the source's columns, its name in column 0, so the HTML
+	// renderings draw that column as row headers rather than as data.
+	Transposed bool
 }
 
 // RowCount returns the number of data rows.

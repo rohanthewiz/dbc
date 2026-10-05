@@ -2184,6 +2184,7 @@
       ["arrows · Shift+arrows", "move · extend the range"], ["g · G", "first · last row"],
       ["Enter · double-click", "inspect the value"], ["y · Y", "copy the value or range · the row"],
       ["- · + · =", "hide the column · show all · fit it"], ["click a header", "sort: asc, desc, off"],
+      ["t · ⇄ Transpose", "turn the grid on its side — each row a column; copies and exports follow"],
       ["p", "the plan, when there is one"],
     ]],
     ["Plan", [

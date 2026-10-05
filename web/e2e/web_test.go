@@ -41,6 +41,7 @@ func TestWeb(t *testing.T) {
 		{"show columns with c", columnsWithKey},
 		{"copy chords on a table", copyChordsOnTable},
 		{"copy out of the columns grid", copyColumnsGrid},
+		{"transpose the grid", transposeGrid},
 		{"switch connections", switchConns},
 		{"disconnect and reconnect", disconnect},
 		{"connection form fields and DSN", connForm},
@@ -275,6 +276,64 @@ func copyColumnsGrid(t *testing.T, _ *env, p *rod.Page) {
 			t.Fatalf("line %d = %q, want %d<TAB>%s<TAB>…", i+1, l, i+1, catsColumns[i])
 		}
 	}
+}
+
+// transposeGrid: t turns the grid on its side — a column per record, a
+// line per result column with its name in the gutter — and back. The
+// arrows follow the screen (right is the next record, down the next
+// column), a record's number selects it whole, and copies come out the
+// way the grid shows them: y as values on their side, the Teams table with
+// the names as row headers.
+func transposeGrid(t *testing.T, _ *env, p *rod.Page) {
+	before := gridSeq(t, p)
+	eval(t, p, `() => dbc.editor.setText("SELECT id, name, age FROM cats ORDER BY id")`)
+	p.MustElement("#run").MustClick()
+	waitResult(t, p, before, "id", "name", "age")
+	p.MustElement("#grid").MustFocus()
+
+	p.Keyboard.MustType(input.KeyT)
+	waitFor(t, p, "the grid transposed", `() => dbc.grid.view().flip &&
+	  document.getElementById("flip-btn").getAttribute("aria-pressed") === "true" &&
+	  document.getElementById("grid-info").textContent.includes("transposed") &&
+	  document.querySelectorAll("#grid .gh .hc.rec").length === 3`)
+	if names := evalStr(t, p, `() => [...document.querySelectorAll("#grid .gb .rn.fn")].map((d) => d.textContent).join(",")`); names != "id,name,age" {
+		t.Fatalf("gutter names = %q, want id,name,age", names)
+	}
+
+	// right: the next record (Mia); down: the next column (name)
+	p.Keyboard.MustType(input.ArrowRight, input.ArrowDown)
+	waitFor(t, p, "the cursor on Mia's name", `() => { const c = dbc.grid.view().cur; return c.row === 1 && c.col === 1; }`)
+	setClipboard(t, p, "sentinel")
+	p.Keyboard.MustType(input.KeyY)
+	waitFor(t, p, "Mia copied", `() => navigator.clipboard.readText().then((s) => s === "Mia")`)
+
+	// record 3's number selects Leo whole; y copies him as a column
+	p.MustElement(`#grid .gh .hc.rec[data-r="2"]`).MustClick()
+	waitFor(t, p, "record 3 selected", `() => { const v = dbc.grid.view(); return v.sel && v.bounds.join() === "2,0,2,2"; }`)
+	p.Keyboard.MustType(input.KeyY)
+	waitFor(t, p, "Leo copied on his side", `() => navigator.clipboard.readText().then((s) => s === "3\nLeo\n1")`)
+
+	// the Teams table: the selection (one record) as "column | value", the
+	// names as row headers
+	p.MustElement("#copy-btn").MustClick()
+	p.MustElementR(".menu .mitem", "Table for Teams").MustClick()
+	waitFor(t, p, "the HTML copy logged", `() => [...document.querySelectorAll("#log > div")].some((d) => d.textContent.includes("1×3 cells as a table, transposed"))`)
+	html := evalStr(t, p, `async () => {
+	  for (const it of await navigator.clipboard.read()) {
+	    if (it.types.includes("text/html")) return await (await it.getType("text/html")).text();
+	  }
+	  return "";
+	}`)
+	for _, want := range []string{`>value</th>`, `<th scope="row"`, `>name</th>`, `>Leo</td>`} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("the Teams copy lacks %s:\n%s", want, html)
+		}
+	}
+
+	// and back upright, as the later steps expect
+	p.MustElement("#grid").MustFocus()
+	p.Keyboard.MustType(input.KeyT)
+	waitFor(t, p, "the grid upright", `() => !dbc.grid.view().flip && !document.querySelector("#grid .gh .hc.rec")`)
 }
 
 // switchConns: a click on another connection moves the tab there and

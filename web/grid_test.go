@@ -238,6 +238,56 @@ func TestGridExportDownloads(t *testing.T) {
 	e.api("GET", "/api/v1/ws/"+id+"/export?format=xls&seq="+seq+"&cols=0", "", 400)
 }
 
+// A transposed copy or export turns the piece the grid named — the rows
+// and columns are chosen upright, then the result is put on its side — and
+// says so in the log's words.
+func TestGridCopyAndExportTransposed(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	e.runAndWait(id, s, petsSQL)
+	seq := itoa(e.page(id, "").Seq)
+
+	// rows 2–3 (Luna, Bella), id and name: headed by their grid numbers
+	out := decodeData[copyOut](t, e.api("POST", "/api/v1/ws/"+id+"/copy",
+		`{"seq":`+seq+`,"sort":-1,"cols":[0,1],"rows":[1,2],"format":"csv","transpose":true}`, 200))
+	if out.Text != "column,row 2,row 3\nid,2,3\nname,Luna,Bella\n" || out.What != "2×2 cells as CSV, transposed" {
+		t.Errorf("csv = %q (%s)", out.Text, out.What)
+	}
+
+	// the plain copy turns too, without names
+	out = decodeData[copyOut](t, e.api("POST", "/api/v1/ws/"+id+"/copy",
+		`{"seq":`+seq+`,"sort":-1,"cols":[0,1],"rows":[1,2],"format":"plain","transpose":true}`, 200))
+	if out.Text != "2\t3\nLuna\tBella" || out.What != "2×2 cells, transposed" {
+		t.Errorf("plain = %q (%s)", out.Text, out.What)
+	}
+
+	// one record for Teams: "column | value", names as row headers, its
+	// NULL age still a NULL
+	out = decodeData[copyOut](t, e.api("POST", "/api/v1/ws/"+id+"/copy",
+		`{"seq":`+seq+`,"sort":-1,"cols":[0,1,2],"rows":[1,1],"row":true,"format":"html","transpose":true}`, 200))
+	if !strings.Contains(out.HTML, `>value</th>`) || strings.Count(out.HTML, `<th scope="row"`) != 3 ||
+		!strings.Contains(out.HTML, `font-style:italic">NULL</td>`) {
+		t.Errorf("html = %s", out.HTML)
+	}
+	if out.What != "row 2 as a table, transposed" {
+		t.Errorf("what = %q", out.What)
+	}
+
+	// the export: the whole view on its side
+	res := e.req("GET", "/api/v1/ws/"+id+"/export?format=html&seq="+seq+"&sort=-1&cols=1,0&t=1", "", nil)
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("export = %d: %s", res.StatusCode, b)
+	}
+	page := string(b)
+	if !strings.Contains(page, `<th scope="row">name</th><td>Whiskers</td><td>Luna</td>`) ||
+		!strings.Contains(page, `<th>row 5</th>`) || strings.Contains(page, `<th scope="row">age`) ||
+		!strings.Contains(page, "5 rows in") {
+		t.Errorf("transposed page = %s", page)
+	}
+}
+
 // History lists what ran (shared with the TUI's file), newest first and
 // filtered; a table preview runs without the editor, and is recorded.
 func TestHistoryAndPreview(t *testing.T) {

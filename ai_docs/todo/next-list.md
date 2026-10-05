@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-111
+**Next ID:** N-113
 
 ## Open
 
@@ -140,6 +140,17 @@ ten session docs in `ai_docs/claude_sessions/`
   then passed on five later runs with and without the tab-groups change.
   Likely a race between the reload and the console's load/save; worth a
   look if it recurs.
+- **N-111** · raised `2026-1005-1247-web-grid-transpose` · value low
+  Transpose in the TUI's grid. `dbc web` has it (`t`, ⇄ Transpose; copies
+  and exports follow); the TUI could reuse `export.Transpose` and
+  `PlainCellsTransposed` for its copy/export, but its grid drawing
+  (`tui/grid.go`) would need a sideways mode. The ask said "at least the
+  html js version", so only the web was done.
+- **N-112** · raised `2026-1005-1247-web-grid-transpose` · value low
+  The transposed web grid gives every record one width (the widest shown
+  column's auto width, or `=` to fit content); there is no drag-resize of
+  record columns, and the names gutter is capped at 40 characters with no
+  way to widen it. Add a resize handle if a long name or value bites.
 
 ## Roadmap
 

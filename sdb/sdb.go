@@ -93,17 +93,35 @@ func (s *S) Conns() []string {
 // Query runs a statement with parameters on the named connection and
 // returns the result set. Use the placeholder style of the target driver
 // ($1 for postgres/bytdb, ? for mysql/sqlite).
+//
+// Server notices the statement raises (Postgres RAISE NOTICE and its kin)
+// are written to the script output, as Print does, before Query returns —
+// whether or not the statement failed.
 func (s *S) Query(conn, query string, args ...any) (*Result, error) {
-	return s.mgr.RunContext(s.Ctx(), conn, query, args...)
+	return s.run(conn, query, args...)
 }
 
-// Exec runs a non-query statement and returns the rows affected.
+// Exec runs a non-query statement and returns the rows affected. Its server
+// notices are printed as Query's are.
 func (s *S) Exec(conn, stmt string, args ...any) (int64, error) {
-	r, err := s.mgr.RunContext(s.Ctx(), conn, stmt, args...)
+	r, err := s.run(conn, stmt, args...)
 	if err != nil {
 		return 0, err
 	}
 	return r.Affected, nil
+}
+
+// run is Query and Exec: the statement through db.Manager.RunNotices, its
+// notices printed one per line ("NOTICE: users : 42"). They go to the
+// script output rather than back to the script so that Query's signature
+// stays as scripts know it, and so they read in the log next to the
+// script's own Print lines, in the order things happened.
+func (s *S) run(conn, stmt string, args ...any) (*Result, error) {
+	r, notices, err := s.mgr.RunNotices(s.Ctx(), conn, stmt, args...)
+	for _, n := range notices {
+		s.Print("%s", n.String())
+	}
+	return r, err
 }
 
 // Explain describes how conn's database runs stmt, as the TUI's Ctrl+X and

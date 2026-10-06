@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -968,6 +970,44 @@ func TestLiveWorkspaceNotices(t *testing.T) {
 			ev.Notes[1] != (Note{Warn, "WARNING: second"}) ||
 			ev.Notes[2].Level != Ok {
 			t.Errorf("notes = %q, want the NOTICE, the WARNING, then the completed note", texts)
+		}
+	})
+}
+
+// A script's s.Query prints the notices its statement raised to the
+// script output, before the script's next line of its own.
+func TestLiveWorkspaceScriptNotices(t *testing.T) {
+	pgOnly(t, func(t *testing.T, e liveEngine) {
+		w, _ := liveWorkspace(t, e)
+		var mu sync.Mutex
+		var printed []string
+		w.sink = func(ev Event) {
+			if p, ok := ev.(*ScriptPrint); ok {
+				mu.Lock()
+				printed = append(printed, p.Text)
+				mu.Unlock()
+			}
+		}
+		path := filepath.Join(t.TempDir(), "notices.go")
+		src := "package main\n\nimport \"github.com/rohanthewiz/dbc/sdb\"\n\n" +
+			"func Run(s *sdb.S) error {\n" +
+			"\tif _, err := s.Query(\"live\", `DO $$ BEGIN RAISE NOTICE 'from %', 'script'; END $$`); err != nil {\n" +
+			"\t\treturn err\n\t}\n" +
+			"\ts.Print(\"after\")\n\treturn nil\n}\n"
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		st, err := w.RunScript(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ev := st.Job().(*RunDone); ev.Err != nil {
+			t.Fatalf("script: %v", ev.Err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if strings.Join(printed, "|") != "NOTICE: from script|after" {
+			t.Errorf("script output = %q, want the NOTICE, then after", printed)
 		}
 	})
 }

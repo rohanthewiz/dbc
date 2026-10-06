@@ -1,12 +1,18 @@
 package db
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	pgxstdlib "github.com/jackc/pgx/v5/stdlib"
+
+	"github.com/rohanthewiz/dbc/model"
 )
 
 // Server notices: Postgres's RAISE NOTICE / WARNING / INFO / LOG / DEBUG,
@@ -26,9 +32,11 @@ import (
 //	Session.Notices ─► buf.take  (what the caller logs)
 //	Session.Close   ─► delete(noticeSinks, pgconn)
 //
-// A notice on a connection no Session holds — the pooled RunContext path
-// (catalog queries, a script's Query) — finds no buffer and is dropped, as
-// every notice was before. Those runs have no log line to put it on.
+// RunNotices does the same for one pooled statement (a script's Query and
+// Exec), on a connection checked out for it. A notice on a connection
+// neither holds — the plain RunContext path (catalog queries, row counts)
+// — finds no buffer and is dropped: those are dbc's own statements, with
+// no log line to put it on.
 //
 // MySQL's warnings are a different mechanism (SHOW WARNINGS, a separate
 // round trip) and SQLite has none, so only Postgres sessions get a buffer.
@@ -144,4 +152,65 @@ func attachNotices(raw func(func(any) error) error) (*noticeBuf, *pgconn.PgConn)
 	buf := &noticeBuf{}
 	noticeSinks.Store(pc, buf)
 	return buf, pc
+}
+
+// RunNotices is RunContext that also returns the server notices the
+// statement raised, in the order sent, success or failure. Session.Run has
+// its session's buffer for that. A pooled run has none, since a statement
+// on *sql.DB runs on whichever connection database/sql picks and that
+// connection is never known here. So on Postgres the statement runs on a
+// connection checked out for it alone, with a buffer registered for that
+// connection's lifetime in the run:
+//
+//	dbh.Conn ─► attachNotices ─► run ─► take ─► unregister ─► Conn.Close (back to the pool)
+//
+// The connection goes back to the pool, not discarded as a Session's is:
+// nothing here could have left session state on it that a plain pooled
+// run would not have left too.
+//
+// The checkout costs nothing extra: *sql.DB's ExecContext/QueryContext
+// check out a connection the same way, and the checkout path is where
+// pgShouldPing's dead-connection check runs. The one thing database/sql's
+// pooled path adds is a retry when the driver says driver.ErrBadConn
+// (the statement never reached the server). A *sql.Conn hands that error
+// back instead, so it is retried here, once, on a fresh checkout.
+//
+// The other engines have no notices and run on the pool as RunContext
+// does, and nil notices come back.
+func (m *Manager) RunNotices(ctx context.Context, name, stmt string, args ...any) (*model.Result, []Notice, error) {
+	dbh, err := m.DBContext(ctx, name)
+	if err != nil {
+		return nil, nil, err
+	}
+	cc, _ := m.cfg.ConnByName(name)
+	if drv, _ := driverFor(cc.Driver); drv != "pgx" {
+		res, err := m.run(ctx, dbh, name, stmt, args...)
+		return res, nil, err
+	}
+	for retried := false; ; retried = true {
+		res, notices, err := m.runNoticed(ctx, dbh, name, stmt, args...)
+		if err != nil && !retried && errors.Is(err, driver.ErrBadConn) {
+			continue
+		}
+		return res, notices, err
+	}
+}
+
+// runNoticed is one attempt of RunNotices on a Postgres pool.
+func (m *Manager) runNoticed(ctx context.Context, dbh *sql.DB, name, stmt string, args ...any) (*model.Result, []Notice, error) {
+	c, err := dbh.Conn(ctx)
+	if err != nil {
+		return nil, nil, wrapRunErr(ctx, err, name, "op", "conn")
+	}
+	defer c.Close()
+	buf, key := attachNotices(c.Raw)
+	if key != nil {
+		defer noticeSinks.Delete(key)
+	}
+	res, err := m.run(ctx, c, name, stmt, args...)
+	var notices []Notice
+	if buf != nil {
+		notices = buf.take()
+	}
+	return res, notices, err
 }

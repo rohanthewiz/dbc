@@ -57,6 +57,7 @@
   const $ = (id) => document.getElementById(id);
   const els = {
     conns: $("conns"), tables: $("tables"), tableCount: $("table-count"),
+    rowCounts: $("row-counts"), rowCountsBox: $("row-counts-box"),
     tableFilter: $("table-filter"), tableSchema: $("table-schema"), schemaList: $("schema-list"),
     dbFilter: $("db-filter"), tableDb: $("table-db"), dbList: $("db-list"),
     active: $("active-conn"), stateful: $("stateful"), busy: $("busy"),
@@ -204,10 +205,57 @@
     side = s || { tables: [] };
     allTables = side.tables || [];
     loadingSchema = false;
+    drawRowCountsBox();
     dbPicker.draw();
     drawSchemaFilter();
     drawTables();
   }
+
+  // ── the "rows" box ─────────────────────────────────────────────────────
+  // Row counts are off until the box is ticked: each is an exact count(*),
+  // a scan of the table (db/rowcount.go). The switch is the tab's on the
+  // server (Workspace.ShowRowCounts), so the box follows whichever tab is
+  // on screen — side.rowCounts, from its sideState — and a new tab starts
+  // unticked.
+  //
+  // t.counting marks a counting on its way for that tab, so the label can
+  // pulse while it runs (a big schema takes seconds):
+  //
+  //	tick on ─► counting: true ─► POST /rowcounts ─► … ─► "counts" ─► false
+  //	"conn" with the box on and tables to count ─► true ─► "counts" ─► false
+  //
+  // Every counting ends in a "counts" event, failed or not (web/hub.go), so
+  // the mark cannot be left on.
+  function drawRowCountsBox() {
+    els.rowCounts.checked = !!side.rowCounts;
+    els.rowCountsBox.classList.toggle("counting", !!(state.tab && state.tab.counting));
+  }
+
+  // countsComing reports whether a "conn" event will be followed by a
+  // counting: the box is on and something in the list can be counted
+  // (views never are).
+  const countsComing = (d) => !!(d.rowCounts && !d.failed && (d.tables || []).some((t) => !t.view));
+
+  els.rowCounts.addEventListener("change", () => {
+    const t = state.tab, on = els.rowCounts.checked;
+    if (!t || !t.ws) return;
+    // optimistic: ticking on marks the counting at once, and only ever
+    // clears it after — the response (nothing to count) or the "counts"
+    // event, whichever comes first. A small schema's "counts" can beat
+    // the response, so the response never sets the mark, only clears it.
+    side.rowCounts = on;
+    t.counting = on;
+    drawRowCountsBox();
+    api("POST", dbc.wsPath("/rowcounts"), { on }).then((r) => {
+      if (!r || !r.counting) t.counting = false;
+      if (t === state.tab) drawRowCountsBox();
+    }).catch((e) => {
+      log("err", e.message);
+      side.rowCounts = !on;
+      t.counting = false;
+      if (t === state.tab) drawRowCountsBox();
+    });
+  });
 
   // schemaTotal is how many tables the database has: the server's per-schema
   // counts where it sends them, else the list itself, which is then whole.
@@ -645,6 +693,12 @@
     ]);
   });
 
+  // countsLanded ends a tab's "counting…" mark: a counting answered,
+  // failed or was switched off.
+  function countsLanded(t) {
+    t.counting = false;
+  }
+
   // ── the event stream ───────────────────────────────────────────────────
   function onEvent(ev) {
     const d = ev.data;
@@ -704,6 +758,7 @@
       case "conn":
         state.active = d.active;
         t.conn = d.active;
+        t.counting = countsComing(d);
         markActive(d.active, "");
         if (!d.active) { els.stateful.hidden = true; t.stateful = false; } // its session goes with it
         showSide(d);
@@ -714,6 +769,9 @@
         dbc.chat.refresh(); // another catalog: other tables' schema
         break;
       case "counts":
+        countsLanded(t);
+        side.rowCounts = !!d.on;
+        drawRowCountsBox();
         // for a connection this tab has since left: the next "conn" and
         // its own "counts" redraw the list
         if (d.active === state.active) showCounts(d.tables || []);
@@ -758,8 +816,13 @@
         break;
       case "conn":
         t.conn = d.active;
+        t.counting = countsComing(d);
         if (d.changed) saveTab(t);
         followConsole(t, d.console);
+        break;
+      case "counts":
+        // its list is redrawn whole (GET …/ws) when it comes on screen
+        countsLanded(t);
         break;
     }
     trackTab(t, type, d);

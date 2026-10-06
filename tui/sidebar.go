@@ -70,7 +70,8 @@ func (m *Model) refreshTables() {
 // Schema is shown only when the connection has more than one, since
 // "public." in front of every name says nothing.
 //
-// A count goes in the row's right-aligned muted slot ("cats      1,234")
+// A count — only while the row counts are on (toggleRowCounts) — goes in
+// the row's right-aligned muted slot ("cats      1,234")
 // rather than after the name: a long name is truncated from its end, and
 // the count is what would be cut. Views have no count (see db/rowcount.go)
 // and keep "view" there instead.
@@ -100,9 +101,29 @@ func (m *Model) fillTables() {
 	m.tables.set(items)
 }
 
-// rowCountsLanded fills the counts into the tables list. An estimated count
-// is marked "~" by RowCount.Short, which is all the TUI has room to say; the
-// web page's tooltip says the rest.
+// toggleRowCounts is the tables list's # key (and its menu's "Show row
+// counts"): the TUI's counterpart of the web sidebar's "rows" box. Counts
+// start off, since each is an exact count(*), a scan of the table (see
+// db/rowcount.go). On, the counting runs as a Job and lands as a
+// *workspace.RowCounts like a connect's; off, the numbers go at once.
+func (m *Model) toggleRowCounts() tea.Cmd {
+	on := !m.ws.RowCountsShown()
+	j := m.ws.ShowRowCounts(on)
+	m.fillTables() // off: the numbers go now; on: the list stays as it is until they land
+	switch {
+	case !on:
+		m.setStatus("row counts off")
+	case j != nil:
+		m.setStatus("counting rows…")
+	default:
+		m.setStatus("row counts on — they show once tables are listed")
+	}
+	return m.tag(job(j))
+}
+
+// rowCountsLanded fills the counts into the tables list. Counts are exact
+// (db/rowcount.go); RowCount.Short would mark an estimated one "~", should
+// one ever come.
 func (m *Model) rowCountsLanded(ev *workspace.RowCounts) tea.Cmd {
 	if ev.Stale {
 		return nil

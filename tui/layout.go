@@ -315,6 +315,11 @@ func (m *Model) render() (*Canvas, *caret) {
 		if n := len(m.tables.items); n > 0 {
 			title = fmt.Sprintf("Tables · %d", n)
 		}
+		// the row counts' switch, so a list without numbers reads as
+		// "counts off" (# turns them on), not as "nothing counted"
+		if m.ws.RowCountsShown() {
+			title += " · rows"
+		}
 		m.drawPane(c, l.tables, title, focusTables, m.st.panel, m.drawTablesPane)
 	}
 

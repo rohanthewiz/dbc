@@ -401,6 +401,11 @@ func (m *Model) openTableMenu(x, y int, onRow bool) {
 	if len(m.tables.items) == 0 {
 		noTables = "no tables listed"
 	}
+	// the counts' switch, worded as what picking it does
+	countsLabel := "Show row counts"
+	if m.ws.RowCountsShown() {
+		countsLabel = "Hide row counts"
+	}
 	items := []menuItem{
 		{label: "Preview rows", key: "2×click", why: noTable, act: func(m *Model) tea.Cmd { return m.tablePicked() }},
 		{label: "Show columns", key: "c", why: noTable, act: func(m *Model) tea.Cmd { return m.tableColumns() }},
@@ -413,6 +418,7 @@ func (m *Model) openTableMenu(x, y int, onRow bool) {
 			return nil
 		}},
 		{label: "Copy name", why: noTable, act: func(m *Model) tea.Cmd { return m.copyString(name, "the table name") }},
+		{label: countsLabel, key: "#", act: func(m *Model) tea.Cmd { return m.toggleRowCounts() }},
 	}
 	if dbRow, schemaRow := m.navRows(); dbRow || schemaRow {
 		dbWhy, schemaWhy := "", ""

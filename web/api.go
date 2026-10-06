@@ -429,6 +429,38 @@ func (s *Server) handleSchema(ctx rweb.Context) error {
 	return ok(ctx, map[string]any{"loading": true})
 }
 
+// rowCountsReq is the sidebar's "rows" box, ticked or not.
+type rowCountsReq struct {
+	On bool `json:"on"`
+}
+
+// handleRowCounts is the sidebar's "rows" box: it turns the tab's row
+// counts on or off (Workspace.ShowRowCounts). On, the counting runs in the
+// background and lands as a "counts" event, seconds later for a big
+// schema; off, the "counts" event goes out at once, with the numbers gone.
+// Either way the response says only what the box now is — the stream
+// carries the rest, as it does for a schema pick.
+func (s *Server) handleRowCounts(ctx rweb.Context) error {
+	t, err := s.hub.get(ctx.Request().PathParam("id"))
+	if err != nil {
+		return fail(ctx, err)
+	}
+	var req rowCountsReq
+	if err = decode(ctx, &req); err != nil {
+		return fail(ctx, err)
+	}
+	counting := false
+	if job := t.ws.ShowRowCounts(req.On); job != nil {
+		counting = true
+		go func() { s.deliver(t, job()) }()
+	} else {
+		// off, or on with no tables listed yet: nothing will land, so the
+		// page hears now that its rows have no numbers
+		t.send("counts", countsEvent{Active: t.ws.Active(), Tables: tables(t.ws), On: t.ws.RowCountsShown()})
+	}
+	return ok(ctx, map[string]any{"on": req.On, "counting": counting})
+}
+
 // runReq is the editor at the moment of Run: the buffer, the caret and the
 // selection. The workspace picks the statement from them, so "the statement
 // under the caret" means the same thing here as in the TUI.

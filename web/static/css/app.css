@@ -855,3 +855,12 @@ a.btnlink:hover { border-color: var(--accent); }
 .erd-img { display: block; margin: 0 auto; }
 .erd-img.fit { max-width: 100%; max-height: 100%; object-fit: contain; }
 .hadd.herd { font-size: 11px; font-weight: 600; letter-spacing: .5px; }
+/* the Tables heading's "rows" box (row counts on/off): sized to sit beside
+   ERD in the uppercase heading. While a counting runs (.counting) the label
+   pulses, since an exact count of a big schema can take seconds. */
+.hchk { display: inline-flex; align-items: center; gap: 3px; margin-right: 4px; cursor: pointer;
+  font-size: 11px; font-weight: 600; letter-spacing: .5px; color: var(--muted); }
+.hchk:hover { color: var(--accent); }
+.hchk input { margin: 0; width: 11px; height: 11px; accent-color: var(--accent); cursor: pointer; }
+.hchk.counting { animation: hchk-pulse 1s ease-in-out infinite alternate; }
+@keyframes hchk-pulse { from { opacity: 1; } to { opacity: .4; } }

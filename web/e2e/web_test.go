@@ -191,14 +191,27 @@ func aliasRename(t *testing.T, _ *env, p *rod.Page) {
 	p.Keyboard.MustType(input.Escape)
 }
 
-// tablesSidebar: the list holds the connection's table with its row count
-// (which lands a moment after the list); SQLite has one schema, so the
-// schema picker stays hidden.
+// tablesSidebar: the list holds the connection's table, without a row
+// count until the heading's "rows" box is ticked (counts are opt-in, an
+// exact count(*) each); ticked, the count lands a moment later, and
+// unticked it goes. SQLite has one schema, so the schema picker stays
+// hidden.
 func tablesSidebar(t *testing.T, _ *env, p *rod.Page) {
+	waitFor(t, p, "cats in the list", `() => !!document.querySelector('#tables li[data-name="cats"]')`)
+	if ticked := eval(t, p, `() => document.getElementById("row-counts").checked`); ticked != false {
+		t.Fatal("the rows box starts ticked")
+	}
+	if has := eval(t, p, `() => !!document.querySelector('#tables li[data-name="cats"] .rows')`); has != false {
+		t.Fatal("cats has a row count before the rows box was ticked")
+	}
+	p.MustElement("#row-counts").MustClick()
 	waitFor(t, p, "cats with its row count", `() => {
 	  const r = document.querySelector('#tables li[data-name="cats"] .rows');
 	  return !!r && r.textContent.trim() === "(3)";
 	}`)
+	waitFor(t, p, "the counting mark cleared", `() => !document.getElementById("row-counts-box").classList.contains("counting")`)
+	p.MustElement("#row-counts").MustClick()
+	waitFor(t, p, "the row count gone", `() => !document.querySelector('#tables li[data-name="cats"] .rows')`)
 	if hidden := eval(t, p, `() => document.getElementById("table-filter").hidden`); hidden != true {
 		t.Fatal("the schema picker is shown for SQLite's single schema")
 	}

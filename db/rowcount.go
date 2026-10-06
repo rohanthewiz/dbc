@@ -17,30 +17,36 @@ import (
 
 // Row counts for the sidebar's tables list: "cats (1,234)".
 //
-// They arrive AFTER the list, as a separate job, because counting is the one
-// catalog chore whose cost grows with the data rather than with the schema:
-// a count(*) reads every row (or every index entry) of the table. The list
-// must never wait for it.
+// They are opt-in: a sidebar shows them only once the user ticks its "rows"
+// box (web) or presses # (TUI) — see Workspace.ShowRowCounts. Counting is
+// the one catalog chore whose cost grows with the data rather than with the
+// schema (a count(*) reads every row, or every index entry, of the table),
+// so it is not something to start on every connect of a big server. When
+// on, they arrive AFTER the list, as a separate job; the list never waits.
 //
-// # Exact where cheap, estimated where not
+// # Exact, never estimated
 //
-// Postgres and MySQL keep a row estimate per table in their catalogs, free to
-// read in one query. That estimate decides how each table is counted:
+// Every count is a real count(*). The database's own row estimates
+// (pg_class.reltuples, information_schema.tables.table_rows) used to stand
+// in for big tables, but they drift far from the truth between ANALYZEs —
+// an InnoDB table_rows can be tens of percent off, a reltuples of a busy
+// or never-vacuumed table further still — and a number in the sidebar that
+// is quietly wrong is worse than no number. Since counting is now asked
+// for, it can afford to take the time to be right.
 //
-//	estimate query (pg_class.reltuples, information_schema.tables.table_rows)
-//	      │
-//	      ├─ ≥ exactCountLimit ─────────────────► keep the estimate  "~1.2M"
-//	      │
-//	      └─ below it, or unknown (never analyzed)
-//	             │
-//	             └─ SELECT count(*) under countTimeout
-//	                   ├─ answered ──────────────► exact             "1,234"
-//	                   └─ timed out / failed ────► the estimate if any, else no count
+//	Postgres  one statement for the whole list (PgCountsQuery): query_to_xml
+//	          runs a count(*) per table server-side, one round trip
+//	   │
+//	   └─ fails (a table without SELECT privilege, say)
+//	         └─► per-table count(*), as below, so one table cannot blank the rest
 //
-// SQLite and bytdb keep no estimate, so every table is counted exactly; both
-// are local, and a count there costs a file scan, not a network round trip.
-// A count that fails (no SELECT privilege, say) is left out rather than
-// failing the rest: the sidebar then shows that table without a number.
+//	others    per-table count(*), a few at once on MySQL, one at a time on
+//	          the embedded engines, each under countTimeout
+//
+// A count that fails (no SELECT privilege, a timeout) is left out rather
+// than failing the rest: the sidebar then shows that table without a
+// number. countBudget bounds the whole counting; what is not counted by
+// then also shows no number.
 //
 // Views are never counted. A view's count(*) runs the view's whole query,
 // which can be arbitrarily expensive, and "rows in a view" is rarely what a
@@ -61,16 +67,15 @@ const (
 	// switch away and back instant without leaving yesterday's numbers up.
 	rowCountTTL = 2 * time.Minute
 
-	// exactCountLimit is the estimate at and above which a table is not
-	// counted exactly. A million rows is where a count(*) stops being a
-	// blink on an ordinary server; above it the estimate (a few percent off
-	// after an ANALYZE) says what a sidebar needs to say.
-	exactCountLimit = 1_000_000
-
-	// countTimeout bounds one table's count(*); countBudget bounds the
-	// whole counting, so a catalog of thousands of tables still settles.
-	countTimeout = 3 * time.Second
-	countBudget  = 30 * time.Second
+	// countTimeout bounds one table's count(*) in the per-table path;
+	// countBudget bounds the whole counting (Postgres's one statement
+	// included), so a catalog of thousands of tables still settles. Both
+	// are generous since the counts are exact and asked for: a count(*) of
+	// tens of millions of rows takes seconds, and cutting it off would
+	// leave exactly the big tables, the ones worth knowing, without a
+	// number. Unticking the box cancels a counting still running.
+	countTimeout = 30 * time.Second
+	countBudget  = 2 * time.Minute
 
 	// networkCountWorkers is how many counts run at once on a networked
 	// server, where each count is mostly a round trip. The embedded
@@ -81,7 +86,9 @@ const (
 )
 
 // RowCount is a table's number of rows. Estimate reports a number taken from
-// the database's statistics rather than counted.
+// the database's statistics rather than counted; the sidebar's counting no
+// longer makes any (see the top of this file), but Short and Sentence still
+// mark one, should a caller build it from RowEstimatesQuery.
 type RowCount struct {
 	N        int64
 	Estimate bool
@@ -160,6 +167,11 @@ func compactCount(n int64) string {
 // row estimates as (schema, name, estimate), or "" for a driver that keeps
 // none. An estimate the database does not have yet comes back negative or
 // NULL, and is read as unknown.
+//
+// The sidebar's counting does not use it: its numbers are exact counts
+// only, since the estimates proved too far off to show (the top of this
+// file). It is kept for a quick, approximate size of a catalog — reading it
+// costs one catalog query, not a scan of every table.
 func RowEstimatesQuery(driver string) (string, error) {
 	drv, err := driverFor(driver)
 	if err != nil {
@@ -255,6 +267,35 @@ func CountQuery(driver string, t TableRef) (string, error) {
 	}
 	return "SELECT count(*) FROM " + name, nil
 }
+
+// PgCountsQuery is the Postgres statement that counts many tables exactly
+// in one round trip, as (schema, name, count). $1 and $2 are parallel
+// text arrays of the tables' schemas and names.
+//
+// Each count(*) is built and run server-side: format's %I quotes the
+// schema and name as identifiers (so any name, quotes included, is safe),
+// query_to_xml runs the statement and returns its one row as XML —
+// <row><c>1234</c></row> — and xpath pulls the number back out. This is
+// what lets a plain SELECT run a dynamic statement per row without a
+// function of dbc's own having to be created on the server.
+//
+// information_schema.tables lists only what the user holds some privilege
+// on, and its 'BASE TABLE' includes a partitioned parent, whose count(*)
+// is the sum of its partitions. The unnest join keeps the counting to the
+// tables the sidebar lists (one schema of many, usually), not every table
+// the database has.
+//
+// It is all or nothing: one table the user may see but not SELECT from
+// fails the statement, and countRows then counts table by table.
+const PgCountsQuery = `SELECT t.table_schema, t.table_name,
+  (xpath('/row/c/text()',
+    query_to_xml(format('SELECT count(*) AS c FROM %I.%I', t.table_schema, t.table_name), false, true, '')
+  ))[1]::text::bigint AS row_count
+FROM information_schema.tables t
+JOIN unnest($1::text[], $2::text[]) AS want(schema_name, table_name)
+  ON want.schema_name = t.table_schema AND want.table_name = t.table_name
+WHERE t.table_type = 'BASE TABLE'
+ORDER BY t.table_schema, t.table_name`
 
 // rowCountCache is a connection's last counting.
 type rowCountCache struct {
@@ -442,37 +483,37 @@ func (m *Manager) countRows(ctx context.Context, name string, tables []TableRef)
 	bctx, cancel := context.WithTimeout(ctx, countBudget)
 	defer cancel()
 
-	// The estimates, when the driver keeps any. Failing to read them only
-	// means counting everything exactly, so the error is dropped.
-	type key struct{ schema, name string }
-	est := map[key]int64{}
-	if q, _ := RowEstimatesQuery(cc.Driver); q != "" {
-		if rows, err := stringRows(bctx, dbh, q); err == nil {
-			for _, r := range rows {
-				if len(r) < 3 {
-					continue
-				}
-				if n, err := strconv.ParseInt(r[2], 10, 64); err == nil && n >= 0 {
-					est[key{r[0], r[1]}] = n
-				}
-			}
-		}
-	}
-
 	out := make(map[TableRef]RowCount, len(tables))
 	var todo []TableRef
 	for _, t := range tables {
-		if t.View {
-			continue
+		if !t.View {
+			todo = append(todo, t)
 		}
-		if n, ok := est[key{t.Schema, t.Name}]; ok && n >= exactCountLimit {
-			out[t] = RowCount{N: n, Estimate: true}
-			continue
-		}
-		todo = append(todo, t)
+	}
+	if len(todo) == 0 {
+		return out, nil
 	}
 
-	// Count the rest on a few workers, each result into its own slot so
+	// Postgres: the whole list in one statement. Its failure is not the
+	// counting's — only the caller's ctx is (see above) — but which way it
+	// failed decides what comes next:
+	//
+	//	ctx canceled ─────────────► error, nothing cached
+	//	countBudget spent ────────► no numbers; no time left to retry
+	//	anything else (privilege) ► count table by table, below
+	if drv == "pgx" {
+		counts, err := pgCounts(bctx, dbh, todo)
+		switch {
+		case err == nil:
+			return counts, nil
+		case ctx.Err() != nil:
+			return nil, ctx.Err()
+		case bctx.Err() != nil:
+			return out, nil
+		}
+	}
+
+	// Count each table on a few workers, each result into its own slot so
 	// the workers share nothing but the index they pull from.
 	workers := 1
 	if drv == "pgx" || drv == "mysql" {
@@ -546,9 +587,38 @@ func (m *Manager) countRows(ctx context.Context, name string, tables []TableRef)
 	for j, t := range todo {
 		if got[j] {
 			out[t] = RowCount{N: exact[j]}
-		} else if n, ok := est[key{t.Schema, t.Name}]; ok {
-			out[t] = RowCount{N: n, Estimate: true}
 		}
+	}
+	return out, nil
+}
+
+// pgCounts runs PgCountsQuery for tables, all of them Postgres tables (no
+// views). A table the statement returns no row for — gone since the list
+// was read, or not visible in information_schema — is simply left out.
+func pgCounts(ctx context.Context, dbh *sql.DB, tables []TableRef) (map[TableRef]RowCount, error) {
+	schemas := make([]string, len(tables))
+	names := make([]string, len(tables))
+	for i, t := range tables {
+		schemas[i], names[i] = t.Schema, t.Name
+	}
+	rows, err := dbh.QueryContext(ctx, PgCountsQuery, schemas, names)
+	if err != nil {
+		return nil, serr.Wrap(err, "op", "count rows")
+	}
+	defer rows.Close()
+	out := make(map[TableRef]RowCount, len(tables))
+	for rows.Next() {
+		var t TableRef
+		var n sql.NullInt64
+		if err := rows.Scan(&t.Schema, &t.Name, &n); err != nil {
+			return nil, serr.Wrap(err, "op", "count rows")
+		}
+		if n.Valid {
+			out[t] = RowCount{N: n.Int64}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, serr.Wrap(err, "op", "count rows")
 	}
 	return out, nil
 }

@@ -454,10 +454,17 @@ func (w *Workspace) PickSchema(pick SchemaPick) (Start, error) {
 // counting, which has the same connGen, to land Stale rather than as
 // "row counts unavailable".
 //
+// With the sidebar's counts off (ShowRowCounts, the default) it makes no
+// Job and returns nil, which every caller already reads as "no counting":
+// the one switch gates the connect's, the schema pick's and the recount's.
+//
 //	connect lands ─► Counts job ─► mgr.RowCounts ─► lands under mu
 //	                                                 ├─ gen and countGen current → rowCounts set
 //	                                                 └─ superseded               → Stale
 func (w *Workspace) countsJobLocked(name string, gen int, tables []db.TableRef) Job {
+	if !w.showCounts {
+		return nil
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	w.countCancel = cancel
 	w.countGen++

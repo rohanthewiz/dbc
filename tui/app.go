@@ -579,10 +579,12 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		}
 		return m.listKey(m.conns, k, m.connPicked)
 	case focusTables:
-		// c ("Show columns"), e (diagram it), d (database) and s (schema)
-		// are the tables list's letter keys: the list's own keys are
-		// movement and Enter, so they shadow nothing
+		// c ("Show columns"), e (diagram it), d (database), s (schema) and
+		// # (row counts) are the tables list's letter keys: the list's own
+		// keys are movement and Enter, so they shadow nothing
 		switch k.String() {
+		case "#":
+			return m.toggleRowCounts()
 		case "c":
 			return m.tableColumns()
 		case "e":

@@ -98,6 +98,7 @@ var keyGroups = []keyGroup{
 		{"● · ○", "(connections) this tab's connection · another tab's"},
 		{"d · s", "(tables) pick a database · a schema"},
 		{"c · e", "(tables) show its columns · diagram it (ERD)"},
+		{"#", "(tables) show or hide row counts (an exact count(*) per table)"},
 	}},
 	{"Assistant", [][2]string{
 		{"Enter · ⇧Enter", "send · new line"},

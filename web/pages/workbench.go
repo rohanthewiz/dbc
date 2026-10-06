@@ -188,7 +188,7 @@ func (p Workbench) topbar(b *element.Builder) any {
 //	│ CONNECTIONS     + ‹ │
 //	│ …                   │
 //	├ side-hsplit ════════┤
-//	│ TABLES 12           │  side-tables: the rest
+//	│ TABLES 12  ☐rows ERD│  side-tables: the rest
 //	│ [type a schema…]    │  tfilter: only when several schemas
 //	│ …                   │  #tables scrolls; the two lines above stay put
 //	└─────────────────────┘
@@ -201,13 +201,25 @@ func (p Workbench) sidebar(b *element.Builder) any {
 			"title", "Drag to resize the connections list (double-click to reset)").R(),
 		b.SectionClass("side-tables").R(
 			// hrow, like the Connections heading: the label left, the
-			// ERD button right. The button draws the whole connection's
-			// diagram; one table's neighbourhood is on the table's own
-			// right-click menu (app.js)
+			// rows box and ERD button right. The button draws the whole
+			// connection's diagram; one table's neighbourhood is on the
+			// table's own right-click menu (app.js).
+			//
+			// The rows box is unticked on every new tab: each count is an
+			// exact count(*), a scan of the table, so it runs only when
+			// asked for (db/rowcount.go). app.js ticks it to the tab's
+			// state (sideState.RowCounts) whenever it draws a sidebar.
 			b.H2Class("hrow").R(
 				b.Span().R(b.T("Tables "), b.SpanClass("count", "id", "table-count").R()),
-				b.ButtonClass("hadd herd", "id", "erd-all", "type", "button",
-					"title", "Diagram the connection's tables and keys (ERD)", "aria-label", "Entity-relationship diagram").T("ERD"),
+				b.SpanClass("hbtns").R(
+					b.LabelClass("hchk", "id", "row-counts-box",
+						"title", "Show each table's row count — an exact count(*) per table, which can take a while on big tables").R(
+						b.Input("type", "checkbox", "id", "row-counts").R(),
+						b.T("rows"),
+					),
+					b.ButtonClass("hadd herd", "id", "erd-all", "type", "button",
+						"title", "Diagram the connection's tables and keys (ERD)", "aria-label", "Entity-relationship diagram").T("ERD"),
+				),
 			),
 			// the database and schema pickers: the levels above the
 			// tables, so a server with many databases, each with many

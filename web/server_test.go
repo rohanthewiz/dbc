@@ -674,9 +674,22 @@ func TestByteOffset(t *testing.T) {
 // The row counts follow the "conn" that drew the list, as a "counts" event
 // carrying the list again with each table's count and its tooltip words;
 // the state a reattaching page reads has them too.
+//
+// The counts are opt-in (the sidebar's "rows" box): a connect with them off
+// draws the list with no numbers, and ticking the box is what counts.
 func TestRowCountsFollowTheConnect(t *testing.T) {
 	e := newTestEnv(t)
 	id, s := e.connected()
+	st0 := decodeData[wsState](t, e.api("GET", "/api/v1/ws/"+id, "", 200))
+	if st0.RowCounts {
+		t.Error("the rows box starts ticked")
+	}
+	for _, tr := range st0.Tables {
+		if tr.Rows != "" {
+			t.Errorf("%s has a count before the box was ticked: %+v", tr.QName, tr)
+		}
+	}
+	e.api("POST", "/api/v1/ws/"+id+"/rowcounts", `{"on":true}`, 200)
 	ev, _ := s.await(t, "counts")
 	c := decodeData[countsEvent](t, testEnvelope{Data: ev.Data})
 	find := func(tables []tabRef) tabRef {
@@ -694,19 +707,35 @@ func TestRowCountsFollowTheConnect(t *testing.T) {
 	if cats := find(c.Tables); cats.Rows != "8" || cats.RowsHint != "cats with 8 rows" {
 		t.Errorf("cats = %+v", cats)
 	}
+	if !c.On {
+		t.Error("the counts event should say the box is on")
+	}
 	st := decodeData[wsState](t, e.api("GET", "/api/v1/ws/"+id, "", 200))
-	if cats := find(st.Tables); cats.Rows != "8" {
-		t.Errorf("state's cats = %+v", cats)
+	if cats := find(st.Tables); cats.Rows != "8" || !st.RowCounts {
+		t.Errorf("state's cats = %+v, box %v", cats, st.RowCounts)
+	}
+
+	// unticked: a "counts" at once, with the numbers gone
+	e.api("POST", "/api/v1/ws/"+id+"/rowcounts", `{"on":false}`, 200)
+	ev, _ = s.await(t, "counts")
+	c = decodeData[countsEvent](t, testEnvelope{Data: ev.Data})
+	if cats := find(c.Tables); cats.Rows != "" || c.On {
+		t.Errorf("after unticking: cats = %+v, on %v", cats, c.On)
 	}
 }
 
 // A write in one query tab recounts every tab on that connection, in any
 // window (N-090): the other tab's stream gets a "counts" with the new
 // number, not only the writer's.
+//
+// The writer's own box need not be ticked: a tab whose counts are on is
+// recounted by another tab's write all the same.
 func TestWriteRecountsOtherTabsOnTheConnection(t *testing.T) {
 	e := newTestEnv(t)
 	id, s := e.connected()
-	_, other := e.connected() // another window, on the same connection
+	otherID, other := e.connected() // another window, on the same connection
+	e.api("POST", "/api/v1/ws/"+id+"/rowcounts", `{"on":true}`, 200)
+	e.api("POST", "/api/v1/ws/"+otherID+"/rowcounts", `{"on":true}`, 200)
 	s.await(t, "counts")
 	other.await(t, "counts")
 
@@ -723,6 +752,27 @@ func TestWriteRecountsOtherTabsOnTheConnection(t *testing.T) {
 		}
 		if rows != "9" {
 			t.Errorf("cats after the insert = %q, want 9", rows)
+		}
+	}
+}
+
+// A write in a tab whose rows box is off still recounts another tab on the
+// connection whose box is on (RunDone.Wrote, not its nil Counts, decides).
+func TestWriteRecountsOtherTabsWithTheWriterOff(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	otherID, other := e.connected()
+	e.api("POST", "/api/v1/ws/"+otherID+"/rowcounts", `{"on":true}`, 200)
+	other.await(t, "counts")
+
+	e.api("POST", "/api/v1/ws/"+id+"/run",
+		runBody("INSERT INTO cats (name, breed, age) VALUES ('Nova', 'tabby', 2)", 0, false), 200)
+	s.await(t, "run")
+	ev, _ := other.await(t, "counts")
+	c := decodeData[countsEvent](t, testEnvelope{Data: ev.Data})
+	for _, tr := range c.Tables {
+		if tr.QName == "cats" && tr.Rows != "9" {
+			t.Errorf("the other tab's cats after the insert = %q, want 9", tr.Rows)
 		}
 	}
 }

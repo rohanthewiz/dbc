@@ -345,11 +345,25 @@ func TestTablesSidebarShowColumns(t *testing.T) {
 	}
 }
 
-// The tables list fills in each table's row count after the connect, in
-// the row's right-aligned slot; counts landing later leave the cursor where
-// the user put it.
+// Row counts start off; # in the tables list turns them on (the title
+// says so), and the list fills in each table's count in the row's
+// right-aligned slot; counts landing later leave the cursor where the user
+// put it. # again takes them away.
 func TestTablesSidebarRowCounts(t *testing.T) {
 	m := newTestModel(t)
+	for _, it := range m.tables.items {
+		if it.sub != "" && it.sub != "view" {
+			t.Fatalf("a count before # turned them on: %+v", it)
+		}
+	}
+	m.focus = focusTables
+	key(t, m, "#")
+	if !m.ws.RowCountsShown() {
+		t.Fatal("# did not turn the row counts on")
+	}
+	if !strings.Contains(frame(m).Text(), "Tables · 1 · rows") {
+		t.Errorf("the pane title should say the counts are on:\n%s", frame(m).Text())
+	}
 	var cats listItem
 	for _, it := range m.tables.items {
 		if it.label == "cats" {
@@ -397,6 +411,13 @@ func TestTablesSidebarRowCounts(t *testing.T) {
 	drive(t, m, &workspace.RowCounts{Conn: "gone", Stale: true})
 	if m.tables.cur != 2 {
 		t.Errorf("stale counts moved the cursor to %d", m.tables.cur)
+	}
+
+	// # again: off, and the numbers go at once
+	m.focus = focusTables
+	key(t, m, "#")
+	if m.ws.RowCountsShown() || m.tables.items[0].sub != "" {
+		t.Errorf("after the second #: shown %v, items %+v", m.ws.RowCountsShown(), m.tables.items)
 	}
 }
 

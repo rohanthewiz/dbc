@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-124
+**Next ID:** N-125
 
 ## Open
 
@@ -68,6 +68,12 @@ ten session docs in `ai_docs/claude_sessions/`
   `driver.Connector`), and every Postgres live suite passes. Also N-094's
   MySQL half: editor completion on a real MySQL (backtick quoting, a
   `<conn>/<database>` pick, the first load), done on Postgres only.
+  2026-10-06 (`2026-1006-1323-opt-in-exact-row-counts`): with postgres:17
+  and mysql:8.4 containers, `TestLivePooledCancelReachesServer` FAILS —
+  "connection N: busy is not 0 after 3s" (`live_session_test.go:564`) —
+  also with that session's changes stashed, so it is not theirs. Which
+  engine's subtest failed was not captured; it passed on Postgres 16 before,
+  so probably MySQL, the KILL path. Every other live test passed.
 
 - **N-104** · raised `2026-1005-1035-sql-consoles-per-database` · value low
   Check consoles by hand on real data. The first `dbc web` start moves the
@@ -250,6 +256,13 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-124** · raised `2026-1006-1323-opt-in-exact-row-counts` · value high
+  The sidebar's row counts started on every connect, and on Postgres/MySQL a
+  table the statistics put at 1M+ rows showed the estimate (`~1.2M`), which
+  the user found far off. Wanted: counts off by default behind a checkbox,
+  and exact counts only, via a `query_to_xml` `count(*)` per table.
+  closed 2026-10-06, `2026-1006-1323-opt-in-exact-row-counts`: `Workspace.ShowRowCounts` (off by default, per workspace) gates every Counts job. The web Tables heading has a "rows" checkbox (`POST …/rowcounts`), and the TUI has `#`, a menu item and a `· rows` title. Counting is exact only: on Postgres one `PgCountsQuery` statement, falling back to a `count(*)` per table when it fails; MySQL, SQLite and bytdb count per table. Limits are 30 s per table and 2 min overall. `RunDone.Wrote` recounts other web tabs even when the writer's counts are off. Live PG/MySQL tests, including a privilege fallback, plus the e2e step, all pass.
 
 - **N-123** · raised `2026-1006-1248-pg-error-context-and-script-notices` · value low
   Headless `dbc query` (`main.go` `runStatements`) runs on a pinned

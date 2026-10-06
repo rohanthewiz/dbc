@@ -123,7 +123,8 @@ type Connected struct {
 	// Counts, when non-nil, fetches the row counts of the catalog's tables
 	// for the sidebar; its event is a *RowCounts. It is separate so the
 	// tables list draws at once and the numbers fill in after — a count
-	// reads a table's rows, and the list must never wait for that.
+	// reads a table's rows, and the list must never wait for that. nil
+	// while the sidebar's counts are off (Workspace.ShowRowCounts).
 	Counts Job
 }
 
@@ -143,9 +144,15 @@ type RunDone struct {
 	// success it is "": the summary depends on how many rows the UI shows
 	// (see ResultStatus).
 	Status string
-	// Counts, when non-nil, refreshes the sidebar's row counts: the run may
-	// have changed rows (db.ChangesRows), failed or not. Its event is a
-	// *RowCounts, as Connected.Counts's is.
+	// Wrote reports that the run may have changed rows (db.ChangesRows of
+	// a statement it reached, or a script), failed or not. A UI with other
+	// workspaces on the same Manager recounts their sidebars on it
+	// (Workspace.Recount); Counts alone would not tell it, being nil
+	// whenever this workspace's own counts are off.
+	Wrote bool
+	// Counts, when non-nil, refreshes the sidebar's row counts: the run
+	// Wrote, and the sidebar shows counts (Workspace.ShowRowCounts). Its
+	// event is a *RowCounts, as Connected.Counts's is.
 	Counts Job
 }
 

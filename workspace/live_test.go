@@ -217,6 +217,7 @@ func hasNote(notes []Note, l Level, text string) bool {
 func TestLiveWorkspaceConnect(t *testing.T) {
 	forLive(t, func(t *testing.T, e liveEngine) {
 		w, _ := liveWorkspace(t, e)
+		countsOn(t, w)
 		ev := w.Connect("live").Job().(*Connected)
 		if ev.Err != nil || ev.Changed || ev.Counts == nil {
 			t.Fatalf("reconnect: %+v (a connect to the active connection changes nothing)", ev)
@@ -642,6 +643,10 @@ func TestLiveWorkspacePickSchema(t *testing.T) {
 		if ev := w.Connect("live").Job().(*Connected); ev.Err != nil || ev.Schema != "public" {
 			t.Fatalf("connect: %+v, want it on public, the default with tables", ev)
 		}
+
+		// the picks below count their schema's tables: counts on, as the
+		// sidebar's box or # would turn them
+		countsOn(t, w)
 
 		// completion's schema is read once here, before any pick: the picks
 		// below must keep it (they change only the ranking) — N-095

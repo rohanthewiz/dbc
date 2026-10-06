@@ -490,6 +490,9 @@ type sideState struct {
 	// Navigable says the server sends one schema's tables at a time, so a
 	// schema pick goes to the server rather than filtering on the page.
 	Navigable bool `json:"navigable,omitempty"`
+	// RowCounts is the tab's "rows" box (Workspace.ShowRowCounts): the
+	// page ticks it to match whenever it draws this tab's sidebar.
+	RowCounts bool `json:"rowCounts"`
 	// Console is the database the connection is on, as a set of SQL
 	// consoles: the page swaps the tab's console when it changes. nil with
 	// no connection (the tab keeps the console it had) or consoles off.
@@ -526,7 +529,7 @@ func (s *Server) sidebar(ws *workspace.Workspace) sideState {
 
 // sidebar is the tab's sideState now, but for its console.
 func sidebar(cfg *config.Config, ws *workspace.Workspace) sideState {
-	st := sideState{Tables: tables(ws), Schema: ws.CatalogSchema()}
+	st := sideState{Tables: tables(ws), Schema: ws.CatalogSchema(), RowCounts: ws.RowCountsShown()}
 	active := ws.Active()
 	cc, ok := cfg.ConnByName(active)
 	if !ok {
@@ -581,9 +584,15 @@ func (s *Server) closeLeft(t *tab, left string) {
 // list. It repeats the whole list rather than just the numbers so the page
 // patches its rows by qname with the same code that draws them; Active lets
 // it drop counts for a connection it has since left.
+//
+// It is also sent when a counting failed (no numbers, and the log says
+// why) and when the counts are switched off (the rows lose theirs), so
+// the page can clear its "counting…" mark on every outcome. On is the
+// tab's switch as it stands (Workspace.RowCountsShown).
 type countsEvent struct {
 	Active string   `json:"active"`
 	Tables []tabRef `json:"tables"`
+	On     bool     `json:"on"`
 }
 
 // tabRef is a sidebar row for a table or view. QName is the name to put in
@@ -667,15 +676,19 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 			return // the tab has moved on to another connection
 		}
 		t.notes(ev.Notes)
-		if ev.Counts != nil {
-			t.send("counts", countsEvent{Active: ev.Conn, Tables: tables(t.ws)})
-		}
+		t.send("counts", countsEvent{Active: ev.Conn, Tables: tables(t.ws), On: t.ws.RowCountsShown()})
 	case *workspace.RunDone:
 		if ev.Stale {
 			return
 		}
-		if ev.Counts != nil { // the run may have changed rows: recount the sidebar's
+		// the run may have changed rows: recount this sidebar, when it
+		// shows counts, and every other tab's on the connection that does.
+		// Wrote, not Counts, decides the others: this tab's own counts may
+		// be off while another's are on.
+		if ev.Counts != nil {
 			go func() { s.deliver(t, ev.Counts()) }()
+		}
+		if ev.Wrote {
 			s.recountOthers(t, ev.Conn)
 		}
 		t.notes(ev.Notes)

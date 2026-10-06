@@ -592,10 +592,68 @@ func TestDisconnectAbandonsConnect(t *testing.T) {
 	}
 }
 
+// countsOn ticks the sidebar's row counts on, as the web's "rows" box and
+// the TUI's # do, and lands the counting that starts.
+func countsOn(t *testing.T, w *Workspace) {
+	t.Helper()
+	if j := w.ShowRowCounts(true); j != nil {
+		if rc := j().(*RowCounts); rc.Stale {
+			t.Fatalf("the first counting landed stale: %+v", rc)
+		}
+	}
+}
+
+// Row counts start off: a connect, a schema's tables and a write count
+// nothing — each count is a table scan — though a write still reports
+// Wrote, for other workspaces whose counts are on. Ticking them on counts
+// the listed tables at once; ticking them off drops the numbers, and a
+// counting still on its way lands Stale.
+func TestRowCountsAreOptIn(t *testing.T) {
+	w := newTestWorkspace(t)
+	cats := db.TableRef{Schema: "main", Name: "cats"}
+	if w.RowCountsShown() {
+		t.Fatal("row counts start on")
+	}
+	if ev := w.Connect(demo).Job().(*Connected); ev.Err != nil || ev.Counts != nil {
+		t.Fatalf("a connect with counts off: %+v", ev)
+	}
+	ev := run(t, w, "INSERT INTO cats (name, breed, age) VALUES ('Zed', 'tabby', 1)")
+	if ev.Err != nil || !ev.Wrote || ev.Counts != nil {
+		t.Fatalf("a write with counts off: err %v, wrote %v, counts job %v", ev.Err, ev.Wrote, ev.Counts != nil)
+	}
+	if w.RowCounts() != nil {
+		t.Fatalf("counts landed while off: %v", w.RowCounts())
+	}
+
+	j := w.ShowRowCounts(true)
+	if j == nil || !w.RowCountsShown() {
+		t.Fatal("ticking on with tables listed should start a counting")
+	}
+	if rc := j().(*RowCounts); rc.Stale || rc.Counts[cats] != (db.RowCount{N: 9}) {
+		t.Fatalf("counting: %+v", rc)
+	}
+	if w.ShowRowCounts(true) != nil {
+		t.Error("ticking on again recounts")
+	}
+	if ev := w.Connect(demo).Job().(*Connected); ev.Counts == nil {
+		t.Error("with counts on, a connect should count")
+	}
+
+	// off while a counting is on its way: the numbers go, it lands Stale
+	inflight := w.Connect(demo).Job().(*Connected).Counts
+	if w.ShowRowCounts(false) != nil || w.RowCountsShown() || w.RowCounts() != nil {
+		t.Fatalf("ticking off: shown %v, counts %v", w.RowCountsShown(), w.RowCounts())
+	}
+	if rc := inflight().(*RowCounts); !rc.Stale || w.RowCounts() != nil {
+		t.Errorf("a counting from before the tick off landed: %+v", rc)
+	}
+}
+
 // A connect lands the catalog at once and hands back a Counts job for the
 // row counts, which lands them in the workspace for a sidebar to draw.
 func TestConnectCountsRows(t *testing.T) {
 	w := newTestWorkspace(t)
+	countsOn(t, w)
 	ev := w.Connect(demo).Job().(*Connected)
 	if ev.Err != nil || ev.Counts == nil {
 		t.Fatalf("connect: %+v", ev)
@@ -621,6 +679,7 @@ func TestConnectCountsRows(t *testing.T) {
 // one's numbers.
 func TestRowCountsStaleAfterSwitch(t *testing.T) {
 	w := newTestWorkspace(t)
+	countsOn(t, w)
 	addConn(w, config.Connection{Name: "other", Driver: "sqlite", DSN: memDSN()})
 	first := w.Connect(demo).Job().(*Connected)
 	if ev := w.Switch("other").Job().(*Connected); ev.Err != nil {
@@ -639,6 +698,7 @@ func TestRowCountsStaleAfterSwitch(t *testing.T) {
 // counting in flight from before the write is written off as Stale.
 func TestRunThatWritesRecounts(t *testing.T) {
 	w := newTestWorkspace(t)
+	countsOn(t, w)
 	cats := db.TableRef{Schema: "main", Name: "cats"}
 	before := w.Connect(demo).Job().(*Connected)
 	if rc := before.Counts().(*RowCounts); rc.Stale || w.RowCounts()[cats].N != 8 {

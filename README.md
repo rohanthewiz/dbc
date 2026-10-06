@@ -189,21 +189,32 @@ A toolbar, a connections and tables sidebar, the SQL editor, the results
 grid, a log, and — when you open it — the AI assistant. Everything has a
 mouse gesture and every gesture has a key.
 
-The tables list shows each table's row count once it has been counted —
-`cats (8)` in `dbc web`, where hovering says "cats with 8 rows", and a
-right-aligned `8` in the terminal. The counts load after the list, never
-holding it up, and are cached per connection for two minutes. A run that
-may have changed rows (an `INSERT`, `DELETE`, `TRUNCATE`, DDL, a `COMMIT`, a
-script) recounts the list straight away, past the cache; a `SELECT`, `SET`
-or `BEGIN` does not. In `dbc web` every query tab on that connection, in
-any window, is recounted, not just the one that ran it; writes made by
-other clients show at the next connect. A write inside an open transaction
-shows once it is committed, since the counts are read outside your session. On Postgres
-and MySQL a table the database's statistics put at a million rows or more
-shows that estimate, marked `~` (`~1.2M`), instead of being counted; the
-rest, and every table on SQLite and bytdb, are counted exactly. A count that
-takes over three seconds falls back to the estimate, or to no number. Views
-are not counted.
+Row counts in the tables list are off until you ask for them: tick the
+**rows** box in the Tables heading in `dbc web`, or press `#` in the
+terminal's tables list (also on its right-click menu; the pane's title then
+reads `Tables · 12 · rows`). Each count is an exact `count(*)` — never the
+database's statistics estimate, which can be far off — so it reads every
+table, and on a big schema it can take a while; the box's label pulses
+until the numbers land. They show as `cats (8)` in `dbc web`, where hovering
+says "cats with 8 rows", and a right-aligned `8` in the terminal. The switch
+is per query tab, and unticking it cancels a counting still running.
+
+On Postgres the whole list is counted in one statement (`query_to_xml` runs
+a `count(*)` per table server-side); if that fails — a table you can see
+but not `SELECT` from, say — each table is counted on its own, so only that
+one goes without a number. MySQL, SQLite and bytdb count table by table. A
+single count gives up after 30 seconds and the whole counting after two
+minutes; what is not counted by then shows no number. Views are not
+counted.
+
+Counts load after the list, never holding it up, and are cached per
+connection for two minutes. While they are on, a run that may have changed
+rows (an `INSERT`, `DELETE`, `TRUNCATE`, DDL, a `COMMIT`, a script) recounts
+the list straight away, past the cache; a `SELECT`, `SET` or `BEGIN` does
+not. In `dbc web` every query tab on that connection with counts on, in any
+window, is recounted, not just the one that ran it; writes made by other
+clients show at the next connect. A write inside an open transaction shows
+once it is committed, since the counts are read outside your session.
 
 When a connection's tables span more than one schema, `dbc web` puts a
 schema filter under the Tables heading, so a big catalog can be narrowed to
@@ -270,6 +281,7 @@ with no database picker.
 | tables | click `⛁ db ▾` / `◫ schema ▾` | *(Postgres; MySQL has `⛁ db` only)* pick another of the server's databases / another schema, from a list you can type into |
 | tables | click / double-click / right-click | select / preview the first 100 rows / show columns, diagram it, diagram all tables, copy the ERD as Mermaid, insert name, copy name |
 | tables | `c` on the selected table | show its columns: its `information_schema.columns` rows (name, type, nullable, default, length) in the grid, ready to copy |
+| tables | `#` | show or hide each table's row count (an exact `count(*)` per table; off by default) |
 | tables | `e` on the selected table | diagram it and its neighbours (an ERD, below), saved as a PNG and opened |
 | editor | click, drag, double-, triple-click | caret, selection, word, line |
 | editor | right-click | run, copy, cut, select all, undo, history, ask the assistant; go to definition, usages, rename; the consoles |

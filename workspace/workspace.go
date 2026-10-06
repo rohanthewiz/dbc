@@ -113,6 +113,11 @@ type Workspace struct {
 	rowCounts   map[db.TableRef]db.RowCount
 	countCancel context.CancelFunc
 	countGen    int // bumped by each Counts job made; see countsJobLocked
+	// showCounts is the sidebar's "rows" switch (ShowRowCounts): off, as
+	// it starts, no Counts job is ever made, so a connect costs no table
+	// scans. It is the workspace's, not the Manager's, so each dbc web tab
+	// (and each TUI tab) has its own.
+	showCounts bool
 
 	lastStmt string        // the statement the last run executed
 	lastErr  string        // what it failed with, "" if it worked
@@ -246,6 +251,51 @@ func (w *Workspace) RowCounts() map[db.TableRef]db.RowCount {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.rowCounts
+}
+
+// RowCountsShown reports whether the sidebar's row counts are on
+// (ShowRowCounts); they start off.
+func (w *Workspace) RowCountsShown() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.showCounts
+}
+
+// ShowRowCounts turns the sidebar's row counts on or off. They start off:
+// every count is an exact count(*), which reads the whole table (see
+// db/rowcount.go), so it is the user's to ask for.
+//
+// Turning them on returns the Job that counts the listed catalog, whose
+// event is a *RowCounts as a connect's is; nil when nothing is listed yet
+// (the next connect or schema pick counts, now that the switch is on).
+// From then on every connect, schema pick and write recounts, as before.
+//
+// Turning them off drops the counts and cancels a counting in flight; that
+// one lands Stale (countGen moves on). It returns nil: there is nothing to
+// wait for, and the caller redraws its list without numbers at once.
+//
+//	off ──ShowRowCounts(true)──► on ─► Counts job ─► *RowCounts
+//	on  ──ShowRowCounts(false)─► off: rowCounts nil, in-flight → Stale
+func (w *Workspace) ShowRowCounts(on bool) Job {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if on == w.showCounts {
+		return nil // a repeat of the same tick: the counting already ran or runs
+	}
+	w.showCounts = on
+	if !on {
+		if w.countCancel != nil {
+			w.countCancel()
+			w.countCancel = nil
+		}
+		w.countGen++ // a counting still on its way lands Stale
+		w.rowCounts = nil
+		return nil
+	}
+	if w.active == "" || w.catalog == nil {
+		return nil
+	}
+	return w.countsJobLocked(w.active, w.connGen, db.TableRefs(w.catalog.Rows))
 }
 
 // TableIndex is the catalog indexed for name lookups; nil without one.

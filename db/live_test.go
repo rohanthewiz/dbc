@@ -639,11 +639,11 @@ func liveRowCounts(t *testing.T, mgr *Manager, driver, prefix string) map[string
 	return out
 }
 
-// On Postgres a table whose statistics say it is huge keeps the estimate;
-// the rest are counted exactly, a quoted name included, and views (plain
-// and materialized) are left out. The "huge" table is faked by writing
-// reltuples directly, which a superuser may, rather than inserting a
-// million rows.
+// On Postgres every table is counted exactly (PgCountsQuery), a quoted
+// name included, and views (plain and materialized) are left out. A table
+// whose statistics say it is huge is counted all the same: its reltuples
+// is faked to 5e6 (a superuser may write it), and the count must still be
+// its 2 real rows — the estimate is never what the sidebar shows.
 func TestLiveRowCountsPostgres(t *testing.T) {
 	mgr := liveMgr(t, "DBC_LIVE_PG_DSN", "postgres")
 	drop := `DROP SCHEMA IF EXISTS dbc_live_rc CASCADE`
@@ -666,7 +666,7 @@ func TestLiveRowCountsPostgres(t *testing.T) {
 	want := map[string]RowCount{
 		"dbc_live_rc.cats":      {N: 3},
 		`dbc_live_rc.Odd "One"`: {N: 1},
-		"dbc_live_rc.big":       {N: 5_000_000, Estimate: true},
+		"dbc_live_rc.big":       {N: 2},
 	}
 	if len(got) != len(want) {
 		t.Errorf("counts = %v, want %v", got, want)
@@ -678,18 +678,15 @@ func TestLiveRowCountsPostgres(t *testing.T) {
 	}
 }
 
-// A partitioned parent gets its leaf partitions' estimates summed (N-073),
-// through a sub-partitioned level, rather than an exact count(*) that reads
-// every partition. A leaf never analyzed adds nothing to the sum, and a
-// parent none of whose leaves has an estimate is counted exactly. As above,
-// the big leaves are faked by writing reltuples; the rest stay at -1, the
-// never-analyzed mark, since too few rows go in to wake autovacuum.
+// A partitioned parent is counted exactly too: its count(*) is the sum of
+// its partitions' rows, through a sub-partitioned level. The leaves' faked
+// reltuples (once summed into the parent's estimate, N-073) must not show:
 //
-//	ev (p) ─┬─ ev_a  (r, 3e6)
-//	        └─ ev_b (p) ─┬─ ev_b1 (r, 2e6)
-//	                     └─ ev_b2 (r, -1, 2 rows)
-//	small (p) ─┬─ small_a (r, -1, 2 rows)
-//	           └─ small_b (r, -1, 1 row)
+//	ev (p, 4) ─┬─ ev_a  (r, reltuples 3e6, 1 row)
+//	           └─ ev_b (p, 3) ─┬─ ev_b1 (r, reltuples 2e6, 1 row)
+//	                           └─ ev_b2 (r, 2 rows)
+//	small (p, 3) ─┬─ small_a (r, 2 rows)
+//	              └─ small_b (r, 1 row)
 func TestLiveRowCountsPostgresPartitioned(t *testing.T) {
 	mgr := liveMgr(t, "DBC_LIVE_PG_DSN", "postgres")
 	drop := `DROP SCHEMA IF EXISTS dbc_live_rcp CASCADE`
@@ -712,10 +709,10 @@ func TestLiveRowCountsPostgresPartitioned(t *testing.T) {
 	)
 	got := liveRowCounts(t, mgr, "postgres", "dbc_live_rcp.")
 	want := map[string]RowCount{
-		"dbc_live_rcp.ev":      {N: 5_000_000, Estimate: true},
-		"dbc_live_rcp.ev_a":    {N: 3_000_000, Estimate: true},
-		"dbc_live_rcp.ev_b":    {N: 2_000_000, Estimate: true},
-		"dbc_live_rcp.ev_b1":   {N: 2_000_000, Estimate: true},
+		"dbc_live_rcp.ev":      {N: 4},
+		"dbc_live_rcp.ev_a":    {N: 1},
+		"dbc_live_rcp.ev_b":    {N: 3},
+		"dbc_live_rcp.ev_b1":   {N: 1},
 		"dbc_live_rcp.ev_b2":   {N: 2},
 		"dbc_live_rcp.small":   {N: 3},
 		"dbc_live_rcp.small_a": {N: 2},
@@ -731,9 +728,71 @@ func TestLiveRowCountsPostgresPartitioned(t *testing.T) {
 	}
 }
 
-// On MySQL small tables are counted exactly (table_rows, InnoDB's sampled
-// estimate, is read but only stands in above exactCountLimit) and a view is
-// left out.
+// PgCountsQuery is all or nothing: one table the user may see but not
+// SELECT from fails the whole statement. countRows then counts table by
+// table, so the readable tables keep their numbers and only the unreadable
+// one goes without. The user is a role holding INSERT alone on that table
+// (enough for information_schema.tables to list it), since the live DSN's
+// superuser bypasses every privilege check.
+func TestLiveRowCountsPostgresFallsBackPerTable(t *testing.T) {
+	admin := liveMgr(t, "DBC_LIVE_PG_DSN", "postgres")
+	drop := []string{`DROP SCHEMA IF EXISTS dbc_live_rcf CASCADE`, `DROP ROLE IF EXISTS dbc_live_rcf_user`}
+	liveExec(t, admin, drop...)
+	t.Cleanup(func() {
+		for _, s := range drop {
+			_, _ = admin.Run("live", s)
+		}
+	})
+	liveExec(t, admin,
+		`CREATE SCHEMA dbc_live_rcf`,
+		`CREATE TABLE dbc_live_rcf.readable (id int)`,
+		`INSERT INTO dbc_live_rcf.readable VALUES (1), (2)`,
+		`CREATE TABLE dbc_live_rcf.locked (id int)`,
+		`INSERT INTO dbc_live_rcf.locked VALUES (1)`,
+		`CREATE ROLE dbc_live_rcf_user LOGIN PASSWORD 'pw'`,
+		`GRANT USAGE ON SCHEMA dbc_live_rcf TO dbc_live_rcf_user`,
+		`GRANT SELECT ON dbc_live_rcf.readable TO dbc_live_rcf_user`,
+		`GRANT INSERT ON dbc_live_rcf.locked TO dbc_live_rcf_user`,
+	)
+	u, err := url.Parse(os.Getenv("DBC_LIVE_PG_DSN"))
+	if err != nil {
+		t.Fatalf("DBC_LIVE_PG_DSN: %v", err)
+	}
+	u.User = url.UserPassword("dbc_live_rcf_user", "pw")
+	mgr := NewManager(&config.Config{
+		MaxRows:     1000,
+		Connections: []config.Connection{{Name: "live", Driver: "postgres", DSN: u.String()}},
+	})
+	t.Cleanup(mgr.Close)
+
+	refs := []TableRef{{Schema: "dbc_live_rcf", Name: "readable"}, {Schema: "dbc_live_rcf", Name: "locked"}}
+	if _, err := pgCountsVia(mgr, refs); err == nil {
+		t.Fatal("PgCountsQuery should fail on the table the role may not SELECT")
+	}
+	counts, err := mgr.RowCounts(context.Background(), "live", refs)
+	if err != nil {
+		t.Fatalf("RowCounts: %v", err)
+	}
+	if c, ok := counts[refs[0]]; !ok || c != (RowCount{N: 2}) {
+		t.Errorf("readable = %+v (present %v), want 2 counted exactly", c, ok)
+	}
+	if c, ok := counts[refs[1]]; ok {
+		t.Errorf("locked has a count it cannot have: %+v", c)
+	}
+}
+
+// pgCountsVia runs PgCountsQuery alone on mgr's "live" pool, to show the
+// one statement's own outcome apart from countRows's fallback.
+func pgCountsVia(mgr *Manager, refs []TableRef) (map[TableRef]RowCount, error) {
+	dbh, err := mgr.DBContext(context.Background(), "live")
+	if err != nil {
+		return nil, err
+	}
+	return pgCounts(context.Background(), dbh, refs)
+}
+
+// On MySQL every table is counted exactly with its own count(*) (table_rows,
+// InnoDB's sampled estimate, is never read) and a view is left out.
 func TestLiveRowCountsMySQL(t *testing.T) {
 	mgr := liveMgr(t, "DBC_LIVE_MYSQL_DSN", "mysql")
 	drop := []string{

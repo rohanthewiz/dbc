@@ -306,6 +306,7 @@ func (w *Workspace) landRun(ev *RunDone, gen int, wrote bool) {
 		return
 	}
 	if wrote {
+		ev.Wrote = true
 		ev.Counts = w.recountLocked(ev.Conn)
 	}
 	w.dropCompletionsAfterRunLocked(ev)
@@ -380,6 +381,12 @@ func doneNote(ev *RunDone) Note {
 // straight back. A counting already in flight for this sidebar is canceled
 // — it may have read the rows before the write — and lands Stale.
 //
+// The drop happens whether or not this sidebar shows counts, or shows
+// conn's tables at all: another workspace on the same Manager may show
+// them (dbc web's other tabs, see Recount), and must not be served the
+// pre-write numbers from the cache. Only the recount itself is gated, by
+// countsJobLocked, on this sidebar's switch (ShowRowCounts).
+//
 // The whole listed catalog is recounted, not just the tables the
 // statements name: a write reaches tables its text does not (a cascade, a
 // trigger, a function), and a sidebar lists at most one schema's tables on
@@ -389,10 +396,10 @@ func doneNote(ev *RunDone) Note {
 // read through, so its recount shows the old numbers; the COMMIT that ends
 // it is itself a run that recounts (db.ChangesRows).
 func (w *Workspace) recountLocked(conn string) Job {
+	w.mgr.ForgetRowCounts(conn)
 	if conn != w.active || w.catalog == nil {
 		return nil
 	}
-	w.mgr.ForgetRowCounts(conn)
 	return w.refreshCountsLocked()
 }
 
@@ -400,8 +407,9 @@ func (w *Workspace) recountLocked(conn string) Job {
 // on conn may have changed rows, or returns nil when this sidebar is not
 // showing conn's tables. A UI that hosts several workspaces on one Manager
 // (dbc web's query tabs and windows) calls it on the others when a RunDone
-// carries Counts, so every sidebar on the connection shows the write, not
-// only the one that made it.
+// reports Wrote, so every sidebar on the connection shows the write, not
+// only the one that made it — whether or not the writer's own sidebar
+// counts. It returns nil, too, when this sidebar's counts are off.
 //
 // Unlike recountLocked it does not drop the Manager's cached counts: the
 // writer's landRun already did, before its RunDone was delivered, so what

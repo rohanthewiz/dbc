@@ -7,6 +7,7 @@
 //	dbc -f - < report.sql          … or from stdin, spelled out
 //	dbc < report.sql               … or from stdin, when it is a pipe or a file
 //	dbc script scripts/loop.go     run a Go script headless
+//	dbc copy --from a --to b t     copy a table between connections (see copycmd.go)
 //	dbc migrate up                 apply pending migrations (see migrate.go)
 //	dbc explain -a "SELECT …"      show a statement's plan and findings (see explain.go)
 //	dbc web                        the workbench in a browser (see webcmd.go)
@@ -188,6 +189,7 @@ func newCLI() *cli.Command {
 				ArgsUsage: "<file.go>",
 				Action:    scriptAction,
 			},
+			copyCommand(),
 			explainCommand(),
 			erdCommand(),
 			webCommand(),

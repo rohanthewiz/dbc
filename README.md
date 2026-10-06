@@ -1282,6 +1282,22 @@ st, err := s.Copy("prod-pg", "local-pg", "public.orders", sdb.CopyOpts{
 s.Print("%s", st) // copied 500000 rows prod-pg:public.orders → local-pg:public.orders in 886ms (direct COPY)
 ```
 
+`"prod-pg"` and `"local-pg"` are connection **names**, not DSNs: the same
+names as in the connections list, from the config file's `[[connection]]`
+entries (see [Configure connections](#configure-connections)) or from
+`~/.config/dbc/connections.toml` (connections added in the TUI or dbc web).
+The DSN, its `${VAR}` expansion and the TLS settings all come from that
+entry. A script has no way to define a connection of its own. The name
+also gives the driver, which decides how the rows move (below). Each
+connection's pool opens on first use, and a name dbc doesn't know fails with
+`unknown connection`.
+
+On Postgres and MySQL, `<conn>/<database>` names another database on the
+same server, with the connection's credentials and TLS settings. For example,
+`s.Copy("prod-pg/reporting", "local-pg", …)` reads from the `reporting`
+database through `prod-pg`. A configured connection whose name matches
+exactly always wins.
+
 | Method | Purpose |
 | --- | --- |
 | `s.Copy(src, dst, table, sdb.CopyOpts{…}) (sdb.CopyStats, error)` | Copy a table (or query) from one connection to another |
@@ -1330,7 +1346,8 @@ for NULL. Postgres `numeric`, `uuid` and arrays arrive in their text form. A
 `Reader` or `Writer` a script leaves open is closed, or rolled back, when
 `Run` returns. A Writer is never committed unless the script calls `Close`.
 [`scripts/copy_table.go`](scripts/copy_table.go) shows all three levels, up
-to a join across two connections.
+to a join across two connections. To copy a single table, with no script,
+use [`dbc copy`](#copy-headless).
 
 One interpreter quirk: yaegi silently drops a comma-ok assertion assigned
 straight into a map element (`m[k], _ = v.(string)`). Assign to a variable
@@ -1348,6 +1365,7 @@ Everything works without the TUI, for cron jobs and shell pipelines:
 ./dbc -f report.sql                              # the SQL in a file
 ./dbc -c local-pg < report.sql                   # … or piped to stdin
 ./dbc script scripts/loop_params.go              # run a Go script
+./dbc copy --from prod --to local --create orders # copy a table across connections
 ```
 
 | Flag | |
@@ -1373,6 +1391,39 @@ running query or script and exits 130; bad usage exits 2.
 
 `-f` was the output format before it was the SQL file; `dbc -f csv …` now
 says to use `-t csv` rather than looking for a file named `csv`.
+
+### Copy headless
+
+`dbc copy` is `s.Copy` without the script, for a cron job or a shell
+pipeline:
+
+```sh
+./dbc copy --from prod --to local public.orders                  # into an existing table
+./dbc copy --from prod --to local --create public.orders         # … created when missing
+./dbc copy --from prod --to local --truncate public.orders       # … emptied first
+./dbc copy --from prod --to local public.orders archive.orders   # … under another name
+./dbc copy --from prod --to local --truncate \
+    --where "created_at >= now() - interval '1 day'" orders      # only some rows
+```
+
+| Flag | |
+| --- | --- |
+| `--from NAME`, `--to NAME` | source and destination connections (both required; may be the same one, copying to a different table). A `<conn>/<database>` name works as it does in `s.Copy` |
+| `--create` | create the destination table when it does not exist (see `Create` under [ETL](#etl-across-connections)) |
+| `--truncate` | empty the destination first, in the load's transaction |
+| `--where CONDITION` | copy only the source rows that match, written in the source's SQL |
+
+A second table name is the destination table; without it, the destination
+has the source's name. The copy is the same as `s.Copy` in a script:
+Postgres to Postgres streams `COPY` to `COPY`, and the destination loads in
+one transaction, so a failed or interrupted (`Ctrl+C`, exit 130) copy leaves
+it as it was. On success it prints one line to stdout
+(`copied 179982 rows pg1:public.orders → pg2:public.orders in 405ms (direct COPY)`).
+When stderr is a terminal, it also prints the row count there every
+100,000 rows. A cron job gets only the summary line. Exit status: 0
+copied, 1 failed, 2 bad usage, including an unknown connection name or a
+table copied onto itself. `-c`, `-f`, `--tx`, `-k`, `-t` and `-o` are
+refused, because a copy has no use for them.
 
 ### Explain headless
 

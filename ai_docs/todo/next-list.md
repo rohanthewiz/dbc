@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-128
+**Next ID:** N-130
 
 ## Open
 
@@ -170,11 +170,6 @@ ten session docs in `ai_docs/claude_sessions/`
   lite2" and no JS errors; the step's waitFor message was not captured.
   Together with N-110 it fails most full `DBC_E2E=1` runs, so the suite no
   longer gives a clean signal after an app.js/CSS change.
-- **N-125** · raised `2026-1006-1346-etl-scripting-layer` · value medium
-  A headless `dbc copy` command over `etl.Copy` (`--from A --to B table`,
-  `--create`, `--truncate`, `--where`, `--to`), so a cron job or shell
-  pipeline can copy a table without writing a script. Today it takes a
-  one-function script run with `dbc script`.
 - **N-126** · raised `2026-1006-1346-etl-scripting-layer` · value low
   Live MySQL tests for the ETL paths. `etl/live_test.go` covers Postgres
   only; MySQL is reasoned about, not run: Create runs outside the load's
@@ -186,6 +181,19 @@ ten session docs in `ai_docs/claude_sessions/`
   map element (`m[k], _ = v.(string)` stores nothing, no error). Worked
   around in `scripts/copy_table.go` and noted in the README. Check a newer
   yaegi, or report it upstream with a minimal repro.
+- **N-128** · raised `2026-1006-1430-headless-dbc-copy` · value medium
+  Copying a date column into bytdb fails ("invalid input syntax for type
+  date"), from `s.Copy` and `dbc copy` alike. bytdb's driver
+  (`stdlib.CheckNamedValue`, bytdb v0.21.0) binds every `time.Time` as
+  `"2006-01-02 15:04:05…"` text, and `bytdb.ParseDate` accepts only
+  `YYYY-MM-DD`. Postgres takes a midnight timestamp for a date, so the
+  likely fix is in bytdb: accept it there (or in the driver).
+- **N-129** · raised `2026-1006-1430-headless-dbc-copy` · value medium
+  `Create` into bytdb fails on a `numeric`/`decimal` source column ("unknown
+  column type", type=numeric). `etl.Engine.columnType` gives bytdb the
+  Postgres type names, but bytdb's types are bool, int, float, string, bytes,
+  timestamp, date, uuid, text_array, jsonb, so bytdb needs its own mapping in
+  `etl/engine.go` (numeric → string or float; check timestamptz too).
 
 ## Roadmap
 
@@ -272,6 +280,13 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-125** · raised `2026-1006-1346-etl-scripting-layer` · value medium
+  A headless `dbc copy` command over `etl.Copy` (`--from A --to B table`,
+  `--create`, `--truncate`, `--where`, `--to`), so a cron job or shell
+  pipeline can copy a table without writing a script. Today it takes a
+  one-function script run with `dbc script`.
+  closed 2026-10-06, `2026-1006-1430-headless-dbc-copy`: `copycmd.go` adds `dbc copy --from A --to B [--create] [--truncate] [--where SQL] <table> [dest-table]`, which goes through `sdb.S.Copy`. The second `--to` became the optional destination-table argument, since `--to` names the connection. Summary on stdout, progress on stderr only when it is a terminal; exit 0/1/2/130. Self-copy, unknown connections and the unused root flags (`-c -f --tx -k -t -o`) are usage errors. Unit tests plus binary runs on SQLite↔bytdb and Postgres 17 (2M-row direct COPY, rename with exact types, Ctrl+C rollback).
 
 - **N-124** · raised `2026-1006-1323-opt-in-exact-row-counts` · value high
   The sidebar's row counts started on every connect, and on Postgres/MySQL a

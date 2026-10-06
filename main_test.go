@@ -846,13 +846,16 @@ func resetFlags(t *testing.T) {
 	t.Helper()
 	t.Setenv("DBC_DEMO", "")
 	ptrs := []*string{&flagConfig, &flagConn, &flagFile, &flagFormat, &flagOut,
-		&flagDemo, &flagDriver, &flagDSN, &flagDir, &flagTLS, &flagTLSCA, &flagTLSCert, &flagTLSKey}
+		&flagDemo, &flagDriver, &flagDSN, &flagDir, &flagTLS, &flagTLSCA, &flagTLSCert, &flagTLSKey,
+		&flagFrom, &flagTo, &flagWhere}
 	for _, p := range ptrs {
 		setFlag(t, p, "")
 	}
-	old := flagMissing
-	flagMissing = false
-	t.Cleanup(func() { flagMissing = old })
+	for _, p := range []*bool{&flagMissing, &flagTx, &flagKeep, &flagCreate, &flagTruncate} {
+		old := *p
+		*p = false
+		t.Cleanup(func() { *p = old })
+	}
 }
 
 // TestRunStatementsNoticesOffPostgres: off Postgres there are no notices, so

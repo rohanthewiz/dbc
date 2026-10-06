@@ -29,32 +29,10 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-121
+**Next ID:** N-123
 
 ## Open
 
-- **N-044** · raised `2026-0925-1353-x11-clipboard-owner` · value low
-  Verify the X11 clipboard owner (`clip/x11owner.go`) on a real X11 desktop:
-  a GNOME/KDE terminal paste after an HTML copy gets the markup, Teams or
-  LibreOffice gets the table, and a clipboard manager (Klipper, GPaste) does
-  not keep a helper alive. Only Xvfb + xclip has exercised it so far.
-- **N-061** · raised `2026-0928-0050-sidebar-splitter-fold-and-section-splitters` · value low
-  Check `dbc web`'s splitters and sidebar fold in Safari and Firefox. They were
-  verified only in Chrome, and the fix that lets a press reach the editor and
-  log bars depends on how Chrome hit-tests. (The bars were raised above
-  Monaco's `.lines-content`, which is clipped on screen but 2^24px square with
-  `contain:strict`.) The other checks: Ctrl+B / ⌘B must not open Firefox's
-  bookmarks sidebar, and the › tab must be clickable in both browsers.
-  Updated `2026-1001-1817-next-list-sweep`: Firefox (Developer Edition, headless via geckodriver,
-  real pointer and key actions) passed 34 checks on 3 runs: a press lands
-  on every bar (Monaco's `.lines-content` does not take it), each splitter
-  drags, sizes and the fold survive a reload, ‹/› and the fold zone work,
-  and Ctrl+B / ⌘B are `defaultPrevented`. It found Ctrl+B dead inside the
-  editor on a Mac (Monaco's cursor-left; Chrome too), fixed in `editor.js`
-  and covered by a `web/e2e` step. Left for a person: Safari (needs `sudo
-  safaridriver --enable`), one real ⌘B in a normal Firefox window (WebDriver
-  keys never reach Firefox's own menus), and the assistant pane's
-  `#chat-split`.
 - **N-064** · raised `2026-0929-1619-macos-app-wrapper` · value low
   Click through `dbc.app` by hand; what the session could not drive from a
   shell. Checks: a grid export and each plan download land in `~/Downloads`;
@@ -186,6 +164,21 @@ ten session docs in `ai_docs/claude_sessions/`
   lite2" and no JS errors; the step's waitFor message was not captured.
   Together with N-110 it fails most full `DBC_E2E=1` runs, so the suite no
   longer gives a clean signal after an app.js/CSS change.
+- **N-121** · raised `2026-1006-1219-raise-notices-in-log` · value low
+  A failed Postgres statement's log line now carries the error's DETAIL and
+  HINT (`db.withPgDetail`), but not its CONTEXT (`PgError.Where`), which
+  says which function raised and from where ("PL/pgSQL function
+  check_job(text,integer) line 7 at RAISE"). It was left out because for a
+  DO block it only says `inline_code_block line 1`, and for nested calls it
+  runs to several lines. Add it, perhaps only when it names a real function,
+  if tracing a RAISE EXCEPTION through nested functions is wanted.
+- **N-122** · raised `2026-1006-1219-raise-notices-in-log` · value low
+  Server notices (RAISE NOTICE …) are shown only for runs on the pinned
+  session (the editor's runs). A Go script's `s.Query`/`s.Exec` goes through
+  the pool (`Manager.RunContext`), where no sink is registered, so its
+  notices are dropped. To fix it, pin a connection per script call (or
+  register a sink around it) and send the notices to `s.Print`. MySQL's
+  `SHOW WARNINGS` is the analogous gap on that engine.
 
 ## Roadmap
 
@@ -197,11 +190,35 @@ call.
   Verify the Windows rich clipboard (`clip/rich_windows.go`) on a real
   Windows machine. It cross-compiles and vets, and its CF_HTML envelope is
   unit-tested, but it has never pasted into Teams from Windows.
+- **N-044** · raised `2026-0925-1353-x11-clipboard-owner` · value low
+  Verify the X11 clipboard owner (`clip/x11owner.go`) on a real X11 desktop:
+  a GNOME/KDE terminal paste after an HTML copy gets the markup, Teams or
+  LibreOffice gets the table, and a clipboard manager (Klipper, GPaste) does
+  not keep a helper alive. Only Xvfb + xclip has exercised it so far.
+
 - **N-058** · raised `2026-0925-1902-explain-plan-sharing-pdf-jpeg-mermaid` · value low
   The plan's PDF is the picture on a page, so its text can't be selected or
   searched. A vector PDF would need the Go fonts embedded as CID fonts, and
   the layout drawn through a second backend. Only worth it if someone asks to
   search or copy from a shared PDF (`y` copies the plan as text today).
+- **N-061** · raised `2026-0928-0050-sidebar-splitter-fold-and-section-splitters` · value low
+  Check `dbc web`'s splitters and sidebar fold in Safari and Firefox. They were
+  verified only in Chrome, and the fix that lets a press reach the editor and
+  log bars depends on how Chrome hit-tests. (The bars were raised above
+  Monaco's `.lines-content`, which is clipped on screen but 2^24px square with
+  `contain:strict`.) The other checks: Ctrl+B / ⌘B must not open Firefox's
+  bookmarks sidebar, and the › tab must be clickable in both browsers.
+  Updated `2026-1001-1817-next-list-sweep`: Firefox (Developer Edition, headless via geckodriver,
+  real pointer and key actions) passed 34 checks on 3 runs: a press lands
+  on every bar (Monaco's `.lines-content` does not take it), each splitter
+  drags, sizes and the fold survive a reload, ‹/› and the fold zone work,
+  and Ctrl+B / ⌘B are `defaultPrevented`. It found Ctrl+B dead inside the
+  editor on a Mac (Monaco's cursor-left; Chrome too), fixed in `editor.js`
+  and covered by a `web/e2e` step. Left for a person: Safari (needs `sudo
+  safaridriver --enable`), one real ⌘B in a normal Firefox window (WebDriver
+  keys never reach Firefox's own menus), and the assistant pane's
+  `#chat-split`.
+
 - **N-098** · raised `2026-1002-1239-web-conn-marks` · value medium
   Close a configured connection's pool when a tab switches away from it and
   no other tab is on it, as is already done for a derived `<conn>/<database>`

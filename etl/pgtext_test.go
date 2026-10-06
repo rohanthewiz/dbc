@@ -75,6 +75,8 @@ func TestFamilyOf(t *testing.T) {
 		"TIMESTAMPTZ": famTimestampTZ, "BYTEA": famBytes, "LONGBLOB": famBytes,
 		"VARCHAR": famText, "": famText, "_INT4": famText, "INT4RANGE": famText,
 		"UNSIGNED INT": famInt, "TINYINT": famInt,
+		// SQLite's declared types keep their modifiers.
+		"DECIMAL(10,2)": famNumeric, "NUMERIC(5)": famNumeric, "NUMERICAL": famText,
 	}
 	for in, want := range cases {
 		if got := familyOf(in); got != want {

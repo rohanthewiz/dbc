@@ -107,6 +107,29 @@ func TestCopySQLiteToBytdbCreates(t *testing.T) {
 	}
 }
 
+// N-129: bytdb has no numeric type, so Create used to fail on one ("unknown
+// column type"); and SQLite's "DECIMAL(10,2)" missed the numeric family,
+// landing in a text column that refuses SQLite's int64/float64 values.
+func TestCopyNumericToBytdbCreates(t *testing.T) {
+	ctx := context.Background()
+	src, dst := fileConn(t, SQLite, "src.db"), fileConn(t, Bytdb, "dst.bytdb")
+	mustExec(t, src,
+		`CREATE TABLE prices (id INTEGER PRIMARY KEY, a NUMERIC, b DECIMAL(10,2), c numeric(5))`,
+		"INSERT INTO prices VALUES (1, 12.34, 5, 100), (2, 9.5, 1234.56, 20), (3, NULL, -0.01, 3)")
+
+	if _, err := Copy(ctx, src, "prices", dst, CopyOptions{Create: true}); err != nil {
+		t.Fatal(err)
+	}
+	q := "SELECT id, a, b, c FROM prices ORDER BY id"
+	if got, want := dump(t, dst, q), dump(t, src, q); !reflect.DeepEqual(got, want) {
+		t.Errorf("destination rows\n got %q\nwant %q", got, want)
+	}
+	// Ordered as numbers, not text ("100" < "20" < "3").
+	if got := dump(t, dst, "SELECT id FROM prices ORDER BY c"); !reflect.DeepEqual(got, [][]string{{"3"}, {"2"}, {"1"}}) {
+		t.Errorf("ORDER BY c = %q, want ids 3, 2, 1", got)
+	}
+}
+
 func TestCopyTransformSkipsAndRewrites(t *testing.T) {
 	src, dst := fileConn(t, SQLite, "src.db"), fileConn(t, SQLite, "dst.db")
 	seedCats(t, src)

@@ -1338,7 +1338,11 @@ commits on the spot.
 type (integer, float, numeric, boolean, date, timestamp, bytes, or text) and
 the source's primary key, where it can be read. Defaults, sequences, other
 indexes and constraints are not copied. bytdb requires a primary key, so to
-copy a query into bytdb, create the table first.
+copy a query into bytdb, create the table first. bytdb has no exact decimal
+type, so a numeric column created there is `double precision`: values with
+more than about 15 significant digits get rounded. To keep every digit,
+create the table yourself with a `text` column. That works from Postgres
+and MySQL, whose numerics arrive as text, but not from SQLite.
 
 A `Reader` has no `max_rows` cap and keeps values typed: `int64`,
 `float64`, `bool`, `string`, `time.Time`, `[]byte` for binary columns, `nil`

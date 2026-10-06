@@ -188,12 +188,12 @@ ten session docs in `ai_docs/claude_sessions/`
   `"2006-01-02 15:04:05…"` text, and `bytdb.ParseDate` accepts only
   `YYYY-MM-DD`. Postgres takes a midnight timestamp for a date, so the
   likely fix is in bytdb: accept it there (or in the driver).
-- **N-129** · raised `2026-1006-1430-headless-dbc-copy` · value medium
-  `Create` into bytdb fails on a `numeric`/`decimal` source column ("unknown
-  column type", type=numeric). `etl.Engine.columnType` gives bytdb the
-  Postgres type names, but bytdb's types are bool, int, float, string, bytes,
-  timestamp, date, uuid, text_array, jsonb, so bytdb needs its own mapping in
-  `etl/engine.go` (numeric → string or float; check timestamptz too).
+  Fixed upstream in `2026-1006-1535-numeric-to-bytdb-and-date-fix-upstream`: bytdb N-026, released
+  as bytdb `v0.21.1` (and `pgwire/v0.21.1`). `ParseDate` now accepts
+  timestamp text and keeps the date as written, as Postgres does. To close
+  this, bump dbc to bytdb v0.21.1 and add a date column to an etl
+  SQLite→bytdb test. Run against the local bytdb, a SQLite→bytdb `Copy` of
+  DATE columns already works.
 
 ## Roadmap
 
@@ -280,6 +280,14 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-129** · raised `2026-1006-1430-headless-dbc-copy` · value medium
+  `Create` into bytdb fails on a `numeric`/`decimal` source column ("unknown
+  column type", type=numeric). `etl.Engine.columnType` gives bytdb the
+  Postgres type names, but bytdb's types are bool, int, float, string, bytes,
+  timestamp, date, uuid, text_array, jsonb, so bytdb needs its own mapping in
+  `etl/engine.go` (numeric → string or float; check timestamptz too).
+  closed 2026-10-06, `2026-1006-1535-numeric-to-bytdb-and-date-fix-upstream`: `Engine.columnType` has a bytdb row, where numeric becomes `double precision`. A bytdb text column refuses SQLite's int64/float64 numerics; a float column takes those and the decimal strings from pgx and MySQL. The cost is silent rounding past ~15 significant digits, noted in the README. `timestamptz` stays, since bytdb parses it as timestamp. `familyOf` now also matches SQLite's `DECIMAL(10,2)`/`NUMERIC(5)`, which used to fall to text and failed the load the same way. `TestCopyNumericToBytdbCreates` checks the values and numeric ORDER BY, and fails on the old code.
 
 - **N-125** · raised `2026-1006-1346-etl-scripting-layer` · value medium
   A headless `dbc copy` command over `etl.Copy` (`--from A --to B table`,

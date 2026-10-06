@@ -180,7 +180,10 @@ func familyOf(dbType string) typeFamily {
 		return famInt
 	case strings.HasPrefix(t, "FLOAT") || t == "DOUBLE" || t == "REAL" || t == "DOUBLE PRECISION":
 		return famFloat
-	case t == "NUMERIC" || t == "DECIMAL":
+	case t == "NUMERIC" || t == "DECIMAL" || strings.HasPrefix(t, "NUMERIC(") || strings.HasPrefix(t, "DECIMAL("):
+		// SQLite reports the declared type verbatim, modifier and all
+		// ("DECIMAL(10,2)"); Postgres and MySQL report the bare name. The
+		// precision is dropped: no destination mapping below uses it.
 		return famNumeric
 	case t == "DATE":
 		return famDate
@@ -220,8 +223,22 @@ func (e Engine) columnType(f typeFamily) string {
 	case SQLite:
 		return [...]string{"TEXT", "INTEGER", "REAL", "NUMERIC", "BOOLEAN",
 			"DATE", "TIMESTAMP", "TIMESTAMP", "BLOB"}[f]
+	case Bytdb:
+		// Postgres type names, except numeric: bytdb has no exact decimal
+		// type, so a numeric column becomes double precision. Text would
+		// keep every digit but cannot load the source values: SQLite yields
+		// a numeric as int64/float64, which a bytdb text column refuses
+		// ("value does not fit column type"), while a float column takes
+		// those and the decimal strings pgx and MySQL yield alike. It also
+		// keeps numeric order and arithmetic, which text would turn
+		// lexicographic. The cost is precision past ~15 significant digits
+		// (float64), and that is silent — a copy that needs every digit
+		// creates the destination itself (e.g. with a text column).
+		// timestamptz is kept: bytdb parses it and folds it into timestamp.
+		return [...]string{"text", "bigint", "double precision", "double precision", "boolean",
+			"date", "timestamp", "timestamptz", "bytea"}[f]
 	}
-	// Postgres and bytdb share Postgres type names.
+	// Postgres.
 	return [...]string{"text", "bigint", "double precision", "numeric", "boolean",
 		"date", "timestamp", "timestamptz", "bytea"}[f]
 }

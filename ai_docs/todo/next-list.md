@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-123
+**Next ID:** N-124
 
 ## Open
 
@@ -164,21 +164,11 @@ ten session docs in `ai_docs/claude_sessions/`
   lite2" and no JS errors; the step's waitFor message was not captured.
   Together with N-110 it fails most full `DBC_E2E=1` runs, so the suite no
   longer gives a clean signal after an app.js/CSS change.
-- **N-121** · raised `2026-1006-1219-raise-notices-in-log` · value low
-  A failed Postgres statement's log line now carries the error's DETAIL and
-  HINT (`db.withPgDetail`), but not its CONTEXT (`PgError.Where`), which
-  says which function raised and from where ("PL/pgSQL function
-  check_job(text,integer) line 7 at RAISE"). It was left out because for a
-  DO block it only says `inline_code_block line 1`, and for nested calls it
-  runs to several lines. Add it, perhaps only when it names a real function,
-  if tracing a RAISE EXCEPTION through nested functions is wanted.
-- **N-122** · raised `2026-1006-1219-raise-notices-in-log` · value low
-  Server notices (RAISE NOTICE …) are shown only for runs on the pinned
-  session (the editor's runs). A Go script's `s.Query`/`s.Exec` goes through
-  the pool (`Manager.RunContext`), where no sink is registered, so its
-  notices are dropped. To fix it, pin a connection per script call (or
-  register a sink around it) and send the notices to `s.Print`. MySQL's
-  `SHOW WARNINGS` is the analogous gap on that engine.
+- **N-123** · raised `2026-1006-1248-pg-error-context-and-script-notices` · value low
+  Headless `dbc query` (`main.go` `runStatements`) runs on a pinned
+  `db.Session` but never calls `Session.Notices`, so RAISE NOTICE output is
+  dropped there. Print it to stderr as psql does (stdout carries the
+  results), about five lines in `runStatements` or a `runHooks` callback.
 
 ## Roadmap
 
@@ -266,6 +256,23 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-122** · raised `2026-1006-1219-raise-notices-in-log` · value low
+  Server notices (RAISE NOTICE …) are shown only for runs on the pinned
+  session (the editor's runs). A Go script's `s.Query`/`s.Exec` goes through
+  the pool (`Manager.RunContext`), where no sink is registered, so its
+  notices are dropped. To fix it, pin a connection per script call (or
+  register a sink around it) and send the notices to `s.Print`. MySQL's
+  `SHOW WARNINGS` is the analogous gap on that engine.
+  closed 2026-10-06, `2026-1006-1248-pg-error-context-and-script-notices`: new `db.Manager.RunNotices` runs a pooled Postgres statement on a checked-out connection with a notice sink (one retry on driver.ErrBadConn); `sdb.Query`/`Exec` use it and print each notice through `s.Print`. Tests: `TestRunNoticesOffPostgres`, `TestLiveRunNotices`, `TestLiveWorkspaceScriptNotices`. MySQL warnings left as they were; headless `dbc query` raised as N-123.
+- **N-121** · raised `2026-1006-1219-raise-notices-in-log` · value low
+  A failed Postgres statement's log line now carries the error's DETAIL and
+  HINT (`db.withPgDetail`), but not its CONTEXT (`PgError.Where`), which
+  says which function raised and from where ("PL/pgSQL function
+  check_job(text,integer) line 7 at RAISE"). It was left out because for a
+  DO block it only says `inline_code_block line 1`, and for nested calls it
+  runs to several lines. Add it, perhaps only when it names a real function,
+  if tracing a RAISE EXCEPTION through nested functions is wanted.
+  closed 2026-10-06, `2026-1006-1248-pg-error-context-and-script-notices`: `db.withPgDetail` now appends ` — CONTEXT: …` via `pgContext`: frames innermost first joined by ←, the DO block's `inline_code_block` frame dropped, lines rejoined while a quoted statement's quotes are open, capped at 4 frames and 160 runes each. Tests: `TestPgContext`, `TestLiveRunNotices`.
 - **N-113** · raised `2026-1005-1352-sql-alias-rename` · value medium
   Go to definition, usages and rename in the TUI editor. `dbc web` has them
   (F12 / Shift+F12 / F2, from `sqlcomplete.Resolve` and `Rename`); the TUI

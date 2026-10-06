@@ -43,7 +43,7 @@ var keyGroups = []keyGroup{
 		{"^K", "stop the run, a connect still dialing, or the assistant's answer"},
 		{"^Space", "suggestions from the schema (also as you type, and after . and ::)"},
 		{"Tab · Enter · Esc", "in the suggestions: pick · pick · close"},
-		{"F12", "on a table alias or a CTE name: go to where it is declared"},
+		{"F12", "on a table alias, a CTE name or a column the query names: go to where it is declared"},
 		{"⇧F12", "highlight its uses in the statement (again: the next one)"},
 		{"F2", "rename it everywhere in the statement"},
 		{"^Z · ⌥Z", "undo · redo"},

@@ -186,3 +186,162 @@ func TestRenameRefused(t *testing.T) {
 		}
 	}
 }
+
+// Columns the statement names: a CTE's or derived table's output columns,
+// and select-list aliases in ORDER BY.
+func TestResolveColumns(t *testing.T) {
+	cases := []struct {
+		name, buf string
+		want      string // the buffer with every use bracketed
+		fixed     bool   // found, but a table's column: not renamable
+	}{
+		{"a CTE's alias, from a qualified use",
+			"WITH t AS (SELECT count(*) AS n FROM orders) SELECT t.▮n FROM t WHERE t.n > 1",
+			"WITH t AS (SELECT count(*) AS [n] FROM orders) SELECT t.[n] FROM t WHERE t.[n] > 1", false},
+		{"from its declaration",
+			"WITH t AS (SELECT count(*) AS ▮n FROM orders) SELECT t.n FROM t",
+			"WITH t AS (SELECT count(*) AS [n] FROM orders) SELECT t.[n] FROM t", false},
+		{"an alias without AS",
+			"WITH t AS (SELECT count(*) n FROM orders) SELECT ▮n FROM t",
+			"WITH t AS (SELECT count(*) [n] FROM orders) SELECT [n] FROM t", false},
+		{"bare uses, the CTE the only thing in FROM",
+			"WITH t AS (SELECT count(*) AS n FROM orders) SELECT n FROM t WHERE ▮n > 1 GROUP BY n ORDER BY n",
+			"WITH t AS (SELECT count(*) AS [n] FROM orders) SELECT [n] FROM t WHERE [n] > 1 GROUP BY [n] ORDER BY [n]", false},
+		{"through an aliased CTE",
+			"WITH t AS (SELECT 1 AS n) SELECT x.▮n FROM t x",
+			"WITH t AS (SELECT 1 AS [n]) SELECT x.[n] FROM t x", false},
+		{"a CTE's column list wins over its body's names",
+			"WITH t(▮n) AS (SELECT count(*) AS c FROM orders ORDER BY c) SELECT t.n FROM t",
+			"WITH t([n]) AS (SELECT count(*) AS c FROM orders ORDER BY c) SELECT t.[n] FROM t", false},
+		{"a derived table's column",
+			"SELECT d.▮n FROM (SELECT count(*) AS n FROM orders) d ORDER BY d.n",
+			"SELECT d.[n] FROM (SELECT count(*) AS [n] FROM orders) d ORDER BY d.[n]", false},
+		{"a derived table's column list",
+			"SELECT d.▮k FROM (SELECT 1 AS n) AS d(k)",
+			"SELECT d.[k] FROM (SELECT 1 AS n) AS d([k])", false},
+		{"passed through another CTE, by name and by star",
+			"WITH a AS (SELECT 1 AS n), b AS (SELECT n FROM a), c AS (SELECT * FROM b) SELECT c.▮n FROM c",
+			"WITH a AS (SELECT 1 AS [n]), b AS (SELECT [n] FROM a), c AS (SELECT * FROM b) SELECT c.[n] FROM c", false},
+		{"t.* passes through too",
+			"WITH a AS (SELECT 1 AS n) SELECT s.▮n FROM (SELECT a.* FROM a) s",
+			"WITH a AS (SELECT 1 AS [n]) SELECT s.[n] FROM (SELECT a.* FROM a) s", false},
+		{"a correlated bare use resolves outward",
+			"WITH t AS (SELECT 1 AS n), u AS (SELECT 2 AS m) SELECT 1 FROM t WHERE EXISTS (SELECT 1 FROM u WHERE m = ▮n)",
+			"WITH t AS (SELECT 1 AS [n]), u AS (SELECT 2 AS m) SELECT 1 FROM t WHERE EXISTS (SELECT 1 FROM u WHERE m = [n])", false},
+		{"a LATERAL body sees the FROM before it",
+			"WITH t AS (SELECT 1 AS n) SELECT * FROM t, LATERAL (SELECT ▮n + 1 AS m) l",
+			"WITH t AS (SELECT 1 AS [n]) SELECT * FROM t, LATERAL (SELECT [n] + 1 AS m) l", false},
+		{"inside a function's parentheses",
+			"WITH t AS (SELECT 1 AS n) SELECT coalesce(▮n, 0), sum(t.n) FROM t",
+			"WITH t AS (SELECT 1 AS [n]) SELECT coalesce([n], 0), sum(t.[n]) FROM t", false},
+		{"a select alias in ORDER BY",
+			"SELECT status, count(*) AS n FROM orders GROUP BY status ORDER BY ▮n DESC",
+			"SELECT status, count(*) AS [n] FROM orders GROUP BY status ORDER BY [n] DESC", false},
+		{"a UNION's ORDER BY names the first arm's columns",
+			"SELECT id AS k FROM orders UNION SELECT id FROM archive ORDER BY ▮k",
+			"SELECT id AS [k] FROM orders UNION SELECT id FROM archive ORDER BY [k]", false},
+		{"a CTE's table column: found, not renamed",
+			"WITH t AS (SELECT o.id FROM orders o) SELECT t.▮id FROM t",
+			"WITH t AS (SELECT o.[id] FROM orders o) SELECT t.[id] FROM t", true},
+		{"a plain column in ORDER BY: the select item",
+			"SELECT id FROM orders ORDER BY ▮id",
+			"SELECT [id] FROM orders ORDER BY [id]", true},
+		{"a recursive CTE's column list, in both arms",
+			"WITH RECURSIVE t(▮n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 5) SELECT n FROM t",
+			"WITH RECURSIVE t([n]) AS (SELECT 1 UNION ALL SELECT [n] + 1 FROM t WHERE [n] < 5) SELECT [n] FROM t", false},
+		{"a recursive CTE's first-arm alias",
+			"WITH RECURSIVE t AS (SELECT 1 AS ▮n UNION ALL SELECT n + 1 FROM t WHERE n < 5) SELECT n FROM t",
+			"WITH RECURSIVE t AS (SELECT 1 AS [n] UNION ALL SELECT [n] + 1 FROM t WHERE [n] < 5) SELECT [n] FROM t", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			sym, buf := resolveAt(t, c.buf)
+			if sym.Kind != SymColumn {
+				t.Fatalf("kind = %q, want column", sym.Kind)
+			}
+			if got := bracket(buf, sym.Uses); got != c.want {
+				t.Errorf("uses:\n got %s\nwant %s", got, c.want)
+			}
+			if (sym.Fixed != "") != c.fixed {
+				t.Errorf("fixed = %q, want fixed %v", sym.Fixed, c.fixed)
+			}
+		})
+	}
+}
+
+// A bare column is left alone wherever it could be a catalog table's.
+func TestResolveColumnsNothing(t *testing.T) {
+	for _, buf := range []string{
+		// orders is in scope: n could be its
+		"WITH t AS (SELECT 1 AS n) SELECT ▮n FROM t, orders",
+		// a CTE's body does not see the statement's FROM (u is not in
+		// FROM, so only the seal stops n reaching t)
+		"WITH t AS (SELECT 1 AS n), u AS (SELECT ▮n) SELECT * FROM t",
+		// nor does a derived table's, unless LATERAL
+		"WITH t AS (SELECT 1 AS n) SELECT * FROM t WHERE EXISTS (SELECT 1 FROM (SELECT ▮n) d)",
+		// ambiguous between two CTEs
+		"WITH a AS (SELECT 1 AS n), b AS (SELECT 2 AS n) SELECT ▮n FROM a, b",
+		// a column no CTE has
+		"WITH t AS (SELECT 1 AS n) SELECT t.▮m FROM t",
+		// an expression in ORDER BY is not an output name
+		"SELECT x AS n FROM orders ORDER BY ▮n + 1",
+		// keywords are not columns, even one a CTE has
+		"WITH t AS (SELECT 1 AS first) SELECT * FROM t ORDER BY 1 NULLS ▮first",
+		// a star over a catalog table: the column might be there
+		"WITH t AS (SELECT * FROM orders) SELECT t.▮id FROM t",
+		// a table's column the select list names, used nowhere else
+		"SELECT o.▮id FROM orders o",
+	} {
+		if sym, _ := resolveAt(t, buf); sym.Kind != "" {
+			t.Errorf("%s: got %q %q, want nothing", buf, sym.Kind, sym.Name)
+		}
+	}
+}
+
+func TestRenameColumns(t *testing.T) {
+	cases := []struct{ buf, name, want string }{
+		{"WITH t AS (SELECT count(*) AS n FROM orders) SELECT t.▮n FROM t ORDER BY n",
+			"total", "WITH t AS (SELECT count(*) AS total FROM orders) SELECT t.total FROM t ORDER BY total"},
+		{"SELECT status, count(*) n FROM orders GROUP BY status ORDER BY ▮n",
+			"Total", `SELECT status, count(*) "Total" FROM orders GROUP BY status ORDER BY "Total"`},
+		// a pass-through follows its origin, so b's column stays a's
+		{"WITH a AS (SELECT 1 AS ▮n), b AS (SELECT n FROM a) SELECT b.n FROM b",
+			"m", "WITH a AS (SELECT 1 AS m), b AS (SELECT m FROM a) SELECT b.m FROM b"},
+		{"SELECT d.▮n FROM (SELECT 1 AS n) d", "k", "SELECT d.k FROM (SELECT 1 AS k) d"},
+	}
+	for _, c := range cases {
+		i := strings.Index(c.buf, "▮")
+		buf := c.buf[:i] + c.buf[i+len("▮"):]
+		edits, err := Rename(buf, i, c.name, "postgres")
+		if err != nil {
+			t.Errorf("%s → %s: %v", c.buf, c.name, err)
+			continue
+		}
+		for j := len(edits) - 1; j >= 0; j-- {
+			buf = buf[:edits[j].From] + edits[j].Text + buf[edits[j].To:]
+		}
+		if buf != c.want {
+			t.Errorf("%s → %s:\n got %s\nwant %s", c.buf, c.name, buf, c.want)
+		}
+	}
+}
+
+func TestRenameColumnsRefused(t *testing.T) {
+	cases := []struct{ buf, name, want string }{
+		// a sibling column already has the name
+		{"WITH t AS (SELECT 1 AS ▮n, 2 AS m) SELECT t.n FROM t", "m", "already a name"},
+		// t.n would become ambiguous with u's m in the bare use
+		{"WITH t AS (SELECT 1 AS ▮n), u AS (SELECT 2 AS m) SELECT n, m FROM t, u", "m", "already a name"},
+		// the subquery's bare m would be captured by t's renamed column
+		{"WITH t AS (SELECT 1 AS ▮n), u AS (SELECT 2 AS m) SELECT (SELECT m FROM t) FROM u", "m", "already a name"},
+		{"WITH t AS (SELECT o.id FROM orders o) SELECT t.▮id FROM t", "k", "table's column"},
+	}
+	for _, c := range cases {
+		i := strings.Index(c.buf, "▮")
+		buf := c.buf[:i] + c.buf[i+len("▮"):]
+		_, err := Rename(buf, i, c.name, "postgres")
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s → %q: err = %v, want %q", c.buf, c.name, err, c.want)
+		}
+	}
+}

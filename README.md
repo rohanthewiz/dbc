@@ -326,7 +326,7 @@ dragging.
 | `Ctrl+P` | Query history of this database (`Tab`: every database) — filter, then `Enter` inserts (never runs) |
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | A new query tab · close the tab · go to tab N (see [Query tabs](#query-tabs)) |
 | `Alt+N` · `Alt+C` | A new console of the database · the database's next console (see [Consoles](#consoles-and-multi-statement-buffers)) |
-| `F12` · `Shift+F12` · `F2` | *(editor)* On an alias or CTE name: go to its declaration · mark its uses (again: the next one) · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename)) |
+| `F12` · `Shift+F12` · `F2` | *(editor)* On an alias, a CTE name or a column the query names: go to its declaration · mark its uses (again: the next one) · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename)) |
 | `Ctrl+Space` | *(editor)* Suggestions at the caret — they also open by themselves after `.`, `::` and two letters of a word (see below) |
 | `Ctrl+T` | List the tables and views on the active connection |
 | `Ctrl+L` | Jump to the connections list |
@@ -424,8 +424,8 @@ schema again.
 
 ### Go to definition, usages and rename
 
-On a table's alias or a CTE's name, `F12` (or `Ctrl`/`⌘`+click) goes to
-where it is declared, `Shift+F12` lists every use, and `F2` renames it. All
+On a table's alias, a CTE's name, or a column the statement names itself,
+`F12` (or `Ctrl`/`⌘`+click) goes to where it is declared, `Shift+F12` lists every use, and `F2` renames it. All
 three are also in the editor's right-click menu, in the terminal as in
 `dbc web`.
 
@@ -443,10 +443,28 @@ quoted where the engine needs it (`"Ord"` on Postgres, `` `order` `` on
 MySQL). A rename is refused if the name is already taken in the same query.
 
 It works by scanning the text, not by parsing SQL, the same way
-completion does. Columns are not resolved. A table referenced without an
-alias is found (`orders.id` goes to `FROM orders`) but not renamed:
-renaming the text would not rename the table, only stop the query from
-finding it. An alias used bare, without a column (`SELECT o FROM orders o`,
+completion does. A table referenced without an alias is found (`orders.id`
+goes to `FROM orders`) but not renamed: renaming the text would not rename
+the table, only stop the query from finding it.
+
+Columns are resolved when the statement itself names them:
+
+- a CTE's or a derived table's output columns: in
+  `WITH t AS (SELECT count(*) AS n FROM orders) SELECT t.n FROM t`, `t.n`
+  goes to `AS n`, and renaming either renames both. A column list
+  (`WITH t(n) AS …`, `(…) AS d(n)`) declares them instead. A column passed
+  on by another CTE (`SELECT n FROM t`, `SELECT * FROM t`) is the same
+  column, so a rename follows it through;
+- a select-list alias used in `ORDER BY` (`count(*) AS n … ORDER BY n`).
+
+A bare `n` (no `t.`) is resolved only where nothing else could own it:
+every table in that part of the query must be a CTE or a subquery whose
+columns are known, since one catalog table in scope could have an `n` too.
+Catalog columns are not resolved: that needs the schema. A CTE column that
+is just a table's column (`WITH t AS (SELECT o.id FROM orders o)`) is
+found from `t.id` but not renamed, as a table is not; alias it
+(`o.id AS order_id`) and rename that. A column rename is refused if it
+would change what any other name in the statement refers to. An alias used bare, without a column (`SELECT o FROM orders o`,
 MySQL's `DELETE o FROM …`), is left alone.
 
 ### Explaining a query
@@ -1148,7 +1166,7 @@ file's connections are changed in the file. The TUI has the same form —
 | `Ctrl+P` · `Ctrl+E` · `Ctrl+O` | history · export · scripts |
 | `Ctrl+I` | the assistant, and back (`Ctrl+A` stays select-all) |
 | `Ctrl+Space` | suggestions (they also open as you type — see [Completion](#completion)) |
-| `F12` · `Shift+F12` · `F2` | on an alias or CTE name: go to its declaration · list its uses · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename)) |
+| `F12` · `Shift+F12` · `F2` | on an alias, a CTE name or a column the query names: go to its declaration · list its uses · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename)) |
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | new tab · close tab · go to tab |
 | `Alt+N` · `Alt+C` | new console · next console of the tab's database |
 | `F1` or `?` | every key |

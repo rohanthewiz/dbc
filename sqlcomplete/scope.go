@@ -134,8 +134,9 @@ type ref struct {
 	// Token indexes, for the resolver (resolve.go), which needs to know
 	// which token is the name and which the alias. nameTok is the name's
 	// last part (meaningful when parts is set), aliasTok the alias
-	// (meaningful when alias is set).
-	nameTok, aliasTok int
+	// (meaningful when alias is set), subTok a derived table's "("
+	// (meaningful when parts is nil).
+	nameTok, aliasTok, subTok int
 }
 
 // cte is a WITH query (or a derived table) and the columns its SELECT list
@@ -293,6 +294,7 @@ func (s *scope) parseRefs(toks []tok, i int, list bool, c *completer) int {
 			// a derived table: (SELECT …) alias
 			close := matching(toks, i)
 			r.cte = &cte{cols: selectList(toks[i+1:close], s, c)}
+			r.subTok = i
 			i = close + 1
 		case toks[i].isName():
 			if reserved[toks[i].low] && toks[i].kind == tWord {

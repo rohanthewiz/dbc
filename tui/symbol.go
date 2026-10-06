@@ -144,13 +144,15 @@ func symbolWhat(s sqlcomplete.Symbol) string {
 		return "CTE " + s.Name
 	case sqlcomplete.SymTable:
 		return "table " + s.Name
+	case sqlcomplete.SymColumn:
+		return "column " + s.Name
 	}
 	return "alias " + s.Name
 }
 
 // notOnSymbol is the one sentence for a caret on nothing resolvable — the
-// same words dbc web's rename box uses.
-const notOnSymbol = "works on a table alias or a CTE name"
+// resolver's own words, which dbc web's rename box uses too.
+const notOnSymbol = sqlcomplete.NotOnSymbol
 
 // gotoDefinition (F12, Ctrl+click) selects where the name under the caret
 // is declared. Selecting it, rather than only moving the caret there, is
@@ -277,10 +279,16 @@ func (m *Model) symbolMenuItems() []menuItem {
 	sym := m.symbolAtCaret()
 	why, renameWhy := "", ""
 	if sym.Kind == "" {
-		why = "not on a table alias or a CTE name"
+		why = "not on a table alias, a CTE name, or a column the query names itself"
 		renameWhy = why
 	} else if sym.Fixed != "" {
-		renameWhy = fmt.Sprintf("%s is a table — give it an alias and rename that", sym.Name)
+		// the short form of sym.Fixed, which is a sentence too long for a
+		// menu row
+		what := "a table"
+		if sym.Kind == sqlcomplete.SymColumn {
+			what = "a table's column"
+		}
+		renameWhy = fmt.Sprintf("%s is %s — give it an alias and rename that", sym.Name, what)
 	}
 	return []menuItem{
 		heading(""),

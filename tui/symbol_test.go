@@ -203,3 +203,37 @@ func TestApplyEditsKeepsTheCaret(t *testing.T) {
 		t.Errorf("text %q caret %d", e.Text(), e.Caret())
 	}
 }
+
+// A CTE's column: F12 from a use selects its alias in the CTE, F2 renames
+// every use, and a table's column the CTE passes on is found but its menu
+// row says why it cannot be renamed.
+func TestColumnSymbol(t *testing.T) {
+	const sql = "WITH t AS (SELECT count(*) AS n FROM orders)\nSELECT t.n FROM t ORDER BY t.n"
+	m := symbolModel(t, sql, "t.n FROM", 2)
+	drive(t, m, fkey(tea.KeyF12, false))
+	if sel, a, _ := m.editor.Selection(); sel != "n" || a != strings.Index(sql, "n FROM orders") {
+		t.Fatalf("selection = %q at %d, want the alias in the CTE", sel, a)
+	}
+	if !strings.Contains(logText(m), "column n is declared on line 1") {
+		t.Errorf("log: %s", logText(m))
+	}
+
+	m = symbolModel(t, sql, "t.n FROM", 2)
+	drive(t, m, fkey(tea.KeyF2, false))
+	if _, ok := m.modal.(*promptModal); !ok {
+		t.Fatalf("F2 on a CTE's column opened %T, want the rename prompt", m.modal)
+	}
+	typeText(t, m, "total") // replaces the name the prompt opens holding
+	key(t, m, "enter")
+	if want := "WITH t AS (SELECT count(*) AS total FROM orders)\nSELECT t.total FROM t ORDER BY t.total"; m.editor.Text() != want {
+		t.Errorf("text = %q, want %q", m.editor.Text(), want)
+	}
+
+	m = symbolModel(t, "WITH t AS (SELECT o.id FROM orders o) SELECT t.id FROM t", "t.id", 2)
+	m.openEditorMenu(10, 5)
+	for _, it := range m.menu.items {
+		if it.label == "Rename…" && !strings.Contains(it.why, "is a table's column") {
+			t.Errorf("rename row on a table's column: why = %q", it.why)
+		}
+	}
+}

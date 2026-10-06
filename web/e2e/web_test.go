@@ -36,7 +36,7 @@ func TestWeb(t *testing.T) {
 		{"boot", boot},
 		{"run a query", runQuery},
 		{"editor completion", completion},
-		{"go to an alias, rename it", aliasRename},
+		{"go to and rename an alias and a column", aliasRename},
 		{"tables sidebar", tablesSidebar},
 		{"show columns from the menu", columnsFromMenu},
 		{"show columns with c", columnsWithKey},
@@ -150,8 +150,10 @@ func completion(t *testing.T, _ *env, p *rod.Page) {
 // aliasRename: F12 on a qualifier goes to where its alias is declared, and
 // F2 renames the alias — only the outer one, not the subquery's own alias
 // of the same name (POST …/symbol and …/rename, sqlcomplete's resolver).
-// The renamed statement still runs. F2 on a column says why no rename box
-// opens.
+// The renamed statement still runs. Shift+F12 on a CTE's column opens
+// Monaco's references list with every use, and F2 renames the column at
+// its declaration and its uses; that statement runs with the new column
+// name. F2 on a catalog table's column says why no rename box opens.
 func aliasRename(t *testing.T, _ *env, p *rod.Page) {
 	eval(t, p, `() => {
 	  dbc.editor.setText("SELECT c.name FROM cats c WHERE c.age > (SELECT avg(c.age) FROM cats c)");
@@ -180,14 +182,58 @@ func aliasRename(t *testing.T, _ *env, p *rod.Page) {
 	p.MustElement("#run").MustClick()
 	waitResult(t, p, before, "name")
 
+	// a CTE's column: "n" is declared by AS n and used twice as t.n
+	const cte = "WITH t AS (SELECT count(*) AS n FROM cats) SELECT t.n FROM t ORDER BY t.n"
+	eval(t, p, `(sql) => {
+	  dbc.editor.setText(sql);
+	  const ed = monaco.editor.getEditors()[0];
+	  ed.setPosition({ lineNumber: 1, column: 53 }); // on the first t.n's "n"
+	  ed.focus();
+	}`, cte)
+	// Shift held across the key: rod's KeyActions would release it early
+	if err := p.Keyboard.Press(input.ShiftLeft); err != nil {
+		t.Fatal(err)
+	}
+	p.Keyboard.MustType(input.F12)
+	if err := p.Keyboard.Release(input.ShiftLeft); err != nil {
+		t.Fatal(err)
+	}
+	// one row per use, the file's own row left out as there is one file;
+	// the second row (the caret's) comes selected
+	waitFor(t, p, "the references list, with the declaration and both uses", `() => {
+	  const rows = [...document.querySelectorAll(".reference-zone-widget .ref-tree .monaco-list-row")];
+	  return rows.length === 3 && rows[0].textContent.includes("AS n FROM") && rows[1].classList.contains("selected");
+	}`)
+	p.Keyboard.MustType(input.Escape)
+	waitFor(t, p, "the references list closed", `() => !document.querySelector(".reference-zone-widget .ref-tree .monaco-list-row")`)
+
 	eval(t, p, `() => {
 	  const ed = monaco.editor.getEditors()[0];
-	  ed.setPosition({ lineNumber: 1, column: 15 }); // on "name"
+	  ed.setPosition({ lineNumber: 1, column: 53 });
+	  ed.focus();
+	}`)
+	p.Keyboard.MustType(input.F2)
+	waitFor(t, p, "the rename box, holding the column and focused", `() => {
+	  const i = document.querySelector(".rename-box input");
+	  return !!i && i.value === "n" && document.activeElement === i;
+	}`)
+	p.MustInsertText("total")
+	p.Keyboard.MustType(input.Enter)
+	waitFor(t, p, "the column renamed at its declaration and both uses", `() => dbc.editor.text() ===
+	  "WITH t AS (SELECT count(*) AS total FROM cats) SELECT t.total FROM t ORDER BY t.total"`)
+	before = gridSeq(t, p)
+	p.MustElement("#run").MustClick()
+	waitResult(t, p, before, "total")
+
+	eval(t, p, `() => {
+	  dbc.editor.setText("SELECT c.name FROM cats c");
+	  const ed = monaco.editor.getEditors()[0];
+	  ed.setPosition({ lineNumber: 1, column: 11 }); // on "name"
 	  ed.focus();
 	}`)
 	p.Keyboard.MustType(input.F2)
 	waitFor(t, p, "the reason there is nothing to rename", `() => [...document.querySelectorAll(".monaco-editor-overlaymessage")]
-	  .some((m) => m.textContent.includes("Rename works on a table alias or a CTE name"))`)
+	  .some((m) => m.textContent.includes("Rename works on a table alias, a CTE name, or a column the query names itself"))`)
 	p.Keyboard.MustType(input.Escape)
 }
 

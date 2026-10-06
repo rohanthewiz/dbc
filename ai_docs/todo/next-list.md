@@ -124,14 +124,6 @@ ten session docs in `ai_docs/claude_sessions/`
   Updated `2026-1005-1751-recent-chats-fold-v0.8.2`: still recurs — 1 of 3
   runs on untouched `main` (37ff3d7) and 1 of 8 with that session's change.
 
-- **N-114** · raised `2026-1005-1352-sql-alias-rename` · value low
-  Resolve columns too, starting with the ones the statement itself names:
-  a CTE's or a derived table's output columns (`WITH t AS (SELECT count(*)
-  AS n …) SELECT t.n`) and select-list aliases used in ORDER BY. Catalog
-  columns would need the schema and a real idea of which table a bare
-  column belongs to. Also: the e2e step covers F12 and F2 but not
-  Shift+F12's references list.
-
 - **N-115** · raised `2026-1005-1450-tui-web-parity` · value low
   Drive the TUI's parity pieces by hand in real terminals (iTerm2,
   Terminal.app, Ghostty, kitty, a cats pane): whether F12 / ⇧F12 / F2 and
@@ -261,6 +253,15 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-114** · raised `2026-1005-1352-sql-alias-rename` · value low
+  Resolve columns too, starting with the ones the statement itself names:
+  a CTE's or a derived table's output columns (`WITH t AS (SELECT count(*)
+  AS n …) SELECT t.n`) and select-list aliases used in ORDER BY. Catalog
+  columns would need the schema and a real idea of which table a bare
+  column belongs to. Also: the e2e step covers F12 and F2 but not
+  Shift+F12's references list.
+  closed 2026-10-06, `2026-1006-1715-column-resolver`: `sqlcomplete/resolve.go` now resolves the columns a statement names itself. These are a CTE's or derived table's output columns (from the body's select list, or from a column list `t(n)` / `AS d(n)`, which wins) and select-list aliases used alone as ORDER BY items (a UNION's ORDER BY reads the first arm). A column passed through another CTE (`SELECT n FROM a`, `*`, `a.*`) is the same symbol, so F12 goes to the origin and a rename follows the chain. A bare `n` resolves only when every handle in its block has known columns. CTE and non-LATERAL derived bodies are sealed, so a bare name never resolves outward from them. A CTE column that is just a catalog column is found from `t.id` but not renamed. A column rename is refused if any reference in the statement would then resolve differently (a sibling with that name, an ambiguity, or a capture). The e2e step `aliasRename` now opens Shift+F12's references list (3 rows) and renames a CTE column, and the renamed statement runs. Catalog columns are still not resolved.
 
 - **N-127** · raised `2026-1006-1346-etl-scripting-layer` · value low
   yaegi v0.16.1 silently drops a comma-ok assertion assigned straight into a

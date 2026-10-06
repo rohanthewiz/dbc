@@ -2327,7 +2327,7 @@
       ["Ctrl+B", "hide the sidebar — and back"],
       ["Ctrl+Space", "suggestions from the schema (also as you type, and after “.”)"],
       ["Tab · Enter · Esc", "in the suggestions: pick · pick · close"],
-      ["F12 · Ctrl+click", "on a table alias or a CTE name: go to where it is declared"],
+      ["F12 · Ctrl+click", "on a table alias, a CTE name or a column the query names: go to where it is declared"],
       ["Shift+F12", "list its uses in the statement"],
       ["F2", "rename it everywhere in the statement (also in the right-click menu)"],
     ]],

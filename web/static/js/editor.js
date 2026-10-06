@@ -31,7 +31,8 @@
 // as the word grows; a list the server cut short (incomplete) is asked for
 // again on each keystroke instead.
 //
-// GO TO DEFINITION, USAGES AND RENAME of a table alias or a CTE name come
+// GO TO DEFINITION, USAGES AND RENAME of a table alias, a CTE name or a
+// column the statement names (a CTE's output column, a select alias) come
 // from the server too (POST /api/v1/ws/:id/symbol and …/rename), from the
 // scanner completion reads the statement with: F12, Shift+F12 and F2.
 (function () {
@@ -342,14 +343,16 @@
 
   // ── go to definition, usages, rename ───────────────────────────────────
   // The server's resolver (POST …/symbol and …/rename, sqlcomplete's
-  // resolve.go) knows a table's alias and a CTE's name: where each is
-  // declared and every use of it in the caret's statement, a subquery's own
-  // alias kept apart from the outer one of the same name. Monaco's keys and
-  // right-click menu reach it: F12 or Ctrl/⌘+click goes to the declaration,
-  // Shift+F12 lists the uses, F2 renames. A catalog table is found but not
-  // renamed (renaming the text would only stop the query finding it), and
-  // a column is not resolved at all; the rename box says so rather than
-  // opening.
+  // resolve.go) knows a table's alias, a CTE's name, and the columns the
+  // statement names itself (a CTE's or derived table's output columns, a
+  // select alias in ORDER BY): where each is declared and every use of it
+  // in the caret's statement, a subquery's own alias kept apart from the
+  // outer one of the same name. Monaco's keys and right-click menu reach
+  // it: F12 or Ctrl/⌘+click goes to the declaration, Shift+F12 lists the
+  // uses, F2 renames. A catalog table, or a catalog column a CTE passes on,
+  // is found but not renamed (renaming the text would only stop the query
+  // finding it), and any other catalog column is not resolved at all; the
+  // rename box says so rather than opening.
   async function symbolAt(model, position) {
     if (!dbc.state.ws) return null;
     try {
@@ -390,7 +393,7 @@
       async resolveRenameLocation(model, position) {
         const s = await symbolAt(model, position);
         const here = new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column);
-        if (!s) return { range: here, text: "", rejectReason: "Rename works on a table alias or a CTE name." };
+        if (!s) return { range: here, text: "", rejectReason: "Rename works on a table alias, a CTE name, or a column the query names itself." };
         if (s.fixed) return { range: here, text: "", rejectReason: s.fixed };
         return { range: rangeOf(model, s.at), text: s.name };
       },

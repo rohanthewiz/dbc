@@ -130,6 +130,32 @@ func TestCopyNumericToBytdbCreates(t *testing.T) {
 	}
 }
 
+// N-128: SQLite (like pgx) reads dates as time.Time, which bytdb's driver
+// binds as timestamp text; bytdb before v0.21.1 refused that for a date
+// column ("invalid input syntax for type date"). bytdb hands dates back as
+// "YYYY-MM-DD" strings and timestamps as UTC time.Time, so the expected rows
+// are spelled out rather than compared with the source's.
+func TestCopyDateToBytdbCreates(t *testing.T) {
+	ctx := context.Background()
+	src, dst := fileConn(t, SQLite, "src.db"), fileConn(t, Bytdb, "dst.bytdb")
+	mustExec(t, src,
+		`CREATE TABLE ev (id INTEGER PRIMARY KEY, day DATE, at TIMESTAMP)`,
+		"INSERT INTO ev VALUES (1, '2024-03-05', '2024-03-05 10:30:00'), "+
+			"(2, '1969-12-31', NULL), (3, NULL, '2024-03-05 23:59:59')")
+
+	if _, err := Copy(ctx, src, "ev", dst, CopyOptions{Create: true}); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"1", "2024-03-05", "2024-03-05 10:30:00 +0000 UTC"},
+		{"2", "1969-12-31", "NULL"},
+		{"3", "NULL", "2024-03-05 23:59:59 +0000 UTC"},
+	}
+	if got := dump(t, dst, "SELECT id, day, at FROM ev ORDER BY id"); !reflect.DeepEqual(got, want) {
+		t.Errorf("destination rows\n got %q\nwant %q", got, want)
+	}
+}
+
 func TestCopyTransformSkipsAndRewrites(t *testing.T) {
 	src, dst := fileConn(t, SQLite, "src.db"), fileConn(t, SQLite, "dst.db")
 	seedCats(t, src)

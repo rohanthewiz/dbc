@@ -181,19 +181,6 @@ ten session docs in `ai_docs/claude_sessions/`
   map element (`m[k], _ = v.(string)` stores nothing, no error). Worked
   around in `scripts/copy_table.go` and noted in the README. Check a newer
   yaegi, or report it upstream with a minimal repro.
-- **N-128** · raised `2026-1006-1430-headless-dbc-copy` · value medium
-  Copying a date column into bytdb fails ("invalid input syntax for type
-  date"), from `s.Copy` and `dbc copy` alike. bytdb's driver
-  (`stdlib.CheckNamedValue`, bytdb v0.21.0) binds every `time.Time` as
-  `"2006-01-02 15:04:05…"` text, and `bytdb.ParseDate` accepts only
-  `YYYY-MM-DD`. Postgres takes a midnight timestamp for a date, so the
-  likely fix is in bytdb: accept it there (or in the driver).
-  Fixed upstream in `2026-1006-1535-numeric-to-bytdb-and-date-fix-upstream`: bytdb N-026, released
-  as bytdb `v0.21.1` (and `pgwire/v0.21.1`). `ParseDate` now accepts
-  timestamp text and keeps the date as written, as Postgres does. To close
-  this, bump dbc to bytdb v0.21.1 and add a date column to an etl
-  SQLite→bytdb test. Run against the local bytdb, a SQLite→bytdb `Copy` of
-  DATE columns already works.
 
 ## Roadmap
 
@@ -280,6 +267,21 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-128** · raised `2026-1006-1430-headless-dbc-copy` · value medium
+  Copying a date column into bytdb fails ("invalid input syntax for type
+  date"), from `s.Copy` and `dbc copy` alike. bytdb's driver
+  (`stdlib.CheckNamedValue`, bytdb v0.21.0) binds every `time.Time` as
+  `"2006-01-02 15:04:05…"` text, and `bytdb.ParseDate` accepts only
+  `YYYY-MM-DD`. Postgres takes a midnight timestamp for a date, so the
+  likely fix is in bytdb: accept it there (or in the driver).
+  Fixed upstream in `2026-1006-1535-numeric-to-bytdb-and-date-fix-upstream`: bytdb N-026, released
+  as bytdb `v0.21.1` (and `pgwire/v0.21.1`). `ParseDate` now accepts
+  timestamp text and keeps the date as written, as Postgres does. To close
+  this, bump dbc to bytdb v0.21.1 and add a date column to an etl
+  SQLite→bytdb test. Run against the local bytdb, a SQLite→bytdb `Copy` of
+  DATE columns already works.
+  closed 2026-10-06, `2026-1006-1602-bump-bytdb-v0.21.1`: dbc requires bytdb `v0.21.1`. `TestCopyDateToBytdbCreates` copies SQLite DATE and TIMESTAMP columns, including pre-1970 dates and NULLs, into a created bytdb table. It passes on v0.21.1 and fails on v0.21.0 with the N-128 error.
 
 - **N-129** · raised `2026-1006-1430-headless-dbc-copy` · value medium
   `Create` into bytdb fails on a `numeric`/`decimal` source column ("unknown

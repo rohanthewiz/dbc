@@ -66,8 +66,8 @@ github.com/rohanthewiz/assert v0.1.2 h1:coi0nUTAuqgpxoa7THQynDnBKUzV9Bid+tNaocUk
 github.com/rohanthewiz/assert v0.1.2/go.mod h1:Xix0OMMRN0aGkE207Wk5GJk0eWlpcNGph0+kYpuq+vQ=
 github.com/rohanthewiz/btypedb v0.9.0 h1:CTD+QR65lLNHDWYVO4Npfb/JmP8h2R2nW5jALlCF0lw=
 github.com/rohanthewiz/btypedb v0.9.0/go.mod h1:K+7M8clbmaVh33X9QYm1sA5A7DWDKOE1+O9WFQflMI0=
-github.com/rohanthewiz/bytdb v0.21.0 h1:3skhu6pZSAeSlls7sTn1vI7SlrBRThBRF1ddS6wh0C8=
-github.com/rohanthewiz/bytdb v0.21.0/go.mod h1:ay6tTWKDpYkcUDYw0mGMoS8u6GkaoFChz6cx8Kk46VA=
+github.com/rohanthewiz/bytdb v0.21.1 h1:qIBrnxOnMyXdwgnnkgCxQQdr1DSH6VKPgGxJArgu38o=
+github.com/rohanthewiz/bytdb v0.21.1/go.mod h1:ay6tTWKDpYkcUDYw0mGMoS8u6GkaoFChz6cx8Kk46VA=
 github.com/rohanthewiz/element v0.6.0 h1:YS7I69mKKjtMa1ezr1ZQKm+XmrhQzKiE9vOSPxdLUvU=
 github.com/rohanthewiz/element v0.6.0/go.mod h1:YZnKqWX2lSsR+zi06x3vhViYVoOSx8xHQjUMTmM/FLo=
 github.com/rohanthewiz/logger v1.3.0 h1:cJoocqUvv5wsHcjlW7wupMTruyBCUHuu8J380u5fyFs=

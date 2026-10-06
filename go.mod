@@ -12,7 +12,7 @@ require (
 	github.com/jezek/xgb v1.3.1
 	github.com/rivo/uniseg v0.4.7
 	github.com/rohanthewiz/btypedb v0.9.0
-	github.com/rohanthewiz/bytdb v0.21.0
+	github.com/rohanthewiz/bytdb v0.21.1
 	github.com/rohanthewiz/element v0.6.0
 	github.com/rohanthewiz/logger v1.3.0
 	github.com/rohanthewiz/rweb v0.1.32

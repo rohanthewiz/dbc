@@ -1255,7 +1255,74 @@ Go module; dbc runs them regardless.
 (`$1` postgres/bytdb, `?` mysql/sqlite).
 
 Sample scripts live in [`scripts/`](scripts/): parameter loops, multi-host
-sweeps, and CSV/HTML report generation.
+sweeps, CSV/HTML report generation, and copying tables between connections.
+
+### ETL across connections
+
+Scripts can move rows between connections, on the same engine or different
+ones (Postgres, MySQL, SQLite, bytdb, in any pairing). Copying a table from
+one Postgres to another is one call:
+
+```go
+st, err := s.Copy("prod-pg", "local-pg", "public.orders", sdb.CopyOpts{
+	Create: true, Truncate: true, ProgressEvery: 250_000,
+})
+s.Print("%s", st) // copied 500000 rows prod-pg:public.orders → local-pg:public.orders in 886ms (direct COPY)
+```
+
+| Method | Purpose |
+| --- | --- |
+| `s.Copy(src, dst, table, sdb.CopyOpts{…}) (sdb.CopyStats, error)` | Copy a table (or query) from one connection to another |
+| `s.Reader(conn, sql, args...) (*sdb.Reader, error)` | Stream a query's rows: `for rd.Next() { row := rd.Row() }`, then `rd.Err()` |
+| `s.Writer(conn, table, cols, sdb.WriteOpts{…}) (*sdb.Writer, error)` | Load rows in one transaction: `w.Write(row)` …, `w.Close()` commits, `defer w.Abort()` |
+
+`sdb.CopyOpts` fields: `To` (destination table, default the same name),
+`Columns`, `Where` + `Args`, or a whole `Query` instead of a table; `Create`
+(make the destination when missing), `Truncate` (empty it first);
+`Transform func(row []any) ([]any, error)` to edit each row in Go (return
+`nil` to skip it); `ProgressEvery` (print the running count) or `Progress`
+(your own callback); `BatchSize`. `sdb.WriteOpts` has `Setup` (statements
+run first, in the load's transaction), `Truncate` and `BatchSize`.
+
+How it moves the rows:
+
+- **Postgres → Postgres** with no `Transform` and no `Args` streams
+  `COPY (SELECT …) TO STDOUT` straight into `COPY … FROM STDIN`. The rows are
+  never decoded, so it is lossless for every type both servers know (arrays,
+  jsonb, ranges, enums) and runs at the speed of the servers and the network.
+  `COPY` cannot take bind parameters, so `Args` goes row by row.
+- **Into Postgres** otherwise: `COPY … FROM STDIN` in text format, so the
+  server parses each value as it would a literal — `"42"` from MySQL loads
+  into an `integer`.
+- **Into MySQL, SQLite or bytdb**: multi-row `INSERT` batches (500 rows,
+  fewer for wide tables), the full-batch statement prepared once.
+
+The destination loads in **one transaction**, together with `Create` and
+`Truncate`. A failed, stopped (`Ctrl+K`) or panicking copy leaves it as it
+was: the old rows still there, a table it was creating not created. Two
+engines can't do DDL that way: on bytdb and MySQL the `CREATE TABLE` runs
+just before the load, so a failure there can leave an empty new table, but
+never a partial one. MySQL's `Truncate` is a `DELETE`, since its `TRUNCATE`
+commits on the spot.
+
+`Create` copies a Postgres table to Postgres with its exact column types,
+`NOT NULL`s and primary key. Between other engines each column gets a broad
+type (integer, float, numeric, boolean, date, timestamp, bytes, or text) and
+the source's primary key, where it can be read. Defaults, sequences, other
+indexes and constraints are not copied. bytdb requires a primary key, so to
+copy a query into bytdb, create the table first.
+
+A `Reader` has no `max_rows` cap and keeps values typed: `int64`,
+`float64`, `bool`, `string`, `time.Time`, `[]byte` for binary columns, `nil`
+for NULL. Postgres `numeric`, `uuid` and arrays arrive in their text form. A
+`Reader` or `Writer` a script leaves open is closed, or rolled back, when
+`Run` returns. A Writer is never committed unless the script calls `Close`.
+[`scripts/copy_table.go`](scripts/copy_table.go) shows all three levels, up
+to a join across two connections.
+
+One interpreter quirk: yaegi silently drops a comma-ok assertion assigned
+straight into a map element (`m[k], _ = v.(string)`). Assign to a variable
+first.
 
 ## Headless mode
 

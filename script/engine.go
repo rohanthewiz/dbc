@@ -34,6 +34,12 @@ func Run(path string, s *sdb.S) (err error) {
 			"Plan":       reflect.ValueOf((*explain.Plan)(nil)),
 			"PlanText":   reflect.ValueOf((*explain.TextOptions)(nil)),
 			"IsCanceled": reflect.ValueOf(sdb.IsCanceled),
+			// ETL across connections (sdb/etl.go)
+			"CopyOpts":  reflect.ValueOf((*sdb.CopyOpts)(nil)),
+			"CopyStats": reflect.ValueOf((*sdb.CopyStats)(nil)),
+			"Reader":    reflect.ValueOf((*sdb.Reader)(nil)),
+			"Writer":    reflect.ValueOf((*sdb.Writer)(nil)),
+			"WriteOpts": reflect.ValueOf((*sdb.WriteOpts)(nil)),
 		},
 	}); err != nil {
 		return serr.Wrap(err, "phase", "load sdb symbols")
@@ -52,6 +58,10 @@ func Run(path string, s *sdb.S) (err error) {
 		return serr.New("Run has the wrong signature", "script", path,
 			"want", "func Run(s *sdb.S) error", "got", v.Type().String())
 	}
+	// Registered after the recover above, so it runs first on a panic too:
+	// whatever the script left open is rolled back / closed before the
+	// panic becomes an error.
+	defer s.Release()
 	if err = fn(s); err != nil {
 		return serr.Wrap(err, "script", path, "phase", "run")
 	}

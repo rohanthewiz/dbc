@@ -38,6 +38,8 @@ type S struct {
 	show  func(*model.Result)
 	print func(string)
 	ctx   context.Context
+	// open tracks the run's Readers and Writers for Release (etl.go).
+	open openSet
 }
 
 // New builds a script session. show receives results pushed via Show;
@@ -81,8 +83,11 @@ func (s *S) Canceled() bool {
 //		}
 //		return err
 //	}
+//
+// Errors from Copy, Reader and Writer carry context.Canceled instead: the
+// etl package does not depend on db, so both are recognised here.
 func IsCanceled(err error) bool {
-	return errors.Is(err, db.ErrCanceled)
+	return errors.Is(err, db.ErrCanceled) || errors.Is(err, context.Canceled)
 }
 
 // Conns returns the configured connection names.

@@ -123,6 +123,19 @@ func Driver(d string) (string, error) {
 	return driverFor(d)
 }
 
+// DriverOf returns the canonical database/sql driver name (pgx, mysql,
+// sqlite, bytdb) of a named connection — derived databases ("pg/sales")
+// included — without opening it. Code that must speak a connection's SQL
+// dialect, such as the etl package building a COPY or a multi-row INSERT,
+// branches on this rather than on the connection's name.
+func (m *Manager) DriverOf(name string) (string, error) {
+	cn, ok := m.cfg.ConnByName(name)
+	if !ok {
+		return "", serr.New("unknown connection", "conn", name)
+	}
+	return driverFor(cn.Driver)
+}
+
 // DB returns the live *sql.DB for a named connection, opening and pinging
 // it on first use.
 func (m *Manager) DB(name string) (*sql.DB, error) {

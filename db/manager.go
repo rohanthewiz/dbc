@@ -944,7 +944,7 @@ func wrapRunErr(ctx context.Context, err error, name string, kv ...string) error
 	fields := append([]string{"conn", name}, kv...)
 	cerr := ctx.Err()
 	if cerr == nil {
-		return serr.Wrap(err, fields...)
+		return serr.Wrap(withPgDetail(err), fields...)
 	}
 	cause := "user"
 	if errors.Is(cerr, context.DeadlineExceeded) {
@@ -952,6 +952,37 @@ func wrapRunErr(ctx context.Context, err error, name string, kv ...string) error
 	}
 	return serr.Wrap(fmt.Errorf("%w: %w", ErrCanceled, cerr),
 		append(fields, "cause", cause, "driver_err", err.Error())...)
+}
+
+// withPgDetail puts a Postgres error's DETAIL and HINT into its text.
+// pgconn.PgError.Error() is "SEVERITY: message (SQLSTATE x)" alone, so the
+// DETAIL and HINT a server error carries — and that RAISE EXCEPTION …
+// USING DETAIL = …, HINT = … sets — never reached the log or the
+// assistant. They are appended to the message, as the log's notice lines
+// write them (Notice.String), rather than added as serr fields: fields
+// print after the location noise, in no fixed order, where a hint is easy
+// to miss.
+//
+// The error is wrapped with %w, so errors.As still finds the *PgError
+// (BadConn, the fault and cancel checks are unaffected). CONTEXT (PgError
+// .Where) is left out: for a DO block it is only "PL/pgSQL function
+// inline_code_block line 1 at RAISE", and for nested calls it runs to
+// several lines.
+func withPgDetail(err error) error {
+	var pe *pgconn.PgError
+	if !errors.As(err, &pe) || (pe.Detail == "" && pe.Hint == "") {
+		return err
+	}
+	var b strings.Builder
+	if pe.Detail != "" {
+		b.WriteString(" — DETAIL: ")
+		b.WriteString(pe.Detail)
+	}
+	if pe.Hint != "" {
+		b.WriteString(" — HINT: ")
+		b.WriteString(pe.Hint)
+	}
+	return fmt.Errorf("%w%s", err, b.String())
 }
 
 func renderVal(v any) string {

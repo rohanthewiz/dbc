@@ -2,8 +2,11 @@ package db
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/rohanthewiz/dbc/config"
 )
@@ -73,7 +76,8 @@ func TestSessionNoticesNilOffPostgres(t *testing.T) {
 
 // RAISE NOTICE reaches the session that ran it — in order, kept even when
 // the statement then fails — and only that statement's: the next Run starts
-// empty. Closing the session unregisters its sink.
+// empty. RAISE EXCEPTION's DETAIL and HINT reach its error. Closing the
+// session unregisters its sink.
 func TestLiveSessionNotices(t *testing.T) {
 	ctx := context.Background()
 	mgr := liveMgr(t, "DBC_LIVE_PG_DSN", "postgres")
@@ -109,6 +113,12 @@ func TestLiveSessionNotices(t *testing.T) {
 		t.Errorf("notices before the exception = %v, want [before]", ns)
 	}
 
+	// RAISE EXCEPTION's DETAIL and HINT reach the error text
+	_, err = s.Run(ctx, `DO $$ BEGIN RAISE EXCEPTION 'boom' USING DETAIL = 'the detail', HINT = 'the hint'; END $$`)
+	if err == nil || !strings.Contains(err.Error(), "ERROR: boom (SQLSTATE P0001) — DETAIL: the detail — HINT: the hint") {
+		t.Errorf("RAISE EXCEPTION … USING DETAIL, HINT: err = %v", err)
+	}
+
 	if _, err = s.Run(ctx, `SELECT 1`); err != nil {
 		t.Fatalf("select: %v", err)
 	}
@@ -123,5 +133,28 @@ func TestLiveSessionNotices(t *testing.T) {
 	_ = s.Close()
 	if _, ok := noticeSinks.Load(key); ok {
 		t.Error("Close left the session's notice sink registered")
+	}
+}
+
+// A Postgres error's DETAIL and HINT join its text, in the notice lines'
+// style; the *PgError stays reachable, and an error without them, or not
+// from Postgres, is returned as it was.
+func TestWithPgDetail(t *testing.T) {
+	plain := errors.New("not postgres")
+	if got := withPgDetail(plain); got != plain {
+		t.Errorf("non-Postgres error changed: %v", got)
+	}
+	bare := &pgconn.PgError{Severity: "ERROR", Message: "boom", Code: "P0001"}
+	if got := withPgDetail(bare); got != error(bare) {
+		t.Errorf("error without detail or hint changed: %v", got)
+	}
+	full := &pgconn.PgError{Severity: "ERROR", Message: "boom", Code: "22023", Detail: "d", Hint: "h"}
+	got := withPgDetail(full)
+	if want := "ERROR: boom (SQLSTATE 22023) — DETAIL: d — HINT: h"; got.Error() != want {
+		t.Errorf("text = %q, want %q", got.Error(), want)
+	}
+	var pe *pgconn.PgError
+	if !errors.As(got, &pe) || pe != full {
+		t.Error("the *PgError is no longer reachable with errors.As")
 	}
 }

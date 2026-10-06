@@ -491,9 +491,11 @@ func runQueryHeadless(cfg *config.Config, mgr *db.Manager, sql string, f export.
 			}
 			fail(err, "could not begin the transaction")
 		}
+		printNotices(os.Stderr, sess.Notices())
 	}
 
-	hooks := runHooks{keepGoing: flagKeep, onFail: reportFailed}
+	hooks := runHooks{keepGoing: flagKeep, onFail: reportFailed,
+		onNotice: func(_ int, n db.Notice) { printNotices(os.Stderr, []db.Notice{n}) }}
 	var stream *blockStream
 	if streamsResults(f, len(stmts)) {
 		stream = &blockStream{out: os.Stdout, notes: os.Stderr, f: f, total: len(stmts)}
@@ -507,6 +509,9 @@ func runQueryHeadless(cfg *config.Config, mgr *db.Manager, sql string, f export.
 	var txErr error
 	if flagTx {
 		txErr = endTx(ctx, sess, runErr == nil && (stream == nil || stream.err == nil))
+		// COMMIT can raise notices of its own — a deferred constraint
+		// trigger's RAISE NOTICE runs at commit, not at its statement
+		printNotices(os.Stderr, sess.Notices())
 	}
 
 	if stream != nil && stream.err != nil {
@@ -613,6 +618,18 @@ func endTx(ctx context.Context, sess *db.Session, ok bool) error {
 	return nil
 }
 
+// printNotices writes server notices to w (stderr in a headless run), one per
+// line as Notice.String draws them ("NOTICE: …", the same line the editor's
+// log shows). Stderr, not stdout, for the same reason psql uses it: stdout
+// carries the results, which may be piped into a file or another tool as
+// CSV or JSON, and a notice line there would corrupt them. Off Postgres
+// there are never any notices, so this writes nothing.
+func printNotices(w io.Writer, ns []db.Notice) {
+	for _, n := range ns {
+		fmt.Fprintln(w, n.String())
+	}
+}
+
 // reportFailed logs a statement that failed in a --keep-going run, as it
 // happens, in the same shape fail uses for the one that ends a run. The
 // error already carries the statement's position.
@@ -700,6 +717,14 @@ type runHooks struct {
 	// onFail, when not nil, is told of each failure keepGoing passes over,
 	// with the error already tagged with the statement's position.
 	onFail func(i int, err error)
+	// onNotice, when not nil, is handed each server notice (Postgres's RAISE
+	// NOTICE and friends) statement i raised, in order. It is called right
+	// after the statement returns and before its result or failure is
+	// handled, so a notice lands ahead of the error it led up to, as in
+	// psql. The session buffers a statement's notices only until its next
+	// Run (Session.Run resets the buffer), so they are drained here, per
+	// statement, rather than once at the end.
+	onNotice func(i int, n db.Notice)
 }
 
 // runOutcome is what a run of statements produced.
@@ -723,6 +748,11 @@ func runStatements(ctx context.Context, sess *db.Session, stmts []sqlsplit.Stmt,
 	}
 	for i, st := range stmts {
 		res, err := sess.Run(ctx, st.Text)
+		if h.onNotice != nil {
+			for _, n := range sess.Notices() {
+				h.onNotice(i, n)
+			}
+		}
 		if err != nil {
 			if len(stmts) > 1 {
 				err = serr.Wrap(err, "statement", fmt.Sprintf("%d/%d", i+1, len(stmts)))

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -852,4 +853,77 @@ func resetFlags(t *testing.T) {
 	old := flagMissing
 	flagMissing = false
 	t.Cleanup(func() { flagMissing = old })
+}
+
+// TestRunStatementsNoticesOffPostgres: off Postgres there are no notices, so
+// a run with onNotice set behaves as one without it.
+func TestRunStatementsNoticesOffPostgres(t *testing.T) {
+	sess := newTestSession(t)
+	called := 0
+	h := runHooks{onNotice: func(int, db.Notice) { called++ }}
+	run, err := runStatements(context.Background(), sess, sqlsplit.Split("SELECT 1; SELECT 2"), h)
+	if err != nil || len(run.results) != 2 {
+		t.Fatalf("run: %d results, err %v", len(run.results), err)
+	}
+	if called != 0 {
+		t.Fatalf("onNotice called %d times on SQLite, want 0", called)
+	}
+}
+
+func TestPrintNotices(t *testing.T) {
+	var b bytes.Buffer
+	printNotices(&b, []db.Notice{
+		{Severity: "NOTICE", Message: "one"},
+		{Severity: "WARNING", Message: "two", Hint: "look"},
+	})
+	if got, want := b.String(), "NOTICE: one\nWARNING: two — HINT: look\n"; got != want {
+		t.Fatalf("printed %q, want %q", got, want)
+	}
+}
+
+// TestLiveRunStatementsNotices runs a headless-style buffer on a real
+// Postgres (DBC_LIVE_PG_DSN, see db/live_test.go) and checks each notice
+// reaches onNotice tagged with the statement that raised it, and ahead of
+// that statement's failure — the order a headless run prints them in.
+func TestLiveRunStatementsNotices(t *testing.T) {
+	dsn := os.Getenv("DBC_LIVE_PG_DSN")
+	if dsn == "" {
+		t.Skip("set DBC_LIVE_PG_DSN to run against a real Postgres")
+	}
+	mgr := db.NewManager(&config.Config{
+		MaxRows:     1000,
+		Connections: []config.Connection{{Name: "live", Driver: "postgres", DSN: dsn}},
+	})
+	t.Cleanup(mgr.Close)
+	sess, err := mgr.Session(context.Background(), "live")
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+
+	var events []string
+	h := runHooks{
+		keepGoing: true,
+		onNotice: func(i int, n db.Notice) {
+			events = append(events, fmt.Sprintf("%d %s", i, n.String()))
+		},
+		onFail: func(i int, err error) { events = append(events, fmt.Sprintf("%d failed", i)) },
+	}
+	stmts := sqlsplit.Split(`
+		DO $$ BEGIN RAISE NOTICE 'one'; RAISE WARNING 'two'; END $$;
+		SELECT 1;
+		DO $$ BEGIN RAISE NOTICE 'three'; RAISE EXCEPTION 'boom'; END $$;
+		SELECT 2;
+	`)
+	run, err := runStatements(context.Background(), sess, stmts, h)
+	if err != nil {
+		t.Fatalf("runStatements: %v", err)
+	}
+	if run.failed != 1 {
+		t.Fatalf("failed = %d, want 1", run.failed)
+	}
+	want := []string{"0 NOTICE: one", "0 WARNING: two", "2 NOTICE: three", "2 failed"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events %q, want %q", events, want)
+	}
 }

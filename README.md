@@ -1446,6 +1446,11 @@ result that hit `max_rows` is noted on stderr, so a truncated export cannot
 pass for the full set while the data stream stays clean. In `json`, duplicate
 column names are suffixed (`a`, `a_2`) rather than silently collapsed.
 
+Postgres server notices (`RAISE NOTICE`, `RAISE WARNING`, "table … does not
+exist, skipping") go to stderr as each statement returns, one line each
+(`NOTICE: …`), as psql prints them. A notice from a failing statement comes
+before its error, and a deferred trigger's notice comes when `--tx` commits.
+
 ## Migrations
 
 `dbc migrate` applies versioned SQL migrations in the goose file format, with

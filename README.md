@@ -1353,9 +1353,12 @@ for NULL. Postgres `numeric`, `uuid` and arrays arrive in their text form. A
 to a join across two connections. To copy a single table, with no script,
 use [`dbc copy`](#copy-headless).
 
-One interpreter quirk: yaegi silently drops a comma-ok assertion assigned
-straight into a map element (`m[k], _ = v.(string)`). Assign to a variable
-first.
+One interpreter quirk: yaegi silently drops a two-value assignment into a map
+element. `m[k], _ = v.(string)`, `m[k], _ = other[k]` and `m[k], _ = f()`
+store nothing, and `m[k], _ = <-ch` panics. Assign to a variable first, then
+store it in the map. Present in yaegi v0.16.1 and on master as of 2026-10;
+tracked upstream in
+[traefik/yaegi#1655](https://github.com/traefik/yaegi/issues/1655).
 
 ## Headless mode
 

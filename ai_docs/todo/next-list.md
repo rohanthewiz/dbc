@@ -176,12 +176,6 @@ ten session docs in `ai_docs/claude_sessions/`
   transaction (implicit commit), Truncate is a DELETE, a text primary key
   becomes VARCHAR(255), and the text protocol's []byte values are read as
   strings by column type.
-- **N-127** · raised `2026-1006-1346-etl-scripting-layer` · value low
-  yaegi v0.16.1 silently drops a comma-ok assertion assigned straight into a
-  map element (`m[k], _ = v.(string)` stores nothing, no error). Worked
-  around in `scripts/copy_table.go` and noted in the README. Check a newer
-  yaegi, or report it upstream with a minimal repro.
-
 ## Roadmap
 
 Wanted, but deliberately not next. Empty at seeding: the session docs never
@@ -267,6 +261,13 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-127** · raised `2026-1006-1346-etl-scripting-layer` · value low
+  yaegi v0.16.1 silently drops a comma-ok assertion assigned straight into a
+  map element (`m[k], _ = v.(string)` stores nothing, no error). Worked
+  around in `scripts/copy_table.go` and noted in the README. Check a newer
+  yaegi, or report it upstream with a minimal repro.
+  closed 2026-10-06, `2026-1006-1659-yaegi-upstream-report`: no newer yaegi fixes it. v0.16.1 is still the newest tag, and master (`fcb76d1`, 2026-02-09) behaves the same. The bug is broader than a type assertion: any two-value assignment into a map element stores nothing (type assertion, comma-ok map read, two-value call), and a channel receive panics with `reflect.Value.SetBool on interface Value`. Slice elements and plain variables work. Upstream already had it as traefik/yaegi#1655 (open since 2024-08, no replies), so the minimal repro went there as a comment rather than a new issue. The README note and the `scripts/copy_table.go` comment now cover the wider scope and link the issue. The workaround stays until upstream fixes it.
 
 - **N-128** · raised `2026-1006-1430-headless-dbc-copy` · value medium
   Copying a date column into bytdb fails ("invalid input syntax for type

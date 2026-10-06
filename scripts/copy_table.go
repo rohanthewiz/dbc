@@ -81,7 +81,8 @@ func Run(s *sdb.S) error {
 		row := lk.Row()
 		// Two steps on purpose: the interpreter (yaegi) silently drops
 		// `regions[k], _ = v.(string)` — a comma-ok assertion assigned
-		// straight into a map element.
+		// straight into a map element (traefik/yaegi#1655; any two-value
+		// form into a map index is affected).
 		email, _ := row[0].(string)
 		region, _ := row[1].(string)
 		regions[email] = region

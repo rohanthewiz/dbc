@@ -164,11 +164,6 @@ ten session docs in `ai_docs/claude_sessions/`
   lite2" and no JS errors; the step's waitFor message was not captured.
   Together with N-110 it fails most full `DBC_E2E=1` runs, so the suite no
   longer gives a clean signal after an app.js/CSS change.
-- **N-123** · raised `2026-1006-1248-pg-error-context-and-script-notices` · value low
-  Headless `dbc query` (`main.go` `runStatements`) runs on a pinned
-  `db.Session` but never calls `Session.Notices`, so RAISE NOTICE output is
-  dropped there. Print it to stderr as psql does (stdout carries the
-  results), about five lines in `runStatements` or a `runHooks` callback.
 
 ## Roadmap
 
@@ -256,6 +251,12 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-123** · raised `2026-1006-1248-pg-error-context-and-script-notices` · value low
+  Headless `dbc query` (`main.go` `runStatements`) runs on a pinned
+  `db.Session` but never calls `Session.Notices`, so RAISE NOTICE output is
+  dropped there. Print it to stderr as psql does (stdout carries the
+  results), about five lines in `runStatements` or a `runHooks` callback.
+  closed 2026-10-06, `2026-1006-1253-headless-query-notices`: `runHooks.onNotice` gets each notice right after its statement returns (before its result or failure is handled); `runQueryHeadless` prints them to stderr via `printNotices`, plus any left after `--tx`'s BEGIN and COMMIT/ROLLBACK (a deferred trigger's notice comes at commit). README notes it. Tests: `TestPrintNotices`, `TestRunStatementsNoticesOffPostgres`, `TestLiveRunStatementsNotices`; the real binary was driven against postgres:17.
 - **N-122** · raised `2026-1006-1219-raise-notices-in-log` · value low
   Server notices (RAISE NOTICE …) are shown only for runs on the pinned
   session (the editor's runs). A Go script's `s.Query`/`s.Exec` goes through

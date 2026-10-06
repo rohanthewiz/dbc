@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-125
+**Next ID:** N-128
 
 ## Open
 
@@ -170,6 +170,22 @@ ten session docs in `ai_docs/claude_sessions/`
   lite2" and no JS errors; the step's waitFor message was not captured.
   Together with N-110 it fails most full `DBC_E2E=1` runs, so the suite no
   longer gives a clean signal after an app.js/CSS change.
+- **N-125** · raised `2026-1006-1346-etl-scripting-layer` · value medium
+  A headless `dbc copy` command over `etl.Copy` (`--from A --to B table`,
+  `--create`, `--truncate`, `--where`, `--to`), so a cron job or shell
+  pipeline can copy a table without writing a script. Today it takes a
+  one-function script run with `dbc script`.
+- **N-126** · raised `2026-1006-1346-etl-scripting-layer` · value low
+  Live MySQL tests for the ETL paths. `etl/live_test.go` covers Postgres
+  only; MySQL is reasoned about, not run: Create runs outside the load's
+  transaction (implicit commit), Truncate is a DELETE, a text primary key
+  becomes VARCHAR(255), and the text protocol's []byte values are read as
+  strings by column type.
+- **N-127** · raised `2026-1006-1346-etl-scripting-layer` · value low
+  yaegi v0.16.1 silently drops a comma-ok assertion assigned straight into a
+  map element (`m[k], _ = v.(string)` stores nothing, no error). Worked
+  around in `scripts/copy_table.go` and noted in the README. Check a newer
+  yaegi, or report it upstream with a minimal repro.
 
 ## Roadmap
 

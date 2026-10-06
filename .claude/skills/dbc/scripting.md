@@ -26,9 +26,15 @@ func Run(s *sdb.S) error {
 
 ```sh
 dbc script s.go                 # text tables + Print lines on stdout
+dbc script copy_mytable         # a script in scripts_dir, by name (.go optional)
+dbc scripts                     # list scripts_dir; its path on stderr
 dbc -t json script s.go | jq .  # one JSON array of every Show; Print → stderr
 dbc -t csv -o out.csv script s.go
 ```
+
+`scripts_dir` defaults to `~/.config/dbc/scripts`; a relative value is
+relative to the config file, never the cwd. Put a user's scripts there,
+not in the repo's `scripts/` (those are the samples).
 
 `//go:build ignore` only keeps `go build ./...` from compiling the script;
 dbc runs it regardless. Connection names come from config /

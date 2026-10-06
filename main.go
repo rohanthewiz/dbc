@@ -185,10 +185,11 @@ func newCLI() *cli.Command {
 		Commands: []*cli.Command{
 			{
 				Name:      "script",
-				Usage:     "run a Go script headless",
-				ArgsUsage: "<file.go>",
+				Usage:     "run a Go script headless: a file, or a NAME from scripts_dir",
+				ArgsUsage: "<file.go|NAME>",
 				Action:    scriptAction,
 			},
+			scriptsCommand(),
 			copyCommand(),
 			explainCommand(),
 			erdCommand(),
@@ -246,14 +247,21 @@ func rootAction(ctx context.Context, cmd *cli.Command) error {
 func scriptAction(ctx context.Context, cmd *cli.Command) error {
 	refuseQueryFlags("script")
 	if cmd.Args().Len() != 1 {
-		usage("usage: dbc script <file.go>")
+		usage("usage: dbc script <file.go|NAME>")
 	}
 	// A script names its own connections, so nothing is opened for it up
 	// front: each demo it uses seeds on first use.
 	cfg, mgr := setup(demoLazy)
 	defer mgr.Close()
 	warnConfig(cfg)
-	runScriptHeadless(mgr, cmd.Args().First(), outFormat())
+	// A file path runs as it always has; a bare NAME (copy_mytable, or
+	// copy_mytable.go) that is not a file here is looked up in scripts_dir.
+	path, err := cfg.FindScript(cmd.Args().First())
+	if err != nil {
+		mgr.Close() // usage exits; the deferred Close would not run
+		usage(err.Error())
+	}
+	runScriptHeadless(mgr, path, outFormat())
 	return nil
 }
 

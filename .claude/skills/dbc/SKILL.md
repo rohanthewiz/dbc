@@ -103,7 +103,8 @@ Exit codes: `0` ok, `1` failure, `2` bad usage (incl. unknown connection),
 
 | Command | Use | README section |
 | --- | --- | --- |
-| `dbc script FILE.go` | run a Go script headless (`-t`/`-o` apply) | Scripts headless |
+| `dbc script FILE.go\|NAME` | run a Go script headless (`-t`/`-o` apply); a bare NAME is looked up in `scripts_dir` | Scripts headless |
+| `dbc scripts [-t json]` | list `scripts_dir` (default `~/.config/dbc/scripts`); the directory goes to stderr | Scripts headless |
 | `dbc copy --from A --to B [--create] [--truncate] [--where C] SRC [DST]` | copy a table across connections/engines in one transaction | Copy headless |
 | `dbc explain [-a] [-t text\|json\|markdown\|html\|pdf\|png\|jpeg\|mermaid] [--fail-on warn\|crit] "SQL"` | plan + findings; one statement | Explain headless |
 | `dbc erd [-t mermaid\|markdown\|png\|jpeg] [--table T] [--depth N] [--views]` | schema diagram | Diagrams headless |

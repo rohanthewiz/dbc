@@ -186,6 +186,9 @@ func SupportsDatabases(driver string) bool {
 
 // Config is the application configuration.
 type Config struct {
+	// ScriptsDir is where Go scripts live. Load leaves it absolute (see
+	// ResolveScriptsDir in scripts.go): as written it is relative to the
+	// config file, and absent it is ~/.config/dbc/scripts.
 	ScriptsDir string `toml:"scripts_dir"`
 	MaxRows    int    `toml:"max_rows"` // rows fetched from the server
 
@@ -264,7 +267,7 @@ func Load(explicit string) (*Config, error) {
 // active. The choice only matters when there is no config file: a real config
 // names its own default_connection.
 func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
-	cfg := &Config{ScriptsDir: "scripts", MaxRows: defaultMaxRows,
+	cfg := &Config{MaxRows: defaultMaxRows,
 		MaxDisplayRows: defaultMaxDisplayRows, AIContextRows: DefaultAIContextRows,
 		ConnIdleTimeout: DefaultConnIdleTimeout, ConnectTimeout: DefaultConnectTimeout, PlanTheme: "dark"}
 
@@ -280,6 +283,7 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 
 	if path == "" {
 		cfg.demoFallback(demo)
+		cfg.resolveScripts("")
 		return cfg, nil
 	}
 
@@ -303,9 +307,6 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 	cfg.checkDuration("conn_idle_timeout", &cfg.ConnIdleTimeout, DefaultConnIdleTimeout)
 	cfg.checkDuration("connect_timeout", &cfg.ConnectTimeout, DefaultConnectTimeout)
 	cfg.checkPlanTheme()
-	if cfg.ScriptsDir == "" {
-		cfg.ScriptsDir = "scripts"
-	}
 	if len(cfg.Connections) == 0 {
 		return nil, serr.New("config has no [[connection]] entries", "config_path", path)
 	}
@@ -316,6 +317,7 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 	if abs, err := filepath.Abs(path); err == nil {
 		cfgDir = filepath.Dir(abs)
 	}
+	cfg.resolveScripts(cfgDir)
 	seen := make(map[string]bool, len(cfg.Connections))
 	for i := range cfg.Connections {
 		cn := &cfg.Connections[i]
@@ -341,6 +343,18 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 			"default_connection", cfg.DefaultConnection, "config_path", path)
 	}
 	return cfg, nil
+}
+
+// resolveScripts settles ScriptsDir (see scripts.go) against the config
+// file's directory, "" for the demo fallback, and adds the warnings: unset
+// ${VAR}s, and scripts left behind in a ./scripts dbc no longer reads.
+func (c *Config) resolveScripts(cfgDir string) {
+	var warns []string
+	c.ScriptsDir, warns = ResolveScriptsDir(c.ScriptsDir, cfgDir)
+	c.Warnings = append(c.Warnings, warns...)
+	if w := legacyScriptsWarning(c.ScriptsDir); w != "" {
+		c.Warnings = append(c.Warnings, w)
+	}
 }
 
 // checkDuration falls back to def, with a warning, for a duration setting

@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/rohanthewiz/serr"
 
+	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/export"
 	"github.com/rohanthewiz/dbc/userdata"
 )
@@ -457,31 +457,42 @@ func (h *historyModal) insert(m *Model) (tea.Cmd, bool) {
 // ---------------------------------------------------------------------------
 
 // scriptsModal lists the Go scripts in scripts_dir; picking one runs it.
+// The title names the directory (config.ScriptsDir is resolved, absolute):
+// when it was a cwd-relative "scripts", a picker that never said where it
+// looked let dbc.app search ~/scripts unnoticed.
 type scriptsModal struct {
 	modalBase
+	dir   string // for the title, ~-shortened
 	files []string
 	lst   *list
 }
 
 func (m *Model) openScripts() {
-	files, err := filepath.Glob(filepath.Join(m.cfg.ScriptsDir, "*.go"))
-	if err != nil || len(files) == 0 {
-		m.logf(logWarn, "no scripts found in %s — add .go files with func Run(s *sdb.S) error", m.cfg.ScriptsDir)
+	infos, err := userdata.ListScripts(m.cfg.ScriptsDir)
+	if err != nil {
+		m.logf(logErr, "scripts: %v", err)
 		return
 	}
-	sort.Strings(files)
-	md := &scriptsModal{files: files, lst: newList()}
-	items := make([]listItem, len(files))
-	for i, f := range files {
-		items[i] = listItem{label: filepath.Base(f), sub: "▶ run"}
+	if len(infos) == 0 {
+		m.logf(logWarn, "no scripts in %s — add .go files with func Run(s *sdb.S) error", m.cfg.ScriptsDir)
+		return
+	}
+	md := &scriptsModal{dir: config.TildePath(m.cfg.ScriptsDir), lst: newList()}
+	items := make([]listItem, len(infos))
+	for i, in := range infos {
+		md.files = append(md.files, filepath.Join(m.cfg.ScriptsDir, in.Name))
+		items[i] = listItem{label: in.Name, sub: "▶ run"}
 	}
 	md.lst.set(items)
 	m.openModal(md)
 }
 
-func (sm *scriptsModal) title() string { return "Scripts · Enter or click runs" }
+func (sm *scriptsModal) title() string { return "Scripts in " + sm.dir + " · Enter or click runs" }
+
+// size is wide enough for the title (the directory can be long), within the
+// screen.
 func (sm *scriptsModal) size(w, h int) (int, int) {
-	return 56, min(len(sm.files)+4, 20)
+	return min(max(56, width(sm.title())+6), w-4), min(len(sm.files)+4, 20)
 }
 func (sm *scriptsModal) draw(m *Model, s Surface) *caret {
 	sm.lst.draw(s.Sub(Rect{0, 1, s.W(), s.H() - 1}), m.st, m.st.panel, true, "")

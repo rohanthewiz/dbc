@@ -5,6 +5,9 @@ import (
 	"slices"
 
 	"github.com/rohanthewiz/rweb"
+
+	"github.com/rohanthewiz/dbc/config"
+	"github.com/rohanthewiz/dbc/userdata"
 )
 
 // Scripts: the Go files in scripts_dir, listed and run as the TUI's Ctrl+O
@@ -18,23 +21,26 @@ import (
 // time — a request cannot reach a .go file outside scripts_dir, and a
 // script deleted since the list was drawn is a plain "not found".
 
-// scriptFiles lists the scripts, by file name, sorted.
+// scriptFiles lists the scripts, by file name, sorted. A directory that
+// cannot be read lists nothing, and handleScripts reports why.
 func (s *Server) scriptFiles() []string {
-	paths, _ := filepath.Glob(filepath.Join(s.cfg.ScriptsDir, "*.go")) // a bad pattern is impossible here
-	names := make([]string, len(paths))
-	for i, p := range paths {
-		names[i] = filepath.Base(p)
+	infos, _ := userdata.ListScripts(s.cfg.ScriptsDir)
+	names := make([]string, len(infos))
+	for i, in := range infos {
+		names[i] = in.Name
 	}
-	slices.Sort(names)
 	return names
 }
 
+// handleScripts lists the scripts. dir is the resolved, absolute directory
+// (config.ResolveScriptsDir) and short its ~-form, for the picker's title:
+// the page always says where it looked.
 func (s *Server) handleScripts(ctx rweb.Context) error {
-	dir, err := filepath.Abs(s.cfg.ScriptsDir)
-	if err != nil {
-		dir = s.cfg.ScriptsDir
+	if _, err := userdata.ListScripts(s.cfg.ScriptsDir); err != nil {
+		return fail(ctx, err)
 	}
-	return ok(ctx, map[string]any{"dir": dir, "scripts": s.scriptFiles()})
+	return ok(ctx, map[string]any{"dir": s.cfg.ScriptsDir, "short": config.TildePath(s.cfg.ScriptsDir),
+		"scripts": s.scriptFiles()})
 }
 
 type scriptReq struct {

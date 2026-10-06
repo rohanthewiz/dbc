@@ -1178,7 +1178,10 @@
     list.addEventListener("click", (e) => { const li = e.target.closest("li[data-i]"); if (li) runIt(+li.dataset.i); });
     draw();
     dbc.modal.open({
-      title: "Scripts · Enter or click runs", body: el("div", "history", list),
+      // the title says where the list came from: scripts_dir used to be
+      // cwd-relative, and a picker that never said so hid dbc.app looking
+      // in ~/scripts. The foot keeps the full path.
+      title: "Scripts in " + (got.short || got.dir) + " · Enter or click runs", body: el("div", "history", list),
       foot: el("div", "mfoot", el("span", "hint", got.dir)),
       onKey: (e) => {
         if (e.key === "ArrowDown") { cur = Math.min(cur + 1, got.scripts.length - 1); draw(); return true; }

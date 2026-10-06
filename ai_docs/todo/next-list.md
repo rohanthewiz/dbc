@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-130
+**Next ID:** N-132
 
 ## Open
 
@@ -179,6 +179,24 @@ ten session docs in `ai_docs/claude_sessions/`
   transaction (implicit commit), Truncate is a DELETE, a text primary key
   becomes VARCHAR(255), and the text protocol's []byte values are read as
   strings by column type.
+- **N-130** · raised `2026-1006-1855-scripts-dir-resolution` · value high
+  Scripts revamp, phases 2–6 of `ai_docs/plans/scripts-revamp.md` (phase 1,
+  where scripts live, is done): the script store (save with revision
+  check, rename, trash and restore), `script.Check` (compile without
+  running, plus a lint for `m[k], _ = …`), the repo samples built in as
+  Examples and templates, the web API, script tabs in dbc web (Monaco Go,
+  error markers, `sdb` completion, Run saves first), the TUI browser with
+  `$EDITOR`, and `dbc script --check`. Until the Examples land, `./dbc` in
+  a checkout with no `dbc.toml` and an empty `~/.config/dbc/scripts` warns
+  that `./scripts` is no longer read.
+- **N-131** · raised `2026-1006-1855-scripts-dir-resolution` · value medium
+  Copying a SQLite table into bytdb fails on a boolean column: SQLite
+  hands back `adopted` as int64 0/1, and bytdb's bool column refuses it
+  ("value does not fit column type", `bytdb.coerce`). Seen with
+  `s.Copy("demo-sqlite", "demo-bytdb", "cats", …)`; the other direction
+  works. Coerce 0/1 to bool in the etl writer for a bool destination
+  column, or in bytdb's coerce.
+
 ## Roadmap
 
 Wanted, but deliberately not next. Empty at seeding: the session docs never

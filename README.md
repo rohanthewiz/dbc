@@ -56,7 +56,7 @@ number as-is. Merge `release` back into main afterwards.
 Copy `dbc.example.toml` to `./dbc.toml` (or `~/.config/dbc/config.toml`):
 
 ```toml
-scripts_dir        = "scripts"
+# scripts_dir      = "scripts"   # default ~/.config/dbc/scripts; relative = beside this file
 max_rows           = 1000   # rows fetched from the server
 max_display_rows   = 2000   # rows the results table draws (0 = all)
 conn_idle_timeout  = "1h"   # close pooled connections idle this long ("0" = never)
@@ -322,7 +322,7 @@ dragging.
 | `Ctrl+K` | Stop the running query or script, a connect still dialing — or the assistant's answer |
 | `Ctrl+A` | Open the assistant / move between it and the editor |
 | `Ctrl+E` | Export the result (format picker; file, or clipboard) |
-| `Ctrl+O` | Pick and run a Go script from `scripts_dir` |
+| `Ctrl+O` | Pick and run a Go script from `scripts_dir` (the picker's title names the directory) |
 | `Ctrl+P` | Query history of this database (`Tab`: every database) — filter, then `Enter` inserts (never runs) |
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | A new query tab · close the tab · go to tab N (see [Query tabs](#query-tabs)) |
 | `Alt+N` · `Alt+C` | A new console of the database · the database's next console (see [Consoles](#consoles-and-multi-statement-buffers)) |
@@ -1259,6 +1259,13 @@ func Run(s *sdb.S) error {
 }
 ```
 
+Scripts live in `~/.config/dbc/scripts`, beside the consoles and the
+history, unless the config sets `scripts_dir`. A relative `scripts_dir` is
+relative to the config file that sets it, not to the directory dbc starts
+in, so the TUI from any directory, `dbc web` and dbc.app all read the same
+scripts. `~` and `${VAR}`s are expanded. `dbc scripts` prints the directory
+and lists what is in it; the Ctrl+O picker names it in its title.
+
 Scripts are interpreted at runtime (via yaegi) — no compile step, edit and
 re-run. The full Go standard library is available. The `//go:build ignore`
 line just keeps `go build` from compiling script files if they live inside a
@@ -1390,6 +1397,8 @@ Everything works without the TUI, for cron jobs and shell pipelines:
 ./dbc -f report.sql                              # the SQL in a file
 ./dbc -c local-pg < report.sql                   # … or piped to stdin
 ./dbc script scripts/loop_params.go              # run a Go script
+./dbc script copy_mytable                        # … one from scripts_dir, by name
+./dbc scripts                                    # list scripts_dir (and say where it is)
 ./dbc copy --from prod --to local --create orders # copy a table across connections
 ```
 
@@ -1505,7 +1514,16 @@ input; neither do `--tx` and `-k`, since a script runs its statements itself):
 ```sh
 ./dbc -t json script scripts/loop_params.go        # one JSON array on stdout
 ./dbc -t csv -o report.csv script scripts/loop.go  # straight to a file
+./dbc script nightly_report                        # by name, from scripts_dir
+./dbc scripts -t json                              # the scripts, as JSON
 ```
+
+The argument is a file path, as it always was. If no such file exists and
+the argument has no `/`, it is looked up in `scripts_dir`, with `.go`
+optional; a file in the current directory wins over a script of the same
+name. `dbc scripts` lists name, modified time, size and description (the
+script's opening comment, to its first sentence), with the directory on
+stderr so `-t json` stays one document.
 
 On stdout, in a block format (`text`, `markdown`, `csv`, `tsv`), each result a
 script pushes with `s.Show` is written the moment it is shown, so it lands in

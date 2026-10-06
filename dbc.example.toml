@@ -1,7 +1,10 @@
 # dbc configuration — copy to ./dbc.toml or ~/.config/dbc/config.toml
 
-# Directory scanned for Go scripts (Ctrl+O in the TUI)
-scripts_dir = "scripts"
+# Directory scanned for Go scripts (Ctrl+O in the TUI and dbc web, and
+# `dbc script NAME`). Leave it out for ~/.config/dbc/scripts. A relative
+# path is relative to this file, not to where dbc is started; ~ and ${VAR}s
+# are expanded.
+# scripts_dir = "scripts"
 
 # Query results are truncated at this many rows in the client
 max_rows = 1000

@@ -2106,6 +2106,14 @@
       tabs.length > 1 ? el("button", { type: "button", class: "qx", title: "Close (Alt+W)", "data-close": t.key }, "×") : null);
       els.qtabs.append(b);
     });
+    // a connection group with no tab here: a hollow chip after the tabs,
+    // so the group stays in sight (tabgroups.js idle) — a click opens a
+    // tab on its connection rather than folding nothing
+    for (const g of groups.idle()) {
+      els.qtabs.append(el("button", { type: "button", class: "qchip idle g" + groups.color(g), "data-group": g.name,
+        title: g.name + " — " + groups.describe(g) + " · click opens a tab on " + g.conn +
+          ", right-click for the group's menu" }, g.name));
+    }
     els.qtabs.append(plus);
     markNew(plus);
   }
@@ -2130,9 +2138,11 @@
   };
 
   els.qtabs.addEventListener("click", (e) => {
-    if (e.target.closest(".qchip")) {
+    const c = e.target.closest(".qchip");
+    if (c) {
       const g = chipGroup(e);
-      if (g) groups.toggle(g);
+      if (g && c.classList.contains("idle")) newTab(g);
+      else if (g) groups.toggle(g);
       return;
     }
     const x = e.target.closest("[data-close]");

@@ -1097,6 +1097,35 @@ func tabGroups(t *testing.T, _ *env, p *rod.Page) {
 	waitConnected(t, p, "lite2")
 	strip("[wip +1],[lite2],Query 2,Renamed tab,Query 1")
 
+	// a connection group whose last tab connects elsewhere stays on the
+	// strip as an idle chip at its end — it used to vanish while still
+	// stored — and a click on it opens a tab on its connection. (wip's
+	// folded Query 1 is not drawn, so tabSel finds the last one.)
+	at(tabSel("Query 1"), proto.InputMouseButtonRight)
+	menuPick(t, p, "Add to group…")
+	menuPick(t, p, "New connection group: lite")
+	name("lite")
+	strip("[wip +1],[lite2],Query 2,Renamed tab,[lite],Query 1")
+	at(tabSel("Query 1"), proto.InputMouseButtonLeft)
+	waitConnected(t, p, "lite")
+	at(`#conns .conn-item[data-conn="lite2"]`, proto.InputMouseButtonLeft)
+	waitConnected(t, p, "lite2")
+	strip("[wip +1],[lite2],Query 2,Renamed tab,Query 1,[lite]")
+	at(`#qtabs .qchip.idle[data-group="lite"]`, proto.InputMouseButtonLeft)
+	waitConnected(t, p, "lite")
+	strip("[wip +1],[lite2],Query 2,Renamed tab,Query 1,[lite],Query 3")
+	// closing Query 3 idles lite again (Query 1 comes on screen); its
+	// chip's menu ungroups it, and Query 1 goes back to lite
+	at(tabSel("Query 3")+" [data-close]", proto.InputMouseButtonLeft)
+	strip("[wip +1],[lite2],Query 2,Renamed tab,Query 1,[lite]")
+	at(`#qtabs .qchip.idle[data-group="lite"]`, proto.InputMouseButtonRight)
+	menuPick(t, p, "Ungroup")
+	strip("[wip +1],[lite2],Query 2,Renamed tab,Query 1")
+	waitConnected(t, p, "lite2")
+	at(`#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
+	waitConnected(t, p, "lite")
+	strip("[wip +1],[lite2],Query 2,Renamed tab,Query 1")
+
 	// the chip's menu: ungroup lite2; a second click unfolds wip; its
 	// menu ungroups it too
 	at(`#qtabs .qchip[data-group="lite2"]`, proto.InputMouseButtonRight)

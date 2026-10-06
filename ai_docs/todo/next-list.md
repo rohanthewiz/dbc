@@ -142,6 +142,10 @@ ten session docs in `ai_docs/claude_sessions/`
   shows the group a new tab joins (its colour, its tooltip), and a
   right-click on + or a group's "New tab in <group>" opens a tab in any
   group, on that group's connection. A TUI port should carry both.
+  Updated `2026-1006-1804-idle-connection-group-chips`: a connection group
+  with no tab now keeps a hollow chip at the strip's end (click opens a tab
+  on its connection, right-click its menu); a TUI port should carry that
+  too.
 - **N-117** · raised `2026-1005-1450-tui-web-parity` · value low
   A light/dark switch in the TUI. dbc web has one; the TUI takes the cats
   host's palette or its own dark one (`theme.Light()` exists, used for plan
@@ -162,6 +166,13 @@ ten session docs in `ai_docs/claude_sessions/`
   lite2" and no JS errors; the step's waitFor message was not captured.
   Together with N-110 it fails most full `DBC_E2E=1` runs, so the suite no
   longer gives a clean signal after an app.js/CSS change.
+  Updated `2026-1006-1804-idle-connection-group-chips`: a lead. A new
+  `p.MustElement("#conns .conn-item…").MustClick()` in this step hung
+  forever right after a connect (sidebar redrawn, handle detached);
+  clicking by coordinates (`at()`) fixed it, and the full suite then
+  passed with "tab groups" in 2.3s (one run). The step keeps one such
+  `MustClick` (lite2, after "Remove from group wip"), and the suite has a
+  dozen more; moving them to coordinate clicks may end these timeouts.
 - **N-126** · raised `2026-1006-1346-etl-scripting-layer` · value low
   Live MySQL tests for the ETL paths. `etl/live_test.go` covers Postgres
   only; MySQL is reasoned about, not run: Create runs outside the load's

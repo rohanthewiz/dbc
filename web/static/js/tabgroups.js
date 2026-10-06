@@ -26,6 +26,13 @@
 //     because it is drawn in another order. arrange clusters each group at
 //     its first member's place — stable, and a no-op with no groups — so
 //     Alt+1…9, the saved order and what is drawn always agree.
+//   - A connection group with no tab here keeps a chip, hollow, at the end
+//     of the strip (idle): it is a rule waiting for a tab, and switching
+//     its last tab to another connection must not make it vanish — it was
+//     still stored and still claimed the next tab on its connection, with
+//     nothing on screen to say so. A click on that chip opens a tab on its
+//     connection; its right-click menu has Ungroup for a group no longer
+//     wanted. An ad-hoc group never idles: dropEmpty deletes it.
 //   - Collapse hides members, never the active tab: picking a member of a
 //     folded group (Alt+N, the group menu) shows that one tab, so the editor
 //     never shows text without its tab in the strip.
@@ -179,6 +186,15 @@
       if (!g || (i > 0 && groupOf(tabs[i - 1]) === g)) return null;
       const n = g.collapsed ? hiddenCount(g) : 0;
       return { g, text: n > 0 ? g.name + " +" + n : g.name };
+    }
+
+    // idle is the connection groups no tab here belongs to, in the order
+    // they were made. Their chips go after the tabs (see the design notes):
+    // an idle group has no member to sit in front of, and a fixed place at
+    // the end keeps the grouped tabs' order — Alt+1…9 — untouched.
+    function idle() {
+      const used = new Set(host.tabs().map(groupOf));
+      return groups.filter((g) => isConn(g) && !used.has(g));
     }
 
     // hiddenCount is how many of g's tabs a fold hides: all but the active.
@@ -338,7 +354,10 @@
       const items = [
         { head: g.name + " — " + describe(g) },
         { label: "New tab in " + g.name, act: () => host.newTab(g) },
-        { label: g.collapsed ? "Expand group" : "Collapse group", act: () => toggle(g) },
+        // an idle group has nothing to fold; a fold it already carries
+        // can still be undone, so the row never strands that state
+        ms.length || g.collapsed ? { label: g.collapsed ? "Expand group" : "Collapse group", act: () => toggle(g) }
+          : { label: "Collapse group", why: g.name + " has no open tabs" },
         { label: "Rename group…", act: () => promptName({ g }) },
         isConn(g) ? { label: "Make ad-hoc group", act: () => makeAdhoc(g) }
           : { label: "Make ad-hoc group", why: g.name + " is already ad-hoc" },
@@ -483,7 +502,7 @@
     }
 
     return {
-      groupOf, arrange, forgetTab, chip, hidden, describe, renameConn, encode, restore,
+      groupOf, arrange, forgetTab, chip, idle, hidden, describe, renameConn, encode, restore,
       tabItems, openGroupMenu, toggle, landing, connFor, ordered,
       // place puts a tab opened into g there by add's rules: out of any
       // ad-hoc group, and let past a deeper connection group that would

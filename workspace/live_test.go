@@ -937,3 +937,37 @@ END $$`, from, to))
 		}
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Server notices
+// ---------------------------------------------------------------------------
+
+// RAISE NOTICE lands in the run's notes, which both UIs write to their log:
+// each statement's in the order raised, a WARNING as Warn, and all of them
+// before the closing "completed" note.
+func TestLiveWorkspaceNotices(t *testing.T) {
+	pgOnly(t, func(t *testing.T, e liveEngine) {
+		w, _ := liveWorkspace(t, e)
+		st, err := w.Run([]string{
+			`DO $$ BEGIN RAISE NOTICE '% : %', 'dbc_live_ws', 3; END $$`,
+			`DO $$ BEGIN RAISE WARNING 'second'; END $$`,
+		}, "notices")
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		ev := st.Job().(*RunDone)
+		if ev.Err != nil {
+			t.Fatalf("run: %v", ev.Err)
+		}
+		var texts []string
+		for _, n := range ev.Notes {
+			texts = append(texts, n.Text)
+		}
+		if len(ev.Notes) != 3 ||
+			ev.Notes[0] != (Note{Info, "NOTICE: dbc_live_ws : 3"}) ||
+			ev.Notes[1] != (Note{Warn, "WARNING: second"}) ||
+			ev.Notes[2].Level != Ok {
+			t.Errorf("notes = %q, want the NOTICE, the WARNING, then the completed note", texts)
+		}
+	})
+}

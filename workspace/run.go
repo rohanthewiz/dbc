@@ -168,10 +168,13 @@ func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 	job := func() Event {
 		var res *model.Result
 		var err error
+		var notes []Note // the server's notices, in the order raised
 		wrote := false
 		for i, stmt := range stmts {
 			w.stepTo(gen, i+1)
-			res, err = w.runOnSession(ctx, conn, stmt)
+			var notices []db.Notice
+			res, notices, err = w.runOnSession(ctx, conn, stmt)
+			notes = append(notes, noticeNotes(notices)...)
 			// A failed statement may still have written (a stop
 			// mid-INSERT on a driver without transactional DDL, a
 			// multi-row write cut short), so it counts as well as
@@ -185,7 +188,10 @@ func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 				break
 			}
 		}
-		ev := &RunDone{Tag: tag, Conn: conn, Stmts: stmts, Result: res, Err: err}
+		// The notices go in first: landRun appends the closing "completed"
+		// or failure note after them, so the log reads in the order things
+		// happened, the RAISE lines before the run's outcome.
+		ev := &RunDone{Tag: tag, Conn: conn, Stmts: stmts, Result: res, Err: err, Notes: notes}
 		w.landRun(ev, gen, wrote)
 		return ev
 	}
@@ -193,6 +199,22 @@ func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 		Tag: tag, Gen: gen, Job: job,
 		Notes: []Note{notef(Info, "running %s on %s — %s", tag, conn, Preview(strings.Join(stmts, "; ")))},
 	}, nil
+}
+
+// noticeNotes turns server notices (RAISE NOTICE and its kin) into log
+// lines. A WARNING is shown as one; the chattier severities (NOTICE, INFO,
+// LOG, DEBUG) as Info, since they are what the user asked the server to
+// say, not trouble.
+func noticeNotes(ns []db.Notice) []Note {
+	var out []Note
+	for _, n := range ns {
+		l := Info
+		if n.Severity == "WARNING" {
+			l = Warn
+		}
+		out = append(out, Note{Level: l, Text: n.String()})
+	}
+	return out
 }
 
 // RunScript runs a Go script. Its s.Show and s.Print fire from the script's

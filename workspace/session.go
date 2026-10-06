@@ -61,14 +61,20 @@ func (w *Workspace) onSession(ctx context.Context, conn string, f func(*db.Sessi
 	}
 }
 
-// runOnSession executes one statement on the session pinned to conn.
-func (w *Workspace) runOnSession(ctx context.Context, conn, stmt string) (*model.Result, error) {
+// runOnSession executes one statement on the session pinned to conn. It
+// also returns the server notices the statement raised (db.Session.Notices),
+// success or failure. They are taken inside f, before onSession can drop
+// the session, and a retried attempt's replace the first's: only the
+// attempt whose outcome is returned is the one that ran.
+func (w *Workspace) runOnSession(ctx context.Context, conn, stmt string) (*model.Result, []db.Notice, error) {
 	var res *model.Result
+	var notices []db.Notice
 	err := w.onSession(ctx, conn, func(s *db.Session) (err error) {
 		res, err = s.Run(ctx, stmt)
+		notices = s.Notices()
 		return err
 	})
-	return res, err
+	return res, notices, err
 }
 
 func (w *Workspace) dropSessionLocked() {

@@ -14,6 +14,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	pgxstdlib "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 
@@ -357,6 +358,9 @@ func openPool(drv, dsn string, t config.TLSOpts, database string) (*sql.DB, erro
 	if database != "" {
 		pcfg.Database = database
 	}
+	// Server notices (RAISE NOTICE …) go to the Session holding the
+	// connection, if any (notice.go).
+	pcfg.OnNotice = dispatchNotice
 	return pgxstdlib.OpenDB(*pcfg, pgxstdlib.OptionShouldPing(pgShouldPing)), nil
 }
 
@@ -694,6 +698,12 @@ type Session struct {
 	// for the KILL that stops a canceled statement on the server; "" on the
 	// other engines, or when it could not be read (see reapCanceled).
 	killID string
+
+	// notices collects the server notices of the statement running on the
+	// session (notice.go); nil on engines without them. noticeKey is the
+	// pgx connection it is registered under, for Close to unregister.
+	notices   *noticeBuf
+	noticeKey *pgconn.PgConn
 }
 
 // Session pins a connection on the named database. The caller must Close it.
@@ -708,8 +718,11 @@ func (m *Manager) Session(ctx context.Context, name string) (*Session, error) {
 	}
 	s := &Session{m: m, name: name, conn: c}
 	if cc, ok := m.cfg.ConnByName(name); ok {
-		if drv, _ := driverFor(cc.Driver); drv == "mysql" {
+		switch drv, _ := driverFor(cc.Driver); drv {
+		case "mysql":
 			s.learnKillID(ctx)
+		case "pgx":
+			s.notices, s.noticeKey = attachNotices(c.Raw)
 		}
 	}
 	return s, nil
@@ -733,6 +746,11 @@ func (s *Session) Stateful() bool { return s.stateful }
 // driver.ErrBadConn, which Classify may retry; and a canceled statement is
 // stopped on the server, not only abandoned by the driver.
 func (s *Session) Run(ctx context.Context, stmt string, args ...any) (*model.Result, error) {
+	// Notices are per statement: whatever the previous one raised and its
+	// caller did not take is not this one's.
+	if s.notices != nil {
+		s.notices.reset()
+	}
 	var res *model.Result
 	err := s.guard(ctx, func() (err error) {
 		res, err = s.m.run(ctx, s.conn, s.name, stmt, args...)
@@ -745,6 +763,17 @@ func (s *Session) Run(ctx context.Context, stmt string, args ...any) (*model.Res
 		s.stateful = true
 	}
 	return res, err
+}
+
+// Notices returns, and forgets, the server notices the last Run received —
+// RAISE NOTICE and its kin, in the order sent. They are kept whether the
+// statement succeeded or failed: the notices a function raised on its way to
+// an exception are often what explains it. Nil on engines without notices.
+func (s *Session) Notices() []Notice {
+	if s.notices == nil {
+		return nil
+	}
+	return s.notices.take()
 }
 
 // Fault says what a failed Run means for the session it ran on, so every
@@ -845,6 +874,9 @@ func driverConnAlive(dc any) bool {
 // supported way to get a checked-out connection closed instead of pooled.
 // It also closes the sql.Conn, so there is no Conn.Close after it.
 func (s *Session) Close() error {
+	if s.noticeKey != nil {
+		noticeSinks.Delete(s.noticeKey)
+	}
 	err := s.conn.Raw(func(any) error { return driver.ErrBadConn })
 	if err == nil || errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) {
 		return nil // discarded as asked, or already closed

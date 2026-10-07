@@ -755,7 +755,13 @@ a.btnlink:hover { border-color: var(--accent); }
   user-select: none;
 }
 .qtab:hover { color: var(--fg); background: var(--panel); }
-.qtab.on { color: var(--fg); background: var(--bg); border-color: var(--line); margin-bottom: -1px; }
+/* The tab on screen stops at the strip's bottom border rather than
+   reaching 1px over it to merge with the editor: the strip scrolls
+   sideways (overflow-x: auto), which clips at its padding edge, so the
+   overlap never showed. It only hid the bottom half of a group's 2px
+   underline on this tab, the one most looked at, and gave the strip 1px
+   to scroll vertically (the web/e2e "tab groups" step checks both). */
+.qtab.on { color: var(--fg); background: var(--bg); border-color: var(--line); }
 .qtab .qt { overflow: hidden; text-overflow: ellipsis; }
 /* the console the tab shows, after its title */
 .qtab .qcon { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }

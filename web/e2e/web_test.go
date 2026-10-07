@@ -1377,6 +1377,27 @@ func tabGroups(t *testing.T, _ *env, p *rod.Page) {
 	strip("[wip],Query 1,Query 2,[lite2],Renamed tab")
 	at(tabSel("Query 2"), proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite")
+	// The tab on screen carries its group's underline as fully as the
+	// others. The strip scrolls sideways, so it clips whatever reaches past
+	// its padding edge — its own bottom border included — and the tab on
+	// screen used to reach 1px down into it (a margin meant to merge it
+	// with the editor), losing half of its 2px underline to the clip. The
+	// overhang also gave the strip 1px to scroll up and down; clickAt's
+	// scrollIntoView takes it, which would lift every tab out of the clip
+	// and hide the loss, so the strip is put back at its top first, as a
+	// person sees it. Then every grouped tab must end inside the clip, and
+	// the strip must have nothing to scroll vertically.
+	if got := evalStr(t, p, `() => {
+	  const s = document.querySelector("#qtabs");
+	  s.scrollTop = 0;
+	  const clip = s.getBoundingClientRect().bottom - parseFloat(getComputedStyle(s).borderBottomWidth);
+	  return [...s.querySelectorAll(".qtab.grp")]
+	    .map((b) => b.querySelector(".qt").textContent + (b.classList.contains("on") ? "*" : "") + ":" +
+	      Math.max(0, Math.round(b.getBoundingClientRect().bottom - clip)))
+	    .concat("scroll:" + (s.scrollHeight - s.clientHeight)).join(",");
+	}`); got != "Query 1:0,Query 2*:0,Renamed tab:0,scroll:0" {
+		t.Fatalf("grouped tabs past the strip's clip (px, * on screen): %s, want none", got)
+	}
 	at(tabSel("Query 2"), proto.InputMouseButtonRight)
 	menuPick(t, p, "Remove from group wip")
 	waitConnected(t, p, "lite")

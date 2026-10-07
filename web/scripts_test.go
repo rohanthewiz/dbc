@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -312,5 +313,103 @@ func TestScriptAPIRoute(t *testing.T) {
 	api := decodeData[sdbapi.API](t, e.api("GET", "/api/v1/script-api", "", 200))
 	if api.Package != "sdb" || !slices.ContainsFunc(api.Types, func(ty sdbapi.Type) bool { return ty.Name == "S" && len(ty.Methods) > 0 }) {
 		t.Errorf("api = %+v", api.Package)
+	}
+}
+
+// showsScript shows three results, so the results bar's switcher has
+// something to switch between.
+const showsScript = `//go:build ignore
+
+package main
+
+import "github.com/rohanthewiz/dbc/sdb"
+
+func Run(s *sdb.S) error {
+	for i := 1; i <= 3; i++ {
+		r, err := s.Query("demo-sqlite", "SELECT ? AS i", i)
+		if err != nil {
+			return err
+		}
+		s.Show(r)
+	}
+	return nil
+}
+`
+
+// A script tab's workspace never connects, and still runs a script (the
+// script opens the connections it names). Each s.Show's "result" event
+// counts the results so far; the outcome and the state carry them; and
+// show-result puts an earlier one back on the grid, with its own status.
+// An index out of range is a 400; a query run's own result ends the list.
+func TestScriptResultSets(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "shows.go"), []byte(showsScript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e := newTestEnv(t, func(c *config.Config, _ *Options) { c.ScriptsDir = dir })
+	id, s := e.open() // no connect: a script tab's workspace
+	e.api("POST", "/api/v1/ws/"+id+"/script", `{"name":"shows.go"}`, 200)
+
+	var counts []string
+	for range 3 {
+		ev, _ := s.await(t, "result")
+		r := decodeData[resultEvent](t, testEnvelope{Data: ev.Data})
+		if r.Sets == nil {
+			counts = append(counts, "-")
+		} else {
+			counts = append(counts, fmt.Sprintf("%d@%d", r.Sets.N, r.Sets.At))
+		}
+	}
+	if strings.Join(counts, ",") != "-,2@1,3@2" {
+		t.Errorf("result events' sets = %v, want none for the first, then 2@1, 3@2", counts)
+	}
+	ev, _ := s.await(t, "run")
+	run := decodeData[runEvent](t, testEnvelope{Data: ev.Data})
+	if !run.OK || run.Sets == nil || run.Sets.N != 3 || run.Sets.At != 2 {
+		t.Fatalf("run = %+v (sets %+v)", run, run.Sets)
+	}
+	st := decodeData[wsState](t, e.api("GET", "/api/v1/ws/"+id, "", 200))
+	if st.Sets == nil || st.Sets.N != 3 || st.Connected {
+		t.Fatalf("state = %+v", st)
+	}
+
+	type picked struct {
+		Sets   *resultSets `json:"sets"`
+		Status string      `json:"status"`
+	}
+	p := decodeData[picked](t, e.api("POST", "/api/v1/ws/"+id+"/show-result", `{"i":0}`, 200))
+	if p.Sets == nil || p.Sets.At != 0 || !strings.Contains(p.Status, "1 row") {
+		t.Errorf("show-result = %+v", p)
+	}
+	pg := decodeData[resultPage](t, e.api("GET", "/api/v1/ws/"+id+"/result", "", 200))
+	if len(pg.Cells) != 1 || *pg.Cells[0][0] != "1" {
+		t.Errorf("the grid after picking result 1: %+v", pg.Cells)
+	}
+	e.api("POST", "/api/v1/ws/"+id+"/show-result", `{"i":3}`, 400)
+
+	// a run with a result of its own: the script's list is over
+	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"demo-sqlite"}`, 200)
+	s.await(t, "conn")
+	e.api("POST", "/api/v1/ws/"+id+"/run", runBody("SELECT 1", 0, false), 200)
+	ev, _ = s.await(t, "run")
+	if run = decodeData[runEvent](t, testEnvelope{Data: ev.Data}); run.Sets != nil {
+		t.Errorf("a query's run still carries the script's sets: %+v", run.Sets)
+	}
+	if st = decodeData[wsState](t, e.api("GET", "/api/v1/ws/"+id, "", 200)); st.Sets != nil {
+		t.Errorf("state after a query still has sets: %+v", st.Sets)
+	}
+}
+
+// A saved tab may name a script; one that is not a script name is refused,
+// so a saved tab can never point the page outside scripts_dir. A script
+// tab boots without a console database.
+func TestSavedScriptTab(t *testing.T) {
+	e := newTestEnv(t)
+	win, _ := e.openWin()
+	e.api("PUT", "/api/v1/tabs/k1?win="+win, `{"title":"copy.go","conn":"demo-sqlite","script":"copy.go"}`, 200)
+	e.api("PUT", "/api/v1/tabs/k2?win="+win, `{"title":"x","script":"../x.go"}`, 400)
+	tabs := decodeData[[]savedTab](t, e.api("GET", "/api/v1/tabs", "", 200))
+	if len(tabs) != 1 || tabs[0].Script != "copy.go" || tabs[0].ConsoleDB != nil {
+		t.Fatalf("saved tabs = %+v", tabs)
 	}
 }

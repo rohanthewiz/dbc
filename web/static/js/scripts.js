@@ -1,0 +1,840 @@
+// dbc web — Go scripts: the scripts browser (Ctrl+O), the files script
+// tabs edit, the check that marks errors as you type, and the editor's Go
+// completion and hover from the sdb API.
+//
+// app.js owns the tabs; this module owns what a script tab edits. app.js
+// makes it with dbc.scripts.create(host) — the host is what the module
+// needs of the strip (open a tab, run in the tab on screen, redraw) — and
+// calls back into it on every edit, save and "scripts" event.
+//
+// THE FILES. A script tab's text is a .go file in scripts_dir, read and
+// written by name through web/scripts.go, never by path. Unlike a console
+// it is saved only when asked (Ctrl+S, ✓ Save, or Run, which saves first):
+// a half-typed script that autosaved would be what the TUI, cron or
+// `dbc script` run next. The save is the console protocol:
+//
+//	PUT {text, base: rev} ─► {rev}                  saved
+//	                      ─► {conflict, text, rev}  not saved: the file's
+//	                         text loads as ONE undoable edit, so Ctrl+Z
+//	                         gets this tab's text back, and the next save
+//	                         (from the new rev) writes it over
+//	                      ─► {conflict, rev: ""}    the file was deleted or
+//	                         trashed: the tab keeps its text, marked
+//	                         unsaved; the next save (base "") recreates it
+//	                      ─► 409                    base "" over a file made
+//	                         elsewhere meanwhile: loaded as a conflict
+//
+// DRAFTS. Unsaved text survives a reload, kept in this browser's
+// localStorage under the script's name with the revision it was typed
+// against:
+//
+//	dbc.script.draft.<name> = {base, text}
+//
+// Opening the script again: a draft whose base is the file's revision is
+// put back as it was (unsaved). One whose base is older — the file moved on
+// meanwhile, in the TUI or vim — is put back too, but keeps its old base,
+// so the first save meets the conflict above rather than silently writing
+// over the newer file. localStorage, not the saved tab: the draft belongs to
+// the script, wherever it is opened next, and a browser that refuses storage
+// (a private window) only loses the safety net, not the editing.
+//
+// THE CHECK. ~600 ms after typing stops, the tab's text — unsaved — goes to
+// POST /api/v1/script-check (script.Check: parse, Run's signature, yaegi's
+// compile, the map comma-ok lint; it never runs the script), and what comes
+// back becomes Monaco markers. ✓ Check does the same at once and also lists
+// the findings in the log.
+(function () {
+  "use strict";
+
+  const dbc = window.dbc;
+  const { api, log, el } = dbc;
+
+  const DRAFT = "dbc.script.draft.";
+
+  // Storage can throw (a private window, blocked site data) or come back
+  // empty; a draft is a convenience, so every touch is wrapped.
+  function readDraft(name) {
+    try {
+      const v = localStorage.getItem(DRAFT + name);
+      const d = v ? JSON.parse(v) : null;
+      return d && typeof d.text === "string" ? d : null;
+    } catch (_) { return null; }
+  }
+  function writeDraft(name, d) {
+    try {
+      if (d) localStorage.setItem(DRAFT + name, JSON.stringify(d));
+      else localStorage.removeItem(DRAFT + name);
+    } catch (_) { /* no storage: the tab still edits, a reload just loses the draft */ }
+  }
+
+  const path = (name) => "/api/v1/scripts/" + encodeURIComponent(name);
+
+  // ago is a short age for the browser's list: "now", "5m", "3h", "2d".
+  function ago(iso) {
+    const s = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (!(s >= 0)) return "";
+    if (s < 60) return "now";
+    if (s < 3600) return Math.floor(s / 60) + "m";
+    if (s < 86400) return Math.floor(s / 3600) + "h";
+    return Math.floor(s / 86400) + "d";
+  }
+
+  // goName makes what was typed a script name: ".go" added when left off.
+  // The server has the last word on what is valid (userdata.ValidScriptName).
+  const goName = (s) => (s && !/\.go$/i.test(s) ? s + ".go" : s);
+
+  // freeName is base, or base-2.go, base-3.go … — the first not in taken.
+  function freeName(base, taken) {
+    const stem = base.replace(/\.go$/i, "");
+    let n = stem + ".go", i = 2;
+    while (taken.includes(n)) n = stem + "-" + i++ + ".go";
+    return n;
+  }
+
+  // ask is a one-field prompt; it resolves to the trimmed text, or null
+  // when cancelled. The stem of a "x.go" value is selected, so typing
+  // replaces the name and keeps the extension.
+  function ask(o) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (v) => { if (!done) { done = true; resolve(v); } };
+      const input = el("input", { class: "hfilter", value: o.value || "", maxlength: "68",
+        "aria-label": o.title, spellcheck: "false", autocomplete: "off" });
+      const go = el("button", { type: "button", class: "primary" }, o.ok || "OK");
+      const no = el("button", { type: "button" }, "Cancel");
+      const submit = () => { finish(input.value.trim() || null); dbc.modal.close(); };
+      go.addEventListener("click", submit);
+      no.addEventListener("click", () => dbc.modal.close());
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } });
+      dbc.modal.open({ title: o.title, focus: input, onClose: () => finish(null),
+        body: el("div", "confirm", o.hint ? el("p", null, o.hint) : null, input), foot: el("div", "mfoot", go, no) });
+      const dot = input.value.search(/\.go$/i);
+      if (dot > 0) input.setSelectionRange(0, dot);
+    });
+  }
+
+  function create(host) {
+    // files: script name → what this window knows of its file:
+    //   rev    the revision the tab's text is based on ("" = no file: new,
+    //          or deleted since)
+    //   saved  the file's text at rev
+    //   text   the tab's text when last seen (the editor has the live copy)
+    //   missing  the file is gone (deleted or trashed); the tab keeps its text
+    //   saving   the PUT in flight
+    //   diags    the last check's findings
+    // An entry lives while a tab shows the script (forget drops it).
+    const files = new Map();
+    const key = (name) => "s:" + name;
+    const textOf = (e) => dbc.editor.docText(key(e.name)) ?? e.text;
+    const isDirty = (e) => !!e && (e.missing || textOf(e) !== e.saved);
+
+    // ── loading and saving ─────────────────────────────────────────────
+    async function load(name) {
+      if (files.has(name)) return files.get(name);
+      let text = "", rev = "", missing = false;
+      try {
+        const r = await api("GET", path(name));
+        text = r.text; rev = r.rev;
+      } catch (err) {
+        if (err.status !== 404) throw err;
+        missing = true; // a saved tab whose script is gone: it opens empty, unsaved
+      }
+      if (files.has(name)) return files.get(name); // another load won the race
+      const e = { name, rev, saved: text, text, missing, saving: null, diags: [], dirty: false };
+      const d = readDraft(name);
+      if (d && d.text !== text) {
+        e.text = d.text;
+        if (!missing && d.base !== rev) {
+          // typed against an older file: keep that base, so the first save
+          // meets the conflict (and loads the newer file as an undoable
+          // edit) rather than writing over it
+          e.rev = d.base || "";
+          log("warn", name + " changed on disk since your unsaved edits here — they are kept; " +
+            "saving first shows the file's version (Ctrl+Z then brings yours back)");
+        }
+      } else if (d) {
+        writeDraft(name, null); // the draft is what the file now says
+      }
+      e.dirty = isDirty(e);
+      files.set(name, e);
+      return e;
+    }
+
+    // changed tells the host when a script's unsaved mark flips, so the
+    // strip and the header redraw only then, not on every keystroke.
+    function changed(e, force) {
+      const d = isDirty(e);
+      if (d === e.dirty && !force) return;
+      e.dirty = d;
+      host.changed(e.name);
+    }
+
+    // adopt makes text, at rev, the file's — in the document as one edit.
+    function adopt(e, text, rev) {
+      Object.assign(e, { rev, saved: text, text, missing: false });
+      dbc.editor.replaceDoc(key(e.name), text);
+      edited(e.name); // the draft and the mark follow (replaceDoc may not fire a change)
+    }
+
+    // save writes the script when it has unsaved changes. It resolves to
+    // true when the file now holds the tab's text, false when it does not
+    // (a conflict, a failure) — Run stops on false. One PUT at a time per
+    // script: a second waits for the first's revision.
+    async function save(name) {
+      const e = files.get(name);
+      if (!e) return false;
+      while (e.saving) await e.saving.catch(() => {});
+      const text = textOf(e);
+      if (!e.missing && text === e.saved) return true;
+      const p = put(e, text);
+      e.saving = p;
+      try { return await p; } finally { if (e.saving === p) e.saving = null; }
+    }
+
+    async function put(e, text) {
+      let r;
+      try {
+        r = await api("PUT", path(e.name) + host.winQuery(), { text, base: e.rev });
+      } catch (err) {
+        if (err.status === 409) {
+          // base "" (a new or deleted file) over one made elsewhere meanwhile
+          try { const f = await api("GET", path(e.name)); adopt(e, f.text, f.rev); } catch (_) { /* reported below */ }
+          log("warn", e.name + " was created elsewhere meanwhile — this tab now shows that version; " +
+            "Ctrl+Z brings back yours, and Ctrl+S then saves it over");
+        } else {
+          log("err", "could not save " + e.name + ": " + err.message);
+        }
+        return false;
+      }
+      if (r.conflict && !r.rev) {
+        Object.assign(e, { rev: "", missing: true });
+        changed(e, true);
+        log("warn", e.name + " was deleted or moved to the trash since it was opened — this tab keeps its text; Ctrl+S saves it again");
+        return false;
+      }
+      if (r.conflict) {
+        adopt(e, r.text, r.rev);
+        log("warn", e.name + " was changed elsewhere (another window, the TUI or an editor) — this tab now shows that version; " +
+          "Ctrl+Z brings back yours, and Ctrl+S then saves it over");
+        return false;
+      }
+      Object.assign(e, { rev: r.rev, saved: text, text, missing: false });
+      storeDraft(e);
+      changed(e, true);
+      return true;
+    }
+
+    // edited is the host's call on every change to a script's document:
+    // the draft is kept (debounced), the check is scheduled, and the mark
+    // follows.
+    function edited(name) {
+      const e = files.get(name);
+      if (!e) return;
+      e.text = textOf(e);
+      clearTimeout(e.draftTimer);
+      e.draftTimer = setTimeout(() => storeDraft(e), 400);
+      clearTimeout(e.checkTimer);
+      e.checkTimer = setTimeout(() => check(name, false), 600);
+      changed(e);
+    }
+
+    // storeDraft writes e's draft now — or drops it once there is nothing
+    // unsaved to keep.
+    function storeDraft(e) {
+      clearTimeout(e.draftTimer);
+      e.draftTimer = 0;
+      const text = textOf(e);
+      writeDraft(e.name, isDirty(e) ? { base: e.rev, text } : null);
+    }
+
+    // flush writes every pending draft: the page is going away.
+    function flush() {
+      for (const e of files.values()) if (e.draftTimer) storeDraft(e);
+    }
+
+    // forget is for a script no tab shows any more. discard also throws
+    // its unsaved text away (the close prompt's Discard).
+    function forget(name, discard) {
+      const e = files.get(name);
+      if (!e) return;
+      clearTimeout(e.checkTimer);
+      if (discard) { clearTimeout(e.draftTimer); writeDraft(name, null); } else if (e.draftTimer) storeDraft(e);
+      files.delete(name);
+    }
+
+    // ── the check ──────────────────────────────────────────────────────
+    // check posts the tab's text — saved or not — to script-check and puts
+    // the findings on the document as markers. loud (✓ Check) also lists
+    // them in the log, or says the script is clean. It resolves to the
+    // diags, or null when the answer was stale or failed.
+    async function check(name, loud) {
+      const e = files.get(name);
+      if (!e) return null;
+      clearTimeout(e.checkTimer);
+      const text = textOf(e), seq = (e.checkSeq = (e.checkSeq || 0) + 1);
+      let r;
+      try {
+        r = await api("POST", "/api/v1/script-check", { name, text });
+      } catch (err) {
+        if (loud) log("err", "check " + name + ": " + err.message);
+        return null;
+      }
+      if (seq !== e.checkSeq || !files.has(name)) return null; // typed on since; a newer check is coming
+      e.diags = r.diags || [];
+      dbc.editor.setMarkers(key(name), e.diags);
+      host.checked(name, e.diags);
+      if (loud) {
+        if (!e.diags.length) log("ok", name + ": no problems — it compiles, and Run has the right signature");
+        for (const d of e.diags) log(d.severity === "error" ? "err" : "warn", name + ":" + d.line + ":" + d.col + ": " + d.msg);
+      }
+      return e.diags;
+    }
+
+    // ── what other windows did ─────────────────────────────────────────
+    // onEvent is the window-level "scripts" event (web/scripts.go
+    // scriptsEvent): a save, rename, trash or restore, in any window.
+    // Renames and trashes are applied here for this window's own too —
+    // they are idempotent, and the event may beat the response.
+    async function onEvent(d) {
+      if (browser) browser.refresh();
+      const e = files.get(d.name);
+      if (d.op === "saved") {
+        if (d.win === host.win() || !e || e.saving || isDirty(e) || d.rev === e.rev) return;
+        try {
+          const f = await api("GET", path(d.name));
+          if (!e.saving && !isDirty(e)) adopt(e, f.text, f.rev);
+        } catch (_) { /* the next save meets the conflict instead */ }
+      } else if (d.op === "renamed") {
+        renamed(d.name, d.to);
+      } else if (d.op === "trashed") {
+        if (!e || e.missing) return;
+        Object.assign(e, { rev: "", missing: true });
+        changed(e, true);
+        storeDraft(e);
+        log("warn", d.name + " was moved to the trash — its tab keeps the text; Ctrl+S saves it again, " +
+          "or restore it from Ctrl+O → Trash");
+      } else if (d.op === "restored") {
+        if (!e || !e.missing) return;
+        // back on disk: if it says what the tab says, the tab is saved
+        // again; otherwise the next save meets the 409 and loads it
+        try {
+          const f = await api("GET", path(d.name));
+          if (f.text === textOf(e)) { Object.assign(e, { rev: f.rev, saved: f.text, missing: false }); storeDraft(e); changed(e, true); }
+        } catch (_) { /* left unsaved */ }
+      }
+    }
+
+    // renamed moves a script's entry, document and draft to its new name,
+    // and the host's tabs with them.
+    function renamed(from, to) {
+      const e = files.get(from);
+      if (e && !files.has(to)) {
+        files.delete(from);
+        e.name = to;
+        files.set(to, e);
+        dbc.editor.renameDoc(key(from), key(to));
+        const d = readDraft(from);
+        writeDraft(from, null);
+        if (d) writeDraft(to, d);
+      }
+      host.renamed(from, to);
+    }
+
+    // ── actions on a script, from the browser or a tab's menu ──────────
+    async function list() {
+      return api("GET", "/api/v1/scripts");
+    }
+
+    // makeScript writes text as a new script, asking for its name
+    // (offered: suggest, made free). A name taken meanwhile asks again.
+    // Then the script opens in a tab.
+    async function makeScript(suggest, text, what) {
+      let taken = [];
+      try { taken = (await list()).scripts.map((s) => s.name); } catch (_) { /* the server will say */ }
+      let name = freeName(suggest, taken), hint = "Letters, digits, '.', '-' and '_', ending in .go.";
+      for (;;) {
+        name = goName(await ask({ title: what, hint, value: name, ok: "Create" }));
+        if (!name) return;
+        try {
+          await api("PUT", path(name) + host.winQuery(), { text, base: "" });
+          break;
+        } catch (err) {
+          if (err.status !== 409 && err.status !== 400) { log("err", what + ": " + err.message); return; }
+          hint = err.message; // taken, or not a script name: say so and ask again
+        }
+      }
+      log("ok", "created " + name + " — Ctrl+S saves, Ctrl+Enter saves and runs");
+      await edit(name);
+    }
+
+    async function newFrom(tpl) {
+      let r;
+      try {
+        r = await api("GET", "/api/v1/script-templates/" + encodeURIComponent(tpl.name) +
+          "?conn=" + encodeURIComponent(host.conn() || ""));
+      } catch (err) { log("err", "template " + tpl.name + ": " + err.message); return; }
+      await makeScript(tpl.name === "blank" ? "script.go" : tpl.name + ".go", r.text, "New script · " + tpl.title);
+    }
+
+    async function duplicateExample(name) {
+      let r;
+      try { r = await api("GET", "/api/v1/script-examples/" + encodeURIComponent(name)); } catch (err) { log("err", err.message); return; }
+      await makeScript(name, r.text, "Copy the example " + name);
+    }
+
+    async function duplicate(name) {
+      const e = files.get(name);
+      let text;
+      if (e) text = textOf(e); // the tab's text, unsaved edits and all
+      else {
+        try { text = (await api("GET", path(name))).text; } catch (err) { log("err", err.message); return; }
+      }
+      await makeScript(name, text, "Duplicate " + name);
+    }
+
+    async function edit(name) {
+      try { await load(name); } catch (err) { log("err", "could not open " + name + ": " + err.message); return; }
+      host.open(name);
+    }
+
+    async function rename(name) {
+      const to = goName(await ask({ title: "Rename " + name, value: name, ok: "Rename",
+        hint: "Letters, digits, '.', '-' and '_', ending in .go. An open tab follows it." }));
+      if (!to || to === name) return;
+      try {
+        await api("POST", path(name) + "/rename" + host.winQuery(), { to });
+      } catch (err) { log("err", "rename " + name + ": " + err.message); return; }
+      renamed(name, to);
+      log("ok", "renamed " + name + " to " + to);
+    }
+
+    // trash moves a script into .trash (restorable from the browser), no
+    // question asked: nothing is lost, and an open tab keeps its text.
+    async function trash(name) {
+      try {
+        await api("DELETE", path(name) + host.winQuery());
+      } catch (err) { log("err", "trash " + name + ": " + err.message); return; }
+      log("info", "moved " + name + " to the trash — Ctrl+O → Trash restores it");
+    }
+
+    async function restore(t) {
+      let to = "";
+      for (;;) {
+        try {
+          const r = await api("POST", "/api/v1/script-trash/" + encodeURIComponent(t.id) + "/restore" + host.winQuery(), { to });
+          log("ok", "restored " + r.name);
+          return;
+        } catch (err) {
+          if (err.status !== 409) { log("err", "restore " + t.name + ": " + err.message); return; }
+          to = goName(await ask({ title: "Restore " + t.name + " as…", value: freeName(t.name, [t.name]), ok: "Restore",
+            hint: "A script named " + (to || t.name) + " exists — restore this one under another name." }));
+          if (!to) return;
+        }
+      }
+    }
+
+    async function copyPath(name) {
+      let dir = "";
+      try { dir = (await list()).dir; } catch (err) { log("err", err.message); return; }
+      dbc.clip.copyText(dir.replace(/\/$/, "") + "/" + name, "the script's path");
+    }
+
+    // scriptItems is the menu of things to do with a script (a tab's
+    // right-click, the browser's ⋯).
+    function scriptItems(name) {
+      return [
+        { label: "Open in a tab", act: () => edit(name) },
+        { label: "Run", act: () => host.run(name) },
+        { label: "Duplicate…", act: () => duplicate(name) },
+        { label: "Rename…", key: "F2", act: () => rename(name) },
+        { label: "Move to the trash", act: () => trash(name) },
+        { label: "Copy path", act: () => copyPath(name) },
+      ];
+    }
+
+    // ── the browser ────────────────────────────────────────────────────
+    // Ctrl+O, ▷ Scripts. One list in sections, filtered by name and
+    // description as you type:
+    //
+    //	┌ Scripts · ~/.config/dbc/scripts ─────────────────────────────┐
+    //	│ ⌕ filter                                                      │
+    //	│ SCRIPTS                                                       │
+    //	│ copy_mytable.go  Copy myschema.mytable from ProdDr to dev  2h ▶ ✎ ⋯
+    //	│ EXAMPLES · read-only — Enter makes your own copy              │
+    //	│ copy_table.go    Copy a Postgres table …                   ⧉  │
+    //	│ TRASH (2) ▸                                                   │
+    //	├ [+ New ▾] ~/.config/dbc/scripts ⧉     Enter run · ⇧Enter edit │
+    //	└───────────────────────────────────────────────────────────────┘
+    //
+    // An empty scripts dir lists the templates where the scripts would be.
+    // The filter keeps the focus, so plain letters type; the commands are
+    // chords: Enter runs (Ctrl+O's old muscle memory), Shift+Enter edits,
+    // F2 renames, Ctrl/⌘+Delete trashes, Alt+N opens the New menu. On an
+    // example, a template or a trashed script, Enter does that row's one
+    // thing: copy it, start from it, restore it.
+    let browser = null;
+
+    async function browse() {
+      let got;
+      try { got = await list(); } catch (err) { log("err", "scripts: " + err.message); return; }
+      let rows = [], cur = 0, showTrash = false, seq = 0;
+      const input = el("input", { type: "search", class: "hfilter", placeholder: "filter scripts and examples…",
+        "aria-label": "Filter scripts", spellcheck: "false", autocomplete: "off" });
+      const ul = el("ul", { class: "hlist slist", role: "listbox" });
+      const newBtn = el("button", { type: "button", class: "primary", title: "A new script from a template (Alt+N)" }, "+ New ▾");
+      const dirBtn = el("button", { type: "button", class: "linkish", title: "Copy the scripts directory's path" });
+      const hint = el("span", "hint", "Enter run · ⇧Enter edit · F2 rename · Ctrl+Del trash · Esc close");
+
+      // build lays out the rows for the filter; a row with a kind can be
+      // picked, the rest are section heads
+      function build() {
+        const q = input.value.trim().toLowerCase();
+        const hit = (n, d) => !q || n.toLowerCase().includes(q) || (d || "").toLowerCase().includes(q);
+        rows = [{ head: "Scripts" }];
+        const mine = got.scripts.filter((s) => hit(s.name, s.desc));
+        for (const s of mine) rows.push({ kind: "script", name: s.name, desc: s.desc, when: ago(s.mod) });
+        if (!got.scripts.length) {
+          rows.push({ note: "none yet in " + (got.short || got.dir) + " — start one from a template:" });
+          for (const t of got.templates.filter((t) => hit(t.title, t.desc))) rows.push({ kind: "template", tpl: t, name: t.title, desc: t.desc });
+        } else if (!mine.length) {
+          rows.push({ note: "no script matches" });
+        }
+        const ex = got.examples.filter((x) => hit(x.name, x.desc));
+        if (ex.length) {
+          rows.push({ head: "Examples · read-only — Enter makes your own copy" });
+          for (const x of ex) rows.push({ kind: "example", name: x.name, desc: x.desc });
+        }
+        if (got.trash.length) {
+          rows.push({ head: "Trash (" + got.trash.length + ") " + (showTrash ? "▾" : "▸"), toggle: true });
+          if (showTrash) {
+            for (const t of got.trash.filter((t) => hit(t.name, ""))) {
+              const at = ago(t.trashed);
+              rows.push({ kind: "trash", t, name: t.name, desc: at === "now" ? "trashed just now" : "trashed " + at + " ago", when: "" });
+            }
+          }
+        }
+        const picks = rows.filter((r) => r.kind).length;
+        cur = Math.min(cur, Math.max(0, picks - 1));
+      }
+
+      const picks = () => rows.filter((r) => r.kind);
+      const current = () => picks()[cur] || null;
+
+      function actions(r) {
+        const b = (label, title, act) => {
+          const x = el("button", { type: "button", title }, label);
+          x.addEventListener("click", (ev) => { ev.stopPropagation(); act(ev); });
+          return x;
+        };
+        if (r.kind === "script") {
+          return [b("▶", "Run it (Enter)", () => go(r, "run")), b("✎", "Edit it in a tab (Shift+Enter)", () => go(r, "edit")),
+            b("⋯", "More: duplicate, rename, trash, copy path", (ev) => {
+              const at = ev.currentTarget.getBoundingClientRect();
+              dbc.menu.open(at.left, at.bottom + 2, scriptItems(r.name).map((it) => ({ ...it, act: () => { dbc.modal.close(); it.act(); } })));
+            })];
+        }
+        if (r.kind === "example") return [b("⧉ Copy", "Make an editable copy in your scripts (Enter)", () => go(r, "run"))];
+        if (r.kind === "template") return [b("+ New", "A new script from this template (Enter)", () => go(r, "run"))];
+        return [b("↺ Restore", "Put it back in the scripts directory (Enter)", () => go(r, "run"))];
+      }
+
+      function draw() {
+        ul.replaceChildren();
+        let i = 0;
+        for (const r of rows) {
+          if (r.head !== undefined) {
+            const li = el("li", { class: "shead" + (r.toggle ? " toggle" : "") }, r.head);
+            if (r.toggle) li.addEventListener("click", () => { showTrash = !showTrash; build(); draw(); input.focus(); });
+            ul.append(li);
+            continue;
+          }
+          if (r.note) { ul.append(el("li", "snote", r.note)); continue; }
+          const n = i++;
+          const li = el("li", { class: "srow " + r.kind + (n === cur ? " cur" : ""), role: "option", "data-i": String(n),
+            "data-name": r.name, title: r.desc || "" },
+          el("span", "sname", r.name), el("span", "sdesc", r.desc || ""), el("span", "swhen", r.when || ""),
+          el("span", "sact", ...actions(r)));
+          ul.append(li);
+        }
+        const c = ul.querySelector("li.cur");
+        if (c) c.scrollIntoView({ block: "nearest" });
+      }
+
+      // go does what a row is for: run/copy/start/restore ("run"), or edit
+      async function go(r, what) {
+        if (!r) return;
+        dbc.modal.close();
+        if (r.kind === "script") {
+          if (what === "edit") await edit(r.name);
+          else host.run(r.name);
+        } else if (r.kind === "example") {
+          await duplicateExample(r.name);
+        } else if (r.kind === "template") {
+          await newFrom(r.tpl);
+        } else if (r.kind === "trash") {
+          await restore(r.t);
+        }
+      }
+
+      function newMenu(x, y) {
+        dbc.menu.open(x, y, [{ head: "new script from" }].concat(got.templates.map((t) => ({
+          label: t.title, act: () => { dbc.modal.close(); newFrom(t); },
+        }))));
+      }
+
+      input.addEventListener("input", () => { cur = 0; build(); draw(); });
+      ul.addEventListener("click", (ev) => {
+        const li = ev.target.closest("li[data-i]");
+        if (!li) return;
+        cur = Number(li.dataset.i);
+        draw();
+      });
+      ul.addEventListener("dblclick", (ev) => {
+        const li = ev.target.closest("li[data-i]");
+        if (li && !ev.target.closest(".sact")) go(picks()[Number(li.dataset.i)], "edit");
+      });
+      newBtn.addEventListener("click", () => {
+        const at = newBtn.getBoundingClientRect();
+        newMenu(at.left, at.bottom + 2);
+      });
+      dirBtn.textContent = (got.short || got.dir) + " ⧉";
+      dirBtn.addEventListener("click", () => dbc.clip.copyText(got.dir, "the scripts directory's path"));
+
+      build();
+      draw();
+      // the title names the resolved directory: scripts_dir used to be
+      // cwd-relative, and a picker that never said where it looked hid
+      // dbc.app looking in ~/scripts
+      dbc.modal.open({
+        title: "Scripts · " + (got.short || got.dir), cls: "wide scripts", focus: input,
+        body: el("div", "history", input, ul),
+        foot: el("div", "mfoot", newBtn, dirBtn, hint),
+        onKey: (e) => {
+          const n = picks().length;
+          if (e.key === "ArrowDown") { cur = Math.min(cur + 1, n - 1); draw(); return true; }
+          if (e.key === "ArrowUp") { cur = Math.max(cur - 1, 0); draw(); return true; }
+          if (e.key === "Enter") { go(current(), e.shiftKey ? "edit" : "run"); return true; }
+          const r = current();
+          if (e.key === "F2" && r && r.kind === "script") { dbc.modal.close(); rename(r.name); return true; }
+          if ((e.key === "Delete" || e.key === "Backspace") && (e.ctrlKey || e.metaKey) && r && r.kind === "script") {
+            trash(r.name);
+            return true;
+          }
+          if (e.altKey && e.code === "KeyN") {
+            const at = newBtn.getBoundingClientRect();
+            newMenu(at.left, at.bottom + 2);
+            return true;
+          }
+          return false;
+        },
+        onClose: () => { browser = null; host.focus(); },
+      });
+      // a change in any window (the "scripts" event) re-lists, keeping the
+      // highlighted row by name
+      browser = {
+        async refresh() {
+          const n = ++seq;
+          let next;
+          try { next = await list(); } catch (_) { return; }
+          if (n !== seq || !browser) return;
+          const was = current();
+          got = next;
+          build();
+          const i = was ? picks().findIndex((r) => r.kind === was.kind && r.name === was.name) : -1;
+          if (i >= 0) cur = i;
+          draw();
+        },
+      };
+    }
+
+    // ── Go completion and hover, from the sdb API ──────────────────────
+    // GET /api/v1/script-api is package sdb as data (sdb/sdbapi): S's
+    // methods, the package funcs, and the types a script meets (Result,
+    // CopyOpts, …) with fields and methods, each with its signature and doc
+    // comment. Without gopls there are no real types, so the providers read
+    // the text around the caret:
+    //
+    //	s.▮            S's methods (s: Run's parameter, whatever it is named)
+    //	sdb.▮          the package's funcs and types
+    //	res.▮          res's type's fields and methods, where res is
+    //	               assigned from a call whose first result is a known
+    //	               type (res, err := s.Query(…)), or declared as one
+    //	               (var o sdb.CopyOpts, o := sdb.CopyOpts{…})
+    //	sdb.CopyOpts{▮ the type's fields
+    //	s.Query("▮     the connection names, inside a connection argument
+    //	               (sdbapi's connArgs: Copy's src and dst, Query's conn …)
+    let sdbAPI = null;
+    const apiOnce = () => sdbAPI || (sdbAPI = api("GET", "/api/v1/script-api").catch((err) => { sdbAPI = null; throw err; }));
+
+    function register(monaco) {
+      // a script tab shown before Monaco loaded was checked into a
+      // textarea, which cannot draw markers: check it again now
+      for (const name of files.keys()) check(name, false);
+      const K = monaco.languages.CompletionItemKind;
+      monaco.languages.registerCompletionItemProvider("go", {
+        triggerCharacters: [".", "\""],
+        async provideCompletionItems(model, pos) {
+          let A;
+          try { A = await apiOnce(); } catch (_) { return { suggestions: [] }; }
+          const line = model.getLineContent(pos.lineNumber).slice(0, pos.column - 1);
+          const before = model.getValueInRange(new monaco.Range(1, 1, pos.lineNumber, pos.column));
+          const recv = receiver(model.getValue());
+          const S = typeOf(A, "S");
+          const rangeBack = (n) => new monaco.Range(pos.lineNumber, pos.column - n, pos.lineNumber, pos.column);
+
+          // inside a string: connection names where the argument is one,
+          // nothing otherwise
+          const ca = /\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\(\s*("(?:[^"\\]|\\.)*"\s*,\s*)?"([^"]*)$/.exec(line);
+          if (ca && ca[1] === recv && S) {
+            const m = (S.methods || []).find((f) => f.name === ca[2]);
+            if (m && (m.connArgs || []).includes(ca[3] ? 1 : 0)) {
+              return { suggestions: host.connNames().map((c) => ({ label: c, kind: K.Value, insertText: c,
+                detail: "connection", range: rangeBack(ca[4].length) })) };
+            }
+          }
+          if (inString(line)) return { suggestions: [] };
+
+          const mem = /([A-Za-z_]\w*)\.(\w*)$/.exec(line);
+          if (mem) {
+            const range = rangeBack(mem[2].length);
+            if (mem[1] === "sdb") {
+              return { suggestions: (A.funcs || []).map((f) => funcItem(monaco, f, K.Function, range))
+                .concat((A.types || []).map((t) => ({ label: t.name, kind: K.Struct, insertText: t.name, range,
+                  detail: t.of ? "= " + t.of : t.kind, documentation: t.doc ? { value: t.doc } : undefined }))) };
+            }
+            const t = mem[1] === recv ? S : typeOf(A, varType(A, model.getValue(), mem[1], recv));
+            if (!t) return { suggestions: [] };
+            return { suggestions: (t.fields || []).map((f) => ({ label: f.name, kind: K.Field, insertText: f.name, range,
+              detail: f.type, documentation: f.doc ? { value: f.doc } : undefined }))
+              .concat((t.methods || []).map((f) => funcItem(monaco, f, K.Method, range))) };
+          }
+
+          // a composite literal's field names: sdb.CopyOpts{To: "x", ▮
+          const lit = /sdb\.([A-Za-z_]\w*)\{([^{}]*)$/.exec(before);
+          if (lit && /(^|[,{\n])\s*(\w*)$/.test(lit[2])) {
+            const t = typeOf(A, lit[1]);
+            const word = /(\w*)$/.exec(line)[1];
+            if (t && t.fields) {
+              return { suggestions: t.fields.map((f) => ({ label: f.name, kind: K.Field, insertText: f.name + ": ",
+                detail: f.type, documentation: f.doc ? { value: f.doc } : undefined, range: rangeBack(word.length) })) };
+            }
+          }
+          return { suggestions: [] };
+        },
+      });
+
+      monaco.languages.registerHoverProvider("go", {
+        async provideHover(model, pos) {
+          const w = model.getWordAtPosition(pos);
+          if (!w) return null;
+          let A;
+          try { A = await apiOnce(); } catch (_) { return null; }
+          const line = model.getLineContent(pos.lineNumber);
+          const base = /([A-Za-z_]\w*)\.$/.exec(line.slice(0, w.startColumn - 1));
+          if (!base) return null;
+          const recv = receiver(model.getValue());
+          let doc = null;
+          if (base[1] === "sdb") {
+            const f = (A.funcs || []).find((x) => x.name === w.word);
+            const t = typeOf(A, w.word);
+            if (f) doc = [f.sig, f.doc];
+            else if (t) doc = ["type " + t.name + (t.of ? " = " + t.of : " " + t.kind), t.doc];
+          } else {
+            const t = base[1] === recv ? typeOf(A, "S") : typeOf(A, varType(A, model.getValue(), base[1], recv));
+            const m = t && (t.methods || []).find((x) => x.name === w.word);
+            const f = t && (t.fields || []).find((x) => x.name === w.word);
+            if (m) doc = [m.sig, m.doc];
+            else if (f) doc = [f.name + " " + f.type, f.doc];
+          }
+          if (!doc) return null;
+          return {
+            range: new monaco.Range(pos.lineNumber, w.startColumn, pos.lineNumber, w.endColumn),
+            contents: [{ value: "```go\n" + doc[0] + "\n```" }].concat(doc[1] ? [{ value: doc[1] }] : []),
+          };
+        },
+      });
+    }
+
+    // funcItem is a method or func as a completion: Name($0) with the
+    // caret between the parentheses when it takes arguments.
+    function funcItem(monaco, f, kind, range) {
+      const takes = (f.params || []).length > 0;
+      return {
+        label: f.name, kind, range, detail: f.sig, documentation: f.doc ? { value: f.doc } : undefined,
+        insertText: f.name + (takes ? "($0)" : "()"),
+        insertTextRules: takes ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
+      };
+    }
+
+    return {
+      key, load, save, edited, check, flush, forget, onEvent, browse, rename, duplicate, trash, copyPath, register,
+      entry: (name) => files.get(name) || null,
+      dirty: (name) => isDirty(files.get(name)),
+      diags: (name) => (files.get(name) || {}).diags || [],
+      items: scriptItems,
+    };
+  }
+
+  // receiver is the name Run gives its *sdb.S, "s" when it cannot be read.
+  function receiver(text) {
+    const m = /func\s+Run\s*\(\s*([A-Za-z_]\w*)\s+\*\s*sdb\.S\s*\)/.exec(text);
+    return m ? m[1] : "s";
+  }
+
+  const typeOf = (A, name) => (name ? (A.types || []).find((t) => t.name === name) || null : null);
+
+  // inString: the line, up to the caret, ends inside a "…" or `…` literal
+  // (or a // comment) — counted naively, which is right for the one-line
+  // strings scripts mostly have.
+  function inString(line) {
+    let q = "";
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (q) {
+        if (c === "\\" && q === "\"") i++;
+        else if (c === q) q = "";
+      } else if (c === "\"" || c === "`") q = c;
+      else if (c === "/" && line[i + 1] === "/") return true;
+    }
+    return !!q;
+  }
+
+  // varType guesses the sdb type a variable holds from how it is made:
+  //   v, err := s.Query(…)    the first result of S.Query's signature
+  //   v := sdb.CopyOpts{…}    v := &sdb.CopyOpts{…}    var v sdb.CopyOpts
+  // The last such line before the end wins; anything else is unknown ("").
+  function varType(A, text, v, recv) {
+    const id = v.replace(/[^\w]/g, "");
+    if (!id) return "";
+    let found = "";
+    const call = new RegExp("\\b" + id + "\\s*(?:,\\s*\\w+\\s*)?:?=\\s*([A-Za-z_]\\w*)\\.([A-Za-z_]\\w*)\\(", "g");
+    for (let m; (m = call.exec(text));) {
+      const owner = m[1] === recv ? typeOf(A, "S") : null;
+      const f = owner ? (owner.methods || []).find((x) => x.name === m[2])
+        : m[1] === "sdb" ? (A.funcs || []).find((x) => x.name === m[2]) : null;
+      if (f) found = firstResult(f.sig);
+    }
+    const decl = new RegExp("\\b" + id + "\\s*:=\\s*&?sdb\\.([A-Za-z_]\\w*)\\s*\\{|\\bvar\\s+" + id + "\\s+\\*?sdb\\.([A-Za-z_]\\w*)", "g");
+    for (let m; (m = decl.exec(text));) found = m[1] || m[2];
+    return found;
+  }
+
+  // firstResult is a signature's first result type, bare: "*Result" and
+  // "(*Result, error)" both give "Result"; a slice or map gives "".
+  function firstResult(sig) {
+    // skip the receiver and the parameter list, by parentheses
+    let i = sig.indexOf("(");
+    if (sig.startsWith("func (")) i = sig.indexOf("(", sig.indexOf(")") + 1);
+    let depth = 0, j = i;
+    for (; j < sig.length; j++) {
+      if (sig[j] === "(") depth++;
+      else if (sig[j] === ")" && --depth === 0) break;
+    }
+    let rest = sig.slice(j + 1).trim();
+    if (rest.startsWith("(")) rest = rest.slice(1).split(",")[0];
+    rest = rest.trim().replace(/^\*/, "").replace(/^sdb\./, "");
+    return /^[A-Za-z_]\w*$/.test(rest) ? rest : "";
+  }
+
+  dbc.scripts = { create, firstResult, varType, receiver, inString };
+})();

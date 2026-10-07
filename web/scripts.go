@@ -16,6 +16,7 @@ import (
 	"github.com/rohanthewiz/dbc/scripts"
 	"github.com/rohanthewiz/dbc/sdb/sdbapi"
 	"github.com/rohanthewiz/dbc/userdata"
+	"github.com/rohanthewiz/dbc/workspace"
 )
 
 // Scripts: the Go files in scripts_dir — listed, read, written, renamed,
@@ -43,6 +44,7 @@ import (
 //	GET    /api/v1/script-templates/:name     a template, filled with connections
 //	GET    /api/v1/script-api                 the sdb API, for completion
 //	POST   /api/v1/ws/:id/script              {name}: run the saved file
+//	POST   /api/v1/ws/:id/show-result         {i}: the grid to the run's ith s.Show
 //
 // Why script-check and not scripts/check: rweb's router is a radix tree
 // that does not backtrack. With a literal child such as "examples/" beside
@@ -379,4 +381,30 @@ func (s *Server) handleScript(ctx rweb.Context) error {
 	}
 	s.launch(t, st)
 	return ok(ctx, map[string]any{"tag": st.Tag})
+}
+
+// handleShowResult is POST /api/v1/ws/:id/show-result {i}: the grid back
+// on result i (0-based, among the kept ones) of the last script run's
+// s.Show results — the results bar's "Result 1 · 2 · 3". The pick is the
+// workspace's (it becomes LastResult), so the grid, its copies and
+// exports, and the assistant all see the same result; the page then
+// fetches it as after any result.
+func (s *Server) handleShowResult(ctx rweb.Context) error {
+	t, err := s.hub.get(ctx.Request().PathParam("id"))
+	if err != nil {
+		return fail(ctx, err)
+	}
+	var req struct {
+		I int `json:"i"`
+	}
+	if err = decode(ctx, &req); err != nil {
+		return fail(ctx, err)
+	}
+	if err = t.ws.ShowScriptResult(req.I); err != nil {
+		return fail(ctx, err)
+	}
+	// the status bar's summary of the picked result, as a run's "run"
+	// event carries for its own
+	r := t.ws.LastResult()
+	return ok(ctx, map[string]any{"sets": scriptSets(t.ws), "status": workspace.ResultStatus(r, s.cfg.MaxRows, s.shown(r))})
 }

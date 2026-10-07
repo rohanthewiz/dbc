@@ -4,7 +4,7 @@ Raised 2026-10-06. The ask: dbc.app looks for scripts in `~/scripts`; the
 scripts UI needs a revamp; scripts should be creatable and editable from the
 app, not only from an outside editor.
 
-This is a plan. **Phases 1–3 are done** (2026-10-06); phases 4–6 are
+This is a plan. **Phases 1–4 are done** (2026-10-06); phases 5–6 are
 not started. The decisions table was accepted as recommended.
 
 ## The one-paragraph version
@@ -404,6 +404,64 @@ Each phase ships alone and leaves main releasable.
    go-rod e2e (`web/e2e`, `DBC_E2E=1`): new from template → edit → see a
    marker → fix → save → run → result in the grid → rename → trash →
    restore.
+   **Outcome (2026-10-06).**
+   - Script tabs (`web/static/js/app.js` "script tabs"). A tab with
+     `script: name` edits that file in Monaco's Go mode. Its title is the
+     name, and a double-click renames the script, not the tab. It is saved
+     in a new `tabs.script` column (`ADD COLUMN IF NOT EXISTS`), and
+     `saveTab` refuses a name `ValidScriptName` would. One tab per script:
+     opening it again goes to that tab.
+   - A script tab never connects. Its workspace still runs the script.
+     The sidebar's Tables pane says so, a click on a connection inserts its
+     name as a Go string, and Connect from the Connections menu is refused
+     with a pointer to a query tab. `.script-mode` hides Run all, Explain,
+     the rows box and ERD, and shows ✓ Check and ⤓ Save. The header reads
+     `▷ name.go ● · 1 error`.
+   - `web/static/js/scripts.js` (new) holds the file store, the browser,
+     the check and Go completion/hover. app.js makes it with
+     `dbc.scripts.create(host)`, the pattern tabgroups.js uses.
+     - Save is the console protocol. A deleted or trashed file is a
+       conflict with rev "": the tab keeps its text, marked unsaved. A 409
+       on `base ""` (made elsewhere meanwhile) loads that file as a
+       conflict.
+     - Drafts are kept in localStorage as `dbc.script.draft.<name>` =
+       `{base, text}`. A draft against an older revision keeps that base,
+       so the first save meets the conflict instead of overwriting.
+     - Run saves first. A save that does not land stops the run.
+     - Check runs 600 ms after typing stops, on the unsaved text; its
+       diags become markers. ✓ Check also lists them in the log.
+     - Completion reads the text, not types: `s.` (whatever Run calls its
+       `*sdb.S`), `sdb.`, a variable assigned from a call (its first
+       result type) or declared as an sdb type, composite-literal fields,
+       and connection names inside a `connArgs` string. Hover shows a
+       signature and doc.
+   - **Browser keys differ from the sketch.** The filter keeps the focus,
+     so bare E/N/Del would type into it. They are chords instead: Enter
+     runs, Shift+Enter edits, F2 renames, Ctrl/⌘+Delete trashes, Alt+N
+     opens New. Each row has ▶ ✎ ⋯ (or ⧉ Copy / + New / ↺ Restore) on
+     hover.
+     - An empty dir lists the templates under Scripts.
+     - Enter on an example duplicates it; on a trashed script it
+       restores, asking for another name on a 409.
+     - Trash asks nothing, since it can be undone.
+   - Several `s.Show`s. The workspace keeps the newest
+     `MaxScriptResults` (20) of a script run's results, counting the
+     dropped ones (`ScriptResults`), and `ShowScriptResult` moves
+     LastResult between them. `POST /api/v1/ws/:id/show-result {i}`
+     returns `{sets, status}`. The "result" and "run" events and the state
+     carry `sets {n, at, cut}` when there are two or more, and the results
+     bar draws "Result 1 · 2 · 3". A query's own result ends the list.
+   - The Monaco vendor script keeps `basic-languages/go` (3.4 KB).
+   - editor.js: documents can have a fixed language (`useDoc(key, text,
+     "go")`), which `setDriver` and the statement marker leave alone.
+     `setMarkers`, `ready(fn)`, Ctrl+S → `dbc.cmd.save`, and a `dbcScript`
+     context key that turns off Ctrl+X explain in a script tab.
+   - Ctrl+S in a query tab flushes its console and tab instead of opening
+     the browser's save dialog.
+   - Also fixed N-110. `saveTab` on the active tab cleared the debounced
+     timer that also carried the console save. A rename within 600 ms of
+     typing left the console file empty, and only the page's goodbye
+     request had been hiding it. `saveTab` now saves the console too.
 5. **TUI.** The browser and `$EDITOR`. Checked with the TUI e2e harness
    (`tui/e2e`), with `EDITOR` set to a script that edits the file.
 6. **Docs and the skill.** The README scripting section rewritten around the

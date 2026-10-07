@@ -7,14 +7,16 @@
 # Keep MONACO_VERSION in sync with MONACO_VERSION in web/static/js/editor.js.
 # gonotes vendors the same version, so the author's apps share one editor.
 #
-# TRIMMED. The full min build is ~14 MB; dbc edits SQL and nothing else, so
-# only what a SQL editor loads is kept (~4.5 MB):
+# TRIMMED. The full min build is ~14 MB; dbc edits SQL and Go scripts and
+# nothing else, so only what those two editors load is kept (~4.5 MB):
 #
 #   vs/loader.js                     the AMD loader
 #   vs/editor/editor.main.{js,css}   the editor itself
 #   vs/base/worker/workerMain.js     the editor worker (diffs, word suggestions)
 #   vs/base/browser/ui/codicons/…    the icon font the editor's widgets use
 #   vs/basic-languages/{sql,mysql,pgsql}  the three SQL tokenizers
+#   vs/basic-languages/go            the Go tokenizer, for script tabs (a few
+#                                    KB, loaded only when a Go model is made)
 #
 # Dropped: the TypeScript/CSS/HTML/JSON language services (vs/language, most
 # of the size), every other tokenizer, and the translated UI strings. Monaco
@@ -50,6 +52,7 @@ KEEP=(
   basic-languages/sql/sql.js
   basic-languages/mysql/mysql.js
   basic-languages/pgsql/pgsql.js
+  basic-languages/go/go.js
 )
 
 # Replace the vendored copy wholesale so removed files don't linger

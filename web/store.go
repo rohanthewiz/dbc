@@ -61,6 +61,11 @@ type Tab struct {
 	// is the console's file; Buffer keeps a copy, so a dbc from before
 	// consoles still opens the tab as it was.
 	Console string `json:"console"`
+	// Script makes it a script tab: the name of the Go script in
+	// scripts_dir it edits (scripts.go). Its text is the script's file,
+	// saved only when asked (Ctrl+S, or Run); Buffer stays "" and Conn is
+	// only where the tab was when it opened. "" for a query tab.
+	Script string `json:"script"`
 }
 
 // SavedConn is a row of the conns table, where dbc web kept connections
@@ -111,6 +116,8 @@ var storeSchema = []string{
 	// refuse. Before v0.21.0 the name had a table of its own,
 	// tab_consoles — see migrateTabConsoles.
 	`ALTER TABLE tabs ADD COLUMN IF NOT EXISTS console TEXT NOT NULL DEFAULT ''`,
+	// a script tab's script name (Tab.Script), added the same way
+	`ALTER TABLE tabs ADD COLUMN IF NOT EXISTS script TEXT NOT NULL DEFAULT ''`,
 	`CREATE TABLE IF NOT EXISTS conns (
 		name    TEXT PRIMARY KEY,
 		driver  TEXT NOT NULL,
@@ -262,7 +269,7 @@ func (s *Store) Tabs() ([]Tab, error) {
 	ctx, cancel := opCtx()
 	defer cancel()
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, title, conn, buffer, updated, console FROM tabs ORDER BY id`)
+		`SELECT id, title, conn, buffer, updated, console, script FROM tabs ORDER BY id`)
 	if err != nil {
 		return nil, serr.Wrap(err, "op", "list tabs")
 	}
@@ -270,7 +277,7 @@ func (s *Store) Tabs() ([]Tab, error) {
 	var out []Tab
 	for rows.Next() {
 		var t Tab
-		if err = rows.Scan(&t.ID, &t.Title, &t.Conn, &t.Buffer, &t.Updated, &t.Console); err != nil {
+		if err = rows.Scan(&t.ID, &t.Title, &t.Conn, &t.Buffer, &t.Updated, &t.Console, &t.Script); err != nil {
 			return nil, serr.Wrap(err, "op", "scan tab")
 		}
 		out = append(out, t)
@@ -294,12 +301,12 @@ func (s *Store) SaveTab(t Tab) error {
 	// one row now (see storeSchema), so one statement: the transaction the
 	// two-table write needed is gone with tab_consoles
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO tabs (id, title, conn, buffer, updated, console) VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO tabs (id, title, conn, buffer, updated, console, script) VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (id) DO UPDATE SET
 			title = EXCLUDED.title, conn = EXCLUDED.conn,
 			buffer = EXCLUDED.buffer, updated = EXCLUDED.updated,
-			console = EXCLUDED.console`,
-		t.ID, t.Title, t.Conn, t.Buffer, t.Updated, t.Console)
+			console = EXCLUDED.console, script = EXCLUDED.script`,
+		t.ID, t.Title, t.Conn, t.Buffer, t.Updated, t.Console, t.Script)
 	return wrap(err, "op", "save tab", "tab", t.ID)
 }
 

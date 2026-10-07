@@ -16,6 +16,9 @@
 //	DBC_E2E_HEADFUL=1   show the browser window, to watch a run or debug one
 //	DBC_LIVE_PG_DSN     also check the Postgres schema picker (the same DSN
 //	                    the db/live_* tests use; see the live-db recipe)
+//	DBC_E2E_STEPS       only the steps whose names contain one of these
+//	                    comma-separated words (sign-in and boot always run),
+//	                    e.g. DBC_E2E_STEPS=script
 //
 // Everything else is self-contained: the test builds dbc, writes a config
 // with two file-backed SQLite connections under a temporary HOME, seeds them

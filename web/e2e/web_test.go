@@ -55,8 +55,27 @@ func TestWeb(t *testing.T) {
 		{"code blocks highlighted", codeHighlight},
 		{"tab groups", tabGroups},
 		{"fold the recent conversations", foldRecentChats},
+		{"script tabs", scriptTabs},
+	}
+	// DBC_E2E_STEPS narrows a run to the steps whose names contain one of
+	// its comma-separated words (plus the sign-in and boot every step
+	// stands on), for iterating on one step without the whole suite
+	only := strings.Split(os.Getenv("DBC_E2E_STEPS"), ",")
+	wanted := func(name string) bool {
+		if only[0] == "" || name == "signed-out page" || name == "boot" {
+			return true
+		}
+		for _, w := range only {
+			if w != "" && strings.Contains(name, w) {
+				return true
+			}
+		}
+		return false
 	}
 	for _, s := range steps {
+		if !wanted(s.name) {
+			continue
+		}
 		ok := t.Run(s.name, func(t *testing.T) {
 			// rod's Must* calls panic; recovering here turns one into this
 			// step's failure (with the page's state) instead of a crash
@@ -729,6 +748,17 @@ func tabsSurviveReload(t *testing.T, _ *env, p *rod.Page) {
 	waitFor(t, p, "the tab saved", `async () => {
 	  const r = await (await fetch("/api/v1/tabs")).json();
 	  return (r.data || []).some((t) => t.title === "Renamed tab" && t.buffer === "SELECT 42 AS answer");
+	}`)
+	// and its console file, which is what a reload reads the text from.
+	// Checked before the reload on purpose: the page's goodbye also saves
+	// the shown console, which hid N-110 — the rename's tab save dropped
+	// the pending console save, so the file stayed empty until then
+	waitFor(t, p, "the console file saved", `async () => {
+	  const c = dbc.state.tab.cdb, name = dbc.state.tab.console;
+	  if (!c || !name) return false;
+	  const r = await (await fetch("/api/v1/consoles/" + encodeURIComponent(c.host) + "/" +
+	    encodeURIComponent(c.database) + "/" + encodeURIComponent(name))).json();
+	  return (r.data || {}).text === "SELECT 42 AS answer";
 	}`)
 
 	p.MustReload()

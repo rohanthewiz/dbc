@@ -40,7 +40,7 @@
 
   // tabs are the query tabs, in strip order:
   //   {key, title, conn, buffer, ws, busy, done, failed, stateful, status, level, grid, planOpen, lost,
-  //    cdb, console}
+  //    cdb, console, script}
   // key is the saved tab's id (web.bytdb); ws its workspace, "" until
   // first shown. buffer is kept only while the tab is in the background.
   // cdb and console: the SQL console the tab shows — its database
@@ -51,6 +51,9 @@
   // lost: another browser tab of dbc web took this tab over (the server
   // refused a save, or a reclaim, with "held"), so its copy here is no
   // longer saved — see markLost.
+  // script: set, it is a SCRIPT TAB — it edits that Go script (scripts.js)
+  // rather than SQL, its title is the script's name, and it never connects:
+  // a script names its own connections (see "script tabs" below).
   let tabs = [];
   const tabOf = (ws) => tabs.find((t) => t.ws && t.ws === ws);
 
@@ -62,6 +65,7 @@
     dbFilter: $("db-filter"), tableDb: $("table-db"), dbList: $("db-list"),
     active: $("active-conn"), stateful: $("stateful"), busy: $("busy"),
     run: $("run"), runAll: $("run-all"), stop: $("stop"), history: $("history-btn"), scripts: $("scripts-btn"),
+    check: $("check-btn"), save: $("save-btn"), rsets: $("rsets"),
     qtabs: $("qtabs"), theme: $("theme-btn"), help: $("help-btn"),
     splitter: $("splitter"), work: document.querySelector(".work"),
     app: document.querySelector(".app"), sidebar: document.querySelector(".sidebar"),
@@ -282,6 +286,11 @@
       : !total ? "" : pick === null ? "· " + total : "· " + shown.length + " / " + total;
     if (loadingSchema) {
       els.tables.append(el("li", "none", "loading " + schemaLabel(pick === null ? "all schemas" : pick) + "…"));
+      return;
+    }
+    if (state.tab && state.tab.script) {
+      const why = "a script names its own connections — click one above to put its name in at the caret";
+      els.tables.append(el("li", { class: "none", title: why }, why));
       return;
     }
     if (!shown.length) {
@@ -717,6 +726,8 @@
         onConsoleSaved(d);
       } else if (ev.type === "consoles") {
         onConsolesChanged(d);
+      } else if (ev.type === "scripts") {
+        scriptKit.onEvent(d);
       } else if (ev.type.startsWith("chat.")) dbc.chat.onEvent(ev.type, d);
       return;
     }
@@ -740,12 +751,14 @@
           dbc.grid.load();
           if (dbc.cmd.showResults) dbc.cmd.showResults();
         }
+        drawSets(d.sets);
         if (dbc.cmd.onRunPlan) dbc.cmd.onRunPlan(d);
         dbc.chat.refresh(); // the last statement, error or result moved
         break;
       case "result": // a script's s.Show, mid-run
         dbc.grid.load();
         if (dbc.cmd.showResults) dbc.cmd.showResults();
+        drawSets(d && d.sets);
         break;
       case "explain":
         setBusy(false);
@@ -890,6 +903,7 @@
     const prev = state.tab;
     if (prev && prev !== t) {
       prev.buffer = dbc.editor.text();
+      if (prev.script) scriptKit.flush(); // its draft, now rather than in 400 ms
       const pc = cons.get(docOf(prev));
       if (pc) pc.text = prev.buffer; // what a textarea editor reopens it with
       prev.grid = dbc.grid.snapshot();
@@ -900,12 +914,26 @@
     state.tab = t;
     state.ws = t.ws;
     t.done = false;
-    const c = cons.get(docOf(t));
-    dbc.editor.useDoc(docOf(t), c ? c.text : t.buffer || "");
+    setMode(t);
+    if (t.script) {
+      // its file, read before it is shown (at boot, or when it was opened);
+      // a read that failed then is tried again here
+      let e = scriptKit.entry(t.script);
+      if (!e) {
+        try { e = await scriptKit.load(t.script); } catch (err) { log("err", "could not read " + t.script + ": " + err.message); }
+        if (state.tab !== t) return;
+      }
+      dbc.editor.useDoc(docOf(t), e ? e.text : "", "go");
+      scriptKit.check(t.script, false); // its markers, at once
+    } else {
+      const c = cons.get(docOf(t));
+      dbc.editor.useDoc(docOf(t), c ? c.text : t.buffer || "");
+    }
     renderTabs();
     saveLayout(Object.assign({ tab: t.key }, plansChanged()));
     dbc.cmd.resetPlan();
     dbc.grid.clear();
+    drawSets(null);
     setBusy(false);
     els.stateful.hidden = true;
     dbc.editor.focus();
@@ -933,7 +961,8 @@
     }
     if (state.tab !== t) return;
     state.ws = t.ws;
-    if (st.connected || st.connecting || disconnected) {
+    // a script tab is never connected: it is drawn as it is
+    if (st.connected || st.connecting || disconnected || t.script) {
       applyState(st, true);
       return;
     }
@@ -970,6 +999,7 @@
   // is kept (a reattach after a dropped stream).
   function applyState(st, fresh) {
     const t = state.tab;
+    if (t.script) { applyScriptState(st, fresh); return; }
     state.active = st.active;
     t.conn = st.active;
     followConsole(t, st.console);
@@ -984,6 +1014,32 @@
     if (st.hasResult) {
       if (fresh) dbc.grid.restore(t.grid); else dbc.grid.load();
     }
+    drawSets(st.sets);
+    if (dbc.cmd.onState) dbc.cmd.onState(Object.assign({}, st, { openPlan: fresh && t.planOpen }));
+    dbc.chat.onState(st);
+    renderTabs();
+  }
+
+  // applyScriptState is applyState for a script tab: the same busy mark,
+  // status, result and plan, but no connection — no row lit in the
+  // sidebar, no tables, the header naming the script instead. state.active
+  // is left as the last query tab had it: a new tab opened from here, or
+  // a template's connections, start from there.
+  function applyScriptState(st, fresh) {
+    const t = state.tab;
+    markActive("", "");
+    showSide({ tables: [] });
+    drawScriptHead();
+    setBusy(st.busy);
+    t.busy = st.busy;
+    els.stateful.hidden = true;
+    if (st.busy) setStatus(st.status, "warn");
+    else if (fresh && t.status) setStatus(t.status, t.level);
+    else setStatus(t.script + " — Ctrl+Enter saves and runs it, Ctrl+S saves", "");
+    if (st.hasResult) {
+      if (fresh) dbc.grid.restore(t.grid); else dbc.grid.load();
+    }
+    drawSets(st.sets);
     if (dbc.cmd.onState) dbc.cmd.onState(Object.assign({}, st, { openPlan: fresh && t.planOpen }));
     dbc.chat.onState(st);
     renderTabs();
@@ -993,6 +1049,14 @@
   // connect switches the tab to name, opening its sidebar on the schema
   // last picked there (pickFor).
   async function connect(name) {
+    // a script tab is never on a connection (the Connections menu's
+    // Connect, a connection just added): say where connecting happens
+    // rather than quietly pin a session to a tab that never uses it
+    if (state.tab && state.tab.script) {
+      log("info", "a script tab is not on a connection — its script names the ones it uses; " +
+        "a query tab (Alt+T) connects to " + name + ", and a click on it here puts its name in the script");
+      return;
+    }
     try {
       await api("POST", dbc.wsPath("/connect"), Object.assign({ name }, pickFor(name)));
     } catch (e) {
@@ -1032,6 +1096,7 @@
   const editorState = () => ({ buffer: dbc.editor.text(), caret: dbc.editor.caret(), selection: dbc.editor.selection() });
 
   async function run(all) {
+    if (state.tab && state.tab.script) { runScriptTab(state.tab); return; }
     try {
       await api("POST", dbc.wsPath("/run"), Object.assign(editorState(), { all }));
     } catch (e) {
@@ -1149,50 +1214,10 @@
     fetchList();
   }
 
-  // scripts is Ctrl+O: the Go scripts in scripts_dir (the TUI's picker).
-  // Picking one runs it — its s.Print lines reach the log and its s.Show
-  // results the grid as they happen; Ctrl+K stops it like any run.
-  async function scripts() {
-    let got;
-    try {
-      got = await api("GET", "/api/v1/scripts");
-    } catch (e) { log("err", "scripts: " + e.message); return; }
-    if (!got.scripts.length) {
-      log("warn", "no scripts found in " + got.dir + " — add .go files with func Run(s *sdb.S) error");
-      return;
-    }
-    let cur = 0;
-    const list = el("ul", { class: "hlist", role: "listbox" });
-    const draw = () => {
-      // each script is {name, desc, …} (userdata.ScriptInfo): the name,
-      // then what its opening comment says it does, as a tooltip too
-      list.replaceChildren(...got.scripts.map((sc, i) => el("li", { class: i === cur ? "cur" : "", role: "option", "data-i": String(i), title: sc.desc || "" },
-        el("span", "hsql", sc.desc ? sc.name + " — " + sc.desc : sc.name), el("span", "hwhen", "▶ run"))));
-      const c = list.children[cur];
-      if (c) c.scrollIntoView({ block: "nearest" });
-    };
-    const runIt = async (i) => {
-      dbc.modal.close();
-      try {
-        await api("POST", dbc.wsPath("/script"), { name: got.scripts[i].name });
-      } catch (e) { setStatus(e.message, e.status === 409 ? "warn" : "err"); }
-    };
-    list.addEventListener("click", (e) => { const li = e.target.closest("li[data-i]"); if (li) runIt(+li.dataset.i); });
-    draw();
-    dbc.modal.open({
-      // the title says where the list came from: scripts_dir used to be
-      // cwd-relative, and a picker that never said so hid dbc.app looking
-      // in ~/scripts. The foot keeps the full path.
-      title: "Scripts in " + (got.short || got.dir) + " · Enter or click runs", body: el("div", "history", list),
-      foot: el("div", "mfoot", el("span", "hint", got.dir)),
-      onKey: (e) => {
-        if (e.key === "ArrowDown") { cur = Math.min(cur + 1, got.scripts.length - 1); draw(); return true; }
-        if (e.key === "ArrowUp") { cur = Math.max(cur - 1, 0); draw(); return true; }
-        if (e.key === "Enter") { runIt(cur); return true; }
-        return false;
-      },
-      onClose: () => dbc.editor.focus(),
-    });
+  // scripts is Ctrl+O: the scripts browser (scripts.js) — run, edit, new
+  // from a template, the built-in examples and the trash.
+  function scripts() {
+    scriptKit.browse();
   }
 
   // connRenamed moves this window's query tabs from a connection's old name
@@ -1278,6 +1303,7 @@
 
   Object.assign(dbc.cmd, {
     run, stop, history, preview, editorState, scripts, help, newTab, pickTab, connect, disconnect, connRenamed,
+    save: () => saveNow(state.tab), check: () => checkNow(state.tab), openScript,
     closeTab: () => closeTab(state.tab),
     newConsole: () => newConsole(state.tab),
     nextConsole: () => nextConsole(state.tab),
@@ -1332,10 +1358,15 @@
     } else if (k === "o" && !e.shiftKey) {
       e.preventDefault();
       scripts();
+    } else if (k === "s" && !e.shiftKey && !e.altKey) {
+      // a script tab's save; a query tab's console flush — and never the
+      // browser's "save page" dialog
+      e.preventDefault();
+      saveNow(state.tab);
     } else if (k === "x" && (e.shiftKey || !dbc.editor.selection())) {
       // explain; with a selection and no Shift it is cut, as ever (the
       // plain editor's path — Monaco binds these itself, see editor.js)
-      if (!dbc.editor.hasFocus()) return;
+      if (!dbc.editor.hasFocus() || (state.tab && state.tab.script)) return;
       e.preventDefault();
       dbc.cmd.explain(e.shiftKey);
     }
@@ -1350,10 +1381,17 @@
   els.stop.addEventListener("click", stop);
   els.history.addEventListener("click", history);
   els.scripts.addEventListener("click", scripts);
+  els.save.addEventListener("click", () => saveNow(state.tab));
+  els.check.addEventListener("click", () => checkNow(state.tab));
 
+  // a connection's row: a query tab switches to it; a script tab, which is
+  // never on one, gets the name typed in at the caret as a Go string —
+  // the argument s.Query and friends take
   els.conns.addEventListener("click", (e) => {
     const b = e.target.closest(".conn-item");
-    if (b) connect(b.dataset.conn);
+    if (!b) return;
+    if (state.tab && state.tab.script) { dbc.editor.insert(JSON.stringify(b.dataset.conn)); return; }
+    connect(b.dataset.conn);
   });
 
   // ── the splitter: drag to size the editor; the height is remembered ────
@@ -1624,8 +1662,9 @@
   const cpath = (cdb, name) => "/api/v1/consoles/" + encodeURIComponent(cdb.host) + "/" +
     encodeURIComponent(cdb.database) + (name === undefined ? "" : "/" + encodeURIComponent(name));
   const sameDB = (a, b) => !!a && !!b && a.host === b.host && a.database === b.database;
-  // docOf is the editor document a tab shows: its console's, else its own
-  const docOf = (t) => (t.console && t.cdb ? ckey(t.cdb, t.console) : t.key);
+  // docOf is the editor document a tab shows: its script's, its console's,
+  // else its own
+  const docOf = (t) => (t.script ? "s:" + t.script : t.console && t.cdb ? ckey(t.cdb, t.console) : t.key);
 
   // textOf is a tab's text: its document's, wherever that is
   function textOf(t) {
@@ -1725,7 +1764,7 @@
   // the console it has). Chained per tab, so two connects in a row swap in
   // order.
   function followConsole(t, ref) {
-    if (!ref) return;
+    if (!ref || t.script) return; // a script tab shows its script, never a console
     if (t.console && sameDB(t.cdb, ref)) {
       t.cdb.names = ref.names; // the freshest list
       return;
@@ -1898,10 +1937,217 @@
     }
   }
 
+  // ── script tabs ────────────────────────────────────────────────────────
+  // A script tab edits one Go script of scripts_dir (t.script) instead of
+  // SQL. What it edits — the file, its revision, the unsaved draft, the
+  // check's markers — is scripts.js's; what is here is how it sits in the
+  // strip and the workbench:
+  //
+  //   topbar   ▶ Run (Ctrl+Enter: save, then run)  ✓ Check  ⤓ Save (Ctrl+S)  ■ Stop
+  //            — Run all and Explain are SQL's, and hidden (.script-mode)
+  //   header   ▷ copy_mytable.go ●       the script, ● while unsaved
+  //   editor   Monaco in Go, with sdb completion and the check's markers
+  //   results  the grid, for s.Show — "Result 1 · 2 · 3" when it showed
+  //            more than one (drawSets); the log, for s.Print
+  //   sidebar  no connection: a click on one types its name at the caret
+  //
+  // It is still a workspace (/api/v1/ws/:id), so Run, Stop, the run slot
+  // and the stream are the ones any script run uses — it just never
+  // connects, as a script opens the connections it names itself.
+  //
+  // RUN SAVES FIRST, so what runs is what is on disk — what `dbc script`
+  // or cron would run, and what the run's log line names. A save that meets
+  // a conflict stops the run: the file's version is now in the editor, and
+  // running it would run something the user has not seen.
+  const scriptKit = dbc.scripts.create({
+    win: () => state.win,
+    winQuery: () => winQuery(),
+    conn: () => state.active,
+    focus: () => dbc.editor.focus(),
+    open: (name) => openScript(name),
+    run: (name) => runScriptIn(state.tab, name),
+    connNames: () => [...els.conns.querySelectorAll(".conn-item")].map((b) => b.dataset.conn),
+    // the unsaved mark flipped, or a check landed: the strip and the
+    // header redraw
+    changed: (name) => {
+      renderTabs();
+      if (state.tab && state.tab.script === name) drawScriptHead();
+    },
+    checked: (name) => { if (state.tab && state.tab.script === name) drawScriptHead(); },
+    // a script was renamed (here or in another window): its tabs follow
+    renamed: (from, to) => {
+      let moved = false;
+      for (const t of tabs) {
+        if (t.script !== from) continue;
+        t.script = to;
+        t.title = to;
+        saveTab(t);
+        moved = true;
+      }
+      if (moved) {
+        renderTabs();
+        if (state.tab && state.tab.script === to) drawScriptHead();
+      }
+    },
+  });
+  dbc.editor.ready((monaco) => scriptKit.register(monaco));
+
+  // setMode puts the workbench in a script tab's shape, or a query tab's:
+  // the CSS hides what does not apply (.script-mode), and Run says what it
+  // will do.
+  function setMode(t) {
+    const on = !!(t && t.script);
+    els.app.classList.toggle("script-mode", on);
+    els.run.title = on ? "Save the script, then run it (Ctrl+Enter)" : "Run the statement under the caret (Ctrl+Enter)";
+  }
+
+  // drawScriptHead is the header for a script tab: the script's name, ●
+  // while it has unsaved changes, and a count of the check's findings.
+  function drawScriptHead() {
+    const t = state.tab;
+    if (!t || !t.script) return;
+    const dirty = scriptKit.dirty(t.script), diags = scriptKit.diags(t.script);
+    const errs = diags.filter((d) => d.severity === "error").length, warns = diags.length - errs;
+    els.active.classList.remove("none");
+    els.active.textContent = "▷ " + t.script + (dirty ? " ●" : "") +
+      (errs ? " · " + dbc.plural(errs, "error") : "") + (warns ? " · " + dbc.plural(warns, "warning") : "");
+    els.active.title = (dirty ? "unsaved changes — Ctrl+S saves. " : "") +
+      (diags.length ? "The check's findings are marked in the editor (F8 walks them; ✓ Check lists them)." : "");
+  }
+
+  // drawSets is the results bar's switcher between the results a script
+  // run showed, when it showed more than one ({n, at, cut}, web/hub.go
+  // resultSets; null hides it). They are numbered as the script showed
+  // them: with the first ones dropped past the cap (cut), from cut+1.
+  //   Result 1 · 2 · [3]
+  function drawSets(sets) {
+    const box = els.rsets;
+    box.replaceChildren();
+    box.hidden = !sets || sets.n < 2;
+    if (box.hidden) return;
+    box.append(el("span", "rslabel", "Result"));
+    for (let i = 0; i < sets.n; i++) {
+      const b = el("button", { type: "button", class: i === sets.at ? "on" : "", "data-set": String(i),
+        title: "the script's s.Show number " + (sets.cut + i + 1) }, String(sets.cut + i + 1));
+      box.append(b);
+    }
+  }
+  els.rsets.addEventListener("click", async (e) => {
+    const b = e.target.closest("button[data-set]");
+    if (!b || b.classList.contains("on")) return;
+    try {
+      const r = await api("POST", dbc.wsPath("/show-result"), { i: Number(b.dataset.set) });
+      drawSets(r.sets);
+      if (r.status) setStatus(r.status, ""); // the picked result's, not the run's last
+      dbc.grid.load();
+      if (dbc.cmd.showResults) dbc.cmd.showResults();
+    } catch (err) {
+      setStatus(err.message, err.status === 409 ? "warn" : "err");
+    }
+  });
+
+  // runScriptTab is Run in a script tab: save, then run the saved file.
+  async function runScriptTab(t) {
+    if (!(await scriptKit.save(t.script))) {
+      setStatus(t.script + " was not run — it is not saved (see the log)", "warn");
+      return;
+    }
+    if (state.tab === t) drawScriptHead();
+    await runScriptIn(t, t.script);
+  }
+
+  // runScriptIn runs a saved script in tab t's workspace (the browser's
+  // Enter runs it in whichever tab is on screen, as Ctrl+O always has).
+  async function runScriptIn(t, name) {
+    if (!t || !t.ws) return;
+    try {
+      await api("POST", "/api/v1/ws/" + t.ws + "/script", { name });
+    } catch (e) {
+      if (t === state.tab) setStatus(e.message, e.status === 409 ? "warn" : "err");
+      else log("err", e.message);
+    }
+  }
+
+  // saveNow is Ctrl+S: a script tab's save; a query tab's console and tab
+  // written now rather than after the autosave's pause.
+  async function saveNow(t) {
+    if (!t) return;
+    if (!t.script) { saveTab(t); saveConsole(docOf(t)); return; }
+    if (await scriptKit.save(t.script)) {
+      if (t === state.tab) setStatus("saved " + t.script, "");
+    }
+  }
+
+  // checkNow is ✓ Check: the check at once, its findings listed in the log.
+  function checkNow(t) {
+    if (!t || !t.script) { log("info", "✓ Check is for script tabs — Ctrl+O opens one"); return; }
+    scriptKit.check(t.script, true);
+  }
+
+  // openScript shows the script in a tab: the one already on it, or a new
+  // one beside the tab on screen. One tab per script, so there is one
+  // editor — one undo history, one unsaved draft — per file. The kit has
+  // read the file by now (scripts.js edit).
+  function openScript(name) {
+    const have = tabs.find((t) => t.script === name);
+    if (have) {
+      if (have !== state.tab) activate(have);
+      else dbc.editor.focus();
+      return;
+    }
+    const t = { key: newKey(), title: name, conn: "", buffer: "", ws: "", script: name };
+    tabs.splice(tabs.indexOf(state.tab) + 1, 0, t);
+    saveOrder();
+    saveTab(t);
+    activate(t);
+  }
+
+  // scriptTabItems is a script tab's right-click menu.
+  function scriptTabItems(t, x, y) {
+    const name = t.script;
+    return [
+      { head: name },
+      { label: "Save", key: "Ctrl+S", act: () => saveNow(t) },
+      { label: "Save and run", key: "Ctrl+Enter", act: () => runScriptTab(t) },
+      { label: "Check", act: () => checkNow(t) },
+      { label: "Rename…", act: () => scriptKit.rename(name) },
+      { label: "Duplicate…", act: () => scriptKit.duplicate(name) },
+      { label: "Move to the trash", act: () => scriptKit.trash(name) },
+      { label: "Copy path", act: () => scriptKit.copyPath(name) },
+      { head: "" },
+      { label: "Close tab", key: "Alt+W", why: tabs.length > 1 ? "" : "the last tab stays", act: () => closeTab(t) },
+      { label: "New query tab", key: "Alt+T", act: newTab },
+      { label: "Scripts…", key: "Ctrl+O", act: scripts },
+    ].concat(groups.tabItems(t, x, y));
+  }
+
+  // closeDirtyScript asks before closing a script tab with unsaved
+  // changes: save them, throw them away, or keep the tab.
+  function closeDirtyScript(t) {
+    const save = el("button", { type: "button", class: "primary" }, "Save and close");
+    const drop = el("button", { type: "button" }, "Discard changes");
+    const keep = el("button", { type: "button" }, "Keep it open");
+    save.addEventListener("click", async () => {
+      dbc.modal.close();
+      if (await scriptKit.save(t.script)) reallyClose(t);
+    });
+    drop.addEventListener("click", () => { dbc.modal.close(); t.discard = true; reallyClose(t); });
+    keep.addEventListener("click", () => dbc.modal.close());
+    dbc.modal.open({
+      title: "Close " + t.script + "?", focus: keep,
+      body: el("div", "confirm", el("p", null, t.script + " has changes that are not saved to the file. " +
+        "Discarding them leaves the file as it was last saved.")),
+      foot: el("div", "mfoot", save, drop, keep),
+    });
+  }
+
   // ── saving tabs: every tab's buffer, title and connection survive a restart
   let saveTimer = 0;
 
   function scheduleSave() {
+    // a script tab saves only when asked; an edit keeps its draft and
+    // re-checks it (scripts.js edited)
+    if (state.tab && state.tab.script) { scriptKit.edited(state.tab.script); return; }
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => { saveTab(state.tab); saveConsole(docOf(state.tab)); }, 600);
   }
@@ -1911,6 +2157,9 @@
   // console's, kept in the tab's buffer too, so a dbc from before consoles
   // still opens the tab as it was.
   function tabBody(t) {
+    // a script tab's text is its file (and its draft): the saved tab only
+    // names the script
+    if (t.script) return { title: t.title, conn: "", buffer: "", console: "", script: t.script };
     const active = t === state.tab;
     return { title: t.title, conn: (active ? state.active : t.conn) || "",
       buffer: active ? dbc.editor.text() : textOf(t), console: t.console || "" };
@@ -1922,7 +2171,17 @@
 
   function saveTab(t, keepalive) {
     if (!t) return;
-    if (t === state.tab) clearTimeout(saveTimer);
+    if (t === state.tab) {
+      // This save stands in for the debounced one (scheduleSave), so its
+      // timer goes — but that timer also carried the console's save, and
+      // dropping it lost text: type into a new tab, rename it (or let a
+      // connect's showConsole save it) within the pause, and the console
+      // file was never written; the tab came back empty after a restart
+      // (N-110). So the console is saved here too. saveConsole is a no-op
+      // when nothing changed, and one PUT at a time per console.
+      clearTimeout(saveTimer);
+      saveConsole(docOf(t), keepalive);
+    }
     if (t.lost) return; // not ours to save any more
     // keepalive lets the last save outlive the page when it is closing
     return fetch("/api/v1/tabs/" + encodeURIComponent(t.key) + winQuery(), {
@@ -2031,7 +2290,7 @@
   };
 
   dbc.editor.onChange(scheduleSave);
-  window.addEventListener("pagehide", release);
+  window.addEventListener("pagehide", () => { scriptKit.flush(); release(); });
   window.addEventListener("pageshow", (e) => { if (e.persisted) reclaim(); });
 
   // ── the query tab strip ────────────────────────────────────────────────
@@ -2097,16 +2356,20 @@
       if (groups.hidden(t)) return; // folded into its chip
       const g = groups.groupOf(t);
       const marks = el("span", "qmark");
+      if (t.script && scriptKit.dirty(t.script)) {
+        marks.append(el("span", { class: "qdirty", title: "unsaved changes — Ctrl+S saves (Run saves first)" }, "●"));
+      }
       if (t.busy) marks.append(el("span", { class: "qbusy", title: "running" }, "●"));
       else if (t.done) marks.append(el("span", { class: t.failed ? "qfail" : "qdone", title: "finished in the background" }, "•"));
       if (t.stateful) marks.append(el("span", { class: "qstate", title: "its session may hold a transaction, SET values or temp tables" }, "◆"));
       if (t.lost) marks.append(el("span", { class: "qlost", title: "open in another browser tab of dbc web — not saved here" }, "⊘"));
       const b = el("div", { class: "qtab" + (t === state.tab ? " on" : "") + (t.lost ? " lost" : "") +
-          (g ? " grp g" + groups.color(g) : ""), role: "tab", tabindex: "-1",
+          (t.script ? " script" : "") + (g ? " grp g" + groups.color(g) : ""), role: "tab", tabindex: "-1",
         "aria-selected": t === state.tab ? "true" : "false", "data-key": t.key,
-        title: t.title + (i < 9 ? " (Alt+" + (i + 1) + ")" : "") +
+        title: (t.script ? "script " : "") + t.title + (i < 9 ? " (Alt+" + (i + 1) + ")" : "") +
           (t.console ? " — console " + t.cdb.label + " · " + t.console : "") + (g ? " — group " + g.name : "") +
-          " — double-click renames" },
+          (t.script ? " — double-click renames the script" : " — double-click renames") },
+      t.script ? el("span", "qgo", "▷") : null,
       el("span", "qt", t.title), t.console ? el("span", "qcon", t.console) : null, marks,
       tabs.length > 1 ? el("button", { type: "button", class: "qx", title: "Close (Alt+W)", "data-close": t.key }, "×") : null);
       els.qtabs.append(b);
@@ -2175,6 +2438,7 @@
     e.preventDefault();
     const t = tabs.find((x) => x.key === b.dataset.key);
     const x = e.clientX, y = e.clientY;
+    if (t.script) { dbc.menu.open(x, y, scriptTabItems(t, x, y)); return; }
     const items = () => [
       { head: t.title },
       { label: "Rename…", act: () => rename(t) },
@@ -2242,6 +2506,7 @@
   function closeTab(t) {
     if (!t) return;
     if (tabs.length === 1) { log("warn", "the last tab stays — clear its editor instead"); return; }
+    if (t.script && scriptKit.dirty(t.script)) { closeDirtyScript(t); return; }
     if (!t.stateful) { reallyClose(t); return; }
     const yes = el("button", { type: "button", class: "primary" }, "Close and release");
     const no = el("button", { type: "button" }, "Keep it");
@@ -2267,6 +2532,7 @@
     // a console another tab here still shows keeps its document
     const k = docOf(t);
     if (!tabs.some((o) => docOf(o) === k)) leaveDoc(k);
+    if (t.script) scriptKit.forget(t.script, t.discard);
     if (t.ws) api("DELETE", "/api/v1/ws/" + t.ws).catch(() => { /* already gone */ });
     // a lost tab's saved copy is the other window's: closing it here
     // leaves that alone
@@ -2276,6 +2542,7 @@
 
   function rename(t) {
     if (!t) return;
+    if (t.script) { scriptKit.rename(t.script); return; } // its title is its file's name
     const b = els.qtabs.querySelector('.qtab[data-key="' + t.key + '"]');
     if (!b) return;
     const input = el("input", { class: "qrename", value: t.title, maxlength: "40", "aria-label": "Tab name", spellcheck: "false" });
@@ -2337,7 +2604,7 @@
       ["Ctrl+K", "stop the run or the connect"],
       ["Ctrl+P", "history of the tab's database (Tab: every database) — insert a past statement"],
       ["Ctrl+E", "export the result"],
-      ["Ctrl+O", "scripts — run a Go script from scripts_dir"],
+      ["Ctrl+O", "scripts — run, edit or start a Go script (see Script tabs)"],
       ["Ctrl+I", "the assistant — and back"],
       ["Ctrl+B", "hide the sidebar — and back"],
       ["Ctrl+Space", "suggestions from the schema (also as you type, and after “.”)"],
@@ -2353,6 +2620,15 @@
       ["right-click a tab → Add to group…", "group tabs: by hand, or every tab on a connection"],
       ["right-click +", "new tab in a group of your choice (+ is coloured for the group Alt+T joins)"],
       ["click · right-click a group's chip", "collapse or expand it · its menu (rename, ungroup, its tabs)"],
+    ]],
+    ["Script tabs", [
+      ["Ctrl+O · ▷ Scripts", "the scripts browser: Enter runs · Shift+Enter edits · F2 renames · Ctrl+Delete trashes · Alt+N new"],
+      ["Ctrl+Enter · ▶ Run", "save the script, then run it"],
+      ["Ctrl+S", "save it (a script never autosaves; unsaved edits survive a reload in this browser)"],
+      ["✓ Check", "compile it without running — errors are also marked as you type"],
+      ["Ctrl+Space · s. · sdb.", "the sdb API: methods, fields and their docs; connection names inside a connection argument"],
+      ["click a connection", "put its name in at the caret"],
+      ["Result 1 · 2 · 3", "on the results bar: each result the script showed"],
     ]],
     ["Results grid", [
       ["arrows · Shift+arrows", "move · extend the range"], ["g · G", "first · last row"],
@@ -2458,14 +2734,19 @@
       const plans = new Set((layout.plans || "").split(","));
       tabs = order.map((k) => {
         const t = byKey.get(k);
-        return { key: t.id, title: t.title || "Query", conn: t.conn, buffer: t.buffer, ws: "", planOpen: plans.has(t.id),
-          cdb: t.console && t.consoleDb ? t.consoleDb : null, console: t.console && t.consoleDb ? t.console : "" };
+        return { key: t.id, title: t.script || t.title || "Query", conn: t.conn, buffer: t.buffer, ws: "", planOpen: plans.has(t.id),
+          cdb: t.console && t.consoleDb ? t.consoleDb : null, console: t.console && t.consoleDb ? t.console : "",
+          script: t.script || "" };
       });
       // each tab's console, read before any is shown; one that cannot be
       // read leaves its tab on the buffer saved with it, and the tab's
       // connection gives it a console once it lands
       await Promise.all(tabs.filter((t) => t.console).map((t) => loadConsole(t.cdb, t.console)
         .then((c) => { t.buffer = c.text; }, () => { t.console = ""; t.cdb = null; })));
+      // each script tab's file (and any draft of it kept here); one that
+      // cannot be read is tried again when its tab is shown
+      await Promise.all(tabs.filter((t) => t.script).map((t) => scriptKit.load(t.script)
+        .catch((e) => log("err", "could not read " + t.script + ": " + e.message))));
       // no tab to show: the first boot, or every saved tab is open in
       // another browser tab of dbc web — this one starts a fresh tab of
       // its own. Its key is new, never "1": a key another window holds

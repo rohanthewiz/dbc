@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-134
+**Next ID:** N-136
 
 ## Open
 
@@ -44,6 +44,10 @@ ten session docs in `ai_docs/claude_sessions/`
   `<select>` it replaced did not scroll there). Launch, sign-in (the page
   opened a workspace), Quit, `kill -9` of the app, and the login-shell `PATH`
   were verified.
+  Updated `2026-1006-2020-scripts-web-ui`: add script tabs in WKWebView. Check that ⌘S saves
+  (not the app's menu), that an unsaved draft survives quitting the app
+  (localStorage in WKWebView), and that the browser's Copy path reaches
+  the clipboard.
 - **N-087** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
   Drive the TUI's new navigator by hand in a real terminal on a big
   Postgres: the picker rows, `d`/`s`, typing into a 150-schema list, the
@@ -104,26 +108,6 @@ ten session docs in `ai_docs/claude_sessions/`
   keyof`…). Offered alongside JSON and shell; the user picked those two.
   Only worth it once answers about app code (calling the database from TS)
   show up.
-- **N-110** · raised `2026-1005-1222-web-tab-groups` · value medium
-  The e2e step "tabs survive a reload" timed out once on "its text back"
-  (editor empty after the reload, status "ready on lite", no JS errors),
-  then passed on five later runs with and without the tab-groups change.
-  Likely a race between the reload and the console's load/save; worth a
-  look if it recurs.
-  Updated `2026-1005-1450-tui-web-parity`: recurs (3 of 10 runs), and narrowed down. In that
-  step the new tab's typed text reaches the tab's saved buffer but never
-  its console file: 20s after typing, `dbc.state.tab.console` is
-  `console-2`, `dbc.editor.text()` is the typed SQL, and
-  `GET /api/v1/consoles/…/console-2` is still `{text: "", rev: ""}` —
-  so `scheduleSave`'s `saveConsole(docOf(tab))` writes nothing (the
-  editor is likely on a document other than `docOf(tab)`, or `cons` has no
-  entry for it). After the reload the tab's buffer and the empty console
-  race for the editor. A user typing straight into a new tab could lose
-  that text across a restart, so this is worth fixing in `followConsole` /
-  `showConsole`, not only in the test.
-  Updated `2026-1005-1751-recent-chats-fold-v0.8.2`: still recurs — 1 of 3
-  runs on untouched `main` (37ff3d7) and 1 of 8 with that session's change.
-
 - **N-115** · raised `2026-1005-1450-tui-web-parity` · value low
   Drive the TUI's parity pieces by hand in real terminals (iTerm2,
   Terminal.app, Ghostty, kitty, a cats pane): whether F12 / ⇧F12 / F2 and
@@ -173,6 +157,12 @@ ten session docs in `ai_docs/claude_sessions/`
   passed with "tab groups" in 2.3s (one run). The step keeps one such
   `MustClick` (lite2, after "Remove from group wip"), and the suite has a
   dozen more; moving them to coordinate clicks may end these timeouts.
+  Updated `2026-1006-2020-scripts-web-ui`: it now fails on every run. On a clean checkout of HEAD
+  (ecef8ac) it failed 3 of 3, and 3 of 3 with phase 4's changes, at the
+  strip checks (`web_test.go:1098`/`1108`: an extra "Query 4", or `[lite]`
+  before "Renamed tab"). Phase 4's step runs after it, so it was checked
+  with `DBC_E2E_STEPS` set to every other step.
+
 - **N-126** · raised `2026-1006-1346-etl-scripting-layer` · value low
   Live MySQL tests for the ETL paths. `etl/live_test.go` covers Postgres
   only; MySQL is reasoned about, not run: Create runs outside the load's
@@ -198,6 +188,12 @@ ten session docs in `ai_docs/claude_sessions/`
   Updated `2026-1006-1937-scripts-web-api`: phase 3 is done. It added the web routes for
   the store, check, examples, templates and the sdb API, plus the `scripts`
   window event. Left: phases 4–6 (web UI, TUI browser, docs rewrite).
+  Updated `2026-1006-2020-scripts-web-ui`: phase 4 is done. dbc web has script tabs (Monaco
+  Go, check markers, sdb completion and hover, explicit save with
+  conflicts and drafts, Run saves first), the Ctrl+O browser (templates,
+  examples, trash), and a "Result 1 · 2 · 3" switcher for several
+  `s.Show`s. Left: phases 5–6 (TUI browser, docs rewrite). README and the
+  skill still describe Ctrl+O as a run-only picker until phase 6.
 - **N-132** · raised `2026-1006-1915-scripts-store-check-examples` · value low
   The built-in examples (`scripts/embed.go`) are reachable only from Go
   until the scripts browser lands (phases 3–5). So `dbc script loop_params`
@@ -206,6 +202,9 @@ ten session docs in `ai_docs/claude_sessions/`
   built-in example by name after `scripts_dir`, and list examples (marked
   as such) in `dbc scripts`. Offered at the end of the session; the user
   did not answer.
+  Updated `2026-1006-2020-scripts-web-ui`: dbc web now offers the examples (Ctrl+O, Enter
+  makes a copy). Headless `dbc script`/`dbc scripts` and the TUI still do
+  not; phase 5 covers the TUI.
 
 - **N-133** · raised `2026-1006-1937-scripts-web-api` · value low
   rweb's radix router (v0.1.32) does not backtrack. Under one method, a
@@ -216,6 +215,20 @@ ten session docs in `ai_docs/claude_sessions/`
   `:name` under `/api/v1/scripts/`). Fix it upstream in rweb, which is the
   user's own library, if another route set ever needs literal and param
   siblings.
+
+- **N-134** · raised `2026-1006-2020-scripts-web-ui` · value low
+  The assistant in a script tab is handed the Go script as "the query":
+  `ChatContext` reads the editor's text as SQL, and its explain-this-query
+  action and context chip say so. It should either send the script as a
+  script (with the sdb API as context) or leave the editor out in a script
+  tab.
+- **N-135** · raised `2026-1006-2020-scripts-web-ui` · value low
+  Script drafts are keyed by name in one browser's localStorage. Two
+  windows with the same script open in a tab share one draft key, and the
+  last to type wins it. The file itself is still revision-checked, so
+  nothing on disk is lost, only the other window's unsaved draft across a
+  reload. Fix it with per-window keys plus a merge, or by keeping drafts on
+  the server (the saved tab's buffer).
 
 ## Roadmap
 
@@ -302,6 +315,27 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-110** · raised `2026-1005-1222-web-tab-groups` · value medium
+  The e2e step "tabs survive a reload" timed out once on "its text back"
+  (editor empty after the reload, status "ready on lite", no JS errors),
+  then passed on five later runs with and without the tab-groups change.
+  Likely a race between the reload and the console's load/save; worth a
+  look if it recurs.
+  Updated `2026-1005-1450-tui-web-parity`: recurs (3 of 10 runs), and narrowed down. In that
+  step the new tab's typed text reaches the tab's saved buffer but never
+  its console file: 20s after typing, `dbc.state.tab.console` is
+  `console-2`, `dbc.editor.text()` is the typed SQL, and
+  `GET /api/v1/consoles/…/console-2` is still `{text: "", rev: ""}` —
+  so `scheduleSave`'s `saveConsole(docOf(tab))` writes nothing (the
+  editor is likely on a document other than `docOf(tab)`, or `cons` has no
+  entry for it). After the reload the tab's buffer and the empty console
+  race for the editor. A user typing straight into a new tab could lose
+  that text across a restart, so this is worth fixing in `followConsole` /
+  `showConsole`, not only in the test.
+  Updated `2026-1005-1751-recent-chats-fold-v0.8.2`: still recurs — 1 of 3
+  runs on untouched `main` (37ff3d7) and 1 of 8 with that session's change.
+  closed 2026-10-06, `2026-1006-2020-scripts-web-ui`: the root cause was `saveTab`. Called for the active tab, it cleared the debounced save timer (`scheduleSave`), and that timer also carried `saveConsole`. Typing into a new tab and then renaming it (or anything else that saves the tab) within 600 ms left the console file empty. Captured before the reload, the file was empty in every run, passing ones included. Those passed only because the page's goodbye request (`release`) saved the shown console as it unloaded. `saveTab` now saves the active tab's console as well (a no-op when unchanged). The step "tabs survive a reload" now checks the console file before reloading; with the fix reverted it fails there. It passed in 4 of 4 runs of every other step afterwards.
 
 - **N-131** · raised `2026-1006-1855-scripts-dir-resolution` · value medium
   Copying a SQLite table into bytdb fails on a boolean column: SQLite

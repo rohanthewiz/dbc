@@ -867,3 +867,40 @@ a.btnlink:hover { border-color: var(--accent); }
 .hchk input { margin: 0; width: 11px; height: 11px; accent-color: var(--accent); cursor: pointer; }
 .hchk.counting { animation: hchk-pulse 1s ease-in-out infinite alternate; }
 @keyframes hchk-pulse { from { opacity: 1; } to { opacity: .4; } }
+
+/* ── script tabs ───────────────────────────────────────────────────────────
+   A script tab edits Go, never connects, and has no statement to run all
+   of or explain: the workbench drops what does not apply (app.js setMode
+   puts .script-mode on .app), and a query tab drops the script's two
+   buttons. The sidebar's tables and their controls are about a connection
+   the tab is not on. */
+.app.script-mode #run-all, .app.script-mode #explain-btn,
+.app.script-mode #row-counts-box, .app.script-mode #erd-all { display: none; }
+.app:not(.script-mode) #check-btn, .app:not(.script-mode) #save-btn { display: none; }
+/* in the strip: ▷ before the name, ● while unsaved (the accent, apart from
+   the running ● in the warn colour) */
+.qtab .qgo { color: var(--muted); font-size: 10px; }
+.qdirty { color: var(--accent); }
+
+/* the results bar's "Result 1 · 2 · 3": each result a script run showed */
+.rsets { display: flex; align-items: center; gap: 1px; color: var(--muted); }
+.rsets .rslabel { margin: 0 4px 0 8px; }
+.rsets button { border: 0; background: none; padding: 1px 6px; color: var(--muted); border-radius: 3px; font-size: 12px; }
+.rsets button:hover { color: var(--fg); }
+.rsets button.on { color: var(--accent); background: var(--sel); }
+
+/* the scripts browser (Ctrl+O): one list in sections */
+.slist li.shead { cursor: default; color: var(--muted); font: 600 11px/2 system-ui, sans-serif; text-transform: uppercase;
+  letter-spacing: .04em; margin-top: 4px; }
+.slist li.shead:hover { background: none; }
+.slist li.shead.toggle { cursor: pointer; }
+.slist li.shead.toggle:hover { color: var(--fg); }
+.slist li.snote { cursor: default; color: var(--muted); font-style: italic; }
+.slist li.snote:hover { background: none; }
+.slist .sname { flex: none; }
+.slist .srow.script .sname { color: var(--accent); }
+.slist .sdesc { color: var(--muted); overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
+.slist .swhen { color: var(--muted); flex: none; }
+.slist .sact { display: flex; gap: 4px; flex: none; visibility: hidden; }
+.slist li.cur .sact, .slist li:hover .sact { visibility: visible; }
+.slist .sact button { font-size: 11px; padding: 0 6px; line-height: 1.5; }

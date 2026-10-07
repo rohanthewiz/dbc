@@ -47,3 +47,43 @@ func TestMoveLayout(t *testing.T) {
 		})
 	}
 }
+
+// TestSaveTabScript keeps a script tab's script name (the script column,
+// added by ALTER), on the file store across a reopen — the reopen runs the
+// schema's ALTERs a second time, which IF NOT EXISTS must take — and on
+// the memory-only one. A query tab's is "".
+func TestSaveTabScript(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "web.bytdb")
+	file, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mem, err := OpenStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []*Store{file, mem} {
+		if err = st.SaveTab(Tab{ID: "a", Title: "copy.go", Script: "copy.go"}); err != nil {
+			t.Fatal(err)
+		}
+		if err = st.SaveTab(Tab{ID: "b", Title: "Query 1", Conn: "lite", Buffer: "SELECT 1"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if file, err = OpenStore(path); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	for name, st := range map[string]*Store{"file": file, "memory": mem} {
+		tabs, err := st.Tabs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(tabs) != 2 || tabs[0].Script != "copy.go" || tabs[1].Script != "" || tabs[1].Buffer != "SELECT 1" {
+			t.Errorf("%s: tabs = %+v", name, tabs)
+		}
+	}
+}

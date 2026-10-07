@@ -408,8 +408,35 @@ func (t *tab) sink(e workspace.Event) {
 	case *workspace.ScriptPrint:
 		t.send("log", logLine{Level: "info", Text: e.Text})
 	case *workspace.ScriptShow:
-		t.send("result", nil) // the page fetches it: see handleResult
+		// the page fetches the rows itself (handleResult); the event says
+		// only how many results the run has shown, for the switcher
+		t.send("result", resultEvent{Sets: scriptSets(t.ws)})
 	}
+}
+
+// resultSets is a script run's shown results as the results bar's
+// switcher draws them: "Result 3 · 4 · 5", n of them numbered from cut+1,
+// the grid on at (0-based among the n; -1 when it shows none of them).
+// Only sent when there are two or more — one result needs no switcher.
+type resultSets struct {
+	N   int `json:"n"`
+	At  int `json:"at"`
+	Cut int `json:"cut"`
+}
+
+// resultEvent is "result": a script's s.Show landed mid-run.
+type resultEvent struct {
+	Sets *resultSets `json:"sets,omitempty"`
+}
+
+// scriptSets is ws's resultSets, or nil when its last script run showed
+// fewer than two results (or the grid has moved on to a run's own).
+func scriptSets(ws *workspace.Workspace) *resultSets {
+	n, at, cut := ws.ScriptResults()
+	if n < 2 {
+		return nil
+	}
+	return &resultSets{N: n, At: at, Cut: cut}
 }
 
 // ---------------------------------------------------------------------------
@@ -634,6 +661,8 @@ type runEvent struct {
 	// it but a new session — so the badge says "may hold", never
 	// "transaction open".
 	Stateful bool `json:"stateful"`
+	// Sets: a script run's shown results, when there are two or more
+	Sets *resultSets `json:"sets,omitempty"`
 }
 
 // deliver draws a landed event: the workspace has already updated itself,
@@ -713,6 +742,9 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 				out.HasResult = true
 				out.Status = workspace.ResultStatus(r, s.cfg.MaxRows, s.shown(r))
 			}
+		}
+		if ev.Script {
+			out.Sets = scriptSets(t.ws)
 		}
 		if r := ev.Result; r != nil {
 			shown := s.shown(r)

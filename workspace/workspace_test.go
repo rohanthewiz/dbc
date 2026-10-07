@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -812,6 +814,79 @@ func TestScriptEventsReachTheSink(t *testing.T) {
 	}
 	if last, _ := got[3].(*ScriptShow); last == nil || w.LastResult() != last.Result {
 		t.Error("the last s.Show should be the last result")
+	}
+}
+
+// A script run keeps each s.Show for a UI to switch between — the newest
+// MaxScriptResults of them, counting the ones dropped (cut) so they can be
+// numbered as shown — and ShowScriptResult puts one back as the last
+// result. The next script run starts a new list; a query's own result ends
+// it.
+func TestScriptResultsKeptAndPicked(t *testing.T) {
+	w := newTestWorkspace(t)
+	shows := MaxScriptResults + 5
+	path := filepath.Join(t.TempDir(), "many.go")
+	src := fmt.Sprintf(`//go:build ignore
+
+package main
+
+import "github.com/rohanthewiz/dbc/sdb"
+
+func Run(s *sdb.S) error {
+	for i := 1; i <= %d; i++ {
+		r, err := s.Query("demo-sqlite", "SELECT ? AS i", i)
+		if err != nil {
+			return err
+		}
+		s.Show(r)
+	}
+	return nil
+}
+`, shows)
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func() {
+		t.Helper()
+		st, err := w.RunScript(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ev := st.Job().(*RunDone); ev.Err != nil {
+			t.Fatal(ev.Err)
+		}
+	}
+	run()
+	n, at, cut := w.ScriptResults()
+	if n != MaxScriptResults || at != n-1 || cut != shows-MaxScriptResults {
+		t.Fatalf("ScriptResults = %d, %d, %d; want %d, %d, %d", n, at, cut, MaxScriptResults, MaxScriptResults-1, shows-MaxScriptResults)
+	}
+	if err := w.ShowScriptResult(0); err != nil {
+		t.Fatal(err)
+	}
+	// the first kept is the script's (cut+1)th show
+	if got := w.LastResult().Rows[0][0]; got != fmt.Sprint(cut+1) {
+		t.Errorf("result 0 holds %s, want %d", got, cut+1)
+	}
+	if _, at, _ = w.ScriptResults(); at != 0 {
+		t.Errorf("at = %d after picking 0", at)
+	}
+	if err := w.ShowScriptResult(n); err == nil {
+		t.Error("an index past the list was taken")
+	}
+
+	run() // a new run: a new list, not appended to the old
+	if n, _, cut = w.ScriptResults(); n != MaxScriptResults || cut != shows-MaxScriptResults {
+		t.Errorf("after a second run: n %d, cut %d", n, cut)
+	}
+
+	st, err := w.Run([]string{"SELECT 1"}, "query")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Job()
+	if n, at, _ = w.ScriptResults(); n != 0 || at != -1 {
+		t.Errorf("after a query: n %d, at %d — the list should be gone", n, at)
 	}
 }
 

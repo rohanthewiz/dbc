@@ -8,6 +8,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/model"
+	"github.com/rohanthewiz/dbc/userdata"
 	"github.com/rohanthewiz/dbc/workspace"
 )
 
@@ -69,7 +70,7 @@ func (s *Server) savedTabs(saved []Tab) []savedTab {
 	tabs := make([]savedTab, 0, len(saved))
 	for _, t := range saved {
 		st := savedTab{Tab: t}
-		if t.Conn != "" {
+		if t.Conn != "" && t.Script == "" { // a script tab shows no console
 			st.ConsoleDB = s.consoleFor(t.Conn)
 		}
 		tabs = append(tabs, st)
@@ -111,6 +112,12 @@ func (s *Server) saveTab(winID string, t Tab) error {
 	}
 	if len(t.Buffer) > maxBuffer {
 		return badRequest("the editor holds %d MB; tabs save up to %d MB", len(t.Buffer)>>20, maxBuffer>>20)
+	}
+	// a script tab names its script, which the page later reads and saves
+	// by that name: one the store would refuse is refused here too, so a
+	// saved tab can never point outside scripts_dir
+	if t.Script != "" && !userdata.ValidScriptName(t.Script) {
+		return badRequest("not a script name: %q", t.Script)
 	}
 	if err := s.hub.claimOne(winID, t.ID); err != nil {
 		return err
@@ -198,6 +205,9 @@ type wsState struct {
 	HasPlan    bool     `json:"hasPlan"`  // the Plan tab has something to show
 	Stateful   bool     `json:"stateful"` // the "session state" badge; see runEvent
 	Warnings   []string `json:"warnings,omitempty"`
+	// Sets: the last script run's shown results, when it showed more than
+	// one, for the results bar's switcher (see resultSets)
+	Sets *resultSets `json:"sets,omitempty"`
 	sideState
 }
 
@@ -206,7 +216,7 @@ func (s *Server) state(t *tab) wsState {
 		ID: t.id, Win: t.win.id, Active: t.ws.Active(), Connected: t.ws.Catalog() != nil,
 		Busy: t.ws.Busy(), Status: t.ws.RunningStatus(),
 		HasResult: t.ws.LastResult() != nil, HasPlan: t.planState().plan != nil,
-		sideState: s.sidebar(t.ws),
+		Sets: scriptSets(t.ws), sideState: s.sidebar(t.ws),
 	}
 	if name, ok := t.ws.Connecting(); ok {
 		st.Connecting = name

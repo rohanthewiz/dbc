@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -229,11 +230,25 @@ func (w *Workspace) RunScript(path string) (Start, error) {
 		return Start{}, err
 	}
 	gen, conn := w.runGen, w.active
+	// a new script run starts a new list of shown results: the last run's
+	// are no longer what the grid's "Result 1 · 2 · 3" switcher is about
+	w.scriptRes, w.scriptCut = nil, 0
 	s := sdb.New(w.mgr,
 		func(r *model.Result) {
 			if r != nil {
 				w.mu.Lock()
-				w.lastRes = r
+				// a straggling show from a run already written off (Stop,
+				// then a new run) must not land in the new run's list
+				if gen == w.runGen {
+					w.lastRes = r
+					w.scriptRes = append(w.scriptRes, r)
+					if len(w.scriptRes) > MaxScriptResults {
+						// drop the oldest; a fresh slice so the dropped
+						// result is not kept alive by the backing array
+						w.scriptRes = slices.Clone(w.scriptRes[1:])
+						w.scriptCut++
+					}
+				}
 				w.mu.Unlock()
 			}
 			w.emit(&ScriptShow{Result: r})
@@ -325,6 +340,7 @@ func (w *Workspace) landRun(ev *RunDone, gen int, wrote bool) {
 	}
 	if ev.Result != nil {
 		w.lastRes = ev.Result
+		w.scriptRes, w.scriptCut = nil, 0 // the grid has moved on from the script's results
 		// a result that is itself a plan — the output of an EXPLAIN the
 		// user ran — becomes the plan too, so a UI can show it as one
 		cc, _ := w.cfg.ConnByName(ev.Result.Conn)

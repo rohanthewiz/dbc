@@ -32,6 +32,7 @@ type Workbench struct {
 // Render returns the whole document.
 //
 //	┌ topbar: dbc · connection · [session state] · ▶ Run ▶▶ Run all ◈ Explain ■ Stop ⟲ History ▷ Scripts ✦ ◐ ┐
+//	  (a script tab: dbc · ▷ name.go ● · ▶ Run ✓ Check ⤓ Save ■ Stop ⟲ History ▷ Scripts ✦ ◐)
 //	├ sidebar ──────┬ [Query 1][Query 2 ●][+]   query tabs ────────────────┬┬ assistant (Ctrl+I) ──────┤
 //	│               ├ editor (textarea, upgraded to Monaco) ────────────────┤│                          │
 //	│ Connections   ├ ═ splitter (drag; the height is saved) ═══════════════┤│ ✦ Copilot · model ▾  ⟲ ✕ │
@@ -97,6 +98,9 @@ func (p Workbench) Render() string {
 								b.ButtonClass("rtab", "id", "plan-tab", "type", "button", "role", "tab", "data-rtab", "plan", "hidden", "hidden",
 									"title", "The last plan (p from the grid)").T("◈ Plan"),
 							),
+							// a script run's results, when it showed more than one:
+							// "Result 1 · 2 · 3" (app.js drawSets)
+							b.SpanClass("rsets", "id", "rsets", "hidden", "hidden", "role", "group", "aria-label", "The script's results").R(),
 							b.SpanClass("grid-info", "id", "grid-info", "aria-live", "polite").R(),
 							b.DivClass("ractions").R(
 								// a toggle: aria-pressed carries its state, for the
@@ -167,11 +171,16 @@ func (p Workbench) topbar(b *element.Builder) any {
 		b.DivClass("actions").R(
 			b.Button("id", "run", "type", "button", "title", "Run the statement under the caret (Ctrl+Enter)").T("▶ Run"),
 			b.Button("id", "run-all", "type", "button", "title", "Run every statement (Ctrl+Shift+Enter)").T("▶▶ Run all"),
+			// a script tab's two (app.js "script tabs"); hidden in a query
+			// tab by the stylesheet, as Run all and Explain are in a script tab
+			b.Button("id", "check-btn", "type", "button",
+				"title", "Compile the script without running it, and list what is wrong (errors are also marked as you type)").T("✓ Check"),
+			b.Button("id", "save-btn", "type", "button", "title", "Save the script (Ctrl+S) — Run saves first too").T("⤓ Save"),
 			b.Button("id", "explain-btn", "type", "button",
 				"title", "Explain the statement under the caret (Ctrl+X with nothing selected; Ctrl+Shift+X analyzes)").T("◈ Explain"),
 			b.Button("id", "stop", "type", "button", "disabled", "disabled", "title", "Stop the run or connect (Ctrl+K)").T("■ Stop"),
 			b.Button("id", "history-btn", "type", "button", "title", "Past statements, here and in the TUI (Ctrl+P)").T("⟲ History"),
-			b.Button("id", "scripts-btn", "type", "button", "title", "Run a Go script from scripts_dir (Ctrl+O)").T("▷ Scripts"),
+			b.Button("id", "scripts-btn", "type", "button", "title", "Go scripts: run, edit, start one from a template (Ctrl+O)").T("▷ Scripts"),
 			b.Button("id", "chat-btn", "type", "button", "title", "The assistant: ask about the query or result (Ctrl+I)").T("✦ Assistant"),
 			b.ButtonClass("iconbtn", "id", "theme-btn", "type", "button", "title", "Switch light / dark", "aria-label", "Switch light / dark").T("◐"),
 		),
@@ -342,7 +351,7 @@ func (p Workbench) chat(b *element.Builder) any {
 
 // scripts are the workbench's modules, in load order: core first (the
 // shared API, log and state), app last (boot, which uses all the others).
-var scripts = []string{"core.js", "ui.js", "editor.js", "grid.js", "plan.js", "planview.js", "erdview.js", "hl.js", "chat.js", "conns.js", "tabgroups.js", "app.js"}
+var scripts = []string{"core.js", "ui.js", "editor.js", "grid.js", "plan.js", "planview.js", "erdview.js", "hl.js", "chat.js", "conns.js", "tabgroups.js", "scripts.js", "app.js"}
 
 // head is the <head> every page shares: the theme as CSS variables, the
 // stylesheet, and the script (deferred, so it runs once the DOM is parsed).

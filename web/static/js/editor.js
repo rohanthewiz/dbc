@@ -35,6 +35,15 @@
 // column the statement names (a CTE's output column, a select alias) come
 // from the server too (POST /api/v1/ws/:id/symbol and …/rename), from the
 // scanner completion reads the statement with: F12, Shift+F12 and F2.
+//
+// SCRIPT TABS edit Go, not SQL (scripts.js). Their documents are opened
+// with a FIXED language ("go"): the connection's dialect (setDriver) never
+// touches them, the statement marker and the SQL providers leave them
+// alone, and the chords that mean something only for SQL (Ctrl+X explain)
+// step aside through the dbcScript context key, so Monaco's own Ctrl+X
+// (cut the line) works there. Go completion, hover and the check's
+// markers are scripts.js's, hung on the editor through ready() and
+// setMarkers().
 (function () {
   "use strict";
 
@@ -61,6 +70,12 @@
   // to keep, so it just swaps text.
   const docs = new Map(); // tab key → {model, view}
   let docKey = "";
+  // fixed: document key → its language, for a document that is not SQL (a
+  // script tab's "go"). Kept apart from docs so the plain textarea, which
+  // has no models, still knows what the document on screen is.
+  const fixed = new Map();
+  const readyFns = []; // ready(fn) callbacks waiting for Monaco
+  let scriptCtx = null; // the dbcScript context key, once Monaco is up
   let warmed = "";   // the connection completions were last warmed for
   let lastNote = ""; // the last completion note logged, so it is logged once
 
@@ -126,7 +141,7 @@
     // their own keywords and quoting; everything else is generic sql.
     setDriver(driver) {
       lang = /postgres|pgx|cockroach/.test(driver || "") ? "pgsql" : /mysql|maria/.test(driver || "") ? "mysql" : "sql";
-      if (ed) monaco.editor.setModelLanguage(ed.getModel(), lang);
+      if (ed && !fixed.has(docKey)) monaco.editor.setModelLanguage(ed.getModel(), lang);
     },
     setHeight(px) {
       wrap.style.height = px + "px";
@@ -136,8 +151,14 @@
     element: wrap,
     // useDoc shows query tab key's document, creating it with text the
     // first time. It fires no change: switching tabs edits nothing.
-    useDoc(key, text) {
+    // language fixes the document's language ("go" for a script tab); left
+    // out, the document is SQL in the connection's dialect.
+    useDoc(key, text, language) {
+      if (language) fixed.set(key, language);
       if (key === docKey) return;
+      const go = fixed.get(key) === "go";
+      ta.placeholder = go ? "func Run(s *sdb.S) error { … }" : "SELECT * FROM cats;";
+      ta.setAttribute("aria-label", go ? "Go script editor" : "SQL editor");
       if (!ed) {
         ta.value = text;
         docKey = key;
@@ -147,21 +168,56 @@
       if (cur) cur.view = ed.saveViewState();
       let d = docs.get(key);
       if (!d) {
-        d = { model: monaco.editor.createModel(text, lang), view: null };
+        d = { model: newModel(text, key), view: null };
         docs.set(key, d);
       }
       docKey = key;
-      monaco.editor.setModelLanguage(d.model, lang);
+      monaco.editor.setModelLanguage(d.model, fixed.get(key) || lang);
       ed.setModel(d.model);
       if (d.view) ed.restoreViewState(d.view);
       ta.value = ed.getValue();
+      scriptCtx.set(go);
       scheduleMark();
+    },
+    // isScript: the document on screen is a script's (Go)
+    isScript: () => fixed.get(docKey) === "go",
+    // setMarkers puts a check's diagnostics (script.Diag: line, col,
+    // severity, msg) on key's document as Monaco markers — squiggles, the
+    // hover's message, F8 to walk them. A document not open (or the plain
+    // textarea, which cannot draw them) is skipped; the next check after
+    // it opens marks it.
+    setMarkers(key, diags) {
+      const d = docs.get(key);
+      if (!ed || !d) return;
+      const m = d.model, S = monaco.MarkerSeverity;
+      monaco.editor.setModelMarkers(m, "dbc", (diags || []).map((x) => {
+        const line = Math.min(Math.max(1, x.line || 1), m.getLineCount());
+        // col 0 is a message about the line as a whole (yaegi does not
+        // always say where); a col marks the word that starts there, or
+        // one character when nothing word-like does
+        let a = 1, b = m.getLineMaxColumn(line);
+        if (x.col > 0) {
+          a = Math.min(x.col, b);
+          const w = m.getWordAtPosition({ lineNumber: line, column: a });
+          b = w && w.startColumn === a ? w.endColumn : Math.min(a + 1, m.getLineMaxColumn(line));
+        }
+        return { severity: x.severity === "error" ? S.Error : S.Warning, message: x.msg,
+          startLineNumber: line, startColumn: a, endLineNumber: line, endColumn: Math.max(b, a + 1) };
+      }));
+    },
+    // ready runs fn(monaco) once Monaco has loaded — at once if it has. A
+    // page whose Monaco never loads never calls it (the textarea has no
+    // completion to offer anyway).
+    ready(fn) {
+      if (ed) fn(window.monaco);
+      else readyFns.push(fn);
     },
     // dropDoc forgets a document no tab will show again: a closed tab's
     // own, or a deleted console's. The one on screen is never dropped.
     dropDoc(key) {
       const d = docs.get(key);
       if (d && key !== docKey) { d.model.dispose(); docs.delete(key); }
+      if (key !== docKey) fixed.delete(key);
     },
     // A document is a query tab's own, or — with consoles — a console's,
     // shared by every tab of the window showing that console (app.js
@@ -197,6 +253,7 @@
     renameDoc(from, to) {
       const d = docs.get(from);
       if (d && !docs.has(to)) { docs.delete(from); docs.set(to, d); }
+      if (fixed.has(from) && !fixed.has(to)) { fixed.set(to, fixed.get(from)); fixed.delete(from); }
       if (docKey === from) docKey = to;
     },
     // warm asks for completions once when the active connection changes,
@@ -217,6 +274,14 @@
   function changed() {
     for (const fn of changeFns) fn();
     scheduleMark();
+  }
+
+  // newModel makes key's Monaco model in its language. A Go document
+  // indents with tabs, as gofmt does; SQL keeps the editor's four spaces.
+  function newModel(text, key) {
+    const m = monaco.editor.createModel(text, fixed.get(key) || lang);
+    if (fixed.get(key) === "go") m.updateOptions({ insertSpaces: false, tabSize: 4 });
+    return m;
   }
   ta.addEventListener("input", changed);
   ta.addEventListener("keyup", scheduleMark);
@@ -241,6 +306,8 @@
   }
   async function mark() {
     const seq = ++markSeq;
+    // a script is Go: there is no statement to mark
+    if (api.isScript()) { decos.set([]); return; }
     const text = ed.getValue();
     let r;
     try {
@@ -515,9 +582,15 @@
     bind(0, C.KeyK, () => dbc.cmd.stop());
     bind(0, C.KeyP, () => dbc.cmd.history());
     bind(0, C.KeyE, () => dbc.cmd.exportMenu());
-    bind(0, C.KeyX, explain(false), "!editorHasSelection");
-    bind(K.Shift, C.KeyX, explain(true));
-    ed.addCommand(K.Alt | C.KeyX, explain(true)); // the TUI's Alt+X
+    // explain is SQL's: in a script tab these step aside (dbcScript), and
+    // Ctrl+X with nothing selected cuts the line as Monaco does by default
+    bind(0, C.KeyX, explain(false), "!editorHasSelection && !dbcScript");
+    bind(K.Shift, C.KeyX, explain(true), "!dbcScript");
+    ed.addCommand(K.Alt | C.KeyX, explain(true), "!dbcScript"); // the TUI's Alt+X
+    // save: a script tab's explicit save; a query tab's console saves
+    // itself, and this only flushes it — either way the browser's "save
+    // the page" dialog stays out of it
+    bind(0, C.KeyS, () => dbc.cmd.save && dbc.cmd.save());
     bind(0, C.KeyI, () => dbc.cmd.assistant());
     // query tabs (Alt: the browser keeps Ctrl+T/W/1…9) and the key list —
     // Monaco's own, or it would type "†" for Alt+T on a Mac and open its
@@ -548,7 +621,7 @@
       // the editor made itself is disposed when it switches to another
       // (see useDoc), which would lose the first query tab's document —
       // undo history, cursor and all — on the first tab switch.
-      model: monaco.editor.createModel(ta.value, lang),
+      model: newModel(ta.value, docKey),
       theme: "dbc",
       automaticLayout: true, // the splitter resizes the pane; Monaco follows
       minimap: { enabled: false },
@@ -584,6 +657,7 @@
       contextmenu: true,
     });
     decos = ed.createDecorationsCollection();
+    scriptCtx = ed.createContextKey("dbcScript", api.isScript());
     if (docKey) docs.set(docKey, { model: ed.getModel(), view: null });
     // keep the caret where it was in the textarea
     const pos = ed.getModel().getPositionAt(ta.selectionStart);
@@ -598,6 +672,7 @@
     wrap.classList.add("monaco-on");
     if (hadFocus) ed.focus();
     scheduleMark();
+    for (const fn of readyFns.splice(0)) fn(window.monaco);
   }
 
   load().then(start).catch((err) => {

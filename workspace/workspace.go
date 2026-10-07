@@ -55,6 +55,7 @@ package workspace
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -123,6 +124,14 @@ type Workspace struct {
 	lastErr  string        // what it failed with, "" if it worked
 	lastRes  *model.Result // the last result published (a run's or a script's s.Show)
 	plan     *explain.Plan // the last plan: an explain's, or one detected in a result
+	// scriptRes are the results the last script run showed (s.Show), oldest
+	// first, at most MaxScriptResults of them; scriptCut counts the ones
+	// dropped off the front to keep to that, so result i here is the
+	// script's (scriptCut+i+1)th show. lastRes is one of them while the
+	// grid is on a script's output (ShowScriptResult moves it between
+	// them); a run that lands a result of its own empties the list.
+	scriptRes []*model.Result
+	scriptCut int
 
 	// planChat caches plan as the assistant is shown it — ChatContext is
 	// built every frame by the TUI's context chip, and the plan does not
@@ -326,6 +335,43 @@ func (w *Workspace) LastResult() *model.Result {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.lastRes
+}
+
+// MaxScriptResults caps how many of one script run's s.Show results are
+// kept for a UI to switch between. A script that shows a result per loop
+// pass could otherwise hold every one of them — each possibly max_rows
+// rows — for as long as the tab lives. The newest are kept: the last
+// result shown is usually the one the script was building toward.
+const MaxScriptResults = 20
+
+// ScriptResults describes the results the last script run showed: n of
+// them kept, the one the grid is on (at, 0-based; -1 when the grid shows
+// something else since, which empties the list anyway), and cut, how many
+// earlier shows were dropped to keep to MaxScriptResults — so a UI can
+// number them as the script showed them (cut+1 … cut+n).
+func (w *Workspace) ScriptResults() (n, at, cut int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	at = slices.Index(w.scriptRes, w.lastRes)
+	return len(w.scriptRes), at, w.scriptCut
+}
+
+// ShowScriptResult puts the last script run's result i (0-based, among the
+// ones kept) back on the grid: it becomes the last result, which is what
+// the grid, copies, exports and the assistant all read. Refused while a run
+// is in flight — a script still showing results would move the grid under
+// the pick — and for an i out of range.
+func (w *Workspace) ShowScriptResult(i int) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.busy {
+		return refuse(Busy, Warn, "busy — %s is still running; pick a result once it is done", w.runTag)
+	}
+	if i < 0 || i >= len(w.scriptRes) {
+		return refuse(Invalid, Warn, "no result %d — the last script showed %d", i+1, len(w.scriptRes))
+	}
+	w.lastRes = w.scriptRes[i]
+	return nil
 }
 
 // Plan is the last plan: an explain's, or one recognized in a result.

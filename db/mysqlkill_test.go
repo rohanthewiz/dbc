@@ -99,7 +99,10 @@ func (r *killFakeRows) Next(dest []driver.Value) error {
 	if r.done {
 		return io.EOF
 	}
-	r.done, dest[0] = true, r.id
+	// uint64, as go-sql-driver/mysql v1.9+ hands back CONNECTION_ID() (a
+	// BIGINT UNSIGNED); an int64 here once hid that connectionID dropped
+	// the real driver's ids (N-097).
+	r.done, dest[0] = true, uint64(r.id)
 	return nil
 }
 

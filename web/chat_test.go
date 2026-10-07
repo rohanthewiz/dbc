@@ -200,6 +200,47 @@ func TestChatContextForecast(t *testing.T) {
 	}
 }
 
+// A question from a script tab sends the editor as the Go script it is, not
+// as SQL; the sdb API goes with the conversation's first such question only
+// (the chip forecasts it, then stops), and a new conversation sends it again.
+func TestChatScriptTab(t *testing.T) {
+	f := &aitest.Fake{}
+	e, _ := chatEnv(t, f)
+	id, s := e.open()
+	src := "package main\n\nfunc Run(s *sdb.S) error {\n\t_, err := s.Query(\"lite\", \"SELECT 1; SELECT 2\")\n\treturn err\n}"
+	req := func(q string) string {
+		b, _ := json.Marshal(chatReq{Question: q, Attach: true, Editor: runReq{Buffer: src, Caret: 10}, Script: "nightly.go"})
+		return string(b)
+	}
+	forecast := func() string {
+		return decodeData[map[string]string](t, e.api("POST", "/api/v1/ws/"+id+"/chat/context", req(""), 200))["note"]
+	}
+	if got := forecast(); !strings.Contains(got, "sdb API") || !strings.Contains(got, "script") || strings.Contains(got, "query") {
+		t.Errorf("first forecast = %q", got)
+	}
+
+	e.api("POST", "/api/v1/ws/"+id+"/chat/ask", req("what does it do?"), 200)
+	awaitChat(t, s, chatReadyView)
+	e.api("POST", "/api/v1/ws/"+id+"/chat/ask", req("and now?"), 200)
+	awaitChat(t, s, func(v chatView) bool { return chatReadyView(v) && len(f.Prompts()) == 2 })
+	p := f.Prompts()
+	if !strings.Contains(p[0], "The Go script in question (nightly.go):\n```go\n"+src) ||
+		!strings.Contains(p[0], "The sdb API, by signature") || strings.Contains(p[0], "The SQL in question") {
+		t.Errorf("first prompt:\n%s", p[0])
+	}
+	if strings.Contains(p[1], "The sdb API") || !strings.Contains(p[1], "```go\n"+src) {
+		t.Errorf("second prompt should carry the script, not the API again:\n%s", p[1])
+	}
+	if got := forecast(); strings.Contains(got, "sdb API") {
+		t.Errorf("forecast after the API went = %q", got)
+	}
+
+	e.api("POST", "/api/v1/ws/"+id+"/chat/new", "", 200)
+	if got := forecast(); !strings.Contains(got, "sdb API") {
+		t.Errorf("a new conversation should send the API again: %q", got)
+	}
+}
+
 // A second question mid-answer is a 409; stop cancels the answer, which
 // ends as "— stopped".
 func TestChatBusyThenStop(t *testing.T) {

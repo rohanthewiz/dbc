@@ -2,7 +2,7 @@
 // log, the status bar, and the page's state. Loaded first; each module after
 // it hangs its piece on window.dbc:
 //
-//   core.js    dbc.api, dbc.log, dbc.setStatus, dbc.state, dbc.cmd
+//   core.js    dbc.api, dbc.putLayout, dbc.log, dbc.setStatus, dbc.state, dbc.cmd
 //   ui.js      dbc.menu, dbc.modal, dbc.clip        (menus, dialogs, clipboard)
 //   editor.js  dbc.editor                           (textarea → Monaco)
 //   grid.js    dbc.grid                             (the virtualized results grid)
@@ -55,6 +55,27 @@
       throw err;
     }
     return env.data;
+  };
+
+  // putLayout writes layout values (PUT /api/v1/layout plus query, e.g.
+  // app.js's ?win=), one write at a time and in the order asked. Each
+  // write is a separate request, and the browser spreads requests over
+  // several connections, so two sent back to back can reach the server in
+  // either order — and the store keeps whichever lands last. Ctrl+B twice
+  // in quick succession could leave "sideHidden" saved as "1" under an
+  // open sidebar (folded again on the next load); a run of strip changes
+  // could save an older "tabs" order or "groups" after a newer one
+  // (N-120). Chaining them costs one round trip on localhost per queued
+  // write. A write that fails does not stop the ones after it; its caller
+  // still sees the error.
+  //
+  //   putLayout(a); putLayout(b); putLayout(c)   (in one tick)
+  //   PUT a ──answered──► PUT b ──answered──► PUT c
+  let layoutWrites = Promise.resolve();
+  dbc.putLayout = function (values, query) {
+    const p = layoutWrites.then(() => dbc.api("PUT", "/api/v1/layout" + (query || ""), values));
+    layoutWrites = p.catch(() => {});
+    return p;
   };
 
   // ── the log and the status bar ─────────────────────────────────────────

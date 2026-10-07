@@ -779,6 +779,68 @@ func TestChatContext(t *testing.T) {
 	}
 }
 
+// A script tab's question carries the whole source as a script (not a
+// statement picked out of it), the configured connections, and the tables
+// its SQL names; the last run's result goes only when that run was this
+// script. A script run also ends the last statement's claim on the last
+// result: a query tab's question about that statement no longer gets the
+// script's rows or error as its own.
+func TestScriptChatContext(t *testing.T) {
+	w := newTestWorkspace(t)
+	w.cfg.Connections[0].AIRows = true
+	stmt := "SELECT id, name FROM cats"
+	run(t, w, stmt)
+
+	src, err := os.ReadFile("../testdata/show_two.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// before it has run: the source and the tables, no result
+	ctx, refs := w.ScriptChatContext("why?", "show_two.go", string(src), GridView{SortCol: -1})
+	if ctx.Script != "show_two.go" || ctx.Query != string(src) || ctx.Plan != "" || ctx.Columns != nil || ctx.Err != "" {
+		t.Errorf("before a run: %+v", ctx)
+	}
+	if len(refs) != 1 || len(ctx.Tables) != 1 {
+		t.Errorf("the cats table, named in the script's SQL, should go: %+v", ctx.Tables)
+	}
+	if len(ctx.ScriptConns) == 0 || !strings.HasPrefix(ctx.ScriptConns[0], w.Active()+" (") {
+		t.Errorf("the tab's own connection should lead the list: %q", ctx.ScriptConns)
+	}
+
+	st, err := w.RunScript("../testdata/show_two.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev := st.Job().(*RunDone); ev.Err != nil {
+		t.Fatal(ev.Err)
+	}
+	last := w.LastResult()
+	ctx, _ = w.ScriptChatContext("", "show_two.go", string(src), GridView{Result: last, SortCol: -1, Hidden: []int{0}})
+	if ctx.Columns == nil || len(ctx.Rows) != len(last.Rows) || len(ctx.Hidden) != 1 {
+		t.Errorf("this script's last show should go, with the grid's view: %+v", ctx)
+	}
+	// another script's question gets none of it
+	if ctx, _ = w.ScriptChatContext("", "other.go", "package main", GridView{SortCol: -1}); ctx.Columns != nil {
+		t.Errorf("another script got this one's result: %+v", ctx)
+	}
+	// nor does the statement that ran before the script
+	if ctx, _ = w.ChatContext("", Editor{Text: stmt}, GridView{SortCol: -1}); ctx.Columns != nil || ctx.Err != "" {
+		t.Errorf("the statement got the script's result: %+v", ctx)
+	}
+	if w.LastStmt() != "" {
+		t.Errorf("LastStmt after a script = %q", w.LastStmt())
+	}
+
+	// a statement run after it takes the last run back
+	run(t, w, stmt)
+	if ctx, _ = w.ScriptChatContext("", "show_two.go", string(src), GridView{SortCol: -1}); ctx.Columns != nil {
+		t.Errorf("the script kept a statement's result: %+v", ctx)
+	}
+	if ctx, _ = w.ChatContext("", Editor{Text: stmt}, GridView{SortCol: -1}); ctx.Columns == nil {
+		t.Errorf("the statement lost its own result: %+v", ctx)
+	}
+}
+
 // A script's s.Print and s.Show reach the sink mid-run, in order, and each
 // s.Show publishes its result; the Job lands the script as a run.
 func TestScriptEventsReachTheSink(t *testing.T) {

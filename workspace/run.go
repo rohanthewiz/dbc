@@ -327,7 +327,15 @@ func (w *Workspace) landRun(ev *RunDone, gen int, wrote bool) {
 	w.dropCompletionsAfterRunLocked(ev)
 	ev.Elapsed = w.endRunLocked()
 	if len(ev.Stmts) > 0 {
-		w.lastStmt = ev.Stmts[len(ev.Stmts)-1]
+		w.lastStmt, w.lastScript = ev.Stmts[len(ev.Stmts)-1], ""
+	}
+	if ev.Script {
+		// A script's run replaces the last statement rather than leaving
+		// it: the error and results below are the script's, and with the
+		// old statement still "last", ChatContext would hand them to the
+		// assistant as that statement's ("why did this SELECT fail?" with
+		// the script's error). The tag is "script <name>" (RunScript).
+		w.lastStmt, w.lastScript = "", strings.TrimPrefix(ev.Tag, "script ")
 	}
 	if ev.Err != nil {
 		w.failedLocked(ev.Err, ev.Tag, ev.Elapsed, &ev.Notes, &ev.Status)

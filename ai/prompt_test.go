@@ -274,3 +274,39 @@ func TestBuildIncludesPlan(t *testing.T) {
 		t.Error("no plan, no mention")
 	}
 }
+
+// A script tab's question: the source is fenced as Go and called the
+// script, never "The SQL in question"; the connections and (when the
+// caller set it) the sdb API go ahead of it, each named in the note. The
+// API is the caller's to send once — without it, only the script goes.
+func TestScriptQuestion(t *testing.T) {
+	src := "package main\n\nfunc Run(s *sdb.S) error { return nil }"
+	ctx := Context{Script: "nightly.go", Query: src, ScriptConns: []string{"prod (postgres)", "lite (sqlite)"},
+		ScriptAPI: "func (s *S) Query(conn, query string, args ...any) (*Result, error)"}
+	p := Build("why?", ctx, true)
+	for _, want := range []string{
+		"The Go script in question (nightly.go):\n```go\n" + src + "\n```",
+		"```go block", // the script preamble asks for Go back
+		"The sdb API, by signature:\n```\nfunc (s *S) Query(",
+		"Connections configured in dbc (a script names them as conn, src and dst): prod (postgres), lite (sqlite).",
+	} {
+		if !strings.Contains(p.Text, want) {
+			t.Errorf("missing %q in:\n%s", want, p.Text)
+		}
+	}
+	if strings.Contains(p.Text, "The SQL in question") {
+		t.Errorf("a script was framed as SQL:\n%s", p.Text)
+	}
+	if p.Note != "sent: sdb API, connection names, script" {
+		t.Errorf("note = %q", p.Note)
+	}
+
+	ctx.ScriptAPI = ""
+	if p = Build("and?", ctx, false); strings.Contains(p.Text, "sdb API") || p.Note != "sent: connection names, script" {
+		t.Errorf("without the API: note %q, text:\n%s", p.Note, p.Text)
+	}
+	// the API never goes with a SQL question, even if set
+	if p = Build("q", Context{Query: "SELECT 1", ScriptAPI: "x"}, false); strings.Contains(p.Text, "sdb API") {
+		t.Errorf("the API went with SQL:\n%s", p.Text)
+	}
+}

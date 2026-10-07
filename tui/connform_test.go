@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/connedit"
 	"github.com/rohanthewiz/dbc/userdata"
@@ -294,5 +296,71 @@ func TestConnFormSeesLazyTabs(t *testing.T) {
 	m.connRenamed("s1", "s2")
 	if m.tabs[1].lazy != "s2" {
 		t.Fatalf("after the rename tab two connects to %q", m.tabs[1].lazy)
+	}
+}
+
+// On a narrow terminal the TLS chips wrap onto a second line instead of
+// running past the form's right edge: every chip stays whole, inside the
+// form, and clickable, and the rows below move down to make room. A wide
+// terminal keeps them on one line.
+func TestConnFormTLSChipsWrap(t *testing.T) {
+	m := newTestModel(t)
+	drive(t, m, tea.WindowSizeMsg{Width: 80, Height: 40})
+	key(t, m, "ctrl+l")
+	key(t, m, "a")
+	cf := connFormOf(t, m)
+	r := cf.drvR[0] // postgres: a server, so the TLS row shows
+	click(t, m, r.X+1, r.Y)
+	if !cf.server() {
+		t.Fatalf("driver = %q, want a server", cf.driver)
+	}
+
+	c := frame(m)
+	inner := m.modalRect().Inset(1)
+	if len(cf.tlsR) != len(cfTLSModes) {
+		t.Fatalf("tls chips = %d, want %d", len(cf.tlsR), len(cfTLSModes))
+	}
+	for i, tr := range cf.tlsR {
+		if tr.X+tr.W > inner.X+inner.W-1 {
+			t.Errorf("chip %d (%q) ends at %d, past the form's last column %d", i, cfTLSModes[i], tr.X+tr.W, inner.X+inner.W-1)
+		}
+	}
+	first, last := cf.tlsR[0], cf.tlsR[len(cf.tlsR)-1]
+	if last.Y != first.Y+1 || last.X != first.X {
+		t.Fatalf("verify-full should start the second line under from DSN: %+v vs %+v\n%s", last, first, c.Text())
+	}
+	if !strings.Contains(c.Line(last.Y), " verify-full ") {
+		t.Errorf("verify-full is not drawn whole: %q", c.Line(last.Y))
+	}
+
+	// the wrapped chip takes a click, and the rows it opens start below it
+	click(t, m, last.X+2, last.Y)
+	if cf.tls != config.TLSVerifyFull {
+		t.Fatalf("tls = %q, want verify-full", cf.tls)
+	}
+	c = frame(m)
+	last = cf.tlsR[len(cf.tlsR)-1] // the taller form is centred anew
+	if _, y := findText(t, c, "CA file"); y != last.Y+1 {
+		t.Errorf("CA file at y %d, want the line under the chips (%d)", y, last.Y+1)
+	}
+	findText(t, c, "✓ Save")
+
+	// wide enough: one line, as before
+	drive(t, m, tea.WindowSizeMsg{Width: 140, Height: 40})
+	if a, b := cf.tlsR[0], cf.tlsR[len(cf.tlsR)-1]; a.Y != b.Y {
+		t.Errorf("at 140 columns the TLS chips should share a line: %+v, %+v", a, b)
+	}
+}
+
+// chipRows wraps before a chip that would reach the last column, never
+// before a line's first chip.
+func TestChipRows(t *testing.T) {
+	pos, lines := chipRows([]string{"aaaa", "bbbb", "cccc"}, 2, 13)
+	// aaaa at 2..5, bbbb at 7..10 (ends before col 12), cccc would end at 15
+	if lines != 2 || pos[1] != [2]int{7, 0} || pos[2] != [2]int{2, 1} {
+		t.Errorf("pos %v, lines %d", pos, lines)
+	}
+	if _, lines := chipRows([]string{"much too wide"}, 2, 6); lines != 1 {
+		t.Errorf("a lone wide chip should stay on its line, lines %d", lines)
 	}
 }

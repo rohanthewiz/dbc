@@ -63,6 +63,26 @@ type Context struct {
 	Query string // the statement the question is about; "" if none
 	Err   string // the error the last run of it failed with, if it failed
 
+	// Script names the Go script (its file name, "nightly.go") when the
+	// question is asked from a script tab. Query then holds the script's
+	// source, not SQL: Build fences it as Go and calls it "the script", so
+	// the model neither reads Go as a malformed statement nor answers with
+	// SQL that rewrites the whole file as one query. Err and the result
+	// fields are then the last run of THIS script, when it was the last
+	// thing the tab ran.
+	Script string
+	// ScriptConns are the configured connections, "name (driver)", for a
+	// script question: a script names its connections in strings (a script
+	// tab has no connection of its own), so these are the names it can use
+	// and the dialect each one's SQL must be written in. Names and drivers
+	// are configuration, not data, so they go on every connection.
+	ScriptConns []string
+	// ScriptAPI is the sdb API summary (sdbapi.Summary) the script is
+	// written against. The caller sets it on the first script question of
+	// a conversation only: the agent keeps the session's history, so the
+	// same ~2k tokens on every turn would buy nothing — the preamble's rule.
+	ScriptAPI string
+
 	// The last result. Columns nil means there is none (never run, or an
 	// exec with nothing to show).
 	Columns   []string
@@ -135,6 +155,16 @@ const preamble = "You are the SQL assistant inside dbc, a terminal database clie
 	"Answer concisely. When you suggest SQL, put each statement in a fenced ```sql block " +
 	"written for the connection's dialect, so the user can insert it into their editor."
 
+// scriptPreamble goes with the sdb API, once per conversation, the first
+// time a question comes from a script tab. The preamble above calls the
+// assistant a SQL one and asks for ```sql blocks; a script's question
+// needs Go back instead, and the script tab offers "insert into the
+// editor" on ```go blocks for it.
+const scriptPreamble = "The user is also editing a dbc script: a Go program run by dbc's embedded " +
+	"interpreter (yaegi), which reaches databases through the sdb API below. " +
+	"When you suggest a change to a script, put the Go in a fenced ```go block; " +
+	"connections are named by the strings passed as conn, src and dst.\n\n"
+
 // Build renders a question plus its context as one prompt. first says
 // whether this is the first turn of the conversation, which is the only one
 // that carries the preamble — the agent keeps the session's history, so
@@ -157,11 +187,33 @@ func Build(question string, ctx Context, first bool) Prompt {
 		}
 		sent = append(sent, schemaNote(ctx.Tables))
 	}
-	if q := strings.TrimSpace(ctx.Query); q != "" {
-		sb.WriteString("The SQL in question:\n```sql\n")
-		sb.WriteString(q)
+	if api := strings.TrimSpace(ctx.ScriptAPI); api != "" && ctx.Script != "" {
+		sb.WriteString(scriptPreamble)
+		sb.WriteString("The sdb API, by signature:\n```\n")
+		sb.WriteString(api)
 		sb.WriteString("\n```\n\n")
-		sent = append(sent, "query")
+		sent = append(sent, "sdb API")
+	}
+	if ctx.Script != "" && len(ctx.ScriptConns) > 0 {
+		fmt.Fprintf(&sb, "Connections configured in dbc (a script names them as conn, src and dst): %s.\n\n",
+			strings.Join(ctx.ScriptConns, ", "))
+		sent = append(sent, "connection names")
+	}
+	if q := strings.TrimSpace(ctx.Query); q != "" {
+		if ctx.Script != "" {
+			// A script, not a statement: fenced as Go, so the model reads
+			// it as the program it is, and named, so "line 12" and "the
+			// Copy call" have a file to belong to.
+			fmt.Fprintf(&sb, "The Go script in question (%s):\n```go\n", ctx.Script)
+			sb.WriteString(q)
+			sb.WriteString("\n```\n\n")
+			sent = append(sent, "script")
+		} else {
+			sb.WriteString("The SQL in question:\n```sql\n")
+			sb.WriteString(q)
+			sb.WriteString("\n```\n\n")
+			sent = append(sent, "query")
+		}
 	}
 	if pl := strings.TrimSpace(ctx.Plan); pl != "" {
 		sb.WriteString("Its query plan, as dbc summarized it (each step's own share of the time or cost, " +

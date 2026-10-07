@@ -136,8 +136,9 @@ See [scripting.md](scripting.md) for the `sdb.S` API, ETL
 map-assignment bug that silently drops writes. Samples to copy from live in
 the repo's `scripts/` (`loop_params.go`, `sweep_conns.go`,
 `export_report.go`, `copy_table.go`, `plan_check.go`). They are built into
-the binary as the browser's read-only Examples, but headless `dbc script
-loop_params` does not find them by name: run them by path from a checkout.
+the binary as the browser's read-only Examples, and headless `dbc script
+loop_params` runs one by name when no script of the user's has that name
+(`dbc scripts` lists them with kind `example`).
 
 ## Working on dbc itself
 

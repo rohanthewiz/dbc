@@ -606,9 +606,17 @@
     // and never reaches the page's own Ctrl+B / ⌘B
     bind(0, C.KeyB, () => dbc.cmd.toggleSidebar && dbc.cmd.toggleSidebar());
     // the TUI's editor menu row, in Monaco's own right-click menu
+    // Two actions, one per kind of tab: a menu item's precondition is its
+    // "when", so each shows only where it applies, and a script tab's says
+    // what the assistant is actually handed (the script, as Go — see
+    // chat.js request) instead of calling a Go program "this query".
     ed.addAction({
       id: "dbc.ask", label: "✦ Ask the assistant about this query", contextMenuGroupId: "navigation",
-      contextMenuOrder: 0, run: () => dbc.cmd.askAbout("Explain this query."),
+      contextMenuOrder: 0, precondition: "!dbcScript", run: () => dbc.cmd.askAbout("Explain this query."),
+    });
+    ed.addAction({
+      id: "dbc.askScript", label: "✦ Ask the assistant about this script", contextMenuGroupId: "navigation",
+      contextMenuOrder: 0, precondition: "dbcScript", run: () => dbc.cmd.askAbout("Explain this script."),
     });
   }
 

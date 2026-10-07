@@ -1,7 +1,7 @@
 // Sample dbc script: run a parameterized query in a loop.
 //
-// Run headless:  dbc script scripts/loop_params.go
-// Or in the TUI: Ctrl+O, pick this file
+// Run headless:  dbc script loop_params   (the built-in copy, by name)
+// Or in the TUI: Ctrl+O, Examples, Enter makes your own copy
 //
 // The ignore tag keeps `go build` off script files; dbc runs them fine.
 //go:build ignore

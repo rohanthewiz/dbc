@@ -95,8 +95,15 @@ func connectionID(ctx context.Context, c driver.Conn) string {
 	if err = rows.Next(dest); err != nil && !errors.Is(err, io.EOF) {
 		return ""
 	}
+	// The type depends on the driver, not the server: CONNECTION_ID() is a
+	// BIGINT UNSIGNED, which go-sql-driver/mysql v1.9+ decodes as uint64 even
+	// over the text protocol. Missing that case left every pooled MySQL
+	// connection without an id, so no canceled statement was ever killed
+	// (N-097). int64 and []byte stay for older drivers and the fakes.
 	var id string
 	switch v := dest[0].(type) {
+	case uint64:
+		id = strconv.FormatUint(v, 10)
 	case int64:
 		id = strconv.FormatInt(v, 10)
 	case []byte:

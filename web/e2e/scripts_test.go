@@ -188,17 +188,41 @@ func scriptTabs(t *testing.T, e *env, p *rod.Page) {
 		t.Fatalf("grid info on Result 1 = %q, want 3 rows", info)
 	}
 
+	// ── the assistant is asked about "this script", not "this query" ─────
+	// (the right-click menu's item: each kind of tab shows only its own)
+	if got := evalStr(t, p, `() => { const ed = monaco.editor.getEditors()[0];
+	  return [ed.getAction("dbc.askScript").isSupported(), ed.getAction("dbc.ask").isSupported()].join("|"); }`); got != "true|false" {
+		t.Fatalf("in a script tab, ask-about-script|ask-about-query = %q", got)
+	}
+
 	// ── an unsaved edit survives a reload (the draft) ────────────────────
+	// The draft is this window's own (scripts.js DRAFTS): another live
+	// window's draft of the same script — planted here, newer and beating
+	// — is neither read back nor overwritten.
 	draft := strings.Replace(scriptsGood, "e2e script done", "e2e draft", 1)
+	eval(t, p, `() => {
+	  localStorage.setItem("dbc.draftSeen.e2eother", String(Date.now() + 3600e3));
+	  localStorage.setItem("dbc.script.draft.e2eother:e2e_report.go",
+	    JSON.stringify({ base: "", text: "other window's draft", at: Date.now() + 3600e3 }));
+	}`)
 	setText(draft)
-	waitFor(t, p, "the draft kept", `() => (localStorage.getItem("dbc.script.draft.e2e_report.go") || "").includes("e2e draft")`)
+	const ownDraft = `(name) => { const me = sessionStorage.getItem("dbc.draftOwner");
+	  return !!me && (localStorage.getItem("dbc.script.draft." + me + ":" + name) || ""); }`
+	waitFor(t, p, "the draft kept", `() => String((`+ownDraft+`)("e2e_report.go")).includes("e2e draft")`)
 	p.MustReload()
 	p.MustWaitLoad()
-	waitFor(t, p, "the script tab back with its draft", `() => {
+	waitFor(t, p, "the script tab back with its own draft", `() => {
 	  const ed = window.monaco && monaco.editor.getEditors()[0];
 	  return !!ed && ed.getValue().includes("e2e draft") &&
 	    document.getElementById("active-conn").textContent.startsWith("▷ e2e_report.go ●");
 	}`)
+	if got := evalStr(t, p, `() => {
+	  const v = localStorage.getItem("dbc.script.draft.e2eother:e2e_report.go");
+	  localStorage.removeItem("dbc.script.draft.e2eother:e2e_report.go");
+	  localStorage.removeItem("dbc.draftSeen.e2eother");
+	  return v || "<gone>"; }`); !strings.Contains(got, "other window's draft") {
+		t.Fatalf("the other window's draft was touched: %q", got)
+	}
 
 	// ── a save over a change made elsewhere: the conflict ────────────────
 	elsewhere := strings.Replace(scriptsGood, "e2e script done", "changed in vim", 1)
@@ -256,10 +280,31 @@ func scriptTabs(t *testing.T, e *env, p *rod.Page) {
 	eval(t, p, `() => [...document.querySelectorAll(".modal .mfoot button")].find((b) => b.textContent === "Discard changes").click()`)
 	waitFor(t, p, "the script tab closed, the query tab back", `() =>
 	  !document.querySelector("#qtabs .qtab.script") && !document.querySelector(".app").classList.contains("script-mode") &&
-	  localStorage.getItem("dbc.script.draft.e2e_renamed.go") === null`)
+	  (`+ownDraft+`)("e2e_renamed.go") === ""`)
 	if d := disk("e2e_renamed.go"); d != draft {
 		t.Fatalf("Discard changed the file:\n%s", d)
 	}
+
+	// ── a closed window's draft is picked up by the next to open it ──────
+	// (an orphan: its owner has no heartbeat) — moved under this window's
+	// key, so it is not adopted twice
+	eval(t, p, `() => localStorage.setItem("dbc.script.draft.e2egone:e2e_renamed.go",
+	  JSON.stringify({ base: "", text: "closed window's draft", at: Date.now() }))`)
+	ctrl(input.KeyO)
+	waitFor(t, p, "the browser listing it again", `() => !!document.querySelector('.slist .srow.script[data-name="e2e_renamed.go"]')`)
+	eval(t, p, `() => document.querySelector('.slist .srow.script[data-name="e2e_renamed.go"] .sact button[title^="Edit"]').click()`)
+	waitFor(t, p, "the orphan adopted", `() => {
+	  const ed = window.monaco && monaco.editor.getEditors()[0];
+	  return !!ed && ed.getValue() === "closed window's draft" &&
+	    document.getElementById("active-conn").textContent.startsWith("▷ e2e_renamed.go ●") &&
+	    localStorage.getItem("dbc.script.draft.e2egone:e2e_renamed.go") === null &&
+	    (`+ownDraft+`)("e2e_renamed.go").includes("closed window's draft");
+	}`)
+	eval(t, p, `() => document.querySelector("#qtabs .qtab.script .qx").click()`)
+	waitFor(t, p, "the close prompt again", `() => !!document.querySelector(".modal .mfoot button")`)
+	eval(t, p, `() => [...document.querySelectorAll(".modal .mfoot button")].find((b) => b.textContent === "Discard changes").click()`)
+	waitFor(t, p, "closed, the adopted draft discarded", `() =>
+	  !document.querySelector("#qtabs .qtab.script") && (`+ownDraft+`)("e2e_renamed.go") === ""`)
 }
 
 // clickSel clicks the middle of the element sel matches, by coordinates:

@@ -28,7 +28,8 @@ func Run(s *sdb.S) error {
 ```sh
 dbc script s.go                 # text tables + Print lines on stdout
 dbc script copy_mytable         # a script in scripts_dir, by name (.go optional)
-dbc scripts                     # list scripts_dir; its path on stderr
+dbc script loop_params          # else a built-in example of that name (said on stderr)
+dbc scripts                     # list scripts_dir, then the examples (kind column); the dir on stderr
 dbc script --check s.go         # check without running: file:line:col: msg, exit 1 on an error
 dbc script --check -t json a b  # … as one JSON array of {file,line,col,severity,msg}
 dbc -t json script s.go | jq .  # one JSON array of every Show; Print → stderr

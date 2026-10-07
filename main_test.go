@@ -480,7 +480,7 @@ func TestScriptHeadlessHonorsFormatAndOutfile(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "cats.csv")
 	setFlag(t, &flagOut, out)
 
-	runScriptHeadless(mgr, "testdata/show_two.go", export.CSV)
+	runScriptHeadless(mgr, config.ScriptRef{Path: "testdata/show_two.go"}, export.CSV)
 
 	bs, err := os.ReadFile(out)
 	if err != nil {
@@ -511,7 +511,7 @@ func TestScriptHeadlessStreamsInOrder(t *testing.T) {
 	setFlag(t, &flagOut, "")
 
 	got := captureStdout(t, func() {
-		runScriptHeadless(mgr, "testdata/show_two.go", export.Text)
+		runScriptHeadless(mgr, config.ScriptRef{Path: "testdata/show_two.go"}, export.Text)
 	})
 
 	tabby := strings.Index(got, "breed Tabby")
@@ -534,7 +534,7 @@ func TestScriptHeadlessStreamsInOrder(t *testing.T) {
 func TestScriptHeadlessOutfileMatchesStream(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "cats.txt")
 	setFlag(t, &flagOut, out)
-	runScriptHeadless(newTestManager(t), "testdata/show_two.go", export.Text)
+	runScriptHeadless(newTestManager(t), config.ScriptRef{Path: "testdata/show_two.go"}, export.Text)
 	bs, err := os.ReadFile(out)
 	if err != nil {
 		t.Fatalf("read -o file: %v", err)
@@ -543,7 +543,7 @@ func TestScriptHeadlessOutfileMatchesStream(t *testing.T) {
 	// the stream, without the log lines that shared stdout with it
 	setFlag(t, &flagOut, "")
 	streamed := captureStdout(t, func() {
-		runScriptHeadless(newTestManager(t), "testdata/show_two.go", export.Text)
+		runScriptHeadless(newTestManager(t), config.ScriptRef{Path: "testdata/show_two.go"}, export.Text)
 	})
 	var kept []string
 	for _, line := range strings.SplitAfter(streamed, "\n") {

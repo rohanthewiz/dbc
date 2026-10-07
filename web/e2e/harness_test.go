@@ -510,12 +510,55 @@ func setClipboard(t *testing.T, p *rod.Page, s string) {
 // rightClick opens the context menu of the element sel names.
 func rightClick(t *testing.T, p *rod.Page, sel string) {
 	t.Helper()
-	el := p.MustElement(sel)
-	el.MustScrollIntoView()
-	if err := el.Click(proto.InputMouseButtonRight, 1); err != nil {
-		t.Fatalf("right-click %s: %v", sel, err)
+	clickAt(t, p, sel, proto.InputMouseButtonRight)
+}
+
+// clickAt clicks the element sel names by its coordinates, looked up in
+// the page at the moment of the click, rather than through an element
+// handle. The sidebar's connection list and the tab strip are rebuilt on
+// many events (a connect, a tab's marks, the in-use dashes), so a handle
+// found a moment earlier can be detached by the time it is clicked — and
+// rod's MustClick on a detached node waits for it to become interactable,
+// which it never does: the step hung until the suite's timeout (N-120).
+// A coordinate click lands on whatever is drawn there now, which is the
+// same row redrawn. A right-click waits for the menu it opens.
+//
+// The target must be drawn — a box of some size — not merely present: a
+// row inside the folded sidebar is in the DOM with a zero box, and a
+// click at its "centre" (0, 0) lands on the top bar and does nothing,
+// which surfaced only as a later wait timing out.
+func clickAt(t *testing.T, p *rod.Page, sel string, button proto.InputMouseButton) {
+	t.Helper()
+	waitFor(t, p, sel+" drawn", `(s) => { const e = document.querySelector(s);
+	  if (!e) return false;
+	  const r = e.getBoundingClientRect();
+	  return r.width > 0 && r.height > 0; }`, sel)
+	box, ok := eval(t, p, `(s) => { const e = document.querySelector(s);
+	  if (!e) return null;
+	  e.scrollIntoView({ block: "nearest", inline: "nearest" });
+	  const r = e.getBoundingClientRect();
+	  return [r.x + r.width / 2, r.y + r.height / 2]; }`, sel).([]any)
+	if !ok {
+		t.Fatalf("click %s: it went away before the click", sel)
 	}
-	waitFor(t, p, "a menu", `() => !!document.querySelector(".menu")`)
+	p.Mouse.MustMoveTo(box[0].(float64), box[1].(float64))
+	if err := p.Mouse.Click(button, 1); err != nil {
+		t.Fatalf("click %s: %v", sel, err)
+	}
+	if button == proto.InputMouseButtonRight {
+		waitFor(t, p, "a menu", `() => !!document.querySelector(".menu")`)
+	}
+}
+
+// tabSelector names the query tab titled title on the strip by its key —
+// a selector clickAt can look up again at the moment of the click. The
+// first such tab, when two share a title.
+func tabSelector(t *testing.T, p *rod.Page, title string) string {
+	t.Helper()
+	waitFor(t, p, "the tab "+title, `(s) => [...document.querySelectorAll("#qtabs .qtab")]
+	  .some((b) => b.querySelector(".qt").textContent === s)`, title)
+	return `#qtabs .qtab[data-key="` + evalStr(t, p, `(s) => [...document.querySelectorAll("#qtabs .qtab")]
+	  .find((b) => b.querySelector(".qt").textContent === s).dataset.key`, title) + `"]`
 }
 
 // menuPick clicks the open menu's row labeled label.

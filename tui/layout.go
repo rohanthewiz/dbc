@@ -48,6 +48,11 @@ type layout struct {
 	// and the title is the plain one)
 	tabResults, tabPlan Rect
 
+	// setChips are the results title's script-result switcher's chips, as
+	// drawn (none unless the last script run showed two or more results;
+	// see resultsets.go)
+	setChips []setChip
+
 	splitSide, splitChat, splitEd, splitLog Rect
 
 	// foldTab is the sidebar's fold control: ‹ on the Connections box's top
@@ -331,7 +336,21 @@ func (m *Model) render() (*Canvas, *caret) {
 			complAt = cur
 		}
 	})
-	m.drawPane(c, l.results, m.resultsTitle(), focusGrid, m.st.base, func(s Surface) {
+	// the script-result switcher (resultsets.go) is laid out before the
+	// title is drawn, so the title can be cut to leave it room; with a plan
+	// the Results │ ◈ Plan tabs need more of the border than a plain title
+	setsLeft := setsReserve
+	if m.planv.plan != nil {
+		setsLeft = width(m.planTabLabel()) + 20 // the tabs at their narrowest: see drawResultsTabs
+	}
+	sets := m.resultSetParts(l.results.W, setsLeft)
+	resTitle := m.resultsTitle()
+	if len(sets) > 0 {
+		// Box draws " title " from x=2; the switcher starts at W-1-its
+		// width; one ─ is kept between them
+		resTitle = truncate(resTitle, l.results.W-6-partsWidth(sets))
+	}
+	m.drawPane(c, l.results, resTitle, focusGrid, m.st.base, func(s Surface) {
 		if m.resTab == tabPlan && m.planv.plan != nil {
 			m.planv.draw(s, m.st, m.focus == focusGrid)
 			return
@@ -339,7 +358,8 @@ func (m *Model) render() (*Canvas, *caret) {
 		m.grid.Draw(s, m.st, m.focus == focusGrid, "run a query with Ctrl+R or ▶ Run — results appear here")
 	})
 	m.drawTabs(c)
-	m.drawResultsTabs(c, l.results)
+	m.drawResultsTabs(c, l.results, partsWidth(sets))
+	m.drawResultSets(c, l.results, sets)
 	if !l.logR.Empty() {
 		m.drawPane(c, l.logR, "Log", focusLog, m.st.base, func(s Surface) {
 			m.logp.draw(s, m.st, m.st.base)
@@ -414,8 +434,10 @@ func (m *Model) resultsTitle() string {
 // a plan to show — the grid's title as it always was, and the plan's — drawn
 // over the border the title sits in, with their rects kept for clicks. With
 // no plan the plain title stands and no tab exists, so a user who never
-// explains anything never sees the difference.
-func (m *Model) drawResultsTabs(c *Canvas, r Rect) {
+// explains anything never sees the difference. setsW is the width of the
+// script-result switcher drawn at the border's right end (0 when there is
+// none), which the tabs keep clear of.
+func (m *Model) drawResultsTabs(c *Canvas, r Rect, setsW int) {
 	m.lay.tabResults, m.lay.tabPlan = Rect{}, Rect{}
 	p := m.planv.plan
 	if p == nil || r.W < 30 {
@@ -427,20 +449,12 @@ func (m *Model) drawResultsTabs(c *Canvas, r Rect) {
 	if focused {
 		on = onBg(m.st.titleFocus, bg)
 	}
-	planLabel := "◈ Plan"
-	if p.ExecutionMs > 0 {
-		planLabel += " · " + explain.FmtMs(p.ExecutionMs)
-	} else if p.Root.HasCost {
-		planLabel += " · cost " + explain.FmtCost(p.Root.TotalCost)
-	}
-	if crit, warn := countSev(p); crit+warn > 0 {
-		planLabel += " · " + pick(crit > 0, "✖", "▲") + itoa(crit+warn)
-	}
+	planLabel := m.planTabLabel()
 	resLabel := m.resultsTitle()
 	if m.ws.LastResult() == nil {
 		resLabel = "Results"
 	}
-	maxRes := max(r.W-width(planLabel)-12, 8)
+	maxRes := max(r.W-width(planLabel)-12-setsW, 8)
 	resLabel = truncate(resLabel, maxRes)
 
 	s := c.Sub(Rect{r.X, r.Y, r.W, 1})
@@ -464,9 +478,25 @@ func (m *Model) drawResultsTabs(c *Canvas, r Rect) {
 	m.lay.tabResults = tab(resLabel, m.resTab == tabResults)
 	x = s.Put(x, 0, "│", border)
 	m.lay.tabPlan = tab(planLabel, m.resTab == tabPlan)
-	if hint := " p switches "; x+width(hint)+2 < r.W {
+	if hint := " p switches "; x+width(hint)+2 < r.W-setsW {
 		s.Put(x+1, 0, hint, off.Italic())
 	}
+}
+
+// planTabLabel is the results title's Plan tab: what the plan cost or
+// took, and how many findings it raised. Only called with a plan.
+func (m *Model) planTabLabel() string {
+	p := m.planv.plan
+	label := "◈ Plan"
+	if p.ExecutionMs > 0 {
+		label += " · " + explain.FmtMs(p.ExecutionMs)
+	} else if p.Root.HasCost {
+		label += " · cost " + explain.FmtCost(p.Root.TotalCost)
+	}
+	if crit, warn := countSev(p); crit+warn > 0 {
+		label += " · " + pick(crit > 0, "✖", "▲") + itoa(crit+warn)
+	}
+	return label
 }
 
 // drawToolbar draws the top bar: the badge, the buttons, the connection chip.

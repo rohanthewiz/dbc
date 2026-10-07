@@ -6,6 +6,7 @@ import (
 	"time"
 
 	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // The TUI, driven as a person drives it: the real binary in a terminal,
@@ -151,14 +152,27 @@ func TestTUI(t *testing.T) {
 		// style, and the browser open on the new script
 		u.waitFor("nightly.go:6:9: undefined: undefinedThing", "Scripts · ~/.config/dbc/scripts")
 
-		// e edits it again; this time it compiles, and Enter runs it
+		// e edits it again; this time it compiles, and Enter runs it. It
+		// shows two results, so the results title offers a switcher
 		e.nextEdit(t, "// Lists the cats.\npackage main\n\nimport \"github.com/rohanthewiz/dbc/sdb\"\n\n"+
-			"func Run(s *sdb.S) error {\n\tr, err := s.Query(\"lite\", \"SELECT name AS cat FROM cats ORDER BY name\")\n"+
+			"func Run(s *sdb.S) error {\n\tw, err := s.Query(\"lite\", \"SELECT 1 AS warmup\")\n"+
+			"\tif err != nil {\n\t\treturn err\n\t}\n\ts.Show(w)\n"+
+			"\tr, err := s.Query(\"lite\", \"SELECT name AS cat FROM cats ORDER BY name\")\n"+
 			"\tif err != nil {\n\t\treturn err\n\t}\n\ts.Print(\"%d cats\", len(r.Rows))\n\ts.Show(r)\n\treturn nil\n}\n")
 		u.key('e')
 		u.waitFor("nightly.go saved — checked, no problems", "Lists the cats.")
 		u.key(uv.KeyEnter)
-		u.waitFor("script nightly.go completed", "3 cats", "│ cat ", "│ Leo ")
+		u.waitFor("script nightly.go completed", "3 cats", "│ cat ", "│ Leo ", "Result 1 · 2")
+
+		// [ in the grid goes back to the first s.Show; a click on the 2
+		// on the title comes back to the last
+		u.click("│ Leo ", 3) // the grid has the keyboard now
+		u.key('[')
+		u.waitFor("warmup │")
+		u.waitGone("│ Leo ")
+		u.click("Result 1 · 2", ansi.StringWidth("Result 1 · ")) // the 2
+		u.waitFor("│ Leo ")
+		u.waitGone("warmup │")
 
 		// Del trashes it (nothing asked); the Trash lists it; Enter restores
 		u.ctrl('o')

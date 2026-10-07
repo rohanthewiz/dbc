@@ -72,13 +72,13 @@ func scriptCheckAction(args []string) {
 	warnConfig(cfg)
 	// every argument is found before any is checked, so a typo in the
 	// fifth name does not come after four scripts' worth of output
-	paths := make([]string, len(args))
+	refs := make([]config.ScriptRef, len(args))
 	for i, a := range args {
-		if paths[i], err = cfg.FindScript(a); err != nil {
+		if refs[i], err = cfg.FindScript(a); err != nil {
 			usage(err.Error())
 		}
 	}
-	bad, err := checkScripts(paths, flagFormat == "json", os.Stdout)
+	bad, err := checkScripts(refs, flagFormat == "json", os.Stdout)
 	if err != nil {
 		fail(err, "check failed")
 	}
@@ -87,18 +87,21 @@ func scriptCheckAction(args []string) {
 	}
 }
 
-// checkScripts checks each file and writes what it finds to w, as compiler
-// lines or (asJSON) one JSON array of every file's diags — [] when all are
-// clean, so a consumer always gets a document. It reports whether any diag
-// is an error. A file that cannot be read is an error for the run (err).
-func checkScripts(paths []string, asJSON bool, w io.Writer) (bad bool, err error) {
+// checkScripts checks each script and writes what it finds to w, as
+// compiler lines or (asJSON) one JSON array of every file's diags — []
+// when all are clean, so a consumer always gets a document. It reports
+// whether any diag is an error. A file that cannot be read is an error for
+// the run (err). A built-in example is named by its Label
+// ("example:loop_params.go") where a file's path would go.
+func checkScripts(refs []config.ScriptRef, asJSON bool, w io.Writer) (bad bool, err error) {
 	all := []checkedDiag{}
-	for _, p := range paths {
-		src, err := os.ReadFile(p)
+	for _, ref := range refs {
+		src, err := ref.Source()
 		if err != nil {
 			return false, err
 		}
-		diags := script.Check(p, string(src))
+		p := ref.Label()
+		diags := script.Check(p, src)
 		bad = bad || script.HasError(diags)
 		for _, d := range diags {
 			if asJSON {

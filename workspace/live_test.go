@@ -827,6 +827,85 @@ func TestLiveWorkspaceCompletionNames(t *testing.T) {
 	})
 }
 
+// COMPLETION ON A REAL MYSQL (N-094's MySQL half, N-097): the first load
+// after a connect, then quoting by MySQL's rules — backticks for a reserved
+// word or a name with a space, a mixed-case name bare (MySQL keeps its case
+// without quotes) — and, after a switch to "<conn>/<database>", the picked
+// database's tables only. MySQL has no schemas below a database, so every
+// table goes in unqualified.
+func TestLiveWorkspaceCompletionMySQL(t *testing.T) {
+	e := liveEngines[1]
+	w, obs := liveWorkspace(t, e)
+	const other = "dbc_live_ws_other"
+	drop := []string{
+		"DROP TABLE IF EXISTS dbc_live_wsm, `dbc_live_ws odd`, dbc_live_wsMixed, `order`",
+		"DROP DATABASE IF EXISTS " + other,
+	}
+	obsExec(t, obs, drop...)
+	obsExec(t, obs,
+		"CREATE TABLE dbc_live_wsm (id int, `Amount` decimal(9,2), `two words` int)",
+		"CREATE TABLE `dbc_live_ws odd` (id int)",
+		"CREATE TABLE dbc_live_wsMixed (id int)",
+		"CREATE TABLE `order` (id int)",
+		"CREATE DATABASE "+other,
+		"CREATE TABLE "+other+".elsewhere (x int)")
+	t.Cleanup(func() {
+		for _, s := range drop {
+			_, _ = obs.Run("live", s)
+		}
+	})
+	// the tables were made after liveWorkspace's connect: connect again, so
+	// the load below is the first one on a connection that has them
+	_, st, _ := w.Disconnect()
+	st.Job()
+	if ev := w.Connect("live").Job().(*Connected); ev.Err != nil {
+		t.Fatalf("reconnect: %+v", ev)
+	}
+	if err := w.LoadCompletions(context.Background()); err != nil {
+		t.Fatalf("load completions: %v", err)
+	}
+
+	got := completeAt(t, w, "SELECT * FROM ▮")
+	for key, want := range map[string]string{
+		"dbc_live_wsm · table":     "dbc_live_wsm",
+		"dbc_live_ws odd · table":  "`dbc_live_ws odd`",
+		"dbc_live_wsMixed · table": "dbc_live_wsMixed",
+		"order · table":            "`order`",
+		liveTable + " · table":     liveTable,
+	} {
+		if it, ok := got[key]; !ok || it.Insert != want {
+			t.Errorf("FROM: %s inserts %q, want %q", key, it.Insert, want)
+		}
+	}
+	if _, ok := got["elsewhere · table"]; ok {
+		t.Error("another database's table offered before switching to it")
+	}
+	cols := completeAt(t, w, "SELECT m.▮ FROM dbc_live_wsm m")
+	for key, want := range map[string]string{
+		"Amount · decimal(9,2)": "Amount",
+		"two words · int":       "`two words`",
+	} {
+		if it, ok := cols[key]; !ok || it.Insert != want {
+			t.Errorf("m.: %s inserts %q, want %q (all: %v)", key, it.Insert, want, cols)
+		}
+	}
+
+	derived := config.DerivedName("live", other)
+	if ev := w.Switch(derived).Job().(*Connected); ev.Err != nil || !ev.Changed {
+		t.Fatalf("switch to %s: %+v", derived, ev)
+	}
+	if err := w.LoadCompletions(context.Background()); err != nil {
+		t.Fatalf("load completions on %s: %v", derived, err)
+	}
+	got = completeAt(t, w, "SELECT * FROM ▮")
+	if it, ok := got["elsewhere · table"]; !ok || it.Insert != "elsewhere" {
+		t.Errorf("on %s: elsewhere inserts %q, want it bare (all: %v)", derived, it.Insert, got)
+	}
+	if _, ok := got["dbc_live_wsm · table"]; ok {
+		t.Errorf("on %s: the base database's table still offered", derived)
+	}
+}
+
 // A BIG CATALOG (N-094), opt-in with DBC_LIVE_BIG=1 on top of the DSN, as
 // it builds thousands of tables: the first load of a catalog just under the
 // schema reader's 250,000-row bound succeeds in reasonable time (logged).

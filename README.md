@@ -342,6 +342,7 @@ dragging.
 | `Enter` | *(results)* Inspect the value under the cursor |
 | `t` | *(results)* Transpose: each row a column, each column a line — copies and exports follow; `t` again turns it upright |
 | `p` | *(results)* Switch between the result grid and the plan |
+| `[` / `]` | *(results)* After a script that showed several results (`s.Show`): the previous / next one — also a click on its number in "Result 1 · 2 · 3" on the results title |
 | `z` | *(results)* Give the results pane the whole column / give it back |
 | `Tab` / `Shift+Tab` | Cycle focus through the panes |
 | `Esc` | Close a dialog or menu |
@@ -1310,7 +1311,8 @@ web alike:
   first.
 - **Examples** — the samples in the repo's [`scripts/`](scripts/), built
   into the binary, so a fresh install has them with no checkout. They are
-  read-only: Enter makes your own copy, which opens for editing.
+  read-only: Enter makes your own copy, which opens for editing. Headless,
+  `dbc script loop_params` runs the built-in copy as it is.
 - **Trash** — folded. Trashing asks nothing, because it moves the file into
   `<scripts_dir>/.trash/` (the newest 50 are kept), and Enter on a trashed
   script restores it, offering another name if the old one has been taken
@@ -1344,7 +1346,10 @@ with the grid and the log beside it as for a query.
   runs is what is on disk and what `dbc script` would run. A save that does
   not land stops the run. `■ Stop` / `Ctrl+K` stops it as any run.
 - **Save** is explicit: `Ctrl+S` or ⤓ Save. A script never autosaves, but
-  unsaved edits are kept in the browser, so a reload does not lose them. The
+  unsaved edits are kept in the browser, so a reload does not lose them.
+  Each browser tab keeps its own: two tabs editing one script never take
+  each other's unsaved text, and a tab that was closed with unsaved edits
+  hands them to the next tab that opens the script. The
   tab reads `▷ name.go ●` while it has unsaved changes, and closing it asks
   whether to save, discard or keep it open. If the file changed on disk
   meanwhile, the save is a conflict: the file's text loads as one undoable
@@ -1361,6 +1366,12 @@ with the grid and the log beside it as for a query.
 - **Several results.** Each `s.Show` is kept (the newest 20 of a run), and
   "Result 1 · 2 · 3" on the results bar switches between them. Copies,
   exports and the assistant follow the one shown.
+- **The assistant** is asked about the script: it gets the whole file as
+  Go, the configured connection names and drivers, the tables its SQL names,
+  and the last run's error or shown result when that run was this script.
+  The first script question of a conversation also sends a summary of the
+  `sdb` API (signatures and one line each), so answers call the real
+  methods. Go in answers gets ⤓ insert, into the script at the caret.
 
 Double-click the tab to rename the script. One script has one tab; opening
 it again goes to that tab.
@@ -1373,8 +1384,9 @@ works (the editor must wait until the file is closed). When it exits, the
 TUI comes back, logs whether the file changed, checks it and logs each
 problem as `~/…/name.go:6:9: undefined: x`. The browser then reopens on the
 script, so Enter runs it. An editor that is not on `PATH` is said in the log,
-and nothing is suspended. The TUI's grid shows only the last of a script's
-`s.Show`s.
+and nothing is suspended. As in dbc web, a script that shows several
+results keeps them (the newest 20): "Result 1 · 2 · 3" on the results
+title switches between them, by a click or `[` / `]` in the grid.
 
 ### Checking without running
 
@@ -1633,19 +1645,24 @@ input; neither do `--tx` and `-k`, since a script runs its statements itself):
 ./dbc -t json script scripts/loop_params.go        # one JSON array on stdout
 ./dbc -t csv -o report.csv script scripts/loop.go  # straight to a file
 ./dbc script nightly_report                        # by name, from scripts_dir
-./dbc scripts -t json                              # the scripts, as JSON
+./dbc script loop_params                           # a built-in example, by name
+./dbc scripts -t json                              # the scripts and examples, as JSON
 ./dbc script --check nightly_report                # check, don't run (exit 1 on an error)
 ./dbc script --check -t json ~/scripts/*.go        # several, diagnostics as JSON
 ```
 
 The argument is a file path, as it always was. If no such file exists and
 the argument has no `/`, it is looked up in `scripts_dir`, with `.go`
-optional; a file in the current directory wins over a script of the same
-name. The browser's built-in examples are not looked up by name; run one by
-its path in a checkout, or copy it into your scripts first. `dbc scripts`
-lists name, modified time, size and description (the comment above
-`package main`, to its first sentence), with the directory on stderr so
-`-t json` stays one document.
+optional, and then among the built-in examples (`./dbc script loop_params`
+works in a fresh install). A file in the current directory wins over a
+script of the same name, and your own script wins over an example of the
+same name. Running an example says so on stderr. `dbc scripts` lists name,
+modified time, size, description (the comment above `package main`, to its
+first sentence) and kind: your scripts (`script`), then the examples no
+script of yours shadows (`example`, with no modified time; `null` in JSON).
+The directory and the counts go to stderr, so `-t json` stays one document.
+`--check` finds names the same way, and names an example
+`example:loop_params.go` in its output.
 
 `--check` takes one or more scripts (names or paths) and runs none of them.
 It prints one line per problem on stdout, as a compiler does

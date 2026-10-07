@@ -158,3 +158,27 @@ func Run(s *sdb.S) error {
 		t.Errorf("b.cats has %s rows after the panic, want the 8 copied before it", got[0][0])
 	}
 }
+
+// RunSource runs text with no file behind it (a built-in example), past
+// the //go:build ignore line every sample carries, and fails to compile as
+// a file would. (Its errors carry name in the serr "script" field, which
+// the headless log prints.)
+func TestRunSource(t *testing.T) {
+	mgr := db.NewManager(&config.Config{MaxRows: 1000, Connections: []config.Connection{
+		{Name: "a", Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "a.db")},
+	}})
+	t.Cleanup(mgr.Close)
+	var printed []string
+	s := sdb.New(mgr, func(*model.Result) {}, func(line string) { printed = append(printed, line) })
+	const hdr = "//go:build ignore\n\npackage main\n\nimport \"github.com/rohanthewiz/dbc/sdb\"\n\n"
+	if err := RunSource("example:hi.go", hdr+"func Run(s *sdb.S) error { s.Print(\"hi\"); return nil }\n", s); err != nil {
+		t.Fatal(err)
+	}
+	if len(printed) != 1 || printed[0] != "hi" {
+		t.Errorf("printed %q, want [hi]", printed)
+	}
+	err := RunSource("example:bad.go", hdr+"func Run(s *sdb.S) error { return s.Nope() }\n", s)
+	if err == nil || !strings.Contains(err.Error(), "Nope") {
+		t.Errorf("err = %v, want the compile error for s.Nope", err)
+	}
+}

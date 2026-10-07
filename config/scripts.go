@@ -85,18 +85,48 @@ func absOr(p string) string {
 	return p
 }
 
-// FindScript turns the argument of `dbc script ARG` into a file to run:
+// ScriptRef is what the argument of `dbc script ARG` names: a file on disk,
+// or (when no file matched) one of the samples built into the binary.
+// Exactly one of Path and Example is set.
+type ScriptRef struct {
+	Path    string           // the file to run or check
+	Example *scripts.Example // the built-in sample, with its source
+}
+
+// Label names the script in messages and in --check's compiler lines: the
+// file's path, or "example:NAME.go" for a built-in sample. A sample has no
+// path, and its bare name would read as a file in the cwd.
+func (r ScriptRef) Label() string {
+	if r.Example != nil {
+		return "example:" + r.Example.Name
+	}
+	return r.Path
+}
+
+// Source is the script's text: the file, read now, or the sample's.
+func (r ScriptRef) Source() (string, error) {
+	if r.Example != nil {
+		return r.Example.Text, nil
+	}
+	bs, err := os.ReadFile(r.Path)
+	return string(bs), err
+}
+
+// FindScript turns the argument of `dbc script ARG` into a script to run:
 //
 //	ARG names an existing file (as a path from cwd) ─► that file, as before
-//	ARG has no path separator ─► ScriptsDir/ARG, then ScriptsDir/ARG.go
-//	otherwise ─► an error naming both places looked
+//	ARG has no path separator ─► ScriptsDir/ARG, then ScriptsDir/ARG.go,
+//	                             then the built-in example ARG, ARG.go
+//	otherwise ─► an error naming every place looked
 //
 // A file in cwd wins over a script of the same name so that every command
 // line that worked before keeps running the same file; the lookup only
-// adds meaning to arguments that used to fail.
-func (c *Config) FindScript(arg string) (string, error) {
+// adds meaning to arguments that used to fail. The examples come last for
+// the same reason: a user's own loop_params.go (likely an edited copy of
+// the sample) is the one they mean.
+func (c *Config) FindScript(arg string) (ScriptRef, error) {
 	if st, err := os.Stat(arg); err == nil && !st.IsDir() {
-		return arg, nil
+		return ScriptRef{Path: arg}, nil
 	}
 	if !strings.ContainsRune(arg, filepath.Separator) && !strings.ContainsRune(arg, '/') {
 		names := []string{arg}
@@ -106,12 +136,20 @@ func (c *Config) FindScript(arg string) (string, error) {
 		for _, name := range names {
 			p := filepath.Join(c.ScriptsDir, name)
 			if st, err := os.Stat(p); err == nil && !st.IsDir() {
-				return p, nil
+				return ScriptRef{Path: p}, nil
 			}
 		}
-		return "", fmt.Errorf("no script %q: not a file here, and not in %s", arg, c.ScriptsDir)
+		// A second pass, not a third candidate in the loop above: every
+		// spelling in scripts_dir must win over every example.
+		for _, name := range names {
+			if ex, ok := scripts.ExampleByName(name); ok {
+				return ScriptRef{Example: &ex}, nil
+			}
+		}
+		return ScriptRef{}, fmt.Errorf("no script %q: not a file here, not in %s, and not a built-in example (dbc scripts lists them)",
+			arg, c.ScriptsDir)
 	}
-	return "", fmt.Errorf("no script file %q", arg)
+	return ScriptRef{}, fmt.Errorf("no script file %q", arg)
 }
 
 // legacyScriptsWarning explains a move nobody would otherwise notice: the

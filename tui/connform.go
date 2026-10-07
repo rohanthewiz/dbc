@@ -397,8 +397,50 @@ func (cf *connFormModal) title() string {
 }
 
 func (cf *connFormModal) size(w, h int) (int, int) {
+	fw := min(max(w*3/4, 70), 90)
 	rows := len(cf.rows()) + 6 // a gap, the message (up to 3 lines), the buttons
-	return min(max(w*3/4, 70), 90), rows + 2
+	if slices.Contains(cf.rows(), cfTLS) {
+		// the TLS chips wrap onto more lines in a narrow form; the inner
+		// width is the form's as modalRect will clamp it (to the screen,
+		// less a cell each side), less the frame
+		_, lines := chipRows(cfTLSLabels(), cfLabelW, min(fw, w-2)-2)
+		rows += lines - 1
+	}
+	return fw, rows + 2
+}
+
+// cfTLSLabels are the TLS chips' labels, as drawn.
+func cfTLSLabels() []string {
+	out := make([]string, len(cfTLSModes))
+	for i, n := range cfTLSModes {
+		out[i] = " " + orDefault(n, "from DSN") + " "
+	}
+	return out
+}
+
+// chipRows lays out a row of chips labelled labels, starting at column x0
+// of a surface inner cells wide, one cell apart. A chip that would end in
+// the surface's last column or past it starts a new line, back at x0 — so
+// a row too long for a narrow terminal (the TLS modes' six chips need 79
+// cells, a form on an 80-column screen has 68) wraps rather than being
+// cut off, and every chip stays whole and clickable. It returns each
+// chip's column and line (0-based), and how many lines the row takes.
+//
+//	TLS           [ from DSN ] [ disable ] [ prefer ] [ require ] [ verify-ca ]
+//	              [ verify-full ]
+func chipRows(labels []string, x0, inner int) (pos [][2]int, lines int) {
+	x, line := x0, 0
+	for _, l := range labels {
+		w := width(l)
+		// never wrap the first chip of a line: one wider than the whole
+		// row is cut, as before, rather than looping on empty lines
+		if x > x0 && x+w > inner-1 {
+			x, line = x0, line+1
+		}
+		pos = append(pos, [2]int{x, line})
+		x += w + 1
+	}
+	return pos, line + 1
 }
 
 func (cf *connFormModal) draw(m *Model, s Surface) *caret {
@@ -416,19 +458,24 @@ func (cf *connFormModal) draw(m *Model, s Surface) *caret {
 			car = &caret{cx, cy}
 		}
 	}
-	chips := func(y int, names []string, cur string, on bool, show func(string) string) []Rect {
+	// chips draws a row of chips from row y, wrapped as chipRows lays
+	// them out, and returns their rects and how many lines they took (the
+	// caller moves y down by the extra ones)
+	chips := func(y int, names []string, cur string, on bool, show func(string) string) ([]Rect, int) {
+		labels := make([]string, len(names))
+		for i, n := range names {
+			labels[i] = " " + show(n) + " "
+		}
+		pos, lines := chipRows(labels, cfLabelW, s.W())
 		var out []Rect
-		x := cfLabelW
-		for _, n := range names {
+		for i, n := range names {
 			st := m.st.button
 			if n == cur {
 				st = pick(on, m.st.sel, m.st.buttonHover)
 			}
-			r := chip(s, x, y, " "+show(n)+" ", st)
-			out = append(out, r)
-			x += r.W + 1
+			out = append(out, chip(s, pos[i][0], y+pos[i][1], labels[i], st))
 		}
-		return out
+		return out, lines
 	}
 	same := func(n string) string { return n }
 	fw := s.W() - cfLabelW - 1 // a text field's width
@@ -441,11 +488,11 @@ func (cf *connFormModal) draw(m *Model, s Surface) *caret {
 			field(cfName, cfLabelW, y, min(fw, 40))
 		case cfDriver:
 			s.Put(1, y, "Driver", label)
-			cf.drvR = chips(y, cfDrivers, cf.canonical(), cf.focus == cfDriver, same)
+			cf.drvR, _ = chips(y, cfDrivers, cf.canonical(), cf.focus == cfDriver, same) // 35 cells: never wraps
 		case cfMode:
 			s.Put(1, y, "Enter as", label)
 			cur := pick(cf.asDSN, "DSN", "Fields")
-			rs := chips(y, []string{"Fields", "DSN"}, cur, cf.focus == cfMode, same)
+			rs, _ := chips(y, []string{"Fields", "DSN"}, cur, cf.focus == cfMode, same)
 			cf.modeR = [2]Rect{rs[0], rs[1]}
 		case cfHost:
 			s.Put(1, y, "Host", label)
@@ -475,9 +522,11 @@ func (cf *connFormModal) draw(m *Model, s Surface) *caret {
 			s.Put(cfLabelW, y, truncate("${VAR} is read from dbc's environment — keeps a password out of the file", fw), label.Italic())
 		case cfTLS:
 			s.Put(1, y, "TLS", label)
-			cf.tlsR = chips(y, cfTLSModes, cf.tls, cf.focus == cfTLS, func(n string) string {
+			var lines int
+			cf.tlsR, lines = chips(y, cfTLSModes, cf.tls, cf.focus == cfTLS, func(n string) string {
 				return orDefault(n, "from DSN")
 			})
+			y += lines - 1 // size counted the extra lines (chipRows)
 		case cfTLSCA:
 			s.Put(1, y, "CA file", label)
 			field(cfTLSCA, cfLabelW, y, fw)

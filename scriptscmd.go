@@ -4,21 +4,24 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/urfave/cli/v3"
 
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/model"
+	"github.com/rohanthewiz/dbc/scripts"
 	"github.com/rohanthewiz/dbc/userdata"
 )
 
 // The scripts subcommand lists the Go scripts in scripts_dir, and says on
 // stderr which directory that is. It is the shell's answer to "where does
 // dbc look?", which before scripts_dir was resolved (config/scripts.go)
-// depended on the directory dbc started in.
+// depended on the directory dbc started in. After them come the built-in
+// examples `dbc script NAME` also runs by name, marked kind "example".
 //
-//	dbc scripts             name · modified · description, as a table
+//	dbc scripts             name · modified · size · description · kind
 //	dbc scripts -t json     the same as a JSON array, for tooling
 //
 // The listing is a model.Result, so every -t format and -o work as they do
@@ -54,20 +57,46 @@ func scriptsAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		fail(err, "could not list scripts")
 	}
+	exs := reachableExamples(infos)
 	// stderr, so `-t json` on stdout stays one parseable document
-	fmt.Fprintf(os.Stderr, "%d script(s) in %s\n", len(infos), cfg.ScriptsDir)
-	emit([]*model.Result{scriptsResult(infos)}, f)
+	fmt.Fprintf(os.Stderr, "%d script(s) in %s, and %d built-in example(s)\n", len(infos), cfg.ScriptsDir, len(exs))
+	emit([]*model.Result{scriptsResult(infos, exs)}, f)
 	return nil
 }
 
-// scriptsResult shapes the listing as a result. Rows hold the text forms;
-// Raw the typed ones for JSON (size a number, modified an RFC 3339 time).
-func scriptsResult(infos []userdata.ScriptInfo) *model.Result {
-	r := &model.Result{Query: "dbc scripts", Columns: []string{"name", "modified", "size", "description"}}
+// reachableExamples are the built-in samples `dbc script NAME` can run by
+// name: those no script in scripts_dir shadows (FindScript tries the
+// user's scripts first). A shadowed sample is left out rather than listed
+// as a second row of the same name that the name could never reach.
+func reachableExamples(infos []userdata.ScriptInfo) []scripts.Example {
+	var out []scripts.Example
+	for _, ex := range scripts.Examples() {
+		if !slices.ContainsFunc(infos, func(in userdata.ScriptInfo) bool { return in.Name == ex.Name }) {
+			out = append(out, ex)
+		}
+	}
+	return out
+}
+
+// scriptsResult shapes the listing as a result: the user's scripts, then
+// the examples. Rows hold the text forms; Raw the typed ones for JSON (size
+// a number, modified an RFC 3339 time).
+//
+// kind ("script" or "example") is the last column so that a consumer that
+// read the four columns before it by position still finds them where they
+// were. An example has no file, so no modified time: "" in the table, null
+// in JSON. Its size is that of its source.
+func scriptsResult(infos []userdata.ScriptInfo, exs []scripts.Example) *model.Result {
+	r := &model.Result{Query: "dbc scripts", Columns: []string{"name", "modified", "size", "description", "kind"}}
 	for _, in := range infos {
 		mod := in.Mod.Local().Format("2006-01-02 15:04")
-		r.Rows = append(r.Rows, []string{in.Name, mod, fmt.Sprint(in.Size), in.Desc})
-		r.Raw = append(r.Raw, []any{in.Name, in.Mod.Format(time.RFC3339), in.Size, in.Desc})
+		r.Rows = append(r.Rows, []string{in.Name, mod, fmt.Sprint(in.Size), in.Desc, "script"})
+		r.Raw = append(r.Raw, []any{in.Name, in.Mod.Format(time.RFC3339), in.Size, in.Desc, "script"})
+	}
+	for _, ex := range exs {
+		size := int64(len(ex.Text))
+		r.Rows = append(r.Rows, []string{ex.Name, "", fmt.Sprint(size), ex.Desc, "example"})
+		r.Raw = append(r.Raw, []any{ex.Name, nil, size, ex.Desc, "example"})
 	}
 	return r
 }

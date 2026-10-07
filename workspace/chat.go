@@ -44,8 +44,7 @@ type GridView struct {
 func (w *Workspace) ChatContext(question string, ed Editor, view GridView) (ctx ai.Context, refs []db.TableRef) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	cc, _ := w.cfg.ConnByName(w.active)
-	ctx = ai.Context{Conn: w.active, Driver: cc.Driver, SendRows: cc.AIRows, MaxRows: w.cfg.AIContextRows}
+	ctx = w.chatBaseLocked()
 	cur := ""
 	if stmts, _ := Pick(ed); len(stmts) > 0 {
 		cur = stmts[len(stmts)-1]
@@ -55,19 +54,81 @@ func (w *Workspace) ChatContext(question string, ed Editor, view GridView) (ctx 
 	}
 	ctx.Query = cur
 	ctx.Plan = w.planForChatLocked(cur)
-	if w.tableIdx != nil {
-		refs = w.tableIdx.Mentioned(cur, question)
-		refs = refs[:min(len(refs), MaxSchemaTables)]
-		for _, r := range refs {
-			ctx.Tables = append(ctx.Tables, ai.Table{Name: w.tableIdx.Display(r), View: r.View})
-		}
-	}
+	refs = w.mentionedLocked(&ctx, cur, question)
 	if cur == "" || cur != w.lastStmt {
 		return ctx, refs
 	}
+	w.attachLastRunLocked(&ctx, view)
+	return ctx, refs
+}
+
+// ScriptChatContext is ChatContext for a script tab: the editor holds a Go
+// script (name, its file name; source, the editor's text), not SQL.
+//
+// What differs, and why:
+//   - The whole source is "the query" (ctx.Script marks it as Go): a
+//     script is one program, and Pick's statement split would cut it at
+//     the first semicolon into something neither SQL nor Go.
+//   - No plan: plans are of statements the editor explained, and a
+//     script tab explains nothing.
+//   - Tables are still looked for, in the source and the question — the
+//     SQL a script runs is in its string literals, and a table named
+//     there is one the model should see the columns of.
+//   - The last run's error and results go only when that run was THIS
+//     script: its s.Show results are what "why is this row here?" is
+//     about, while another script's (or a statement's) would be answered
+//     as if this one produced them.
+//
+// The sdb API summary is not set here: it goes once per conversation,
+// which only the assistant (the caller) knows — see ai.Context.ScriptAPI.
+func (w *Workspace) ScriptChatContext(question, name, source string, view GridView) (ctx ai.Context, refs []db.TableRef) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	ctx = w.chatBaseLocked()
+	ctx.Script, ctx.Query = name, source
+	// the connections a script can name, the tab's own (if any) first, as
+	// a new script's template orders them
+	for _, n := range w.cfg.ConnOrder(w.active) {
+		cc, _ := w.cfg.ConnByName(n)
+		ctx.ScriptConns = append(ctx.ScriptConns, n+" ("+cc.Driver+")")
+	}
+	refs = w.mentionedLocked(&ctx, source, question)
+	if name == "" || name != w.lastScript {
+		return ctx, refs
+	}
+	w.attachLastRunLocked(&ctx, view)
+	return ctx, refs
+}
+
+// chatBaseLocked is what every question carries whatever it is about: the
+// connection, its dialect, and its ai_rows rule.
+func (w *Workspace) chatBaseLocked() ai.Context {
+	cc, _ := w.cfg.ConnByName(w.active)
+	return ai.Context{Conn: w.active, Driver: cc.Driver, SendRows: cc.AIRows, MaxRows: w.cfg.AIContextRows}
+}
+
+// mentionedLocked names, in ctx.Tables, the catalog's tables that text or
+// question mention (at most MaxSchemaTables), and returns them as refs for
+// the caller's column lookup.
+func (w *Workspace) mentionedLocked(ctx *ai.Context, text, question string) (refs []db.TableRef) {
+	if w.tableIdx == nil {
+		return nil
+	}
+	refs = w.tableIdx.Mentioned(text, question)
+	refs = refs[:min(len(refs), MaxSchemaTables)]
+	for _, r := range refs {
+		ctx.Tables = append(ctx.Tables, ai.Table{Name: w.tableIdx.Display(r), View: r.View})
+	}
+	return refs
+}
+
+// attachLastRunLocked puts the last run's outcome into ctx: its error, or
+// else its result as the grid shows it (view). The caller has decided the
+// last run is the one the question is about.
+func (w *Workspace) attachLastRunLocked(ctx *ai.Context, view GridView) {
 	if w.lastErr != "" {
 		ctx.Err = w.lastErr
-		return ctx, refs
+		return
 	}
 	if r := w.lastRes; r != nil && !r.IsExec {
 		ctx.Columns, ctx.Rows, ctx.Truncated = r.Columns, r.Rows, r.Truncated
@@ -89,7 +150,6 @@ func (w *Workspace) ChatContext(question string, ed Editor, view GridView) (ctx 
 			}
 		}
 	}
-	return ctx, refs
 }
 
 // SchemaLookupTimeout bounds the catalog query a question's tables cost at

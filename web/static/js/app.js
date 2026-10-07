@@ -1406,7 +1406,7 @@
       els.splitter.removeEventListener("pointermove", move);
       els.splitter.removeEventListener("pointerup", up);
       els.splitter.classList.remove("dragging");
-      api("PUT", "/api/v1/layout", { editorHeight: String(Math.round(dbc.editor.height())) })
+      dbc.putLayout({ editorHeight: String(Math.round(dbc.editor.height())) })
         .catch((err) => log("warn", "layout not saved: " + err.message));
     };
     els.splitter.addEventListener("pointermove", move);
@@ -2156,12 +2156,21 @@
   // on screen) and the console it shows. With a console the text is the
   // console's, kept in the tab's buffer too, so a dbc from before consoles
   // still opens the tab as it was.
+  //
+  // The connection is always t.conn, never state.active, even for the tab
+  // on screen. The two agree once the tab's state has landed (the "conn"
+  // event, applyState and connRenamed write both together), but activate
+  // puts a tab on screen (state.tab = t) before its workspace answers, and
+  // until then state.active is still the previous tab's connection. A save
+  // in that gap — a quick click on another tab, whose activate saves this
+  // one as prev — wrote the previous tab's connection into this one, and
+  // after a reload it came back on the wrong database (N-120).
   function tabBody(t) {
     // a script tab's text is its file (and its draft): the saved tab only
     // names the script
     if (t.script) return { title: t.title, conn: "", buffer: "", console: "", script: t.script };
     const active = t === state.tab;
-    return { title: t.title, conn: (active ? state.active : t.conn) || "",
+    return { title: t.title, conn: t.conn || "",
       buffer: active ? dbc.editor.text() : textOf(t), console: t.console || "" };
   }
 
@@ -2193,7 +2202,7 @@
   }
 
   function saveLayout(values) {
-    api("PUT", "/api/v1/layout" + winQuery(), values).catch((err) => log("warn", "layout not saved: " + err.message));
+    dbc.putLayout(values, winQuery()).catch((err) => log("warn", "layout not saved: " + err.message));
   }
 
   // ── claims: which browser tab of dbc web shows which saved tab ─────────
@@ -2481,7 +2490,12 @@
     const used = new Set(tabs.map((t) => t.title));
     let n = 1;
     while (used.has("Query " + n)) n++;
-    const t = { key: newKey(), title: "Query " + n, conn: g ? groups.connFor(g, state.active) : state.active, buffer: "", ws: "" };
+    // The tab on screen's own connection, not state.active: right after a
+    // tab switch state.active is still the previous tab's until the new
+    // one's state lands (see tabBody). A script tab has none, so it, and a
+    // tab not yet connected, fall back to state.active as before.
+    const here = (state.tab && !state.tab.script && state.tab.conn) || state.active;
+    const t = { key: newKey(), title: "Query " + n, conn: g ? groups.connFor(g, here) : here, buffer: "", ws: "" };
     // Beside the tab on screen; into a group, after its last tab — where
     // the redraw's arrange would gather it anyway, and a connection group
     // with no tab here gets it beside the tab on screen.
@@ -2709,6 +2723,9 @@
         } catch (e) {
           if (e.status !== 409) throw e;
           log("info", "this browser tab is a copy of another one of dbc web — it gets a window (and sessions) of its own");
+          // and its own script drafts: the copied sessionStorage holds the
+          // original's draft owner id (scripts.js DRAFTS)
+          dbc.scripts.newOwner();
           win = "";
           live = [];
         }

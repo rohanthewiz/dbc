@@ -173,6 +173,11 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 		m.resTab, m.focus = t, focusGrid
 		return nil
 	}
+	// the script-result switcher shares the results pane's top border
+	// with the tabs, at its right end (resultsets.go)
+	if i, ok := m.resultSetAt(x, y); ok {
+		return m.showScriptResult(i)
+	}
 
 	switch {
 	case l.editor.Contains(x, y):

@@ -25,9 +25,11 @@
 //
 // WHAT GOES WITH A QUESTION is decided on the server by the rules the TUI
 // uses (workspace.ChatContext): the page sends only what the server cannot
-// know — the editor (buffer, caret, selection) and the grid's view (the
-// result's seq, the sort, the hidden columns). The chip's forecast comes
-// from the same code, so it cannot promise what the question will not send.
+// know — the editor (buffer, caret, selection), the grid's view (the
+// result's seq, the sort, the hidden columns), and in a script tab the
+// script's name (workspace.ScriptChatContext then reads the editor as Go).
+// The chip's forecast comes from the same code, so it cannot promise what
+// the question will not send.
 //
 // SQL IN ANSWERS IS ACTIONABLE, never runnable: ⤓ insert puts a block in
 // the editor at the caret, where the user reads it before Ctrl+Enter.
@@ -62,6 +64,12 @@
   // (tui/chat.go isSQLLang); an unlabeled fence counts, since the preamble
   // asks for ```sql and models often drop the label.
   const SQL_LANGS = new Set(["", "sql", "postgres", "postgresql", "psql", "mysql", "sqlite", "pgsql", "plpgsql"]);
+  // GO_LANGS get ⤓ insert too, for a script tab: a question asked there
+  // carries the script (as Go) and asks for ```go blocks back. The button is
+  // drawn whatever tab is open — the transcript outlives tab switches — and
+  // the click checks: Go goes only into a script tab, never into SQL.
+  const GO_LANGS = new Set(["go", "golang"]);
+  const inScriptTab = () => !!(state.tab && state.tab.script);
 
   // ── the transcript ─────────────────────────────────────────────────────
   function atBottom() {
@@ -119,7 +127,8 @@
       }
     }
     for (const p of [
-      "Ask about the query in the editor or the result in the grid.",
+      "Ask about the query in the editor or the result in the grid — in a script tab, about the script " +
+        "(it goes as Go, with the sdb API on the conversation's first script question).",
       "The query, any error, and the columns of the tables it or your question names go with each question. " +
         "Result rows go only on connections with ai_rows = true (up to ai_context_rows of them), " +
         "in the grid's sort order and without its hidden columns.",
@@ -224,6 +233,17 @@
       ins.addEventListener("click", () => {
         dbc.editor.insert(code.replace(/\n+$/, ""));
         log("ok", "inserted the assistant's SQL at the caret — review it, then Ctrl+Enter runs it");
+      });
+      head.append(ins);
+    } else if (GO_LANGS.has(lang)) {
+      const ins = el("button", { type: "button", class: "linkish", title: "Put it in the script at the caret — nothing runs or saves" }, "⤓ insert");
+      ins.addEventListener("click", () => {
+        if (!inScriptTab()) {
+          log("warn", "that is Go — open the script's tab to insert it (⧉ copy takes it anywhere)");
+          return;
+        }
+        dbc.editor.insert(code.replace(/\n+$/, ""));
+        log("ok", "inserted the assistant's Go at the caret — review it; Ctrl+S saves, Ctrl+Enter saves and runs");
       });
       head.append(ins);
     }
@@ -338,7 +358,7 @@
 
   // ── opening and closing ────────────────────────────────────────────────
   function saveLayout(values) {
-    api("PUT", "/api/v1/layout", values).catch((e) => log("warn", "layout not saved: " + e.message));
+    dbc.putLayout(values).catch((e) => log("warn", "layout not saved: " + e.message));
   }
 
   async function show(focusInput) {
@@ -400,8 +420,12 @@
     return { seq: v.seq, sort: v.sort, desc: v.desc, hidden: v.hidden };
   }
 
+  // script: in a script tab the editor holds Go, and the server must read it
+  // as the script it is (workspace.ScriptChatContext), not pick a SQL
+  // statement out of it — the chip then says "script", not "query".
   const request = (question) => ({
     question, attach: els.attach.checked, editor: dbc.cmd.editorState(), view: gridView(),
+    script: inScriptTab() ? state.tab.script : "",
   });
 
   async function submit() {

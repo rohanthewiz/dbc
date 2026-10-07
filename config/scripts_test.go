@@ -114,16 +114,32 @@ func TestFindScript(t *testing.T) {
 		{"./here.go", "./here.go"},
 	} {
 		got, err := cfg.FindScript(c.arg)
-		if err != nil || got != c.want {
-			t.Errorf("FindScript(%q) = %q, %v; want %q", c.arg, got, err, c.want)
+		if err != nil || got.Path != c.want || got.Example != nil {
+			t.Errorf("FindScript(%q) = %+v, %v; want %q", c.arg, got, err, c.want)
 		}
 	}
-	for _, arg := range []string{"nope", "sub/copy_it.go", "copy_it.go.go"} {
+	for _, arg := range []string{"nope", "sub/copy_it.go", "copy_it.go.go", "sub/loop_params.go"} {
 		if got, err := cfg.FindScript(arg); err == nil {
-			t.Errorf("FindScript(%q) = %q, want an error", arg, got)
+			t.Errorf("FindScript(%q) = %+v, want an error", arg, got)
 		} else if !strings.Contains(arg, "/") && !strings.Contains(err.Error(), dir) {
 			t.Errorf("FindScript(%q) error %q should name the scripts dir", arg, err)
 		}
+	}
+
+	// A built-in example answers a bare name nothing on disk took, with or
+	// without .go; a script of the user's with that name wins over it.
+	for _, arg := range []string{"loop_params", "loop_params.go"} {
+		got, err := cfg.FindScript(arg)
+		if err != nil || got.Example == nil || got.Example.Name != "loop_params.go" || got.Path != "" {
+			t.Fatalf("FindScript(%q) = %+v, %v; want the loop_params example", arg, got, err)
+		}
+		if src, _ := got.Source(); !strings.Contains(src, "func Run(") || got.Label() != "example:loop_params.go" {
+			t.Errorf("example %q: label %q, source %.40q", arg, got.Label(), src)
+		}
+	}
+	write(filepath.Join(dir, "loop_params.go"))
+	if got, err := cfg.FindScript("loop_params"); err != nil || got.Path != filepath.Join(dir, "loop_params.go") {
+		t.Errorf("FindScript(loop_params) with the user's own = %+v, %v; want the file in scripts_dir", got, err)
 	}
 }
 

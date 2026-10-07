@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/ai"
 	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/sdb/sdbapi"
 	"github.com/rohanthewiz/dbc/userdata"
 	"github.com/rohanthewiz/dbc/workspace"
 )
@@ -96,11 +98,15 @@ type assistant struct {
 	models    []ai.Model
 	modelID   string
 	msgs      []chatLine
-	streaming bool   // an answer is in flight (a schema lookup included)
-	first     bool   // the next turn is the conversation's first
-	pending   string // a prompt written before the handshake finished
-	needAuth  bool   // the agent refused for lack of sign-in
-	closed    bool   // close ran: nothing starts, lands or saves after it
+	streaming bool // an answer is in flight (a schema lookup included)
+	first     bool // the next turn is the conversation's first
+	// apiSent: the sdb API summary has gone in this conversation (with its
+	// first question from a script tab), so later script questions leave
+	// it out — reset with first, for the same reason first is
+	apiSent  bool
+	pending  string // a prompt written before the handshake finished
+	needAuth bool   // the agent refused for lack of sign-in
+	closed   bool   // close ran: nothing starts, lands or saves after it
 
 	signState string
 	signIn    *ai.SignIn
@@ -415,6 +421,10 @@ func (a *assistant) schemaLanded(gen int, q string, ctx ai.Context, cols [][]db.
 // finishLocked builds the prompt and hands it to the agent, or queues it
 // until the handshake completes.
 func (a *assistant) finishLocked(q string, ctx ai.Context) {
+	ctx = a.withAPILocked(ctx)
+	if ctx.ScriptAPI != "" {
+		a.apiSent = true
+	}
 	prompt := ai.Build(q, ctx, a.first)
 	a.first = false
 	a.addLocked("note", "▤ "+prompt.Note)
@@ -425,6 +435,17 @@ func (a *assistant) finishLocked(q string, ctx ai.Context) {
 		return
 	}
 	a.sendLocked(prompt.Text)
+}
+
+// withAPILocked adds the sdb API summary to a script question's context
+// when this conversation has not been sent it yet. The send (finishLocked)
+// and the chip's forecast (handleChatContext) both go through here, so the
+// chip says "sdb API" exactly when the question would carry it.
+func (a *assistant) withAPILocked(ctx ai.Context) ai.Context {
+	if ctx.Script != "" && !a.apiSent {
+		ctx.ScriptAPI = sdbapi.Summary()
+	}
+	return ctx
 }
 
 // sendLocked hands a prompt to the agent.
@@ -518,7 +539,7 @@ func (a *assistant) resetLocked() {
 		a.c.Close()
 	}
 	a.c, a.state, a.streaming, a.pending = nil, chatIdle, false, ""
-	a.msgs, a.first, a.models, a.modelID = nil, true, nil, ""
+	a.msgs, a.first, a.apiSent, a.models, a.modelID = nil, true, false, nil, ""
 	a.archiveID, a.archiveStart = "", time.Time{}
 	a.ensureLocked()
 	a.send("chat.reset", nil)
@@ -791,6 +812,10 @@ type chatReq struct {
 	Attach   bool      `json:"attach"` // the context chip is on
 	Editor   runReq    `json:"editor"`
 	View     *chatGrid `json:"view"`
+	// Script is the script's file name when asked from a script tab: the
+	// editor then holds Go, and workspace.ScriptChatContext reads it as a
+	// script rather than picking a SQL statement out of it.
+	Script string `json:"script"`
 }
 
 // chatGrid is the grid's view of the result it shows: the result's seq,
@@ -823,6 +848,12 @@ func (s *Server) chatContext(t *tab, req chatReq) (ai.Context, []db.TableRef, er
 		case len(g.Hidden) > 0:
 			return ai.Context{}, nil, conflict("the result changed while you were asking — the grid is reloading; ask again")
 		}
+	}
+	if req.Script != "" {
+		// Base: the name only labels the source in the prompt; the page
+		// sends a scripts_dir file name, and a path has no business there.
+		ctx, refs := t.ws.ScriptChatContext(req.Question, filepath.Base(req.Script), req.Editor.Buffer, view)
+		return ctx, refs, nil
 	}
 	ctx, refs := t.ws.ChatContext(req.Question, ed, view)
 	return ctx, refs, nil
@@ -908,7 +939,7 @@ func (s *Server) handleChatAsk(ctx rweb.Context) error {
 // is named but not looked up — that costs a catalog query, paid only when
 // the question goes.
 func (s *Server) handleChatContext(ctx rweb.Context) error {
-	t, _, err := s.tabChat(ctx)
+	t, a, err := s.tabChat(ctx)
 	if err != nil {
 		return fail(ctx, err)
 	}
@@ -920,6 +951,9 @@ func (s *Server) handleChatContext(ctx rweb.Context) error {
 	if err != nil {
 		return fail(ctx, err)
 	}
+	a.mu.Lock()
+	c = a.withAPILocked(c)
+	a.mu.Unlock()
 	note := ai.Build("", c, false).Note
 	if len(note) > len("sent: ") {
 		note = note[len("sent: "):]

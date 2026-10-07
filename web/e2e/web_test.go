@@ -320,7 +320,7 @@ func resetGrid(t *testing.T, p *rod.Page) {
 // where the list's keys act.
 func selectTable(t *testing.T, p *rod.Page, name string) {
 	t.Helper()
-	p.MustElement(`#tables li[data-name="` + name + `"]`).MustClick()
+	clickAt(t, p, `#tables li[data-name="`+name+`"]`, proto.InputMouseButtonLeft)
 	waitFor(t, p, name+" selected and focused", `(n) => {
 	  const li = document.activeElement;
 	  return !!li && li.matches("#tables li.sel") && li.dataset.name === n;
@@ -547,11 +547,11 @@ func evalNum(t *testing.T, p *rod.Page, js string, args ...any) float64 {
 // switchConns: a click on another connection moves the tab there and
 // redraws the Tables list with its tables; and back again.
 func switchConns(t *testing.T, _ *env, p *rod.Page) {
-	p.MustElement(`#conns .conn-item[data-conn="lite2"]`).MustClick()
+	clickAt(t, p, `#conns .conn-item[data-conn="lite2"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite2")
 	waitFor(t, p, "lite2's tables", `() => [...document.querySelectorAll("#tables li[data-name]")].map((l) => l.dataset.name).join() === "dogs"`)
 
-	p.MustElement(`#conns .conn-item[data-conn="lite"]`).MustClick()
+	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite")
 	waitFor(t, p, "lite's tables", `() => !!document.querySelector('#tables li[data-name="cats"]')`)
 }
@@ -561,7 +561,7 @@ func switchConns(t *testing.T, _ *env, p *rod.Page) {
 // lite has the earlier steps' queries; one run on lite2 makes it a
 // database with history of its own.
 func historyScope(t *testing.T, _ *env, p *rod.Page) {
-	p.MustElement(`#conns .conn-item[data-conn="lite2"]`).MustClick()
+	clickAt(t, p, `#conns .conn-item[data-conn="lite2"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite2")
 	before := gridSeq(t, p)
 	eval(t, p, `() => dbc.editor.setText("SELECT 'only on lite2' AS here")`)
@@ -581,7 +581,7 @@ func historyScope(t *testing.T, _ *env, p *rod.Page) {
 	}`)
 	eval(t, p, `() => dbc.modal.close()`)
 
-	p.MustElement(`#conns .conn-item[data-conn="lite"]`).MustClick()
+	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite")
 }
 
@@ -596,7 +596,7 @@ func disconnect(t *testing.T, _ *env, p *rod.Page) {
 	  !document.querySelector("#tables li[data-name]") &&
 	  !!document.querySelector('#conns .conn-item[data-conn="lite"]')`)
 
-	p.MustElement(`#conns .conn-item[data-conn="lite"]`).MustClick()
+	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite")
 }
 
@@ -663,7 +663,7 @@ func connForm(t *testing.T, e *env, p *rod.Page) {
 		t.Fatalf("lite3 is not in connections.toml (%v):\n%s", err, b)
 	}
 
-	p.MustElement(`#conns .conn-item[data-conn="lite"]`).MustClick()
+	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite")
 }
 
@@ -675,7 +675,7 @@ func pgSchemaPicker(t *testing.T, e *env, p *rod.Page) {
 	if e.pgDSN == "" {
 		t.Skip("set DBC_LIVE_PG_DSN to check the Postgres schema picker")
 	}
-	p.MustElement(`#conns .conn-item[data-conn="pg"]`).MustClick()
+	clickAt(t, p, `#conns .conn-item[data-conn="pg"]`, proto.InputMouseButtonLeft)
 	waitFor(t, p, "connected to pg with its schema picker", `() => dbc.state.active === "pg" &&
 	  !document.querySelector("#conns .conn-item.connecting") &&
 	  !document.getElementById("table-filter").hidden`)
@@ -713,14 +713,14 @@ func pgSchemaPicker(t *testing.T, e *env, p *rod.Page) {
 	  document.getElementById("table-schema").value === "e2e_a" &&
 	  [...document.querySelectorAll("#tables li[data-name]")].map((l) => l.dataset.name).join() === "e2e_a.alpha"`)
 
-	p.MustElement(`#conns .conn-item[data-conn="lite"]`).MustClick()
+	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite")
 }
 
 // tabsSurviveReload: a new tab, its text and a rename are saved on the
 // server, so a reload of the window brings all three back, on that tab.
 func tabsSurviveReload(t *testing.T, _ *env, p *rod.Page) {
-	p.MustElement("#qnew").MustClick()
+	clickAt(t, p, "#qnew", proto.InputMouseButtonLeft)
 	waitFor(t, p, "Query 2 open", `() => {
 	  const on = document.querySelector("#qtabs .qtab.on .qt");
 	  return !!on && on.textContent === "Query 2" && !!dbc.state.ws;
@@ -816,6 +816,34 @@ func sidebarFoldKeys(t *testing.T, _ *env, p *rod.Page) {
 			}
 		}
 	}
+
+	// The saved fold ends as the sidebar does: open. Each toggle writes
+	// the layout, and two writes sent back to back used to race to the
+	// server, so the "1" of a fold could land after the "" of the reveal —
+	// and the next load (tabGroups reloads) drew the sidebar folded, its
+	// connection rows zero-sized and unclickable (N-120). Here the fold's
+	// write is held back 300 ms, so without core.js's putLayout queue the
+	// reveal's write would land first every time.
+	eval(t, p, `() => {
+	  const f = window.fetch;
+	  let held = false;
+	  window.fetch = async (u, o) => {
+	    if (!held && o && o.method === "PUT" && String(u).includes("/api/v1/layout")) {
+	      held = true;
+	      await new Promise((r) => setTimeout(r, 300));
+	      window.fetch = f; // only the one write is held
+	    }
+	    return f(u, o);
+	  };
+	  dbc.cmd.toggleSidebar();
+	  dbc.cmd.toggleSidebar();
+	}`)
+	if folded() {
+		t.Fatal("a fold and a reveal left the sidebar folded")
+	}
+	time.Sleep(500 * time.Millisecond) // past the held write
+	waitFor(t, p, "the layout saved open", `async () =>
+	  ((await (await fetch("/api/v1/layout")).json()).data || {}).sideHidden === ""`)
 }
 
 // otherTabsConns: a connection another query tab is on — in this window or
@@ -838,7 +866,7 @@ func otherTabsConns(t *testing.T, e *env, p *rod.Page) {
 	}
 
 	// Renamed tab moves to lite2: lite is now Query 1's alone
-	p.MustElement(`#conns .conn-item[data-conn="lite2"]`).MustClick()
+	clickAt(t, p, `#conns .conn-item[data-conn="lite2"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite2")
 	marked(p, "lite")
 	if got := tooltip(p, "lite"); !strings.HasPrefix(got, "also open in Query 1 — ") {
@@ -846,7 +874,7 @@ func otherTabsConns(t *testing.T, e *env, p *rod.Page) {
 	}
 
 	// on Query 1 the marks swap: its own bar on lite, Renamed tab's on lite2
-	p.MustElementR("#qtabs .qtab .qt", "^Query 1$").MustClick()
+	clickAt(t, p, tabSelector(t, p, "Query 1"), proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite")
 	marked(p, "lite2")
 	if got := tooltip(p, "lite2"); !strings.HasPrefix(got, "also open in Renamed tab — ") {
@@ -877,7 +905,7 @@ func otherTabsConns(t *testing.T, e *env, p *rod.Page) {
 
 	// back on lite, as the step found it
 	p.MustActivate()
-	p.MustElement(`#conns .conn-item[data-conn="lite"]`).MustClick()
+	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite")
 }
 
@@ -923,14 +951,14 @@ func consolesPerDatabase(t *testing.T, e *env, p *rod.Page) {
 	}
 
 	// another database: another console; back again: this one's text
-	p.MustElement(`#conns .conn-item[data-conn="lite2"]`).MustClick()
+	clickAt(t, p, `#conns .conn-item[data-conn="lite2"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite2")
 	waitFor(t, p, "lite2's console", `() => dbc.editor.text() !== "SELECT 'on lite'"`)
 	setText("SELECT 'on lite2'")
 	if f := onDisk("SELECT 'on lite2'"); filepath.Dir(f) == filepath.Dir(liteFile) {
 		t.Fatalf("lite2's console %s is in lite's directory", f)
 	}
-	p.MustElement(`#conns .conn-item[data-conn="lite"]`).MustClick()
+	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite")
 	editorIs("lite's console back", "SELECT 'on lite'")
 	// and as it was left: the caret after what was typed, the typing still
@@ -1031,28 +1059,46 @@ func tabGroups(t *testing.T, _ *env, p *rod.Page) {
 		p.MustInsertText(n)
 		p.Keyboard.MustType(input.Enter)
 	}
-	// at clicks sel by its coordinates: renderTabs rebuilds the strip on
-	// many events (a tab's marks, the in-use dashes), so an element handle
-	// can be detached between finding it and clicking it
+	// at and tabSel are clickAt and tabSelector (harness_test.go): renderTabs
+	// rebuilds the strip on many events, so every click here goes by
+	// coordinates looked up at the moment of the click
 	at := func(sel string, button proto.InputMouseButton) {
 		t.Helper()
-		waitFor(t, p, sel, `(s) => !!document.querySelector(s)`, sel)
-		box := eval(t, p, `(s) => { const r = document.querySelector(s).getBoundingClientRect();
-		  return [r.x + r.width / 2, r.y + r.height / 2]; }`, sel).([]any)
-		p.Mouse.MustMoveTo(box[0].(float64), box[1].(float64))
-		if err := p.Mouse.Click(button, 1); err != nil {
-			t.Fatalf("click %s: %v", sel, err)
-		}
-		if button == proto.InputMouseButtonRight {
-			waitFor(t, p, "a menu", `() => !!document.querySelector(".menu")`)
-		}
+		clickAt(t, p, sel, button)
 	}
 	tabSel := func(title string) string {
-		return `#qtabs .qtab[data-key="` + evalStr(t, p, `(s) => [...document.querySelectorAll("#qtabs .qtab")]
-		  .find((b) => b.querySelector(".qt").textContent === s).dataset.key`, title) + `"]`
+		t.Helper()
+		return tabSelector(t, p, title)
 	}
 
 	strip("Query 1,Renamed tab")
+
+	// A tab brought on screen and left straight away keeps its own
+	// connection (N-120). activate shows a tab before its workspace
+	// answers, and until then the page's active connection is still the
+	// previous tab's; leaving saves the tab, and that save used to write
+	// the previous tab's connection into it — Renamed tab came back on
+	// lite after a reload. In the full suite the gap was wide enough only
+	// on a loaded run, so the workspace read is held back here to open it
+	// every time, and the saves the page sends are checked directly.
+	eval(t, p, `() => {
+	  window.__tabPuts = [];
+	  window.__realFetch = window.fetch;
+	  window.fetch = async (u, o) => {
+	    const url = String(u).split("?")[0], m = (o && o.method) || "GET";
+	    if (m === "GET" && /\/api\/v1\/ws\/[^/]+$/.test(url)) await new Promise((r) => setTimeout(r, 700));
+	    if (m === "PUT" && url.includes("/api/v1/tabs/")) window.__tabPuts.push(JSON.parse(o.body));
+	    return window.__realFetch(u, o);
+	  };
+	}`)
+	at(tabSel("Renamed tab"), proto.InputMouseButtonLeft)
+	waitFor(t, p, "Renamed tab on screen", `() => dbc.state.tab && dbc.state.tab.title === "Renamed tab"`)
+	at(tabSel("Query 1"), proto.InputMouseButtonLeft)
+	waitConnected(t, p, "lite")
+	eval(t, p, `() => { window.fetch = window.__realFetch; }`)
+	if got := evalStr(t, p, `() => window.__tabPuts.filter((b) => b.title === "Renamed tab").map((b) => b.conn).join()`); got == "" || strings.Trim(strings.ReplaceAll(got, "lite2", ""), ",") != "" {
+		t.Fatalf("Renamed tab was saved on %q, want lite2 (its own connection) every time", got)
+	}
 
 	// a hand-made group; a name the dialog refuses says why and stays open
 	at(tabSel("Query 1"), proto.InputMouseButtonRight)
@@ -1105,7 +1151,7 @@ func tabGroups(t *testing.T, _ *env, p *rod.Page) {
 	at(tabSel("Query 2"), proto.InputMouseButtonRight)
 	menuPick(t, p, "Remove from group wip")
 	waitConnected(t, p, "lite")
-	p.MustElement(`#conns .conn-item[data-conn="lite2"]`).MustClick()
+	clickAt(t, p, `#conns .conn-item[data-conn="lite2"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite2")
 	strip("[wip],Query 1,[lite2],Query 2,Renamed tab")
 

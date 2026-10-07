@@ -45,7 +45,27 @@ func newInterp() (*interp.Interpreter, error) {
 }
 
 // Run interprets the Go script at path and invokes its Run(s *sdb.S) error.
-func Run(path string, s *sdb.S) (err error) {
+func Run(path string, s *sdb.S) error {
+	return run(path, s, func(i *interp.Interpreter) error {
+		_, err := i.EvalPath(path)
+		return err
+	})
+}
+
+// RunSource is Run for a script that is text rather than a file: a sample
+// built into the binary, run by `dbc script NAME` without being copied out
+// first. name stands in for the path in errors.
+func RunSource(name, src string, s *sdb.S) error {
+	return run(name, s, func(i *interp.Interpreter) error {
+		_, err := i.Eval(src)
+		return err
+	})
+}
+
+// run is Run and RunSource after the one step they differ in: load
+// evaluates the script's file or text into a fresh interpreter, then
+// main.Run is looked up, checked and called.
+func run(path string, s *sdb.S, load func(*interp.Interpreter) error) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = serr.New("script panicked", "script", path, "panic", fmt.Sprint(r))
@@ -57,7 +77,7 @@ func Run(path string, s *sdb.S) (err error) {
 		return err
 	}
 
-	if _, err = i.EvalPath(path); err != nil {
+	if err = load(i); err != nil {
 		return serr.Wrap(err, "script", path, "phase", "compile")
 	}
 	v, err := i.Eval("main.Run")

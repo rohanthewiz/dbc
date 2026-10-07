@@ -267,13 +267,21 @@ func scriptAction(ctx context.Context, cmd *cli.Command) error {
 	defer mgr.Close()
 	warnConfig(cfg)
 	// A file path runs as it always has; a bare NAME (copy_mytable, or
-	// copy_mytable.go) that is not a file here is looked up in scripts_dir.
-	path, err := cfg.FindScript(cmd.Args().First())
+	// copy_mytable.go) that is not a file here is looked up in scripts_dir,
+	// then among the built-in examples.
+	ref, err := cfg.FindScript(cmd.Args().First())
 	if err != nil {
 		mgr.Close() // usage exits; the deferred Close would not run
 		usage(err.Error())
 	}
-	runScriptHeadless(mgr, path, outFormat())
+	if ref.Example != nil {
+		// stderr whatever the format: stdout may be the data. Said because
+		// the name could as well have been a typo for one of the user's
+		// own scripts, and running the sample instead would be a surprise.
+		fmt.Fprintf(os.Stderr, "running the built-in example %s (none of that name in %s)\n",
+			ref.Example.Name, cfg.ScriptsDir)
+	}
+	runScriptHeadless(mgr, ref, outFormat())
 	return nil
 }
 
@@ -952,8 +960,8 @@ func noteTruncated(w io.Writer, r *model.Result, what string) {
 		what, len(r.Rows))
 }
 
-// runScriptHeadless runs a Go script. The results it pushes with s.Show go
-// out one of two ways:
+// runScriptHeadless runs a Go script, a file or a built-in example. The
+// results it pushes with s.Show go out one of two ways:
 //
 //   - streamed, in a block format on stdout (scriptStreams): each result is
 //     written the moment it is shown, so it lands in order with the s.Print
@@ -966,7 +974,7 @@ func noteTruncated(w io.Writer, r *model.Result, what string) {
 //     documents, and -o writes one file. A block format collected is
 //     export.RenderOpen's document — the bytes the stream would have written,
 //     so `> file` and `-o file` agree.
-func runScriptHeadless(mgr *db.Manager, path string, f export.Format) {
+func runScriptHeadless(mgr *db.Manager, ref config.ScriptRef, f export.Format) {
 	ctx, stop := interruptible()
 	defer stop()
 
@@ -986,7 +994,13 @@ func runScriptHeadless(mgr *db.Manager, path string, f export.Format) {
 		func(msg string) { fmt.Fprintln(logOut, msg) },
 	).WithContext(ctx)
 
-	err := script.Run(path, s)
+	var err error
+	if ref.Example != nil {
+		// a sample runs from the binary's copy; nothing is written to disk
+		err = script.RunSource(ref.Label(), ref.Example.Text, s)
+	} else {
+		err = script.Run(ref.Path, s)
+	}
 	if stream != nil && stream.err != nil {
 		// checked before err: the script was canceled because output failed,
 		// and "script canceled" would hide why

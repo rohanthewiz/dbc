@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-137
+**Next ID:** N-139
 
 ## Open
 
@@ -61,24 +61,6 @@ ten session docs in `ai_docs/claude_sessions/`
   person: how `⛁ ◫ ▾` and the counts render in real emulators (iTerm2,
   Terminal.app, Ghostty, kitty, a cats pane), wheel scrolling and drags
   with real mouse hardware.
-- **N-097** · raised `2026-1002-0214-next-list-sweep-2` · value medium
-  Run the live suites against a real MySQL (8.4), which this session could
-  not: Docker Desktop's pulls hung in its proxy, and only `postgres:16-alpine`
-  was cached. New or newly unskipped on MySQL: `TestLivePooledCancelReachesServer`
-  (N-089's KILL of a canceled pooled statement), and the "at once" cases of
-  `TestLiveSessionGuardFindsTheCut` and `TestLiveWorkspaceRetryOnce` (N-088's
-  socket peek). With `DBC_LIVE_MYSQL_DSN` set: `go test -race ./db ./workspace`.
-  Offline, both are covered by fakes (a v10-handshake server; a
-  `driver.Connector`), and every Postgres live suite passes. Also N-094's
-  MySQL half: editor completion on a real MySQL (backtick quoting, a
-  `<conn>/<database>` pick, the first load), done on Postgres only.
-  2026-10-06 (`2026-1006-1323-opt-in-exact-row-counts`): with postgres:17
-  and mysql:8.4 containers, `TestLivePooledCancelReachesServer` FAILS —
-  "connection N: busy is not 0 after 3s" (`live_session_test.go:564`) —
-  also with that session's changes stashed, so it is not theirs. Which
-  engine's subtest failed was not captured; it passed on Postgres 16 before,
-  so probably MySQL, the KILL path. Every other live test passed.
-
 - **N-104** · raised `2026-1005-1035-sql-consoles-per-database` · value low
   Check consoles by hand on real data. The first `dbc web` start moves the
   real `web.bytdb`'s tab buffers into consoles (`moveTabBuffers`, once,
@@ -123,6 +105,11 @@ ten session docs in `ai_docs/claude_sessions/`
   screen, mouse and the kitty keys, also inside a cats pane. Check that Del
   reaches it (a Mac's ⌫ is Backspace, so `x` is the fallback). The e2e
   drives `e` only through a shell stand-in for `$EDITOR`.
+  Updated `2026-1007-0229-next-list-sweep-3`: add the results title's "Result 1 · 2 · 3" switcher
+  (N-136): that `[` and `]` reach dbc, and how `·` and `‹ ›` render. Also
+  N-097's leftover: editor completion by hand on a real MySQL (backtick
+  quoting, a `<conn>/<database>` pick, the first load), now covered
+  headlessly by `TestLiveWorkspaceCompletionMySQL`.
 - **N-116** · raised `2026-1005-1450-tui-web-parity` · value low
   Tab groups in the TUI. dbc web has them (`tabgroups.js`: ad-hoc and
   connection groups, collapse to a chip); the TUI's strip has no groups.
@@ -145,53 +132,6 @@ ten session docs in `ai_docs/claude_sessions/`
   are underlined, listed by line in the log, and ⇧F12 again steps through
   them. A small modal list (line + text, Enter jumps) if stepping is not
   enough.
-- **N-119** · raised `2026-1005-1450-tui-web-parity` · value low
-  The TUI connection form's TLS mode chips are cut off on terminals under
-  about 75 columns. Wrap them onto a second row, or switch to a picker.
-- **N-120** · raised `2026-1005-1751-recent-chats-fold-v0.8.2` · value medium
-  The e2e step "tab groups" (`web/e2e/web_test.go` `tabGroups`) times out
-  after ~21s in most runs: 2 of 3 on untouched `main` (37ff3d7), 3 of 8
-  with that session's change. Its failure dump showed status "ready on
-  lite2" and no JS errors; the step's waitFor message was not captured.
-  Together with N-110 it fails most full `DBC_E2E=1` runs, so the suite no
-  longer gives a clean signal after an app.js/CSS change.
-  Updated `2026-1006-1804-idle-connection-group-chips`: a lead. A new
-  `p.MustElement("#conns .conn-item…").MustClick()` in this step hung
-  forever right after a connect (sidebar redrawn, handle detached);
-  clicking by coordinates (`at()`) fixed it, and the full suite then
-  passed with "tab groups" in 2.3s (one run). The step keeps one such
-  `MustClick` (lite2, after "Remove from group wip"), and the suite has a
-  dozen more; moving them to coordinate clicks may end these timeouts.
-  Updated `2026-1006-2020-scripts-web-ui`: it now fails on every run. On a clean checkout of HEAD
-  (ecef8ac) it failed 3 of 3, and 3 of 3 with phase 4's changes, at the
-  strip checks (`web_test.go:1098`/`1108`: an extra "Query 4", or `[lite]`
-  before "Renamed tab"). Phase 4's step runs after it, so it was checked
-  with `DBC_E2E_STEPS` set to every other step.
-
-- **N-126** · raised `2026-1006-1346-etl-scripting-layer` · value low
-  Live MySQL tests for the ETL paths. `etl/live_test.go` covers Postgres
-  only; MySQL is reasoned about, not run: Create runs outside the load's
-  transaction (implicit commit), Truncate is a DELETE, a text primary key
-  becomes VARCHAR(255), and the text protocol's []byte values are read as
-  strings by column type.
-- **N-132** · raised `2026-1006-1915-scripts-store-check-examples` · value low
-  The built-in examples (`scripts/embed.go`) are reachable only from Go
-  until the scripts browser lands (phases 3–5). So `dbc script loop_params`
-  in a fresh install, with an empty scripts dir, fails "no script", and
-  `dbc scripts` does not mention the examples. Options: fall back to a
-  built-in example by name after `scripts_dir`, and list examples (marked
-  as such) in `dbc scripts`. Offered at the end of the session; the user
-  did not answer.
-  Updated `2026-1006-2020-scripts-web-ui`: dbc web now offers the examples (Ctrl+O, Enter
-  makes a copy). Headless `dbc script`/`dbc scripts` and the TUI still do
-  not; phase 5 covers the TUI.
-  Updated `2026-1006-2224-scripts-tui-browser`: the TUI's browser lists the examples too
-  (Enter or `d` copies one into the scripts dir). Only headless
-  `dbc script NAME` / `dbc scripts` are left without them.
-  Updated `2026-1006-2234-scripts-docs-and-skill`: the README and the dbc skill now say
-  that headless `dbc script loop_params` does not find an example by name
-  (run it by path from a checkout). So the gap is documented, not closed.
-
 - **N-133** · raised `2026-1006-1937-scripts-web-api` · value low
   rweb's radix router (v0.1.32) does not backtrack. Under one method, a
   path segment with a literal child (`examples/`) beside a param (`:name`)
@@ -202,26 +142,19 @@ ten session docs in `ai_docs/claude_sessions/`
   user's own library, if another route set ever needs literal and param
   siblings.
 
-- **N-134** · raised `2026-1006-2020-scripts-web-ui` · value low
-  The assistant in a script tab is handed the Go script as "the query":
-  `ChatContext` reads the editor's text as SQL, and its explain-this-query
-  action and context chip say so. It should either send the script as a
-  script (with the sdb API as context) or leave the editor out in a script
-  tab.
-- **N-135** · raised `2026-1006-2020-scripts-web-ui` · value low
-  Script drafts are keyed by name in one browser's localStorage. Two
-  windows with the same script open in a tab share one draft key, and the
-  last to type wins it. The file itself is still revision-checked, so
-  nothing on disk is lost, only the other window's unsaved draft across a
-  reload. Fix it with per-window keys plus a merge, or by keeping drafts on
-  the server (the saved tab's buffer).
-
-- **N-136** · raised `2026-1006-2224-scripts-tui-browser` · value low
-  The TUI keeps only the last of a script's `s.Show`s: each one replaces
-  the grid. dbc web keeps the newest 20 (`Workspace.ScriptResults`,
-  `ShowScriptResult`) behind a "Result 1 · 2 · 3" switcher. The TUI could
-  draw the same switcher on the results title (keys `[`/`]`, a click), since
-  the workspace already keeps the list.
+- **N-137** · raised `2026-1007-0229-next-list-sweep-3` · value low
+  The TUI assistant does not send a script's context. dbc web's script
+  tabs now do (N-134: the source as Go, the connections, the run's error
+  or result, the sdb API summary); in the TUI scripts go to `$EDITOR`, so
+  the assistant sees only a script run's result. After a TUI script run it
+  could attach `ScriptChatContext` for that script.
+- **N-138** · raised `2026-1007-0229-next-list-sweep-3` · value low
+  ETL values that MySQL cannot hold: a Postgres `timestamptz 'infinity'`
+  into a DATETIME fails the load (cleanly, it rolls back; pinned in
+  `etl/live_mysql_test.go`), and an unsigned BIGINT above 2^63 would
+  overflow the signed BIGINT a created column gets. Mapping infinity to
+  `9999-12-31` or NULL is a decision about the data, so it is left to a
+  `Where` or a Transform. Neither has been seen in practice.
 
 ## Roadmap
 
@@ -309,6 +242,95 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-136** · raised `2026-1006-2224-scripts-tui-browser` · value low
+  The TUI keeps only the last of a script's `s.Show`s: each one replaces
+  the grid. dbc web keeps the newest 20 (`Workspace.ScriptResults`,
+  `ShowScriptResult`) behind a "Result 1 · 2 · 3" switcher. The TUI could
+  draw the same switcher on the results title (keys `[`/`]`, a click), since
+  the workspace already keeps the list.
+  closed 2026-10-07, `2026-1007-0229-next-list-sweep-3`: the TUI results title has the "Result 1 · 2 · 3" switcher (click a number, or `[` / `]` in the grid; a compact "Result ‹ k/N ›" when it does not fit), over the workspace's existing list, so copies, exports and the assistant follow the shown result (`tui/resultsets.go`). Unit tests plus the TUI e2e scripts step.
+- **N-135** · raised `2026-1006-2020-scripts-web-ui` · value low
+  Script drafts are keyed by name in one browser's localStorage. Two
+  windows with the same script open in a tab share one draft key, and the
+  last to type wins it. The file itself is still revision-checked, so
+  nothing on disk is lost, only the other window's unsaved draft across a
+  reload. Fix it with per-window keys plus a merge, or by keeping drafts on
+  the server (the saved tab's buffer).
+  closed 2026-10-07, `2026-1007-0229-next-list-sweep-3`: drafts are keyed `dbc.script.draft.<owner>:<name>` with the owner id in sessionStorage (a duplicated tab gets a new one) and a 30 s heartbeat. On open: this window's draft wins; else the newest draft of a closed window (or the old one-key format) is adopted and moved; a live window's draft is never read or overwritten. Rename moves drafts; dead owners are swept at boot. Covered by the "script tabs" e2e step.
+- **N-134** · raised `2026-1006-2020-scripts-web-ui` · value low
+  The assistant in a script tab is handed the Go script as "the query":
+  `ChatContext` reads the editor's text as SQL, and its explain-this-query
+  action and context chip say so. It should either send the script as a
+  script (with the sdb API as context) or leave the editor out in a script
+  tab.
+  closed 2026-10-07, `2026-1007-0229-next-list-sweep-3`: a script tab asks about the script: the source fenced as Go and named, the configured connections, the tables its SQL names, its own last run's error or result, and the sdb API summary (`sdbapi.Summary()`, ~8 KB) once per conversation. The chip and menu say "script"; Go blocks get ⤓ insert. On the way: a script run no longer leaves its error/result attributed to the last SQL statement (`lastStmt` cleared, `lastScript` recorded), which also fixes the TUI's cats staging. The TUI assistant does not send a script's context yet (N-137).
+- **N-132** · raised `2026-1006-1915-scripts-store-check-examples` · value low
+  The built-in examples (`scripts/embed.go`) are reachable only from Go
+  until the scripts browser lands (phases 3–5). So `dbc script loop_params`
+  in a fresh install, with an empty scripts dir, fails "no script", and
+  `dbc scripts` does not mention the examples. Options: fall back to a
+  built-in example by name after `scripts_dir`, and list examples (marked
+  as such) in `dbc scripts`. Offered at the end of the session; the user
+  did not answer.
+  Updated `2026-1006-2020-scripts-web-ui`: dbc web now offers the examples (Ctrl+O, Enter
+  makes a copy). Headless `dbc script`/`dbc scripts` and the TUI still do
+  not; phase 5 covers the TUI.
+  Updated `2026-1006-2224-scripts-tui-browser`: the TUI's browser lists the examples too
+  (Enter or `d` copies one into the scripts dir). Only headless
+  `dbc script NAME` / `dbc scripts` are left without them.
+  Updated `2026-1006-2234-scripts-docs-and-skill`: the README and the dbc skill now say
+  that headless `dbc script loop_params` does not find an example by name
+  (run it by path from a checkout). So the gap is documented, not closed.
+  closed 2026-10-07, `2026-1007-0229-next-list-sweep-3`: headless `dbc script NAME` falls back to a built-in example after the cwd and `scripts_dir` (your script wins), says so on stderr, and runs the binary's copy without writing it. `--check` resolves names the same way (`example:NAME.go`). `dbc scripts` lists the examples no script of yours shadows, with a new last column `kind` (script/example; modified `null` in JSON). README and the dbc skill updated.
+- **N-126** · raised `2026-1006-1346-etl-scripting-layer` · value low
+  Live MySQL tests for the ETL paths. `etl/live_test.go` covers Postgres
+  only; MySQL is reasoned about, not run: Create runs outside the load's
+  transaction (implicit commit), Truncate is a DELETE, a text primary key
+  becomes VARCHAR(255), and the text protocol's []byte values are read as
+  strings by column type.
+  closed 2026-10-07, `2026-1007-0229-next-list-sweep-3`: `etl/live_mysql_test.go`: MySQL→MySQL with Create (exact created types, VARCHAR/VARBINARY keys → (255), values with and without `parseTime`), a failed reload keeping the old rows (Truncate as DELETE inside the transaction; TRUNCATE makes it fail), Create's table left behind empty as documented, and MySQL↔Postgres both ways (text, numeric, timestamps, bytes). All pass on mysql:8.4. A Postgres `infinity` timestamp into DATETIME fails the load cleanly (pinned; see N-138).
+- **N-120** · raised `2026-1005-1751-recent-chats-fold-v0.8.2` · value medium
+  The e2e step "tab groups" (`web/e2e/web_test.go` `tabGroups`) times out
+  after ~21s in most runs: 2 of 3 on untouched `main` (37ff3d7), 3 of 8
+  with that session's change. Its failure dump showed status "ready on
+  lite2" and no JS errors; the step's waitFor message was not captured.
+  Together with N-110 it fails most full `DBC_E2E=1` runs, so the suite no
+  longer gives a clean signal after an app.js/CSS change.
+  Updated `2026-1006-1804-idle-connection-group-chips`: a lead. A new
+  `p.MustElement("#conns .conn-item…").MustClick()` in this step hung
+  forever right after a connect (sidebar redrawn, handle detached);
+  clicking by coordinates (`at()`) fixed it, and the full suite then
+  passed with "tab groups" in 2.3s (one run). The step keeps one such
+  `MustClick` (lite2, after "Remove from group wip"), and the suite has a
+  dozen more; moving them to coordinate clicks may end these timeouts.
+  Updated `2026-1006-2020-scripts-web-ui`: it now fails on every run. On a clean checkout of HEAD
+  (ecef8ac) it failed 3 of 3, and 3 of 3 with phase 4's changes, at the
+  strip checks (`web_test.go:1098`/`1108`: an extra "Query 4", or `[lite]`
+  before "Renamed tab"). Phase 4's step runs after it, so it was checked
+  with `DBC_E2E_STEPS` set to every other step.
+  closed 2026-10-07, `2026-1007-0229-next-list-sweep-3`: two app races, not the test. `tabBody` saved the on-screen tab's connection from `state.active`, which still holds the previous tab's between `activate` and its workspace's answer, so a quick switch saved "Renamed tab" on `lite`; it now uses `t.conn` (and `newTab` likewise). Layout PUTs could reach the server out of order, so quick Ctrl+B presses left `sideHidden` "1" under an open sidebar, and after the reload the folded sidebar's rows were unclickable; `dbc.putLayout` (`core.js`) now sends them in order. The e2e's sidebar/strip clicks go through a shared `clickAt` (coordinates, drawn targets only). Two new checks force each race and fail with its fix reverted. The full suite passed 5 of 5 runs in the fork and 3 of 3 on the merged tree.
+- **N-119** · raised `2026-1005-1450-tui-web-parity` · value low
+  The TUI connection form's TLS mode chips are cut off on terminals under
+  about 75 columns. Wrap them onto a second row, or switch to a picker.
+  closed 2026-10-07, `2026-1007-0229-next-list-sweep-3`: the chips wrap onto a second line where they do not fit (`chipRows` in `tui/connform.go`); the form's height counts the extra line, so rows below and click targets move with it. The real threshold was about 108 columns, not 75. `TestConnFormTLSChipsWrap`, `TestChipRows`.
+- **N-097** · raised `2026-1002-0214-next-list-sweep-2` · value medium
+  Run the live suites against a real MySQL (8.4), which this session could
+  not: Docker Desktop's pulls hung in its proxy, and only `postgres:16-alpine`
+  was cached. New or newly unskipped on MySQL: `TestLivePooledCancelReachesServer`
+  (N-089's KILL of a canceled pooled statement), and the "at once" cases of
+  `TestLiveSessionGuardFindsTheCut` and `TestLiveWorkspaceRetryOnce` (N-088's
+  socket peek). With `DBC_LIVE_MYSQL_DSN` set: `go test -race ./db ./workspace`.
+  Offline, both are covered by fakes (a v10-handshake server; a
+  `driver.Connector`), and every Postgres live suite passes. Also N-094's
+  MySQL half: editor completion on a real MySQL (backtick quoting, a
+  `<conn>/<database>` pick, the first load), done on Postgres only.
+  2026-10-06 (`2026-1006-1323-opt-in-exact-row-counts`): with postgres:17
+  and mysql:8.4 containers, `TestLivePooledCancelReachesServer` FAILS —
+  "connection N: busy is not 0 after 3s" (`live_session_test.go:564`) —
+  also with that session's changes stashed, so it is not theirs. Which
+  engine's subtest failed was not captured; it passed on Postgres 16 before,
+  so probably MySQL, the KILL path. Every other live test passed.
+  closed 2026-10-07, `2026-1007-0229-next-list-sweep-3`: the MySQL failure of `TestLivePooledCancelReachesServer` was a real bug: `connectionID` (`db/mysqlkill.go`) accepted only int64/[]byte/string, but go-sql-driver/mysql returns `CONNECTION_ID()` as uint64, so every pooled MySQL connection had an empty id and a canceled statement was never KILLed — N-089 never worked live (the offline fake returned int64). It now takes uint64, and the fake returns uint64 like the driver. With postgres:16 and mysql:8.4: `go test -race ./db ./workspace ./etl ./web ./tui .` passes on both engines, including the N-088 "at once" cases on MySQL. New `TestLiveWorkspaceCompletionMySQL` covers N-094's MySQL half headlessly (first load, backtick quoting, a `<conn>/<database>` switch); driving the editor by hand moved to N-115.
 - **N-130** · raised `2026-1006-1855-scripts-dir-resolution` · value high
   Scripts revamp, phases 2–6 of `ai_docs/plans/scripts-revamp.md` (phase 1,
   where scripts live, is done): the script store (save with revision

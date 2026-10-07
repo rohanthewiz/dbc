@@ -120,10 +120,15 @@ type Workspace struct {
 	// (and each TUI tab) has its own.
 	showCounts bool
 
-	lastStmt string        // the statement the last run executed
-	lastErr  string        // what it failed with, "" if it worked
-	lastRes  *model.Result // the last result published (a run's or a script's s.Show)
-	plan     *explain.Plan // the last plan: an explain's, or one detected in a result
+	lastStmt string // the statement the last run executed; "" after a script run
+	// lastScript is the file name of the script the last run ran ("" when
+	// the last run was SQL), so the assistant hands a script tab its own
+	// run's error and results, and a query tab never gets a script's as
+	// its statement's (ScriptChatContext, ChatContext).
+	lastScript string
+	lastErr    string        // what the last run failed with, "" if it worked
+	lastRes    *model.Result // the last result published (a run's or a script's s.Show)
+	plan       *explain.Plan // the last plan: an explain's, or one detected in a result
 	// scriptRes are the results the last script run showed (s.Show), oldest
 	// first, at most MaxScriptResults of them; scriptCut counts the ones
 	// dropped off the front to keep to that, so result i here is the
@@ -314,7 +319,8 @@ func (w *Workspace) TableIndex() *db.TableIndex {
 	return w.tableIdx
 }
 
-// LastStmt is the statement the last run executed ("" before any).
+// LastStmt is the statement the last run executed ("" before any, and
+// after a script run: what a script ran is not known).
 func (w *Workspace) LastStmt() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()

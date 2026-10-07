@@ -643,6 +643,10 @@ func (m *Model) gridKey(k tea.KeyPressMsg) tea.Cmd {
 	case "enter":
 		m.openInspect()
 		return nil
+	case "[":
+		return m.stepScriptResult(-1)
+	case "]":
+		return m.stepScriptResult(1)
 	case "p":
 		if m.planv.plan == nil {
 			m.log(logWarn, "no plan yet — Ctrl+X explains the statement under the caret")

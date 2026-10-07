@@ -88,6 +88,7 @@ var keyGroups = []keyGroup{
 		{"t", "transpose — each row a column; copies and exports follow"},
 		{"click a header", "sort: ascending, descending, off"},
 		{"p", "the plan, when there is one"},
+		{"[ · ]", "a script's previous · next shown result (or click a number on the title)"},
 		{"z", "give the results the whole column — and back"},
 	}},
 	{"Plan", [][2]string{

@@ -25,10 +25,11 @@
 //	                         elsewhere meanwhile: loaded as a conflict
 //
 // DRAFTS. Unsaved text survives a reload, kept in this browser's
-// localStorage under the script's name with the revision it was typed
-// against:
+// localStorage under the script's name and the window that typed it, with
+// the revision it was typed against:
 //
-//	dbc.script.draft.<name> = {base, text}
+//	dbc.script.draft.<owner>:<name> = {base, text, at}
+//	dbc.draftSeen.<owner>           = ms of the owner's last heartbeat
 //
 // Opening the script again: a draft whose base is the file's revision is
 // put back as it was (unsaved). One whose base is older — the file moved on
@@ -37,6 +38,31 @@
 // over the newer file. localStorage, not the saved tab: the draft belongs to
 // the script, wherever it is opened next, and a browser that refuses storage
 // (a private window) only loses the safety net, not the editing.
+//
+// WHY PER WINDOW. One key per script name meant two windows with the same
+// script open shared it, and the last to type took it: a reload of the
+// other window then came back with the wrong window's text, and its own
+// unsaved edits were gone. So each browser tab is a draft OWNER (an id in
+// its sessionStorage — which a reload keeps, and which a duplicated tab
+// copies, so app.js gives a copy a new one) and writes only its own key.
+// "Wherever it is opened next" still holds, through orphans:
+//
+//	open a script ─► my own draft? ─yes─► use it
+//	                      │no
+//	                      ▼
+//	   drafts of owners whose heartbeat stopped (closed windows), and the
+//	   one-key draft an older page wrote ─► the newest is adopted: moved
+//	   under my key, the rest dropped (logged) — as before, a closed
+//	   window's draft is picked up by the next window to open the script
+//	                      │none
+//	                      ▼
+//	   a LIVE window's draft is left alone: that window is still editing
+//	   it, so this one shows the saved file and says so
+//
+// An owner beats every 30 s; a stopped beat is an orphan after 5 minutes
+// (a hidden tab's timers can be throttled to once a minute). Closing the
+// tab (pagehide) shortens that to 15 s rather than zero, since a reload
+// fires pagehide too and comes straight back as the same owner.
 //
 // THE CHECK. ~600 ms after typing stops, the tab's text — unsaved — goes to
 // POST /api/v1/script-check (script.Check: parse, Run's signature, yaegi's
@@ -49,23 +75,123 @@
   const dbc = window.dbc;
   const { api, log, el } = dbc;
 
+  // DRAFT + name is an older page's one-key draft; DRAFT + owner + ":" +
+  // name is a window's own. A script name cannot hold ":" (letters, digits,
+  // '.', '-' and '_'), so the two never collide.
   const DRAFT = "dbc.script.draft.";
+  const OWNER = "dbc.draftOwner"; // sessionStorage: this browser tab's owner id
+  const SEEN = "dbc.draftSeen.";  // localStorage: SEEN + owner = last heartbeat
+  const BEAT = 30e3, ORPHAN = 5 * 60e3, CLOSING = 15e3;
 
   // Storage can throw (a private window, blocked site data) or come back
   // empty; a draft is a convenience, so every touch is wrapped.
-  function readDraft(name) {
+  function readKey(k) {
     try {
-      const v = localStorage.getItem(DRAFT + name);
+      const v = localStorage.getItem(k);
       const d = v ? JSON.parse(v) : null;
       return d && typeof d.text === "string" ? d : null;
     } catch (_) { return null; }
   }
-  function writeDraft(name, d) {
+  function writeKey(k, d) {
     try {
-      if (d) localStorage.setItem(DRAFT + name, JSON.stringify(d));
-      else localStorage.removeItem(DRAFT + name);
+      if (d) localStorage.setItem(k, JSON.stringify(d));
+      else localStorage.removeItem(k);
     } catch (_) { /* no storage: the tab still edits, a reload just loses the draft */ }
   }
+  function storageKeys() {
+    try { return Object.keys(localStorage); } catch (_) { return []; }
+  }
+
+  // owner is this browser tab's draft owner id, made on first use. Without
+  // sessionStorage it lives as long as the page — drafts then still keep
+  // one window from overwriting another's, and a reload finds its old
+  // draft as an orphan once the old page's beat has stopped.
+  let pageOwner = "";
+  function owner() {
+    try {
+      let id = sessionStorage.getItem(OWNER);
+      if (!id) {
+        id = pageOwner || Math.random().toString(36).slice(2, 10);
+        sessionStorage.setItem(OWNER, id);
+      }
+      return (pageOwner = id);
+    } catch (_) {
+      return pageOwner || (pageOwner = Math.random().toString(36).slice(2, 10));
+    }
+  }
+  // newOwner is for a duplicated browser tab (app.js: the boot claim's
+  // 409): its sessionStorage, owner id included, is a copy of the
+  // original's, and two live windows must not share a key.
+  function newOwner() {
+    pageOwner = "";
+    try { sessionStorage.removeItem(OWNER); } catch (_) { /* owner() makes a page-only one */ }
+    owner();
+    beat();
+  }
+
+  const ownKey = (name) => DRAFT + owner() + ":" + name;
+  const readDraft = (name) => readKey(ownKey(name));
+  const writeDraft = (name, d) => writeKey(ownKey(name), d);
+
+  function beat(at) {
+    try { localStorage.setItem(SEEN + owner(), String(at ?? Date.now())); } catch (_) { /* no storage, no drafts */ }
+  }
+  // live: owner id has beaten within ORPHAN. An owner never seen (its
+  // pages predate the beat, or storage was cleared) counts as gone.
+  function live(id) {
+    let t = 0;
+    try { t = Number(localStorage.getItem(SEEN + id)) || 0; } catch (_) { /* gone */ }
+    return Date.now() - t < ORPHAN;
+  }
+
+  // othersDrafts lists the drafts of name that are not this window's:
+  // {key, d, live} — the older page's one-key draft counts as an orphan.
+  function othersDrafts(name) {
+    const me = owner(), out = [];
+    for (const k of storageKeys()) {
+      if (!k.startsWith(DRAFT)) continue;
+      const rest = k.slice(DRAFT.length), i = rest.indexOf(":");
+      const id = i < 0 ? "" : rest.slice(0, i), n = i < 0 ? rest : rest.slice(i + 1);
+      if (n !== name || id === me) continue;
+      const d = readKey(k);
+      if (d) out.push({ key: k, d, live: id !== "" && live(id) });
+    }
+    return out;
+  }
+
+  // adoptOrphan moves the newest orphaned draft of name under this
+  // window's key and drops the other orphans — see DRAFTS. It returns the
+  // draft, or null, and how many live windows hold a draft of their own.
+  function adoptOrphan(name) {
+    const all = othersDrafts(name);
+    const orphans = all.filter((o) => !o.live).sort((a, b) => (b.d.at || 0) - (a.d.at || 0));
+    const liveN = all.length - orphans.length;
+    if (!orphans.length) return { d: null, liveN };
+    const d = orphans[0].d;
+    writeDraft(name, d);
+    for (const o of orphans) writeKey(o.key, null);
+    if (orphans.length > 1) {
+      const n = orphans.length - 1;
+      log("warn", name + ": " + n + " older unsaved draft" + (n > 1 ? "s" : "") +
+        " from closed windows " + (n > 1 ? "were" : "was") + " dropped for the newest one");
+    }
+    return { d, liveN };
+  }
+
+  // the heartbeat, and the forgetting of owners that are gone and left no
+  // drafts behind (a window closed with everything saved)
+  beat();
+  setInterval(beat, BEAT);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) beat(); });
+  window.addEventListener("pagehide", () => beat(Date.now() - ORPHAN + CLOSING));
+  (function forgetGone() {
+    const keys = storageKeys();
+    for (const k of keys) {
+      if (!k.startsWith(SEEN)) continue;
+      const id = k.slice(SEEN.length);
+      if (!live(id) && !keys.some((x) => x.startsWith(DRAFT + id + ":"))) writeKey(k, null);
+    }
+  })();
 
   const path = (name) => "/api/v1/scripts/" + encodeURIComponent(name);
 
@@ -141,7 +267,15 @@
       }
       if (files.has(name)) return files.get(name); // another load won the race
       const e = { name, rev, saved: text, text, missing, saving: null, diags: [], dirty: false };
-      const d = readDraft(name);
+      let d = readDraft(name);
+      if (!d) {
+        const o = adoptOrphan(name);
+        d = o.d;
+        if (!d && o.liveN) {
+          log("info", name + " has unsaved edits in another dbc web window — this tab shows the saved file; " +
+            "save there first to see them here");
+        }
+      }
       if (d && d.text !== text) {
         e.text = d.text;
         if (!missing && d.base !== rev) {
@@ -244,7 +378,8 @@
       clearTimeout(e.draftTimer);
       e.draftTimer = 0;
       const text = textOf(e);
-      writeDraft(e.name, isDirty(e) ? { base: e.rev, text } : null);
+      // at: when it was typed, so of two orphans the newer is adopted
+      writeDraft(e.name, isDirty(e) ? { base: e.rev, text, at: Date.now() } : null);
     }
 
     // flush writes every pending draft: the page is going away.
@@ -333,9 +468,18 @@
         e.name = to;
         files.set(to, e);
         dbc.editor.renameDoc(key(from), key(to));
-        const d = readDraft(from);
-        writeDraft(from, null);
-        if (d) writeDraft(to, d);
+      }
+      // This window's draft follows the script, and so do closed windows'
+      // (orphans have nobody else to move them, and left under the old
+      // name a later script of that name would adopt them). A live
+      // window's draft is its own to move: it gets this same event.
+      const d = readDraft(from);
+      writeDraft(from, null);
+      if (d) writeDraft(to, d);
+      for (const o of othersDrafts(from)) {
+        if (o.live) continue;
+        writeKey(o.key, null);
+        writeKey(o.key.slice(0, o.key.length - from.length) + to, o.d);
       }
       host.renamed(from, to);
     }
@@ -836,5 +980,5 @@
     return /^[A-Za-z_]\w*$/.test(rest) ? rest : "";
   }
 
-  dbc.scripts = { create, firstResult, varType, receiver, inString };
+  dbc.scripts = { create, newOwner, firstResult, varType, receiver, inString };
 })();

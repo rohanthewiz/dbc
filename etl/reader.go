@@ -42,6 +42,10 @@ type Reader struct {
 	n       int64
 	err     error
 	closed  bool
+	// holdTx keeps the transaction open past the last row, for Copy: it
+	// commits the read (Close) only after its load has, or rolls it back
+	// (rollback). Next would otherwise commit as the rows run out.
+	holdTx bool
 }
 
 // pgPinOutput fixes, for the current transaction only (set_config's
@@ -142,6 +146,12 @@ func (r *Reader) Next() bool {
 		if err := r.rows.Err(); err != nil {
 			r.err = serr.Wrap(canceled(r.ctx, err), "conn", r.conn, "op", "read", "after_rows", itoa(r.n))
 		}
+		// Held for its owner, who decides how it ends. database/sql has
+		// already closed the rows on reaching the end; only the
+		// transaction (and so the connection) waits.
+		if r.holdTx && r.err == nil {
+			return false
+		}
 		// Close commits the read's transaction on Postgres; a failed commit
 		// is the read's failure (a DELETE … RETURNING whose rows were all
 		// read but whose delete did not stick).
@@ -200,4 +210,19 @@ func (r *Reader) Close() error {
 		}
 	}
 	return err
+}
+
+// rollback ends the read as a failed one: it closes the rows and rolls the
+// transaction back, whether or not the rows ran out cleanly. It is Copy's
+// way out for a held read (holdTx) whose load did not commit, and a no-op
+// once the Reader is closed.
+func (r *Reader) rollback() {
+	if r.closed {
+		return
+	}
+	r.closed = true
+	_ = r.rows.Close()
+	if r.tx != nil {
+		_ = r.tx.Rollback()
+	}
 }

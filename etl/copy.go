@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,8 +20,14 @@ import (
 type CopyOptions struct {
 	// To names the destination table; empty means the source table's name.
 	To string
-	// Query, when set, is the source instead of a table: any SELECT, with
-	// Args as its parameters. To is then required.
+	// Query, when set, is the source instead of a table: one statement that
+	// returns rows, with Args as its parameters. To is then required.
+	//
+	// A write with RETURNING is a source too — "DELETE FROM jobs WHERE done
+	// RETURNING *" moves rows. From Postgres its change commits only after
+	// the load has, so a copy that fails leaves the source as it was; the
+	// other engines commit it as it runs. A write without RETURNING has no
+	// rows to copy, and is refused before it runs.
 	Query string
 	// Args are bind parameters for Query or Where, in the source's
 	// placeholder style ($1 Postgres/bytdb, ? MySQL/SQLite).
@@ -104,7 +111,10 @@ const defaultProgressEvery = 100_000
 // The destination is loaded in one transaction together with the Create and
 // Truncate: on failure, or when ctx is canceled, it is left as it was
 // (MySQL excepted for the DDL, which it commits implicitly). The source is
-// read by a single statement, so it sees one consistent snapshot.
+// read by a single statement, so it sees one consistent snapshot. On
+// Postgres that read runs in a transaction which commits after the load
+// does, on both paths, so a Query that writes (DELETE … RETURNING) loses
+// its change when the load fails rather than losing the rows.
 func Copy(ctx context.Context, src Conn, table string, dst Conn, opt CopyOptions) (CopyStats, error) {
 	start := time.Now()
 	query, dest, err := copySource(src.Engine, table, opt)
@@ -152,6 +162,9 @@ func copySource(e Engine, table string, opt CopyOptions) (query, dest string, er
 		case 0:
 			return "", "", serr.New("etl: Query has no statement in it")
 		case 1:
+			if err := returnsRows(stmts[0].Text); err != nil {
+				return "", "", err
+			}
 			return stmts[0].Text, opt.To, nil
 		}
 		return "", "", serr.New("etl: Query holds more than one statement; a copy reads from one",
@@ -174,6 +187,40 @@ func copySource(e Engine, table string, opt CopyOptions) (query, dest string, er
 	return query, dest, nil
 }
 
+// writeVerbs are the statements that change rows. They return rows only
+// with a RETURNING clause (REPLACE is MySQL's and SQLite's, MERGE … RETURNING
+// Postgres 17's).
+var writeVerbs = map[string]bool{
+	"insert": true, "update": true, "delete": true, "merge": true, "replace": true,
+}
+
+// returnsRows refuses a Query that is a write with no RETURNING. Such a
+// statement has no rows to copy, and it is refused here, from its text,
+// because by any later check it would already have run: the row path runs
+// the query to learn its columns, and off Postgres the write commits as it
+// runs, so `DELETE FROM jobs` would empty the source and load nothing.
+//
+// The test is lexical, like db's isQuery: the main verb is the one after a
+// CTE list (`WITH x AS (…) DELETE …` is a delete), and RETURNING counts
+// only in the main statement — not in a string, a comment, or a CTE body,
+// whose RETURNING feeds the statement rather than its output. What it
+// cannot see (a CALL, a DO block) the column checks in describe and
+// copyRows catch, before any row is loaded.
+func returnsRows(query string) error {
+	v := sqlsplit.Verbs(query)
+	if writeVerbs[v.Main] && !sqlsplit.HasKeyword(query[v.MainAt:], "returning") {
+		return serr.New("etl: Query is "+strings.ToUpper(v.Main)+" without RETURNING, so it has no rows to copy",
+			"hint", "add RETURNING and the columns to load")
+	}
+	return nil
+}
+
+// errNoColumns is the column checks' report of a Query that returns no rows.
+func errNoColumns(c Conn, query string) error {
+	return serr.New("etl: Query returns no columns, so it has no rows to copy",
+		"conn", c.Name, "query", clip(query), "hint", "a write needs RETURNING to be a copy's source")
+}
+
 // copyRows is the general path: decode, transform, re-encode.
 func copyRows(ctx context.Context, src Conn, table, query string, dst Conn, dest string,
 	opt CopyOptions, st *CopyStats) error {
@@ -190,10 +237,20 @@ func copyRows(ctx context.Context, src Conn, table, query string, dst Conn, dest
 		stopRead()
 		return err
 	}
+	// The read's transaction (Postgres) stays open past the last row and
+	// commits only once the load has — at the end of this function. Every
+	// earlier return lands here instead, which rolls it back: a Query that
+	// moved rows out of the source puts them back when they did not arrive.
+	rd.holdTx = true
 	defer func() {
 		stopRead()
-		_ = rd.Close()
+		rd.rollback()
 	}()
+	// A statement returnsRows could not judge, run and found to return
+	// nothing. Its transaction rolls back with the rest.
+	if len(rd.Columns()) == 0 {
+		return errNoColumns(src, query)
+	}
 
 	setup, err := prepareDest(ctx, src, table, dst, dest, rd.Columns(), rd.DBTypes(), opt)
 	if err != nil {
@@ -226,8 +283,15 @@ func copyRows(ctx context.Context, src Conn, table, query string, dst Conn, dest
 	if err = rd.Err(); err != nil {
 		return err
 	}
-	st.Rows, err = w.Close()
-	return err
+	if st.Rows, err = w.Close(); err != nil {
+		return err
+	}
+	// The load is in: now the read's own commit (see copyDirect for the
+	// order and what a failure here means).
+	if err = rd.Close(); err != nil {
+		return serr.Wrap(err, "conn", src.Name, "op", "commit source", "loaded", itoa(st.Rows))
+	}
+	return nil
 }
 
 // copyDirect streams Postgres COPY text from src to dst. The source runs on
@@ -244,7 +308,7 @@ func copyRows(ctx context.Context, src Conn, table, query string, dst Conn, dest
 func copyDirect(ctx context.Context, src Conn, table, query string, dst Conn, dest string,
 	opt CopyOptions, st *CopyStats) error {
 	// The column list (for the destination's COPY, and Create) comes from
-	// describing the query: a LIMIT 0 run returns the columns and no rows.
+	// describing the query, which parses it without running it.
 	cols, types, err := describe(ctx, src, query)
 	if err != nil {
 		return err
@@ -293,16 +357,29 @@ func copyDirect(ctx context.Context, src Conn, table, query string, dst Conn, de
 		}
 		return serr.Wrap(err, "conn", src.Name, "op", "copy out")
 	}
-	// The read is over: end its transaction, which only scoped the pinned
-	// settings, and give the connection back before the load commits — as
-	// the row path's Reader does when it reaches the end. A COMMIT that
-	// fails here means a broken connection, not a broken copy, but it is
-	// still reported, and the deferred Abort then rolls the load back.
-	if err = endTx(conn, "COMMIT"); err != nil {
-		return serr.Wrap(err, "conn", src.Name)
+	// The read is over, but its transaction ends only after the load's. For
+	// a SELECT it just scopes the pinned settings; a Query that writes —
+	// DELETE … RETURNING, moving rows — makes its change in it, and the
+	// change must not outlive a load that failed. A load can fail as late
+	// as its commit, after every source row is read — a deferred check
+	// fires there, and a key violation in the last rows reaches the client
+	// only as COPY FROM ends — so the order is:
+	//
+	//	load fails ───────────────► ROLLBACK the read: the rows stay put
+	//	load commits ─► COMMIT read ─► moved
+	//	                    └─ fails ─► reported; the rows are in both places
+	//
+	// The last needs the source connection to drop between two commits,
+	// and a duplicate is the harm that can be undone. The row path keeps
+	// the same order (copyRows).
+	if st.Rows, err = w.Close(); err != nil {
+		_ = endTx(conn, "ROLLBACK")
+		return err
 	}
-	st.Rows, err = w.Close()
-	return err
+	if err = endTx(conn, "COMMIT"); err != nil {
+		return serr.Wrap(err, "conn", src.Name, "op", "commit source", "loaded", itoa(st.Rows))
+	}
+	return nil
 }
 
 // loadOptions are the Writer's options for a copy's load: the Setup from
@@ -377,16 +454,67 @@ func (s *rawSink) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// describe returns a query's column names and driver type names without
-// fetching its rows.
-func describe(ctx context.Context, c Conn, query string) ([]string, []string, error) {
-	// "\n)": see copyDirect — a trailing line comment must not eat the paren.
-	rd, err := Read(ctx, c, "SELECT * FROM ("+query+"\n) AS etl_src LIMIT 0")
+// describe returns a Postgres query's column names and driver type names
+// without running it. The query goes over the extended protocol as Parse,
+// Describe, Sync — never Bind or Execute — so it may be anything COPY (…)
+// TO STDOUT can hold:
+//
+//	SELECT, VALUES, TABLE                    a subquery could hold these too
+//	INSERT/UPDATE/DELETE/MERGE … RETURNING   not as a subquery: syntax error
+//	WITH d AS (DELETE … RETURNING …) SELECT  not as a subquery: a writing
+//	                                         WITH must be at the top level
+//
+// which is why it is no longer SELECT * FROM (query) LIMIT 0. Parsing takes
+// the locks the query will need, but on the protocol's implicit
+// transaction, which Sync ends at once.
+//
+// The type names are the ones a Reader reports for the same columns (what
+// pgx's database/sql driver gives as DatabaseTypeName: the type map's name
+// upper-cased, or the OID when pgx has no name for it), so createDDL types
+// a Create from either path alike.
+func describe(ctx context.Context, c Conn, query string) (cols, types []string, err error) {
+	conn, err := c.DB.Conn(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, serr.Wrap(canceled(ctx, err), "conn", c.Name, "op", "checkout")
 	}
-	defer rd.Close()
-	return rd.Columns(), rd.DBTypes(), nil
+	defer conn.Close()
+	params := 0
+	err = conn.Raw(func(dc any) error {
+		pc, ok := dc.(*pgxstdlib.Conn)
+		if !ok {
+			return serr.New("etl: not a pgx connection")
+		}
+		// The unnamed statement: the next Parse on this connection replaces
+		// it, so there is nothing to deallocate. pgx's statement cache keeps
+		// its own under names, and is not disturbed.
+		sd, err := pc.Conn().PgConn().Prepare(ctx, "", query, nil)
+		if err != nil {
+			return err
+		}
+		tm := pc.Conn().TypeMap()
+		for _, f := range sd.Fields {
+			cols = append(cols, f.Name)
+			if dt, ok := tm.TypeForOID(f.DataTypeOID); ok {
+				types = append(types, strings.ToUpper(dt.Name))
+			} else {
+				types = append(types, strconv.FormatUint(uint64(f.DataTypeOID), 10))
+			}
+		}
+		params = len(sd.ParamOIDs)
+		return nil
+	})
+	switch {
+	case err != nil:
+		return nil, nil, serr.Wrap(canceled(ctx, err), "conn", c.Name, "op", "describe", "query", clip(query))
+	case params > 0:
+		// Parse accepts $1 and infers its type; COPY would then fail on it.
+		// Args are what fill it, and they take the row path.
+		return nil, nil, serr.New("etl: Query has bind parameters but no Args to fill them",
+			"conn", c.Name, "params", itoa(int64(params)), "query", clip(query))
+	case len(cols) == 0:
+		return nil, nil, errNoColumns(c, query)
+	}
+	return cols, types, nil
 }
 
 // prepareDest returns the statements to run in the load's transaction

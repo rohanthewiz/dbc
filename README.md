@@ -1622,6 +1622,21 @@ would stall the copy's own read of the table, so a table copied onto itself
 to rewrite it through a `Transform` works — at `DELETE`'s speed on a big
 table.
 
+A `Query` may be a write with `RETURNING`, which makes the copy a move:
+
+```go
+st, err := s.Copy("prod-pg", "archive-pg", "", sdb.CopyOpts{
+	Query: "DELETE FROM jobs WHERE finished_at < now() - interval '90 days' RETURNING *",
+	To:    "jobs_archive", Create: true,
+})
+```
+
+From Postgres, the source's change commits only after the destination's load
+has. A copy that fails, even at the load's final commit, leaves the rows
+where they were. MySQL, SQLite and bytdb commit the write as it runs, before
+the load. A write without `RETURNING` has nothing to copy and is refused
+before it runs.
+
 Reading from Postgres pins the settings that shape a value's text —
 `DateStyle` to ISO, `IntervalStyle` to `postgres`, `extra_float_digits` to
 exact — for that read only. A copy between two servers configured

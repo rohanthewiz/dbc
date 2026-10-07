@@ -341,9 +341,46 @@ func TestCopyOptionErrors(t *testing.T) {
 		{"", CopyOptions{Query: "SELECT 1"}, "To (the destination table) is required"},
 		{"", CopyOptions{Query: "SELECT 1", To: "x", Where: "1=1"}, "Query replaces Where"},
 		{"", CopyOptions{}, "no source table"},
+		{"", CopyOptions{Query: "DELETE FROM t", To: "x"}, "DELETE without RETURNING"},
+		{"", CopyOptions{Query: "WITH x AS (SELECT 1) UPDATE t SET a = 1", To: "x"}, "UPDATE without RETURNING"},
+		// the word in a string, a comment or a CTE body is not the clause
+		{"", CopyOptions{Query: "DELETE FROM t WHERE note = 'returning'", To: "x"}, "without RETURNING"},
+		{"", CopyOptions{Query: "DELETE FROM t -- returning\n", To: "x"}, "without RETURNING"},
+		{"", CopyOptions{Query: "WITH d AS (DELETE FROM t RETURNING id) INSERT INTO log SELECT id FROM d", To: "x"},
+			"INSERT without RETURNING"},
 	} {
 		if _, err := Copy(context.Background(), src, c.table, dst, c.opt); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%+v: err = %v, want %q", c.opt, err, c.want)
 		}
+	}
+}
+
+// A Query that writes: with RETURNING it is a source like any other (a
+// "move rows" copy); without, it is refused before it runs. Off Postgres
+// the write would commit the moment it ran, so a refusal that came after
+// running it — which is what the row path's column check alone would be —
+// would leave the source emptied and nothing loaded.
+func TestCopyQueryThatWrites(t *testing.T) {
+	src, dst := fileConn(t, SQLite, "src.db"), fileConn(t, SQLite, "dst.db")
+	seedCats(t, src)
+	ctx := context.Background()
+	_, err := Copy(ctx, src, "", dst, CopyOptions{Query: "DELETE FROM cats", To: "gone", Create: true})
+	if err == nil || !strings.Contains(err.Error(), "RETURNING") {
+		t.Fatalf("err = %v, want a refusal naming RETURNING", err)
+	}
+	if got := dump(t, src, "SELECT count(*) FROM cats")[0][0]; got != "5" {
+		t.Errorf("source after a refused DELETE has %s rows, want 5", got)
+	}
+	st, err := Copy(ctx, src, "", dst, CopyOptions{
+		Query: "DELETE FROM cats WHERE id <= 2 RETURNING id, name", To: "moved", Create: true,
+	})
+	if err != nil || st.Rows != 2 {
+		t.Fatalf("%+v, %v", st, err)
+	}
+	if got := dump(t, src, "SELECT id FROM cats ORDER BY id"); !reflect.DeepEqual(got, [][]string{{"3"}, {"4"}, {"5"}}) {
+		t.Errorf("source keeps %q, want 3, 4, 5", got)
+	}
+	if got := dump(t, dst, "SELECT id FROM moved ORDER BY id"); !reflect.DeepEqual(got, [][]string{{"1"}, {"2"}}) {
+		t.Errorf("moved = %q, want 1, 2", got)
 	}
 }

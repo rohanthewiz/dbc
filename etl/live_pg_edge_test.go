@@ -3,6 +3,7 @@ package etl
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"reflect"
@@ -25,6 +26,7 @@ import (
 //	TestLivePGTransformValues    Go values a Transform hands back (slices, maps …)
 //	TestLivePGSameDatabase       a table rewritten in place (loadOptions)
 //	TestLivePGConcurrentCopies   copies in parallel over shared pools (-race)
+//	TestLivePGMoveRows           a DELETE … RETURNING source, kept if the load fails
 //
 // They take about 15s against a local server, most of it the 300k- and
 // 1M-row tables that make "part way" and "in place" mean something.
@@ -899,4 +901,115 @@ func TestLivePGConcurrentCopies(t *testing.T) {
 	}
 	assertSourceIdle(t, src)
 	assertNoOpenTx(t, dst)
+}
+
+// TestLivePGMoveRows: a Query that changes the source as it reads it — a
+// DELETE … RETURNING, the "move rows" copy — on both paths. The direct
+// path must be able to describe it without running it, and on either path
+// the source's change must commit only once the load has: a load that
+// fails, even as late as its commit, leaves the source rows where they
+// were.
+func TestLivePGMoveRows(t *testing.T) {
+	src, dst := livePG(t)
+	ctx := context.Background()
+	n := 0
+	// fresh makes a new five-row source table — a new name per case, since
+	// pgx's statement cache trips over a name reused with other columns —
+	// and the name its archive on the destination gets.
+	fresh := func(t *testing.T) (from, to string) {
+		t.Helper()
+		n++
+		from, to = "etl_live.m"+itoa(int64(n)), "etl_live.arch"+itoa(int64(n))
+		mustExec(t, src, "CREATE TABLE "+from+" (id int PRIMARY KEY, name text)",
+			"INSERT INTO "+from+" SELECT g, 'n' || g FROM generate_series(1, 5) g")
+		return from, to
+	}
+	ids := func(t *testing.T, c Conn, table string) string {
+		t.Helper()
+		return dump(t, c, "SELECT coalesce(string_agg(id::text, ',' ORDER BY id), '') FROM "+table)[0][0]
+	}
+	idle := func(t *testing.T) {
+		t.Helper()
+		assertNoOpenTx(t, src)
+		assertNoOpenTx(t, dst)
+	}
+
+	for _, direct := range []bool{true, false} {
+		path := map[bool]string{true: "direct", false: "row"}[direct]
+		moves := map[string]string{
+			"delete returning": "DELETE FROM %s WHERE id <= 3 RETURNING id, name",
+			"data-modifying with": "WITH d AS (DELETE FROM %s WHERE id <= 3 RETURNING id, name)\n" +
+				"SELECT id, name FROM d -- moved",
+		}
+		for name, q := range moves {
+			t.Run(path+"/"+name, func(t *testing.T) {
+				from, to := fresh(t)
+				st, err := Copy(ctx, src, "", dst, opt2(direct, CopyOptions{
+					Query: fmt.Sprintf(q, from), To: to, Create: true,
+				}))
+				if err != nil || st.Rows != 3 || st.Direct != direct {
+					t.Fatalf("%+v, %v", st, err)
+				}
+				if got := ids(t, src, from); got != "4,5" {
+					t.Errorf("source keeps %q, want 4,5", got)
+				}
+				if got := ids(t, dst, to); got != "1,2,3" {
+					t.Errorf("archive has %q, want 1,2,3", got)
+				}
+				idle(t)
+			})
+		}
+		t.Run(path+"/load fails at commit", func(t *testing.T) {
+			// id 2 is already archived: the key violation reaches the copy
+			// when the load ends, after every source row has been read.
+			from, to := fresh(t)
+			mustExec(t, dst, "CREATE TABLE "+to+" (id int PRIMARY KEY, name text)",
+				"INSERT INTO "+to+" VALUES (2, 'already here')")
+			_, err := Copy(ctx, src, "", dst, opt2(direct, CopyOptions{
+				Query: "DELETE FROM " + from + " RETURNING id, name", To: to,
+			}))
+			if err == nil || !strings.Contains(err.Error(), "duplicate key") {
+				t.Fatalf("err = %v, want a duplicate key", err)
+			}
+			if got := ids(t, src, from); got != "1,2,3,4,5" {
+				t.Errorf("source after a failed move = %q: rows lost", got)
+			}
+			if got := ids(t, dst, to); got != "2" {
+				t.Errorf("archive after a failed move = %q", got)
+			}
+			idle(t)
+		})
+		t.Run(path+"/no RETURNING is refused before it runs", func(t *testing.T) {
+			from, to := fresh(t)
+			for _, q := range []string{
+				"DELETE FROM " + from,
+				"WITH x AS (SELECT 3 AS id) DELETE FROM " + from + " USING x WHERE " + from + ".id = x.id",
+			} {
+				_, err := Copy(ctx, src, "", dst, opt2(direct, CopyOptions{Query: q, To: to, Create: true}))
+				if err == nil || !strings.Contains(err.Error(), "RETURNING") {
+					t.Errorf("%s: err = %v, want a refusal naming RETURNING", q, err)
+				}
+			}
+			if got := ids(t, src, from); got != "1,2,3,4,5" {
+				t.Errorf("source after a refused copy = %q", got)
+			}
+			if got := dump(t, dst, "SELECT to_regclass('"+to+"') IS NULL"); got[0][0] != "true" {
+				t.Error("a refused copy created its table")
+			}
+			idle(t)
+		})
+	}
+	t.Run("direct/placeholders without Args", func(t *testing.T) {
+		from, to := fresh(t)
+		_, err := Copy(ctx, src, "", dst, CopyOptions{
+			Query: "DELETE FROM " + from + " WHERE id = $1 RETURNING id, name", To: to, Create: true,
+		})
+		if err == nil || !strings.Contains(err.Error(), "Args") {
+			t.Errorf("err = %v, want one naming Args", err)
+		}
+		if got := ids(t, src, from); got != "1,2,3,4,5" {
+			t.Errorf("source after a refused copy = %q", got)
+		}
+		idle(t)
+	})
 }

@@ -114,6 +114,11 @@ Behavior worth knowing before promising anything to the user:
   an empty new table. MySQL `Truncate` is a `DELETE`; so is Postgres's
   within one database, which is what lets a table be copied onto itself
   with a `Transform` (an in-place rewrite) instead of deadlocking.
+- `Query` may be a write with `RETURNING`: `DELETE FROM jobs WHERE done
+  RETURNING *` moves rows, on either path. From Postgres the write commits
+  only after the load does, so a failed copy leaves the source rows in
+  place; MySQL/SQLite/bytdb commit it as it runs. A write without
+  `RETURNING` is refused before it runs.
 - Into Postgres, a `Transform`/`Writer` value may be a Go slice (→ array),
   map or struct (→ JSON), `time.Duration` (→ interval), pointer, or
   `driver.Valuer` (`sql.NullString`).

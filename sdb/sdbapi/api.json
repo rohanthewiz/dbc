@@ -29,7 +29,7 @@
         {
           "name": "Query",
           "type": "string",
-          "doc": "Query, when set, is the source instead of a table: any SELECT, with\nArgs as its parameters. To is then required."
+          "doc": "Query, when set, is the source instead of a table: one statement that\nreturns rows, with Args as its parameters. To is then required.\n\nA write with RETURNING is a source too — \"DELETE FROM jobs WHERE done\nRETURNING *\" moves rows. From Postgres its change commits only after\nthe load has, so a copy that fails leaves the source as it was; the\nother engines commit it as it runs. A write without RETURNING has no\nrows to copy, and is refused before it runs."
         },
         {
           "name": "Args",

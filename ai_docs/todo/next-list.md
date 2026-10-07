@@ -24,70 +24,20 @@ ten session docs in `ai_docs/claude_sessions/`
 - **Open** is what we intend to pick up next. **Roadmap** is wanted, but not
   soon. **Non-goals** are what we are likely never to do, kept so they stay
   visibly declined.
-- **Nothing leaves Open or Roadmap without a line in another section** — moved
-  to Closed (with what closed it) or to Non-goals (with the reason). Moving
-  between Open and Roadmap is fine.
-- Open and Roadmap stay in ID order. Never renumber, never delete.
+- **Validate** sits directly below Open: items whose remaining work is purely
+  testing (a hand check in a real terminal or app, a run on real data or
+  hardware, or a test to write or repair), with no product change planned. A
+  check that finds a defect raises it as a new Open item; an Open item whose
+  fix has landed but is unchecked moves to Validate.
+- **Nothing leaves Open, Validate or Roadmap without a line in another
+  section** — moved to Closed (with what closed it) or to Non-goals (with the
+  reason). Moving among Open, Validate and Roadmap is fine.
+- Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
 **Next ID:** N-152
 
 ## Open
 
-- **N-064** · raised `2026-0929-1619-macos-app-wrapper` · value low
-  Click through `dbc.app` by hand; what the session could not drive from a
-  shell. Checks: a grid export and each plan download land in `~/Downloads`;
-  the plan's "open page" opens a second, signed-in window; the Copilot
-  sign-in's GitHub link opens in the browser; copy (plain and "for Teams")
-  reaches the clipboard from WKWebView; ⌘B/⌘R/⌘K reach the page, not the
-  menu; View ▸ Open in Browser signs the browser in; the Tables schema
-  filter's list opens, scrolls and takes typing in WKWebView (the native
-  `<select>` it replaced did not scroll there). Launch, sign-in (the page
-  opened a workspace), Quit, `kill -9` of the app, and the login-shell `PATH`
-  were verified.
-  Updated `2026-1006-2020-scripts-web-ui`: add script tabs in WKWebView. Check that ⌘S saves
-  (not the app's menu), that an unsaved draft survives quitting the app
-  (localStorage in WKWebView), and that the browser's Copy path reaches
-  the clipboard.
-  Updated `2026-1007-1054-web-tab-to-table-find`: add the sidebar's table
-  find box. Check that Tab in the schema box lands in it, that typing a
-  letter on a table row starts a find there (the page puts the character in
-  by hand, since WKWebView may not deliver a keypress to the box focus moved
-  to), and that ↑↓ and Enter in the box act on the list.
-- **N-087** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
-  Drive the TUI's new navigator by hand in a real terminal on a big
-  Postgres: the picker rows, `d`/`s`, typing into a 150-schema list, the
-  Disconnect confirm menu. Only the test harness's rendered frames and a
-  live Postgres test have exercised them.
-  Updated `2026-1001-1817-next-list-sweep`: the real binary was driven in a 140×45 pty through a VT
-  emulator (charmbracelet/x/vt) against 150 schemas and three databases —
-  40 checks, all passing: both rows, `d`/`s`, filtering, mouse clicks on
-  the rows, a database switch and back, the recount after an INSERT, the
-  Disconnect menu, and the saved pick on a restart. What is left needs a
-  person: how `⛁ ◫ ▾` and the counts render in real emulators (iTerm2,
-  Terminal.app, Ghostty, kitty, a cats pane), wheel scrolling and drags
-  with real mouse hardware.
-- **N-104** · raised `2026-1005-1035-sql-consoles-per-database` · value low
-  Check consoles by hand on real data. The first `dbc web` start moves the
-  real `web.bytdb`'s tab buffers into consoles (`moveTabBuffers`, once,
-  marker `consoles.moved`); the TUI's first start seeds from `buffer.sql`.
-  Also check a live Postgres `<conn>/<database>` switch landing in
-  `consoles/<host>_<port>/<database>/`, and the TUI and a browser tab
-  editing one console at once (the TUI writes only a console it changed,
-  last writer wins then; the web side is revision-checked).
-- **N-106** · raised `2026-1005-1109-completion-big-catalog` · value high
-  Confirm completion on the real ProdDr connection, where it failed with
-  "the catalog is too big to read whole" (rows 250000). Note whether the
-  partition filter alone fixed it, or the scoped fallback kicked in (the
-  error now names the query, e.g. `query[columns]`). The diagnostic query
-  in the session doc counts its column rows on partitions vs. not.
-  2026-10-05: ProdDr's *sidebar* then failed too — no schema picker, "tables
-  list unavailable … op[read the catalog], cause[timeout]". The schema
-  summary (a pass over all of pg_class) ran out the shared 10s budget and
-  the fallback read every table. Now each read has its own budget and a
-  slow summary falls back to schema names (`db.SchemaNamesQuery`). Still to
-  confirm on ProdDr: the picker shows up, a schema's tables load within
-  `catalogTimeout` (that query scans pg_class too), and how big pg_class is
-  (`SELECT relkind, relispartition, count(*) FROM pg_class GROUP BY 1, 2`).
 - **N-107** · raised `2026-1005-1132-assistant-code-highlighting` · value low
   Highlight TypeScript blocks in the assistant's answers. `ts`/`tsx` would
   map onto the JS spec in `codehl` and `hl.js` plus a TS keyword list
@@ -95,30 +45,6 @@ ten session docs in `ai_docs/claude_sessions/`
   keyof`…). Offered alongside JSON and shell; the user picked those two.
   Only worth it once answers about app code (calling the database from TS)
   show up.
-- **N-115** · raised `2026-1005-1450-tui-web-parity` · value low
-  Drive the TUI's parity pieces by hand in real terminals (iTerm2,
-  Terminal.app, Ghostty, kitty, a cats pane): whether F12 / ⇧F12 / F2 and
-  F1 reach dbc (macOS may take F12; some terminals send ⇧F12 as F24, which
-  is accepted), Ctrl+click in the editor, ⌥T / ⌥W / ⌥1…9 (need Option as
-  Meta), the tab strip's `● • ◆` and the list's `○`, the `‹ / ›` fold tab,
-  typing in the connection form (masked password, TLS chips), and
-  transposed-grid drags with real mouse hardware. The pty e2e suite
-  (`tui/e2e`, xterm-256color through charmbracelet/x/vt) passes every new
-  step; glyph rendering and OS key capture it cannot see.
-  Updated `2026-1006-2224-scripts-tui-browser`: add the scripts browser's `e` with a real
-  editor (vim, nvim, `code -w`). Check that the TUI comes back whole: alt
-  screen, mouse and the kitty keys, also inside a cats pane. Check that Del
-  reaches it (a Mac's ⌫ is Backspace, so `x` is the fallback). The e2e
-  drives `e` only through a shell stand-in for `$EDITOR`.
-  Updated `2026-1007-0229-next-list-sweep-3`: add the results title's "Result 1 · 2 · 3" switcher
-  (N-136): that `[` and `]` reach dbc, and how `·` and `‹ ›` render. Also
-  N-097's leftover: editor completion by hand on a real MySQL (backtick
-  quoting, a `<conn>/<database>` pick, the first load), now covered
-  headlessly by `TestLiveWorkspaceCompletionMySQL`.
-  Updated `2026-1007-1245-result-tabs-per-connection`: add the result-tab strip on the results
-  pane's bottom border (how `⚑`, `✦` and `‹ ›` render; that `{` `}` `P` `S`
-  and `x` reach dbc in the grid and the plan view), and the log title's
-  `⧉ copy` / `✕ clear` (a click there must not start a log-splitter drag).
 - **N-116** · raised `2026-1005-1450-tui-web-parity` · value low
   Tab groups in the TUI. dbc web has them (`tabgroups.js`: ad-hoc and
   connection groups, collapse to a chip); the TUI's strip has no groups.
@@ -199,14 +125,6 @@ ten session docs in `ai_docs/claude_sessions/`
   another way or refuse it up front with a clear message. Query is
   documented as "any SELECT", so nothing promises it today.
 
-- **N-145** · raised `2026-1007-1245-result-tabs-per-connection` · value low
-  Drive a real share with the assistant end to end. Neither e2e harness has
-  a connection with `ai_rows = true`, so `S` / "✦ Share with the assistant"
-  is only checked as refused (web e2e) and through unit tests (workspace,
-  tui, web). Add an `ai_rows` connection to the harnesses and check the ✦
-  mark, the chip's "shared result N: …" note, and that a column hidden in
-  the shared tab stays out of the prompt while another tab is on screen.
-
 - **N-146** · raised `2026-1007-1245-result-tabs-per-connection` · value low
   Share more than one result with the assistant. One tab per connection is
   shared today (`workspace.ShareResultTab` moves the share), which covers
@@ -237,14 +155,6 @@ ten session docs in `ai_docs/claude_sessions/`
   reverse. They answer different questions (DDL vs catalog-changing), so
   check which this needs before sharing one.
 
-- **N-150** · raised `2026-1007-1347-connection-refresh` · value low
-  Refresh has not been tried against a real Postgres. Keeping the listed
-  schema (or "all schemas") across a refresh (`refreshPickLocked`) is
-  covered by unit tests, and the rest only on SQLite (workspace, web, TUI
-  and e2e tests). Add a step to `TestLiveWorkspacePickSchema`: pick a
-  schema, create a table in it through the pool, Refresh, and check that
-  the schema stays picked and the table is listed.
-
 - **N-151** · raised `2026-1007-1423-script-ddl-log` · value low
   `dbc copy` does not log its DDL. It runs through `sdb.S` like a script, but
   only `script.run` turns the DDL log on (`LogDDL`), so on a terminal a
@@ -253,6 +163,109 @@ ten session docs in `ai_docs/claude_sessions/`
   prints to stderr only when stderr is a terminal. `TestRunCopy` asserts that
   output is empty for a `Create` copy, so that assertion would need to
   change. Left out because the ask named scripts.
+
+## Validate
+
+Items whose remaining work is purely testing: hand checks in a real terminal
+or app, runs on real data or hardware, and tests to write or repair. No
+product change is planned unless a check finds a defect, which is then raised
+as a new Open item. Split out of Open on 2026-10-07; each item kept its ID
+and `raised`.
+
+- **N-064** · raised `2026-0929-1619-macos-app-wrapper` · value low
+  Click through `dbc.app` by hand; what the session could not drive from a
+  shell. Checks: a grid export and each plan download land in `~/Downloads`;
+  the plan's "open page" opens a second, signed-in window; the Copilot
+  sign-in's GitHub link opens in the browser; copy (plain and "for Teams")
+  reaches the clipboard from WKWebView; ⌘B/⌘R/⌘K reach the page, not the
+  menu; View ▸ Open in Browser signs the browser in; the Tables schema
+  filter's list opens, scrolls and takes typing in WKWebView (the native
+  `<select>` it replaced did not scroll there). Launch, sign-in (the page
+  opened a workspace), Quit, `kill -9` of the app, and the login-shell `PATH`
+  were verified.
+  Updated `2026-1006-2020-scripts-web-ui`: add script tabs in WKWebView. Check that ⌘S saves
+  (not the app's menu), that an unsaved draft survives quitting the app
+  (localStorage in WKWebView), and that the browser's Copy path reaches
+  the clipboard.
+  Updated `2026-1007-1054-web-tab-to-table-find`: add the sidebar's table
+  find box. Check that Tab in the schema box lands in it, that typing a
+  letter on a table row starts a find there (the page puts the character in
+  by hand, since WKWebView may not deliver a keypress to the box focus moved
+  to), and that ↑↓ and Enter in the box act on the list.
+- **N-087** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
+  Drive the TUI's new navigator by hand in a real terminal on a big
+  Postgres: the picker rows, `d`/`s`, typing into a 150-schema list, the
+  Disconnect confirm menu. Only the test harness's rendered frames and a
+  live Postgres test have exercised them.
+  Updated `2026-1001-1817-next-list-sweep`: the real binary was driven in a 140×45 pty through a VT
+  emulator (charmbracelet/x/vt) against 150 schemas and three databases —
+  40 checks, all passing: both rows, `d`/`s`, filtering, mouse clicks on
+  the rows, a database switch and back, the recount after an INSERT, the
+  Disconnect menu, and the saved pick on a restart. What is left needs a
+  person: how `⛁ ◫ ▾` and the counts render in real emulators (iTerm2,
+  Terminal.app, Ghostty, kitty, a cats pane), wheel scrolling and drags
+  with real mouse hardware.
+- **N-104** · raised `2026-1005-1035-sql-consoles-per-database` · value low
+  Check consoles by hand on real data. The first `dbc web` start moves the
+  real `web.bytdb`'s tab buffers into consoles (`moveTabBuffers`, once,
+  marker `consoles.moved`); the TUI's first start seeds from `buffer.sql`.
+  Also check a live Postgres `<conn>/<database>` switch landing in
+  `consoles/<host>_<port>/<database>/`, and the TUI and a browser tab
+  editing one console at once (the TUI writes only a console it changed,
+  last writer wins then; the web side is revision-checked).
+- **N-106** · raised `2026-1005-1109-completion-big-catalog` · value high
+  Confirm completion on the real ProdDr connection, where it failed with
+  "the catalog is too big to read whole" (rows 250000). Note whether the
+  partition filter alone fixed it, or the scoped fallback kicked in (the
+  error now names the query, e.g. `query[columns]`). The diagnostic query
+  in the session doc counts its column rows on partitions vs. not.
+  2026-10-05: ProdDr's *sidebar* then failed too — no schema picker, "tables
+  list unavailable … op[read the catalog], cause[timeout]". The schema
+  summary (a pass over all of pg_class) ran out the shared 10s budget and
+  the fallback read every table. Now each read has its own budget and a
+  slow summary falls back to schema names (`db.SchemaNamesQuery`). Still to
+  confirm on ProdDr: the picker shows up, a schema's tables load within
+  `catalogTimeout` (that query scans pg_class too), and how big pg_class is
+  (`SELECT relkind, relispartition, count(*) FROM pg_class GROUP BY 1, 2`).
+- **N-115** · raised `2026-1005-1450-tui-web-parity` · value low
+  Drive the TUI's parity pieces by hand in real terminals (iTerm2,
+  Terminal.app, Ghostty, kitty, a cats pane): whether F12 / ⇧F12 / F2 and
+  F1 reach dbc (macOS may take F12; some terminals send ⇧F12 as F24, which
+  is accepted), Ctrl+click in the editor, ⌥T / ⌥W / ⌥1…9 (need Option as
+  Meta), the tab strip's `● • ◆` and the list's `○`, the `‹ / ›` fold tab,
+  typing in the connection form (masked password, TLS chips), and
+  transposed-grid drags with real mouse hardware. The pty e2e suite
+  (`tui/e2e`, xterm-256color through charmbracelet/x/vt) passes every new
+  step; glyph rendering and OS key capture it cannot see.
+  Updated `2026-1006-2224-scripts-tui-browser`: add the scripts browser's `e` with a real
+  editor (vim, nvim, `code -w`). Check that the TUI comes back whole: alt
+  screen, mouse and the kitty keys, also inside a cats pane. Check that Del
+  reaches it (a Mac's ⌫ is Backspace, so `x` is the fallback). The e2e
+  drives `e` only through a shell stand-in for `$EDITOR`.
+  Updated `2026-1007-0229-next-list-sweep-3`: add the results title's "Result 1 · 2 · 3" switcher
+  (N-136): that `[` and `]` reach dbc, and how `·` and `‹ ›` render. Also
+  N-097's leftover: editor completion by hand on a real MySQL (backtick
+  quoting, a `<conn>/<database>` pick, the first load), now covered
+  headlessly by `TestLiveWorkspaceCompletionMySQL`.
+  Updated `2026-1007-1245-result-tabs-per-connection`: add the result-tab strip on the results
+  pane's bottom border (how `⚑`, `✦` and `‹ ›` render; that `{` `}` `P` `S`
+  and `x` reach dbc in the grid and the plan view), and the log title's
+  `⧉ copy` / `✕ clear` (a click there must not start a log-splitter drag).
+- **N-145** · raised `2026-1007-1245-result-tabs-per-connection` · value low
+  Drive a real share with the assistant end to end. Neither e2e harness has
+  a connection with `ai_rows = true`, so `S` / "✦ Share with the assistant"
+  is only checked as refused (web e2e) and through unit tests (workspace,
+  tui, web). Add an `ai_rows` connection to the harnesses and check the ✦
+  mark, the chip's "shared result N: …" note, and that a column hidden in
+  the shared tab stays out of the prompt while another tab is on screen.
+
+- **N-150** · raised `2026-1007-1347-connection-refresh` · value low
+  Refresh has not been tried against a real Postgres. Keeping the listed
+  schema (or "all schemas") across a refresh (`refreshPickLocked`) is
+  covered by unit tests, and the rest only on SQLite (workspace, web, TUI
+  and e2e tests). Add a step to `TestLiveWorkspacePickSchema`: pick a
+  schema, create a table in it through the pool, Refresh, and check that
+  the schema stays picked and the table is listed.
 
 ## Roadmap
 

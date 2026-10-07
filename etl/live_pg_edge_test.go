@@ -2,6 +2,7 @@ package etl
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/url"
@@ -27,6 +28,7 @@ import (
 //	TestLivePGSameDatabase       a table rewritten in place (loadOptions)
 //	TestLivePGConcurrentCopies   copies in parallel over shared pools (-race)
 //	TestLivePGMoveRows           a DELETE … RETURNING source, kept if the load fails
+//	                             or, in one database, waits on it (lock_timeout)
 //
 // They take about 15s against a local server, most of it the 300k- and
 // 1M-row tables that make "part way" and "in place" mean something.
@@ -1012,4 +1014,83 @@ func TestLivePGMoveRows(t *testing.T) {
 		}
 		idle(t)
 	})
+
+	// Within one database the load can need the rows the Query has deleted
+	// but not committed, and the Query commits only after the load: a cycle
+	// through this process. The lock_timeout loadOptions sets ends it as an
+	// error, and the read's rollback keeps the rows. The deadline is what
+	// fails the test if the cycle hangs again.
+	defer func(d time.Duration) { sameDBLockTimeout = d }(sameDBLockTimeout)
+	sameDBLockTimeout = time.Second
+	for _, direct := range []bool{true, false} {
+		path := map[bool]string{true: "direct", false: "row"}[direct]
+		cycles := map[string]func(from, to string) (string, CopyOptions){
+			// The archive's key references the table being emptied: its
+			// check waits on the deleted, uncommitted parent rows.
+			"foreign key into the source": func(from, to string) (string, CopyOptions) {
+				mustExec(t, src, "CREATE TABLE "+to+" (id int PRIMARY KEY REFERENCES "+from+", name text)")
+				return to, CopyOptions{To: to}
+			},
+			// The rows go back into their own table: each key matches a row
+			// deleted by the uncommitted read.
+			"rows moved back": func(from, _ string) (string, CopyOptions) {
+				return from, CopyOptions{To: from}
+			},
+			// The same with Truncate: the load's DELETE waits on them first.
+			"rows moved back, truncating": func(from, _ string) (string, CopyOptions) {
+				return from, CopyOptions{To: from, Truncate: true}
+			},
+		}
+		for name, setup := range cycles {
+			t.Run(path+"/same database/"+name, func(t *testing.T) {
+				from, to := fresh(t)
+				to, opt := setup(from, to)
+				opt.Query = "DELETE FROM " + from + " WHERE id <= 3 RETURNING id, name"
+				ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+				defer cancel()
+				_, err := Copy(ctx, src, "", src, opt2(direct, opt))
+				if err == nil || !strings.Contains(err.Error(), "lock timeout") ||
+					!strings.Contains(err.Error(), "waited on each other") {
+					t.Fatalf("err = %v, want a lock timeout with the hint", err)
+				}
+				if got := ids(t, src, from); got != "1,2,3,4,5" {
+					t.Errorf("source after the timed-out move = %q: rows lost", got)
+				}
+				if to != from {
+					if got := ids(t, src, to); got != "" {
+						t.Errorf("archive after the timed-out move = %q", got)
+					}
+				}
+				assertNoOpenTx(t, src)
+			})
+		}
+	}
+	// A setting already in force stands: the load's set_config is
+	// conditional on lock_timeout being off.
+	t.Run("same database/an existing lock_timeout stands", func(t *testing.T) {
+		conn, err := src.DB.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		var got string
+		mustExecConn(t, conn, "BEGIN", "SET LOCAL lock_timeout = '7s'", pgSameDBLockTimeout())
+		if err = conn.QueryRowContext(ctx, "SHOW lock_timeout").Scan(&got); err != nil || got != "7s" {
+			t.Errorf("lock_timeout = %q, %v; want the 7s already set", got, err)
+		}
+		mustExecConn(t, conn, "ROLLBACK", "BEGIN", pgSameDBLockTimeout())
+		if err = conn.QueryRowContext(ctx, "SHOW lock_timeout").Scan(&got); err != nil || got != "1s" {
+			t.Errorf("lock_timeout = %q, %v; want 1s when none was set", got, err)
+		}
+		mustExecConn(t, conn, "ROLLBACK")
+	})
+}
+
+func mustExecConn(t *testing.T, c *sql.Conn, stmts ...string) {
+	t.Helper()
+	for _, s := range stmts {
+		if _, err := c.ExecContext(context.Background(), s); err != nil {
+			t.Fatal(s, err)
+		}
+	}
 }

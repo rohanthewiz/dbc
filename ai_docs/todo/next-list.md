@@ -38,13 +38,6 @@ ten session docs in `ai_docs/claude_sessions/`
 
 ## Open
 
-- **N-107** · raised `2026-1005-1132-assistant-code-highlighting` · value low
-  Highlight TypeScript blocks in the assistant's answers. `ts`/`tsx` would
-  map onto the JS spec in `codehl` and `hl.js` plus a TS keyword list
-  (`interface type enum implements readonly declare namespace abstract
-  keyof`…). Offered alongside JSON and shell; the user picked those two.
-  Only worth it once answers about app code (calling the database from TS)
-  show up.
 - **N-116** · raised `2026-1005-1450-tui-web-parity` · value low
   Tab groups in the TUI. dbc web has them (`tabgroups.js`: ad-hoc and
   connection groups, collapse to a chip); the TUI's strip has no groups.
@@ -91,23 +84,6 @@ ten session docs in `ai_docs/claude_sessions/`
   already keys (`j k g G c e d s #`), so it would be a `/` that opens a
   filter line over the list, as the pickers' `pickModal` filters. Offered
   at the end of the session; the user did not answer.
-
-- **N-152** · raised `2026-1007-1553-pg-copy-move-rows` · value low
-  A write `Query` from MySQL (MariaDB), SQLite or bytdb commits as it runs,
-  before the load, so a move whose load fails loses its rows there. Only
-  Postgres reads in a transaction (`Read`) that Copy can hold until the load
-  commits. SQLite and bytdb could read in one too; check what a held read
-  transaction costs a file database (a writer locked out for the copy).
-  Contingent on someone moving rows off a non-Postgres source.
-
-- **N-153** · raised `2026-1007-1553-pg-copy-move-rows` · value low
-  A same-database move whose load waits on the source's own uncommitted
-  write now hangs until canceled. Examples: an archive with a foreign key
-  into the table being emptied, or rows moved back into the table they came
-  from. Postgres cannot see the cycle, which runs through this process
-  (as with TRUNCATE in `loadOptions`). Before N-144's fix the same copy
-  committed the source and lost the rows. A `lock_timeout` on the load
-  within one database would turn it into an error.
 
 - **N-155** · raised `2026-1007-1606-run-all-tab-per-statement` · value low
   A run of several statements reports only one count: that of the result
@@ -278,6 +254,14 @@ call.
   The cost is a fresh dial on switching back. Deferred by the user ("for now"
   the in-use mark alone).
 
+- **N-107** · raised `2026-1005-1132-assistant-code-highlighting` · value low
+  Highlight TypeScript blocks in the assistant's answers. `ts`/`tsx` would
+  map onto the JS spec in `codehl` and `hl.js` plus a TS keyword list
+  (`interface type enum implements readonly declare namespace abstract
+  keyof`…). Offered alongside JSON and shell; the user picked those two.
+  Only worth it once answers about app code (calling the database from TS)
+  show up.
+
 - **N-109** · raised `2026-1005-1222-web-tab-groups` · value low
   Tab groups across browser windows: the server merges a window's
   `groups` layout write by saved-tab keys (`mergeTabGroups`,
@@ -329,6 +313,14 @@ call.
   output is empty for a `Create` copy, so that assertion would need to
   change. Left out because the ask named scripts.
 
+- **N-152** · raised `2026-1007-1553-pg-copy-move-rows` · value low
+  A write `Query` from MySQL (MariaDB), SQLite or bytdb commits as it runs,
+  before the load, so a move whose load fails loses its rows there. Only
+  Postgres reads in a transaction (`Read`) that Copy can hold until the load
+  commits. SQLite and bytdb could read in one too; check what a held read
+  transaction costs a file database (a writer locked out for the copy).
+  Contingent on someone moving rows off a non-Postgres source.
+
 ## Non-goals
 
 - **N-012** · declined `2026-0728-2000-stmt-under-cursor-and-query-cancel` —
@@ -355,6 +347,16 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-153** · raised `2026-1007-1553-pg-copy-move-rows` · value low
+  A same-database move whose load waits on the source's own uncommitted
+  write now hangs until canceled. Examples: an archive with a foreign key
+  into the table being emptied, or rows moved back into the table they came
+  from. Postgres cannot see the cycle, which runs through this process
+  (as with TRUNCATE in `loadOptions`). Before N-144's fix the same copy
+  committed the source and lost the rows. A `lock_timeout` on the load
+  within one database would turn it into an error.
+  closed 2026-10-07, `2026-1007-1639-same-db-move-lock-timeout` (from the cats-todo backlog): a copy from a Query within one Postgres database sets a `lock_timeout` on both sides, the load (first in its Setup, `loadOptions`) and the source read (`sourceSetup`, through the new unexported `read` and in `copyDirect`'s transaction). The source needed one too: on the direct path a Truncate's DELETE runs before the read starts, so the read is the one that waits. The bound is 30s (`sameDBLockTimeout`), set with a conditional `set_config(…, true)`, so a lock_timeout the session already has stands. Copy now asks `samePGDatabase` once and passes `same` down. A 55P03 from such a copy is explained in the error's text (`lockTimeoutHint`), since a script shows only the text; the read rolls back, so the source keeps its rows. Live `TestLivePGMoveRows` gains six same-database cases (FK into the source, rows moved back, rows moved back with Truncate; each on both paths), which hang without the fix, plus a check that an existing lock_timeout stands. Checked with a script through the built binary: the FK move failed after 30s, and the source kept all 5 rows.
 
 - **N-149** · raised `2026-1007-1347-connection-refresh` · value medium
   The sidebar does not relist after DDL run in dbc (CREATE / DROP / ALTER /

@@ -3,12 +3,14 @@ package etl
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	pgxstdlib "github.com/jackc/pgx/v5/stdlib"
 	"github.com/rohanthewiz/serr"
 
@@ -27,7 +29,12 @@ type CopyOptions struct {
 	// RETURNING *" moves rows. From Postgres its change commits only after
 	// the load has, so a copy that fails leaves the source as it was; the
 	// other engines commit it as it runs. A write without RETURNING has no
-	// rows to copy, and is refused before it runs.
+	// rows to copy, and is refused before it runs. Within one Postgres
+	// database, a load that needs the rows the Query changed (an archive
+	// with a foreign key into them, the rows moved back where they came
+	// from) would wait on that uncommitted change for good; it fails on a
+	// lock timeout instead — 30s, unless the session already has one (see
+	// loadOptions) — and the source keeps its rows.
 	Query string
 	// Args are bind parameters for Query or Where, in the source's
 	// placeholder style ($1 Postgres/bytdb, ? MySQL/SQLite).
@@ -129,15 +136,23 @@ func Copy(ctx context.Context, src Conn, table string, dst Conn, opt CopyOptions
 		opt.ProgressEvery = defaultProgressEvery
 	}
 
+	// Whether both ends are one Postgres database, which changes how the
+	// load empties a table and bounds both sides' lock waits (loadOptions).
+	// Asked only when the answer matters, so a plain copy between two
+	// databases skips the lookup.
+	same := src.Engine == Postgres && dst.Engine == Postgres && (opt.Truncate || opt.Query != "") &&
+		samePGDatabase(ctx, src, dst)
+
 	if src.Engine == Postgres && dst.Engine == Postgres && opt.Transform == nil && len(opt.Args) == 0 {
 		st.Direct = true
-		err = copyDirect(ctx, src, table, query, dst, dest, opt, &st)
+		err = copyDirect(ctx, src, table, query, dst, dest, same, opt, &st)
 	} else {
-		err = copyRows(ctx, src, table, query, dst, dest, opt, &st)
+		err = copyRows(ctx, src, table, query, dst, dest, same, opt, &st)
 	}
 	st.Duration = time.Since(start)
 	if err != nil {
-		return st, serr.Wrap(canceled(ctx, err), "from", st.From, "to", st.To)
+		err = lockTimeoutHint(canceled(ctx, err), same, opt)
+		return st, serr.Wrap(err, "from", st.From, "to", st.To)
 	}
 	return st, nil
 }
@@ -223,7 +238,7 @@ func errNoColumns(c Conn, query string) error {
 
 // copyRows is the general path: decode, transform, re-encode.
 func copyRows(ctx context.Context, src Conn, table, query string, dst Conn, dest string,
-	opt CopyOptions, st *CopyStats) error {
+	same bool, opt CopyOptions, st *CopyStats) error {
 	// The read gets a context of its own, canceled before the Reader is
 	// closed. Closing pgx (or MySQL) rows mid-result drains every remaining
 	// row first, so when the destination fails part way through a big table
@@ -232,7 +247,7 @@ func copyRows(ctx context.Context, src Conn, table, query string, dst Conn, dest
 	// still judged against ctx, so this cancel is never reported as the
 	// user's.
 	rctx, stopRead := context.WithCancel(ctx)
-	rd, err := Read(rctx, src, query, opt.Args...)
+	rd, err := read(rctx, src, query, sourceSetup(same, opt), opt.Args...)
 	if err != nil {
 		stopRead()
 		return err
@@ -256,7 +271,7 @@ func copyRows(ctx context.Context, src Conn, table, query string, dst Conn, dest
 	if err != nil {
 		return err
 	}
-	w, err := NewWriter(ctx, dst, dest, rd.Columns(), loadOptions(ctx, src, dst, dest, setup, opt))
+	w, err := NewWriter(ctx, dst, dest, rd.Columns(), loadOptions(dest, setup, same, opt))
 	if err != nil {
 		return err
 	}
@@ -306,7 +321,7 @@ func copyRows(ctx context.Context, src Conn, table, query string, dst Conn, dest
 // CopyTo stop reading the source. That error, not CopyTo's report of it, is
 // the one returned.
 func copyDirect(ctx context.Context, src Conn, table, query string, dst Conn, dest string,
-	opt CopyOptions, st *CopyStats) error {
+	same bool, opt CopyOptions, st *CopyStats) error {
 	// The column list (for the destination's COPY, and Create) comes from
 	// describing the query, which parses it without running it.
 	cols, types, err := describe(ctx, src, query)
@@ -317,7 +332,7 @@ func copyDirect(ctx context.Context, src Conn, table, query string, dst Conn, de
 	if err != nil {
 		return err
 	}
-	w, err := NewWriter(ctx, dst, dest, cols, loadOptions(ctx, src, dst, dest, setup, opt))
+	w, err := NewWriter(ctx, dst, dest, cols, loadOptions(dest, setup, same, opt))
 	if err != nil {
 		return err
 	}
@@ -331,8 +346,13 @@ func copyDirect(ctx context.Context, src Conn, table, query string, dst Conn, de
 	// The rows are the source's text output, handed to the destination
 	// unread, so the settings that shape it are pinned for the COPY TO
 	// (pgPinOutput) — in a transaction, which scopes them to it.
+	// sourceSetup's lock_timeout goes in the same transaction.
 	if _, err = conn.ExecContext(ctx, "BEGIN"); err == nil {
-		_, err = conn.ExecContext(ctx, pgPinOutput)
+		for _, s := range append([]string{pgPinOutput}, sourceSetup(same, opt)...) {
+			if _, err = conn.ExecContext(ctx, s); err != nil {
+				break
+			}
+		}
 	}
 	if err != nil {
 		discard(conn)
@@ -402,13 +422,92 @@ func copyDirect(ctx context.Context, src Conn, table, query string, dst Conn, de
 // snapshot does not see the uncommitted delete, so it reads the old rows
 // while the load replaces them. The cost is DELETE's: slower than TRUNCATE
 // on a big table, and dead rows for vacuum — paid only within one database.
-func loadOptions(ctx context.Context, src, dst Conn, dest string, setup []string, opt CopyOptions) WriteOptions {
+//
+// A Query within one database gets a lock_timeout on both sides
+// (pgSameDBLockTimeout), the load here and the read in sourceSetup. A
+// Query can write, and its change stays uncommitted until the load has
+// committed (see copyDirect), so when the load needs a row the Query
+// wrote — or the Query a row the load's DELETE took first — each side
+// waits on the other: the same kind of cycle through this process, which
+// Postgres cannot see either:
+//
+//	read (src tx):  DELETE FROM t … RETURNING ──row locks on t, uncommitted──┐
+//	load (dst tx):  INSERT into a table with an FK to t,                      │
+//	                or the moved rows back into t (a key match) ◄──waits──────┘
+//	read:           commits only after the load does
+//
+//	load (dst tx):  DELETE FROM t (Truncate) ──row locks on t, uncommitted──┐
+//	read (src tx):  DELETE FROM t … RETURNING ◄──waits──────────────────────┘
+//	load:           waits for rows from the read
+//
+// (the second on the direct path, whose load opens before its read starts.)
+// No setting removes the cycle — the order of the two commits is what keeps
+// a failed move's rows in the source — so the timeout turns the hang into an
+// error, the read rolls back, and the rows stay where they were.
+//
+// same is Copy's answer to whether src and dst are one Postgres database.
+func loadOptions(dest string, setup []string, same bool, opt CopyOptions) WriteOptions {
 	wo := WriteOptions{Setup: setup, Truncate: opt.Truncate, BatchSize: opt.BatchSize}
-	if opt.Truncate && src.Engine == Postgres && dst.Engine == Postgres && samePGDatabase(ctx, src, dst) {
-		wo.Setup = append(append([]string(nil), setup...), "DELETE FROM "+Postgres.QuoteTable(dest))
+	if !same {
+		return wo
+	}
+	wo.Setup = append([]string(nil), setup...)
+	if opt.Query != "" {
+		// First, so it covers the Setup's CREATE and DELETE as well as the
+		// COPY: the DELETE waits on the Query's rows when they are moved
+		// back into the table they came from.
+		wo.Setup = append([]string{pgSameDBLockTimeout()}, wo.Setup...)
+	}
+	if opt.Truncate {
+		wo.Setup = append(wo.Setup, "DELETE FROM "+Postgres.QuoteTable(dest))
 		wo.Truncate = false
 	}
 	return wo
+}
+
+// sourceSetup is the read's side of loadOptions' lock_timeout: statements
+// for the source's transaction, after its pinned output settings. A table
+// or view source only reads, and never waits on the load, so it gets none.
+func sourceSetup(same bool, opt CopyOptions) []string {
+	if !same || opt.Query == "" {
+		return nil
+	}
+	return []string{pgSameDBLockTimeout()}
+}
+
+// sameDBLockTimeout is how long a same-database load waits for a lock
+// before it gives up. A wait on the copy's own read never ends, so any
+// bound beats none; it is long enough that a wait on some other session's
+// short transaction still gets through. A var so tests can shorten it.
+var sameDBLockTimeout = 30 * time.Second
+
+// pgSameDBLockTimeout is the Setup statement that bounds the load's lock
+// waits: SET LOCAL lock_timeout, as set_config(…, true) so it can be
+// conditional. It applies only when no lock_timeout is in force ('0', the
+// server default): one the user or their role already set — shorter, or
+// longer on purpose — stands, and either way the wait has an end. LOCAL
+// scopes it to the load's transaction, so the pooled connection goes back
+// as it came.
+func pgSameDBLockTimeout() string {
+	return "SELECT set_config('lock_timeout', '" + itoa(sameDBLockTimeout.Milliseconds()) +
+		"ms', true) WHERE current_setting('lock_timeout') = '0'"
+}
+
+// lockTimeoutHint explains a lock timeout on a same-database copy from a
+// Query, whose bare message ("canceling statement due to lock timeout",
+// SQLSTATE 55P03) says nothing of why. The explanation goes in the error's
+// text rather than a serr field: a script shows the text alone. It says
+// "probably" because the wait could also have been on another session that
+// held its lock past the timeout. errors.As still reaches the *PgError.
+func lockTimeoutHint(err error, same bool, opt CopyOptions) error {
+	var pe *pgconn.PgError
+	if !same || opt.Query == "" || !errors.As(err, &pe) || pe.Code != "55P03" {
+		return err
+	}
+	return fmt.Errorf("etl: the load and the Query probably waited on each other, so lock_timeout stopped "+
+		"the copy and the source kept its rows — within one database the load cannot use rows the Query "+
+		"changed (a foreign key into them, or the same rows moved back) until the Query commits, "+
+		"which is after the load: %w", err)
 }
 
 // samePGDatabase reports whether two Postgres connections reach the same

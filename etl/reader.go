@@ -83,6 +83,13 @@ const pgPinOutput = `SELECT set_config('datestyle', 'ISO', true),
 // (DELETE … RETURNING, nextval) keeps them just as it would have
 // unwrapped; a read that fails or is canceled rolls them back.
 func Read(ctx context.Context, c Conn, query string, args ...any) (*Reader, error) {
+	return read(ctx, c, query, nil, args...)
+}
+
+// read is Read with setup: statements run in the read's transaction after
+// pgPinOutput and before the query (Postgres only, where there is one) —
+// a copy's lock_timeout (sourceSetup).
+func read(ctx context.Context, c Conn, query string, setup []string, args ...any) (*Reader, error) {
 	var (
 		tx   *sql.Tx
 		rows *sql.Rows
@@ -92,7 +99,12 @@ func Read(ctx context.Context, c Conn, query string, args ...any) (*Reader, erro
 		if tx, err = c.DB.BeginTx(ctx, nil); err != nil {
 			return nil, serr.Wrap(canceled(ctx, err), "conn", c.Name, "op", "read", "query", clip(query))
 		}
-		if _, err = tx.ExecContext(ctx, pgPinOutput); err == nil {
+		for _, s := range append([]string{pgPinOutput}, setup...) {
+			if _, err = tx.ExecContext(ctx, s); err != nil {
+				break
+			}
+		}
+		if err == nil {
 			rows, err = tx.QueryContext(ctx, query, args...)
 		}
 	} else {

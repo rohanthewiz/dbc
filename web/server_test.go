@@ -824,3 +824,53 @@ func TestDisconnectKeepsTheConnection(t *testing.T) {
 		t.Fatalf("reconnect = %+v", c)
 	}
 }
+
+// The connections menu's Refresh re-reads the tab's connection in place: a
+// "connecting" marked refresh (so the page says "refreshing"), then a
+// "conn" that lists a table created since the connect, with Changed false
+// — the results pane and the log stay — and the session, with the
+// transaction open on it, kept. With no connection it is refused.
+func TestRefreshRereadsTheSidebar(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	e.api("POST", "/api/v1/ws/"+id+"/run", runBody("CREATE TABLE refreshed_pets (id INTEGER)", 0, false), 200)
+	s.await(t, "run")
+	e.api("POST", "/api/v1/ws/"+id+"/run", runBody("BEGIN", 0, false), 200)
+	s.await(t, "run")
+	before := decodeData[wsState](t, e.api("GET", "/api/v1/ws/"+id, "", 200))
+	listed := func(ts []tabRef) bool {
+		return slices.ContainsFunc(ts, func(r tabRef) bool { return r.Name == "refreshed_pets" })
+	}
+	if listed(before.Tables) {
+		t.Fatal("a DDL run relisted the sidebar on its own — the test proves nothing")
+	}
+
+	e.api("POST", "/api/v1/ws/"+id+"/refresh", "", 200)
+	ev, _ := s.await(t, "connecting")
+	if d := decodeData[struct {
+		Name    string `json:"name"`
+		Refresh bool   `json:"refresh"`
+	}](t, testEnvelope{Data: ev.Data}); d.Name != "demo-sqlite" || !d.Refresh {
+		t.Errorf("connecting = %+v", d)
+	}
+	ev, logs := s.await(t, "conn")
+	c := decodeData[connEvent](t, testEnvelope{Data: ev.Data})
+	if c.Active != "demo-sqlite" || c.Changed || c.Failed || c.Status != "refreshed" || !listed(c.Tables) {
+		t.Fatalf("conn event = %+v", c)
+	}
+	if !slices.Contains(logs, "refreshing demo-sqlite…") ||
+		!slices.ContainsFunc(logs, func(l string) bool { return strings.HasPrefix(l, "refreshed demo-sqlite: ") }) {
+		t.Errorf("logs = %q", logs)
+	}
+	if st := decodeData[wsState](t, e.api("GET", "/api/v1/ws/"+id, "", 200)); !st.Stateful {
+		t.Errorf("the refresh released the session: %+v", st)
+	}
+
+	e.api("POST", "/api/v1/ws/"+id+"/run", runBody("ROLLBACK", 0, false), 200)
+	s.await(t, "run")
+	e.api("POST", "/api/v1/ws/"+id+"/disconnect", "", 200)
+	s.await(t, "conn")
+	if env := e.api("POST", "/api/v1/ws/"+id+"/refresh", "", 400); !strings.Contains(env.Error, "not connected") {
+		t.Errorf("a refresh with no connection: %+v", env)
+	}
+}

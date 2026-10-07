@@ -1089,3 +1089,184 @@ func TestHistoryRecordsTheDatabase(t *testing.T) {
 		t.Error("no connection, or an unknown one, should have no database key")
 	}
 }
+
+// hasTable reports whether the workspace's catalog lists a table named name.
+func hasTable(w *Workspace, name string) bool {
+	cat := w.Catalog()
+	if cat == nil {
+		return false
+	}
+	for _, r := range db.TableRefs(cat.Rows) {
+		if r.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// Refresh re-reads the active connection in place: a table another client
+// created since the connect is listed, the session pinned to the connection
+// — and the transaction open on it — stays (no Release, Changed false), and
+// the log says what the list now holds.
+func TestRefreshRereadsTheCatalog(t *testing.T) {
+	w := newTestWorkspace(t)
+	// through the pool, as another client would: the workspace hears nothing
+	if _, err := w.mgr.Run(demo, "CREATE TABLE refreshed_pets (id INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	run(t, w, "BEGIN")
+	if hasTable(w, "refreshed_pets") {
+		t.Fatal("the table was listed before any refresh — the test proves nothing")
+	}
+
+	st, err := w.Refresh()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Notes) != 1 || st.Notes[0].Text != "refreshing demo-sqlite…" {
+		t.Errorf("notes = %+v", st.Notes)
+	}
+	ev := st.Job().(*Connected)
+	if ev.Err != nil || ev.Stale || ev.Changed || ev.Release != nil || ev.Status != "refreshed" {
+		t.Fatalf("event = %+v", ev)
+	}
+	if !hasTable(w, "refreshed_pets") {
+		t.Error("the new table is not listed after the refresh")
+	}
+	want := fmt.Sprintf("refreshed demo-sqlite: %d tables", len(w.Catalog().Rows))
+	if n := ev.Notes[len(ev.Notes)-1]; n.Text != want || n.Level != Ok {
+		t.Errorf("last note = %+v, want %q", n, want)
+	}
+	if conn, stateful := w.Session(); conn != demo || !stateful {
+		t.Errorf("session after the refresh = %q, stateful %v; want it kept", conn, stateful)
+	}
+}
+
+// A refresh drops the Manager's cached row counts, so a sidebar with its
+// counts on shows rows another client wrote — the cache would otherwise
+// serve the number from before for up to rowCountTTL.
+func TestRefreshRecountsRows(t *testing.T) {
+	w := newTestWorkspace(t)
+	countsOn(t, w)
+	cats := db.TableRef{Schema: "main", Name: "cats"}
+	if c := w.RowCounts()[cats]; c != (db.RowCount{N: 8}) {
+		t.Fatalf("cats before = %+v", c)
+	}
+	if _, err := w.mgr.Run(demo, "INSERT INTO cats (name, breed, age) VALUES ('Zed', 'tabby', 1)"); err != nil {
+		t.Fatal(err)
+	}
+	st, err := w.Refresh()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := st.Job().(*Connected)
+	if ev.Counts == nil {
+		t.Fatalf("a refresh with counts on should count: %+v", ev)
+	}
+	if rc := ev.Counts().(*RowCounts); rc.Stale || rc.Counts[cats] != (db.RowCount{N: 9}) {
+		t.Errorf("cats after = %+v, want 9 (the cached 8 served stale?)", rc.Counts[cats])
+	}
+}
+
+// Nothing to refresh with no connection; and mid-connect the catalog it
+// would re-read is about to be replaced, so that is refused too — without
+// disturbing the connect.
+func TestRefreshRefusals(t *testing.T) {
+	w := newTestWorkspace(t)
+	addConn(w, config.Connection{Name: "slow", Driver: "postgres", DSN: blackholeDSN(t)})
+	slow := async(w.Switch("slow").Job)
+	_, err := w.Refresh()
+	refusal(t, err, Busy)
+	if name, ok := w.Connecting(); !ok || name != "slow" {
+		t.Errorf("the refused refresh disturbed the connect: connecting %q, %v", name, ok)
+	}
+	w.Cancel()
+	await(t, slow)
+
+	left, st, err := w.Disconnect()
+	if err != nil || left != demo {
+		t.Fatalf("disconnect = %q, %v", left, err)
+	}
+	st.Job()
+	_, err = w.Refresh()
+	refusal(t, err, NoConnection)
+}
+
+// A refresh that could not read the tables keeps the list the sidebar
+// shows — stale beats empty — where a connect (which has no list of its
+// own to keep) lands the empty one. Driven through landConnect directly:
+// an in-memory SQLite cannot be made to fail its catalog query on demand.
+func TestRefreshWithoutTablesKeepsTheList(t *testing.T) {
+	w := newTestWorkspace(t)
+	before := w.Catalog()
+	land := func(refresh bool) *Connected {
+		w.mu.Lock()
+		w.connGen++
+		gen := w.connGen
+		w.mu.Unlock()
+		ev := &Connected{Name: demo, Notes: []Note{notef(Warn, "tables list unavailable: boom")}}
+		w.landConnect(ev, gen, refresh)
+		return ev
+	}
+
+	ev := land(true)
+	if w.Catalog() != before || ev.Status != "refresh failed" || ev.Counts != nil {
+		t.Fatalf("refresh: catalog kept %v, event %+v", w.Catalog() == before, ev)
+	}
+	if n := ev.Notes[len(ev.Notes)-1]; n.Text != "demo-sqlite not refreshed: the tables listed before stay" {
+		t.Errorf("last note = %+v", n)
+	}
+
+	land(false)
+	if w.Catalog() != nil {
+		t.Error("a connect without tables should land the empty list, as it always has")
+	}
+}
+
+// refreshPickLocked asks for what the sidebar lists now: its schema, or —
+// listing "" on a database of several schemas — all of them again, rather
+// than narrowing to the default. "" on one schema (or a driver without
+// schemas) is the default pick.
+func TestRefreshPick(t *testing.T) {
+	w := newTestWorkspace(t)
+	three := []db.SchemaInfo{{Name: "a"}, {Name: "b"}, {Name: "c"}}
+	for _, c := range []struct {
+		schema  string
+		schemas []db.SchemaInfo
+		whole   bool
+		want    SchemaPick
+	}{
+		{"b", three, false, SchemaPick{Name: "b"}},
+		{"", three, false, SchemaPick{All: true}},
+		{"", three[:1], false, SchemaPick{}},
+		{"", nil, false, SchemaPick{}},
+		{"", nil, true, SchemaPick{All: true}}, // Options.WholeCatalog
+	} {
+		w.mu.Lock()
+		w.schema, w.schemas, w.wholeCatalog = c.schema, c.schemas, c.whole
+		got := w.refreshPickLocked()
+		w.mu.Unlock()
+		if got != c.want {
+			t.Errorf("schema %q of %d (whole %v): pick %+v, want %+v", c.schema, len(c.schemas), c.whole, got, c.want)
+		}
+	}
+}
+
+func TestRefreshedWhat(t *testing.T) {
+	cat := func(n int) *model.Result { return &model.Result{Rows: make([][]string, n)} }
+	three := []db.SchemaInfo{{Name: "a"}, {Name: "sales"}, {Name: "c"}}
+	for _, c := range []struct {
+		ev   Connected
+		want string
+	}{
+		{Connected{}, ""},
+		{Connected{Catalog: cat(1)}, ": 1 table"},
+		{Connected{Catalog: cat(12), Schemas: three[:1]}, ": 12 tables"},
+		{Connected{Catalog: cat(12), Schemas: three, Schema: "sales"}, ": 12 tables in sales (of 3 schemas)"},
+		{Connected{Catalog: cat(40), Schemas: three}, ": 40 tables in 3 schemas"},
+	} {
+		if got := refreshedWhat(&c.ev); got != c.want {
+			t.Errorf("refreshedWhat(%+v) = %q, want %q", c.ev, got, c.want)
+		}
+	}
+}

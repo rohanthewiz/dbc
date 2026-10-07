@@ -112,8 +112,9 @@ var keyGroups = []keyGroup{
 	{"Sidebar", [][2]string{
 		{"Enter · click", "connect · preview a table's rows"},
 		{"x", "(connections) disconnect"},
+		{"r", "(connections) refresh: read its databases, schemas and tables again"},
 		{"a · + · e", "(connections) add a connection · edit the one under the cursor"},
-		{"right-click", "(connections) connect, edit, remove, add"},
+		{"right-click", "(connections) connect, refresh, edit, remove, add"},
 		{"● · ○", "(connections) this tab's connection · another tab's"},
 		{"d · s", "(tables) pick a database · a schema"},
 		{"c · e", "(tables) show its columns · diagram it (ERD)"},

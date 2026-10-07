@@ -31,7 +31,7 @@ the GitHub Releases page. `dbc version` (or `dbc --version`) prints the version.
   enters dbc's dependencies): `cd web/e2e && DBC_E2E=1 go test -count=1 -v .`
   It builds dbc, serves `dbc web` from a temporary HOME on two SQLite files,
   and drives a headless Chrome through it: sign-in, a run, the Tables list,
-  Show columns, copies, switching, Disconnect, the connection form and tabs
+  Show columns, copies, switching, Disconnect, Refresh, the connection form and tabs
   across a reload. A JavaScript error on the page fails it. `DBC_E2E_CHROME`
   names the browser, `DBC_E2E_HEADFUL=1` shows it, and `DBC_LIVE_PG_DSN`
   adds the Postgres schema picker.
@@ -290,7 +290,7 @@ with no database picker.
 | anywhere | click | focuses that pane — the keyboard follows the mouse |
 | toolbar | click | Run, Stop, Explain, Copy ▾, Export, History, Scripts, Tables, Assistant; `● conn ▾` switches connection |
 | connections | click | connects |
-| connections | right-click (or the toolbar's `● conn ▾`) | **Disconnect** the active connection, then the list to connect to; on a row, **Edit…** and **Remove…** for a connection added in dbc (below); **Add a connection…** |
+| connections | right-click (or the toolbar's `● conn ▾`) | **Disconnect** the active connection, **Refresh** it (read its databases, schemas and tables again, for what another client created or dropped — the session and any open transaction stay), then the list to connect to; on a row, **Edit…** and **Remove…** for a connection added in dbc (below); **Add a connection…** |
 | tables | click `⛁ db ▾` / `◫ schema ▾` | *(Postgres; MySQL has `⛁ db` only)* pick another of the server's databases / another schema, from a list you can type into |
 | tables | click / double-click / right-click | select / preview the first 100 rows / show columns, diagram it, diagram all tables, copy the ERD as Mermaid, insert name, copy name |
 | tables | `c` on the selected table | show its columns: its `information_schema.columns` rows (name, type, nullable, default, length) in the grid, ready to copy |
@@ -348,6 +348,7 @@ dragging.
 | `Ctrl+B` | Fold the sidebar away / bring it back (also the `‹` on the Connections box and the `›` left on the edge) |
 | `F1` · `?` | Every key, in a dialog (`?` outside the editor and the assistant's input) |
 | `x` | *(connections)* Disconnect without picking another connection. If the session may hold a transaction, dbc asks first, because disconnecting rolls it back |
+| `r` | *(connections)* Refresh the active connection: read its databases, schemas and tables again, on the schema the list shows now. The session, and any transaction open on it, stays; if the tables cannot be read, the old list stays up |
 | `a` / `+` · `e` | *(connections)* Add a connection · edit the one under the cursor (see [Adding connections](#adding-connections-in-the-terminal)) |
 | `d` / `s` | *(tables, Postgres; `d` on MySQL too)* Pick a database / a schema |
 | `Ctrl+G` | *(inside Cats)* Hand the statement to an agent in another pane |

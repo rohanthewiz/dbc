@@ -369,15 +369,27 @@ func (m *Model) openEditorMenu(x, y int) {
 }
 
 // openConnMenu lists the connections; picking one connects. While the
-// sidebar is on (or dialing) a connection, Disconnect leads: it is the one
-// action on that row the list itself does not offer. Last come the
+// sidebar is on (or dialing) a connection, Disconnect leads, then Refresh:
+// the actions on that row the list itself does not offer. Last come the
 // connection form's rows (connform.go): edit and remove target, the row
 // right-clicked ("" from the toolbar or off the rows), and add.
+//
+// Refresh re-reads the sidebar's own connection whichever row was
+// right-clicked, as Disconnect leaves it, so its label names that
+// connection. Mid-dial it is shown but says why it cannot run: the
+// schemas are being read for the first time already.
 func (m *Model) openConnMenu(x, y int, target string) {
 	var items []menuItem
 	if on := m.connOn(); on != "" {
-		items = append(items, menuItem{label: "⏏ Disconnect " + on, key: "x",
-			act: func(m *Model) tea.Cmd { return m.disconnect(x, y) }})
+		refreshWhy := ""
+		if name, dialing := m.ws.Connecting(); dialing {
+			refreshWhy = "still connecting to " + name + " — its schemas are being read now"
+		}
+		items = append(items,
+			menuItem{label: "⏏ Disconnect " + on, key: "x",
+				act: func(m *Model) tea.Cmd { return m.disconnect(x, y) }},
+			menuItem{label: "↻ Refresh " + on, key: "r", why: refreshWhy,
+				act: func(m *Model) tea.Cmd { return m.refreshCatalog() }})
 	}
 	items = append(items, heading("connect to"))
 	active := m.baseOf(m.ws.Active())

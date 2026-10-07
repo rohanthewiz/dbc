@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -55,6 +56,47 @@ func TestDisconnectFromTheConnectionsPane(t *testing.T) {
 	}
 	rightClick(t, m, x, y)
 	if m.menu == nil || m.menu.items[0].label != "⏏ Disconnect demo-sqlite" {
+		t.Fatalf("menu while connected: %+v", m.menu)
+	}
+}
+
+// r in the Connections pane re-reads the sidebar's connection: a table
+// another client created is listed, the tables cursor stays on the table it
+// was on though the new one shifted every row below it, and the log says
+// what the list holds now. The connections menu offers the same as its
+// second row, under Disconnect.
+func TestRefreshFromTheConnectionsPane(t *testing.T) {
+	m := newTestModel(t)
+	if len(m.tables.items) == 0 {
+		t.Fatalf("tables: %d", len(m.tables.items))
+	}
+	last := len(m.tables.items) - 1
+	m.tables.cur = last
+	was := m.tables.items[last].data.(string)
+	// "aaa" sorts first, so every listed table moves down a row
+	if _, err := m.mgr.Run(config.DemoSQLite, "CREATE TABLE aaa_refreshed (id INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+
+	m.focus = focusConns
+	key(t, m, "r")
+	if len(m.tables.items) != last+2 || m.tables.items[0].data.(string) != "aaa_refreshed" {
+		t.Fatalf("after r: %d tables, first %+v", len(m.tables.items), m.tables.items[0])
+	}
+	if it, _ := m.tables.current(); it.data.(string) != was {
+		t.Errorf("cursor on %q, want it kept on %q", it.data, was)
+	}
+	logs := logText(m)
+	for _, want := range []string{"refreshing demo-sqlite…", fmt.Sprintf("refreshed demo-sqlite: %d tables", last+2)} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("log lacks %q:\n%s", want, logs)
+		}
+	}
+
+	// the Connections row, not the toolbar's chip above it
+	x, y := findText(t, frame(m), "demo-sqlite    sqlite")
+	rightClick(t, m, x, y)
+	if m.menu == nil || len(m.menu.items) < 2 || m.menu.items[1].label != "↻ Refresh demo-sqlite" || m.menu.items[1].why != "" {
 		t.Fatalf("menu while connected: %+v", m.menu)
 	}
 }

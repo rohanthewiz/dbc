@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-149
+**Next ID:** N-151
 
 ## Open
 
@@ -227,6 +227,24 @@ ten session docs in `ai_docs/claude_sessions/`
   closing its tab) starts an empty log. Key it by the script's name if
   script logs turn out to be read across tabs. Logs are per page (lost on
   a reload) in dbc web and per process in the TUI; neither is persisted.
+
+- **N-149** · raised `2026-1007-1347-connection-refresh` · value medium
+  The sidebar does not relist after DDL run in dbc (CREATE / DROP / ALTER /
+  RENAME of a table). The completion cache is dropped already
+  (`dropCompletionsAfterRunLocked`), but the table list waits for the
+  connections menu's Refresh. Could start the same catalog re-read
+  (`connectLocked(…, refresh)`, keeping the pick and the session) after a
+  run whose statements include a DDL verb, or a script. Other query tabs on
+  the same connection keep their stale list either way, as they do for row
+  counts until their own recount.
+
+- **N-150** · raised `2026-1007-1347-connection-refresh` · value low
+  Refresh has not been tried against a real Postgres. Keeping the listed
+  schema (or "all schemas") across a refresh (`refreshPickLocked`) is
+  covered by unit tests, and the rest only on SQLite (workspace, web, TUI
+  and e2e tests). Add a step to `TestLiveWorkspacePickSchema`: pick a
+  schema, create a table in it through the pool, Refresh, and check that
+  the schema stays picked and the table is listed.
 
 ## Roadmap
 

@@ -975,8 +975,11 @@
         if (dbc.cmd.onExplain) dbc.cmd.onExplain(d);
         break;
       case "connecting":
+        // a refresh (POST /refresh) is a connect back to the connection
+        // the tab is on: the row dials the same way — which is what lets
+        // Ctrl+K stop it — but the status says what is happening
         markActive(state.active, d.name);
-        setStatus("connecting to " + d.name + "…", "warn");
+        setStatus((d.refresh ? "refreshing " : "connecting to ") + d.name + "…", "warn");
         break;
       case "conn":
         state.active = d.active;
@@ -1332,6 +1335,22 @@
     });
   }
 
+  // refresh re-reads the tab's connection's databases, schemas and tables
+  // (POST /refresh, Workspace.Refresh): what another client created or
+  // dropped since the connect shows up without leaving the connection, so
+  // the session — and any transaction on it — stays. The sidebar comes
+  // back on the schema it lists now; the outcome lands as a "conn", with
+  // a "refreshed …" line in the connection's log saying what it found.
+  async function refresh() {
+    try {
+      await api("POST", dbc.wsPath("/refresh"));
+    } catch (e) {
+      // the server logged the refusal's words already (not connected,
+      // still connecting)
+      setStatus(e.message, e.status === 409 ? "warn" : "err");
+    }
+  }
+
   // editorState is what a run or an explain sends: the buffer, the caret
   // and the selection. The server picks the statement from them.
   const editorState = () => ({ buffer: dbc.editor.text(), caret: dbc.editor.caret(), selection: dbc.editor.selection() });
@@ -1543,7 +1562,7 @@
   const connUnder = (conn, base) => conn === base || derivedConn(conn, base);
 
   Object.assign(dbc.cmd, {
-    run, stop, history, preview, editorState, scripts, help, newTab, pickTab, connect, disconnect, connRenamed,
+    run, stop, history, preview, editorState, scripts, help, newTab, pickTab, connect, disconnect, refresh, connRenamed,
     save: () => saveNow(state.tab), check: () => checkNow(state.tab), openScript,
     closeTab: () => closeTab(state.tab),
     newConsole: () => newConsole(state.tab),
@@ -3171,7 +3190,7 @@
     ]],
     ["Sidebar", [
       ["click a connection", "switch this tab to it"], ["+ beside Connections", "add a connection"],
-      ["right-click a connection", "connect · remove one added here"],
+      ["right-click a connection", "connect · refresh its schemas and tables · remove one added here"],
       ["‹ beside Connections · Ctrl+B", "hide it; the › tab on the left edge brings it back"],
       ["drag its right edge", "resize it (double-click the edge: the default width)"],
       ["drag the bar above Tables", "share the column between the lists"],

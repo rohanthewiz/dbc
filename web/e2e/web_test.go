@@ -48,6 +48,7 @@ func TestWeb(t *testing.T) {
 		{"result tabs and logs per connection", resultTabsPerConn},
 		{"history scoped to the database", historyScope},
 		{"disconnect and reconnect", disconnect},
+		{"refresh a connection", refreshConn},
 		{"connection form fields and DSN", connForm},
 		{"postgres schema picker", pgSchemaPicker},
 		{"tabs survive a reload", tabsSurviveReload},
@@ -730,6 +731,45 @@ func disconnect(t *testing.T, _ *env, p *rod.Page) {
 
 	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite")
+}
+
+// refreshConn: the connection menu's Refresh re-reads the tab's
+// connection in place — a table another client created (dbc headless, a
+// separate process) is listed, and one it dropped goes — without leaving
+// it. On a row the tab is not on, Refresh is shown but off, and says why.
+func refreshConn(t *testing.T, e *env, p *rod.Page) {
+	listed := `() => !!document.querySelector('#tables li[data-name="e2e_refreshed"]')`
+	refreshed := func(what string, want bool) {
+		t.Helper()
+		waitFor(t, p, what, `(want) => {
+		  const a = document.querySelector('#conns .conn-item.active[data-conn="lite"]');
+		  return !!a && !document.querySelector("#conns .conn-item.connecting") &&
+		    document.getElementById("status").textContent.includes("refreshed") &&
+		    !!document.querySelector('#tables li[data-name="e2e_refreshed"]') === want;
+		}`, want)
+	}
+
+	e.dbc(t, "lite", "CREATE TABLE e2e_refreshed (id INTEGER)")
+	if eval(t, p, listed) != false {
+		t.Fatal("the new table was listed before any refresh — the step proves nothing")
+	}
+	rightClick(t, p, `#conns .conn-item[data-conn="lite2"]`)
+	waitFor(t, p, "Refresh shown off on lite2", `() => [...document.querySelectorAll(".menu .mitem")]
+	  .some((b) => b.textContent === "Refresh" && b.classList.contains("off"))`)
+	p.Keyboard.MustType(input.Escape)
+	waitFor(t, p, "the menu closed", `() => !document.querySelector(".menu")`)
+
+	rightClick(t, p, `#conns .conn-item[data-conn="lite"]`)
+	menuPick(t, p, "Refresh")
+	refreshed("the new table listed", true)
+
+	e.dbc(t, "lite", "DROP TABLE e2e_refreshed")
+	// the status still reads "refreshed" from the last one: clear it so the
+	// wait below sees this refresh land, not that one
+	eval(t, p, `() => { document.getElementById("status").textContent = ""; }`)
+	rightClick(t, p, `#conns .conn-item[data-conn="lite"]`)
+	menuPick(t, p, "Refresh")
+	refreshed("the dropped table gone", false)
 }
 
 // connForm: the Add a connection form shows the rows its driver and its

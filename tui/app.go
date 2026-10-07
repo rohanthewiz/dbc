@@ -280,7 +280,7 @@ func (m *Model) startupLog() {
 		m.logf(logInfo, "loaded config from %s", m.cfg.Path)
 	}
 	m.log(logMuted, "keys: ^R run · ^⇧R/⌥R run all · ^X explain · ⌥X explain analyze · ^K stop · ^A assistant · ^E export · ^P history · ^O scripts · "+
-		"^Space suggest · F12/⇧F12/F2 definition/uses/rename · ⌥T/⌥W/⌥1…9 tabs · ⌥N/⌥C new/next console · ^T tables · ^L conns · ^B sidebar · F1 keys · x disconnect · a/e add/edit connection · d/s database/schema · Tab focus · y/Y/c copy · t transpose · Enter inspect · -/+ hide/show column · { } P S x result tabs · ^Q quit")
+		"^Space suggest · F12/⇧F12/F2 definition/uses/rename · ⌥T/⌥W/⌥1…9 tabs · ⌥N/⌥C new/next console · ^T tables · ^L conns · ^B sidebar · F1 keys · x/r disconnect/refresh · a/e add/edit connection · d/s database/schema · Tab focus · y/Y/c copy · t transpose · Enter inspect · -/+ hide/show column · { } P S x result tabs · ^Q quit")
 	m.log(logMuted, "mouse: click to focus · drag to select · right-click for menus · "+
 		"drag borders to resize · hold Shift (⌥ on macOS) to select terminal text")
 	for _, w := range m.cfg.Warnings {
@@ -596,9 +596,14 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		}
 		return m.gridKey(k)
 	case focusConns:
-		if k.String() == "x" {
+		switch k.String() {
+		case "x":
 			// below the list's cursor row, where a confirm menu stays in view
 			return m.disconnect(m.conns.view.X+2, m.conns.view.Y+m.conns.cur-m.conns.top+1)
+		case "r":
+			// the sidebar's connection, not the row under the cursor: as
+			// x, it acts on what the tab is on (Workspace.Refresh)
+			return m.refreshCatalog()
 		}
 		if m.connKey(k) { // a/+ add, e edit (connform.go)
 			return nil

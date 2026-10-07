@@ -62,6 +62,26 @@ func (m *Model) refreshTables() {
 	m.fillTables()
 }
 
+// relistTables rebuilds the tables list from a re-read of the same
+// connection's catalog (a Refresh), keeping the cursor on the table it was
+// on. By name, not by row: a table created or dropped above it shifts the
+// rows, and the cursor would otherwise land on a neighbour. With that table
+// gone, the cursor stays at the row number it had (set clamps it).
+func (m *Model) relistTables() {
+	was := ""
+	if it, ok := m.tables.current(); ok {
+		was, _ = it.data.(string)
+	}
+	m.fillTables()
+	for i, it := range m.tables.items {
+		if name, _ := it.data.(string); was != "" && name == was {
+			m.tables.cur = i
+			break
+		}
+	}
+	m.tables.ensureVisible()
+}
+
 // fillTables (re)draws the tables list's rows from the active connection's
 // catalog: table_schema · table_name · table_type, per db.TablesQuery, and
 // the row counts once they land. It leaves the cursor where it is, so the

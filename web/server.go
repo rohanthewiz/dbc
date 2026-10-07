@@ -265,6 +265,7 @@ func (s *Server) routes() {
 	r.Get("/api/v1/ws/:id/export", s.handleExport)
 	r.Post("/api/v1/ws/:id/copy", s.handleCopy)
 	r.Post("/api/v1/ws/:id/connect", s.handleConnect)
+	r.Post("/api/v1/ws/:id/refresh", s.handleRefresh)
 	r.Post("/api/v1/ws/:id/disconnect", s.handleDisconnect)
 	r.Post("/api/v1/ws/:id/schema", s.handleSchema)
 	r.Post("/api/v1/ws/:id/rowcounts", s.handleRowCounts)

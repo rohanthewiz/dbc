@@ -398,24 +398,35 @@
   }
 
   // The right-click menu: connect (or, on the row this tab is on or is
-  // connecting to, disconnect), or edit or remove one added here. For
-  // the config file's, Edit and Remove are shown and say why they cannot,
-  // rather than being absent and leaving the user to wonder where they went.
+  // connecting to, disconnect), refresh, or edit or remove one added here.
+  // For the config file's, Edit and Remove are shown and say why they
+  // cannot, rather than being absent and leaving the user to wonder where
+  // they went — and Refresh likewise on a row the tab is not on.
   //
-  // Disconnect acts on the tab, not the row's name: on a server's other
-  // database ("ProdDr/analytics") the base's row is the one marked, and
-  // what the tab leaves is the database it is on.
+  // Disconnect and Refresh act on the tab, not the row's name: on a
+  // server's other database ("ProdDr/analytics") the base's row is the one
+  // marked, and what the tab leaves, or re-reads, is the database it is on.
+  //
+  // Refresh is offered only on the row marked active: the server refreshes
+  // the tab's own connection (Workspace.Refresh), and another row's schemas
+  // are read fresh by the Connect beside it anyway. Mid-dial ("connecting")
+  // there is nothing settled to re-read yet.
   conns.addEventListener("contextmenu", (e) => {
     const b = e.target.closest(".conn-item");
     if (!b) return;
     e.preventDefault();
     const name = b.dataset.conn;
     const fromFile = name + " comes from the config file (or is a built-in demo) — edit the file to ";
+    const on = b.classList.contains("active"), dialing = b.classList.contains("connecting");
     dbc.menu.open(e.clientX, e.clientY, [
       { head: name },
-      b.classList.contains("active") || b.classList.contains("connecting")
+      on || dialing
         ? { label: "Disconnect", act: () => dbc.cmd.disconnect() }
         : { label: "Connect", act: () => dbc.cmd.connect(name) },
+      on
+        ? { label: "Refresh", act: () => dbc.cmd.refresh() }
+        : { label: "Refresh", why: dialing ? "still connecting to " + name + " — its schemas are being read now"
+          : "this tab is not on " + name + " — Connect reads its schemas fresh" },
       b.dataset.saved
         ? { label: "Edit…", act: () => openEdit(b) }
         : { label: "Edit…", why: fromFile + "change it" },

@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/rohanthewiz/serr"
@@ -108,13 +109,27 @@ func (w *Workspace) ConnectPick(name string, pick SchemaPick) Start {
 	if name == "" {
 		return Start{}
 	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.connectLocked(name, pick, false)
+}
+
+// connectLocked is ConnectPick's work, under mu: it supersedes whatever
+// connect is in flight and returns the Job that dials and reads the
+// catalog. refresh marks the re-read of the active connection (Refresh),
+// which lands differently: see landConnect.
+//
+// It is split out so Refresh can check what is active and start the
+// re-read under one hold of mu — released between the two, a connect to
+// another connection could start in the gap, and the refresh would then
+// cancel it and pull the tab back onto the connection it was leaving.
+func (w *Workspace) connectLocked(name string, pick SchemaPick, refresh bool) Start {
 	driver := ""
 	if cc, ok := w.cfg.ConnByName(name); ok {
 		driver = cc.Driver
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
-	w.mu.Lock()
 	if w.connCancel != nil {
 		w.connCancel()
 	}
@@ -122,7 +137,6 @@ func (w *Workspace) ConnectPick(name string, pick SchemaPick) Start {
 	w.connGen++
 	gen := w.connGen
 	w.connCancel, w.connName = cancel, name
-	w.mu.Unlock()
 
 	mgr := w.mgr
 	job := func() Event {
@@ -146,10 +160,68 @@ func (w *Workspace) ConnectPick(name string, pick SchemaPick) Start {
 			ev.Notes = append(ev.Notes, notes...)
 			tcancel()
 		}
-		w.landConnect(ev, gen)
+		w.landConnect(ev, gen, refresh)
 		return ev
 	}
 	return Start{Job: job}
+}
+
+// Refresh re-reads the active connection's catalog — the server's
+// databases, this database's schemas, and the tables of the schema the
+// sidebar lists now — for when another client has created, dropped or
+// renamed something since the connect. It is the connect a Switch to the
+// connection already active skips (SwitchPick), forced, and differs from
+// one only in what it keeps:
+//
+//   - the session: the connection does not change, so there is no Release
+//     and a transaction open on the pinned session stays open;
+//   - the schema pick: the sidebar comes back on the schema it lists now
+//     (refreshPickLocked), not the default one;
+//   - the old list, when the re-read cannot list the tables: an empty
+//     sidebar would be no truer than the stale one (landConnect).
+//
+// The Manager's cached row counts for the connection are dropped too, so a
+// sidebar with its counts on counts afresh rather than serving numbers from
+// before the change that prompted the refresh. The completion cache goes
+// with the landing, as on any connect (landConnect).
+//
+// It runs as a connect does — on the pool, under connGen, cancelable with
+// Cancel — so a connect started after it supersedes it, and it supersedes a
+// schema pick or a counting in flight. Refused with no active connection,
+// and while a connect is still in flight (the catalog it would re-read is
+// about to be replaced).
+//
+// The Job's event is a *Connected, with Changed false.
+func (w *Workspace) Refresh() (Start, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	name := w.active
+	switch {
+	case w.connCancel != nil:
+		return Start{}, refuse(Busy, Warn, "still connecting to %s", w.connName)
+	case name == "":
+		return Start{}, refuse(NoConnection, Warn, "not connected — nothing to refresh")
+	}
+	w.mgr.ForgetRowCounts(name)
+	st := w.connectLocked(name, w.refreshPickLocked(), true)
+	st.Notes = append([]Note{notef(Info, "refreshing %s…", name)}, st.Notes...)
+	return st, nil
+}
+
+// refreshPickLocked is the pick that lists again what the sidebar lists
+// now. w.schema "" is ambiguous — every schema's tables picked, or a
+// database with one schema (or none, or a driver that is not db.Navigable),
+// where every list is "" — so the schema count tells them apart: with
+// several, "" was the "all schemas" pick and stays it; otherwise the
+// default pick, which on such a database lists "" again. The caller holds mu.
+func (w *Workspace) refreshPickLocked() SchemaPick {
+	switch {
+	case w.schema != "":
+		return SchemaPick{Name: w.schema}
+	case len(w.schemas) > 1:
+		return SchemaPick{All: true}
+	}
+	return w.defaultPick()
 }
 
 // cancelCatalogWorkLocked stops the sidebar work a new connect or schema
@@ -313,7 +385,23 @@ func defaultSchema(schemas []db.SchemaInfo) string {
 
 // landConnect installs a connect's outcome, unless a newer connect has
 // superseded it.
-func (w *Workspace) landConnect(ev *Connected, gen int) {
+//
+// A refresh (Workspace.Refresh) lands as a connect back to the same
+// connection, with two differences. Its words say refresh, since nothing
+// was connected to. And a re-read that could not list the tables lands
+// nothing — not the databases and schemas it did read either, so the
+// sidebar stays one consistent, if stale, picture rather than new schema
+// counts over an old schema's tables:
+//
+//	refresh lands ─┬─ canceled / failed ──────────► notes only (as a connect)
+//	               ├─ no tables, a list shown ────► notes only; old list stays
+//	               └─ tables (or none ever shown) ► installed as a connect's,
+//	                                                 + "refreshed …" note
+//
+// "A list shown" matters for a driver with no catalog query at all
+// (db.TablesQuery fails): its Catalog is always nil, and its refresh is
+// then only the re-dial, landing as a connect does.
+func (w *Workspace) landConnect(ev *Connected, gen int, refresh bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if gen != w.connGen {
@@ -322,12 +410,28 @@ func (w *Workspace) landConnect(ev *Connected, gen int) {
 	}
 	w.connCancel = nil
 	if errors.Is(ev.Err, db.ErrCanceled) {
+		if refresh {
+			ev.Notes = append(ev.Notes, notef(Warn, "refresh of %s canceled", ev.Name))
+			ev.Status = "refresh canceled"
+			return
+		}
 		ev.Notes = append(ev.Notes, notef(Warn, "connect to %s canceled", ev.Name))
 		ev.Status = "connect canceled"
 		return
 	}
 	if ev.Err != nil {
+		if refresh {
+			ev.Notes = append(ev.Notes, notef(Err, "refresh of %s failed: %s", ev.Name, serr.StringFromErr(ev.Err)))
+			return
+		}
 		ev.Notes = append(ev.Notes, notef(Err, "connect failed: %s", serr.StringFromErr(ev.Err)))
+		return
+	}
+	if refresh && ev.Catalog == nil && w.catalog != nil {
+		// loadTables has already said why the tables could not be read;
+		// this says what the user is looking at meanwhile
+		ev.Notes = append(ev.Notes, notef(Warn, "%s not refreshed: the tables listed before stay", ev.Name))
+		ev.Status = "refresh failed"
 		return
 	}
 	ev.Changed = ev.Name != w.active
@@ -353,6 +457,40 @@ func (w *Workspace) landConnect(ev *Connected, gen int) {
 		// the meantime is already on Name and its session is left alone
 		ev.Release = w.releaseJob(ev.Name)
 	}
+	if refresh {
+		ev.Notes = append(ev.Notes, notef(Ok, "refreshed %s%s", ev.Name, refreshedWhat(ev)))
+		ev.Status = "refreshed"
+	}
+}
+
+// refreshedWhat is the tail of a refresh's "refreshed <conn>" note: what
+// the sidebar now lists, so the user can see at a glance whether the table
+// they were expecting arrived. Empty when there is no list (a driver
+// without a catalog query).
+//
+//	": 12 tables"                          one schema, or a whole catalog
+//	": 12 tables in sales (of 4 schemas)"  a navigable database, one schema
+//	": 40 tables in 4 schemas"             the same, every schema listed
+func refreshedWhat(ev *Connected) string {
+	if ev.Catalog == nil {
+		return ""
+	}
+	s := ": " + countOf(len(ev.Catalog.Rows), "table")
+	switch n := len(ev.Schemas); {
+	case n > 1 && ev.Schema != "":
+		s += " in " + ev.Schema + " (of " + countOf(n, "schema") + ")"
+	case n > 1:
+		s += " in " + countOf(n, "schema")
+	}
+	return s // a list cut at the catalog bound has loadTables's note already
+}
+
+// countOf is "1 table", "2 tables".
+func countOf(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return strconv.Itoa(n) + " " + noun + "s"
 }
 
 // setCatalogLocked installs a connection's catalog and its index. Row counts

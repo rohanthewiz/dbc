@@ -376,6 +376,38 @@ func (s *Server) handleConnect(ctx rweb.Context) error {
 	return ok(ctx, map[string]any{"connecting": true})
 }
 
+// handleRefresh re-reads the tab's connection's databases, schemas and
+// tables (Workspace.Refresh) — the connections menu's Refresh, for a table
+// another client created since the connect. Like handleConnect it answers
+// at once and the outcome arrives as "conn" (Changed false, so the page
+// keeps its results pane and log, and the session stays pinned).
+//
+// The "connecting" it announces carries refresh, so the page says
+// "refreshing" rather than "connecting to" a connection it is already on —
+// and marks the row as dialing, which is what lets Ctrl+K stop a re-read
+// stuck on a slow catalog (Workspace.Cancel stops it as it does a connect).
+func (s *Server) handleRefresh(ctx rweb.Context) error {
+	t, err := s.hub.get(ctx.Request().PathParam("id"))
+	if err != nil {
+		return fail(ctx, err)
+	}
+	st, err := t.ws.Refresh()
+	if err != nil {
+		if r, isRefusal := asRefusal(err); isRefusal {
+			t.notes([]workspace.Note{r.Note})
+		}
+		return fail(ctx, err)
+	}
+	name := t.ws.Active()
+	t.send("connecting", map[string]any{"name": name, "refresh": true})
+	// to the connection's own log: unlike a connect's "connecting to …",
+	// this is about the connection on screen, and its outcome lands there
+	t.notesOn(name, st.Notes)
+	st.Notes = nil
+	s.launch(t, st)
+	return ok(ctx, map[string]any{"refreshing": name})
+}
+
 // handleDisconnect takes the tab off its connection, keeping the connection
 // in the list (Workspace.Disconnect). The tab's sidebar empties at once (a
 // "conn" with no active connection); its session is closed off the request,

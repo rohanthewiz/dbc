@@ -150,6 +150,22 @@ func (m *Model) setActive(name string) tea.Cmd {
 	return m.tag(job(st.Job))
 }
 
+// refreshCatalog is r in the Connections pane and the connections menu's
+// Refresh: workspace.Refresh re-reads the active connection's databases,
+// schemas and tables, keeping its session and its schema pick. It lands as
+// a connect back to the same connection does (connected), with a
+// "refreshed …" line saying what the list now holds.
+func (m *Model) refreshCatalog() tea.Cmd {
+	st, err := m.ws.Refresh()
+	if err != nil {
+		m.refused(err)
+		return nil
+	}
+	m.notes(st.Notes)
+	m.setStatus("refreshing " + m.ws.Active() + "…")
+	return m.tag(job(st.Job))
+}
+
 // connected draws a connect's outcome. On a switch, the session pinned to
 // the old connection is released by the event's Release job — separately,
 // because it waits for any statement still running there. The tables' row
@@ -170,7 +186,13 @@ func (m *Model) connected(ev *workspace.Connected) tea.Cmd {
 	m.syncResults()          // the results pane follows the connection (resulttabs.go)
 	m.switchConsole(ev.Name) // the editor follows the database (console.go)
 	m.refreshConns()
-	m.refreshTables()
+	if ev.Changed {
+		m.refreshTables()
+	} else {
+		// the same connection's list read again — a Refresh, or a connect
+		// back after its catalog failed — so the cursor stays on its table
+		m.relistTables()
+	}
 	m.catsAfterTransition()
 	return tea.Batch(m.tag(m.releaseThenClose(ev)), m.tag(job(ev.Counts)))
 }

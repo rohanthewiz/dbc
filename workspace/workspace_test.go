@@ -251,7 +251,7 @@ func TestStragglerIsDropped(t *testing.T) {
 	w.busy, w.runGen = true, 7
 	w.mu.Unlock()
 	ev := &RunDone{Tag: "old", Stmts: []string{"SELECT 2"}, Result: &model.Result{Columns: []string{"late"}}}
-	w.landRun(ev, 6, true)
+	w.landRun(ev, 6, runEffects{wrote: true})
 	if !ev.Stale {
 		t.Error("the straggler was not marked stale")
 	}
@@ -1206,17 +1206,17 @@ func TestRefreshRefusals(t *testing.T) {
 func TestRefreshWithoutTablesKeepsTheList(t *testing.T) {
 	w := newTestWorkspace(t)
 	before := w.Catalog()
-	land := func(refresh bool) *Connected {
+	land := func(kind connectKind) *Connected {
 		w.mu.Lock()
 		w.connGen++
 		gen := w.connGen
 		w.mu.Unlock()
 		ev := &Connected{Name: demo, Notes: []Note{notef(Warn, "tables list unavailable: boom")}}
-		w.landConnect(ev, gen, refresh)
+		w.landConnect(ev, gen, kind)
 		return ev
 	}
 
-	ev := land(true)
+	ev := land(kindRefresh)
 	if w.Catalog() != before || ev.Status != "refresh failed" || ev.Counts != nil {
 		t.Fatalf("refresh: catalog kept %v, event %+v", w.Catalog() == before, ev)
 	}
@@ -1224,7 +1224,17 @@ func TestRefreshWithoutTablesKeepsTheList(t *testing.T) {
 		t.Errorf("last note = %+v", n)
 	}
 
-	land(false)
+	// a relist keeps the list as a refresh does, in its own words, and
+	// leaves the status bar to the run that started it
+	ev = land(kindRelist)
+	if w.Catalog() != before || ev.Status != "" || ev.Counts != nil {
+		t.Fatalf("relist: catalog kept %v, event %+v", w.Catalog() == before, ev)
+	}
+	if n := ev.Notes[len(ev.Notes)-1]; n.Text != "demo-sqlite not relisted: the tables listed before stay" {
+		t.Errorf("last note = %+v", n)
+	}
+
+	land(kindConnect)
 	if w.Catalog() != nil {
 		t.Error("a connect without tables should land the empty list, as it always has")
 	}
@@ -1275,5 +1285,196 @@ func TestRefreshedWhat(t *testing.T) {
 		if got := refreshedWhat(&c.ev); got != c.want {
 			t.Errorf("refreshedWhat(%+v) = %q, want %q", c.ev, got, c.want)
 		}
+	}
+}
+
+// A run whose statements change the catalog relists the sidebar: the table
+// it created is listed once its Relist lands, through a re-read that is a
+// Refresh in all but its words — same session, Changed false, the status
+// bar left to the run — and that counts the new list, in place of the
+// run's own recount.
+func TestDDLRunRelistsTheSidebar(t *testing.T) {
+	w := newTestWorkspace(t)
+	countsOn(t, w)
+	ev := run(t, w, "CREATE TABLE relisted_pets (id INTEGER)")
+	if ev.Err != nil || ev.Relist == nil || ev.Counts != nil || !ev.Wrote {
+		t.Fatalf("run = %+v; want a Relist in place of Counts", ev)
+	}
+	if hasTable(w, "relisted_pets") {
+		t.Fatal("listed before the relist ran — the test proves nothing")
+	}
+	if name, ok := w.Connecting(); !ok || name != demo {
+		t.Errorf("connecting = %q, %v; the relist is a connect until it lands", name, ok)
+	}
+
+	cev := ev.Relist().(*Connected)
+	if cev.Err != nil || cev.Stale || cev.Changed || cev.Release != nil || cev.Status != "" || !cev.Relisted {
+		t.Fatalf("relist = %+v", cev)
+	}
+	if !hasTable(w, "relisted_pets") {
+		t.Error("the new table is not listed after the relist")
+	}
+	want := fmt.Sprintf("relisted demo-sqlite after the DDL: %d tables", len(w.Catalog().Rows))
+	if n := cev.Notes[len(cev.Notes)-1]; n.Text != want || n.Level != Info {
+		t.Errorf("last note = %+v, want %q", n, want)
+	}
+	if cev.Counts == nil {
+		t.Error("the relist should count the list it landed (counts are on)")
+	}
+	if conn, stateful := w.Session(); conn != demo || !stateful {
+		t.Errorf("session = %q, stateful %v; want it kept", conn, stateful)
+	}
+
+	if ev := run(t, w, "SELECT 1"); ev.Relist != nil {
+		t.Error("a SELECT relisted the sidebar")
+	}
+	// a failed run relists when a statement it reached was DDL (it ran),
+	// not when the DDL lay past the failure (it never did)
+	ev = run(t, w, "DROP TABLE relisted_pets", "SELEC nonsense")
+	if ev.Err == nil || ev.Relist == nil {
+		t.Fatalf("DROP then a failure: %+v", ev)
+	}
+	ev.Relist()
+	if hasTable(w, "relisted_pets") {
+		t.Error("the dropped table is still listed")
+	}
+	if ev := run(t, w, "SELEC nonsense", "CREATE TABLE never (x INT)"); ev.Relist != nil {
+		t.Error("a CREATE the run never reached relisted the sidebar")
+	}
+}
+
+// relistEffects is the runEffects of a run that reached stmts.
+func relistEffects(stmts ...string) runEffects {
+	var e runEffects
+	for _, s := range stmts {
+		e.see(s)
+	}
+	return e
+}
+
+// DDL may sit in a transaction the relist cannot see into (it reads
+// through the pool), so the COMMIT run after it relists again — once: a
+// later COMMIT, with no DDL since, does not. A ROLLBACK does not clear the
+// mark, nor does a COMMIT on another connection.
+func TestCommitRelistsAfterDDL(t *testing.T) {
+	w := newTestWorkspace(t)
+	relists := func(stmts ...string) bool {
+		t.Helper()
+		w.mu.Lock()
+		j := w.relistAfterRunLocked(demo, relistEffects(stmts...))
+		w.mu.Unlock()
+		if j != nil {
+			j() // lands, so the next relist is not refused as mid-connect
+		}
+		return j != nil
+	}
+	for i, step := range []struct {
+		stmts []string
+		want  bool
+	}{
+		{[]string{"BEGIN"}, false},
+		{[]string{"CREATE TABLE tx_pets (id INTEGER)"}, true},
+		{[]string{"INSERT INTO tx_pets VALUES (1)"}, false},
+		{[]string{"COMMIT"}, true},
+		{[]string{"COMMIT"}, false}, // nothing since
+		// a run that commits its own DDL leaves nothing open …
+		{[]string{"BEGIN", "CREATE TABLE tx_a (id INTEGER)", "COMMIT"}, true},
+		{[]string{"COMMIT"}, false},
+		// … and one that commits before its DDL does
+		{[]string{"COMMIT", "CREATE TABLE tx_b (id INTEGER)"}, true},
+		{[]string{"END"}, true},
+		{[]string{"DROP TABLE tx_b"}, true},
+		{[]string{"ROLLBACK"}, false},
+		{[]string{"COMMIT"}, true}, // the mark outlived the ROLLBACK
+	} {
+		if got := relists(step.stmts...); got != step.want {
+			t.Errorf("step %d %v: relist %v, want %v", i, step.stmts, got, step.want)
+		}
+	}
+
+	w.mu.Lock()
+	w.ddlSinceCommit = "elsewhere"
+	w.mu.Unlock()
+	if relists("COMMIT") {
+		t.Error("a COMMIT on demo relisted for DDL run on another connection")
+	}
+}
+
+// No relist when the sidebar is not showing the run's connection's tables,
+// nor mid-connect: that connect's read replaces the list anyway, and must
+// not be canceled by a relist.
+func TestRelistGates(t *testing.T) {
+	w := newTestWorkspace(t)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.relistLocked("elsewhere") != nil {
+		t.Error("relisted for a connection the sidebar is not on")
+	}
+	w.connCancel = func() {}
+	if w.relistLocked(demo) != nil {
+		t.Error("relisted mid-connect")
+	}
+	w.connCancel = nil
+	cat := w.catalog
+	w.catalog = nil
+	if w.relistLocked(demo) != nil {
+		t.Error("relisted a sidebar with no list")
+	}
+	w.catalog = cat
+}
+
+// A re-read started while a schema pick is still loading asks for that
+// pick: the re-read cancels the pick's load, and re-reading the schema
+// listed now would undo the user's pick.
+func TestRefreshPickHonoursAPickInFlight(t *testing.T) {
+	w := newTestWorkspace(t)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.schema, w.schemas = "a", []db.SchemaInfo{{Name: "a"}, {Name: "b"}}
+	w.schemaCancel, w.schemaPick = func() {}, SchemaPick{Name: "b"}
+	if got := w.refreshPickLocked(); got != (SchemaPick{Name: "b"}) {
+		t.Errorf("pick = %+v, want the one loading", got)
+	}
+	w.schemaCancel = nil
+	if got := w.refreshPickLocked(); got != (SchemaPick{Name: "a"}) {
+		t.Errorf("pick = %+v, want the one listed once nothing is loading", got)
+	}
+}
+
+// A script relists the sidebar when it ran a catalog-changing statement on
+// the connection it started on — through S, which notes each one — and not
+// otherwise: its recount (a script is taken to have written) is all.
+func TestScriptRelistsAfterItsDDL(t *testing.T) {
+	w := newTestWorkspace(t)
+	script := func(name, body string) *RunDone {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), name)
+		src := "//go:build ignore\n\npackage main\n\nimport \"github.com/rohanthewiz/dbc/sdb\"\n\n" +
+			"func Run(s *sdb.S) error {\n" + body + "\n}\n"
+		if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		st, err := w.RunScript(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ev := st.Job().(*RunDone)
+		if ev.Err != nil {
+			t.Fatal(ev.Err)
+		}
+		return ev
+	}
+
+	ev := script("reads.go", `_, err := s.Query("demo-sqlite", "SELECT 1"); return err`)
+	if ev.Relist != nil || !ev.Wrote {
+		t.Errorf("a reading script: %+v; want a recount only", ev)
+	}
+	ev = script("creates.go", `_, err := s.Exec("demo-sqlite", "CREATE TABLE script_pets (id INTEGER)"); return err`)
+	if ev.Relist == nil {
+		t.Fatalf("a script that ran a CREATE: %+v; want a Relist", ev)
+	}
+	ev.Relist()
+	if !hasTable(w, "script_pets") {
+		t.Error("the script's table is not listed after the relist")
 	}
 }

@@ -118,28 +118,21 @@ func complScope(focus string, path []string) []string {
 	return scope
 }
 
-// ddlVerbs start a statement that may change what the catalog holds.
-var ddlVerbs = map[string]bool{
-	"create": true, "alter": true, "drop": true, "rename": true, "comment": true, "attach": true, "detach": true,
-}
-
 // dropCompletionsLocked forgets the cached schema. The caller holds mu.
 func (w *Workspace) dropCompletionsLocked() { w.complGen++ }
 
 // dropCompletionsAfterRunLocked forgets the cached schema after a run that
-// may have changed it: a script (whatever it ran), or any statement whose
-// verb is DDL — failed runs included, since the statements before the
-// failing one did run. The caller holds mu.
+// may have changed it: a script (whatever it ran), or any statement that
+// changes the catalog (sqlsplit.ChangesCatalog) — failed runs included,
+// since the statements before the failing one did run. The caller holds mu.
+//
+// A script drops the cache whatever it ran, even though sdb.S now knows
+// whether it ran DDL (CatalogChanged), which the sidebar's relist goes by
+// (landRun): a drop costs nothing until the next completion asks, and a
+// script can reach the database through DB's raw handle, out of S's sight.
 func (w *Workspace) dropCompletionsAfterRunLocked(ev *RunDone) {
-	if ev.Script {
+	if ev.Script || slices.ContainsFunc(ev.Stmts, sqlsplit.ChangesCatalog) {
 		w.dropCompletionsLocked()
-		return
-	}
-	for _, s := range ev.Stmts {
-		if ddlVerbs[sqlsplit.FirstKeyword(s)] {
-			w.dropCompletionsLocked()
-			return
-		}
 	}
 }
 

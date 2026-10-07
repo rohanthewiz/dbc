@@ -136,6 +136,32 @@ func IsDDL(stmt string) bool {
 	return ddlVerbs[FirstKeyword(stmt)]
 }
 
+// catalogVerbs are the leading keywords of the statements ChangesCatalog
+// counts: the ones that may change what a catalog read lists — the
+// tables, their columns and comments, the schemas (SQLite's ATTACH and
+// DETACH add and remove one).
+//
+// It is not ddlVerbs, which answers another question (what belongs in a
+// log of schema changes), and the two differ on purpose at the edges:
+//
+//	              IsDDL  ChangesCatalog
+//	TRUNCATE        ✓         ·          rows go, the table stays
+//	GRANT REVOKE    ✓         ·          who may use it, not what exists
+//	ATTACH DETACH   ·         ✓          a whole schema comes or goes
+var catalogVerbs = map[string]bool{
+	"create": true, "alter": true, "drop": true, "rename": true, "comment": true,
+	"attach": true, "detach": true,
+}
+
+// ChangesCatalog reports whether stmt may change what the database's
+// catalog lists, by its leading keyword (catalogVerbs): what a cached
+// schema (completion's, a sidebar's table list) is stale after. It is
+// lexical as IsDDL is, with the same blind spots: DDL inside a function
+// body, a DO block or an EXECUTE is not seen.
+func ChangesCatalog(stmt string) bool {
+	return catalogVerbs[FirstKeyword(stmt)]
+}
+
 // StmtVerbs is the shape of a statement's verbs: what it does at the top
 // level, and — for a WITH — what each of its CTEs does.
 type StmtVerbs struct {

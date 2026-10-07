@@ -833,8 +833,11 @@ func TestDisconnectKeepsTheConnection(t *testing.T) {
 func TestRefreshRereadsTheSidebar(t *testing.T) {
 	e := newTestEnv(t)
 	id, s := e.connected()
-	e.api("POST", "/api/v1/ws/"+id+"/run", runBody("CREATE TABLE refreshed_pets (id INTEGER)", 0, false), 200)
-	s.await(t, "run")
+	// through the pool, as another client would: a DDL run in the tab would
+	// relist its sidebar on its own (TestDDLRunRelistsTheSidebar)
+	if _, err := e.srv.mgr.Run("demo-sqlite", "CREATE TABLE refreshed_pets (id INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
 	e.api("POST", "/api/v1/ws/"+id+"/run", runBody("BEGIN", 0, false), 200)
 	s.await(t, "run")
 	before := decodeData[wsState](t, e.api("GET", "/api/v1/ws/"+id, "", 200))
@@ -842,7 +845,7 @@ func TestRefreshRereadsTheSidebar(t *testing.T) {
 		return slices.ContainsFunc(ts, func(r tabRef) bool { return r.Name == "refreshed_pets" })
 	}
 	if listed(before.Tables) {
-		t.Fatal("a DDL run relisted the sidebar on its own — the test proves nothing")
+		t.Fatal("listed before any refresh — the test proves nothing")
 	}
 
 	e.api("POST", "/api/v1/ws/"+id+"/refresh", "", 200)
@@ -872,5 +875,25 @@ func TestRefreshRereadsTheSidebar(t *testing.T) {
 	s.await(t, "conn")
 	if env := e.api("POST", "/api/v1/ws/"+id+"/refresh", "", 400); !strings.Contains(env.Error, "not connected") {
 		t.Errorf("a refresh with no connection: %+v", env)
+	}
+}
+
+// A DDL run relists the tab's sidebar on its own: after its "run", a
+// "conn" that lists the new table, marked relisted with no status — the
+// page keeps the run's summary rather than saying "ready" — and Changed
+// false. The log says so, in a relist's words.
+func TestDDLRunRelistsTheSidebar(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	e.api("POST", "/api/v1/ws/"+id+"/run", runBody("CREATE TABLE relisted_pets (id INTEGER)", 0, false), 200)
+	s.await(t, "run")
+	ev, logs := s.await(t, "conn")
+	c := decodeData[connEvent](t, testEnvelope{Data: ev.Data})
+	listed := slices.ContainsFunc(c.Tables, func(r tabRef) bool { return r.Name == "relisted_pets" })
+	if c.Active != "demo-sqlite" || c.Changed || c.Failed || c.Status != "" || !c.Relisted || !listed {
+		t.Fatalf("conn event = %+v", c)
+	}
+	if !slices.ContainsFunc(logs, func(l string) bool { return strings.HasPrefix(l, "relisted demo-sqlite after the DDL: ") }) {
+		t.Errorf("logs = %q", logs)
 	}
 }

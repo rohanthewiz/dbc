@@ -528,6 +528,9 @@ type connEvent struct {
 	Changed bool   `json:"changed"`
 	Failed  bool   `json:"failed"`
 	Status  string `json:"status,omitempty"`
+	// Relisted: the sidebar was listed again after a run's DDL
+	// (workspace.Connected.Relisted), so the page keeps the run's status.
+	Relisted bool `json:"relisted,omitempty"`
 	sideState
 	// The results pane follows the connection: a switch puts the new
 	// connection's result set on screen (workspace/results.go), so the
@@ -744,7 +747,9 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 			conn = ev.Name
 		}
 		t.notesOn(conn, ev.Notes)
-		t.send("conn", s.connEventOf(t, ev.Changed, ev.Err != nil, ev.Status))
+		ce := s.connEventOf(t, ev.Changed, ev.Err != nil, ev.Status)
+		ce.Relisted = ev.Relisted
+		t.send("conn", ce)
 		// landed or failed, the tab is on another connection (or none) than
 		// the "connecting" announcement said
 		s.hub.announceInUse()
@@ -784,6 +789,12 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 		// be off while another's are on.
 		if ev.Counts != nil {
 			go func() { s.deliver(t, ev.Counts()) }()
+		}
+		// the run may have changed the catalog: this tab's sidebar lists
+		// it again (a *Connected, landing as a Refresh does). The other
+		// tabs on the connection keep their lists until their own Refresh.
+		if ev.Relist != nil {
+			go func() { s.deliver(t, ev.Relist()) }()
 		}
 		if ev.Wrote {
 			s.recountOthers(t, ev.Conn)

@@ -101,6 +101,35 @@ func TestRefreshFromTheConnectionsPane(t *testing.T) {
 	}
 }
 
+// A DDL run relists the sidebar on its own, as r would: the new table is
+// listed and the cursor stays on its table. The status bar keeps the run's
+// summary — the relist is not what the user asked for — and the log says
+// what the list holds now.
+func TestDDLRunRelistsTheSidebar(t *testing.T) {
+	m := newTestModel(t)
+	last := len(m.tables.items) - 1
+	m.tables.cur = last
+	was := m.tables.items[last].data.(string)
+
+	m.editor.SetText("CREATE TABLE aaa_relisted (id INTEGER)")
+	key(t, m, "ctrl+r")
+	if len(m.tables.items) != last+2 || m.tables.items[0].data.(string) != "aaa_relisted" {
+		t.Fatalf("after the CREATE: %d tables, first %+v", len(m.tables.items), m.tables.items[0])
+	}
+	if it, _ := m.tables.current(); it.data.(string) != was {
+		t.Errorf("cursor on %q, want it kept on %q", it.data, was)
+	}
+	if strings.Contains(m.status, "refresh") || strings.Contains(m.status, "relist") || m.status == "" {
+		t.Errorf("status = %q, want the run's summary", m.status)
+	}
+	if want := fmt.Sprintf("relisted demo-sqlite after the DDL: %d tables", last+2); !strings.Contains(logText(m), want) {
+		t.Errorf("log lacks %q:\n%s", want, logText(m))
+	}
+	if _, connecting := m.ws.Connecting(); connecting {
+		t.Error("the relist never landed: the workspace is still mid-connect")
+	}
+}
+
 // A session that may hold a transaction asks first, with a menu, and
 // "Stay connected" keeps it. Disconnecting from there rolls the work back.
 func TestDisconnectAsksWhenTheSessionHoldsState(t *testing.T) {

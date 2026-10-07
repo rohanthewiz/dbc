@@ -107,6 +107,7 @@ type Workspace struct {
 	schema       string
 	wholeCatalog bool               // Options.WholeCatalog
 	schemaCancel context.CancelFunc // cancels the schema load in flight; nil when none is
+	schemaPick   SchemaPick         // what that load is for, while schemaCancel is set (refreshPickLocked)
 	// rowCounts are the catalog's tables' row counts, once the Counts job
 	// of the connect that loaded it lands; nil until then. countCancel
 	// stops that job, which the next connect does: the counts would be for
@@ -166,6 +167,11 @@ type Workspace struct {
 	connGen    int                // bumped per connect; an older one's outcome is dropped
 	connCancel context.CancelFunc // cancels the connect in flight; nil when none is
 	connName   string             // what it is connecting to, for the log
+	// ddlSinceCommit is the connection whose pinned session ran a
+	// catalog-changing statement since its last COMMIT, "" for none: the
+	// COMMIT that makes it visible to the pool relists the sidebar again
+	// (relistAfterRunLocked).
+	ddlSinceCommit string
 
 	// sessMu is held while a statement runs on sess — see Locking above.
 	sessMu  sync.Mutex

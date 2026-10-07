@@ -15,6 +15,7 @@ import (
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/script"
 	"github.com/rohanthewiz/dbc/sdb"
+	"github.com/rohanthewiz/dbc/sqlsplit"
 	"github.com/rohanthewiz/dbc/userdata"
 )
 
@@ -180,7 +181,7 @@ func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 		var res *model.Result
 		var err error
 		var notes []Note // the server's notices, in the order raised
-		wrote := false
+		var eff runEffects
 		for i, stmt := range stmts {
 			w.stepTo(gen, i+1)
 			var notices []db.Notice
@@ -190,7 +191,7 @@ func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 			// mid-INSERT on a driver without transactional DDL, a
 			// multi-row write cut short), so it counts as well as
 			// the ones that succeeded.
-			wrote = wrote || db.ChangesRows(stmt)
+			eff.see(stmt)
 			if err != nil {
 				if len(stmts) > 1 {
 					err = serr.Wrap(err, "statement", fmt.Sprintf("%d/%d", i+1, len(stmts)))
@@ -203,7 +204,7 @@ func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 		// or failure note after them, so the log reads in the order things
 		// happened, the RAISE lines before the run's outcome.
 		ev := &RunDone{Tag: tag, Conn: conn, Stmts: stmts, Result: res, Err: err, Notes: notes}
-		w.landRun(ev, gen, wrote)
+		w.landRun(ev, gen, eff)
 		return ev
 	}
 	return Start{
@@ -267,9 +268,14 @@ func (w *Workspace) RunScript(path string) (Start, error) {
 	).WithContext(ctx)
 	job := func() Event {
 		ev := &RunDone{Tag: tag, Conn: conn, Script: true, Err: script.Run(path, s)}
-		// what a script ran is not known here, so it is taken to have
-		// written: a script is more often a data chore than a report
-		w.landRun(ev, gen, true)
+		// which rows a script wrote is not known here, so it is taken to
+		// have written: a script is more often a data chore than a
+		// report. Whether it changed the catalog is known — S notes each
+		// catalog-changing statement it runs — and only conn's matters:
+		// the sidebar lists no other connection's tables. Its statements
+		// ran on the pool, each committed as it went, so none is left
+		// waiting on a COMMIT (runEffects.open).
+		w.landRun(ev, gen, runEffects{wrote: true, catalog: s.CatalogChanged(conn)})
 		return ev
 	}
 	return Start{Tag: tag, Gen: gen, Job: job, Notes: []Note{notef(Info, "running %s", tag)}}, nil
@@ -323,19 +329,60 @@ func (w *Workspace) runningStatusLocked() string {
 	return fmt.Sprintf("%s %s", w.runTag, took)
 }
 
-// landRun installs a run's outcome. wrote is whether the run may have
-// changed rows (db.ChangesRows of any statement it reached, or a script),
-// for the sidebar's counts: see recountLocked.
-func (w *Workspace) landRun(ev *RunDone, gen int, wrote bool) {
+// runEffects is what a run's statements may have done to what the sidebar
+// shows, gathered from the statements it reached — the failing one
+// included, since a failed statement may still have done its work in part.
+type runEffects struct {
+	// wrote: a statement may have changed rows (db.ChangesRows), or it
+	// was a script — for the sidebar's counts (recountLocked).
+	wrote bool
+	// catalog: a statement may have changed the catalog
+	// (sqlsplit.ChangesCatalog), or a script ran one on the run's
+	// connection (sdb.S.CatalogChanged) — for the sidebar's list.
+	catalog bool
+	// open: such a statement ran after the run's last COMMIT, so it may be
+	// inside a transaction still open on the session; committed: the run
+	// ran a COMMIT (or Postgres's END). See relistAfterRunLocked.
+	open, committed bool
+}
+
+// see adds one statement the run reached to e. The order matters for open:
+// a CREATE then a COMMIT leaves nothing open, a COMMIT then a CREATE may.
+func (e *runEffects) see(stmt string) {
+	e.wrote = e.wrote || db.ChangesRows(stmt)
+	switch {
+	case sqlsplit.ChangesCatalog(stmt):
+		e.catalog, e.open = true, true
+	case commitVerbs[sqlsplit.FirstKeyword(stmt)]:
+		e.committed, e.open = true, false
+	}
+}
+
+// commitVerbs end a transaction by committing it. ROLLBACK is not among
+// them: it puts the catalog back as it was before the transaction, which
+// is what the pool — and so the relist that ran when the DDL did — saw.
+var commitVerbs = map[string]bool{"commit": true, "end": true}
+
+// landRun installs a run's outcome. eff is what its statements may have
+// done (runEffects), for the sidebar: a list re-read when it changed the
+// catalog (relistAfterRunLocked), otherwise a recount when it changed rows
+// (recountLocked).
+func (w *Workspace) landRun(ev *RunDone, gen int, eff runEffects) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if gen != w.runGen {
 		ev.Stale = true // a straggler from a run that was already written off
 		return
 	}
-	if wrote {
+	// the relist is decided first: its landing counts the list it reads,
+	// so a recount alongside it would only count the old list, to be
+	// canceled when the relist lands (cancelCatalogWorkLocked)
+	ev.Relist = w.relistAfterRunLocked(ev.Conn, eff)
+	if eff.wrote {
 		ev.Wrote = true
-		ev.Counts = w.recountLocked(ev.Conn)
+		if ev.Relist == nil {
+			ev.Counts = w.recountLocked(ev.Conn)
+		}
 	}
 	w.dropCompletionsAfterRunLocked(ev)
 	ev.Elapsed = w.endRunLocked()
@@ -441,6 +488,64 @@ func (w *Workspace) recountLocked(conn string) Job {
 		return nil
 	}
 	return w.refreshCountsLocked()
+}
+
+// relistAfterRunLocked makes the Job that lists the sidebar's catalog
+// again after a run on conn that may have changed it, or nil. It keeps
+// ddlSinceCommit up to date as it goes. The caller holds mu.
+//
+// DDL inside a transaction is the case to mind. The relist reads through
+// the pool, not the pinned session, so on an engine with transactional DDL
+// (Postgres, SQLite) the table a session's BEGIN … CREATE TABLE made is not
+// there to list until the session's COMMIT — a run with no DDL in it. So
+// a run whose DDL may be left open (runEffects.open) marks conn, and the
+// COMMIT run that follows relists again:
+//
+//	BEGIN                    ·        nothing to relist
+//	CREATE TABLE t (…)       relist   (lists without t)   mark conn
+//	INSERT INTO t …          ·        a recount only
+//	COMMIT                   relist   (lists t)           clear the mark
+//
+// Whether a transaction is open is not tracked — that would take a lexer
+// that understands every engine's implicit commits — so an autocommitted
+// CREATE marks conn as well, and costs one needless relist at the next
+// COMMIT run on conn. MySQL's DDL commits implicitly, so the first relist
+// already lists it there. A ROLLBACK leaves the mark: one stray relist at
+// a later COMMIT, for not tracking ROLLBACK TO SAVEPOINT, which leaves the
+// transaction (and maybe its DDL) open.
+func (w *Workspace) relistAfterRunLocked(conn string, eff runEffects) Job {
+	pending := w.ddlSinceCommit == conn
+	switch {
+	case eff.open:
+		w.ddlSinceCommit = conn
+	case eff.committed && pending:
+		w.ddlSinceCommit = ""
+	}
+	if !eff.catalog && !(eff.committed && pending) {
+		return nil
+	}
+	return w.relistLocked(conn)
+}
+
+// relistLocked starts the sidebar's re-read of conn's catalog: a Refresh
+// (same pick, same session, the Manager's row counts dropped) that lands
+// in quieter words (kindRelist, see landConnect). It returns nil — no
+// relist — when the sidebar is not showing conn's tables (the run's
+// connection was left meanwhile, or its catalog never loaded: the driver
+// has no catalog query, or the connect's read failed and the user has a
+// Refresh for that), or while a connect is in flight, whose read is about
+// to replace the list anyway and must not be canceled by this one. The
+// caller holds mu.
+//
+// Only this workspace's sidebar is relisted. Another on the same Manager
+// (dbc web's other tabs) keeps its list until its own Refresh — as it
+// would for DDL any other client ran.
+func (w *Workspace) relistLocked(conn string) Job {
+	if conn != w.active || w.catalog == nil || w.connCancel != nil {
+		return nil
+	}
+	w.mgr.ForgetRowCounts(conn)
+	return w.connectLocked(conn, w.refreshPickLocked(), kindRelist).Job
 }
 
 // Recount refreshes the sidebar's row counts after another workspace's run

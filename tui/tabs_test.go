@@ -87,6 +87,27 @@ func TestTabBackgroundRunLandsInItsTab(t *testing.T) {
 	}
 }
 
+// A DDL run that lands while its tab is in the background starts its
+// relist at once rather than on the user's return — until it lands, the
+// tab's workspace is mid-connect, refusing a Refresh — and the tab comes
+// back to the new table listed.
+func TestTabBackgroundDDLRelistsAtOnce(t *testing.T) {
+	m := newTestModel(t)
+	m.editor.SetText("CREATE TABLE aaa_background (id INTEGER)")
+	run := m.runQuery()
+
+	key(t, m, "alt+t")
+	drive(t, m, nil, run)
+	if _, connecting := m.tabs[0].ws.Connecting(); connecting {
+		t.Fatal("tab 1's relist waits for the user's return: its workspace is still mid-connect")
+	}
+
+	key(t, m, "alt+1")
+	if len(m.tables.items) == 0 || m.tables.items[0].data.(string) != "aaa_background" {
+		t.Fatalf("back on tab 1: first table %+v, want aaa_background", m.tables.items[0])
+	}
+}
+
 // ⌥W closes the tab on screen, asking first when its session may hold a
 // transaction; the last tab stays.
 func TestTabClose(t *testing.T) {

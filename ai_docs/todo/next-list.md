@@ -99,22 +99,6 @@ ten session docs in `ai_docs/claude_sessions/`
   with result tabs that is now a small step (placeLocked per statement),
   but it would interact with the cap and with "a run replaces its tab".
 
-- **N-149** · raised `2026-1007-1347-connection-refresh` · value medium
-  The sidebar does not relist after DDL run in dbc (CREATE / DROP / ALTER /
-  RENAME of a table). The completion cache is dropped already
-  (`dropCompletionsAfterRunLocked`), but the table list waits for the
-  connections menu's Refresh. Could start the same catalog re-read
-  (`connectLocked(…, refresh)`, keeping the pick and the session) after a
-  run whose statements include a DDL verb, or a script. Other query tabs on
-  the same connection keep their stale list either way, as they do for row
-  counts until their own recount.
-  Updated `2026-1007-1423-script-ddl-log`: a script now reports each DDL
-  statement as it runs (`sdb.S.logDDL`, classified by `sqlsplit.IsDDL`), so
-  "or a script" can narrow to a script that ran DDL. `IsDDL` counts
-  TRUNCATE/GRANT/REVOKE but not ATTACH/DETACH; `workspace.ddlVerbs` is the
-  reverse. They answer different questions (DDL vs catalog-changing), so
-  check which this needs before sharing one.
-
 - **N-152** · raised `2026-1007-1553-pg-copy-move-rows` · value low
   A write `Query` from MySQL (MariaDB), SQLite or bytdb commits as it runs,
   before the load, so a move whose load fails loses its rows there. Only
@@ -362,6 +346,22 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-149** · raised `2026-1007-1347-connection-refresh` · value medium
+  The sidebar does not relist after DDL run in dbc (CREATE / DROP / ALTER /
+  RENAME of a table). The completion cache is dropped already
+  (`dropCompletionsAfterRunLocked`), but the table list waits for the
+  connections menu's Refresh. Could start the same catalog re-read
+  (`connectLocked(…, refresh)`, keeping the pick and the session) after a
+  run whose statements include a DDL verb, or a script. Other query tabs on
+  the same connection keep their stale list either way, as they do for row
+  counts until their own recount.
+  Updated `2026-1007-1423-script-ddl-log`: a script now reports each DDL
+  statement as it runs (`sdb.S.logDDL`, classified by `sqlsplit.IsDDL`), so
+  "or a script" can narrow to a script that ran DDL. `IsDDL` counts
+  TRUNCATE/GRANT/REVOKE but not ATTACH/DETACH; `workspace.ddlVerbs` is the
+  reverse. They answer different questions (DDL vs catalog-changing), so
+  check which this needs before sharing one.
+  closed 2026-10-07 (from the cats-todo backlog): a run that may have changed the catalog now relists the sidebar on its own (`RunDone.Relist`, a `connectLocked(…, kindRelist)` re-read: Refresh's pick and session, quieter words, the status bar left to the run). The classifier is neither `IsDDL` nor a copy: `workspace.ddlVerbs` moved to `sqlsplit.ChangesCatalog` (catalog-changing: with ATTACH/DETACH, without TRUNCATE/GRANT/REVOKE), which completion's drop and the relist now share. A script relists only when it ran such a statement on its connection (`sdb.S.CatalogChanged`, noted where `logDDL` sees every statement, log on or off). Found on the way: DDL inside a transaction is invisible to the pool the relist reads through, so the COMMIT (or END) run after DDL relists again (`ddlSinceCommit`). Also a re-read during a schema pick now asks for the pick in flight rather than undoing it, Refresh included. The TUI starts a background tab's relist at once (else the tab stayed mid-connect until revisited), and dbc web's page keeps the run's status on a `relisted` "conn". Other tabs on the connection still keep their list until their own Refresh. Tests in sqlsplit, workspace, tui (one fails without the background-tab start) and web; web e2e passes.
 - **N-144** · raised `2026-1007-1156-pg-copy-hardening` · value low
   A Postgres `Query` that is a `DELETE … RETURNING` (a "move rows" copy)
   fails on the direct path with a bare syntax error. `describe` wraps it

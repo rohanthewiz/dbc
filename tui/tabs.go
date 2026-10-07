@@ -192,6 +192,13 @@ func (m *Model) routeTab(tm tabMsg) tea.Cmd {
 	case *workspace.RunDone:
 		if !ev.Stale {
 			t.done, t.failed = true, ev.Err != nil
+			// the relist starts now, not on the user's return: until it
+			// lands the tab's workspace is mid-connect (Connecting), and
+			// the tab would come back to a stale list with a refresh
+			// refused. Its *Connected is queued behind this RunDone and
+			// replayed after it, as it would have drawn live.
+			cmd = m.tagFor(t, job(ev.Relist))
+			ev.Relist = nil
 		}
 	case *workspace.ExplainDone:
 		if !ev.Stale {

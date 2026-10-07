@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/explain"
@@ -45,6 +46,12 @@ type S struct {
 	// is called and never cleared, so it needs no lock: a script's own
 	// goroutines all start after the write.
 	ddl bool
+	// catalog is the connections the session ran a catalog-changing
+	// statement on (sqlsplit.ChangesCatalog), for CatalogChanged. It is
+	// kept whether or not the DDL log is on, and under its own lock: a
+	// script may run statements from goroutines of its own.
+	catMu   sync.Mutex
+	catalog map[string]bool
 }
 
 // New builds a script session. show receives results pushed via Show;
@@ -98,18 +105,49 @@ func (s *S) LogDDL() *S {
 // pasted in whole), and a CREATE after an INSERT is still a CREATE. Each
 // line is the statement as written, only trimmed — a multi-line CREATE
 // TABLE keeps its shape, and both UIs' logs draw that as one entry.
+//
+// It is also where the session notes a catalog change on conn
+// (CatalogChanged), log or no log: both doors a statement goes through —
+// run, and the etl Trace of a Copy's or Writer's setup — come here. It is
+// noted before the statement runs, so a failed one counts too: costing a
+// sidebar one needless relist, where the other way round (a multi-statement
+// Exec that failed after its CREATE) would leave it stale.
 func (s *S) logDDL(conn, stmt string) bool {
-	if !s.ddl {
-		return false
-	}
 	logged := false
 	for _, st := range sqlsplit.Split(stmt) {
-		if sqlsplit.IsDDL(st.Text) {
+		if sqlsplit.ChangesCatalog(st.Text) {
+			s.noteCatalog(conn)
+		}
+		if s.ddl && sqlsplit.IsDDL(st.Text) {
 			s.Print("DDL %s: %s", conn, st.Text)
 			logged = true
 		}
 	}
 	return logged
+}
+
+// noteCatalog records that the session ran a catalog-changing statement on
+// conn.
+func (s *S) noteCatalog(conn string) {
+	s.catMu.Lock()
+	defer s.catMu.Unlock()
+	if s.catalog == nil {
+		s.catalog = map[string]bool{}
+	}
+	s.catalog[conn] = true
+}
+
+// CatalogChanged reports whether the session has run a statement that may
+// change conn's catalog (sqlsplit.ChangesCatalog: CREATE, ALTER, DROP,
+// RENAME, COMMENT, ATTACH, DETACH) — through Query, Exec, or what Copy and
+// Writer run to ready a destination. The host asks it once the script has
+// returned, to decide whether the sidebar should list the tables again.
+// Statements run through DB's raw handle are out of its sight, as they are
+// out of the DDL log's.
+func (s *S) CatalogChanged(conn string) bool {
+	s.catMu.Lock()
+	defer s.catMu.Unlock()
+	return s.catalog[conn]
 }
 
 // Ctx returns the session's context. Long-running scripts can select on

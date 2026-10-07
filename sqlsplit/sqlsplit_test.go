@@ -301,6 +301,33 @@ func TestIsDDL(t *testing.T) {
 	}
 }
 
+// ChangesCatalog shares IsDDL's lexing but not its verbs: TRUNCATE, GRANT
+// and REVOKE leave the table list as it was, and ATTACH / DETACH change the
+// schema list.
+func TestChangesCatalog(t *testing.T) {
+	cases := map[string]bool{
+		"CREATE TABLE t (id int)":                   true,
+		"-- why\n/* how */ ALTER TABLE t ADD c int": true,
+		"DROP VIEW v":                                 true,
+		"RENAME TABLE a TO b":                         true,
+		"COMMENT ON TABLE t IS 'x'":                   true,
+		"ATTACH DATABASE 'x.db' AS x":                 true,
+		"detach database x":                           true,
+		"TRUNCATE TABLE t":                            false,
+		"GRANT SELECT ON t TO r":                      false,
+		"REVOKE ALL ON t FROM r":                      false,
+		"INSERT INTO t VALUES (1)":                    false,
+		"COMMIT":                                      false,
+		"DO $$ BEGIN CREATE TABLE t (id int); END $$": false,
+		"": false,
+	}
+	for in, want := range cases {
+		if got := ChangesCatalog(in); got != want {
+			t.Errorf("ChangesCatalog(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestVerbs(t *testing.T) {
 	cases := []struct {
 		in   string

@@ -988,8 +988,10 @@
         markActive(d.active, "");
         if (!d.active) { els.stateful.hidden = true; t.stateful = false; } // its session goes with it
         showSide(d);
+        // a relist after a run's DDL leaves the status to the run (its
+        // result summary): the user asked for the run, not the re-read
         if (d.status) setStatus(d.status);
-        else if (!state.busy) setStatus("ready on " + d.active);
+        else if (!state.busy && !d.relisted) setStatus("ready on " + d.active);
         if (d.changed) {
           saveTab(t);
           // the results pane and the log follow the connection: its own

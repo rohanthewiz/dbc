@@ -105,6 +105,10 @@ type Connected struct {
 	Schema    string
 	Err       error // the connect's failure (db.ErrCanceled when stopped); nil on success
 	Changed   bool  // the active connection moved to Name
+	// Relisted reports the re-read a run's DDL started (RunDone.Relist),
+	// not one the user asked for: the status bar belongs to the run that
+	// started it, so a UI leaves it as it is rather than saying "ready".
+	Relisted bool
 	// Left is the connection Changed moved away from, "" when there was
 	// none (the first connect, or one after a Disconnect). A UI that knows
 	// no other workspace is on it may close its pool once Release has run
@@ -154,6 +158,17 @@ type RunDone struct {
 	// Wrote, and the sidebar shows counts (Workspace.ShowRowCounts). Its
 	// event is a *RowCounts, as Connected.Counts's is.
 	Counts Job
+	// Relist, when non-nil, reads the sidebar's catalog again — databases,
+	// schemas, tables — after a run that may have changed it: a statement
+	// that changes the catalog (sqlsplit.ChangesCatalog), a script that ran
+	// one on its connection (sdb.S.CatalogChanged), or the COMMIT that ends
+	// a transaction one ran in. It is a Refresh in all but its words
+	// (relistLocked), its event a *Connected with Changed false, and it
+	// counts the rows of the list it lands — so Counts is nil whenever it
+	// is set. A UI must run it whenever it is set, as it does Counts: until
+	// it lands, the workspace is mid-connect (Connecting), which refuses a
+	// Refresh and a schema pick.
+	Relist Job
 }
 
 // ExplainDone lands an explain.

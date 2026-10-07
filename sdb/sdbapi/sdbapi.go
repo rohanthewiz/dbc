@@ -117,10 +117,11 @@ const (
 
 // hostOnly are the S methods a script does not call: the host builds the
 // session (New), attaches the stop (WithContext), turns on the DDL log
-// (LogDDL) and releases what Run left open (Release). Offering them in
+// (LogDDL), releases what Run left open (Release) and asks afterwards
+// whether the sidebar needs relisting (CatalogChanged). Offering them in
 // completion would invite a script to break its own run. TestHostOnlyExist
 // keeps the list in step with sdb.
-var hostOnly = []string{"New", "WithContext", "LogDDL", "Release"}
+var hostOnly = []string{"New", "WithContext", "LogDDL", "Release", "CatalogChanged"}
 
 // connParams are the parameter names that mean "a connection name".
 var connParams = []string{"conn", "src", "dst"}

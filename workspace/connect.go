@@ -111,19 +111,31 @@ func (w *Workspace) ConnectPick(name string, pick SchemaPick) Start {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.connectLocked(name, pick, false)
+	return w.connectLocked(name, pick, kindConnect)
 }
+
+// connectKind is what a connectLocked is for. The work is the same for
+// all three — dial, then read the databases, schemas and tables — and the
+// kind decides only how it lands (landConnect): what it says, and whether
+// a re-read that could not list the tables keeps the list shown.
+type connectKind int
+
+const (
+	kindConnect connectKind = iota // a connect proper (ConnectPick)
+	kindRefresh                    // the user's re-read of the active connection (Refresh)
+	kindRelist                     // the re-read a run's DDL starts (relistLocked): quieter
+)
 
 // connectLocked is ConnectPick's work, under mu: it supersedes whatever
 // connect is in flight and returns the Job that dials and reads the
-// catalog. refresh marks the re-read of the active connection (Refresh),
-// which lands differently: see landConnect.
+// catalog. kind marks a re-read of the active connection (Refresh, or the
+// relist after a run's DDL), which lands differently: see landConnect.
 //
 // It is split out so Refresh can check what is active and start the
 // re-read under one hold of mu — released between the two, a connect to
 // another connection could start in the gap, and the refresh would then
 // cancel it and pull the tab back onto the connection it was leaving.
-func (w *Workspace) connectLocked(name string, pick SchemaPick, refresh bool) Start {
+func (w *Workspace) connectLocked(name string, pick SchemaPick, kind connectKind) Start {
 	driver := ""
 	if cc, ok := w.cfg.ConnByName(name); ok {
 		driver = cc.Driver
@@ -160,7 +172,7 @@ func (w *Workspace) connectLocked(name string, pick SchemaPick, refresh bool) St
 			ev.Notes = append(ev.Notes, notes...)
 			tcancel()
 		}
-		w.landConnect(ev, gen, refresh)
+		w.landConnect(ev, gen, kind)
 		return ev
 	}
 	return Start{Job: job}
@@ -203,7 +215,7 @@ func (w *Workspace) Refresh() (Start, error) {
 		return Start{}, refuse(NoConnection, Warn, "not connected — nothing to refresh")
 	}
 	w.mgr.ForgetRowCounts(name)
-	st := w.connectLocked(name, w.refreshPickLocked(), true)
+	st := w.connectLocked(name, w.refreshPickLocked(), kindRefresh)
 	st.Notes = append([]Note{notef(Info, "refreshing %s…", name)}, st.Notes...)
 	return st, nil
 }
@@ -214,8 +226,16 @@ func (w *Workspace) Refresh() (Start, error) {
 // where every list is "" — so the schema count tells them apart: with
 // several, "" was the "all schemas" pick and stays it; otherwise the
 // default pick, which on such a database lists "" again. The caller holds mu.
+//
+// A schema pick still loading is what the sidebar is about to list, so it
+// is the one asked for: the re-read cancels the pick's load
+// (cancelCatalogWorkLocked), and re-reading w.schema instead would undo
+// the user's pick — the relist after a run's DDL can start mid-pick
+// without the user having asked for anything.
 func (w *Workspace) refreshPickLocked() SchemaPick {
 	switch {
+	case w.schemaCancel != nil:
+		return w.schemaPick
 	case w.schema != "":
 		return SchemaPick{Name: w.schema}
 	case len(w.schemas) > 1:
@@ -401,7 +421,12 @@ func defaultSchema(schemas []db.SchemaInfo) string {
 // "A list shown" matters for a driver with no catalog query at all
 // (db.TablesQuery fails): its Catalog is always nil, and its refresh is
 // then only the re-dial, landing as a connect does.
-func (w *Workspace) landConnect(ev *Connected, gen int, refresh bool) {
+//
+// A relist (kindRelist, after a run's DDL: Workspace.relistLocked) lands
+// as a refresh does, in its own words ("relisted"), and leaves the status
+// bar alone: the user asked for the run, not for this, and the bar's
+// summary of the run's result must not be replaced by the re-read's.
+func (w *Workspace) landConnect(ev *Connected, gen int, kind connectKind) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if gen != w.connGen {
@@ -409,10 +434,19 @@ func (w *Workspace) landConnect(ev *Connected, gen int, refresh bool) {
 		return
 	}
 	w.connCancel = nil
+	// the re-read's noun for the words below, and its status setter: a
+	// relist says nothing to the status bar (see above)
+	reread := kind != kindConnect
+	noun := "refresh"
+	status := func(s string) { ev.Status = s }
+	if kind == kindRelist {
+		noun = "relist"
+		status = func(string) {}
+	}
 	if errors.Is(ev.Err, db.ErrCanceled) {
-		if refresh {
-			ev.Notes = append(ev.Notes, notef(Warn, "refresh of %s canceled", ev.Name))
-			ev.Status = "refresh canceled"
+		if reread {
+			ev.Notes = append(ev.Notes, notef(Warn, "%s of %s canceled", noun, ev.Name))
+			status(noun + " canceled")
 			return
 		}
 		ev.Notes = append(ev.Notes, notef(Warn, "connect to %s canceled", ev.Name))
@@ -420,18 +454,18 @@ func (w *Workspace) landConnect(ev *Connected, gen int, refresh bool) {
 		return
 	}
 	if ev.Err != nil {
-		if refresh {
-			ev.Notes = append(ev.Notes, notef(Err, "refresh of %s failed: %s", ev.Name, serr.StringFromErr(ev.Err)))
+		if reread {
+			ev.Notes = append(ev.Notes, notef(Err, "%s of %s failed: %s", noun, ev.Name, serr.StringFromErr(ev.Err)))
 			return
 		}
 		ev.Notes = append(ev.Notes, notef(Err, "connect failed: %s", serr.StringFromErr(ev.Err)))
 		return
 	}
-	if refresh && ev.Catalog == nil && w.catalog != nil {
+	if reread && ev.Catalog == nil && w.catalog != nil {
 		// loadTables has already said why the tables could not be read;
 		// this says what the user is looking at meanwhile
-		ev.Notes = append(ev.Notes, notef(Warn, "%s not refreshed: the tables listed before stay", ev.Name))
-		ev.Status = "refresh failed"
+		ev.Notes = append(ev.Notes, notef(Warn, "%s not %sed: the tables listed before stay", ev.Name, noun))
+		status(noun + " failed")
 		return
 	}
 	ev.Changed = ev.Name != w.active
@@ -457,9 +491,13 @@ func (w *Workspace) landConnect(ev *Connected, gen int, refresh bool) {
 		// the meantime is already on Name and its session is left alone
 		ev.Release = w.releaseJob(ev.Name)
 	}
-	if refresh {
+	switch kind {
+	case kindRefresh:
 		ev.Notes = append(ev.Notes, notef(Ok, "refreshed %s%s", ev.Name, refreshedWhat(ev)))
 		ev.Status = "refreshed"
+	case kindRelist:
+		ev.Notes = append(ev.Notes, notef(Info, "relisted %s after the DDL%s", ev.Name, refreshedWhat(ev)))
+		ev.Relisted = true
 	}
 }
 
@@ -544,7 +582,7 @@ func (w *Workspace) PickSchema(pick SchemaPick) (Start, error) {
 	w.connGen++
 	gen := w.connGen
 	ctx, cancel := context.WithCancel(context.Background())
-	w.schemaCancel = cancel
+	w.schemaCancel, w.schemaPick = cancel, pick
 	schemas, mgr, driver := w.schemas, w.mgr, cc.Driver
 
 	job := func() Event {

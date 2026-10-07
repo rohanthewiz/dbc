@@ -277,13 +277,17 @@ func (m *Model) tick(msg tickMsg) tea.Cmd {
 
 // runDone draws a run's outcome, which the workspace has already landed.
 // A run that may have changed rows comes with a recount of the sidebar's
-// row counts (RunDone.Counts), started whatever the outcome.
+// row counts (RunDone.Counts), and one that may have changed the catalog
+// with a re-read of the sidebar's list instead (RunDone.Relist, which
+// counts the list it lands) — either started whatever the outcome. A run
+// that landed while its tab was in the background had its relist started
+// then (routeTab), and comes here with Relist nil.
 func (m *Model) runDone(ev *workspace.RunDone) tea.Cmd {
 	if ev.Stale {
 		return nil // a straggler from a run that was already written off
 	}
 	m.catsAfterTransition()
-	recount := m.tag(job(ev.Counts))
+	recount := tea.Batch(m.tag(job(ev.Counts)), m.tag(job(ev.Relist)))
 	// The run landed in its own connection's result set (workspace
 	// results.go), and its lines belong in that connection's log. When the
 	// tab has switched away meanwhile, neither is on screen: nothing is

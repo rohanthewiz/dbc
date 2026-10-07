@@ -63,6 +63,7 @@
     rowCounts: $("row-counts"), rowCountsBox: $("row-counts-box"),
     tableFilter: $("table-filter"), tableSchema: $("table-schema"), schemaList: $("schema-list"),
     dbFilter: $("db-filter"), tableDb: $("table-db"), dbList: $("db-list"),
+    findFilter: $("find-filter"), tableFind: $("table-find"),
     active: $("active-conn"), stateful: $("stateful"), busy: $("busy"),
     run: $("run"), runAll: $("run-all"), stop: $("stop"), history: $("history-btn"), scripts: $("scripts-btn"),
     check: $("check-btn"), save: $("save-btn"), rsets: $("rsets"),
@@ -197,6 +198,7 @@
   //	┌ Tables · 12 / 340 ───── ERD ┐
   //	│ db     [analytics_______] │  #db-filter: hidden with one database
   //	│ schema [sales___________] │  #table-filter: hidden with one schema
+  //	│ table  [ord_____________] │  #find-filter: narrows #tables as you type
   //	│ orders (~1.2M)            │  #tables: the picked schema's tables
   //	└───────────────────────────┘
   let side = { tables: [] };
@@ -212,7 +214,11 @@
     drawRowCountsBox();
     dbPicker.draw();
     drawSchemaFilter();
+    drawFindBox();
     drawTables();
+    // last: a database picked with Tab moves the keyboard on to the boxes
+    // just drawn for it
+    dbPicker.landed();
   }
 
   // ── the "rows" box ─────────────────────────────────────────────────────
@@ -274,16 +280,21 @@
   }
 
   // drawTables (re)draws the list: allTables narrowed to the picked
-  // schema. The count beside the heading says "· shown / all" while a
-  // schema is picked, so a narrowed list is never mistaken for the whole.
+  // schema, then to what the find box holds. The count beside the heading
+  // says "· shown / all" while a schema is picked, so a narrowed list is
+  // never mistaken for the whole; it counts the schema's tables, not the
+  // find's matches — the find box's own accent border marks that
+  // narrowing, as the schema box's marks a pick.
   function drawTables() {
     const pick = schemaPick();
-    const shown = side.navigable || pick === null ? allTables : allTables.filter((t) => t.schema === pick);
+    const inPick = side.navigable || pick === null ? allTables : allTables.filter((t) => t.schema === pick);
     const total = schemaTotal();
     els.tables.replaceChildren();
     // uncounted (total null): the shown tables alone, with no "/ all"
-    els.tableCount.textContent = total === null ? (shown.length ? "· " + shown.length : "")
-      : !total ? "" : pick === null ? "· " + total : "· " + shown.length + " / " + total;
+    els.tableCount.textContent = total === null ? (inPick.length ? "· " + inPick.length : "")
+      : !total ? "" : pick === null ? "· " + total : "· " + inPick.length + " / " + total;
+    const find = els.tableFind.value.trim();
+    els.findFilter.classList.toggle("on", find !== "");
     if (loadingSchema) {
       els.tables.append(el("li", "none", "loading " + schemaLabel(pick === null ? "all schemas" : pick) + "…"));
       return;
@@ -293,11 +304,18 @@
       els.tables.append(el("li", { class: "none", title: why }, why));
       return;
     }
-    if (!shown.length) {
+    if (!inPick.length) {
       els.tables.append(el("li", "none", "no tables"));
       return;
     }
+    const shown = findTables(inPick, find);
+    if (!shown.length) {
+      els.tables.append(el("li", "none", "no table matches “" + find + "” — Esc clears"));
+      return;
+    }
     for (const t of shown) {
+      // tabindex -1: focusable by script and click, but not a Tab stop —
+      // the list has one, its selected row (selectRow), set below
       const li = el("li", { class: t.view ? "view" : "", tabindex: "-1", "data-name": t.qname });
       // the schema prefix is muted, and left off altogether while the
       // list is narrowed to one schema: every row would repeat it.
@@ -310,7 +328,108 @@
       setRowCount(li, t);
       els.tables.append(li);
     }
+    // The first row is the list's Tab stop until another is selected. While
+    // a find is typed, or the keyboard is in its box (a schema just picked
+    // with Tab, its tables landing now), it is also selected: the best
+    // match, which Enter in the box previews.
+    const first = els.tables.firstElementChild;
+    first.tabIndex = 0;
+    if (find !== "" || document.activeElement === els.tableFind) selectRow(first, false);
   }
+
+  // ── finding a table ────────────────────────────────────────────────────
+  // The find box under the pickers is the tables list's own filter: the
+  // level below the schema, and where a schema picked with Tab (or a
+  // second Enter) leaves the keyboard. Typing narrows the list in place
+  // and selects the first match; ↑↓ and PgUp/PgDn move the selection
+  // while the keyboard stays in the box, so more typing still narrows;
+  // Enter previews the selected table, as Enter on its row does; Esc
+  // drops the find, and a second Esc leaves the box. Tab goes on to the
+  // selected row, where c and e are its keys.
+  //
+  //	[schema box] ─Tab/Enter─► [find box] ─type─► list narrowed, 1st selected
+  //	                              │ ↑↓ ─► selection moves, keyboard stays
+  //	                              │ Enter ─► preview the selected
+  //	                              └ Tab ─► the selected row (c, e, Enter)
+  //	[a row] ─ a letter, digit, _ $ . - ─► a new find with it
+  //	        ─ /                         ─► the box, the find kept
+
+  // findTables narrows list to the tables whose name has text in it,
+  // ignoring case. As in the pickers, names that start with it come
+  // first, then those that only contain it, so "ord" puts orders above
+  // back_orders, and Enter, on the first, takes the likelier. The
+  // unquoted name is matched, not qname: a quoted "Orders" would
+  // otherwise start with a quote. Text with a dot in it is matched
+  // against schema.name instead ("sales.ord"); without one the schema is
+  // left out, or "ain" would match every table in SQLite's main.
+  function findTables(list, text) {
+    const q = text.trim().toLowerCase();
+    if (!q) return list;
+    const dotted = q.includes(".");
+    const starts = [], contains = [];
+    for (const t of list) {
+      const name = String(t.name || t.qname).toLowerCase();
+      const hay = dotted && t.schema ? t.schema.toLowerCase() + "." + name : name;
+      if (hay.startsWith(q)) starts.push(t);
+      else if (hay.includes(q)) contains.push(t);
+    }
+    return [...starts, ...contains];
+  }
+
+  // drawFindBox shows the box while the tab is on a connection, and
+  // empties it for the sidebar being drawn anew (a connect, a schema's
+  // tables landing, another tab), whose list the old find was not typed
+  // against — unless the keyboard is in it: a schema picked with Tab
+  // moves the keyboard here before its tables land, and what is typed
+  // meanwhile is the find to apply to them.
+  function drawFindBox() {
+    const on = !!state.active && !(state.tab && state.tab.script);
+    els.findFilter.hidden = !on;
+    if (!on || document.activeElement !== els.tableFind) els.tableFind.value = "";
+  }
+
+  // focusTables moves the keyboard on to the tables: into the find box,
+  // the level below a schema as the schema box is below a database.
+  function focusTables() {
+    if (!els.findFilter.hidden) els.tableFind.focus();
+  }
+
+  // refind redraws the list for the find box's text, from its top.
+  function refind() {
+    drawTables();
+    els.tables.scrollTop = 0;
+  }
+
+  els.tableFind.addEventListener("focus", () => {
+    els.tableFind.select(); // typing replaces the last find, as in the pickers
+    // the row Enter would preview, lit while the keyboard is here
+    const li = els.tables.querySelector("li.sel") || els.tables.querySelector("li[data-name]");
+    if (li) selectRow(li, false);
+  });
+  // "input" covers the box's own clear (×) too. Not "search": a search
+  // box fires that on Enter as well, and the redraw would put the
+  // selection back on the first row as Enter previews another.
+  els.tableFind.addEventListener("input", refind);
+  els.tableFind.addEventListener("keydown", (e) => {
+    const step = { ArrowDown: 1, ArrowUp: -1, PageDown: 10, PageUp: -10 }[e.key];
+    if (step) {
+      const rows = [...els.tables.querySelectorAll("li[data-name]")];
+      if (!rows.length) return;
+      e.preventDefault();
+      const at = rows.indexOf(els.tables.querySelector("li.sel"));
+      // nothing selected yet: either arrow starts on the first row
+      const i = at < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, at + step));
+      selectRow(rows[i], false);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const li = els.tables.querySelector("li.sel") || els.tables.querySelector("li[data-name]");
+      if (li) { selectRow(li, false); preview(li.dataset.name); }
+    } else if (e.key === "Escape") {
+      // first press drops the find, a second leaves the box: the pickers' Esc
+      e.preventDefault();
+      if (els.tableFind.value) { els.tableFind.value = ""; refind(); } else els.tableFind.blur();
+    }
+  });
 
   // ── the pickers ────────────────────────────────────────────────────────
   // combo wires one of the sidebar's type-to-filter pickers: a search box
@@ -333,14 +452,19 @@
   //   placeholder() the box's placeholder (shown when label() is "")
   //   narrowed()    whether the pick narrows the list (accent border)
   //   choose(value) act on a pick
-  //   enter()       Enter with the list closed, i.e. just after a pick
+  //   enter()       Enter with the list closed, i.e. just after a pick:
+  //                 move on to the level below
+  //   advance()     the same move, after a pick made with Tab
   // Matching ignores case; rows whose label starts with the text come
   // before those that only contain it, so "sa" lists sales above
   // analytics_sandbox — once there is text, Enter takes the first match,
-  // and so does Tab, completing to it.
+  // and so does Tab, which then moves on: db → schema → the tables' find.
   function combo(o) {
     const { input, list, wrap } = o;
     let rows = [], hi = -1;
+    // moved: the arrows have walked the highlight since the list opened,
+    // so it is on a row the user chose rather than the one it opened on
+    let moved = false;
 
     function show() {
       input.value = o.label();
@@ -362,6 +486,7 @@
       const lead = q ? null : o.lead();
       rows = lead ? [lead, ...starts] : [...starts, ...contains];
       hi = rows.length ? 0 : -1;
+      moved = false;
       if (fresh) hi = Math.max(0, rows.findIndex((r) => r.value === o.current()));
 
       list.replaceChildren();
@@ -425,28 +550,34 @@
         if (!rows.length) return;
         const step = e.key === "ArrowDown" ? 1 : -1;
         hi = (hi + step + rows.length) % rows.length;
+        moved = true;
         mark();
       } else if (e.key === "PageDown" || e.key === "PageUp") {
         if (!isOpen || !rows.length) return;
         e.preventDefault();
         const step = e.key === "PageDown" ? 10 : -10;
         hi = Math.min(rows.length - 1, Math.max(0, hi + step));
+        moved = true;
         mark();
       } else if (e.key === "Enter") {
         e.preventDefault();
         if (isOpen && hi >= 0) pick(hi);
         else if (!isOpen && o.enter) o.enter();
-      } else if (e.key === "Tab" && !e.shiftKey && isOpen && hi >= 0 && typed()) {
-        // Tab completes to the highlighted row, as a shell's would. Left to
-        // the browser, Tab moves focus on, and the blur below puts the box
-        // back to the pick standing before — which reads as Tab choosing
-        // that other schema. Focus stays in the box (as after Enter), so a
-        // second Tab, with the list closed, moves on as usual.
+      } else if (e.key === "Tab" && !e.shiftKey && isOpen && hi >= 0 && (typed() || moved)) {
+        // Tab takes the highlighted row, as a shell completes to a match,
+        // and moves on to the level below (o.advance): a schema picked
+        // this way leaves the keyboard in the tables' find box, ready to
+        // type a table's name. Left to the browser, Tab would move focus
+        // on, and the blur below would put the box back to the pick
+        // standing before — which reads as Tab choosing that other schema.
         //
-        // Only once something is typed: on a box just focused the list is
-        // open on the current pick, and Tab there should still move focus.
+        // Only once something is typed or the arrows have moved the
+        // highlight: on a box just focused the list is open on the
+        // current pick, and Tab there is the browser's, moving focus to
+        // the next box down without picking anything.
         e.preventDefault();
         pick(hi);
+        if (o.advance) o.advance();
       } else if (e.key === "Escape") {
         // first press drops the typing, a second leaves the box
         e.preventDefault();
@@ -544,6 +675,11 @@
     const v = name === null ? "" : "=" + name;
     schemaPicks[state.active] = v;
     saveLayout({ [PICK_KEY + state.active]: v });
+    // another schema is another list: a find typed against the last one
+    // goes with it. Here, not in drawFindBox, which keeps the box's text
+    // while the keyboard is in it — and a pick made with Tab puts the
+    // keyboard there before this schema's tables land.
+    if (name !== schemaPick()) els.tableFind.value = "";
     if (!side.navigable) {
       picked = name;
       drawTables();
@@ -575,11 +711,12 @@
     placeholder: () => "all " + schemaCounts.size + " schemas · type to filter",
     narrowed: () => schemaPick() !== null,
     choose: chooseSchema,
-    // with the list closed (just picked), Enter moves on to the tables
-    enter: () => {
-      const first = els.tables.querySelector("li[data-name]");
-      if (first) pickTable(first);
-    },
+    // with the list closed (just picked), Enter moves on to the tables,
+    // and a pick made with Tab does at once. On a navigable server the
+    // tables may still be loading: the find box takes what is typed
+    // meanwhile, and applies it when they land (drawFindBox)
+    enter: focusTables,
+    advance: focusTables,
     // the box's × shows every schema again, where that is on offer
     cleared: () => { if (schemaPick() !== null && offersAll()) chooseSchema(null); },
   });
@@ -593,6 +730,19 @@
   // database its DSN opens, "<conn>/<database>" for the others — which
   // closes the session on the database left, as any switch does.
   const dbPicker = (() => {
+    // moveOn is the level below a database: the schema box, or, with none
+    // shown (MySQL, a one-schema database), the tables' find box
+    const moveOn = () => {
+      if (!els.tableFilter.hidden) els.tableSchema.focus();
+      else focusTables();
+    };
+    // chosen is the connection the last pick named; awaiting, the one a
+    // pick made with Tab is connecting to, whose sidebar — drawn when the
+    // connect lands (showSide → landed) — the keyboard then moves on into.
+    // Not at once: until then the boxes below are the old database's, and
+    // the redraw would wipe what was typed in them, or hide the box the
+    // keyboard is in.
+    let chosen = null, awaiting = null;
     const p = combo({
       input: els.tableDb, list: els.dbList, wrap: els.dbFilter,
       idPrefix: "db-opt-", none: "no database matches",
@@ -602,16 +752,18 @@
       label: () => ((side.databases || []).find((d) => d.current) || { name: "" }).name,
       placeholder: () => (side.databases || []).length + " databases · type to filter",
       narrowed: () => false,
-      choose: (conn) => { if (conn !== state.active) connect(conn); },
+      choose: (conn) => {
+        chosen = conn;
+        if (conn !== state.active) connect(conn);
+      },
       // Enter moves on to the next level down: the schema picker, or, with
-      // none shown (MySQL, a one-schema database), the tables themselves
-      enter: () => {
-        if (!els.tableFilter.hidden) {
-          els.tableSchema.focus();
-          return;
-        }
-        const first = els.tables.querySelector("li[data-name]");
-        if (first) pickTable(first);
+      // none shown (MySQL, a one-schema database), the tables' find box
+      enter: moveOn,
+      // a pick made with Tab: the database already on moves on now,
+      // another once its connect lands
+      advance: () => {
+        if (chosen === state.active) moveOn();
+        else awaiting = chosen;
       },
     });
     return {
@@ -619,6 +771,16 @@
         els.dbFilter.hidden = (side.databases || []).length < 2;
         p.close();
         p.show();
+      },
+      // landed is called once a sidebar is drawn. The first after a Tab
+      // pick settles it: the connection picked moves the keyboard on,
+      // provided it is still in the database box (it has not gone
+      // elsewhere meanwhile); anything else — a failed connect, which
+      // leaves the tab where it was — drops the move.
+      landed() {
+        const to = awaiting;
+        awaiting = null;
+        if (to !== null && to === state.active && document.activeElement === els.tableDb) moveOn();
       },
     };
   })();
@@ -655,10 +817,22 @@
     }
   }
 
-  function pickTable(li) {
+  // selectRow makes li the list's selected row: the one Enter, c and e
+  // act on, and the list's one Tab stop (a roving tabindex), so Tab from
+  // the find box lands on it and Shift+Tab from it goes back. focus moves
+  // the keyboard to the row; without it the keyboard stays where it is
+  // (the find box) and the row is only scrolled into view.
+  function selectRow(li, focus) {
     for (const x of els.tables.querySelectorAll("li.sel")) x.classList.remove("sel");
+    for (const x of els.tables.querySelectorAll('li[tabindex="0"]')) x.tabIndex = -1;
     li.classList.add("sel");
-    li.focus();
+    li.tabIndex = 0;
+    if (focus) li.focus();
+    else li.scrollIntoView({ block: "nearest" });
+  }
+
+  function pickTable(li) {
+    selectRow(li, true);
   }
 
   els.tables.addEventListener("click", (e) => {
@@ -683,7 +857,23 @@
     }
     if (e.key === "ArrowDown") next = li.nextElementSibling;
     else if (e.key === "ArrowUp") next = li.previousElementSibling;
-    if (next) { e.preventDefault(); pickTable(next); }
+    if (next) { e.preventDefault(); pickTable(next); return; }
+    // Typing on a row finds a table: / goes to the find box, keeping its
+    // find, and any other character a table name is made of starts a new
+    // find with it — c and e excepted, the row's own keys (above). The
+    // character is put in by hand rather than left to land in the box
+    // the focus moves to: whether a keypress follows focus moved during
+    // its keydown is the browser's call, and WKWebView's may differ.
+    if (e.ctrlKey || e.metaKey || e.altKey || els.findFilter.hidden) return;
+    if (e.key === "/") {
+      e.preventDefault();
+      focusTables();
+    } else if (/^[\p{L}\p{N}_$.-]$/u.test(e.key)) {
+      e.preventDefault();
+      els.tableFind.focus(); // selects the old find (focus listener) …
+      els.tableFind.value = e.key; // … which this replaces, caret at its end
+      refind();
+    }
   });
   document.getElementById("erd-all").addEventListener("click", () => dbc.erd.open(""));
   els.tables.addEventListener("contextmenu", (e) => {
@@ -2665,7 +2855,10 @@
       ["‹ beside Connections · Ctrl+B", "hide it; the › tab on the left edge brings it back"],
       ["drag its right edge", "resize it (double-click the edge: the default width)"],
       ["drag the bar above Tables", "share the column between the lists"],
+      ["db · schema box: type, then Enter · Tab", "pick it · pick it and move on: to the schema box, to the table box"],
+      ["table box: type", "find a table — the list narrows as you type; ↑↓ move, Enter previews, Esc clears"],
       ["on a table: Enter · c · e", "preview its rows · show its columns · diagram it and its neighbours (ERD)"],
+      ["on a table: another letter · /", "find a table starting with it · back to the table box"],
       ["ERD beside Tables", "diagram every table and key: PNG, JPEG or Mermaid"],
     ]],
     ["Splitters", [

@@ -199,7 +199,8 @@ func (p Workbench) topbar(b *element.Builder) any {
 //	├ side-hsplit ════════┤
 //	│ TABLES 12  ☐rows ERD│  side-tables: the rest
 //	│ [type a schema…]    │  tfilter: only when several schemas
-//	│ …                   │  #tables scrolls; the two lines above stay put
+//	│ [type to find…]     │  find-filter: narrows the list below
+//	│ …                   │  #tables scrolls; the lines above stay put
 //	└─────────────────────┘
 func (p Workbench) sidebar(b *element.Builder) any {
 	b.AsideClass("sidebar").R(
@@ -245,7 +246,7 @@ func (p Workbench) sidebar(b *element.Builder) any {
 					b.Input("id", "table-db", "type", "search", "role", "combobox",
 						"aria-label", "Database", "aria-autocomplete", "list",
 						"aria-expanded", "false", "aria-controls", "db-list",
-						"title", "Switch to another database on this server: type to find it, Enter to pick",
+						"title", "Switch to another database on this server: type to find it, Enter to pick (Tab: pick and go on to its schemas)",
 						"spellcheck", "false", "autocomplete", "off").R(),
 				),
 				b.UlClass("schema-list", "id", "db-list", "role", "listbox", "hidden", "hidden").R(),
@@ -256,10 +257,28 @@ func (p Workbench) sidebar(b *element.Builder) any {
 					b.Input("id", "table-schema", "type", "search", "role", "combobox",
 						"aria-label", "Schema", "aria-autocomplete", "list",
 						"aria-expanded", "false", "aria-controls", "schema-list",
-						"title", "Show the tables of one schema: type to find it, Enter to pick",
+						"title", "Show the tables of one schema: type to find it, Enter to pick (Tab: pick and go on to find a table)",
 						"spellcheck", "false", "autocomplete", "off").R(),
 				),
 				b.UlClass("schema-list", "id", "schema-list", "role", "listbox", "hidden", "hidden").R(),
+			),
+			// the level below the schema: a find box over the tables list
+			// itself. A schema picked with Tab or Enter moves the keyboard
+			// here, so typing finds a table at once. It narrows #tables in
+			// place (no list of its own), and its arrows and Enter act on
+			// that list's selected row. A box rather than type-ahead on
+			// the rows, whose c and e are keys of their own: a name
+			// starting with either could not be typed there. Shown while
+			// the tab is on a connection (app.js drawFindBox).
+			b.DivClass("tfilter", "id", "find-filter", "hidden", "hidden").R(
+				b.DivClass("trow").R(
+					b.LabelClass("tlabel", "for", "table-find").T("table"),
+					b.Input("id", "table-find", "type", "search",
+						"aria-label", "Find a table", "aria-controls", "tables",
+						"placeholder", "type to find a table",
+						"title", "Find a table: type part of its name — ↑↓ move, Enter previews its rows, Esc clears",
+						"spellcheck", "false", "autocomplete", "off").R(),
+				),
 			),
 			b.Ul("id", "tables").R(),
 		),

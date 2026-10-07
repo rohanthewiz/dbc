@@ -40,6 +40,7 @@ func TestWeb(t *testing.T) {
 		{"tables sidebar", tablesSidebar},
 		{"show columns from the menu", columnsFromMenu},
 		{"show columns with c", columnsWithKey},
+		{"find a table by typing", findTable},
 		{"copy chords on a table", copyChordsOnTable},
 		{"copy out of the columns grid", copyColumnsGrid},
 		{"transpose the grid", transposeGrid},
@@ -283,6 +284,59 @@ func tablesSidebar(t *testing.T, _ *env, p *rod.Page) {
 	if got := evalStr(t, p, `() => document.getElementById("table-count").textContent`); got != "· 1" {
 		t.Fatalf("table count = %q, want · 1", got)
 	}
+}
+
+// findTable: the table box narrows the list as you type and Enter
+// previews the match; typing on a row starts a find there, and Tab goes
+// on from the box to the selected row. lite has one table, cats, so a
+// miss empties the list and a hit brings it back selected.
+func findTable(t *testing.T, _ *env, p *rod.Page) {
+	resetGrid(t, p)
+	selectTable(t, p, "cats")
+	// a letter that is not one of the row's keys (c, e) starts a find
+	p.Keyboard.MustType(input.KeyZ)
+	waitFor(t, p, "the find box with z, nothing matching", `() =>
+	  document.activeElement === document.getElementById("table-find") &&
+	  document.getElementById("table-find").value === "z" &&
+	  !document.querySelector("#tables li[data-name]") &&
+	  document.querySelector("#tables li.none").textContent.startsWith("no table matches") &&
+	  document.getElementById("find-filter").classList.contains("on")`)
+	// Esc drops the find: every table back, the first selected
+	p.Keyboard.MustType(input.Escape)
+	waitFor(t, p, "the find dropped", `() =>
+	  document.activeElement === document.getElementById("table-find") &&
+	  document.getElementById("table-find").value === "" &&
+	  !!document.querySelector('#tables li.sel[data-name="cats"]') &&
+	  !document.getElementById("find-filter").classList.contains("on")`)
+	// "ats" is inside cats, not at its start: still a match
+	p.Keyboard.MustType(input.KeyA, input.KeyT, input.KeyS)
+	waitFor(t, p, "cats found by ats", `() =>
+	  document.getElementById("table-find").value === "ats" &&
+	  [...document.querySelectorAll("#tables li[data-name]")].map((l) => l.dataset.name).join() === "cats" &&
+	  !!document.querySelector('#tables li.sel[data-name="cats"]')`)
+	before := gridSeq(t, p)
+	p.Keyboard.MustType(input.Enter)
+	if info := waitResult(t, p, before, catsColumns...); info != "3 rows" {
+		t.Fatalf("grid info = %q, want 3 rows (the preview of cats)", info)
+	}
+	// Tab goes on to the selected row, the list's one Tab stop
+	eval(t, p, `() => document.getElementById("table-find").focus()`)
+	p.Keyboard.MustType(input.Tab)
+	waitFor(t, p, "the keyboard on cats' row", `() => {
+	  const li = document.activeElement;
+	  return !!li && li.matches('#tables li.sel[data-name="cats"]') && li.tabIndex === 0;
+	}`)
+	// and / goes back to the box, the find kept
+	p.Keyboard.MustType(input.Slash)
+	waitFor(t, p, "back in the find box", `() =>
+	  document.activeElement === document.getElementById("table-find") &&
+	  document.getElementById("table-find").value === "ats"`)
+	// two Escs: the find dropped, then the box left
+	p.Keyboard.MustType(input.Escape, input.Escape)
+	waitFor(t, p, "out of the find box, every table shown", `() =>
+	  document.activeElement !== document.getElementById("table-find") &&
+	  document.getElementById("table-find").value === "" &&
+	  !!document.querySelector('#tables li[data-name="cats"]')`)
 }
 
 // catsColumns is what Show columns lists for cats, in order.
@@ -699,19 +753,76 @@ func pgSchemaPicker(t *testing.T, e *env, p *rod.Page) {
 		t.Fatalf("grid info = %q, want 2 rows (id, label)", info)
 	}
 
-	// Tab completes to the one match left, as Enter would, and keeps the
-	// box focused — rather than moving on and leaving the box back on the
-	// schema picked before (e2e_b)
+	// Tab completes to the one match left, as Enter would, and moves on
+	// to the table box — rather than leaving the box back on the schema
+	// picked before (e2e_b). The keyboard gets there before e2e_a's
+	// tables do; they land with the first selected, for Enter to preview
 	box.MustClick()
 	waitFor(t, p, "the schema list again", `() => !document.getElementById("schema-list").hidden`)
 	box.MustInput("e2e_a")
 	waitFor(t, p, "the list narrowed to e2e_a", `() =>
 	  [...document.querySelectorAll("#schema-list li[data-i]")].map((li) => li.textContent).join().startsWith("e2e_a")`)
 	p.Keyboard.MustType(input.Tab)
-	waitFor(t, p, "e2e_a's tables after Tab", `() =>
-	  document.activeElement === document.getElementById("table-schema") &&
+	waitFor(t, p, "e2e_a's tables after Tab, the keyboard in the table box", `() =>
+	  document.activeElement === document.getElementById("table-find") &&
 	  document.getElementById("table-schema").value === "e2e_a" &&
-	  [...document.querySelectorAll("#tables li[data-name]")].map((l) => l.dataset.name).join() === "e2e_a.alpha"`)
+	  [...document.querySelectorAll("#tables li[data-name]")].map((l) => l.dataset.name).join() === "e2e_a.alpha" &&
+	  !!document.querySelector('#tables li.sel[data-name="e2e_a.alpha"]')`)
+	p.Keyboard.MustType(input.KeyA, input.KeyL)
+	waitFor(t, p, "alpha found by al", `() =>
+	  document.getElementById("table-find").value === "al" &&
+	  !!document.querySelector('#tables li.sel[data-name="e2e_a.alpha"]')`)
+	before = gridSeq(t, p)
+	p.Keyboard.MustType(input.Enter)
+	if info := waitResult(t, p, before, "id"); info != "0 rows" {
+		t.Fatalf("grid info = %q, want 0 rows (the preview of e2e_a.alpha)", info)
+	}
+
+	// Tab takes a schema the arrows moved to, too, with nothing typed;
+	// before, it moved focus on and the box went back to the pick before
+	box.MustClick()
+	waitFor(t, p, "the schema list on e2e_a", `() => {
+	  const hi = document.querySelector("#schema-list li.hi");
+	  return !document.getElementById("schema-list").hidden && !!hi && hi.textContent.startsWith("e2e_a");
+	}`)
+	p.Keyboard.MustType(input.ArrowDown)
+	waitFor(t, p, "e2e_b highlighted", `() => {
+	  const hi = document.querySelector("#schema-list li.hi");
+	  return !!hi && hi.textContent.startsWith("e2e_b");
+	}`)
+	p.Keyboard.MustType(input.Tab)
+	waitFor(t, p, "e2e_b's tables after an arrow and Tab", `() =>
+	  document.activeElement === document.getElementById("table-find") &&
+	  document.getElementById("table-find").value === "" &&
+	  document.getElementById("table-schema").value === "e2e_b" &&
+	  !!document.querySelector('#tables li.sel[data-name="e2e_b.beta"]')`)
+
+	// A database picked with Tab moves on too, once its connect lands
+	// (until then the boxes below are the old database's): to the table
+	// box on the postgres database, whose one schema means no schema box,
+	// and to the schema box back on dbc
+	dbBox := p.MustElement("#table-db")
+	tabToDatabase := func(name string) {
+		t.Helper()
+		dbBox.MustClick()
+		waitFor(t, p, "the database list", `() => !document.getElementById("db-list").hidden`)
+		dbBox.MustInput(name)
+		waitFor(t, p, "the list narrowed to "+name, `(n) => {
+		  const first = document.querySelector("#db-list li[data-i]");
+		  return !!first && first.textContent.startsWith(n);
+		}`, name)
+		p.Keyboard.MustType(input.Tab)
+	}
+	tabToDatabase("postgres")
+	waitFor(t, p, "on pg/postgres, the keyboard in the table box", `() =>
+	  dbc.state.active === "pg/postgres" && !document.querySelector("#conns .conn-item.connecting") &&
+	  document.getElementById("table-filter").hidden &&
+	  document.activeElement === document.getElementById("table-find")`)
+	tabToDatabase("dbc")
+	waitFor(t, p, "back on pg, the keyboard in the schema box", `() =>
+	  dbc.state.active === "pg" && !document.querySelector("#conns .conn-item.connecting") &&
+	  document.activeElement === document.getElementById("table-schema") &&
+	  !document.getElementById("schema-list").hidden`)
 
 	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite")

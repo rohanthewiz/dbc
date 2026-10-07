@@ -221,10 +221,21 @@ schema filter under the Tables heading, so a big catalog can be narrowed to
 the one you are working in. Click it (or tab to it) for the list of schemas,
 each with its table count; type to narrow the list — names starting with
 what you typed come first — then `Enter` or a click picks one, and `Enter`
-again moves to its tables. `Esc` drops the typing; emptying the box and
+again moves to its tables. `Tab` does both at once: it picks the schema
+typed to (or arrowed to) and moves on to its tables, so `sal` `Tab` `ord`
+`Enter` previews `sales.orders`. `Esc` drops the typing; emptying the box and
 picking "all schemas" (or its `×`) shows everything again. The heading then
 reads `· 12 / 340`. The pick is remembered per connection, across reloads
 and windows. The heading and the filter stay put while the tables scroll.
+
+Under the pickers, a **table** box finds a table in the list: type part of
+its name and the list narrows to the matches, the ones starting with it
+first, with the first selected. `↑`/`↓` move the selection while you keep
+typing, `Enter` previews the selected table, and `Esc` clears the find (a
+second `Esc` leaves the box). Typing `schema.` matches qualified names.
+`Tab` goes on to the selected row, where `c` and `e` work. Typing on a row
+starts a new find with what you type, except for `c` and `e`, which are
+that row's own keys; `/` goes back to the box.
 
 On Postgres the sidebar is loaded a level at a time, so connecting to a big
 server costs what the sidebar shows, not what the server holds:
@@ -236,7 +247,8 @@ server costs what the sidebar shows, not what the server holds:
   `ProdDr/analytics`). It shows in the header, and tabs, history and the
   schema pick remember it like any connection. Moving off it closes its
   connection to the server once no tab is on it, so browsing a server's
-  databases does not leave one open per database visited.
+  databases does not leave one open per database visited. Picked with
+  `Tab`, the keyboard moves on to the schema box once it is connected.
 - **schema**: the database's schemas with their table counts, empty ones
   included. A connect opens on the first schema on `search_path` if it has
   tables (else the first schema that does), or on the schema last picked

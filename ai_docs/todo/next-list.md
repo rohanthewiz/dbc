@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-141
+**Next ID:** N-142
 
 ## Open
 
@@ -48,6 +48,11 @@ ten session docs in `ai_docs/claude_sessions/`
   (not the app's menu), that an unsaved draft survives quitting the app
   (localStorage in WKWebView), and that the browser's Copy path reaches
   the clipboard.
+  Updated `2026-1007-1054-web-tab-to-table-find`: add the sidebar's table
+  find box. Check that Tab in the schema box lands in it, that typing a
+  letter on a table row starts a find there (the page puts the character in
+  by hand, since WKWebView may not deliver a keypress to the box focus moved
+  to), and that ↑↓ and Enter in the box act on the list.
 - **N-087** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
   Drive the TUI's new navigator by hand in a real terminal on a big
   Postgres: the picker rows, `d`/`s`, typing into a 150-schema list, the
@@ -155,6 +160,14 @@ ten session docs in `ai_docs/claude_sessions/`
   marker (and its text). The marker could start at the statement's first
   code line instead, leaving header comments unmarked. Offered at the end
   of the session; the user did not answer.
+
+- **N-141** · raised `2026-1007-1054-web-tab-to-table-find` · value low
+  The TUI's Tables pane has no type-to-find. dbc web's sidebar now has a
+  table box under db/schema (a schema picked with Tab lands there, typing
+  narrows the list, Enter previews). In the TUI the pane's letters are
+  already keys (`j k g G c e d s #`), so it would be a `/` that opens a
+  filter line over the list, as the pickers' `pickModal` filters. Offered
+  at the end of the session; the user did not answer.
 
 ## Roadmap
 

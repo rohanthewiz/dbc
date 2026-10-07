@@ -296,6 +296,11 @@ func (m *Model) runDone(ev *workspace.RunDone) tea.Cmd {
 	// sight is neither silent nor mixed into another connection's log.
 	onScreen := m.landedHere(ev.Conn, ev.Tag, ev.Err, "result")
 	if ev.Err != nil {
+		if onScreen && ev.Result != nil {
+			// the statements before the failure landed their results
+			// (workspace landRun): show them, the status still the error's
+			m.showResult(ev.Result)
+		}
 		m.notesTo(ev.Conn, ev.Notes)
 		if onScreen {
 			m.setStatus(ev.Status)

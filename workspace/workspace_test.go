@@ -251,7 +251,7 @@ func TestStragglerIsDropped(t *testing.T) {
 	w.busy, w.runGen = true, 7
 	w.mu.Unlock()
 	ev := &RunDone{Tag: "old", Stmts: []string{"SELECT 2"}, Result: &model.Result{Columns: []string{"late"}}}
-	w.landRun(ev, 6, runEffects{wrote: true})
+	w.landRun(ev, 6, runEffects{wrote: true}, []landing{{title: "SELECT 2", stmt: "SELECT 2", res: ev.Result, n: 1}}, 0)
 	if !ev.Stale {
 		t.Error("the straggler was not marked stale")
 	}
@@ -261,15 +261,19 @@ func TestStragglerIsDropped(t *testing.T) {
 }
 
 // Multi-statement runs stop at the first failure, naming it, and the error
-// is remembered for the assistant.
+// is remembered for the assistant. The statements before it that returned
+// rows still land their results (results.go): they ran.
 func TestRunStopsAtTheFirstFailure(t *testing.T) {
 	w := newTestWorkspace(t)
 	ev := run(t, w, "SELECT 1", "SELEC nonsense", "CREATE TEMP TABLE never (x INT)")
 	if ev.Err == nil || !strings.Contains(w.LastErr(), "2/3") || !strings.HasPrefix(ev.Status, "error after") {
 		t.Fatalf("err = %v, lastErr = %q, status = %q", ev.Err, w.LastErr(), ev.Status)
 	}
-	if ev.Result != nil {
-		t.Error("a failed run should publish no result")
+	if ev.Result == nil || ev.Tabs != 1 || w.LastResult() != ev.Result || ev.Result.Rows[0][0] != "1" {
+		t.Errorf("statement 1's result did not land: %+v, tabs %d", ev.Result, ev.Tabs)
+	}
+	if n := ev.Notes[len(ev.Notes)-1]; !strings.Contains(n.Text, "1 result from the statements before it") {
+		t.Errorf("last note = %+v", n)
 	}
 	ev = run(t, w, "SELECT count(*) FROM temp.sqlite_master WHERE name = 'never'")
 	if ev.Result.Rows[0][0] != "0" {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -177,11 +178,21 @@ func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 	w.runTarget = target
 	conn, gen := w.active, w.runGen
 	w.runStep, w.runSteps = 0, len(stmts)
+	// read now, under mu: no more results than this can be on screen at
+	// once, so the job keeps no more (see rows below)
+	limit := w.cfg.ResultTabLimit()
 	job := func() Event {
 		var res *model.Result
 		var err error
 		var notes []Note // the server's notices, in the order raised
 		var eff runEffects
+		// rows are the results that get a tab each (results.go): every
+		// statement's that returned rows, the last limit of them — the
+		// earlier ones would only be dropped at landing by the cap, and
+		// holding a run-all's every result set until then is memory for
+		// nothing. over counts the ones let go here.
+		var rows []landing
+		over := 0
 		for i, stmt := range stmts {
 			w.stepTo(gen, i+1)
 			var notices []db.Notice
@@ -199,12 +210,19 @@ func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 				res = nil
 				break
 			}
+			if res != nil && !res.IsExec {
+				rows = append(rows, landing{title: resultTitle(tag, stmt), stmt: stmt, res: res, n: i + 1})
+				if len(rows) > limit {
+					rows = slices.Delete(rows, 0, 1)
+					over++
+				}
+			}
 		}
 		// The notices go in first: landRun appends the closing "completed"
 		// or failure note after them, so the log reads in the order things
 		// happened, the RAISE lines before the run's outcome.
 		ev := &RunDone{Tag: tag, Conn: conn, Stmts: stmts, Result: res, Err: err, Notes: notes}
-		w.landRun(ev, gen, eff)
+		w.landRun(ev, gen, eff, rows, over)
 		return ev
 	}
 	return Start{
@@ -275,7 +293,8 @@ func (w *Workspace) RunScript(path string) (Start, error) {
 		// the sidebar lists no other connection's tables. Its statements
 		// ran on the pool, each committed as it went, so none is left
 		// waiting on a COMMIT (runEffects.open).
-		w.landRun(ev, gen, runEffects{wrote: true, catalog: s.CatalogChanged(conn)})
+		// Its results have landed already, show by show.
+		w.landRun(ev, gen, runEffects{wrote: true, catalog: s.CatalogChanged(conn)}, nil, 0)
 		return ev
 	}
 	return Start{Tag: tag, Gen: gen, Job: job, Notes: []Note{notef(Info, "running %s", tag)}}, nil
@@ -366,8 +385,14 @@ var commitVerbs = map[string]bool{"commit": true, "end": true}
 // landRun installs a run's outcome. eff is what its statements may have
 // done (runEffects), for the sidebar: a list re-read when it changed the
 // catalog (relistAfterRunLocked), otherwise a recount when it changed rows
-// (recountLocked).
-func (w *Workspace) landRun(ev *RunDone, gen int, eff runEffects) {
+// (recountLocked). rows are the results that get a tab each, oldest first,
+// after over older ones were let go (Run).
+//
+// A failed or stopped run still lands the rows of the statements before
+// the one that failed: they ran, and their results are as real as a
+// successful run's — run-all with a typo in the third statement should not
+// throw away the first two's.
+func (w *Workspace) landRun(ev *RunDone, gen int, eff runEffects, rows []landing, over int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if gen != w.runGen {
@@ -402,6 +427,11 @@ func (w *Workspace) landRun(ev *RunDone, gen int, eff runEffects) {
 	}
 	if ev.Err != nil {
 		w.failedLocked(set, ev.Err, ev.Tag, ev.Elapsed, &ev.Notes, &ev.Status)
+		if len(rows) > 0 {
+			w.landRowsLocked(ev, set, gen, rows, over)
+			ev.Notes = append(ev.Notes, notef(Info, "%s from the statements before it landed in the result tabs",
+				plural(len(rows), "result", "results")))
+		}
 		return
 	}
 	set.lastErr = ""
@@ -409,17 +439,48 @@ func (w *Workspace) landRun(ev *RunDone, gen int, eff runEffects) {
 		ev.Notes = append(ev.Notes, notef(Ok, "%s completed in %s", ev.Tag, ev.Elapsed.Round(time.Millisecond)))
 		return
 	}
-	if ev.Result != nil {
+	if len(rows) == 0 && ev.Result != nil {
+		// no statement returned rows: the last one's result (its "n
+		// affected") lands alone, as a single statement's always did
 		last := ev.Stmts[len(ev.Stmts)-1]
-		w.placeLocked(ev.Conn, w.runTarget, resultTitle(ev.Tag, last), last, ev.Result)
-		// a result that is itself a plan — the output of an EXPLAIN the
-		// user ran — becomes the plan too, so a UI can show it as one
-		cc, _ := w.cfg.ConnByName(ev.Result.Conn)
-		if p, ok := explain.Detect(ev.Result, cc.Driver); ok {
-			ev.Plan, set.plan = p, p
-		}
+		rows = []landing{{title: resultTitle(ev.Tag, last), stmt: last, res: ev.Result, n: len(ev.Stmts)}}
 	}
-	ev.Notes = append(ev.Notes, doneNote(ev))
+	shown := 0
+	if len(rows) > 0 {
+		shown = w.landRowsLocked(ev, set, gen, rows, over)
+	}
+	ev.Notes = append(ev.Notes, doneNote(ev, shown))
+}
+
+// landRowsLocked puts a run's rows in their tabs (placeRunLocked), makes
+// ev.Result the one now on screen — the last — and notes how many did not
+// fit under result_tabs. It returns which statement's result is on screen
+// (landing.n), for doneNote. The caller holds mu.
+func (w *Workspace) landRowsLocked(ev *RunDone, set *resultSet, gen int, rows []landing, over int) int {
+	_, dropped := w.placeRunLocked(ev.Conn, w.runTarget, gen, len(ev.Stmts) > 1, rows)
+	last := rows[len(rows)-1]
+	ev.Result, ev.Tabs = last.res, len(rows)-dropped
+	if cut := over + dropped; cut > 0 {
+		ev.Notes = append(ev.Notes, notef(Warn, "%d of the run's %d results did not fit in the result tabs — showing the last %d (result_tabs = %d)",
+			cut, len(rows)+over, ev.Tabs, w.cfg.ResultTabLimit()))
+	}
+	// a result that is itself a plan — the output of an EXPLAIN the user
+	// ran — becomes the plan too, so a UI can show it as one. Only the
+	// result on screen is looked at: the plan pane shows one plan, and
+	// it should be the one beside the grid.
+	cc, _ := w.cfg.ConnByName(last.res.Conn)
+	if p, ok := explain.Detect(last.res, cc.Driver); ok {
+		ev.Plan, set.plan = p, p
+	}
+	return last.n
+}
+
+// plural is "1 result" or "3 results".
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 // doneNote is the log line that closes a successful run, the pair of
@@ -433,9 +494,16 @@ func (w *Workspace) landRun(ev *RunDone, gen int, eff runEffects) {
 // the count fetched; the "showing N" cap is a UI's (max_display_rows), and
 // each UI logs that itself.
 //
+// A run of several statements says which one's result is on screen (shown,
+// its 1-based number) — the last statement's no longer, now that a write
+// gets no tab of its own (results.go) — and, with several, how many tabs
+// it filled.
+//
 //	statement 3/3 completed on Pilot in 1.234s — 42 rows
 //	3 statements completed on Pilot in 2.5s — showing the last result: 1 affected
-func doneNote(ev *RunDone) Note {
+//	3 statements completed on Pilot in 2.5s — showing statement 1's result: 42 rows
+//	3 statements completed on Pilot in 2.5s — 2 result tabs, showing statement 3's: 42 rows
+func doneNote(ev *RunDone, shown int) Note {
 	took := ev.Elapsed.Round(time.Millisecond)
 	what := ev.Tag
 	if len(ev.Stmts) > 1 {
@@ -451,6 +519,10 @@ func doneNote(ev *RunDone) Note {
 	switch {
 	case summary == "": // a driver handed back no result: say it finished all the same
 		return notef(Ok, "%s completed on %s in %s", what, ev.Conn, took)
+	case len(ev.Stmts) > 1 && ev.Tabs > 1:
+		return notef(Ok, "%s completed on %s in %s — %d result tabs, showing statement %d's: %s", what, ev.Conn, took, ev.Tabs, shown, summary)
+	case len(ev.Stmts) > 1 && shown != len(ev.Stmts):
+		return notef(Ok, "%s completed on %s in %s — showing statement %d's result: %s", what, ev.Conn, took, shown, summary)
 	case len(ev.Stmts) > 1:
 		return notef(Ok, "%s completed on %s in %s — showing the last result: %s", what, ev.Conn, took, summary)
 	default:

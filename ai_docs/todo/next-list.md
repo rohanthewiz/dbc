@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-154
+**Next ID:** N-156
 
 ## Open
 
@@ -92,13 +92,6 @@ ten session docs in `ai_docs/claude_sessions/`
   filter line over the list, as the pickers' `pickModal` filters. Offered
   at the end of the session; the user did not answer.
 
-- **N-147** · raised `2026-1007-1245-result-tabs-per-connection` · value low
-  One result tab per statement for a multi-statement run. Run all (or a
-  selection of several) still lands only the last statement's result, in
-  one tab. DBeaver and DataGrip open a tab per statement that returns rows;
-  with result tabs that is now a small step (placeLocked per statement),
-  but it would interact with the cap and with "a run replaces its tab".
-
 - **N-152** · raised `2026-1007-1553-pg-copy-move-rows` · value low
   A write `Query` from MySQL (MariaDB), SQLite or bytdb commits as it runs,
   before the load, so a move whose load fails loses its rows there. Only
@@ -115,6 +108,15 @@ ten session docs in `ai_docs/claude_sessions/`
   (as with TRUNCATE in `loadOptions`). Before N-144's fix the same copy
   committed the source and lost the rows. A `lock_timeout` on the load
   within one database would turn it into an error.
+
+- **N-155** · raised `2026-1007-1606-run-all-tab-per-statement` · value low
+  A run of several statements reports only one count: that of the result
+  on screen. A write's "n affected" was lost before too unless it came
+  last; since N-147 a write gets no result tab, so after
+  `SELECT …; UPDATE …` even the last UPDATE's count is gone (the done note
+  names the SELECT's rows). DataGrip writes a line per statement to its
+  output. Could log one line per write statement (folded
+  past a few, so a script of 500 INSERTs does not flood the log).
 
 ## Validate
 
@@ -218,6 +220,14 @@ and `raised`.
   and e2e tests). Add a step to `TestLiveWorkspacePickSchema`: pick a
   schema, create a table in it through the pool, Refresh, and check that
   the schema stays picked and the table is listed.
+
+- **N-154** · raised `2026-1007-1606-run-all-tab-per-statement` · value low
+  Tabs per statement (N-147) have not been watched in a browser. The
+  workspace tests cover the strip, the web wire test covers the "run" event,
+  and the TUI test covers its model; the page's JS is unchanged because it
+  already redraws the strip from the run event. Add a step to the go-rod
+  test in `web/e2e`: run all on two SELECTs, see two tabs with the second
+  on the grid, run again and see the same two tabs refilled.
 
 ## Roadmap
 
@@ -362,6 +372,14 @@ written up in the session docs themselves.
   reverse. They answer different questions (DDL vs catalog-changing), so
   check which this needs before sharing one.
   closed 2026-10-07 (from the cats-todo backlog): a run that may have changed the catalog now relists the sidebar on its own (`RunDone.Relist`, a `connectLocked(…, kindRelist)` re-read: Refresh's pick and session, quieter words, the status bar left to the run). The classifier is neither `IsDDL` nor a copy: `workspace.ddlVerbs` moved to `sqlsplit.ChangesCatalog` (catalog-changing: with ATTACH/DETACH, without TRUNCATE/GRANT/REVOKE), which completion's drop and the relist now share. A script relists only when it ran such a statement on its connection (`sdb.S.CatalogChanged`, noted where `logDDL` sees every statement, log on or off). Found on the way: DDL inside a transaction is invisible to the pool the relist reads through, so the COMMIT (or END) run after DDL relists again (`ddlSinceCommit`). Also a re-read during a schema pick now asks for the pick in flight rather than undoing it, Refresh included. The TUI starts a background tab's relist at once (else the tab stayed mid-connect until revisited), and dbc web's page keeps the run's status on a `relisted` "conn". Other tabs on the connection still keep their list until their own Refresh. Tests in sqlsplit, workspace, tui (one fails without the background-tab start) and web; web e2e passes.
+- **N-147** · raised `2026-1007-1245-result-tabs-per-connection` · value low
+  One result tab per statement for a multi-statement run. Run all (or a
+  selection of several) still lands only the last statement's result, in
+  one tab. DBeaver and DataGrip open a tab per statement that returns rows;
+  with result tabs that is now a small step (placeLocked per statement),
+  but it would interact with the cap and with "a run replaces its tab".
+  closed 2026-10-07, `2026-1007-1606-run-all-tab-per-statement`: a run of several statements gives each statement that returned rows a tab (`placeRunLocked`); a write gets none, and with no rows anywhere the last result lands alone. One run's tabs form a group (`resultTab.run`). A rerun of several statements refills the group in order and closes the tabs it has no result for; a single-statement run replaces only its own tab. New tabs go after the group's last. The cap drops other runs' unpinned tabs before the run's own oldest, so the last results show, with a log line for the rest. A failed run still lands the results before the failure. The assistant gets the on-screen tab's rows only when that tab holds the statement under the caret (`attachTabLocked`). `RunDone.Tabs` added; `RunDone.Result` is the result on screen, and can be set alongside `Err`.
+
 - **N-144** · raised `2026-1007-1156-pg-copy-hardening` · value low
   A Postgres `Query` that is a `DELETE … RETURNING` (a "move rows" copy)
   fails on the direct path with a bare syntax error. `describe` wraps it

@@ -79,12 +79,18 @@ func TestRunAllRunsTheWholeBuffer(t *testing.T) {
 }
 
 // A failure stops run-all there, naming the statement; later ones never run.
+// The ones before it keep their results.
 func TestRunAllStopsAtTheFirstFailure(t *testing.T) {
 	m := newTestModel(t)
 	m.editor.SetText("SELECT 1 AS a;\nSELEC nonsense;\nCREATE TEMP TABLE never (x INT);")
 	key(t, m, "ctrl+shift+r")
 	if !strings.Contains(m.ws.LastErr(), "2/3") {
 		t.Errorf("lastErr should name statement 2/3: %q", m.ws.LastErr())
+	}
+	// statement 1 ran: its result is drawn, while the status bar keeps
+	// the failure
+	if m.grid.res == nil || m.grid.res.Columns[0] != "a" || !strings.HasPrefix(m.status, "error after") {
+		t.Errorf("grid %+v, status %q", m.grid.res, m.status)
 	}
 	m.editor.SetText("SELECT count(*) FROM temp.sqlite_master WHERE name = 'never'")
 	key(t, m, "ctrl+r")

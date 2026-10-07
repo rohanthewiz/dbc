@@ -125,6 +125,38 @@ func TestResultTabsOnTheWire(t *testing.T) {
 	}
 }
 
+// Run all opens a tab per statement that returns rows, and a rerun refills
+// them; a failure still lands the results before it, on a "run" event that
+// says it failed (its status the error's) and has a result to draw.
+func TestRunAllTabPerStatementOnTheWire(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	runAll := func(buf string) runEvent {
+		t.Helper()
+		e.api("POST", "/api/v1/ws/"+id+"/run", runBody(buf, 0, true), 200)
+		return decodeData[runEvent](t, testEnvelope{Data: s.awaitFrom(t, id, "run").Data})
+	}
+
+	run := runAll("SELECT 1 AS a;\nSELECT 2 AS b;")
+	if !run.OK || !run.HasResult || len(run.ResultTabs) != 2 || run.ResultTab != run.ResultTabs[1].ID {
+		t.Fatalf("run all = %+v", run)
+	}
+	ids := []int{run.ResultTabs[0].ID, run.ResultTabs[1].ID}
+	if run.ResultTabs[0].Title != "SELECT 1 AS a" || run.ResultTabs[1].Title != "SELECT 2 AS b" {
+		t.Errorf("titles = %q, %q", run.ResultTabs[0].Title, run.ResultTabs[1].Title)
+	}
+
+	run = runAll("SELECT 1 AS a;\nSELEC oops;")
+	if run.OK || !run.HasResult || !strings.HasPrefix(run.Status, "error after") {
+		t.Errorf("failed run all = ok %v, hasResult %v, status %q", run.OK, run.HasResult, run.Status)
+	}
+	// statement 1 refilled the group's first tab; the second, with no
+	// result this time, is closed
+	if len(run.ResultTabs) != 1 || run.ResultTabs[0].ID != ids[0] || run.ResultTab != ids[0] {
+		t.Errorf("after the failure: %+v (was %v)", run.resultTabsState, ids)
+	}
+}
+
 // Switching the tab's connection swaps the results pane: the "conn" event
 // carries the new connection's set (empty, the first time), the grid's
 // result and the plan follow, and switching back brings the old ones back

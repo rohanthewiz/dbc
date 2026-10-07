@@ -134,10 +134,18 @@ type Connected struct {
 
 // RunDone lands a run of statements, or of a script.
 type RunDone struct {
-	Tag     string
-	Conn    string
-	Stmts   []string      // what ran; nil for a script
-	Result  *model.Result // the last statement's result; nil on failure and for a script
+	Tag   string
+	Conn  string
+	Stmts []string // what ran; nil for a script
+	// Result is the result the run put on screen: the last of its
+	// statements' that returned rows (each got a result tab, see Tabs), or
+	// the last statement's when none did. A failed run still lands the
+	// rows of the statements before the failure, so Result can be set
+	// beside Err. nil when nothing landed, and for a script.
+	Result *model.Result
+	// Tabs is how many result tabs the run filled, one per statement that
+	// returned rows (results.go); 0 for a script and when nothing landed.
+	Tabs    int
 	Plan    *explain.Plan // Result is itself a query plan (an EXPLAIN the user typed)
 	Err     error         // the failure, or db.ErrCanceled when stopped
 	Script  bool

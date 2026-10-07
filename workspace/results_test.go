@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -494,5 +495,160 @@ func TestShareResultTab(t *testing.T) {
 	w.cfg.Connections[0].AIRows = false
 	if err := w.ShareResultTab(id, false); err != nil {
 		t.Errorf("unshare: %v", err)
+	}
+}
+
+// titles lists the active set's tab titles in strip order.
+func titles(w *Workspace) []string {
+	tabs, _ := w.ResultTabs()
+	var out []string
+	for _, t := range tabs {
+		out = append(out, t.Title)
+	}
+	return out
+}
+
+// A run of several statements opens a tab per statement that returned
+// rows — a write gets none — and the last one's is on screen. The log
+// says how many tabs and whose result is showing.
+func TestRunAllTabPerStatement(t *testing.T) {
+	w := newTestWorkspace(t)
+	ev := run(t, w, "SELECT 1 AS a", "CREATE TEMP TABLE tps (x INT)", "SELECT 2 AS b", "INSERT INTO tps VALUES (1)")
+	if ev.Err != nil || ev.Tabs != 2 {
+		t.Fatalf("run: err %v, tabs %d", ev.Err, ev.Tabs)
+	}
+	if got := titles(w); strings.Join(got, "|") != "SELECT 1 AS a|SELECT 2 AS b" {
+		t.Errorf("titles = %q", got)
+	}
+	if r := w.LastResult(); r != ev.Result || r.Columns[0] != "b" {
+		t.Errorf("on screen: %+v", r)
+	}
+	if n := ev.Notes[len(ev.Notes)-1]; !strings.HasSuffix(n.Text, " — 2 result tabs, showing statement 3's: 1 rows") {
+		t.Errorf("done note = %q", n.Text)
+	}
+	// the last statement is still the INSERT, so the assistant is not
+	// handed b's rows as the INSERT's; with the caret on b, they go
+	text := "SELECT 1 AS a;\nSELECT 2 AS b;\nINSERT INTO tps VALUES (1);"
+	if ctx, _ := w.ChatContext("", Editor{Text: text, Caret: len(text) - 2}); ctx.Query != "INSERT INTO tps VALUES (1)" || ctx.Columns != nil {
+		t.Errorf("caret on the INSERT: query %q, columns %v", ctx.Query, ctx.Columns)
+	}
+	if ctx, _ := w.ChatContext("", Editor{Text: text, Caret: strings.Index(text, "AS b")}); len(ctx.Columns) != 1 || ctx.Columns[0] != "b" {
+		t.Errorf("caret on b: columns %v", ctx.Columns)
+	}
+	// back on a's tab, with the caret on a: a's rows, though a is not the
+	// last statement run
+	ids, _ := tabIDs(w)
+	_ = w.ShowResultTab(ids[0])
+	if ctx, _ := w.ChatContext("", Editor{Text: text, Caret: 3}); len(ctx.Columns) != 1 || ctx.Columns[0] != "a" {
+		t.Errorf("caret on a, its tab on screen: columns %v", ctx.Columns)
+	}
+
+	// only writes: the last statement's result lands alone, as before
+	ev = run(t, w, "INSERT INTO tps VALUES (2)", "INSERT INTO tps VALUES (3), (4)")
+	if ev.Tabs != 1 || ev.Result == nil || !ev.Result.IsExec || ev.Result.Affected != 2 {
+		t.Errorf("writes only: tabs %d, result %+v", ev.Tabs, ev.Result)
+	}
+}
+
+// A rerun refills its group's tabs in order, closing the ones it has no
+// result for; a pinned tab stays out of it, and a single statement run on
+// one of the group's tabs replaces just that one.
+func TestRunAllReplacesItsGroup(t *testing.T) {
+	w := newTestWorkspace(t)
+	run(t, w, "SELECT 0 AS kept")
+	ids, cur := tabIDs(w)
+	if err := w.PinResultTab(cur, true); err != nil {
+		t.Fatal(err)
+	}
+	run(t, w, "SELECT 1 AS a", "SELECT 2 AS b", "SELECT 3 AS c")
+	group, cur := tabIDs(w)
+	if len(group) != 4 || group[0] != ids[0] || cur != group[3] {
+		t.Fatalf("first run all: tabs %v cur %d", group, cur)
+	}
+
+	// rerun with the middle tab on screen: the whole group is refilled,
+	// the same tabs, and the last is current again
+	_ = w.ShowResultTab(group[2])
+	run(t, w, "SELECT 1 AS a2", "SELECT 2 AS b2", "SELECT 3 AS c2")
+	again, cur := tabIDs(w)
+	if !slices.Equal(again, group) || cur != group[3] {
+		t.Errorf("rerun: tabs %v cur %d, want %v", again, cur, group)
+	}
+	if got := titles(w); strings.Join(got, "|") != "SELECT 0 AS kept|SELECT 1 AS a2|SELECT 2 AS b2|SELECT 3 AS c2" {
+		t.Errorf("titles = %q", got)
+	}
+
+	// one statement fewer: the group's third tab goes
+	run(t, w, "SELECT 1 AS a3", "SELECT 2 AS b3")
+	if got, cur := tabIDs(w); !slices.Equal(got, group[:3]) || cur != group[2] {
+		t.Errorf("shorter rerun: tabs %v cur %d, want %v", got, cur, group[:3])
+	}
+
+	// a single statement on the group's first tab replaces only it …
+	_ = w.ShowResultTab(group[1])
+	run(t, w, "SELECT 9 AS solo")
+	if got := titles(w); strings.Join(got, "|") != "SELECT 0 AS kept|SELECT 9 AS solo|SELECT 2 AS b3" {
+		t.Errorf("solo: titles %q", got)
+	}
+	// … and takes it out of the group: run all from the group's other tab
+	// refills that one and opens a new tab right after it, leaving solo
+	_ = w.ShowResultTab(group[2])
+	run(t, w, "SELECT 1 AS a4", "SELECT 2 AS b4")
+	got, cur := tabIDs(w)
+	if len(got) != 4 || got[2] != group[2] || cur != got[3] {
+		t.Errorf("after solo: tabs %v cur %d", got, cur)
+	}
+	if t2 := titles(w); strings.Join(t2, "|") != "SELECT 0 AS kept|SELECT 9 AS solo|SELECT 1 AS a4|SELECT 2 AS b4" {
+		t.Errorf("after solo: titles %q", t2)
+	}
+}
+
+// A run's new tabs go right after its group's last, so they stay side by
+// side when the group sits mid-strip.
+func TestRunAllTabsStayTogether(t *testing.T) {
+	w := newTestWorkspace(t)
+	run(t, w, "SELECT 1 AS a", "SELECT 2 AS b")
+	_, cur := tabIDs(w)
+	_ = w.PinResultTab(cur, true) // b is kept: the run after opens a new tab
+	run(t, w, "SELECT 3 AS later")
+	ids, _ := tabIDs(w)
+	_ = w.ShowResultTab(ids[0]) // back on a, the group's unpinned tab
+	run(t, w, "SELECT 1 AS a2", "SELECT 2 AS x2", "SELECT 3 AS y2")
+	if got := titles(w); strings.Join(got, "|") != "SELECT 1 AS a2|SELECT 2 AS x2|SELECT 3 AS y2|SELECT 2 AS b|SELECT 3 AS later" {
+		t.Errorf("titles = %q", got)
+	}
+	if _, cur := tabIDs(w); cur == 0 {
+		t.Error("no current tab")
+	} else if r := w.LastResult(); r.Columns[0] != "y2" {
+		t.Errorf("on screen: %v", r.Columns)
+	}
+}
+
+// More results than result_tabs: other runs' unpinned tabs go first, then
+// the run's own oldest, so the last ones show; the log says how many did
+// not fit — whether the run let them go itself (past the cap outright) or
+// the cap dropped them at landing (pinned tabs taking room).
+func TestRunAllUnderTheCap(t *testing.T) {
+	w := newTestWorkspace(t)
+	w.cfg.ResultTabs = 3
+	run(t, w, "SELECT 0 AS kept")
+	_, cur := tabIDs(w)
+	_ = w.PinResultTab(cur, true)
+	run(t, w, "SELECT 9 AS old") // an unpinned tab of another run
+
+	ev := run(t, w, "SELECT 1 AS a", "SELECT 2 AS b", "SELECT 3 AS c", "SELECT 4 AS d")
+	if got := titles(w); strings.Join(got, "|") != "SELECT 0 AS kept|SELECT 3 AS c|SELECT 4 AS d" {
+		t.Errorf("titles = %q", got)
+	}
+	if ev.Tabs != 2 || w.LastResult().Columns[0] != "d" {
+		t.Errorf("tabs %d, on screen %v", ev.Tabs, w.LastResult().Columns)
+	}
+	var warned bool
+	for _, n := range ev.Notes {
+		warned = warned || (n.Level == Warn && strings.HasPrefix(n.Text, "2 of the run's 4 results did not fit") &&
+			strings.Contains(n.Text, "showing the last 2 (result_tabs = 3)"))
+	}
+	if !warned {
+		t.Errorf("notes = %+v", ev.Notes)
 	}
 }

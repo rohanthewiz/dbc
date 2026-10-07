@@ -126,9 +126,12 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 		}
 		if msg.Button == tea.MouseLeft {
 			m.drag.kind = dragModal
-			cmd, closed := m.modal.click(m, x, y, n, shift)
+			md := m.modal
+			cmd, closed := md.click(m, x, y, n, shift)
 			if closed {
-				m.modal = nil
+				if m.modal == md { // not when it handed over to another (app.go key)
+					m.modal = nil
+				}
 				m.drag.kind = dragNone
 			}
 			return cmd
@@ -462,7 +465,7 @@ func (m *Model) pressButton(b button) tea.Cmd {
 	case btnHistory:
 		m.openHistory()
 	case btnScripts:
-		m.openScripts()
+		m.openScripts("")
 	case btnTables:
 		return m.listTables()
 	case btnAssistant:

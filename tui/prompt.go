@@ -28,6 +28,14 @@ type promptModal struct {
 	field  *editor
 	errMsg string
 	accept func(m *Model, text string) error
+	// acceptCmd, when set, is used instead of accept: for an answer whose
+	// work goes on in a command (the scripts browser's new script, which
+	// then suspends the TUI for $EDITOR).
+	acceptCmd func(m *Model, text string) (tea.Cmd, error)
+	// cancel, when set, runs on Esc, Cancel or ✕: the scripts browser's
+	// prompts reopen the browser, so backing out of a rename lands where
+	// it started rather than on the bare screen.
+	cancel func(m *Model)
 
 	fieldRect    Rect
 	okBtn, noBtn Rect
@@ -40,6 +48,15 @@ func (m *Model) openPrompt(title, hint, okText, initial string, accept func(m *M
 	p.field.SetText(initial)
 	p.field.SelectAll()
 	m.openModal(p)
+}
+
+// openPromptCmd is openPrompt for an accept that returns a command.
+func (m *Model) openPromptCmd(title, hint, okText, initial string, accept func(m *Model, text string) (tea.Cmd, error)) *promptModal {
+	p := &promptModal{head: title, hint: hint, okText: okText, field: newEditor(true), acceptCmd: accept, hoverBtn: -1}
+	p.field.SetText(initial)
+	p.field.SelectAll()
+	m.openModal(p)
+	return p
 }
 
 func (p *promptModal) title() string            { return p.head }
@@ -69,7 +86,7 @@ func (p *promptModal) draw(m *Model, s Surface) *caret {
 func (p *promptModal) key(m *Model, k tea.KeyPressMsg) (tea.Cmd, bool) {
 	switch k.String() {
 	case "esc":
-		return nil, true
+		return p.dismiss(m)
 	case "enter":
 		return p.submit(m)
 	}
@@ -78,19 +95,34 @@ func (p *promptModal) key(m *Model, k tea.KeyPressMsg) (tea.Cmd, bool) {
 	return nil, false
 }
 
+// dismiss closes the dialog without accepting, running cancel if set.
+func (p *promptModal) dismiss(m *Model) (tea.Cmd, bool) {
+	if p.cancel != nil {
+		p.cancel(m)
+	}
+	return nil, true
+}
+
 // submit hands the text to accept; an error keeps the dialog open.
 func (p *promptModal) submit(m *Model) (tea.Cmd, bool) {
-	if err := p.accept(m, p.field.Text()); err != nil {
+	var cmd tea.Cmd
+	var err error
+	if p.acceptCmd != nil {
+		cmd, err = p.acceptCmd(m, p.field.Text())
+	} else {
+		err = p.accept(m, p.field.Text())
+	}
+	if err != nil {
 		p.errMsg = err.Error()
 		return nil, false
 	}
-	return nil, true
+	return cmd, true
 }
 
 func (p *promptModal) click(m *Model, x, y, clicks int, shift bool) (tea.Cmd, bool) {
 	switch {
 	case m.modalClose().Contains(x, y), p.noBtn.Contains(x, y):
-		return nil, true
+		return p.dismiss(m)
 	case p.okBtn.Contains(x, y):
 		return p.submit(m)
 	case p.fieldRect.Contains(x, y):

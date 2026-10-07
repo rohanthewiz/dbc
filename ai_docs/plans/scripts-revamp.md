@@ -4,8 +4,8 @@ Raised 2026-10-06. The ask: dbc.app looks for scripts in `~/scripts`; the
 scripts UI needs a revamp; scripts should be creatable and editable from the
 app, not only from an outside editor.
 
-This is a plan. **Phases 1–4 are done** (2026-10-06); phases 5–6 are
-not started. The decisions table was accepted as recommended.
+This is a plan. **Phases 1–5 are done** (2026-10-06); phase 6 is not
+started. The decisions table was accepted as recommended.
 
 ## The one-paragraph version
 
@@ -464,6 +464,46 @@ Each phase ships alone and leaves main releasable.
      request had been hiding it. `saveTab` now saves the console too.
 5. **TUI.** The browser and `$EDITOR`. Checked with the TUI e2e harness
    (`tui/e2e`), with `EDITOR` set to a script that edits the file.
+
+   **Outcome (2026-10-06).**
+   - `tui/scripts.go` replaces the run-only picker. It is the web browser's
+     sections drawn with the list widget: Scripts (or, with none, the
+     templates and a note naming the dir), Examples, and Trash (folded,
+     `t` or a click unfolds it). The title names the resolved dir. Each
+     row has a muted description in one column and an age, "example" or
+     "Enter restores" on the right.
+   - **Keys are the plan's bare letters, not the web's chords.** The list
+     has the keyboard: Enter run, `e` edit, `n` new, `d` duplicate, `r`/F2
+     rename, Del/`x` trash, `y` copy path, `t` the trash. The filter is a
+     mode, entered with `/` or a click and left with Esc or Tab. ⇧Enter and
+     Ctrl+Delete, the web's chords, do not reach a terminal reliably.
+     - Enter on an example copies it, on a template starts a script, and on
+       a trashed script restores it (asking for another name when the old
+       one is taken).
+     - A double-click edits, and a right-click opens the row's menu.
+     - `n` and "+ New" open a menu of templates, then a name prompt with
+       the stem selected. That is the web's order, the reverse of the
+       plan's sketch.
+   - Every way of making a script (new, duplicate, copying an example)
+     writes it, then edits it, as the web opens a tab.
+   - Edit suspends the TUI with `tea.ExecProcess` for `$VISUAL`, else
+     `$EDITOR`, else `vi`. The command is split on spaces, so `code -w`
+     works. A missing editor is logged and nothing is suspended. On return,
+     `script.Check` runs, its findings go to the log as
+     `~/…/name.go:L:C: msg` (capped at 20), and the browser reopens on the
+     script, so Enter runs it.
+   - Templates are filled with `config.ConnOrder(active)`, now shared with
+     the web's `templateConns`.
+   - Plumbing:
+     - The list widget gained `head` rows, which the cursor skips, plus
+       `desc` and `descCol`.
+     - `promptModal` gained `acceptCmd` and `cancel`. Cancelling a
+       browser prompt goes back to the browser.
+     - A modal that closes while opening another (a prompt reopening the
+       browser) no longer has its successor cleared (`app.go` key,
+       `mouse.go` click).
+   - The TUI still shows only the last of several `s.Show`s. The web's
+     "Result 1 · 2 · 3" switcher was not ported (N-136).
 6. **Docs and the skill.** The README scripting section rewritten around the
    browser, and `.claude/skills/dbc` (`SKILL.md`, `scripting.md`) updated for
    the new dir, `dbc scripts`, and `--check`.

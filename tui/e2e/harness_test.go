@@ -46,8 +46,30 @@ func setup(t *testing.T) *env {
 	e.bin = filepath.Join(e.home, "dbc")
 	build(t, e.bin)
 	e.writeConfig(t)
+	e.writeEditor(t)
 	e.seed(t)
 	return e
+}
+
+// writeEditor writes the run's $EDITOR: a shell script standing in for the
+// user's editor. It copies HOME/next-edit.go over the file it was handed
+// (when there is one, else leaves the file as it is) and exits, so a step
+// decides what an "edit" writes by putting it in next-edit.go first. The
+// TUI suspends for it exactly as it would for vim (tea.ExecProcess).
+func (e *env) writeEditor(t *testing.T) {
+	t.Helper()
+	sh := "#!/bin/sh\n[ -f \"$HOME/next-edit.go\" ] && cp \"$HOME/next-edit.go\" \"$1\"\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(e.home, "edit.sh"), []byte(sh), 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// nextEdit sets what the stand-in editor writes on its next run.
+func (e *env) nextEdit(t *testing.T, text string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(e.home, "next-edit.go"), []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // build compiles dbc from this checkout (two levels up), so the run always
@@ -115,16 +137,19 @@ func (e *env) dbc(t *testing.T, conn, sql string) {
 //
 // CATS_*: a dbc that inherits them (a Claude Code session on dbc runs in a
 // cats pane) reports to the LIVE pane and dials its control socket.
+// VISUAL/EDITOR: the scripts browser's edit must reach the stand-in
+// (writeEditor), never the developer's own editor.
 func (e *env) environ() []string {
 	var out []string
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(k, "CATS_") || k == "HOME" || k == "TERM" || k == "DBC_DEMO" {
+		if strings.HasPrefix(k, "CATS_") || k == "HOME" || k == "TERM" || k == "DBC_DEMO" || k == "VISUAL" || k == "EDITOR" {
 			continue
 		}
 		out = append(out, kv)
 	}
-	return append(out, "HOME="+e.home, "TERM=xterm-256color", "COLORTERM=truecolor")
+	return append(out, "HOME="+e.home, "TERM=xterm-256color", "COLORTERM=truecolor",
+		"EDITOR="+filepath.Join(e.home, "edit.sh"))
 }
 
 // term is the TUI running in a pseudo-terminal, read through an emulator.

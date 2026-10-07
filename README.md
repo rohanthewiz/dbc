@@ -322,7 +322,7 @@ dragging.
 | `Ctrl+K` | Stop the running query or script, a connect still dialing — or the assistant's answer |
 | `Ctrl+A` | Open the assistant / move between it and the editor |
 | `Ctrl+E` | Export the result (format picker; file, or clipboard) |
-| `Ctrl+O` | Pick and run a Go script from `scripts_dir` (the picker's title names the directory) |
+| `Ctrl+O` | The scripts browser: `Enter` runs, `e` edits in `$VISUAL`/`$EDITOR` (checked when the editor exits), `n` new from a template, `d` duplicate, `r` rename, `Del` trash, `/` filter; the built-in examples and the trash are listed too (its title names the directory) |
 | `Ctrl+P` | Query history of this database (`Tab`: every database) — filter, then `Enter` inserts (never runs) |
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | A new query tab · close the tab · go to tab N (see [Query tabs](#query-tabs)) |
 | `Alt+N` · `Alt+C` | A new console of the database · the database's next console (see [Consoles](#consoles-and-multi-statement-buffers)) |

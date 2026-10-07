@@ -18,12 +18,17 @@ func TestTUI(t *testing.T) {
 	u := e.start(t)
 
 	step(t, "startup draws the panes and connects to the default", func() {
-		u.waitFor("▶ Run", "Connections", "● lite", "Query", "Results", "Log")
-		// the row counts load after the list
+		u.waitFor("▶ Run", "Connections", "● lite", "Query", "Results", "Log", " cats ", " owners ")
+		// row counts are opt-in (N-124): # in Tables turns them on, and
+		// they load after the list
+		u.ctrl('l')
+		u.key(uv.KeyTab) // Connections → Tables
+		u.key('#')
 		u.waitUntil("cats 3 and owners 2 in Tables", func(string) bool {
 			return strings.HasSuffix(strings.TrimRight(strings.Trim(u.lineWith(" cats "), "│ "), " "), "3") &&
 				strings.Contains(u.lineWith(" owners "), "2")
 		})
+		u.click("Type SQL here", 0) // the editor has the keyboard again
 	})
 
 	step(t, "Ctrl+R runs the statement and the grid shows it", func() {
@@ -127,6 +132,45 @@ func TestTUI(t *testing.T) {
 		u.waitFor("Add a connection", "Test connection")
 		u.key(uv.KeyEscape)
 		u.waitGone("Add a connection")
+	})
+
+	step(t, "Ctrl+O browses scripts: new from a template, $EDITOR, the check, run, trash, restore", func() {
+		u.ctrl('o')
+		// an empty scripts dir offers the templates, then the examples
+		u.waitFor("Scripts · ~/.config/dbc/scripts", "Query and show", "Examples · read-only", "loop_params.go")
+		u.key('n')
+		u.waitFor("new script from")
+		u.key(uv.KeyDown) // Blank script → Query and show
+		u.key(uv.KeyEnter)
+		u.waitFor("New script · Query and show")
+		// the stand-in editor writes a script that does not compile
+		e.nextEdit(t, "package main\n\nimport \"github.com/rohanthewiz/dbc/sdb\"\n\nfunc Run(s *sdb.S) error {\n\treturn undefinedThing\n}\n")
+		u.typeText("nightly") // replaces the offered stem, keeps .go
+		u.key(uv.KeyEnter)
+		// back from the editor: the check's finding in the log, compiler
+		// style, and the browser open on the new script
+		u.waitFor("nightly.go:6:9: undefined: undefinedThing", "Scripts · ~/.config/dbc/scripts")
+
+		// e edits it again; this time it compiles, and Enter runs it
+		e.nextEdit(t, "// Lists the cats.\npackage main\n\nimport \"github.com/rohanthewiz/dbc/sdb\"\n\n"+
+			"func Run(s *sdb.S) error {\n\tr, err := s.Query(\"lite\", \"SELECT name AS cat FROM cats ORDER BY name\")\n"+
+			"\tif err != nil {\n\t\treturn err\n\t}\n\ts.Print(\"%d cats\", len(r.Rows))\n\ts.Show(r)\n\treturn nil\n}\n")
+		u.key('e')
+		u.waitFor("nightly.go saved — checked, no problems", "Lists the cats.")
+		u.key(uv.KeyEnter)
+		u.waitFor("script nightly.go completed", "3 cats", "│ cat ", "│ Leo ")
+
+		// Del trashes it (nothing asked); the Trash lists it; Enter restores
+		u.ctrl('o')
+		u.waitFor("Lists the cats.")
+		u.key(uv.KeyDelete)
+		u.waitFor("moved nightly.go to the trash", "Trash (1)")
+		u.key('t')
+		u.key('G') // the last row: the trashed script
+		u.key(uv.KeyEnter)
+		u.waitFor("restored nightly.go")
+		u.key(uv.KeyEscape)
+		u.waitGone("Scripts · ~/.config/dbc/scripts")
 	})
 
 	step(t, "Ctrl+Q quits", func() {

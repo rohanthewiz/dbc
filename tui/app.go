@@ -427,6 +427,8 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 		return m.catsHandle(msg)
 	case connTestMsg:
 		return m.connTestDone(msg)
+	case scriptEditedMsg:
+		return m.scriptEdited(msg)
 	}
 	return nil
 }
@@ -455,8 +457,12 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		case "ctrl+q":
 			return m.quitCmd()
 		}
-		cmd, closed := m.modal.key(m, k)
-		if closed {
+		md := m.modal
+		cmd, closed := md.key(m, k)
+		// only the modal that closed is dropped: one that hands over to
+		// another (the scripts browser's rename prompt reopening the
+		// browser) has already put its successor in m.modal
+		if closed && m.modal == md {
 			m.modal = nil
 		}
 		return cmd
@@ -502,7 +508,7 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		m.openExport()
 		return nil
 	case "ctrl+o":
-		m.openScripts()
+		m.openScripts("")
 		return nil
 	case "ctrl+p":
 		m.openHistory()

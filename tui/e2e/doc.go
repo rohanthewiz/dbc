@@ -12,6 +12,9 @@
 // Everything is self-contained: the test builds dbc, writes a config with
 // two file-backed SQLite connections under a temporary HOME, seeds them
 // with the headless `dbc -c conn "SQL"` mode, and runs the TUI at 140×45.
+// $EDITOR is a shell stand-in (writeEditor) that copies a file the test
+// prepares over the script being edited, so the scripts browser's edit,
+// the suspend and resume, and the check on return run for real.
 //
 // What it cannot see: how a particular terminal renders the glyphs and
 // colors (iTerm2, Terminal.app, kitty, Ghostty), and real mouse hardware's

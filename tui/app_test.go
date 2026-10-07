@@ -524,10 +524,9 @@ func TestScriptRunsFromThePicker(t *testing.T) {
 	if !ok {
 		t.Fatalf("modal = %T; log: %s", m.modal, logText(m))
 	}
-	for i, f := range sm.files {
-		if strings.HasSuffix(f, "loop_params.go") {
-			sm.lst.cur = i
-		}
+	sm.selectName("loop_params.go")
+	if r, _ := sm.row(); r.name != "loop_params.go" {
+		t.Fatalf("cursor on %+v, want loop_params.go", r)
 	}
 	key(t, m, "enter")
 	if m.ws.Busy() {

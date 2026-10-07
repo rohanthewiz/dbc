@@ -328,22 +328,10 @@ func (s *Server) handleScriptTemplate(ctx rweb.Context) error {
 }
 
 // templateConns orders the connection names for a template: first, if it
-// is a connection; the default; the rest. Each name once.
+// is a connection; the default; the rest. Each name once. The rule lives in
+// config.ConnOrder, which the TUI's browser fills its templates through too.
 func (s *Server) templateConns(first string) []string {
-	var out []string
-	add := func(n string) {
-		if n != "" && !slices.Contains(out, n) {
-			out = append(out, n)
-		}
-	}
-	if _, known := s.cfg.ConnByName(first); known {
-		add(first)
-	}
-	add(s.defaultConn())
-	for _, c := range s.cfg.Conns() {
-		add(c.Name)
-	}
-	return out
+	return s.cfg.ConnOrder(first)
 }
 
 // handleScriptAPI is GET /api/v1/script-api: the sdb API as data, for

@@ -504,6 +504,31 @@ func (c *Config) Conns() []Connection {
 	return c.Connections
 }
 
+// ConnOrder lists the connection names in the order a new script's template
+// wants them (scripts.Fill puts the first in "{{conn}}" and the second in
+// "{{conn2}}"): first, when it names a connection (the tab's own, say); the
+// default connection; then the rest in config order. Each name once. dbc web
+// and the TUI both fill templates through it, so a script started from
+// either names the same connections.
+func (c *Config) ConnOrder(first string) []string {
+	var out []string
+	add := func(n string) {
+		if n != "" && !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	if _, known := c.ConnByName(first); known {
+		add(first)
+	}
+	if _, known := c.ConnByName(c.DefaultConnection); known {
+		add(c.DefaultConnection)
+	}
+	for _, cn := range c.Conns() {
+		add(cn.Name)
+	}
+	return out
+}
+
 // ErrConnExists is AddConn refusing a name already in use: ConnByName would
 // always find the first of two, so the second could never be reached.
 var ErrConnExists = errors.New("a connection by that name already exists")

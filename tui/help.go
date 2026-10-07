@@ -53,7 +53,7 @@ var keyGroups = []keyGroup{
 	{"Anywhere", [][2]string{
 		{"^P", "history — insert a past statement (never runs it)"},
 		{"^E", "export the result (file or clipboard)"},
-		{"^O", "scripts — run a Go script from scripts_dir"},
+		{"^O", "scripts — run, edit ($EDITOR), make from a template, examples, trash"},
 		{"^T", "list the tables and views"},
 		{"^A", "the assistant — and back"},
 		{"^B", "hide the sidebar — and back (or click ‹ / ›)"},
@@ -69,6 +69,15 @@ var keyGroups = []keyGroup{
 		{"click · double-click a tab", "switch to it · rename it"},
 		{"right-click a tab", "rename, close, new tab, its consoles"},
 		{"● · • · ◆", "running · finished in the background · may hold a transaction"},
+	}},
+	{"Scripts browser (^O)", [][2]string{
+		{"Enter · double-click", "run it · edit it (an example: copy it; a trashed one: restore it)"},
+		{"e", "edit in $VISUAL / $EDITOR (else vi); dbc checks it when the editor exits"},
+		{"n · d", "new from a template · duplicate (an example: copy into your scripts)"},
+		{"r · F2 · Del · x", "rename · rename · move to the trash · the same"},
+		{"y · t", "copy its path · show or hide the Trash"},
+		{"/ · Esc", "filter by name and description · back to the list, then close"},
+		{"right-click", "everything above for the row"},
 	}},
 	{"Results grid", [][2]string{
 		{"arrows · ⇧arrows", "move · extend the range"},

@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-136
+**Next ID:** N-137
 
 ## Open
 
@@ -118,6 +118,11 @@ ten session docs in `ai_docs/claude_sessions/`
   transposed-grid drags with real mouse hardware. The pty e2e suite
   (`tui/e2e`, xterm-256color through charmbracelet/x/vt) passes every new
   step; glyph rendering and OS key capture it cannot see.
+  Updated `2026-1006-2224-scripts-tui-browser`: add the scripts browser's `e` with a real
+  editor (vim, nvim, `code -w`). Check that the TUI comes back whole: alt
+  screen, mouse and the kitty keys, also inside a cats pane. Check that Del
+  reaches it (a Mac's ⌫ is Backspace, so `x` is the fallback). The e2e
+  drives `e` only through a shell stand-in for `$EDITOR`.
 - **N-116** · raised `2026-1005-1450-tui-web-parity` · value low
   Tab groups in the TUI. dbc web has them (`tabgroups.js`: ad-hoc and
   connection groups, collapse to a chip); the TUI's strip has no groups.
@@ -194,6 +199,12 @@ ten session docs in `ai_docs/claude_sessions/`
   examples, trash), and a "Result 1 · 2 · 3" switcher for several
   `s.Show`s. Left: phases 5–6 (TUI browser, docs rewrite). README and the
   skill still describe Ctrl+O as a run-only picker until phase 6.
+  Updated `2026-1006-2224-scripts-tui-browser`: phase 5 is done. The TUI's Ctrl+O is the
+  browser (Scripts or templates, Examples, Trash; bare-letter keys, `/`
+  filters), editing goes through `$VISUAL`/`$EDITOR` with `script.Check`
+  on return, and every way of making a script edits it next. The README's
+  Ctrl+O key row is updated; the rest of the docs and the skill are
+  phase 6, which is all that is left.
 - **N-132** · raised `2026-1006-1915-scripts-store-check-examples` · value low
   The built-in examples (`scripts/embed.go`) are reachable only from Go
   until the scripts browser lands (phases 3–5). So `dbc script loop_params`
@@ -205,6 +216,9 @@ ten session docs in `ai_docs/claude_sessions/`
   Updated `2026-1006-2020-scripts-web-ui`: dbc web now offers the examples (Ctrl+O, Enter
   makes a copy). Headless `dbc script`/`dbc scripts` and the TUI still do
   not; phase 5 covers the TUI.
+  Updated `2026-1006-2224-scripts-tui-browser`: the TUI's browser lists the examples too
+  (Enter or `d` copies one into the scripts dir). Only headless
+  `dbc script NAME` / `dbc scripts` are left without them.
 
 - **N-133** · raised `2026-1006-1937-scripts-web-api` · value low
   rweb's radix router (v0.1.32) does not backtrack. Under one method, a
@@ -229,6 +243,13 @@ ten session docs in `ai_docs/claude_sessions/`
   nothing on disk is lost, only the other window's unsaved draft across a
   reload. Fix it with per-window keys plus a merge, or by keeping drafts on
   the server (the saved tab's buffer).
+
+- **N-136** · raised `2026-1006-2224-scripts-tui-browser` · value low
+  The TUI keeps only the last of a script's `s.Show`s: each one replaces
+  the grid. dbc web keeps the newest 20 (`Workspace.ScriptResults`,
+  `ShowScriptResult`) behind a "Result 1 · 2 · 3" switcher. The TUI could
+  draw the same switcher on the results title (keys `[`/`]`, a click), since
+  the workspace already keeps the list.
 
 ## Roadmap
 

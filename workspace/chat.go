@@ -33,7 +33,9 @@ type GridView struct {
 // Which statement is "this query": the one under the editor's caret, since
 // that is what the user is looking at. When it is the statement that last
 // ran, its result (or error) comes along; when the editor is empty, the last
-// run's statement stands in.
+// run's statement stands in. A result goes only from the tab on screen, and
+// only when that tab holds the statement's result (attachTabLocked) — which
+// after a run of several statements may be an earlier statement's tab.
 //
 // question is the question being (or about to be) asked; its words, like
 // the statement's, pick which tables' schema goes along. The Tables come
@@ -80,10 +82,18 @@ func (w *Workspace) ChatContext(question string, ed Editor, views ...GridView) (
 		return ctx, refs
 	}
 	refs = w.mentionedLocked(&ctx, cur, question)
-	if cur == "" || cur != last.lastStmt {
-		return ctx, refs
+	switch {
+	case cur == "":
+	case cur == last.lastStmt:
+		w.attachLastRunLocked(&ctx, views, cur)
+	default:
+		// not the statement that last ran, but its result may be the one
+		// on screen all the same: a run of several statements leaves a tab
+		// per statement (results.go), and clicking back to one with the
+		// caret on its statement is asking about that result. No error
+		// goes: the last error is the last statement's.
+		w.attachTabLocked(&ctx, views, cur)
 	}
-	w.attachLastRunLocked(&ctx, views)
 	return ctx, refs
 }
 
@@ -145,7 +155,8 @@ func (w *Workspace) ScriptChatContext(question, name, source string, views ...Gr
 	if name == "" || name != w.lastLocked().lastScript {
 		return ctx, refs
 	}
-	w.attachLastRunLocked(&ctx, views)
+	// "": a script's tab holds no statement (resultTab.stmt)
+	w.attachLastRunLocked(&ctx, views, "")
 	return ctx, refs
 }
 
@@ -182,18 +193,30 @@ func (w *Workspace) mentionedLocked(ctx *ai.Context, text, question string) (ref
 }
 
 // attachLastRunLocked puts the last run's outcome into ctx: its error, or
-// else its result as the grid shows it (view). The caller has decided the
-// last run is the one the question is about.
-func (w *Workspace) attachLastRunLocked(ctx *ai.Context, views []GridView) {
+// else the result on screen as the grid shows it (view), when that is
+// stmt's (attachTabLocked). The caller has decided the last run is the one
+// the question is about.
+func (w *Workspace) attachLastRunLocked(ctx *ai.Context, views []GridView, stmt string) {
 	if e := w.lastLocked().lastErr; e != "" {
 		ctx.Err = e
 		return
 	}
-	var r *model.Result
-	if t := w.curLocked(); t != nil {
-		r = t.res
+	w.attachTabLocked(ctx, views, stmt)
+}
+
+// attachTabLocked puts the result on screen into ctx, as the grid shows it
+// (view) — only when its tab holds stmt's result. The tab on screen is
+// not always the last statement's: a run of several statements gives a
+// tab to each one that returned rows and none to a write, so after
+// "SELECT …; UPDATE …" the SELECT's rows are on screen while the UPDATE
+// is the last statement — and the user can click back to an older tab.
+// Rows sent as another statement's would be answered about wrongly.
+func (w *Workspace) attachTabLocked(ctx *ai.Context, views []GridView, stmt string) {
+	t := w.curLocked()
+	if t == nil || t.stmt != stmt {
+		return
 	}
-	if r != nil && !r.IsExec {
+	if r := t.res; r != nil && !r.IsExec {
 		ctx.Columns, ctx.Rows, ctx.Truncated = r.Columns, r.Rows, r.Truncated
 		applyView(ctx, r, views)
 	}

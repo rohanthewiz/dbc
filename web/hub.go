@@ -815,8 +815,13 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 			out.Sets = scriptSets(t.ws)
 		}
 		if r := ev.Result; r != nil {
+			// a failed run can still land the results of the statements
+			// before the failure (workspace landRun); its status stays the
+			// error's
 			shown := s.shown(r)
-			out.Status = workspace.ResultStatus(r, s.cfg.MaxRows, shown)
+			if ev.Err == nil {
+				out.Status = workspace.ResultStatus(r, s.cfg.MaxRows, shown)
+			}
 			if shown < len(r.Rows) { // the TUI's words for the same cap
 				t.logOn(ev.Conn, "warn", fmt.Sprintf(
 					"showing the first %d of %d rows — the rest are fetched, and go into an export (max_display_rows)",

@@ -52,6 +52,35 @@ import (
 // shared tab keeps its result as a pinned one does: a run does not replace
 // it, and room is not made by dropping it.
 //
+// A run of SEVERAL statements (run all, a selection of several) opens a
+// tab per statement that returns rows, as DBeaver and DataGrip do — a
+// write's "n affected" gets none, or a script of INSERTs would bury the
+// strip; when no statement returns rows, the last one's result lands
+// alone, as a single statement's would. The tabs of one run are a GROUP
+// (resultTab.run), and "a run replaces its tab" becomes "a run replaces its
+// group": rerunning the buffer refills the same tabs in order rather than
+// piling up a strip's worth each time:
+//
+//	before   [#1 ⚑ users] [#4 a] [#5 b] [#6 c]     #4–#6 one run's group, #5 current
+//	run all  (2 SELECTs and an UPDATE) ─► target #5 ─► group #4 #5 #6
+//	after    [#1 ⚑ users] [#4 a'] [#5 b']          #4, #5 refilled in order; #6
+//	                                               had no result to take and is
+//	                                               closed; #5 (the last) current
+//
+// More results than the group has tabs open new ones right after the
+// group's last, so a run's tabs stay side by side. A pinned or shared tab
+// leaves the group as far as a rerun is concerned (it keeps its result).
+// A single statement run on one tab of a group replaces just that tab —
+// that is the edit-one-and-rerun loop — and takes it out of the group. A
+// rerun of several statements replaces the group however many of them
+// return rows this time (a failure part way included): fewer results than
+// tabs closes the rest.
+//
+// The cap still holds: a new tab first drops the oldest unpinned tab of
+// OTHER runs, then this run's own oldest, so a run with more results than
+// result_tabs keeps its last ones (the last result is still the one on
+// screen, as before tabs-per-statement) and says how many did not fit.
+//
 // A script run lands in one tab too: its first s.Show takes the target as a
 // run's result would, and every later show of the same run joins that tab
 // (shows, below), where the "Result 1 · 2 · 3" switcher steps through them.
@@ -75,6 +104,16 @@ type resultTab struct {
 	// (cut+i+1)th. res is one of them. Empty for a run's own result.
 	shows []shown
 	cut   int
+	// run is the run that filled the tab (its runGen): tabs sharing it are
+	// one multi-statement run's group, which a rerun refills together
+	run int
+}
+
+// landing is one result a run puts in a tab: what placeRunLocked takes.
+type landing struct {
+	title, stmt string
+	res         *model.Result
+	n           int // the statement's number in the run, 1-based (0: not a statement's)
 }
 
 // shown is one of a script run's s.Show results, with its seq.
@@ -191,29 +230,94 @@ func (w *Workspace) targetLocked(conn string) (*resultTab, error) {
 // in a new tab at the end — and makes that tab the current one. The caller
 // holds mu.
 func (w *Workspace) placeLocked(conn string, target *resultTab, title, stmt string, r *model.Result) *resultTab {
+	t, _ := w.placeRunLocked(conn, target, w.runGen, false, []landing{{title: title, stmt: stmt, res: r}})
+	return t
+}
+
+// placeRunLocked lands one run's results (at least one) in conn's result
+// set, a tab each, and makes the last one's tab current; it returns that
+// tab and how many of the run's own earlier tabs the cap made it drop. The
+// caller holds mu.
+//
+// The tabs it may refill — the SLOTS — are target alone for a run of one
+// statement, and target's whole group (the unkept tabs its run filled, in
+// strip order) when group is set, for a run of several; none when target
+// has gone or is now kept. It is the run's statements that decide, not how
+// many results came back: rerunning the buffer after a statement stopped
+// returning rows (or failed) still replaces the group, closing the tab the
+// missing result had.
+// Results past the slots open new tabs after the last tab filled; slots
+// past the results are closed — they held the replaced run's results for
+// statements this run did not return rows from. See the package comment
+// above for the picture.
+func (w *Workspace) placeRunLocked(conn string, target *resultTab, run int, group bool, ls []landing) (*resultTab, int) {
 	s := w.setLocked(conn)
-	w.resSeq++
-	if i := slices.Index(s.tabs, target); target != nil && i >= 0 && !s.kept(target) {
-		target.title, target.stmt, target.res, target.seq = title, stmt, r, w.resSeq
-		target.shows, target.cut = nil, 0
-		s.cur = i
-		return target
+	var slots []*resultTab
+	if target != nil && slices.Contains(s.tabs, target) && !s.kept(target) {
+		slots = []*resultTab{target}
+		if group {
+			slots = slices.DeleteFunc(slices.Clone(s.tabs), func(t *resultTab) bool {
+				return t.run != target.run || s.kept(t)
+			})
+		}
 	}
-	// a new tab: make room by dropping the oldest unpinned (and unshared)
-	// ones. With none left to drop the set goes over the cap (see the
-	// package comment above: only a pin or share made mid-run gets here).
+	var placed []*resultTab // this landing's tabs, in the order filled
+	dropped := 0
+	for i, l := range ls {
+		w.resSeq++
+		if i < len(slots) {
+			t := slots[i]
+			t.title, t.stmt, t.res, t.seq, t.run = l.title, l.stmt, l.res, w.resSeq, run
+			t.shows, t.cut = nil, 0
+			placed = append(placed, t)
+			continue
+		}
+		dropped += w.makeRoomLocked(s, placed)
+		// right after the tab filled last, so one run's tabs sit side by
+		// side; the first new tab of a landing goes at the end
+		at := len(s.tabs)
+		if n := len(placed); n > 0 {
+			if j := slices.Index(s.tabs, placed[n-1]); j >= 0 {
+				at = j + 1
+			}
+		}
+		w.tabSeq++
+		t := &resultTab{id: w.tabSeq, title: l.title, stmt: l.stmt, res: l.res, seq: w.resSeq, run: run}
+		s.tabs = slices.Insert(s.tabs, at, t)
+		placed = append(placed, t)
+	}
+	if len(slots) > len(ls) {
+		gone := slots[len(ls):]
+		s.tabs = slices.DeleteFunc(s.tabs, func(t *resultTab) bool { return slices.Contains(gone, t) })
+	}
+	// the last tab filled is never dropped: makeRoomLocked runs only
+	// before a tab is added, and drops this landing's oldest first
+	last := placed[len(placed)-1]
+	s.cur = slices.Index(s.tabs, last)
+	return last, dropped
+}
+
+// makeRoomLocked drops tabs until s has room for one more under the cap:
+// the oldest unkept tab that is not one of ours (this landing's) first,
+// then the oldest of ours. It returns how many of ours went. With nothing
+// left to drop the set goes over the cap (see the package comment: only a
+// pin or share made mid-run gets here, and then only for the first tab a
+// landing adds — the next has that one to drop).
+func (w *Workspace) makeRoomLocked(s *resultSet, ours []*resultTab) int {
+	n := 0
 	for len(s.tabs) >= w.cfg.ResultTabLimit() {
-		i := slices.IndexFunc(s.tabs, func(t *resultTab) bool { return !s.kept(t) })
+		i := slices.IndexFunc(s.tabs, func(t *resultTab) bool { return !s.kept(t) && !slices.Contains(ours, t) })
 		if i < 0 {
-			break
+			// ours are never kept: a landing holds mu from its first tab
+			// to its last, so nothing pins one in between
+			if i = slices.IndexFunc(s.tabs, func(t *resultTab) bool { return slices.Contains(ours, t) }); i < 0 {
+				break
+			}
+			n++
 		}
 		s.tabs = slices.Delete(s.tabs, i, i+1)
 	}
-	w.tabSeq++
-	t := &resultTab{id: w.tabSeq, title: title, stmt: stmt, res: r, seq: w.resSeq}
-	s.tabs = append(s.tabs, t)
-	s.cur = len(s.tabs) - 1
-	return t
+	return n
 }
 
 // showLocked lands one of a script run's s.Show results on conn: the run's

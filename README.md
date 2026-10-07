@@ -977,8 +977,9 @@ Keep a whole scratchpad of SQL in the editor and run one statement at a time:
 which one (`running statement 2/4 …`), then that it finished
 (`statement 2/4 completed on pg in 12ms — 3 rows`). Select a region first and `Ctrl+R`
 runs exactly that instead — a selection holding several statements runs them
-in order, stopping at the first failure, with the last result shown in the
-table.
+in order, stopping at the first failure, with a result tab for each statement
+that returns rows (see [Result tabs](#result-tabs-and-the-log-per-connection))
+and the last of them on screen.
 To run the whole buffer without selecting it, press `Ctrl+Shift+R` (or
 `Alt+R` — a terminal without the kitty keyboard protocol sends Ctrl+Shift+R
 as plain Ctrl+R, and on macOS `Alt+R` needs Option set to send Meta), or pick **▶ Run all** from the editor's right-click menu;
@@ -1069,9 +1070,22 @@ its statement (or `preview cats`, `columns cats`, `script x.go`). A script's
 `s.Show` results all land in one tab, where "Result 1 · 2 · 3" steps through
 them.
 
+A run of **several statements** (Run all, or a selection of several) opens
+a tab per statement that returns rows, as DBeaver and DataGrip do; an
+`INSERT`, `UPDATE` or DDL statement gets none (the log has its count), and
+when no statement returns rows the last one's result lands alone. The last
+tab filled is the one on screen. Those tabs stay together, and running the
+buffer again **refills them in order** instead of piling up more — a rerun
+with fewer row-returning statements closes the tabs it has nothing for,
+while a pinned (or shared) tab is left out and keeps its result. Running
+one statement with one of those tabs on screen replaces just that tab. When
+a statement fails, the results of the ones before it still land.
+
 `result_tabs` (default 10, at most 50) caps the tabs of one connection's
 set. When a run needs a new tab and the set is full, the oldest tab that is
-neither pinned nor shared is dropped. If every tab is pinned, the run is
+neither pinned nor shared is dropped — another run's before one of this
+run's own, so a run with more results than the cap keeps its last ones (the
+log says how many did not fit). If every tab is pinned, the run is
 refused before it starts, and the log says to unpin or close one. `{` / `}`
 step through the tabs, `x` closes the one on screen (its right-hand
 neighbour takes its place), and the strip's right-click menu also closes

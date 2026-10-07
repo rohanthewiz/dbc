@@ -60,15 +60,6 @@ ten session docs in `ai_docs/claude_sessions/`
   are underlined, listed by line in the log, and ⇧F12 again steps through
   them. A small modal list (line + text, Enter jumps) if stepping is not
   enough.
-- **N-133** · raised `2026-1006-1937-scripts-web-api` · value low
-  rweb's radix router (v0.1.32) does not backtrack. Under one method, a
-  path segment with a literal child (`examples/`) beside a param (`:name`)
-  sends any value sharing the literal's first letters (`export_report.go`)
-  into the literal's branch, where it fails as "no such endpoint" instead
-  of matching `:name`. dbc routes around it (`web/scripts.go` keeps only
-  `:name` under `/api/v1/scripts/`). Fix it upstream in rweb, which is the
-  user's own library, if another route set ever needs literal and param
-  siblings.
 
 - **N-137** · raised `2026-1007-0229-next-list-sweep-3` · value low
   The TUI assistant does not send a script's context. dbc web's script
@@ -271,6 +262,16 @@ call.
   leaves another window's members under the old name. Only matters with
   two windows grouping at once; fix would be page-side deltas or a
   per-group stamp.
+
+- **N-133** · raised `2026-1006-1937-scripts-web-api` · value low
+  rweb's radix router (v0.1.32) does not backtrack. Under one method, a
+  path segment with a literal child (`examples/`) beside a param (`:name`)
+  sends any value sharing the literal's first letters (`export_report.go`)
+  into the literal's branch, where it fails as "no such endpoint" instead
+  of matching `:name`. dbc routes around it (`web/scripts.go` keeps only
+  `:name` under `/api/v1/scripts/`). Fix it upstream in rweb, which is the
+  user's own library, if another route set ever needs literal and param
+  siblings.
 
 - **N-138** · raised `2026-1007-0229-next-list-sweep-3` · value low
   ETL values that MySQL cannot hold: a Postgres `timestamptz 'infinity'`

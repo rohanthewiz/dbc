@@ -125,11 +125,19 @@ stdlib). Run it with `dbc [-c …] [-t FMT] [-o FILE] script path.go`.
 `s.Print` is progress (moves to stderr when `-t` is machine-readable);
 `s.Show(r)` is data.
 
+A user's scripts live in `scripts_dir` (default `~/.config/dbc/scripts`;
+`dbc scripts` prints it on stderr). Write one there, `dbc script --check`
+it, then run it by name. Both UIs list that directory in their scripts
+browser (`Ctrl+O`): dbc web edits a script in a Go tab, and the TUI hands it
+to `$VISUAL`/`$EDITOR`.
+
 See [scripting.md](scripting.md) for the `sdb.S` API, ETL
-(`Copy`/`Reader`/`Writer`), and the yaegi map-assignment bug that silently
-drops writes. Samples to copy from live in `scripts/`:
-`loop_params.go`, `sweep_conns.go`, `export_report.go`, `copy_table.go`,
-`plan_check.go`.
+(`Copy`/`Reader`/`Writer`), the scripts browser, and the yaegi
+map-assignment bug that silently drops writes. Samples to copy from live in
+the repo's `scripts/` (`loop_params.go`, `sweep_conns.go`,
+`export_report.go`, `copy_table.go`, `plan_check.go`). They are built into
+the binary as the browser's read-only Examples, but headless `dbc script
+loop_params` does not find them by name: run them by path from a checkout.
 
 ## Working on dbc itself
 
@@ -144,7 +152,8 @@ Opt-in suites (README "Tests"):
 - **Web e2e** — `cd web/e2e && DBC_E2E=1 go test -count=1 -v .` (go-rod,
   headless Chrome; its own module). `DBC_E2E_HEADFUL=1` to watch.
 - **TUI e2e** — `cd tui/e2e && DBC_TUI_E2E=1 go test -count=1 -v .`
-  (pseudo-terminal + VT emulator; its own module).
+  (pseudo-terminal + VT emulator; its own module). It points `EDITOR` at a
+  shell stand-in, so the scripts browser's `e` runs without a real editor.
 
 To show a change working, prefer a headless run of a fresh build against the
 demo or a scratch SQLite/bytdb file (see "Before running anything"); use the

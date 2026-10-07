@@ -385,7 +385,8 @@ func ScriptDesc(path string) string {
 // DescOf is a script's description, taken from the script itself so there
 // is no sidecar file to keep in step: the first comment in the file, before
 // the package clause, cut to its first sentence. Directives (//go:build)
-// are not part of it — CommentGroup.Text drops them.
+// are not part of it — CommentGroup.Text drops them — so the comment may
+// come before the build tag or after it.
 //
 //	// Copy myschema.mytable from ProdDr to dev.   ─► "Copy myschema.mytable from ProdDr to dev."
 //	// More detail on the next line.
@@ -413,10 +414,23 @@ func scriptHeaderOf(src []byte) scriptHeader {
 		return scriptHeader{}
 	}
 	h := scriptHeader{otherPkg: f.Name != nil && f.Name.Name != "main"}
-	if len(f.Comments) == 0 || f.Comments[0].Pos() > f.Package {
-		return h // no comment, or the first is below the package clause
+	// The first group with words in it, above the package clause. A group
+	// that is only directives has none (Text drops //go:build), and that is
+	// what a file starting with its build tag has first:
+	//
+	//	//go:build ignore              ← group 1: Text() == "" → skipped
+	//
+	//	// Count the cats by breed.    ← group 2: the description
+	//	package main
+	for _, g := range f.Comments {
+		if g.Pos() > f.Package {
+			break // below the package clause: a declaration's doc, not ours
+		}
+		if text := strings.Join(strings.Fields(g.Text()), " "); text != "" {
+			h.desc = firstSentence(text)
+			break
+		}
 	}
-	h.desc = firstSentence(strings.Join(strings.Fields(f.Comments[0].Text()), " "))
 	return h
 }
 

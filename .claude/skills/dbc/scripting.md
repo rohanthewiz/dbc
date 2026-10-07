@@ -9,6 +9,7 @@ the code disagree.
 ```go
 //go:build ignore
 
+// Count the demo cats by breed.
 package main
 
 import "github.com/rohanthewiz/dbc/sdb"
@@ -36,7 +37,26 @@ dbc -t csv -o out.csv script s.go
 
 `scripts_dir` defaults to `~/.config/dbc/scripts`; a relative value is
 relative to the config file, never the cwd. Put a user's scripts there,
-not in the repo's `scripts/` (those are the samples).
+not in the repo's `scripts/` (those are the samples). The directory may not
+exist yet: dbc makes it on the first save from a UI, so `mkdir -p` it when
+writing a script from the shell.
+
+Writing a script for the user:
+
+1. `dbc scripts` — the directory (stderr) and the names already taken.
+2. Write `<dir>/<name>.go`. Use letters, digits, `.`, `_` and `-`, ending
+   in `.go`, with no leading dot (the UIs refuse to rename or save anything
+   else). Put a comment above `package main` (before
+   or after the build tag): its first sentence is the description both UIs
+   and `dbc scripts` show.
+3. `dbc script --check <name>` until it prints nothing. It never runs
+   anything, so it is safe on a script that writes.
+4. Run it only with the user's go-ahead if it writes to a real connection.
+
+The user will see it at once in `Ctrl+O`. A dbc web tab with the script open
+and unsaved edits gets a conflict on its next save rather than overwriting
+your version, and the reverse holds for you: re-read the file before
+editing a script the user may have open.
 
 `//go:build ignore` only keeps `go build ./...` from compiling the script;
 dbc runs it regardless. Connection names come from config /
@@ -88,6 +108,31 @@ Behavior worth knowing before promising anything to the user:
 - `Reader` values: `int64`, `float64`, `bool`, `string`, `time.Time`,
   `[]byte`, `nil`; Postgres `numeric`/`uuid`/arrays as text. An unclosed
   Writer is rolled back when `Run` returns, never committed.
+
+## The scripts browser (TUI and dbc web)
+
+`Ctrl+O` in either UI. Sections: Scripts (by name, with description and
+age; the five templates — blank, query, loop, copy, export — when the dir is
+empty), Examples (the repo's samples, embedded, read-only; Enter copies
+one), and Trash (`<dir>/.trash/`, newest 50 kept; Enter restores). Making a
+script (new, duplicate, copy an example) asks a name, writes the file, then
+opens it for editing. Enter on a script runs it.
+
+| | TUI | dbc web |
+| --- | --- | --- |
+| edit | `e` → `$VISUAL`/`$EDITOR`/`vi`, checked on exit | `Shift+Enter` → a script tab |
+| new · duplicate · rename | `n` · `d` · `r`/F2 | `Alt+N` · ⋯ · F2 |
+| trash · copy path · filter | Del/`x` · `y` · `/` | Ctrl+Delete · ⋯ · type |
+
+A dbc web script tab: Monaco in Go, errors marked 600 ms after typing (the
+same `script.Check`), `sdb` completion and hover, explicit `Ctrl+S` save
+(drafts survive a reload in localStorage), and Run saves first. It is never
+connected; a script names its own connections. Each `s.Show` of a run is
+kept (newest 20) behind "Result 1 · 2 · 3"; the TUI keeps only the last.
+
+To check these in the real UIs, use the e2e suites (SKILL.md): the web
+step "script tabs" (`web/e2e/scripts_test.go`) and the TUI step that drives
+`e` through a stand-in `$EDITOR`.
 
 ## yaegi pitfalls
 

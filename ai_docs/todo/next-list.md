@@ -174,37 +174,6 @@ ten session docs in `ai_docs/claude_sessions/`
   transaction (implicit commit), Truncate is a DELETE, a text primary key
   becomes VARCHAR(255), and the text protocol's []byte values are read as
   strings by column type.
-- **N-130** · raised `2026-1006-1855-scripts-dir-resolution` · value high
-  Scripts revamp, phases 2–6 of `ai_docs/plans/scripts-revamp.md` (phase 1,
-  where scripts live, is done): the script store (save with revision
-  check, rename, trash and restore), `script.Check` (compile without
-  running, plus a lint for `m[k], _ = …`), the repo samples built in as
-  Examples and templates, the web API, script tabs in dbc web (Monaco Go,
-  error markers, `sdb` completion, Run saves first), the TUI browser with
-  `$EDITOR`, and `dbc script --check`. Until the Examples land, `./dbc` in
-  a checkout with no `dbc.toml` and an empty `~/.config/dbc/scripts` warns
-  that `./scripts` is no longer read.
-  Updated `2026-1006-1915-scripts-store-check-examples`: phase 2 is done.
-  It added the store (save with rev check, rename, trash/restore),
-  `script.Check`, the embedded examples and templates, and
-  `dbc script --check`. A checkout no longer warns about `./scripts`,
-  because copies of the samples are skipped. Left: phases 3–6 (web API, web
-  UI, TUI browser, docs rewrite).
-  Updated `2026-1006-1937-scripts-web-api`: phase 3 is done. It added the web routes for
-  the store, check, examples, templates and the sdb API, plus the `scripts`
-  window event. Left: phases 4–6 (web UI, TUI browser, docs rewrite).
-  Updated `2026-1006-2020-scripts-web-ui`: phase 4 is done. dbc web has script tabs (Monaco
-  Go, check markers, sdb completion and hover, explicit save with
-  conflicts and drafts, Run saves first), the Ctrl+O browser (templates,
-  examples, trash), and a "Result 1 · 2 · 3" switcher for several
-  `s.Show`s. Left: phases 5–6 (TUI browser, docs rewrite). README and the
-  skill still describe Ctrl+O as a run-only picker until phase 6.
-  Updated `2026-1006-2224-scripts-tui-browser`: phase 5 is done. The TUI's Ctrl+O is the
-  browser (Scripts or templates, Examples, Trash; bare-letter keys, `/`
-  filters), editing goes through `$VISUAL`/`$EDITOR` with `script.Check`
-  on return, and every way of making a script edits it next. The README's
-  Ctrl+O key row is updated; the rest of the docs and the skill are
-  phase 6, which is all that is left.
 - **N-132** · raised `2026-1006-1915-scripts-store-check-examples` · value low
   The built-in examples (`scripts/embed.go`) are reachable only from Go
   until the scripts browser lands (phases 3–5). So `dbc script loop_params`
@@ -219,6 +188,9 @@ ten session docs in `ai_docs/claude_sessions/`
   Updated `2026-1006-2224-scripts-tui-browser`: the TUI's browser lists the examples too
   (Enter or `d` copies one into the scripts dir). Only headless
   `dbc script NAME` / `dbc scripts` are left without them.
+  Updated `2026-1006-2234-scripts-docs-and-skill`: the README and the dbc skill now say
+  that headless `dbc script loop_params` does not find an example by name
+  (run it by path from a checkout). So the gap is documented, not closed.
 
 - **N-133** · raised `2026-1006-1937-scripts-web-api` · value low
   rweb's radix router (v0.1.32) does not backtrack. Under one method, a
@@ -336,6 +308,39 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-130** · raised `2026-1006-1855-scripts-dir-resolution` · value high
+  Scripts revamp, phases 2–6 of `ai_docs/plans/scripts-revamp.md` (phase 1,
+  where scripts live, is done): the script store (save with revision
+  check, rename, trash and restore), `script.Check` (compile without
+  running, plus a lint for `m[k], _ = …`), the repo samples built in as
+  Examples and templates, the web API, script tabs in dbc web (Monaco Go,
+  error markers, `sdb` completion, Run saves first), the TUI browser with
+  `$EDITOR`, and `dbc script --check`. Until the Examples land, `./dbc` in
+  a checkout with no `dbc.toml` and an empty `~/.config/dbc/scripts` warns
+  that `./scripts` is no longer read.
+  Updated `2026-1006-1915-scripts-store-check-examples`: phase 2 is done.
+  It added the store (save with rev check, rename, trash/restore),
+  `script.Check`, the embedded examples and templates, and
+  `dbc script --check`. A checkout no longer warns about `./scripts`,
+  because copies of the samples are skipped. Left: phases 3–6 (web API, web
+  UI, TUI browser, docs rewrite).
+  Updated `2026-1006-1937-scripts-web-api`: phase 3 is done. It added the web routes for
+  the store, check, examples, templates and the sdb API, plus the `scripts`
+  window event. Left: phases 4–6 (web UI, TUI browser, docs rewrite).
+  Updated `2026-1006-2020-scripts-web-ui`: phase 4 is done. dbc web has script tabs (Monaco
+  Go, check markers, sdb completion and hover, explicit save with
+  conflicts and drafts, Run saves first), the Ctrl+O browser (templates,
+  examples, trash), and a "Result 1 · 2 · 3" switcher for several
+  `s.Show`s. Left: phases 5–6 (TUI browser, docs rewrite). README and the
+  skill still describe Ctrl+O as a run-only picker until phase 6.
+  Updated `2026-1006-2224-scripts-tui-browser`: phase 5 is done. The TUI's Ctrl+O is the
+  browser (Scripts or templates, Examples, Trash; bare-letter keys, `/`
+  filters), editing goes through `$VISUAL`/`$EDITOR` with `script.Check`
+  on return, and every way of making a script edits it next. The README's
+  Ctrl+O key row is updated; the rest of the docs and the skill are
+  phase 6, which is all that is left.
+  closed 2026-10-06, `2026-1006-2234-scripts-docs-and-skill`: phase 6 is done. The README's scripting section now covers the scripts browser (a TUI/web key table), script tabs, `$EDITOR` in the TUI, and the check. The dbc skill gained a write → check → run recipe and a browser section. Also `DescOf` now skips a directive-only comment group, so a script that starts with its build tag still gets a description.
 
 - **N-110** · raised `2026-1005-1222-web-tab-groups` · value medium
   The e2e step "tabs survive a reload" timed out once on "its text back"

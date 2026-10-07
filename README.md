@@ -2,8 +2,8 @@
 
 `dbc` is a terminal database client for Postgres, MySQL, SQLite, and
 [bytdb](https://github.com/rohanthewiz/bytdb) with a twist: instead of a
-bespoke macro language, you script it in **Go**. Drop a
-`.go` file in the scripts directory, loop over parameters, run queries against
+bespoke macro language, you script it in **Go**. Write a `.go` file — in
+dbc's own script editor or yours — loop over parameters, run queries against
 any configured connection, and export the results — CSV, Markdown, HTML,
 JSON — to a file or straight to the clipboard. And when a query is slow,
 **explain it**: the plan as a tree or a flame graph, the step that costs, and
@@ -1164,6 +1164,7 @@ file's connections are changed in the file. The TUI has the same form —
 | `Ctrl+X` (nothing selected) · `Ctrl+Shift+X` | explain · explain analyze |
 | `Ctrl+K` | stop the run (in the assistant: stop the answer) |
 | `Ctrl+P` · `Ctrl+E` · `Ctrl+O` | history · export · scripts |
+| `Ctrl+S` | in a script tab, save the script |
 | `Ctrl+I` | the assistant, and back (`Ctrl+A` stays select-all) |
 | `Ctrl+Space` | suggestions (they also open as you type — see [Completion](#completion)) |
 | `F12` · `Shift+F12` · `F2` | on an alias, a CTE name or a column the query names: go to its declaration · list its uses · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename)) |
@@ -1188,8 +1189,13 @@ drafts a question about what you are looking at. Copilot sign-in runs in the
 pane: dbc shows the device code, with buttons to copy it and open GitHub's
 page.
 
-**Scripts** (`Ctrl+O`, or ▷ Scripts) run from `scripts_dir`; `s.Print`
-lines reach the log and `s.Show` results the grid as they happen.
+**Scripts** (`Ctrl+O`, or ▷ Scripts) open the scripts browser: run, make,
+rename or trash a script, or copy one of the built-in examples. Editing a
+script opens a script tab — Go in Monaco, errors marked as you type, `sdb`
+completion, `Ctrl+S` to save, and Run saves first. `s.Print` lines reach the
+log and `s.Show` results the grid as they happen. See
+[The scripts browser](#the-scripts-browser) and
+[Script tabs in dbc web](#script-tabs-in-dbc-web).
 
 `Ctrl+C` in the terminal stops the server; every tab's run is stopped and
 its session released — anything left open is rolled back.
@@ -1241,6 +1247,7 @@ A script is a plain Go file defining one function:
 ```go
 //go:build ignore
 
+// Count the cats at each minimum age.
 package main
 
 import "github.com/rohanthewiz/dbc/sdb"
@@ -1263,25 +1270,122 @@ Scripts live in `~/.config/dbc/scripts`, beside the consoles and the
 history, unless the config sets `scripts_dir`. A relative `scripts_dir` is
 relative to the config file that sets it, not to the directory dbc starts
 in, so the TUI from any directory, `dbc web` and dbc.app all read the same
-scripts. `~` and `${VAR}`s are expanded. `dbc scripts` prints the directory
-and lists what is in it; the Ctrl+O picker names it in its title.
+scripts. `~` and `${VAR}`s are expanded. The directory is made on the first
+save. `dbc scripts` prints the directory and lists what is in it, and the
+scripts browser names it in its title.
 
 Scripts are interpreted at runtime (via yaegi) — no compile step, edit and
 re-run. The full Go standard library is available. The `//go:build ignore`
 line just keeps `go build` from compiling script files if they live inside a
 Go module; dbc runs them regardless.
 
+A script is an ordinary file, so it can be written anywhere: in dbc web's
+script tabs, in your own editor from the TUI, or in vim and committed to a
+repo of its own. Every save is revision-checked against the file, so a
+change made elsewhere (another window, the TUI, an editor) is a conflict to
+resolve, never silently overwritten.
+
+### The scripts browser
+
+`Ctrl+O` (or ƒ / ▷ Scripts on the toolbar) opens it, in the TUI and in dbc
+web alike:
+
+```
+┌ Scripts · ~/.config/dbc/scripts ─────────────────────── [+ New] ┐
+│ ⌕ filter                                                         │
+│ copy_mytable.go   Copy myschema.mytable from ProdDr to dev   2h  │
+│ nightly_report.go Export yesterday's orders as HTML          3d  │
+│ ─ Examples ───────────────────────────────────────────────────── │
+│ copy_table.go     Copy a Postgres table from one connection…     │
+│ loop_params.go    …                                              │
+│ ─ Trash (2) ▸ ────────────────────────────────────────────────── │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+- **Scripts** — yours, by name, each with its description (the comment
+  above `package main`, to its first sentence) and age. With none yet,
+  the section lists the **templates** instead: blank, query and show, a loop
+  over parameters, copying a table, exporting a report. A template's
+  connection names are filled in from your config, the current connection
+  first.
+- **Examples** — the samples in the repo's [`scripts/`](scripts/), built
+  into the binary, so a fresh install has them with no checkout. They are
+  read-only: Enter makes your own copy, which opens for editing.
+- **Trash** — folded. Trashing asks nothing, because it moves the file into
+  `<scripts_dir>/.trash/` (the newest 50 are kept), and Enter on a trashed
+  script restores it, offering another name if the old one has been taken
+  since.
+
+Enter on a script runs it, as Ctrl+O always has. New, duplicate and
+copying an example ask for a name, write the file, then open it for
+editing. The rest:
+
+| | TUI | dbc web |
+|---|---|---|
+| run · edit | `Enter` · `e` (or double-click) | `Enter` · `Shift+Enter` (or ▶ · ✎) |
+| new from a template | `n` (or `+ New`) | `Alt+N` (or `+ New ▾`) |
+| duplicate · rename | `d` · `r` / `F2` | ⋯ Duplicate… · `F2` |
+| trash | `Del` / `x` | `Ctrl+Delete` (`⌘⌫`) |
+| copy the path | `y` | ⋯ Copy path |
+| filter | `/` (Esc or Tab back to the list) | type — the filter has the focus |
+| unfold the trash | `t` (or click its heading) | click its heading |
+
+In the TUI a right-click on a row has these as a menu; in the web, ⋯ on a
+script's row does. The keys differ because the web's filter keeps the focus,
+so bare letters would type into it, and a terminal does not reliably pass
+`Shift+Enter` or `Ctrl+Delete` through.
+
+### Script tabs in dbc web
+
+Edit (or New) opens the script in a **script tab**: the editor in Go mode,
+with the grid and the log beside it as for a query.
+
+- **Run** (`Ctrl+Enter`, ▶ Run) saves first, then runs the file, so what
+  runs is what is on disk and what `dbc script` would run. A save that does
+  not land stops the run. `■ Stop` / `Ctrl+K` stops it as any run.
+- **Save** is explicit: `Ctrl+S` or ⤓ Save. A script never autosaves, but
+  unsaved edits are kept in the browser, so a reload does not lose them. The
+  tab reads `▷ name.go ●` while it has unsaved changes, and closing it asks
+  whether to save, discard or keep it open. If the file changed on disk
+  meanwhile, the save is a conflict: the file's text loads as one undoable
+  edit, and `Ctrl+Z` brings yours back to save over it.
+- **Errors as you type.** 600 ms after you stop typing, the unsaved text is
+  checked (as `dbc script --check` does) and the errors are marked on their
+  lines; the header adds `· 1 error`. ✓ Check also lists them in the log.
+- **Completion and hover** for the `sdb` API (`s.`, `sdb.`, the fields of a
+  `Result`, `CopyOpts` or `WriteOpts`), with signatures and doc comments,
+  and connection names inside a connection argument (`s.Query("…`).
+- A script names its own connections, so a script tab is never connected:
+  a click on a connection in the sidebar puts its name in at the caret, and
+  Explain, Run all and the rows box are hidden.
+- **Several results.** Each `s.Show` is kept (the newest 20 of a run), and
+  "Result 1 · 2 · 3" on the results bar switches between them. Copies,
+  exports and the assistant follow the one shown.
+
+Double-click the tab to rename the script. One script has one tab; opening
+it again goes to that tab.
+
+### Editing scripts from the TUI
+
+`e` in the browser suspends the TUI and opens the script in `$VISUAL`, else
+`$EDITOR`, else `vi`. The value is split on spaces, so `EDITOR="code -w"`
+works (the editor must wait until the file is closed). When it exits, the
+TUI comes back, logs whether the file changed, checks it and logs each
+problem as `~/…/name.go:6:9: undefined: x`. The browser then reopens on the
+script, so Enter runs it. An editor that is not on `PATH` is said in the log,
+and nothing is suspended. The TUI's grid shows only the last of a script's
+`s.Show`s.
+
+### Checking without running
+
 `dbc script --check NAME` checks a script without running any of it (not
 `Run`, not `init()`): syntax, that it is `package main` with a
 `func Run(s *sdb.S) error`, and the interpreter's compile pass (undefined
 names, type mismatches, an import other than the standard library and
-`sdb`). It also warns about the map-assignment quirk below. See
-[Scripts headless](#scripts-headless).
-
-The samples in the repo's `scripts/` are built into the binary as examples,
-along with new-script templates (blank, query and show, a loop over
-parameters, copying a table, exporting a report). The scripts browser in dbc
-web and the TUI will offer them; they are not read from disk.
+`sdb`). It also warns about the map-assignment quirk below. It is the same
+check both UIs run after an edit. yaegi is not the Go compiler, though: only
+the first compile error is reported, and an unused variable or import
+passes. See [Scripts headless](#scripts-headless).
 
 ### The `sdb.S` API
 
@@ -1305,6 +1409,7 @@ web and the TUI will offer them; they are not read from disk.
 
 Sample scripts live in [`scripts/`](scripts/): parameter loops, multi-host
 sweeps, CSV/HTML report generation, and copying tables between connections.
+They are the browser's Examples.
 
 ### ETL across connections
 
@@ -1536,9 +1641,11 @@ input; neither do `--tx` and `-k`, since a script runs its statements itself):
 The argument is a file path, as it always was. If no such file exists and
 the argument has no `/`, it is looked up in `scripts_dir`, with `.go`
 optional; a file in the current directory wins over a script of the same
-name. `dbc scripts` lists name, modified time, size and description (the
-script's opening comment, to its first sentence), with the directory on
-stderr so `-t json` stays one document.
+name. The browser's built-in examples are not looked up by name; run one by
+its path in a checkout, or copy it into your scripts first. `dbc scripts`
+lists name, modified time, size and description (the comment above
+`package main`, to its first sentence), with the directory on stderr so
+`-t json` stays one document.
 
 `--check` takes one or more scripts (names or paths) and runs none of them.
 It prints one line per problem on stdout, as a compiler does

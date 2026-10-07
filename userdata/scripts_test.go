@@ -57,6 +57,10 @@ func TestScriptDesc(t *testing.T) {
 		// the repo samples' shape: comment, then the build tag, then package
 		{"// Sample dbc script: copy a table from one\n// connection to another. More.\n//go:build ignore\n\npackage main\n",
 			"Sample dbc script: copy a table from one connection to another."},
+		// the build tag first, in a group of its own: that group is only a
+		// directive, so the comment after it is the description
+		{"//go:build ignore\n\n// Count the cats by breed. More.\npackage main\n", "Count the cats by breed."},
+		{"//go:build ignore\n\npackage main\n", ""},
 		// a dot inside a word is not a sentence end
 		{"// Uses sdb.S to copy v1.2 rows\npackage main\n", "Uses sdb.S to copy v1.2 rows"},
 		// a comment below the package clause is not a description

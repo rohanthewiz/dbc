@@ -4,8 +4,8 @@ Raised 2026-10-06. The ask: dbc.app looks for scripts in `~/scripts`; the
 scripts UI needs a revamp; scripts should be creatable and editable from the
 app, not only from an outside editor.
 
-This is a plan. **Phases 1–5 are done** (2026-10-06); phase 6 is not
-started. The decisions table was accepted as recommended.
+This is a plan. **All six phases are done** (2026-10-06). The decisions
+table was accepted as recommended.
 
 ## The one-paragraph version
 
@@ -507,6 +507,26 @@ Each phase ships alone and leaves main releasable.
 6. **Docs and the skill.** The README scripting section rewritten around the
    browser, and `.claude/skills/dbc` (`SKILL.md`, `scripting.md`) updated for
    the new dir, `dbc scripts`, and `--check`.
+
+   **Outcome (2026-10-06).**
+   - README "Scripting in Go" has new subsections: *The scripts browser*
+     (its sections and a TUI/web key table), *Script tabs in dbc web*,
+     *Editing scripts from the TUI* and *Checking without running*. The
+     stale "the browser will offer the examples" line is gone. The dbc web
+     section's Scripts paragraph describes script tabs, its key table has
+     Ctrl+S, and the intro no longer says "drop a file in the scripts
+     directory".
+   - The skill. `SKILL.md` covers where a user's scripts go, the browsers,
+     that headless `dbc script NAME` does not find the examples (N-132),
+     and the TUI e2e's `$EDITOR` stand-in. `scripting.md` has a
+     write → check → run recipe for an agent writing a user's script, and a
+     scripts-browser section.
+   - Fixed while checking the docs against the binary. `DescOf` read only
+     the first comment group above `package`. A script that starts with
+     `//go:build ignore` and puts its comment after it, the layout of the
+     README's own example, got no description. It now takes the first
+     group with text, so a directive-only group is skipped.
+     `TestScriptDesc` covers it and fails on the old code.
 
 ## Risks
 

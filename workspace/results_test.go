@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -547,6 +548,66 @@ func TestRunAllTabPerStatement(t *testing.T) {
 	ev = run(t, w, "INSERT INTO tps VALUES (2)", "INSERT INTO tps VALUES (3), (4)")
 	if ev.Tabs != 1 || ev.Result == nil || !ev.Result.IsExec || ev.Result.Affected != 2 {
 		t.Errorf("writes only: tabs %d, result %+v", ev.Tabs, ev.Result)
+	}
+}
+
+// A run of several statements logs each write's count, which has no tab
+// of its own, folding them past writeLines; a single statement's count is
+// left to the done note.
+func TestRunAllLogsEachWrite(t *testing.T) {
+	w := newTestWorkspace(t)
+	// lines picks the per-statement write lines out of a run's notes
+	lines := func(ev *RunDone) []string {
+		var out []string
+		for _, n := range ev.Notes {
+			if strings.HasPrefix(n.Text, "statement ") || strings.HasPrefix(n.Text, "… ") {
+				out = append(out, n.Text)
+			}
+		}
+		return out
+	}
+
+	// the UPDATE's count, lost before behind the SELECT's tab
+	run(t, w, "CREATE TEMP TABLE lw (x INT)", "INSERT INTO lw VALUES (1), (2), (3)")
+	ev := run(t, w, "SELECT 1 AS a", "UPDATE lw SET x = x + 1 WHERE x > 1")
+	if got := lines(ev); len(got) != 1 || got[0] != "statement 2/2: 2 affected — UPDATE lw SET x = x + 1 WHERE x > 1" {
+		t.Errorf("select then update: %q", got)
+	}
+
+	// a single statement: the done note has its count
+	if got := lines(run(t, w, "DELETE FROM lw WHERE x = 1")); len(got) != 0 {
+		t.Errorf("single statement: %q", got)
+	}
+
+	// no line for BEGIN or COMMIT, "done" for DDL, the rest folded
+	stmts := []string{"BEGIN", "CREATE TEMP TABLE lw2 (x INT)"}
+	for i := range 8 {
+		stmts = append(stmts, fmt.Sprintf("INSERT INTO lw2 VALUES (%d), (%d)", i, i))
+	}
+	stmts = append(stmts, "COMMIT")
+	got := lines(run(t, w, stmts...))
+	want := []string{
+		"statement 2/11: done — CREATE TEMP TABLE lw2 (x INT)",
+		"statement 3/11: 2 affected — INSERT INTO lw2 VALUES (0), (0)",
+		"statement 4/11: 2 affected — INSERT INTO lw2 VALUES (1), (1)",
+		"statement 5/11: 2 affected — INSERT INTO lw2 VALUES (2), (2)",
+		"statement 6/11: 2 affected — INSERT INTO lw2 VALUES (3), (3)",
+		"… 4 more writes, to statement 10: 8 affected in all",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("folded:\n got %q\nwant %q", got, want)
+	}
+
+	// a failed run logs the writes before the failure, ahead of the error
+	ev = run(t, w, "INSERT INTO lw VALUES (9)", "SELECT * FROM no_such_table", "INSERT INTO lw VALUES (10)")
+	if ev.Err == nil {
+		t.Fatal("want the failure")
+	}
+	if got := lines(ev); len(got) != 1 || got[0] != "statement 1/3: 1 affected — INSERT INTO lw VALUES (9)" {
+		t.Errorf("failed run: %q", got)
+	}
+	if n := ev.Notes[len(ev.Notes)-1]; n.Level != Err {
+		t.Errorf("last note = %+v, want the error", n)
 	}
 }
 

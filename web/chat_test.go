@@ -368,10 +368,8 @@ func TestScriptListAndRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := newTestEnv(t, func(c *config.Config, _ *Options) { c.ScriptsDir = dir })
-	list := decodeData[struct {
-		Scripts []string `json:"scripts"`
-	}](t, e.api("GET", "/api/v1/scripts", "", 200))
-	if len(list.Scripts) != 1 || list.Scripts[0] != "old_cats.go" {
+	list := decodeData[scriptsList](t, e.api("GET", "/api/v1/scripts", "", 200))
+	if len(list.Scripts) != 1 || list.Scripts[0].Name != "old_cats.go" {
 		t.Fatalf("scripts = %v", list.Scripts)
 	}
 

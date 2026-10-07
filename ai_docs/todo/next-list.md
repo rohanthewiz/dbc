@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-133
+**Next ID:** N-134
 
 ## Open
 
@@ -195,13 +195,9 @@ ten session docs in `ai_docs/claude_sessions/`
   `dbc script --check`. A checkout no longer warns about `./scripts`,
   because copies of the samples are skipped. Left: phases 3–6 (web API, web
   UI, TUI browser, docs rewrite).
-- **N-131** · raised `2026-1006-1855-scripts-dir-resolution` · value medium
-  Copying a SQLite table into bytdb fails on a boolean column: SQLite
-  hands back `adopted` as int64 0/1, and bytdb's bool column refuses it
-  ("value does not fit column type", `bytdb.coerce`). Seen with
-  `s.Copy("demo-sqlite", "demo-bytdb", "cats", …)`; the other direction
-  works. Coerce 0/1 to bool in the etl writer for a bool destination
-  column, or in bytdb's coerce.
+  Updated `2026-1006-1937-scripts-web-api`: phase 3 is done. It added the web routes for
+  the store, check, examples, templates and the sdb API, plus the `scripts`
+  window event. Left: phases 4–6 (web UI, TUI browser, docs rewrite).
 - **N-132** · raised `2026-1006-1915-scripts-store-check-examples` · value low
   The built-in examples (`scripts/embed.go`) are reachable only from Go
   until the scripts browser lands (phases 3–5). So `dbc script loop_params`
@@ -210,6 +206,16 @@ ten session docs in `ai_docs/claude_sessions/`
   built-in example by name after `scripts_dir`, and list examples (marked
   as such) in `dbc scripts`. Offered at the end of the session; the user
   did not answer.
+
+- **N-133** · raised `2026-1006-1937-scripts-web-api` · value low
+  rweb's radix router (v0.1.32) does not backtrack. Under one method, a
+  path segment with a literal child (`examples/`) beside a param (`:name`)
+  sends any value sharing the literal's first letters (`export_report.go`)
+  into the literal's branch, where it fails as "no such endpoint" instead
+  of matching `:name`. dbc routes around it (`web/scripts.go` keeps only
+  `:name` under `/api/v1/scripts/`). Fix it upstream in rweb, which is the
+  user's own library, if another route set ever needs literal and param
+  siblings.
 
 ## Roadmap
 
@@ -296,6 +302,15 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-131** · raised `2026-1006-1855-scripts-dir-resolution` · value medium
+  Copying a SQLite table into bytdb fails on a boolean column: SQLite
+  hands back `adopted` as int64 0/1, and bytdb's bool column refuses it
+  ("value does not fit column type", `bytdb.coerce`). Seen with
+  `s.Copy("demo-sqlite", "demo-bytdb", "cats", …)`; the other direction
+  works. Coerce 0/1 to bool in the etl writer for a bool destination
+  column, or in bytdb's coerce.
+  closed 2026-10-06, `2026-1006-1937-scripts-web-api`: fixed upstream in bytdb `v0.21.2`, whose `coerce` takes an integer 0/1 for a bool column (any other integer is an error). dbc now requires v0.21.2. `TestCopyBoolToBytdbCreates` copies a SQLite BOOLEAN with 1, 0 and NULL into a created bytdb table and filters `WHERE adopted`. It passes on v0.21.2 and fails on v0.21.1 with the N-131 error.
 
 - **N-114** · raised `2026-1005-1352-sql-alias-rename` · value low
   Resolve columns too, starting with the ones the statement itself names:

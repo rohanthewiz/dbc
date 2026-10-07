@@ -4,7 +4,7 @@ Raised 2026-10-06. The ask: dbc.app looks for scripts in `~/scripts`; the
 scripts UI needs a revamp; scripts should be creatable and editable from the
 app, not only from an outside editor.
 
-This is a plan. **Phases 1 and 2 are done** (2026-10-06); phases 3–6 are
+This is a plan. **Phases 1–3 are done** (2026-10-06); phases 4–6 are
 not started. The decisions table was accepted as recommended.
 
 ## The one-paragraph version
@@ -368,6 +368,37 @@ Each phase ships alone and leaves main releasable.
 3. **Web API.** The routes in §5, the `scripts` hub event, and the `sdb` API
    JSON generator. Tests in `web/` beside `consoles_test.go`, including a
    `:name` of `../x.go` and of an example name.
+
+   **Outcome (2026-10-06).**
+   - Routes (`web/scripts.go`). The ones that are not about one script moved
+     off `/api/v1/scripts/` to siblings: `script-check`, `script-api`,
+     `script-examples/:name`, `script-templates/:name` and
+     `script-trash/:id/restore`. rweb's radix router does not backtrack.
+     With a literal like `examples/` beside `:name`, a script whose name
+     shares its first letters (`export_report.go`, `trash.go`) 404'd.
+     `TestScriptNamesBesideRouteWords` holds the line.
+   - `GET /api/v1/scripts` now returns `{dir, short, scripts: [ScriptInfo],
+     examples, templates, trash: [TrashInfo]}`, so trash is the list, not a
+     count. The page's Ctrl+O picker reads `.name` and shows the desc.
+   - The save is the console protocol: `PUT {text, base}` returns `{rev}` or
+     `{conflict, text, rev}`, and a deleted file is a conflict with rev "".
+     A create (`base ""`) over a taken name is a 409. The size cap is
+     `userdata.MaxScriptBytes`, now exported.
+   - `DELETE` returns the trash `{id}`, so the page can offer Undo. Restore
+     takes an optional `{to}`, and a taken name is a 409.
+   - Beyond the plan, `GET /api/v1/script-templates/:name?conn=` returns a
+     filled template. The connection order is the tab's connection, then
+     the default, then the rest. New and Duplicate are the page PUTting text
+     with `base ""`; there is no server-side "create from" route.
+   - Every save, rename, trash or restore broadcasts a window-level
+     `scripts` event: `{op, name, to?, rev?, id?, win}`. It carries no text,
+     because a window with the script open fetches it.
+   - `sdb/sdbapi` builds the `sdb` API from source with `go/doc`: S's
+     methods (less `New`, `WithContext` and `Release`), package funcs, and
+     the aliased types' fields and methods, one level deep. Each func has
+     its params and its `connArgs` (string params named conn, src or dst).
+     It is embedded as `api.json`, and `go generate ./sdb/sdbapi` rebuilds
+     it. `TestAPIUpToDate` fails on drift.
 4. **Web UI.** The browser, script tabs, Monaco Go, markers, completion,
    the multi-result switcher, and dirty/conflict handling. Checked with the
    go-rod e2e (`web/e2e`, `DBC_E2E=1`): new from template → edit → see a

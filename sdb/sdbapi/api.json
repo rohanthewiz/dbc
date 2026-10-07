@@ -1,0 +1,824 @@
+{
+  "package": "sdb",
+  "doc": "Package sdb is the API surface handed to Go scripts. A script is a plain\nGo file (package main) defining:\n\n\tfunc Run(s *sdb.S) error\n\nIt can query any configured connection, loop with parameters, push results\ninto the results view, and export in any supported format.",
+  "funcs": [
+    {
+      "name": "IsCanceled",
+      "sig": "func IsCanceled(err error) bool",
+      "doc": "IsCanceled reports whether an error from Query or Exec is the user stopping\nthe run, as opposed to a genuine failure — so a script can unwind quietly:\n\n\tif err != nil {\n\t\tif sdb.IsCanceled(err) {\n\t\t\treturn nil\n\t\t}\n\t\treturn err\n\t}\n\nErrors from Copy, Reader and Writer carry context.Canceled instead: the\netl package does not depend on db, so both are recognised here.",
+      "params": [
+        {
+          "name": "err",
+          "type": "error"
+        }
+      ]
+    }
+  ],
+  "types": [
+    {
+      "name": "CopyOpts",
+      "of": "etl.CopyOptions",
+      "kind": "struct",
+      "doc": "CopyOpts shapes s.Copy: destination name, a Where or a whole Query as the\nsource, a column subset, Create/Truncate of the destination, a per-row\nTransform. The zero value copies the whole table into an existing table\nof the same name. Set ProgressEvery to have the script output report the\nrunning row count.",
+      "fields": [
+        {
+          "name": "To",
+          "type": "string",
+          "doc": "To names the destination table; empty means the source table's name."
+        },
+        {
+          "name": "Query",
+          "type": "string",
+          "doc": "Query, when set, is the source instead of a table: any SELECT, with\nArgs as its parameters. To is then required."
+        },
+        {
+          "name": "Args",
+          "type": "[]any",
+          "doc": "Args are bind parameters for Query or Where, in the source's\nplaceholder style ($1 Postgres/bytdb, ? MySQL/SQLite)."
+        },
+        {
+          "name": "Columns",
+          "type": "[]string",
+          "doc": "Columns limits the copy to these source columns, in this order. The\ndestination columns have the same names."
+        },
+        {
+          "name": "Where",
+          "type": "string",
+          "doc": "Where filters the source table's rows: \"created_at \u003e= $1\"."
+        },
+        {
+          "name": "Create",
+          "type": "bool",
+          "doc": "Create makes the destination table when it does not exist yet. A\nPostgres-to-Postgres copy of a table reproduces the source's column\ntypes, NOT NULLs and primary key from the catalog; any other pairing\nmaps each column to a broad type on the destination (integer, float,\nnumeric, boolean, date, timestamp, bytes, text). Defaults, indexes\nother than the key, and constraints are not copied."
+        },
+        {
+          "name": "Truncate",
+          "type": "bool",
+          "doc": "Truncate empties the destination first, in the load's transaction:\nif the copy fails, the old rows are still there."
+        },
+        {
+          "name": "BatchSize",
+          "type": "int",
+          "doc": "BatchSize is rows per INSERT on non-Postgres destinations (see\nWriteOptions.BatchSize)."
+        },
+        {
+          "name": "Transform",
+          "type": "func(row []any) ([]any, error)",
+          "doc": "Transform is called on every row before it is written, and may\nchange values in place or return a new row of the same length.\nReturning a nil row skips it; returning an error stops the copy and\nrolls the destination back."
+        },
+        {
+          "name": "Progress",
+          "type": "func(rows int64)",
+          "doc": "Progress, when set, is called every ProgressEvery rows (default\n100000) with the running total."
+        },
+        {
+          "name": "ProgressEvery",
+          "type": "int64",
+          "doc": ""
+        }
+      ]
+    },
+    {
+      "name": "CopyStats",
+      "of": "etl.CopyStats",
+      "kind": "struct",
+      "doc": "CopyStats reports a finished copy; its String() is a one-line summary.",
+      "fields": [
+        {
+          "name": "From",
+          "type": "string",
+          "doc": "\"conn:table\" (or \"conn:query\")"
+        },
+        {
+          "name": "To",
+          "type": "string",
+          "doc": "\"conn:table\""
+        },
+        {
+          "name": "Rows",
+          "type": "int64",
+          "doc": "rows loaded"
+        },
+        {
+          "name": "Skipped",
+          "type": "int64",
+          "doc": "rows a Transform dropped"
+        },
+        {
+          "name": "Duration",
+          "type": "time.Duration",
+          "doc": ""
+        },
+        {
+          "name": "Direct",
+          "type": "bool",
+          "doc": "Direct is true when the rows streamed Postgres to Postgres as COPY\ntext, never decoded into Go values."
+        }
+      ],
+      "methods": [
+        {
+          "name": "String",
+          "sig": "func (s CopyStats) String() string",
+          "doc": "",
+          "params": []
+        }
+      ]
+    },
+    {
+      "name": "Plan",
+      "of": "explain.Plan",
+      "kind": "struct",
+      "doc": "Plan is an explained statement: its steps (Root, Nodes), what it cost or\ntook, and dbc's findings about it (Insights). See package explain.",
+      "fields": [
+        {
+          "name": "Engine",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "Conn",
+          "type": "string",
+          "doc": "connection name it ran on"
+        },
+        {
+          "name": "Statement",
+          "type": "string",
+          "doc": "the statement explained"
+        },
+        {
+          "name": "Command",
+          "type": "string",
+          "doc": "the EXPLAIN actually sent, for the record"
+        },
+        {
+          "name": "Analyzed",
+          "type": "bool",
+          "doc": "Analyzed: the statement was executed and every step carries measured\nrows, loops and time. Measured: the statement was executed and timed\nas a whole, on an engine that cannot time its steps (SQLite, bytdb) —\nthe root carries the total, the steps carry nothing."
+        },
+        {
+          "name": "Measured",
+          "type": "bool",
+          "doc": ""
+        },
+        {
+          "name": "PlanningMs",
+          "type": "float64",
+          "doc": ""
+        },
+        {
+          "name": "ExecutionMs",
+          "type": "float64",
+          "doc": ""
+        },
+        {
+          "name": "ResultRows",
+          "type": "float64",
+          "doc": "Measured: the rows the statement returned"
+        },
+        {
+          "name": "Notes",
+          "type": "[]string",
+          "doc": "Notes are facts about how the plan was obtained that a reader must\nknow to read it right (\"ran inside a transaction that was rolled\nback\"). They are not findings about the plan; Insights are."
+        },
+        {
+          "name": "Root",
+          "type": "*Node",
+          "doc": ""
+        },
+        {
+          "name": "Insights",
+          "type": "[]Insight",
+          "doc": ""
+        },
+        {
+          "name": "Metric",
+          "type": "Metric",
+          "doc": "Metric is the best measure this plan has, which the views size bars\nand flame blocks by unless the user picks another (see Metrics)."
+        },
+        {
+          "name": "Raw",
+          "type": "string",
+          "doc": "Raw is the engine's own output, verbatim — what \"copy the plan\"\ncopies, since that is what a DBA or a search engine recognizes."
+        }
+      ],
+      "methods": [
+        {
+          "name": "FileName",
+          "sig": "func (p *Plan) FileName(ext string) string",
+          "doc": "FileName is the name a saved or downloaded rendering of the plan takes:\nplan-\u003cconn\u003e-\u003cyyyymmdd-hhmmss\u003e.\u003cext\u003e, or plan-\u003cstamp\u003e.\u003cext\u003e with no\nconnection.",
+          "params": [
+            {
+              "name": "ext",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "Finalize",
+          "sig": "func (p *Plan) Finalize()",
+          "doc": "Finalize numbers the steps, links parents, derives every computed field\nand runs the insight rules. Parsers call it last; it is idempotent, so a\ncaller that edits a plan (the db layer adding table sizes) calls it again.\n\nTime is the subtle part. Engines report a step's time as an average per\nloop, INCLUSIVE of its children, so:\n\n\tTotalMs(n) = ActualMs(n) × Loops(n)        (÷ workers inside a Gather)\n\tSelfMs(n)  = TotalMs(n) − Σ TotalMs(child)  clamped at 0\n\nThe clamp matters: a Postgres InitPlan, a CTE referenced twice, or a\nparallel child whose per-worker average does not add up can make the naive\ndifference negative, and a negative bar is worse than a slightly\ngenerous one.",
+          "params": []
+        },
+        {
+          "name": "Findings",
+          "sig": "func (p *Plan) Findings() (crit, warn int)",
+          "doc": "Findings counts the plan's critical and warning insights — the ones\nworth acting on; info-level notes are not counted.",
+          "params": []
+        },
+        {
+          "name": "HTML",
+          "sig": "func (p *Plan) HTML() (string, error)",
+          "doc": "HTML renders the plan as a self-contained interactive page: a tidy-tree\ngraph of the steps with heat-colored cards and data-flow edges, a flame\n(icicle) view, the insights with copyable fixes, and a detail panel for\nthe selected step. It references nothing on the network — no CDN, no web\nfont — so it opens the same from a temp file, an email attachment, or an\nair-gapped machine.\n\nThe plan travels as the Document JSON (see JSON) inside a\n\u003cscript type=\"application/json\"\u003e block, parsed by the page at load. That\nkeeps one source of truth for what a plan contains: the page reads the\nsame document `dbc explain -t json` prints, weights included, so its bars\nand blocks are sized exactly as the terminal's.",
+          "params": []
+        },
+        {
+          "name": "Headline",
+          "sig": "func (p *Plan) Headline() string",
+          "doc": "Headline is the plan's one-line summary: engine, how it was obtained, the\ntotals, the size.",
+          "params": []
+        },
+        {
+          "name": "JPEG",
+          "sig": "func (p *Plan) JPEG(opt PictureOptions) ([]byte, error)",
+          "doc": "JPEG renders the picture as a JPEG. Quality 90 keeps text edges clean;\nthe flat fills compress well enough that higher buys nothing visible.",
+          "params": [
+            {
+              "name": "opt",
+              "type": "PictureOptions"
+            }
+          ]
+        },
+        {
+          "name": "JSON",
+          "sig": "func (p *Plan) JSON() ([]byte, error)",
+          "doc": "JSON renders the plan as an indented Document.",
+          "params": []
+        },
+        {
+          "name": "Mermaid",
+          "sig": "func (p *Plan) Mermaid() string",
+          "doc": "Mermaid renders the plan as a Mermaid flowchart — the form a plan takes\nin a GitHub or GitLab comment, a wiki page, or a Notion doc, which draw a\n```mermaid block as a diagram without anyone installing anything.\n\n\tflowchart BT                        ┌───────────────┐\n\t  n0[\"Hash Join\u003cbr/\u003e…\"]             │ n0 Hash Join  │  ← the root on top\n\t  n1[\"Seq Scan · orders\u003cbr/\u003e…\"]     └───────▲───────┘\n\t  n1 --\u003e|\"36.7k rows\"| n0                   │ 36.7k rows\n\t                                    ┌───────┴───────┐\n\t                                    │ n1 Seq Scan   │\n\t                                    └───────────────┘\n\nWHY BOTTOM-TO-TOP. Every other view draws the root on top and the data\nflowing up into it. In Mermaid an edge A --\u003e B puts B after A in the\nflow's direction, so \"BT\" with child --\u003e parent gives the same picture —\nroot on top, arrows pointing the way the rows go — without the reversed\narrowheads a TD chart would need.\n\nWHAT A NODE SAYS. The same lines the graph's cards carry: the operation\nand what it works on, the step's most telling detail, rows, and its share\nof the metric the plan is best measured by. Heat and findings become\nclassDefs (see mermaidClass) so a renderer that draws colors shows where\nthe time goes, and one that does not still has the words.\n\nESCAPING. Labels are double-quoted, and inside one Mermaid reads its own\nentity codes: #quot; for a quote, and #\u003cdecimal\u003e; for anything else. A\nplan's text is the user's SQL — full of quotes, \u003c, \u003e, # and | — so every\ncharacter Mermaid or its HTML labels could read as syntax is written as a\ncode (see mermaidText). The result never breaks the chart, whatever the\nstatement holds.",
+          "params": []
+        },
+        {
+          "name": "Metrics",
+          "sig": "func (p *Plan) Metrics() []Metric",
+          "doc": "Metrics lists the measures this plan can be viewed by, best first.",
+          "params": []
+        },
+        {
+          "name": "Node",
+          "sig": "func (p *Plan) Node(id int) *Node",
+          "doc": "Node returns the step with the given ID, or nil.",
+          "params": [
+            {
+              "name": "id",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "Nodes",
+          "sig": "func (p *Plan) Nodes() []*Node",
+          "doc": "Nodes returns every step in preorder — a parent before its children,\nchildren in the order the engine listed them — so Nodes()[i].ID == i.",
+          "params": []
+        },
+        {
+          "name": "PDF",
+          "sig": "func (p *Plan) PDF(opt PictureOptions) ([]byte, error)",
+          "doc": "PDF renders the picture (see picture.go) as a one-page PDF, the page\nsized to the picture so nothing is scaled or split: a wide plan makes a\nwide page, which a viewer fits to its window and a printer to its paper.\n\nWHY A RASTER INSIDE A PDF, NOT VECTOR PDF. A vector page would need the\ntext laid out a second time with PDF's own font machinery — embedding\nand subsetting the Go fonts as CID fonts to reach beyond Latin-1 — to\ndraw the same picture the raster already is. At the 2× scale the picture\nis drawn at, the page is sharp on screen and on paper; what it gives up\nis selecting the text, and the statement and findings are one \"copy as\ntext\" away in every dbc view. So the PDF is a thin, dependency-free\nwrapper, written by hand below, around the tested renderer.\n\nThe file, object by object:\n\n\t1 Catalog ─► 2 Pages ─► 3 Page ─┬─► 4 content stream: \"q W 0 0 H 0 0 cm /Im0 Do Q\"\n\t                                └─► 5 Image XObject (RGB, Flate + PNG \"Up\" predictor)\n\t6 Info (Title, Creator, CreationDate)\n\txref table, trailer\n\nThe image is Flate-compressed after the PNG \"Up\" filter (each row stored\nas its difference from the row above). The picture is mostly flat fills,\nso most rows are all zeros after the filter and compress to almost\nnothing; plain Flate on raw pixels is several times larger.",
+          "params": [
+            {
+              "name": "opt",
+              "type": "PictureOptions"
+            }
+          ]
+        },
+        {
+          "name": "PNG",
+          "sig": "func (p *Plan) PNG(opt PictureOptions) ([]byte, error)",
+          "doc": "PNG renders the picture as a PNG: lossless, and for a picture of flat\nfills and text usually smaller than the JPEG too.",
+          "params": [
+            {
+              "name": "opt",
+              "type": "PictureOptions"
+            }
+          ]
+        },
+        {
+          "name": "Picture",
+          "sig": "func (p *Plan) Picture(opt PictureOptions) (*image.RGBA, error)",
+          "doc": "Picture draws the plan. See the top of this file for what is on it.",
+          "params": [
+            {
+              "name": "opt",
+              "type": "PictureOptions"
+            }
+          ]
+        },
+        {
+          "name": "ResolveAliases",
+          "sig": "func (p *Plan) ResolveAliases(stmt string)",
+          "doc": "ResolveAliases fills in the table behind each step that names only an\nalias, from the statement's FROM and JOIN clauses, then re-runs the rules\nso their suggestions can name real tables.",
+          "params": [
+            {
+              "name": "stmt",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "Share",
+          "sig": "func (p *Plan) Share(n *Node, m Metric) float64",
+          "doc": "Share is the step's Self as a fraction (0–1) of the whole plan's.",
+          "params": [
+            {
+              "name": "n",
+              "type": "*Node"
+            },
+            {
+              "name": "m",
+              "type": "Metric"
+            }
+          ]
+        },
+        {
+          "name": "Text",
+          "sig": "func (p *Plan) Text(o TextOptions) string",
+          "doc": "Text renders the plan as an indented tree with a column of numbers and a\nbar per step — the headless `dbc explain` output, the \"copy plan as text\"\nclipboard payload, and what the assistant is shown.\n\n\tHash Join · (o.user_id = u.id)             36,650 rows          8.4 ms  31% ███▏\n\t├─ Bitmap Heap Scan · orders o             50,000 rows          6.2 ms  23% ██▎\n\t│  └─ Bitmap Index Scan · orders_status    50,000 rows          0.9 ms   3% ▎\n\t└─ Hash                                    15,659 rows          2.3 ms   9% ▉\n\nThe bar and percentage are each step's OWN share (self time, self cost),\nso they add up to 100% down the column and point straight at the step\nthat matters; the tree lines carry the nesting.",
+          "params": [
+            {
+              "name": "o",
+              "type": "TextOptions"
+            }
+          ]
+        },
+        {
+          "name": "WriteFile",
+          "sig": "func (p *Plan) WriteFile(dir, ext string, data []byte) (string, error)",
+          "doc": "WriteFile saves one rendering of the plan (the page, a PDF, a JPEG, the\nMermaid source) into dir under the same what-and-when name WriteHTML\nuses, with ext as its extension, and returns its path. 0600 for the\nreason WriteHTML gives: every rendering quotes the statement.",
+          "params": [
+            {
+              "name": "dir",
+              "type": "string"
+            },
+            {
+              "name": "ext",
+              "type": "string"
+            },
+            {
+              "name": "data",
+              "type": "[]byte"
+            }
+          ]
+        },
+        {
+          "name": "WriteHTML",
+          "sig": "func (p *Plan) WriteHTML(dir string) (string, error)",
+          "doc": "WriteHTML saves the interactive page into dir (created if need be) under a\nname that says what and when — plan-\u003cconn\u003e-\u003cyyyymmdd-hhmmss\u003e.html — and\nreturns its path. The file is 0600: a plan quotes the statement and its\nliterals, which are the user's business, and dir is usually the shared\ntemp directory.",
+          "params": [
+            {
+              "name": "dir",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PlanText",
+      "of": "explain.TextOptions",
+      "kind": "struct",
+      "doc": "PlanText shapes Plan.Text: width, the metric bars are sized by, color,\nand whether the findings are appended.",
+      "fields": [
+        {
+          "name": "Width",
+          "type": "int",
+          "doc": "total line width; 0 = 100"
+        },
+        {
+          "name": "Metric",
+          "type": "Metric",
+          "doc": "\"\" = the plan's best"
+        },
+        {
+          "name": "Color",
+          "type": "bool",
+          "doc": "ANSI colors, for a terminal"
+        },
+        {
+          "name": "Insights",
+          "type": "bool",
+          "doc": "append the findings"
+        }
+      ]
+    },
+    {
+      "name": "Reader",
+      "of": "etl.Reader",
+      "kind": "struct",
+      "doc": "Reader streams a query's rows: for rd.Next() { row := rd.Row() }, then\nrd.Err(). Close it (defer rd.Close()) if you stop before the end.",
+      "methods": [
+        {
+          "name": "Close",
+          "sig": "func (r *Reader) Close() error",
+          "doc": "Close releases the query's connection. It is safe to call more than once,\nand a deferred Close after reading to the end costs nothing.",
+          "params": []
+        },
+        {
+          "name": "Columns",
+          "sig": "func (r *Reader) Columns() []string",
+          "doc": "Columns returns the result's column names.",
+          "params": []
+        },
+        {
+          "name": "Count",
+          "sig": "func (r *Reader) Count() int64",
+          "doc": "Count is the number of rows read so far.",
+          "params": []
+        },
+        {
+          "name": "DBTypes",
+          "sig": "func (r *Reader) DBTypes() []string",
+          "doc": "DBTypes returns the driver's type name for each column, upper case\n(\"INT4\", \"TEXT\", \"DATETIME\"); empty where the driver does not say.",
+          "params": []
+        },
+        {
+          "name": "Err",
+          "sig": "func (r *Reader) Err() error",
+          "doc": "Err returns the error that stopped Next early, if any.",
+          "params": []
+        },
+        {
+          "name": "Next",
+          "sig": "func (r *Reader) Next() bool",
+          "doc": "Next advances to the next row, reporting false at the end or on an error\n(see Err). The Reader closes itself when it runs out.",
+          "params": []
+        },
+        {
+          "name": "Row",
+          "sig": "func (r *Reader) Row() []any",
+          "doc": "Row returns the current row. Each call to Next makes a new slice.",
+          "params": []
+        }
+      ]
+    },
+    {
+      "name": "Result",
+      "of": "model.Result",
+      "kind": "struct",
+      "doc": "Result is the tabular result type scripts receive from Query.",
+      "fields": [
+        {
+          "name": "Conn",
+          "type": "string",
+          "doc": "connection name the statement ran on"
+        },
+        {
+          "name": "Query",
+          "type": "string",
+          "doc": "the statement text"
+        },
+        {
+          "name": "Columns",
+          "type": "[]string",
+          "doc": "column names"
+        },
+        {
+          "name": "Rows",
+          "type": "[][]string",
+          "doc": "display-ready values (NULL rendered as \"NULL\")"
+        },
+        {
+          "name": "Raw",
+          "type": "[][]any",
+          "doc": "typed values, used for JSON export"
+        },
+        {
+          "name": "Duration",
+          "type": "time.Duration",
+          "doc": "wall time for the statement"
+        },
+        {
+          "name": "Truncated",
+          "type": "bool",
+          "doc": "true when the row limit was hit"
+        },
+        {
+          "name": "IsExec",
+          "type": "bool",
+          "doc": "true for non-query statements (INSERT/UPDATE/...)"
+        },
+        {
+          "name": "Affected",
+          "type": "int64",
+          "doc": "rows affected, when IsExec"
+        },
+        {
+          "name": "Transposed",
+          "type": "bool",
+          "doc": "Transposed marks a result turned on its side (export.Transpose): each\nrow is one of the source's columns, its name in column 0, so the HTML\nrenderings draw that column as row headers rather than as data."
+        }
+      ],
+      "methods": [
+        {
+          "name": "RowCount",
+          "sig": "func (r *Result) RowCount() int",
+          "doc": "RowCount returns the number of data rows.",
+          "params": []
+        }
+      ]
+    },
+    {
+      "name": "S",
+      "kind": "struct",
+      "doc": "S is the session handle passed to a script's Run function.",
+      "methods": [
+        {
+          "name": "Canceled",
+          "sig": "func (s *S) Canceled() bool",
+          "doc": "Canceled reports whether the user has stopped this run.",
+          "params": []
+        },
+        {
+          "name": "Conns",
+          "sig": "func (s *S) Conns() []string",
+          "doc": "Conns returns the configured connection names.",
+          "params": []
+        },
+        {
+          "name": "Copy",
+          "sig": "func (s *S) Copy(src, dst, table string, opt CopyOpts) (CopyStats, error)",
+          "doc": "Copy copies table from connection src into connection dst:\n\n\tst, err := s.Copy(\"prod\", \"local\", \"public.orders\", sdb.CopyOpts{\n\t\tCreate: true, Truncate: true, Where: \"created_at \u003e= now() - interval '7 days'\",\n\t})\n\ts.Print(\"%s\", st) // copied 48213 rows prod:public.orders → local:public.orders in 1.4s (direct COPY)\n\nPostgres to Postgres without a Transform or Args streams COPY to COPY and\nnever decodes a row; every other pairing goes row by row. Either way the\ndestination is loaded in one transaction (with its Create and Truncate),\nso a failed or stopped copy leaves it as it was.",
+          "params": [
+            {
+              "name": "src",
+              "type": "string"
+            },
+            {
+              "name": "dst",
+              "type": "string"
+            },
+            {
+              "name": "table",
+              "type": "string"
+            },
+            {
+              "name": "opt",
+              "type": "CopyOpts"
+            }
+          ],
+          "connArgs": [
+            0,
+            1
+          ]
+        },
+        {
+          "name": "Ctx",
+          "sig": "func (s *S) Ctx() context.Context",
+          "doc": "Ctx returns the session's context. Long-running scripts can select on\ns.Ctx().Done() (or check s.Canceled()) to bail out early.",
+          "params": []
+        },
+        {
+          "name": "DB",
+          "sig": "func (s *S) DB(conn string) (*sql.DB, error)",
+          "doc": "DB exposes the raw *database/sql.DB for a connection — the escape hatch\nfor transactions, prepared statements, or anything else database/sql can do.",
+          "params": [
+            {
+              "name": "conn",
+              "type": "string"
+            }
+          ],
+          "connArgs": [
+            0
+          ]
+        },
+        {
+          "name": "Exec",
+          "sig": "func (s *S) Exec(conn, stmt string, args ...any) (int64, error)",
+          "doc": "Exec runs a non-query statement and returns the rows affected. Its server\nnotices are printed as Query's are.",
+          "params": [
+            {
+              "name": "conn",
+              "type": "string"
+            },
+            {
+              "name": "stmt",
+              "type": "string"
+            },
+            {
+              "name": "args",
+              "type": "...any"
+            }
+          ],
+          "connArgs": [
+            0
+          ]
+        },
+        {
+          "name": "Explain",
+          "sig": "func (s *S) Explain(conn, stmt string, analyze bool) (*Plan, error)",
+          "doc": "Explain describes how conn's database runs stmt, as the TUI's Ctrl+X and\n`dbc explain` do. analyze runs the statement to measure it: on Postgres a\nwrite is analyzed inside a transaction that is rolled back; on the other\nengines a write is explained but not run. It runs on its own session, not\none the script shares with Query.\n\n\tp, err := s.Explain(\"pg\", \"SELECT * FROM orders WHERE user_id = 42\", true)\n\ts.Print(\"%s\", p.Text(sdb.PlanText{Insights: true}))\n\tfor _, in := range p.Insights { if in.Severity != \"info\" { … } }",
+          "params": [
+            {
+              "name": "conn",
+              "type": "string"
+            },
+            {
+              "name": "stmt",
+              "type": "string"
+            },
+            {
+              "name": "analyze",
+              "type": "bool"
+            }
+          ],
+          "connArgs": [
+            0
+          ]
+        },
+        {
+          "name": "Export",
+          "sig": "func (s *S) Export(r *Result, format, path string) error",
+          "doc": "Export renders a result in the named format (csv|tsv|markdown|html|json|text)\nand writes it to path — or to the system clipboard when path is empty.",
+          "params": [
+            {
+              "name": "r",
+              "type": "*Result"
+            },
+            {
+              "name": "format",
+              "type": "string"
+            },
+            {
+              "name": "path",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "Print",
+          "sig": "func (s *S) Print(format string, args ...any)",
+          "doc": "Print writes a Printf-style message to the script output.",
+          "params": [
+            {
+              "name": "format",
+              "type": "string"
+            },
+            {
+              "name": "args",
+              "type": "...any"
+            }
+          ]
+        },
+        {
+          "name": "Query",
+          "sig": "func (s *S) Query(conn, query string, args ...any) (*Result, error)",
+          "doc": "Query runs a statement with parameters on the named connection and\nreturns the result set. Use the placeholder style of the target driver\n($1 for postgres/bytdb, ? for mysql/sqlite).\n\nServer notices the statement raises (Postgres RAISE NOTICE and its kin)\nare written to the script output, as Print does, before Query returns —\nwhether or not the statement failed.",
+          "params": [
+            {
+              "name": "conn",
+              "type": "string"
+            },
+            {
+              "name": "query",
+              "type": "string"
+            },
+            {
+              "name": "args",
+              "type": "...any"
+            }
+          ],
+          "connArgs": [
+            0
+          ]
+        },
+        {
+          "name": "Reader",
+          "sig": "func (s *S) Reader(conn, query string, args ...any) (*Reader, error)",
+          "doc": "Reader runs query on conn and streams its rows. Use the placeholder style\nof the connection's driver ($1 postgres/bytdb, ? mysql/sqlite).",
+          "params": [
+            {
+              "name": "conn",
+              "type": "string"
+            },
+            {
+              "name": "query",
+              "type": "string"
+            },
+            {
+              "name": "args",
+              "type": "...any"
+            }
+          ],
+          "connArgs": [
+            0
+          ]
+        },
+        {
+          "name": "Show",
+          "sig": "func (s *S) Show(r *Result)",
+          "doc": "Show pushes a result to the results view (TUI) or prints it (headless).",
+          "params": [
+            {
+              "name": "r",
+              "type": "*Result"
+            }
+          ]
+        },
+        {
+          "name": "Writer",
+          "sig": "func (s *S) Writer(conn, table string, cols []string, opt WriteOpts) (*Writer, error)",
+          "doc": "Writer starts a load into table on conn; rows passed to Write line up\nwith cols. Nothing is visible to other sessions until Close commits.",
+          "params": [
+            {
+              "name": "conn",
+              "type": "string"
+            },
+            {
+              "name": "table",
+              "type": "string"
+            },
+            {
+              "name": "cols",
+              "type": "[]string"
+            },
+            {
+              "name": "opt",
+              "type": "WriteOpts"
+            }
+          ],
+          "connArgs": [
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "WriteOpts",
+      "of": "etl.WriteOptions",
+      "kind": "struct",
+      "doc": "WriteOpts shapes s.Writer: Setup statements and Truncate run first, in\nthe load's transaction; BatchSize tunes INSERT batching off Postgres.",
+      "fields": [
+        {
+          "name": "Setup",
+          "type": "[]string",
+          "doc": "Setup statements run first, inside the load's transaction — a CREATE\nTABLE, an ALTER, a DELETE of the slice being reloaded. If the load\nfails they are rolled back with it (except where the engine commits\nDDL on its own: MySQL)."
+        },
+        {
+          "name": "Truncate",
+          "type": "bool",
+          "doc": "Truncate empties the table after Setup and before the first row, in\nthe same transaction: a reload either replaces the old rows or leaves\nthem alone, never a half-empty table."
+        },
+        {
+          "name": "BatchSize",
+          "type": "int",
+          "doc": "BatchSize is rows per INSERT statement on engines loaded by INSERT\n(everything but Postgres). 0 means 500. It is lowered automatically so\none statement stays under the engines' bind-parameter limits."
+        }
+      ]
+    },
+    {
+      "name": "Writer",
+      "of": "etl.Writer",
+      "kind": "struct",
+      "doc": "Writer loads rows into one table in one transaction: w.Write(row) per\nrow, then w.Close() to commit. defer w.Abort() rolls back on any early\nreturn; it is a no-op after Close.",
+      "methods": [
+        {
+          "name": "Abort",
+          "sig": "func (w *Writer) Abort() error",
+          "doc": "Abort rolls the load back. It is a no-op after Close or a previous Abort,\nso `defer w.Abort()` is the idiom that guarantees an early return or a\npanic never leaves a transaction open.",
+          "params": []
+        },
+        {
+          "name": "Close",
+          "sig": "func (w *Writer) Close() (int64, error)",
+          "doc": "Close sends any buffered rows and commits, returning the rows loaded.\nAfter a failed Write it rolls back instead and returns that failure.",
+          "params": []
+        },
+        {
+          "name": "Columns",
+          "sig": "func (w *Writer) Columns() []string",
+          "doc": "Columns returns the column list rows are written in.",
+          "params": []
+        },
+        {
+          "name": "Count",
+          "sig": "func (w *Writer) Count() int64",
+          "doc": "Count is the number of rows accepted by Write so far.",
+          "params": []
+        },
+        {
+          "name": "Write",
+          "sig": "func (w *Writer) Write(row []any) error",
+          "doc": "Write queues one row; its values line up with Columns. A failure aborts\nthe whole load, and every later Write or Close returns the same error.",
+          "params": [
+            {
+              "name": "row",
+              "type": "[]any"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

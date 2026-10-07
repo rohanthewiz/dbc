@@ -156,6 +156,29 @@ func TestCopyDateToBytdbCreates(t *testing.T) {
 	}
 }
 
+// SQLite has no boolean type: a BOOLEAN column reads back as int64 0/1, and
+// bytdb before v0.21.2 refused an integer for its bool column ("value does
+// not fit column type", N-131). The created column must come out bool, so a
+// WHERE on it works as it would on Postgres.
+func TestCopyBoolToBytdbCreates(t *testing.T) {
+	ctx := context.Background()
+	src, dst := fileConn(t, SQLite, "src.db"), fileConn(t, Bytdb, "dst.bytdb")
+	mustExec(t, src,
+		`CREATE TABLE cats (id INTEGER PRIMARY KEY, adopted BOOLEAN)`,
+		"INSERT INTO cats VALUES (1, 1), (2, 0), (3, NULL)")
+
+	if _, err := Copy(ctx, src, "cats", dst, CopyOptions{Create: true}); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"1", "true"}, {"2", "false"}, {"3", "NULL"}}
+	if got := dump(t, dst, "SELECT id, adopted FROM cats ORDER BY id"); !reflect.DeepEqual(got, want) {
+		t.Errorf("destination rows\n got %q\nwant %q", got, want)
+	}
+	if got := dump(t, dst, "SELECT id FROM cats WHERE adopted"); !reflect.DeepEqual(got, [][]string{{"1"}}) {
+		t.Errorf("WHERE adopted = %q, want [[1]]", got)
+	}
+}
+
 func TestCopyTransformSkipsAndRewrites(t *testing.T) {
 	src, dst := fileConn(t, SQLite, "src.db"), fileConn(t, SQLite, "dst.db")
 	seedCats(t, src)

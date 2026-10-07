@@ -205,7 +205,7 @@ func TestSaveScript(t *testing.T) {
 		t.Errorf("ReadScript(missing) = %v, want ErrNotExist", err)
 	}
 
-	if _, _, err = SaveScript(dir, "big.go", strings.Repeat("x", maxScriptBytes+1), ""); err == nil {
+	if _, _, err = SaveScript(dir, "big.go", strings.Repeat("x", MaxScriptBytes+1), ""); err == nil {
 		t.Error("an oversized script was saved")
 	}
 

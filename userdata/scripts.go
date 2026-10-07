@@ -71,9 +71,10 @@ var ErrScriptExists = errors.New("a script by that name already exists")
 // ErrBadScriptName is a name ValidScriptName refuses.
 var ErrBadScriptName = errors.New("not a script name: letters, digits, . _ - ending in .go")
 
-// maxScriptBytes bounds what a save writes. A script is a page of Go; a
-// megabyte is a mistake (a pasted data file), not a script.
-const maxScriptBytes = 1 << 20
+// MaxScriptBytes bounds what a save writes (and what dbc web checks). A
+// script is a page of Go; a megabyte is a mistake (a pasted data file),
+// not a script.
+const MaxScriptBytes = 1 << 20
 
 // scriptMu serialises this process's read-compare-write sequences, so two
 // dbc web requests saving one script cannot both pass the revision check.
@@ -168,9 +169,9 @@ func SaveScript(dir, name, text, base string) (rev string, conflict bool, err er
 	if err != nil {
 		return "", false, err
 	}
-	if len(text) > maxScriptBytes {
+	if len(text) > MaxScriptBytes {
 		return "", false, serr.New("script too large", "name", name,
-			"bytes", strconv.Itoa(len(text)), "max", strconv.Itoa(maxScriptBytes))
+			"bytes", strconv.Itoa(len(text)), "max", strconv.Itoa(MaxScriptBytes))
 	}
 	scriptMu.Lock()
 	defer scriptMu.Unlock()

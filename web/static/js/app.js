@@ -1164,15 +1164,17 @@
     let cur = 0;
     const list = el("ul", { class: "hlist", role: "listbox" });
     const draw = () => {
-      list.replaceChildren(...got.scripts.map((n, i) => el("li", { class: i === cur ? "cur" : "", role: "option", "data-i": String(i) },
-        el("span", "hsql", n), el("span", "hwhen", "▶ run"))));
+      // each script is {name, desc, …} (userdata.ScriptInfo): the name,
+      // then what its opening comment says it does, as a tooltip too
+      list.replaceChildren(...got.scripts.map((sc, i) => el("li", { class: i === cur ? "cur" : "", role: "option", "data-i": String(i), title: sc.desc || "" },
+        el("span", "hsql", sc.desc ? sc.name + " — " + sc.desc : sc.name), el("span", "hwhen", "▶ run"))));
       const c = list.children[cur];
       if (c) c.scrollIntoView({ block: "nearest" });
     };
     const runIt = async (i) => {
       dbc.modal.close();
       try {
-        await api("POST", dbc.wsPath("/script"), { name: got.scripts[i] });
+        await api("POST", dbc.wsPath("/script"), { name: got.scripts[i].name });
       } catch (e) { setStatus(e.message, e.status === 409 ? "warn" : "err"); }
     };
     list.addEventListener("click", (e) => { const li = e.target.closest("li[data-i]"); if (li) runIt(+li.dataset.i); });

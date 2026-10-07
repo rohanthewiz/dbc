@@ -66,11 +66,18 @@ func PickAll(text string) (stmts []string, tag string) {
 // StmtRange is the byte range of the statement under the caret, for an
 // editor's gutter marker — zero when the buffer holds fewer than two
 // statements, since marking the only one says nothing.
+//
+// The range starts at the statement's first code (CodeStart), not at the
+// comments heading it: a separator such as `---` between two statements is
+// left unmarked, so it reads as the gap it is meant to be. Which statement
+// the caret picks is unchanged, so a caret on such a comment still marks
+// (and Ctrl+R still runs) the statement below, with the marker starting
+// under the caret — as a caret on a blank line between statements does.
 func StmtRange(text string, caret int) [2]int {
 	all := sqlsplit.Split(text)
 	if len(all) < 2 {
 		return [2]int{}
 	}
 	i := sqlsplit.IndexAt(all, caret)
-	return [2]int{all[i].Start, all[i].End}
+	return [2]int{all[i].CodeStart, all[i].End}
 }

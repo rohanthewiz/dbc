@@ -11,10 +11,19 @@ package sqlsplit
 import "strings"
 
 // Stmt is one statement found in a buffer.
+//
+// Comments on their own lines above a statement head it: they are part of
+// Text (they run with it, and a caret in them picks it), but CodeStart skips
+// them, so an editor's marker can sit beside the code alone.
+//
+//	SELECT 1; -- note⏎
+//	---⏎                 ← Start: Text begins with the header comment
+//	SELECT 2;            ← CodeStart: the first byte outside blanks/comments
 type Stmt struct {
-	Text  string // statement text, trimmed, terminating semicolon removed
-	Start int    // byte offset of Text in the buffer
-	End   int    // byte offset just past Text in the buffer
+	Text      string // statement text, trimmed, terminating semicolon removed
+	Start     int    // byte offset of Text in the buffer
+	End       int    // byte offset just past Text in the buffer
+	CodeStart int    // byte offset of Text's first code, past any heading comments; Start when there are none
 
 	spanStart int // start of the whole chunk, leading comments/blanks included
 	spanEnd   int // end of the whole chunk: its semicolon and that line's trailing remark included
@@ -57,10 +66,15 @@ func Split(sql string) []Stmt {
 		if text == "" {
 			continue
 		}
+		start := c.start + lead
 		out = append(out, Stmt{
-			Text:      text,
-			Start:     c.start + lead,
-			End:       c.start + lead + len(text),
+			Text:  text,
+			Start: start,
+			End:   start + len(text),
+			// the chunk has code (hasCode), so codeAt stops inside Text; it
+			// starts on a token boundary (only blanks were skipped to reach
+			// Start), so it cannot mistake a comment's inside for code
+			CodeStart: codeAt(sql, start),
 			spanStart: c.start,
 			spanEnd:   c.tail,
 		})
@@ -251,6 +265,26 @@ func keywordAt(sql string, i int) int {
 	for i < len(sql) {
 		switch {
 		case isSpace(sql[i]), sql[i] == '(':
+			i++
+		case isLineCommentAt(sql, i):
+			i = skipLineComment(sql, i)
+		case isBlockCommentAt(sql, i):
+			i = skipBlockComment(sql, i)
+		default:
+			return i
+		}
+	}
+	return len(sql)
+}
+
+// codeAt returns the offset of the first byte at or after i that is neither
+// whitespace nor inside a comment; len(sql) when there is none. Unlike
+// keywordAt it stops at an open paren, which is code: a statement such as
+// `(SELECT 1) UNION (SELECT 2)` starts there.
+func codeAt(sql string, i int) int {
+	for i < len(sql) {
+		switch {
+		case isSpace(sql[i]):
 			i++
 		case isLineCommentAt(sql, i):
 			i = skipLineComment(sql, i)

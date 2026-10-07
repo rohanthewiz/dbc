@@ -85,6 +85,46 @@ func TestSplitOffsets(t *testing.T) {
 	}
 }
 
+// CodeStart skips the comments heading a statement (own-line, block, nested,
+// several), but not an open paren, and is Start when nothing heads it. Text
+// and Start still include the heading comments.
+func TestSplitCodeStart(t *testing.T) {
+	cases := []struct {
+		name, sql, code string // code: what the last statement's CodeStart points at
+		text            string // the last statement's Text
+	}{
+		{"no header", "SELECT 1;\nSELECT 2", "SELECT 2", "SELECT 2"},
+		{"separator line", "SELECT 1; -- ran\n---\nSELECT 2", "SELECT 2", "---\nSELECT 2"},
+		{"several comments", "SELECT 1;\n-- a\n\n  -- b\nSELECT 2", "SELECT 2", "-- a\n\n  -- b\nSELECT 2"},
+		{"block comment over lines", "SELECT 1;\n/* a\n b */\nSELECT 2", "SELECT 2", "/* a\n b */\nSELECT 2"},
+		{"nested block comment", "SELECT 1;\n/* a /* b */ c */ SELECT 2", "SELECT 2", "/* a /* b */ c */ SELECT 2"},
+		{"comment before code on the same line", "SELECT 1; /* x */ SELECT 2", "SELECT 2", "/* x */ SELECT 2"},
+		{"open paren is code", "SELECT 1;\n-- u\n(SELECT 2) UNION (SELECT 3)", "(SELECT 2)", "-- u\n(SELECT 2) UNION (SELECT 3)"},
+		{"dollar body", "SELECT 1;\n---\nDO $$ BEGIN END $$;", "DO $$", "---\nDO $$ BEGIN END $$"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			stmts := Split(c.sql)
+			if len(stmts) != 2 {
+				t.Fatalf("got %d statements %q, want 2", len(stmts), texts(stmts))
+			}
+			s := stmts[1]
+			if s.Text != c.text {
+				t.Errorf("Text = %q, want %q", s.Text, c.text)
+			}
+			if !strings.HasPrefix(c.sql[s.CodeStart:], c.code) {
+				t.Errorf("CodeStart = %d (%q), want it at %q", s.CodeStart, c.sql[s.CodeStart:], c.code)
+			}
+			if s.CodeStart < s.Start || s.CodeStart >= s.End {
+				t.Errorf("CodeStart %d outside Text's [%d:%d]", s.CodeStart, s.Start, s.End)
+			}
+			if stmts[0].CodeStart != stmts[0].Start {
+				t.Errorf("first statement: CodeStart %d != Start %d with no header", stmts[0].CodeStart, stmts[0].Start)
+			}
+		})
+	}
+}
+
 func TestIndexAt(t *testing.T) {
 	//               0         1         2
 	//               0123456789012345678901234

@@ -76,15 +76,6 @@ ten session docs in `ai_docs/claude_sessions/`
   filter line over the list, as the pickers' `pickModal` filters. Offered
   at the end of the session; the user did not answer.
 
-- **N-155** · raised `2026-1007-1606-run-all-tab-per-statement` · value low
-  A run of several statements reports only one count: that of the result
-  on screen. A write's "n affected" was lost before too unless it came
-  last; since N-147 a write gets no result tab, so after
-  `SELECT …; UPDATE …` even the last UPDATE's count is gone (the done note
-  names the SELECT's rows). DataGrip writes a line per statement to its
-  output. Could log one line per write statement (folded
-  past a few, so a script of 500 INSERTs does not flood the log).
-
 ## Validate
 
 Items whose remaining work is purely testing: hand checks in a real terminal
@@ -349,6 +340,15 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-155** · raised `2026-1007-1606-run-all-tab-per-statement` · value low
+  A run of several statements reports only one count: that of the result
+  on screen. A write's "n affected" was lost before too unless it came
+  last; since N-147 a write gets no result tab, so after
+  `SELECT …; UPDATE …` even the last UPDATE's count is gone (the done note
+  names the SELECT's rows). DataGrip writes a line per statement to its
+  output. Could log one line per write statement (folded
+  past a few, so a script of 500 INSERTs does not flood the log).
+  closed 2026-10-07, `2026-1007-1646-run-all-write-log-lines`: each write in a run of several statements now gets a log line, `statement i/n: k affected — …` (`writeLog` in `workspace/run.go`, fed by `Run`'s loop). DDL says `done`, since its count is 0 on most drivers and stale on SQLite; BEGIN, SET, COMMIT and ROLLBACK get no line; a statement that returns rows has its tab. Past five writes the rest fold into one line with their total. A single statement keeps its count in the done note only. A failed run logs the writes before the failure, ahead of the error. Test `TestRunAllLogsEachWrite`; README's run-all paragraph, which already claimed "the log has its count", now says how.
 - **N-153** · raised `2026-1007-1553-pg-copy-move-rows` · value low
   A same-database move whose load waits on the source's own uncommitted
   write now hangs until canceled. Examples: an archive with a foreign key

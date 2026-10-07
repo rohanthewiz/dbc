@@ -169,11 +169,20 @@ type ExplainDone struct {
 	Status  string // as RunDone's: set on failure only
 }
 
-// ScriptShow is a script's s.Show, mid-run: a result to put in the grid.
-type ScriptShow struct{ Result *model.Result }
+// ScriptShow is a script's s.Show, mid-run: a result to put in the grid —
+// when Conn, the connection the script run started on (whose result set it
+// landed in), is still the active one.
+type ScriptShow struct {
+	Result *model.Result
+	Conn   string
+}
 
-// ScriptPrint is a script's s.Print, mid-run: a line for the log.
-type ScriptPrint struct{ Text string }
+// ScriptPrint is a script's s.Print, mid-run: a line for the log of Conn,
+// the connection the script run started on.
+type ScriptPrint struct {
+	Text string
+	Conn string
+}
 
 // SessionReleased reports that switching connections closed the session
 // pinned to the previous one.

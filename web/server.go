@@ -290,6 +290,7 @@ func (s *Server) routes() {
 	r.Post("/api/v1/ws/:id/cancel", s.handleCancel)
 	r.Post("/api/v1/ws/:id/script", s.handleScript)
 	r.Post("/api/v1/ws/:id/show-result", s.handleShowResult)
+	r.Post("/api/v1/ws/:id/result-tab", s.handleResultTab)
 
 	// the assistant pane (chat.go)
 	r.Get("/api/v1/ws/:id/chat", s.handleChat)

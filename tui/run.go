@@ -2,11 +2,13 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/rohanthewiz/serr"
 
+	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/workspace"
 )
@@ -54,26 +56,37 @@ func (m *Model) editorState() workspace.Editor {
 }
 
 // note writes one of the workspace's notes to the log.
-func (m *Model) note(n workspace.Note) {
-	kind := logInfo
-	switch n.Level {
+func (m *Model) note(n workspace.Note) { m.log(noteKind(n.Level), n.Text) }
+
+// noteKind is the log color of a workspace note's level.
+func noteKind(l workspace.Level) logKind {
+	switch l {
 	case workspace.Ok:
-		kind = logOk
+		return logOk
 	case workspace.Warn:
-		kind = logWarn
+		return logWarn
 	case workspace.Err:
-		kind = logErr
+		return logErr
 	case workspace.Accent:
-		kind = logAccent
+		return logAccent
 	case workspace.Muted:
-		kind = logMuted
+		return logMuted
 	}
-	m.log(kind, n.Text)
+	return logInfo
 }
 
 func (m *Model) notes(ns []workspace.Note) {
 	for _, n := range ns {
 		m.note(n)
+	}
+}
+
+// notesTo writes notes to conn's log (logs.go) — the shown one when conn
+// is on screen, else that connection's, where they wait for the tab to
+// come back to it.
+func (m *Model) notesTo(conn string, ns []workspace.Note) {
+	for _, n := range ns {
+		m.logTo(conn, noteKind(n.Level), n.Text)
 	}
 }
 
@@ -154,6 +167,7 @@ func (m *Model) connected(ev *workspace.Connected) tea.Cmd {
 		return nil
 	}
 	m.active().unconnected = false
+	m.syncResults()          // the results pane follows the connection (resulttabs.go)
 	m.switchConsole(ev.Name) // the editor follows the database (console.go)
 	m.refreshConns()
 	m.refreshTables()
@@ -248,26 +262,63 @@ func (m *Model) runDone(ev *workspace.RunDone) tea.Cmd {
 	}
 	m.catsAfterTransition()
 	recount := m.tag(job(ev.Counts))
+	// The run landed in its own connection's result set (workspace
+	// results.go), and its lines belong in that connection's log. When the
+	// tab has switched away meanwhile, neither is on screen: nothing is
+	// drawn, the notes go to the run's connection's log, and one line in
+	// the log on screen says where they went — so a run finishing out of
+	// sight is neither silent nor mixed into another connection's log.
+	onScreen := m.landedHere(ev.Conn, ev.Tag, ev.Err, "result")
 	if ev.Err != nil {
-		m.notes(ev.Notes)
-		m.setStatus(ev.Status)
+		m.notesTo(ev.Conn, ev.Notes)
+		if onScreen {
+			m.setStatus(ev.Status)
+		}
 		return recount
 	}
 	if ev.Script {
-		m.notes(ev.Notes)
-		if r := m.ws.LastResult(); r != nil {
+		m.notesTo(ev.Conn, ev.Notes)
+		if r := m.ws.LastResult(); r != nil && onScreen {
+			m.syncResults()
 			m.setStatus(resultStatus(r, m.cfg.MaxRows, m.grid.Rows()))
 		}
 		return recount
 	}
-	m.showResult(ev.Result)
+	if onScreen {
+		m.showResult(ev.Result)
+	}
 	if ev.Plan != nil {
 		// The raw output stays in the Results tab, one keypress (p) away.
-		m.showPlan(ev.Plan)
-		m.log(logAccent, "that result is a query plan — shown in the ◈ Plan tab (p switches back to the raw rows)")
+		m.showPlanOn(ev.Conn, ev.Plan)
+		m.logTo(ev.Conn, logAccent, "that result is a query plan — shown in the ◈ Plan tab (p switches back to the raw rows)")
 	}
-	m.notes(ev.Notes)
+	m.notesTo(ev.Conn, ev.Notes)
 	return recount
+}
+
+// landedHere reports whether a run (or explain) on conn landed on the
+// connection on screen. When it did not — the tab switched away while it
+// ran — the log on screen gets one line saying what became of it and where
+// its lines went (conn's log, by notesTo), so a run ending out of sight is
+// neither silent nor mixed into another connection's log. what is what it
+// left there: "result" or "plan".
+func (m *Model) landedHere(conn, tag string, err error, what string) bool {
+	if conn == m.ws.Active() {
+		return true
+	}
+	verb := "finished"
+	switch {
+	case errors.Is(err, db.ErrCanceled):
+		verb = "was stopped"
+	case err != nil:
+		verb, what = "failed", "error"
+	}
+	m.logf(logMuted, "%s on %s %s — its %s and log lines are %s's (switch back to %s to see them)",
+		tag, conn, verb, what, conn, conn)
+	// the status bar still shows the run's last elapsed-time tick, which
+	// would read as still running
+	m.setStatus(fmt.Sprintf("%s on %s %s", tag, conn, verb))
+	return false
 }
 
 // showResult puts a result in the grid and describes it in the status bar.
@@ -279,7 +330,9 @@ func (m *Model) showResult(r *model.Result) {
 		return
 	}
 	m.resTab = tabResults
-	m.grid.SetResult(r, m.cfg.MaxDisplayRows)
+	// the workspace has put r in the current result tab; syncResults brings
+	// that tab's grid on screen (resulttabs.go) and gives it r
+	m.syncResults()
 	if m.grid.Rows() < len(r.Rows) {
 		m.logf(logWarn, "showing the first %d of %d rows — the rest are fetched, and go into an export (max_display_rows)",
 			m.grid.Rows(), len(r.Rows))

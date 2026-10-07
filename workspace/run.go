@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -160,10 +159,21 @@ func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 	if w.active == "" {
 		return Start{}, refuse(NoConnection, Warn, "no active connection — pick one in the sidebar")
 	}
+	if w.busy {
+		return Start{}, refuse(Busy, Warn, "busy — %s is still running (Ctrl+K stops it)", w.runTag)
+	}
+	// the result tab this run will land in is picked now, not when it lands
+	// (results.go) — and a run with nowhere to land is refused before it
+	// costs anything
+	target, err := w.targetLocked(w.active)
+	if err != nil {
+		return Start{}, err
+	}
 	ctx, err := w.beginRunLocked(tag)
 	if err != nil {
 		return Start{}, err
 	}
+	w.runTarget = target
 	conn, gen := w.active, w.runGen
 	w.runStep, w.runSteps = 0, len(stmts)
 	job := func() Event {
@@ -225,35 +235,35 @@ func (w *Workspace) RunScript(path string) (Start, error) {
 	tag := "script " + filepath.Base(path)
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.busy {
+		return Start{}, refuse(Busy, Warn, "busy — %s is still running (Ctrl+K stops it)", w.runTag)
+	}
+	// its shows land as a run's result would: in the tab on screen now,
+	// unless pinned (results.go); refused when they could land nowhere
+	target, err := w.targetLocked(w.active)
+	if err != nil {
+		return Start{}, err
+	}
 	ctx, err := w.beginRunLocked(tag)
 	if err != nil {
 		return Start{}, err
 	}
 	gen, conn := w.runGen, w.active
-	// a new script run starts a new list of shown results: the last run's
-	// are no longer what the grid's "Result 1 · 2 · 3" switcher is about
-	w.scriptRes, w.scriptCut = nil, 0
+	w.runTarget = target
 	s := sdb.New(w.mgr,
 		func(r *model.Result) {
 			if r != nil {
 				w.mu.Lock()
 				// a straggling show from a run already written off (Stop,
-				// then a new run) must not land in the new run's list
+				// then a new run) must not land in the new run's tab
 				if gen == w.runGen {
-					w.lastRes = r
-					w.scriptRes = append(w.scriptRes, r)
-					if len(w.scriptRes) > MaxScriptResults {
-						// drop the oldest; a fresh slice so the dropped
-						// result is not kept alive by the backing array
-						w.scriptRes = slices.Clone(w.scriptRes[1:])
-						w.scriptCut++
-					}
+					w.showLocked(conn, w.runTarget, tag, r)
 				}
 				w.mu.Unlock()
 			}
-			w.emit(&ScriptShow{Result: r})
+			w.emit(&ScriptShow{Result: r, Conn: conn})
 		},
-		func(msg string) { w.emit(&ScriptPrint{Text: msg}) },
+		func(msg string) { w.emit(&ScriptPrint{Text: msg, Conn: conn}) },
 	).WithContext(ctx)
 	job := func() Event {
 		ev := &RunDone{Tag: tag, Conn: conn, Script: true, Err: script.Run(path, s)}
@@ -285,6 +295,9 @@ func (w *Workspace) beginRunLocked(tag string) (context.Context, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	w.busy, w.cancel, w.runTag, w.runAt = true, cancel, tag, time.Now()
 	w.runStep, w.runSteps = 0, 0 // Run sets them for a list of statements
+	// Run and RunScript set the target after this; an explain lands no
+	// result, so it keeps none, and no run's shows carry over
+	w.runTarget, w.showTab = nil, nil
 	w.runGen++
 	return ctx, nil
 }
@@ -326,8 +339,11 @@ func (w *Workspace) landRun(ev *RunDone, gen int, wrote bool) {
 	}
 	w.dropCompletionsAfterRunLocked(ev)
 	ev.Elapsed = w.endRunLocked()
+	// everything below lands in the run's own connection's result set,
+	// which is not the active one if the tab switched meanwhile
+	set := w.setLocked(ev.Conn)
 	if len(ev.Stmts) > 0 {
-		w.lastStmt, w.lastScript = ev.Stmts[len(ev.Stmts)-1], ""
+		set.lastStmt, set.lastScript = ev.Stmts[len(ev.Stmts)-1], ""
 	}
 	if ev.Script {
 		// A script's run replaces the last statement rather than leaving
@@ -335,25 +351,25 @@ func (w *Workspace) landRun(ev *RunDone, gen int, wrote bool) {
 		// old statement still "last", ChatContext would hand them to the
 		// assistant as that statement's ("why did this SELECT fail?" with
 		// the script's error). The tag is "script <name>" (RunScript).
-		w.lastStmt, w.lastScript = "", strings.TrimPrefix(ev.Tag, "script ")
+		set.lastStmt, set.lastScript = "", strings.TrimPrefix(ev.Tag, "script ")
 	}
 	if ev.Err != nil {
-		w.failedLocked(ev.Err, ev.Tag, ev.Elapsed, &ev.Notes, &ev.Status)
+		w.failedLocked(set, ev.Err, ev.Tag, ev.Elapsed, &ev.Notes, &ev.Status)
 		return
 	}
-	w.lastErr = ""
+	set.lastErr = ""
 	if ev.Script {
 		ev.Notes = append(ev.Notes, notef(Ok, "%s completed in %s", ev.Tag, ev.Elapsed.Round(time.Millisecond)))
 		return
 	}
 	if ev.Result != nil {
-		w.lastRes = ev.Result
-		w.scriptRes, w.scriptCut = nil, 0 // the grid has moved on from the script's results
+		last := ev.Stmts[len(ev.Stmts)-1]
+		w.placeLocked(ev.Conn, w.runTarget, resultTitle(ev.Tag, last), last, ev.Result)
 		// a result that is itself a plan — the output of an EXPLAIN the
 		// user ran — becomes the plan too, so a UI can show it as one
 		cc, _ := w.cfg.ConnByName(ev.Result.Conn)
 		if p, ok := explain.Detect(ev.Result, cc.Driver); ok {
-			ev.Plan, w.plan = p, p
+			ev.Plan, set.plan = p, p
 		}
 	}
 	ev.Notes = append(ev.Notes, doneNote(ev))
@@ -461,9 +477,10 @@ func (w *Workspace) refreshCountsLocked() Job {
 }
 
 // failedLocked writes a failed or stopped run's notes and status, and
-// remembers a real failure for the assistant to explain. A stop is the
+// remembers a real failure in set (the run's connection's) for the
+// assistant to explain. A stop is the
 // user's choice, not a failure: it is not remembered as the last error.
-func (w *Workspace) failedLocked(err error, tag string, elapsed time.Duration, notes *[]Note, status *string) {
+func (w *Workspace) failedLocked(set *resultSet, err error, tag string, elapsed time.Duration, notes *[]Note, status *string) {
 	took := elapsed.Round(time.Millisecond)
 	if errors.Is(err, db.ErrCanceled) {
 		*notes = append(*notes, notef(Warn, "%s stopped after %s", tag, took))
@@ -476,8 +493,8 @@ func (w *Workspace) failedLocked(err error, tag string, elapsed time.Duration, n
 		}
 		return
 	}
-	w.lastErr = serr.StringFromErr(err)
-	*notes = append(*notes, Note{Err, w.lastErr})
+	set.lastErr = serr.StringFromErr(err)
+	*notes = append(*notes, Note{Err, set.lastErr})
 	*status = fmt.Sprintf("error after %s — ✦ ask the assistant why", took)
 }
 

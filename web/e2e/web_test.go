@@ -45,6 +45,7 @@ func TestWeb(t *testing.T) {
 		{"copy out of the columns grid", copyColumnsGrid},
 		{"transpose the grid", transposeGrid},
 		{"switch connections", switchConns},
+		{"result tabs and logs per connection", resultTabsPerConn},
 		{"history scoped to the database", historyScope},
 		{"disconnect and reconnect", disconnect},
 		{"connection form fields and DSN", connForm},
@@ -608,6 +609,83 @@ func switchConns(t *testing.T, _ *env, p *rod.Page) {
 	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite")
 	waitFor(t, p, "lite's tables", `() => !!document.querySelector('#tables li[data-name="cats"]')`)
+}
+
+// resultTabsPerConn: each connection keeps its own result tabs, grid view
+// and log. A result sorted on lite comes back sorted after a visit to
+// lite2, which shows none of lite's results or log lines; a pinned tab
+// makes the next run open a second tab; clicking the first shows it again
+// with its view; the log's header names the connection, Copy copies it and
+// Clear empties it; a tab closes from its menu.
+func resultTabsPerConn(t *testing.T, _ *env, p *rod.Page) {
+	eval(t, p, `() => { if (dbc.grid.view().flip) dbc.grid.transpose(); }`)
+	before := gridSeq(t, p)
+	eval(t, p, `() => dbc.editor.setText("SELECT name, age FROM cats ORDER BY id")`)
+	p.MustElement("#run").MustClick()
+	waitResult(t, p, before, "name", "age")
+	waitFor(t, p, "one result tab", `() => document.querySelectorAll("#rstrip .rt").length === 1 &&
+	  !!document.querySelector("#rstrip .rt.on") && !document.getElementById("rstrip").hidden`)
+	waitFor(t, p, "the log names lite", `() => document.getElementById("log-conn").textContent === "· lite" &&
+	  document.getElementById("log").textContent.includes("completed on lite")`)
+	clickAt(t, p, `#grid .gh .hc[data-c="1"]`, proto.InputMouseButtonLeft) // sort by age
+	waitFor(t, p, "sorted by age", `() => dbc.grid.view().sort === 1`)
+	liteSeq := gridSeq(t, p)
+
+	clickAt(t, p, `#conns .conn-item[data-conn="lite2"]`, proto.InputMouseButtonLeft)
+	waitConnected(t, p, "lite2")
+	waitFor(t, p, "lite2's empty results and its own log", `() => !dbc.grid.hasResult() &&
+	  document.getElementById("rstrip").hidden &&
+	  document.getElementById("log-conn").textContent === "· lite2" &&
+	  !document.getElementById("log").textContent.includes("completed on lite ")`)
+	before = gridSeq(t, p)
+	eval(t, p, `() => dbc.editor.setText("SELECT name FROM dogs")`)
+	p.MustElement("#run").MustClick()
+	waitResult(t, p, before, "name")
+
+	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
+	waitConnected(t, p, "lite")
+	waitFor(t, p, "lite's result back, still sorted", `(seq) => dbc.grid.view().seq === seq &&
+	  dbc.grid.view().sort === 1 && document.querySelectorAll("#rstrip .rt").length === 1 &&
+	  document.getElementById("log-conn").textContent === "· lite" &&
+	  document.getElementById("log").textContent.includes("completed on lite") &&
+	  !document.getElementById("log").textContent.includes("on lite2")`, liteSeq)
+
+	// P pins (dispatched on the focused grid: a shifted printable key)
+	eval(t, p, `() => { dbc.grid.focus();
+	  document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "P", bubbles: true, cancelable: true })); }`)
+	waitFor(t, p, "the tab pinned", `() => !!document.querySelector("#rstrip .rt.on .pin")`)
+	before = gridSeq(t, p)
+	eval(t, p, `() => dbc.editor.setText("SELECT 1 AS one")`)
+	p.MustElement("#run").MustClick()
+	waitResult(t, p, before, "one")
+	waitFor(t, p, "a second tab, on screen", `() => document.querySelectorAll("#rstrip .rt").length === 2 &&
+	  document.querySelector("#rstrip .rt:nth-child(2)").classList.contains("on")`)
+
+	clickAt(t, p, `#rstrip .rt:nth-child(1) .tt`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "the first tab back, with its sort", `(seq) => dbc.grid.view().seq === seq && dbc.grid.view().sort === 1 &&
+	  document.querySelector("#rstrip .rt:nth-child(1)").classList.contains("on")`, liteSeq)
+
+	setClipboard(t, p, "sentinel")
+	p.MustElement("#log-copy").MustClick()
+	waitFor(t, p, "the log copied", `() => [...document.querySelectorAll("#log > div")].some((d) => d.textContent.includes("copied the log"))`)
+	if got := clipboard(t, p); !strings.Contains(got, "completed on lite") || strings.Contains(got, "on lite2") {
+		t.Fatalf("the copied log = %q", got)
+	}
+	p.MustElement("#log-clear").MustClick()
+	waitFor(t, p, "the log cleared", `() => document.querySelectorAll("#log > div").length === 0`)
+
+	rightClick(t, p, `#rstrip .rt:nth-child(1)`)
+	// lite has no ai_rows: sharing is offered, off, with the reason (the
+	// share itself, which needs an ai_rows connection, is web/resulttabs_test.go's)
+	if got := evalStr(t, p, `() => { const b = [...document.querySelectorAll(".menu .mitem")]
+	  .find((m) => m.textContent.includes("Share with the assistant"));
+	  return b ? b.className + "|" + b.title : ""; }`); !strings.Contains(got, "off|") || !strings.Contains(got, "ai_rows = true on lite") {
+		t.Fatalf("the share row = %q", got)
+	}
+	menuPick(t, p, "Close this result tab")
+	waitFor(t, p, "one tab left, on screen, its result in the grid", `() => document.querySelectorAll("#rstrip .rt").length === 1 &&
+	  !!document.querySelector("#rstrip .rt.on") && !document.querySelector("#rstrip .pin") &&
+	  [...document.querySelectorAll("#grid .gh .hc")].some((h) => h.textContent.includes("one"))`)
 }
 
 // historyScope: the history opens on the tab's database when it has

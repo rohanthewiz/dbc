@@ -1,0 +1,434 @@
+package workspace
+
+import (
+	"slices"
+	"strings"
+
+	"github.com/rohanthewiz/dbc/explain"
+	"github.com/rohanthewiz/dbc/model"
+)
+
+// Result sets: what the results pane shows, kept PER CONNECTION.
+//
+// A workspace (one query tab) keeps a result set for each connection it has
+// been on. Switching the tab to another connection does not carry the old
+// connection's result along, nor throw it away: the pane shows the new
+// connection's set, and switching back shows the old one again as it was.
+// "The last result", "the last error", "the last statement" and "the plan"
+// are all the active connection's — so the grid, copies, exports and the
+// assistant all talk about the connection the tab is on.
+//
+//	Workspace (active = "pg")
+//	  sets["pg"]   ─► resultSet{ tabs: [#3 ⚑ orders, #7 cats], cur: 1, plan, last* }
+//	  sets["lite"] ─► resultSet{ tabs: [#5 select 1], cur: 0, … }
+//	                     LastResult() = sets[active].tabs[cur].res
+//
+// A set is a strip of RESULT TABS, at most Config.ResultTabLimit of them.
+// A run REPLACES the result in the tab that was current when it started,
+// unless that tab is PINNED, in which case it opens a new tab — the
+// DataGrip/DBeaver model, where the common loop (edit the WHERE, run again)
+// does not pile up tabs, and a result worth keeping is one click from kept:
+//
+//	run starts ──► target = the current tab, or nil when it is pinned (or
+//	               the set is empty)
+//	run lands  ──► target still in the set and unpinned? replace its result
+//	               otherwise a new tab at the end; at the cap, the oldest
+//	               unpinned tab is dropped first
+//	               either way the landed tab becomes the current one
+//
+// The target is fixed at the START, not at landing: a slow query must not
+// overwrite whichever tab the user happens to be browsing when it ends.
+// A run that would need a new tab while every tab is pinned and the set is
+// full is refused before it starts (targetLocked) — dropping a pinned result
+// to make room would break the one promise a pin makes, and refusing up
+// front costs nothing but a click, where a result thrown away at landing
+// may have cost minutes. (Pinning the last unpinned tab while a run is in
+// flight can still leave it nowhere to land; the set then goes one over
+// the cap rather than lose either result.)
+//
+// One tab per set may be SHARED with the assistant (ShareResultTab, on a
+// connection with ai_rows only): its result goes with every question asked
+// on that connection until it is unshared or closed — see ChatContext. A
+// shared tab keeps its result as a pinned one does: a run does not replace
+// it, and room is not made by dropping it.
+//
+// A script run lands in one tab too: its first s.Show takes the target as a
+// run's result would, and every later show of the same run joins that tab
+// (shows, below), where the "Result 1 · 2 · 3" switcher steps through them.
+//
+// Every result put in a tab gets a SEQ, a number unique within the
+// workspace that moves whenever a tab's result does. A UI keys what it
+// keeps about a result (dbc web's grid view, a copy's "still the same
+// result?" check) on it; unlike a pointer it survives a JSON round trip.
+
+// resultTab is one tab of a result set.
+type resultTab struct {
+	id     int    // unique within the workspace, for the tab's whole life
+	title  string // what produced it, one line: see resultTitle
+	stmt   string // the statement whose result it is ("" for a script's)
+	pinned bool
+	res    *model.Result // what the tab shows
+	seq    int           // res's number; see SEQ above
+	// shows are the s.Show results of the script run that filled the tab,
+	// oldest first, at most MaxScriptResults; cut counts the ones dropped
+	// off the front to keep to that, so shows[i] is the script's
+	// (cut+i+1)th. res is one of them. Empty for a run's own result.
+	shows []shown
+	cut   int
+}
+
+// shown is one of a script run's s.Show results, with its seq.
+type shown struct {
+	res *model.Result
+	seq int
+}
+
+// resultSet is one connection's results as a query tab keeps them.
+type resultSet struct {
+	tabs []*resultTab
+	cur  int // index of the tab on screen; -1 when there is none
+
+	// the last run on this connection: its statement (or script) and what
+	// it failed with — the assistant's "this query" and "✦ ask why"
+	lastStmt   string
+	lastScript string // the script's file name when the last run was one
+	lastErr    string
+	plan       *explain.Plan // the last plan: an explain's, or one detected in a result
+
+	// shared is the tab the user shared with the assistant (ShareResultTab):
+	// its result goes with every question asked on this connection until
+	// it is unshared or closed. At most one per set — one result is what
+	// "this result" in a question can mean. A tab closed or dropped from
+	// the set is no longer shared (sharedTab checks it is still there).
+	shared *resultTab
+}
+
+// sharedTab is the set's shared tab and its 0-based position, or nil.
+func (s *resultSet) sharedTab() (*resultTab, int) {
+	if s == nil || s.shared == nil {
+		return nil, -1
+	}
+	if i := slices.Index(s.tabs, s.shared); i >= 0 {
+		return s.shared, i
+	}
+	return nil, -1
+}
+
+// kept reports whether t keeps its result: a run does not replace it, and
+// making room for a new tab does not drop it. A pinned tab, by definition;
+// and the shared one, since the user shared that RESULT — a rerun swapping
+// it for another under the share, or the cap dropping it, would change
+// what the assistant is told without a word.
+func (s *resultSet) kept(t *resultTab) bool { return t.pinned || t == s.shared }
+
+// current is the tab on screen, or nil.
+func (s *resultSet) current() *resultTab {
+	if s == nil || s.cur < 0 || s.cur >= len(s.tabs) {
+		return nil
+	}
+	return s.tabs[s.cur]
+}
+
+// setLocked is conn's result set, made on first use. The caller holds mu.
+func (w *Workspace) setLocked(conn string) *resultSet {
+	if w.sets == nil {
+		w.sets = map[string]*resultSet{}
+	}
+	s := w.sets[conn]
+	if s == nil {
+		s = &resultSet{cur: -1}
+		w.sets[conn] = s
+	}
+	return s
+}
+
+// activeSetLocked is the active connection's set, or nil before anything
+// landed there. Read-only callers use it, so nothing is made for a lookup.
+func (w *Workspace) activeSetLocked() *resultSet { return w.sets[w.active] }
+
+// curLocked is the active connection's current result tab, or nil.
+func (w *Workspace) curLocked() *resultTab { return w.activeSetLocked().current() }
+
+// resultTitle names a result tab after what produced it. An editor run's
+// tag ("query", "statement 2/4", "selection", "all 3 statements") says
+// where the statement was picked, not what it was, so those tabs are named
+// by the statement itself; the app's own runs ("preview cats", "columns
+// cats", "list tables") have tags that already say it better than their
+// generated SQL would.
+func resultTitle(tag, stmt string) string {
+	switch {
+	case tag == "query", strings.HasPrefix(tag, "statement "),
+		strings.HasPrefix(tag, "selection"), strings.HasPrefix(tag, "all "):
+		return Preview(stmt)
+	}
+	return tag
+}
+
+// targetLocked picks the tab a run on conn will land in: the current tab
+// when it is not kept (pinned or shared), else nil (a new one). It refuses
+// when a new tab is needed and there is no room for one: every tab kept,
+// at the cap.
+func (w *Workspace) targetLocked(conn string) (*resultTab, error) {
+	s := w.sets[conn]
+	cur := s.current()
+	if cur != nil && !s.kept(cur) {
+		return cur, nil
+	}
+	if s == nil {
+		return nil, nil
+	}
+	limit := w.cfg.ResultTabLimit()
+	if len(s.tabs) < limit || slices.ContainsFunc(s.tabs, func(t *resultTab) bool { return !s.kept(t) }) {
+		return nil, nil
+	}
+	return nil, refuse(Invalid, Warn,
+		"every result tab on %s is pinned (or shared with the assistant) and there are %d of %d (result_tabs) — unpin or close one, then run again",
+		conn, len(s.tabs), limit)
+}
+
+// placeLocked puts r in conn's result set — in target when that is still in
+// the set and not kept (a pin or a share made since the run started), else
+// in a new tab at the end — and makes that tab the current one. The caller
+// holds mu.
+func (w *Workspace) placeLocked(conn string, target *resultTab, title, stmt string, r *model.Result) *resultTab {
+	s := w.setLocked(conn)
+	w.resSeq++
+	if i := slices.Index(s.tabs, target); target != nil && i >= 0 && !s.kept(target) {
+		target.title, target.stmt, target.res, target.seq = title, stmt, r, w.resSeq
+		target.shows, target.cut = nil, 0
+		s.cur = i
+		return target
+	}
+	// a new tab: make room by dropping the oldest unpinned (and unshared)
+	// ones. With none left to drop the set goes over the cap (see the
+	// package comment above: only a pin or share made mid-run gets here).
+	for len(s.tabs) >= w.cfg.ResultTabLimit() {
+		i := slices.IndexFunc(s.tabs, func(t *resultTab) bool { return !s.kept(t) })
+		if i < 0 {
+			break
+		}
+		s.tabs = slices.Delete(s.tabs, i, i+1)
+	}
+	w.tabSeq++
+	t := &resultTab{id: w.tabSeq, title: title, stmt: stmt, res: r, seq: w.resSeq}
+	s.tabs = append(s.tabs, t)
+	s.cur = len(s.tabs) - 1
+	return t
+}
+
+// showLocked lands one of a script run's s.Show results on conn: the run's
+// first show is placed as a run's result would be (in target, or a new
+// tab); later ones join the tab the first went to, as long as it is still
+// in the set — closed meanwhile, the next show starts over in a new tab.
+func (w *Workspace) showLocked(conn string, target *resultTab, title string, r *model.Result) {
+	s := w.setLocked(conn)
+	t := w.showTab
+	i := slices.Index(s.tabs, t)
+	if t == nil || i < 0 {
+		t = w.placeLocked(conn, target, title, "", r)
+		t.shows = []shown{{res: r, seq: t.seq}}
+		w.showTab = t
+		return
+	}
+	w.resSeq++
+	t.shows = append(t.shows, shown{res: r, seq: w.resSeq})
+	if len(t.shows) > MaxScriptResults {
+		// drop the oldest; a fresh slice so the dropped result is not kept
+		// alive by the backing array
+		t.shows = slices.Clone(t.shows[1:])
+		t.cut++
+	}
+	t.res, t.seq = r, w.resSeq
+	s.cur = i // a show moves the grid to it, as a landed run does
+}
+
+// ---------------------------------------------------------------------------
+// Reading and changing the result tabs
+// ---------------------------------------------------------------------------
+
+// ResultTab describes one tab of the active connection's result set, for a
+// UI's strip.
+type ResultTab struct {
+	ID     int    // stable for the tab's life: what ShowResultTab and the rest take
+	Seq    int    // numbers the result on it; moves whenever that result does
+	Title  string // what produced it, one line: a statement's preview, "preview cats", "script x.go"
+	Stmt   string // the whole statement, for a tooltip ("" for a script's)
+	Pinned bool
+	// Result is the result the tab shows. Shared: read it, never write it.
+	Result *model.Result
+	Shows  int  // how many s.Show results of a script it holds (0 for a run's own)
+	Shared bool // shared with the assistant (ShareResultTab)
+}
+
+// ResultTabs is the active connection's result set: its tabs in strip
+// order, and the index of the one on screen (-1 when there is none).
+func (w *Workspace) ResultTabs() (tabs []ResultTab, cur int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	s := w.activeSetLocked()
+	if s == nil {
+		return nil, -1
+	}
+	tabs = make([]ResultTab, len(s.tabs))
+	shared, _ := s.sharedTab()
+	for i, t := range s.tabs {
+		tabs[i] = ResultTab{ID: t.id, Seq: t.seq, Title: t.title, Stmt: t.stmt, Pinned: t.pinned,
+			Result: t.res, Shows: len(t.shows), Shared: t == shared}
+	}
+	return tabs, s.cur
+}
+
+// ResultTabLimit is how many tabs one connection's result set holds
+// (result_tabs).
+func (w *Workspace) ResultTabLimit() int { return w.cfg.ResultTabLimit() }
+
+// tabLocked finds tab id in the active connection's set.
+func (w *Workspace) tabLocked(id int) (*resultSet, int, error) {
+	s := w.activeSetLocked()
+	if s != nil {
+		if i := slices.IndexFunc(s.tabs, func(t *resultTab) bool { return t.id == id }); i >= 0 {
+			return s, i, nil
+		}
+	}
+	return nil, -1, refuse(Invalid, Warn, "no result tab %d on %s — it was closed, or replaced", id, w.active)
+}
+
+// ShowResultTab puts result tab id on screen: its result becomes the last
+// result, which is what the grid, copies, exports and the assistant read.
+// Allowed mid-run — looking back at an earlier result while a slow query
+// runs is what keeping them is for — since the run lands in the tab it
+// picked when it started, not in whichever is on screen.
+func (w *Workspace) ShowResultTab(id int) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	s, i, err := w.tabLocked(id)
+	if err != nil {
+		return err
+	}
+	s.cur = i
+	return nil
+}
+
+// PinResultTab pins or unpins result tab id. A pinned tab keeps its
+// result: the next run that would have replaced it opens a new tab.
+func (w *Workspace) PinResultTab(id int, pin bool) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	s, i, err := w.tabLocked(id)
+	if err != nil {
+		return err
+	}
+	s.tabs[i].pinned = pin
+	return nil
+}
+
+// CloseResultTab closes result tab id, pinned or not. When it was on
+// screen, the tab to its right takes its place (its left, at the end of
+// the strip), as a browser's tabs do; the last one closed leaves the pane
+// empty. A run in flight that picked it lands in a new tab instead.
+func (w *Workspace) CloseResultTab(id int) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	s, i, err := w.tabLocked(id)
+	if err != nil {
+		return err
+	}
+	s.tabs = slices.Delete(s.tabs, i, i+1)
+	switch {
+	case len(s.tabs) == 0:
+		s.cur = -1
+	case s.cur > i, s.cur == len(s.tabs):
+		// a tab left of the current one went, or the current one was the
+		// last: either way the index moves one left
+		s.cur--
+	}
+	return nil
+}
+
+// CanShareResults reports whether the active connection lets the assistant
+// see result rows (ai_rows), which is what sharing a result tab needs —
+// for a UI to offer "Share with the assistant", or say why not. The
+// config is read live: dbc web can change ai_rows on a connection at any
+// time.
+func (w *Workspace) CanShareResults() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	cc, ok := w.cfg.ConnByName(w.active)
+	return ok && cc.AIRows
+}
+
+// ShareResultTab shares result tab id with the assistant, or stops sharing
+// it. A shared tab's result goes with every question asked on its
+// connection — in place of the result that would otherwise ride along
+// with the statement under the caret — until it is unshared, closed, or
+// another tab is shared (one at a time). The RESULT is what is shared: a
+// shared tab keeps it as a pinned tab would (resultSet.kept), so the next
+// run opens a new tab rather than change what the assistant sees.
+//
+// Sharing is refused on a connection without ai_rows: result rows are the
+// database's contents, and sending them is that connection's setting to
+// grant (package ai's DATA RULE), not a menu's. Unsharing always works. A
+// share made while ai_rows was on, then turned off, sends column names
+// only, and the note says the rows were withheld (ai.Build).
+func (w *Workspace) ShareResultTab(id int, share bool) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	s, i, err := w.tabLocked(id)
+	if err != nil {
+		return err
+	}
+	if !share {
+		if s.shared == s.tabs[i] {
+			s.shared = nil
+		}
+		return nil
+	}
+	if cc, ok := w.cfg.ConnByName(w.active); !ok || !cc.AIRows {
+		return refuse(Invalid, Warn,
+			"%s does not share results with the assistant — set ai_rows = true on connection %q to share them",
+			w.active, w.active)
+	}
+	s.shared = s.tabs[i]
+	return nil
+}
+
+// CloseUnpinnedResultTabs closes every unpinned tab of the active
+// connection's result set — except the one shared with the assistant,
+// which the user is still using — and reports how many went. The current
+// tab, if kept, stays current; otherwise the last kept tab comes on screen.
+func (w *Workspace) CloseUnpinnedResultTabs() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	s := w.activeSetLocked()
+	if s == nil {
+		return 0
+	}
+	cur := s.current()
+	n := len(s.tabs)
+	s.tabs = slices.DeleteFunc(s.tabs, func(t *resultTab) bool { return !s.kept(t) })
+	s.cur = slices.Index(s.tabs, cur)
+	if s.cur < 0 {
+		s.cur = len(s.tabs) - 1
+	}
+	return n - len(s.tabs)
+}
+
+// RenameResults moves conn from's result sets to to, after a connection
+// rename, so a query tab that visited the old name finds its results under
+// the new one. A set already under to (a name reused) is replaced.
+func (w *Workspace) RenameResults(from, to string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if s, ok := w.sets[from]; ok && from != to {
+		delete(w.sets, from)
+		w.sets[to] = s
+	}
+}
+
+// DropResults forgets conn's result set — after the connection is removed,
+// so its results do not stay alive in every query tab that visited it.
+func (w *Workspace) DropResults(conn string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.sets, conn)
+}

@@ -120,13 +120,23 @@ type tab struct {
 	win *window
 	ws  *workspace.Workspace
 
-	// the grid's cache of the last result and its sort order (grid.go);
-	// rvSeq numbers results, so a copy can tell it is still looking at
-	// the one the page drew
+	// the grid's cache of the result on screen and its sort order
+	// (grid.go); its seq is the workspace's (LastResultSeq), so a copy can
+	// tell it is still looking at the one the page drew
 	viewMu sync.Mutex
 	rv     resultView
-	rvSeq  int
-	ps     planState // the Plan tab's plan and its "before" (plan.go)
+	// ps is the Plan tab's plan and its "before", per connection (plan.go):
+	// a plan belongs to the result set of the connection it was made on,
+	// so switching the tab's connection shows that connection's plan.
+	// planSeq numbers the plans across every connection (see planState).
+	ps      map[string]planState
+	planSeq int
+	// visited are the connections the tab's workspace may hold results
+	// for — every one it connected to or ran on — so a connection renamed
+	// or removed in the browser can have its results moved or dropped
+	// (moveResults): the workspace keeps them by name but does not list
+	// its names. Guarded by viewMu.
+	visited map[string]bool
 }
 
 func newHub(newWS func(sink func(workspace.Event)) *workspace.Workspace, releaseAfter time.Duration) *hub {
@@ -381,10 +391,18 @@ func (w *window) send(typ, ws string, data any) {
 // send puts one of this query tab's events on its window's stream.
 func (t *tab) send(typ string, data any) { t.win.send(typ, t.id, data) }
 
-// logLine is a log event's data.
+// logLine is a log event's data. Conn is the connection the line belongs
+// to: the page keeps a log per connection, and a line about pg must land
+// in pg's log even when it arrives after the tab moved to lite (a run's
+// outcome, a script's s.Print). Stamped by the server, which knows which
+// connection the work ran on. Left out ("") the line goes to the log on
+// screen in its query tab — the tab's connection's, or the no-connection
+// log while it has none — which is right for the lines that are about the
+// tab rather than about a connection (the assistant's, a pool closed).
 type logLine struct {
 	Level string `json:"level"`
 	Text  string `json:"text"`
+	Conn  string `json:"conn,omitempty"`
 }
 
 // levelNames are the page's CSS class suffixes for workspace.Level.
@@ -394,11 +412,24 @@ var levelNames = map[workspace.Level]string{
 }
 
 // notes sends the workspace's own words to the tab's log, so the browser
-// and the terminal say the same thing.
-func (t *tab) notes(ns []workspace.Note) {
+// and the terminal say the same thing. They go to the log of the tab's
+// connection as it is when they are sent: "connecting to lite…" is said
+// while the tab is still on pg, so it shows where the user is looking, and
+// "connected to lite" after the switch landed, in lite's. Work that ran on
+// a connection of its own — a run, an explain, a script — names it with
+// notesOn instead.
+func (t *tab) notes(ns []workspace.Note) { t.notesOn(t.ws.Active(), ns) }
+
+// notesOn sends notes to conn's log.
+func (t *tab) notesOn(conn string, ns []workspace.Note) {
 	for _, n := range ns {
-		t.send("log", logLine{Level: levelNames[n.Level], Text: n.Text})
+		t.send("log", logLine{Level: levelNames[n.Level], Text: n.Text, Conn: conn})
 	}
+}
+
+// logOn sends one line of the server's own to conn's log.
+func (t *tab) logOn(conn, level, text string) {
+	t.send("log", logLine{Level: level, Text: text, Conn: conn})
 }
 
 // sink receives the workspace's mid-run events (a script's s.Print and
@@ -406,11 +437,13 @@ func (t *tab) notes(ns []workspace.Note) {
 func (t *tab) sink(e workspace.Event) {
 	switch e := e.(type) {
 	case *workspace.ScriptPrint:
-		t.send("log", logLine{Level: "info", Text: e.Text})
+		t.logOn(e.Conn, "info", e.Text)
 	case *workspace.ScriptShow:
 		// the page fetches the rows itself (handleResult); the event says
-		// only how many results the run has shown, for the switcher
-		t.send("result", resultEvent{Sets: scriptSets(t.ws)})
+		// only how many results the run has shown, for the switcher, and
+		// the result tabs it landed among — and which connection's, since
+		// a tab switched away mid-run must not draw it
+		t.send("result", resultEvent{Conn: e.Conn, Sets: scriptSets(t.ws), resultTabsState: resultTabsOf(t.ws)})
 	}
 }
 
@@ -424,9 +457,14 @@ type resultSets struct {
 	Cut int `json:"cut"`
 }
 
-// resultEvent is "result": a script's s.Show landed mid-run.
+// resultEvent is "result": a script's s.Show landed mid-run, in Conn's
+// result set. Sets and the result tabs are the ACTIVE connection's, as
+// everywhere else: when Conn is not the tab's connection any more, the page
+// draws nothing, and finds the show there when it switches back.
 type resultEvent struct {
+	Conn string      `json:"conn"`
 	Sets *resultSets `json:"sets,omitempty"`
+	resultTabsState
 }
 
 // scriptSets is ws's resultSets, or nil when its last script run showed
@@ -491,6 +529,23 @@ type connEvent struct {
 	Failed  bool   `json:"failed"`
 	Status  string `json:"status,omitempty"`
 	sideState
+	// The results pane follows the connection: a switch puts the new
+	// connection's result set on screen (workspace/results.go), so the
+	// event carries it, with whether there is a result and a plan to
+	// fetch and the script switcher of the result tab on screen.
+	resultTabsState
+	HasResult bool        `json:"hasResult"`
+	HasPlan   bool        `json:"hasPlan"`
+	Sets      *resultSets `json:"sets,omitempty"`
+}
+
+// connEventOf builds a connEvent from the workspace as it is now.
+func (s *Server) connEventOf(t *tab, changed, failed bool, status string) connEvent {
+	return connEvent{
+		Active: t.ws.Active(), Changed: changed, Failed: failed, Status: status,
+		sideState: s.sidebar(t.ws), resultTabsState: resultTabsOf(t.ws),
+		HasResult: t.ws.LastResult() != nil, HasPlan: t.planState().plan != nil, Sets: scriptSets(t.ws),
+	}
 }
 
 // sideState is the sidebar below the Connections list, as the page draws it:
@@ -663,6 +718,12 @@ type runEvent struct {
 	Stateful bool `json:"stateful"`
 	// Sets: a script run's shown results, when there are two or more
 	Sets *resultSets `json:"sets,omitempty"`
+	// the active connection's result tabs, which the run may have changed
+	// (a tab replaced, one opened, the oldest dropped). Conn says whose set
+	// the run landed in: when it is not the tab's connection any more (it
+	// switched mid-run), the page draws no result — the run is in Conn's
+	// set, shown when the tab goes back to it.
+	resultTabsState
 }
 
 // deliver draws a landed event: the workspace has already updated itself,
@@ -673,11 +734,17 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 		if ev.Stale {
 			return // superseded by a newer connect, which will report
 		}
-		t.notes(ev.Notes)
-		t.send("conn", connEvent{
-			Active: t.ws.Active(), Changed: ev.Changed, Failed: ev.Err != nil,
-			Status: ev.Status, sideState: s.sidebar(t.ws),
-		})
+		// a landed connect's words go to its connection's log, which the
+		// page shows from the "conn" below; a failed one's to the log on
+		// screen (none stamped) — the tab stays where it was, and so must
+		// the reason it did
+		conn := ""
+		if ev.Err == nil {
+			t.visit(ev.Name)
+			conn = ev.Name
+		}
+		t.notesOn(conn, ev.Notes)
+		t.send("conn", s.connEventOf(t, ev.Changed, ev.Err != nil, ev.Status))
 		// landed or failed, the tab is on another connection (or none) than
 		// the "connecting" announcement said
 		s.hub.announceInUse()
@@ -696,7 +763,7 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 			return // a later pick or connect will report
 		}
 		t.notes(ev.Notes)
-		t.send("conn", connEvent{Active: t.ws.Active(), Failed: ev.Catalog == nil, sideState: s.sidebar(t.ws)})
+		t.send("conn", s.connEventOf(t, false, ev.Catalog == nil, ""))
 		if ev.Counts != nil {
 			go func() { s.deliver(t, ev.Counts()) }()
 		}
@@ -704,12 +771,13 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 		if ev.Stale {
 			return // the tab has moved on to another connection
 		}
-		t.notes(ev.Notes)
+		t.notesOn(ev.Conn, ev.Notes)
 		t.send("counts", countsEvent{Active: ev.Conn, Tables: tables(t.ws), On: t.ws.RowCountsShown()})
 	case *workspace.RunDone:
 		if ev.Stale {
 			return
 		}
+		t.visit(ev.Conn)
 		// the run may have changed rows: recount this sidebar, when it
 		// shows counts, and every other tab's on the connection that does.
 		// Wrote, not Counts, decides the others: this tab's own counts may
@@ -720,18 +788,18 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 		if ev.Wrote {
 			s.recountOthers(t, ev.Conn)
 		}
-		t.notes(ev.Notes)
+		t.notesOn(ev.Conn, ev.Notes)
 		out := runEvent{
 			Tag: ev.Tag, Conn: ev.Conn, OK: ev.Err == nil,
 			Stopped: errors.Is(ev.Err, db.ErrCanceled), Status: ev.Status,
 			HasResult: ev.Result != nil,
 		}
 		if ev.Plan != nil {
-			t.setPlan(ev.Plan)
+			t.setPlan(ev.Conn, ev.Plan)
 			out.HasPlan = true
 			// the raw rows stay in the Results tab, one keypress (p) away
-			t.send("log", logLine{Level: "accent",
-				Text: "that result is a query plan — shown in the ◈ Plan tab (p switches back to the raw rows)"})
+			t.logOn(ev.Conn, "accent",
+				"that result is a query plan — shown in the ◈ Plan tab (p switches back to the raw rows)")
 		}
 		if ev.Script && ev.Err == nil {
 			// a script's results reached the grid as it showed them (the
@@ -750,11 +818,12 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 			shown := s.shown(r)
 			out.Status = workspace.ResultStatus(r, s.cfg.MaxRows, shown)
 			if shown < len(r.Rows) { // the TUI's words for the same cap
-				t.send("log", logLine{Level: "warn", Text: fmt.Sprintf(
+				t.logOn(ev.Conn, "warn", fmt.Sprintf(
 					"showing the first %d of %d rows — the rest are fetched, and go into an export (max_display_rows)",
-					shown, len(r.Rows))})
+					shown, len(r.Rows)))
 			}
 		}
+		out.resultTabsState = resultTabsOf(t.ws)
 		// Session takes the session lock; the run has just released it,
 		// and this is the Job's goroutine, so waiting here holds up nobody.
 		_, out.Stateful = t.ws.Session()

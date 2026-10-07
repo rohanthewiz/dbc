@@ -12,8 +12,10 @@ import (
 
 // Query tabs: several workspaces in one TUI, as dbc web's query tabs are.
 // Each tab has its own pinned session (a BEGIN in one does not leak into
-// another), its own console, result, plan and Tables list; the
-// connections list, the log, the assistant and the layout are shared.
+// another), its own console, result sets (one per connection it has been
+// on: resulttabs.go), plans and Tables list; the connections list, the
+// logs (one per connection: logs.go), the assistant and the layout are
+// shared.
 //
 // THE SWAP. The Model was built around one workspace and one set of
 // widgets (m.ws, m.editor, m.grid, …), and every handler reads those
@@ -62,8 +64,16 @@ type queryTab struct {
 
 	resTab        resultsTab
 	schemaLoading string
-	status        string
-	complSt       complState
+
+	// the results pane per connection, parked (see the Model's fields of
+	// the same names, and resulttabs.go)
+	planFor  string
+	plans    map[string]connPane
+	gridConn string
+	gridFor  int
+	rgrids   map[string]map[int]*grid
+	status   string
+	complSt  complState
 
 	console, consoleName, consoleText string
 	consoleDB                         userdata.ConsoleDB
@@ -212,6 +222,7 @@ func (m *Model) park(t *queryTab) {
 	t.ws, t.editor, t.grid, t.planv, t.tables = m.ws, m.editor, m.grid, m.planv, m.tables
 	t.resTab, t.schemaLoading, t.status, t.complSt = m.resTab, m.schemaLoading, m.status, m.complSt
 	t.console, t.consoleName, t.consoleText, t.consoleDB = m.console, m.consoleName, m.consoleText, m.consoleDB
+	t.planFor, t.plans, t.gridConn, t.gridFor, t.rgrids = m.planFor, m.plans, m.gridConn, m.gridFor, m.rgrids
 }
 
 // load copies t's fields into the Model (the tab coming on screen).
@@ -219,6 +230,7 @@ func (m *Model) load(t *queryTab) {
 	m.ws, m.editor, m.grid, m.planv, m.tables = t.ws, t.editor, t.grid, t.planv, t.tables
 	m.resTab, m.schemaLoading, m.status, m.complSt = t.resTab, t.schemaLoading, t.status, t.complSt
 	m.console, m.consoleName, m.consoleText, m.consoleDB = t.console, t.consoleName, t.consoleText, t.consoleDB
+	m.planFor, m.plans, m.gridConn, m.gridFor, m.rgrids = t.planFor, t.plans, t.gridConn, t.gridFor, t.rgrids
 	m.compl = nil // a popup belongs to the editor it opened over
 }
 
@@ -251,6 +263,7 @@ func (m *Model) arrive() tea.Cmd {
 	for _, msg := range pending {
 		cmds = append(cmds, m.route(msg))
 	}
+	m.syncResults() // its results pane, as its connection now has it
 	if t.lazy != "" {
 		// a restored tab's first look: connect it now (see restoreTabs)
 		name := t.lazy

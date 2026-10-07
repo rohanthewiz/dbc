@@ -59,6 +59,7 @@ Copy `dbc.example.toml` to `./dbc.toml` (or `~/.config/dbc/config.toml`):
 # scripts_dir      = "scripts"   # default ~/.config/dbc/scripts; relative = beside this file
 max_rows           = 1000   # rows fetched from the server
 max_display_rows   = 2000   # rows the results table draws (0 = all)
+result_tabs        = 10     # result tabs per connection, per query tab (1–50; see Result tabs)
 conn_idle_timeout  = "1h"   # close pooled connections idle this long ("0" = never)
 connect_timeout    = "5s"   # give up opening a connection after this ("0" = no limit; Ctrl+K cancels)
 default_connection = "local-pg"
@@ -312,6 +313,8 @@ with no database picker.
 | `‹` on Connections · `›` on the left edge | click | fold the sidebar away · bring it back (`Ctrl+B`) |
 | assistant | `⤓ insert` on a code block | puts that SQL in the editor at the caret |
 | results title | click `Results` / `◈ Plan` | switches the results pane between the grid and the plan |
+| result tabs (the results pane's bottom border) | click · right-click | shows that result · pin or unpin, share with the assistant, close, close the unpinned ones (see [Result tabs](#result-tabs-and-the-log-per-connection)) |
+| log title | click `⧉ copy` / `✕ clear` | copies the connection's log to the clipboard / empties it |
 | plan | click / double-click / right-click | select a step (fold it) / step menu: copy, zoom the flame graph, ask the assistant |
 | plan | `▸`/`▾` beside a step | folds or unfolds it |
 | plan | chips | Tree · Flame · Insights, size by time / cost / rows, ▶ Analyze, ↗ Browser, ⧉ Copy |
@@ -354,8 +357,12 @@ dragging.
 | `Enter` | *(results)* Inspect the value under the cursor |
 | `t` | *(results)* Transpose: each row a column, each column a line — copies and exports follow; `t` again turns it upright |
 | `p` | *(results)* Switch between the result grid and the plan |
-| `[` / `]` | *(results)* After a script that showed several results (`s.Show`): the previous / next one — also a click on its number in "Result 1 · 2 · 3" on the results title |
+| `{` / `}` | *(results, plan)* The previous / next result tab of the connection (see [Result tabs](#result-tabs-and-the-log-per-connection)) |
+| `P` · `x` | *(results, plan)* Pin the result tab (a run then opens a new one) or unpin it · close it |
+| `S` | *(results, plan)* Share the result tab with the assistant, or stop sharing it (`s` too; needs `ai_rows` — see [Sharing a result](#ai-assistant)) |
+| `[` / `]` | *(results)* After a script that showed several results (`s.Show`): the previous / next one within its result tab — also a click on its number in "Result 1 · 2 · 3" on the results title |
 | `z` | *(results)* Give the results pane the whole column / give it back |
+| `y` · `x` | *(log)* Copy the connection's log · clear it |
 | `Tab` / `Shift+Tab` | Cycle focus through the panes |
 | `Esc` | Close a dialog or menu |
 | `Ctrl+C` | Stop what's running; quit when idle (a query running in another tab keeps it from quitting — `Ctrl+Q` quits anyway) |
@@ -763,6 +770,22 @@ may be in a column you hid. The chip above the input says
 what the next question will carry (click it to send the question alone), and
 the transcript records what each one did carry.
 
+**Sharing a result.** By default a result goes with a question only when
+it is the result of the statement under the caret. To ask about a
+particular one — an earlier result tab, a result next to the query you are
+fixing — share it: **✦ Share with the assistant** on the result tab's or the
+grid's right-click menu, or `S` in the results. Its tab is marked `✦`, and
+its result goes with every question asked on that connection, framed as
+"shared result 2" together with the statement it came from, until you stop
+sharing it (the same item, or `S` again) or close the tab. One result per
+connection is shared at a time; sharing another moves the share. A shared
+tab keeps its result as a pinned tab does — the next run opens a new tab
+rather than change what the assistant sees. Sharing is offered only on a
+connection with `ai_rows = true`; elsewhere the item says which setting
+would allow it. The data rule still holds: at most `ai_context_rows` rows go,
+in that tab's sort order, without the columns hidden in that tab, and if
+`ai_rows` is turned off after sharing only the column names go.
+
 The assistant can answer but not act: dbc declines every request from the
 agent to run a command or touch a file. SQL in an answer gets `⤓ insert`,
 which puts it in the editor for you to read and run — there is deliberately
@@ -1016,6 +1039,58 @@ Tabs are kept between sessions with the pane sizes, in
 the next start only the tab on screen connects; the others connect the first
 time you look at them, so ten saved tabs do not dial ten connections.
 
+### Result tabs and the log, per connection
+
+Each query tab keeps a **result set per connection** it has been on. Switch
+the tab to another connection and the results pane shows that connection's
+results — nothing, the first time — and switching back shows the old
+connection's again, as you left them: the same result tabs, each with its
+sort, hidden columns, widths and scroll, and the same plan. The assistant
+follows along: "the last result", "the last error" and the plan it is told
+about are the connection's on screen. Each tab's sets are its own, as its
+session is: two tabs on one connection keep separate results. Results are
+kept in memory for as long as dbc (or the `dbc web` page's tab) runs.
+
+A set holds **result tabs**, drawn on the results pane's bottom border in
+the terminal and on the results bar in `dbc web`:
+
+```
+╰─ 1⚑ select * from orders · 2✦ columns cats · 3 select count(*) … ─── { } switch · P pin · S share · x close ─╯
+```
+
+A run **replaces the result in the tab it started from**, unless that tab
+is **pinned** (`⚑`, `P` or the tab's right-click menu): then it opens a new
+tab. So the edit-the-WHERE-and-run-again loop keeps one tab, and a result
+worth keeping is one key from kept. The tab a run lands in is picked when it
+starts, so you can look through the other tabs while a slow query runs
+without its result landing on the one you are reading. A tab is named after
+its statement (or `preview cats`, `columns cats`, `script x.go`). A script's
+`s.Show` results all land in one tab, where "Result 1 · 2 · 3" steps through
+them.
+
+`result_tabs` (default 10, at most 50) caps the tabs of one connection's
+set. When a run needs a new tab and the set is full, the oldest tab that is
+neither pinned nor shared is dropped. If every tab is pinned, the run is
+refused before it starts, and the log says to unpin or close one. `{` / `}`
+step through the tabs, `x` closes the one on screen (its right-hand
+neighbour takes its place), and the strip's right-click menu also closes
+every unpinned tab at once. A tab shared with the assistant (`✦`, see
+[Sharing a result](#ai-assistant)) is kept like a pinned one.
+
+The **log** is per connection too: the log pane shows the messages of the
+connection the tab on screen is on — its runs, notices, connects and the
+`s.Print` lines of scripts run on it — under the title `Log · <connection>`.
+Two tabs on one connection share its log. A line goes to the log of the
+connection on screen when it is written. A run or explain that finishes
+after you switched away keeps its lines (and its result or plan) for its
+own connection, and the log on screen gets one line saying so.
+Lines written while the tab is on no connection (after a Disconnect, say)
+are moved into the next connection's log when it connects, so none is left
+where it can't be seen. `⧉ copy` on the log's title puts the connection's
+log on the clipboard (one `HH:MM:SS message` line each), and `✕ clear`
+empties it; in the terminal, `y` and `x` do the same with the log focused.
+In `dbc web` a script tab, which is on no connection, has a log of its own.
+
 ### Stopping a long query
 
 While a query or script runs, the status bar shows a live elapsed time and a
@@ -1073,9 +1148,12 @@ allowed, with a warning — it is a local tool, not a team server. The port is
 so a `BEGIN` in one does not leak into another. `Alt+T` opens a tab, `Alt+W`
 closes it (asking first when its session may hold a transaction, since
 closing rolls it back), `Alt+1`…`Alt+9` switch, and a double-click renames.
-A tab keeps its result, its grid view (sort, hidden columns, widths) and its
-plan while another is on screen; a run left going in the background marks
-its tab (● running, • done) and names its log lines.
+A tab keeps its result tabs, each with its grid view (sort, hidden columns,
+widths), and its plan while another is on screen — per connection, as in
+the terminal (see
+[Result tabs and the log](#result-tabs-and-the-log-per-connection)); a run
+left going in the background marks its tab (● running, • done) and names its
+log lines.
 
 **Tab groups** gather tabs behind a short coloured chip, as ced's do.
 Right-click a tab → *Add to group…* to start one: an **ad-hoc** group
@@ -1183,6 +1261,7 @@ file's connections are changed in the file. The TUI has the same form —
 | `F12` · `Shift+F12` · `F2` | on an alias, a CTE name or a column the query names: go to its declaration · list its uses · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename)) |
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | new tab · close tab · go to tab |
 | `Alt+N` · `Alt+C` | new console · next console of the tab's database |
+| `{` · `}` · `P` · `S` · `x` | in the results: previous · next result tab · pin · share with the assistant · close |
 | `F1` or `?` | every key |
 
 On a Mac, `⌘` works wherever `Ctrl` is listed.
@@ -1375,7 +1454,9 @@ with the grid and the log beside it as for a query.
 - A script names its own connections, so a script tab is never connected:
   a click on a connection in the sidebar puts its name in at the caret, and
   Explain, Run all and the rows box are hidden.
-- **Several results.** Each `s.Show` is kept (the newest 20 of a run), and
+- **Several results.** Each `s.Show` is kept (the newest 20 of a run) in
+  the one result tab the run lands in (see
+  [Result tabs](#result-tabs-and-the-log-per-connection)), and
   "Result 1 · 2 · 3" on the results bar switches between them. Copies,
   exports and the assistant follow the one shown.
 - **The assistant** is asked about the script: it gets the whole file as

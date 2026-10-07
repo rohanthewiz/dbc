@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-145
+**Next ID:** N-149
 
 ## Open
 
@@ -115,6 +115,10 @@ ten session docs in `ai_docs/claude_sessions/`
   N-097's leftover: editor completion by hand on a real MySQL (backtick
   quoting, a `<conn>/<database>` pick, the first load), now covered
   headlessly by `TestLiveWorkspaceCompletionMySQL`.
+  Updated `2026-1007-1245-result-tabs-per-connection`: add the result-tab strip on the results
+  pane's bottom border (how `⚑`, `✦` and `‹ ›` render; that `{` `}` `P` `S`
+  and `x` reach dbc in the grid and the plan view), and the log title's
+  `⧉ copy` / `✕ clear` (a click there must not start a log-splitter drag).
 - **N-116** · raised `2026-1005-1450-tui-web-parity` · value low
   Tab groups in the TUI. dbc web has them (`tabgroups.js`: ad-hoc and
   connection groups, collapse to a chip); the TUI's strip has no groups.
@@ -194,6 +198,35 @@ ten session docs in `ai_docs/claude_sessions/`
   committing the source only when its Reader closes. Either describe DML
   another way or refuse it up front with a clear message. Query is
   documented as "any SELECT", so nothing promises it today.
+
+- **N-145** · raised `2026-1007-1245-result-tabs-per-connection` · value low
+  Drive a real share with the assistant end to end. Neither e2e harness has
+  a connection with `ai_rows = true`, so `S` / "✦ Share with the assistant"
+  is only checked as refused (web e2e) and through unit tests (workspace,
+  tui, web). Add an `ai_rows` connection to the harnesses and check the ✦
+  mark, the chip's "shared result N: …" note, and that a column hidden in
+  the shared tab stays out of the prompt while another tab is on screen.
+
+- **N-146** · raised `2026-1007-1245-result-tabs-per-connection` · value low
+  Share more than one result with the assistant. One tab per connection is
+  shared today (`workspace.ShareResultTab` moves the share), which covers
+  "explain this result" but not "why do these two differ?". It would need
+  `ai.Context` to carry several results, each with its own view, and a
+  chip that names them all. Contingent on someone asking to compare.
+
+- **N-147** · raised `2026-1007-1245-result-tabs-per-connection` · value low
+  One result tab per statement for a multi-statement run. Run all (or a
+  selection of several) still lands only the last statement's result, in
+  one tab. DBeaver and DataGrip open a tab per statement that returns rows;
+  with result tabs that is now a small step (placeLocked per statement),
+  but it would interact with the cap and with "a run replaces its tab".
+
+- **N-148** · raised `2026-1007-1245-result-tabs-per-connection` · value low
+  A dbc web script tab's log is keyed by the query tab, not the script: it
+  survives a rename, but opening the script again in a new tab (or after
+  closing its tab) starts an empty log. Key it by the script's name if
+  script logs turn out to be read across tabs. Logs are per page (lost on
+  a reload) in dbc web and per process in the TUI; neither is persisted.
 
 ## Roadmap
 

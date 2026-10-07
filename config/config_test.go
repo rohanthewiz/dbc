@@ -92,6 +92,64 @@ dsn = "a.db"
 	}
 }
 
+// result_tabs caps one connection's result set: absent is the default, a
+// value in range is kept, and one out of range is pulled back into
+// 1…MaxResultTabs with a warning rather than refusing to start.
+func TestLoadResultTabs(t *testing.T) {
+	conn := `
+[[connection]]
+name = "db"
+driver = "sqlite"
+dsn = "a.db"
+`
+	cases := []struct {
+		name  string
+		body  string
+		want  int
+		warns int
+	}{
+		{"absent", conn, DefaultResultTabs, 0},
+		{"set", "result_tabs = 3\n" + conn, 3, 0},
+		{"one", "result_tabs = 1\n" + conn, 1, 0},
+		{"zero", "result_tabs = 0\n" + conn, DefaultResultTabs, 1},
+		{"negative", "result_tabs = -2\n" + conn, DefaultResultTabs, 1},
+		{"too many", "result_tabs = 500\n" + conn, MaxResultTabs, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, c.body))
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if cfg.ResultTabs != c.want || cfg.ResultTabLimit() != c.want {
+				t.Errorf("ResultTabs = %d (limit %d), want %d", cfg.ResultTabs, cfg.ResultTabLimit(), c.want)
+			}
+			n := 0
+			for _, w := range cfg.Warnings {
+				if strings.Contains(w, "result_tabs") {
+					n++
+				}
+			}
+			if n != c.warns {
+				t.Errorf("result_tabs warnings = %d, want %d (%q)", n, c.warns, cfg.Warnings)
+			}
+		})
+	}
+
+	// a Config built in code (tests, ad-hoc) never went through Load
+	if got := (&Config{}).ResultTabLimit(); got != DefaultResultTabs {
+		t.Errorf("zero Config limit = %d, want %d", got, DefaultResultTabs)
+	}
+	isolateDemo(t)
+	demo, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if demo.ResultTabLimit() != DefaultResultTabs {
+		t.Errorf("demo limit = %d", demo.ResultTabLimit())
+	}
+}
+
 func TestLoadConnIdleTimeout(t *testing.T) {
 	conn := `
 [[connection]]

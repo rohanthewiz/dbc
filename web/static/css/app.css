@@ -543,13 +543,36 @@ button.primary { border-color: var(--accent); }
 
 .offscreen { position: fixed; left: -9999px; top: 0; opacity: 0; }
 
-/* --log-h is set on .work by the results | log bar (app.js) */
-.log {
+/* --log-h is set on .work by the results | log bar (app.js). The box is
+   what is sized: its header keeps its own height and the lines (.log)
+   scroll in the rest. */
+.logbox {
   flex: 0 0 var(--log-h, 130px);
-  overflow: auto;
-  padding: 4px 12px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   background: var(--panel);
   border-top: 1px solid var(--line);
+}
+.loghead {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px 1px 12px;
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+.logtitle { text-transform: uppercase; letter-spacing: .04em; }
+.logconn { color: var(--accent); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.logbtn { font-size: 11px; padding: 0 6px; border: 0; background: none; color: var(--muted); border-radius: 3px; }
+.logbtn:hover { color: var(--fg); background: var(--sel); }
+.log {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 12px;
   font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .log div { white-space: pre-wrap; }
@@ -883,6 +906,26 @@ a.btnlink:hover { border-color: var(--accent); }
 .qdirty { color: var(--accent); }
 
 /* the results bar's "Result 1 · 2 · 3": each result a script run showed */
+/* the result tabs of the query tab's connection (app.js drawResultTabs):
+   a number and a short title each, the current one lit like the Results
+   tab; ⚑ marks a pinned one, ✦ the one shared with the assistant; ×
+   closes (shown on hover, and on the current one). The strip shrinks
+   before the actions do, its titles first. */
+.rstrip { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 0 1 auto; overflow: hidden; }
+.rstrip .rt {
+  display: flex; align-items: center; gap: 4px; min-width: 0; max-width: 180px; flex: 0 1 auto;
+  border: 0; background: none; padding: 1px 4px 1px 6px; color: var(--muted); border-radius: 3px; font-size: 12px;
+}
+.rstrip .rt:hover { color: var(--fg); }
+.rstrip .rt.on { color: var(--accent); background: var(--sel); }
+.rstrip .rt .n { flex: none; font-variant-numeric: tabular-nums; }
+.rstrip .rt .pin { flex: none; color: var(--warn); }
+.rstrip .rt .shr { flex: none; color: var(--accent); }
+.rstrip .rt .tt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rstrip .rt .x { flex: none; visibility: hidden; padding: 0 2px; border-radius: 2px; }
+.rstrip .rt:hover .x, .rstrip .rt.on .x { visibility: visible; }
+.rstrip .rt .x:hover { color: var(--err); background: var(--panel); }
+.rstrip .rcount { flex: none; color: var(--muted); font-size: 11px; margin-left: 2px; }
 .rsets { display: flex; align-items: center; gap: 1px; color: var(--muted); }
 .rsets .rslabel { margin: 0 4px 0 8px; }
 .rsets button { border: 0; background: none; padding: 1px 6px; color: var(--muted); border-radius: 3px; font-size: 12px; }

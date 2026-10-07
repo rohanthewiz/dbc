@@ -14,6 +14,13 @@ max_rows = 1000
 # this cap are still fetched, and still exported. 0 draws all of them.
 max_display_rows = 2000
 
+# Each query tab keeps a result set per connection: switch the tab to another
+# connection and the results pane shows that connection's results. A run
+# replaces the result tab on screen, unless that tab is pinned — then it opens
+# a new one. This caps the tabs in one set (1–50); past it the oldest
+# unpinned tab is dropped.
+result_tabs = 10
+
 # A pooled connection that sits unused this long is closed, and reopened the
 # next time it is needed — so a dbc left open overnight gives its server
 # connections back. Write a duration string ("30m", "2h"); "0" never closes

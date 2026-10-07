@@ -2,8 +2,8 @@
 // and the rules for changing it — with no UI in it.
 //
 // A Workspace holds the active connection and its catalog, the session
-// pinned to it, the run in flight, and the last statement, error, result and
-// plan. The TUI (package tui) and the browser UI (dbc web) are both clients:
+// pinned to it, the run in flight, and — per connection it has been on — a
+// result set: result tabs, the last statement, error and plan (results.go). The TUI (package tui) and the browser UI (dbc web) are both clients:
 // they turn keys and clicks into calls here, and draw what comes back. The
 // rules therefore exist once — ONE RUN AT A TIME, A PINNED SESSION per active
 // connection, CANCEL REACHES THE SERVER (see run.go) — rather than as two
@@ -120,23 +120,18 @@ type Workspace struct {
 	// (and each TUI tab) has its own.
 	showCounts bool
 
-	lastStmt string // the statement the last run executed; "" after a script run
-	// lastScript is the file name of the script the last run ran ("" when
-	// the last run was SQL), so the assistant hands a script tab its own
-	// run's error and results, and a query tab never gets a script's as
-	// its statement's (ScriptChatContext, ChatContext).
-	lastScript string
-	lastErr    string        // what the last run failed with, "" if it worked
-	lastRes    *model.Result // the last result published (a run's or a script's s.Show)
-	plan       *explain.Plan // the last plan: an explain's, or one detected in a result
-	// scriptRes are the results the last script run showed (s.Show), oldest
-	// first, at most MaxScriptResults of them; scriptCut counts the ones
-	// dropped off the front to keep to that, so result i here is the
-	// script's (scriptCut+i+1)th show. lastRes is one of them while the
-	// grid is on a script's output (ShowScriptResult moves it between
-	// them); a run that lands a result of its own empties the list.
-	scriptRes []*model.Result
-	scriptCut int
+	// sets are the results pane's contents, one result set per connection
+	// this workspace has been on — result tabs, the plan, and the last
+	// run's statement and error. See results.go: everything "last" is the
+	// active connection's.
+	sets map[string]*resultSet
+	// tabSeq numbers result tabs, resSeq the results put in them; both
+	// only ever grow, so an id or seq is never reused within a workspace
+	tabSeq, resSeq int
+	// runTarget is the result tab the run in flight lands in, picked when
+	// it started (targetLocked); nil for a new tab. showTab is the tab a
+	// script run's s.Show results are going to, once its first has landed.
+	runTarget, showTab *resultTab
 
 	// planChat caches plan as the assistant is shown it — ChatContext is
 	// built every frame by the TUI's context chip, and the plan does not
@@ -319,28 +314,50 @@ func (w *Workspace) TableIndex() *db.TableIndex {
 	return w.tableIdx
 }
 
-// LastStmt is the statement the last run executed ("" before any, and
-// after a script run: what a script ran is not known).
+// LastStmt is the statement the last run on the active connection executed
+// ("" before any, and after a script run: what a script ran is not known).
 func (w *Workspace) LastStmt() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.lastStmt
+	if s := w.activeSetLocked(); s != nil {
+		return s.lastStmt
+	}
+	return ""
 }
 
-// LastErr is what the last run failed with, "" if it worked. A stopped run
-// leaves it alone: stopping is the user's choice, not a failure to explain.
+// LastErr is what the last run on the active connection failed with, ""
+// if it worked. A stopped run leaves it alone: stopping is the user's
+// choice, not a failure to explain.
 func (w *Workspace) LastErr() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.lastErr
+	if s := w.activeSetLocked(); s != nil {
+		return s.lastErr
+	}
+	return ""
 }
 
-// LastResult is the last result published — by a run, or by a script's
-// s.Show. nil before any.
+// LastResult is the result on screen: the active connection's current
+// result tab's — a run's, or a script's s.Show. nil when that set has none.
 func (w *Workspace) LastResult() *model.Result {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.lastRes
+	if t := w.curLocked(); t != nil {
+		return t.res
+	}
+	return nil
+}
+
+// LastResultSeq is LastResult with its seq (see results.go), which moves
+// whenever the result on screen does — a run, a show, another result tab
+// or connection — and only then. 0 with no result.
+func (w *Workspace) LastResultSeq() (*model.Result, int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if t := w.curLocked(); t != nil {
+		return t.res, t.seq
+	}
+	return nil, 0
 }
 
 // MaxScriptResults caps how many of one script run's s.Show results are
@@ -350,41 +367,54 @@ func (w *Workspace) LastResult() *model.Result {
 // result shown is usually the one the script was building toward.
 const MaxScriptResults = 20
 
-// ScriptResults describes the results the last script run showed: n of
-// them kept, the one the grid is on (at, 0-based; -1 when the grid shows
-// something else since, which empties the list anyway), and cut, how many
-// earlier shows were dropped to keep to MaxScriptResults — so a UI can
-// number them as the script showed them (cut+1 … cut+n).
+// ScriptResults describes the s.Show results held by the result tab on
+// screen: n of them kept (0 for a tab holding a run's own result), the one
+// the grid is on (at, 0-based), and cut, how many earlier shows were
+// dropped to keep to MaxScriptResults — so a UI can number them as the
+// script showed them (cut+1 … cut+n).
 func (w *Workspace) ScriptResults() (n, at, cut int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	at = slices.Index(w.scriptRes, w.lastRes)
-	return len(w.scriptRes), at, w.scriptCut
+	t := w.curLocked()
+	if t == nil {
+		return 0, -1, 0
+	}
+	at = slices.IndexFunc(t.shows, func(s shown) bool { return s.seq == t.seq })
+	return len(t.shows), at, t.cut
 }
 
-// ShowScriptResult puts the last script run's result i (0-based, among the
-// ones kept) back on the grid: it becomes the last result, which is what
-// the grid, copies, exports and the assistant all read. Refused while a run
-// is in flight — a script still showing results would move the grid under
-// the pick — and for an i out of range.
+// ShowScriptResult puts the current result tab's script result i (0-based,
+// among the ones kept) back on the grid: it becomes the last result, which
+// is what the grid, copies, exports and the assistant all read. Refused
+// while a run is in flight — a script still showing results would move the
+// grid under the pick — and for an i out of range.
 func (w *Workspace) ShowScriptResult(i int) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.busy {
 		return refuse(Busy, Warn, "busy — %s is still running; pick a result once it is done", w.runTag)
 	}
-	if i < 0 || i >= len(w.scriptRes) {
-		return refuse(Invalid, Warn, "no result %d — the last script showed %d", i+1, len(w.scriptRes))
+	t := w.curLocked()
+	if t == nil || i < 0 || i >= len(t.shows) {
+		n := 0
+		if t != nil {
+			n = len(t.shows)
+		}
+		return refuse(Invalid, Warn, "no result %d — the script in this result tab showed %d", i+1, n)
 	}
-	w.lastRes = w.scriptRes[i]
+	t.res, t.seq = t.shows[i].res, t.shows[i].seq
 	return nil
 }
 
-// Plan is the last plan: an explain's, or one recognized in a result.
+// Plan is the active connection's last plan: an explain's, or one
+// recognized in a result.
 func (w *Workspace) Plan() *explain.Plan {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.plan
+	if s := w.activeSetLocked(); s != nil {
+		return s.plan
+	}
+	return nil
 }
 
 // Busy reports whether a run (statements, an explain or a script) is in

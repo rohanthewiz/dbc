@@ -349,6 +349,8 @@ func (s *Server) handleConnEdit(ctx rweb.Context) error {
 				"saved tab groups on %q were not moved to %q, and will not gather its tabs: %v",
 				name, to, err))
 		}
+		// the results query tabs keep for it (in memory, so nothing can fail)
+		s.moveResults(name, to)
 	}
 	list := s.connList()
 	if res.Renamed {
@@ -372,6 +374,7 @@ func (s *Server) handleConnDelete(ctx rweb.Context) error {
 	}
 	removed, err := s.connEditor().Delete(name, s.inUseRefusal(false))
 	if removed {
+		s.moveResults(name, "") // its results go with it
 		// gone for this run even when the file failed: every window is
 		// told, and the failure (it comes back at the next start) is the
 		// answer

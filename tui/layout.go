@@ -53,6 +53,12 @@ type layout struct {
 	// see resultsets.go)
 	setChips []setChip
 
+	// rtabChips are the result tabs' chips on the results pane's bottom
+	// border, as drawn (resulttabs.go); logCopy and logClear are the log
+	// title's ⧉ copy and ✕ clear (logs.go), zero when not drawn
+	rtabChips         []rtabChip
+	logCopy, logClear Rect
+
 	splitSide, splitChat, splitEd, splitLog Rect
 
 	// foldTab is the sidebar's fold control: ‹ on the Connections box's top
@@ -310,6 +316,11 @@ func (m *Model) render() (*Canvas, *caret) {
 	m.lay = m.computeLayout()
 	l := m.lay
 	var cur, complAt *caret
+	// the frame draws the workspace's truth: the event handlers sync as
+	// they land, and this catches whatever moved without one (both are
+	// no-ops when nothing did)
+	m.syncResults()
+	m.syncLog()
 
 	m.drawToolbar(c.Sub(l.toolbar))
 	if !l.conns.Empty() {
@@ -360,10 +371,13 @@ func (m *Model) render() (*Canvas, *caret) {
 	m.drawTabs(c)
 	m.drawResultsTabs(c, l.results, partsWidth(sets))
 	m.drawResultSets(c, l.results, sets)
+	m.drawResultTabs(c, l.results)
+	m.lay.logCopy, m.lay.logClear = Rect{}, Rect{}
 	if !l.logR.Empty() {
-		m.drawPane(c, l.logR, "Log", focusLog, m.st.base, func(s Surface) {
+		m.drawPane(c, l.logR, m.logTitle(), focusLog, m.st.base, func(s Surface) {
 			m.logp.draw(s, m.st, m.st.base)
 		})
+		m.drawLogControls(c, l.logR)
 	}
 	if !l.chat.Empty() {
 		if p := m.drawChat(c, l.chat); p != nil && m.focus == focusChat && m.modal == nil && m.menu == nil {

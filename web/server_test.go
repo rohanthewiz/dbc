@@ -789,16 +789,16 @@ func TestDisconnectKeepsTheConnection(t *testing.T) {
 	s.await(t, "run")
 
 	e.api("POST", "/api/v1/ws/"+id+"/disconnect", "", 200)
-	ev, logs := s.await(t, "conn")
+	ev, _ := s.await(t, "conn")
 	c := decodeData[connEvent](t, testEnvelope{Data: ev.Data})
 	if c.Active != "" || !c.Changed || c.Status != "disconnected" || len(c.Tables) != 0 {
 		t.Fatalf("conn event = %+v", c)
 	}
-	if !slices.Contains(logs, "disconnected from demo-sqlite") {
-		t.Errorf("logs = %q", logs)
-	}
+	// said after the "conn", so it lands in the no-connection log the page
+	// shows from then on (handleDisconnect), not in the one that just left
+	s.awaitLog(t, "disconnected from demo-sqlite")
 	// the session's release, then the pool's fate, follow off the request
-	_, logs = s.awaitLog(t, "1 query tab is still on demo-sqlite: its connection stays open for it")
+	_, logs := s.awaitLog(t, "1 query tab is still on demo-sqlite: its connection stays open for it")
 	if !slices.ContainsFunc(logs, func(l string) bool { return strings.HasPrefix(l, "left demo-sqlite") }) {
 		t.Errorf("the open transaction's rollback went unsaid: %q", logs)
 	}

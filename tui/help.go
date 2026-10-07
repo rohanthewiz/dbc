@@ -89,6 +89,10 @@ var keyGroups = []keyGroup{
 		{"click a header", "sort: ascending, descending, off"},
 		{"p", "the plan, when there is one"},
 		{"[ · ]", "a script's previous · next shown result (or click a number on the title)"},
+		{"{ · }", "the connection's previous · next result tab (or click one on the bottom border)"},
+		{"P · x", "pin the result tab — the next run opens a new one — or unpin it · close it"},
+		{"S", "share the result tab with the assistant (✦: it goes with every question; needs ai_rows) — or stop"},
+		{"right-click a result tab", "pin or unpin, share, close, close the unpinned ones"},
 		{"z", "give the results the whole column — and back"},
 	}},
 	{"Plan", [][2]string{
@@ -99,6 +103,11 @@ var keyGroups = []keyGroup{
 		{"y · Y", "copy as text · the engine's own output"},
 		{"b · c", "open in the browser · the plan menu (PDF, PNG, JPEG, Mermaid)"},
 		{"p", "back to the results"},
+		{"{ · } · P · s · x", "result tabs, as in the grid"},
+	}},
+	{"Log", [][2]string{
+		{"y · x", "copy the connection's log · clear it (or ⧉ copy / ✕ clear on its title)"},
+		{"↑↓ · PgUp/PgDn · g/G", "scroll · to the top / the newest line"},
 	}},
 	{"Sidebar", [][2]string{
 		{"Enter · click", "connect · preview a table's rows"},

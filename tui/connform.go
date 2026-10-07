@@ -862,7 +862,8 @@ func (m *Model) connInUse(forEdit bool) func(string) error {
 
 // connRenamed moves the schema picks of a renamed connection — its own and
 // its other databases' ("<old>/analytics" → "<new>/analytics") — in memory
-// and in the picks file, so the renamed connection reopens where it was.
+// and in the picks file, so the renamed connection reopens where it was;
+// its log and the tabs' result sets on it follow the same way.
 // A configured connection that merely has such a name is not derived from
 // it and stays.
 func (m *Model) connRenamed(from, to string) {
@@ -902,6 +903,8 @@ func (m *Model) connRenamed(from, to string) {
 			m.schemaPicks[nto] = p
 		}
 	}
+	// its log, and every tab's results on it (logs.go), go along too
+	m.renameConnViews(rename)
 	if err := userdata.MovePicks(m.picksFile, rename); err != nil {
 		m.logf(logWarn, "saved schema picks on %q were not moved to %q, and it will open on its default schema: %s",
 			from, to, serr.StringFromErr(err))
@@ -918,6 +921,7 @@ func (m *Model) removeConn(name string, x, y int) tea.Cmd {
 			removed, err := m.connEditor().Delete(name, m.connInUse(false))
 			if removed {
 				m.connRemovedFromTabs(name)
+				m.dropConnViews(name) // its log and every tab's results on it (logs.go)
 				m.refreshConns()
 				m.logf(logOk, "removed connection %s", name)
 			}

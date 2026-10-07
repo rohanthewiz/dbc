@@ -42,10 +42,15 @@ import (
 // copy and export turn the projected piece with export.Transpose, so what
 // lands on the clipboard has the orientation the grid showed.
 //
-// Every response carries the result's SEQ, a per-tab number that moves when
-// the result does. A copy or export names the seq it was made against, and
-// one that no longer matches is refused (409): a rerun landing between the
+// Every response carries the result's SEQ, the workspace's number for it
+// (workspace.LastResultSeq), which moves when the result on screen does —
+// a run, a script's s.Show, another result tab or another connection — and
+// only then. A copy or export names the seq it was made against, and one
+// that no longer matches is refused (409): a rerun landing between the
 // click and the request must not put a different result on the clipboard.
+// Because the same result keeps its seq, the page can key a grid view
+// (sort, hidden columns, scroll) on it and get it back after looking at
+// another result tab or connection.
 
 // gridPage bounds one page of rows. The page asks for a screenful plus
 // some; this caps a hand-made request.
@@ -82,17 +87,18 @@ type resultView struct {
 // given sort, (re)building the cache when the result or the sort moved. A
 // nil view means there is no result.
 func (t *tab) view(sortCol int, desc bool) *resultView {
-	r := t.ws.LastResult()
+	r, seq := t.ws.LastResultSeq()
 	t.viewMu.Lock()
 	defer t.viewMu.Unlock()
 	if r == nil {
 		return nil
 	}
 	v := &t.rv
-	if v.res != r {
-		t.rvSeq++
+	// keyed on the seq, not the pointer: a script's s.Show can hand the
+	// same *Result to two shows, which are still two results to the page
+	if v.res != r || v.seq != seq {
 		num := export.NumericColumns(r)
-		*v = resultView{res: r, seq: t.rvSeq, numeric: num, sortCol: -2}
+		*v = resultView{res: r, seq: seq, numeric: num, sortCol: -2}
 		v.widths, v.content = colWidths(r, num)
 	}
 	if sortCol < -1 || sortCol >= len(r.Columns) {

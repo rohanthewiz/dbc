@@ -94,27 +94,31 @@ func (w *Workspace) landExplain(ev *ExplainDone, gen int) {
 		return
 	}
 	ev.Elapsed = w.endRunLocked()
+	set := w.setLocked(ev.Conn) // the explain's connection's, as a run's
 	if ev.Err != nil {
 		// remembered like a failed run's, so "✦ ask why" carries the error
 		// with the statement that caused it
-		w.lastStmt, w.lastScript = ev.Stmt, ""
-		w.failedLocked(ev.Err, ev.Tag, ev.Elapsed, &ev.Notes, &ev.Status)
+		set.lastStmt, set.lastScript = ev.Stmt, ""
+		w.failedLocked(set, ev.Err, ev.Tag, ev.Elapsed, &ev.Notes, &ev.Status)
 		return
 	}
 	// A plan is not a result, so lastStmt stays the last RUN statement —
 	// otherwise the assistant would be sent the last result's rows as this
 	// statement's. Only an error this same statement left behind is cleared.
-	if ev.Stmt == w.lastStmt {
-		w.lastErr = ""
+	if ev.Stmt == set.lastStmt {
+		set.lastErr = ""
 	}
-	w.plan = ev.Plan
+	set.plan = ev.Plan
 }
 
 // planForChatLocked is the plan text the assistant gets with a question —
 // only when the plan is of the statement being asked about, so a question
 // about a new query is not answered from an old one's plan.
 func (w *Workspace) planForChatLocked(query string) string {
-	p := w.plan
+	var p *explain.Plan
+	if s := w.activeSetLocked(); s != nil {
+		p = s.plan
+	}
 	if p == nil || p.Statement == "" {
 		return ""
 	}

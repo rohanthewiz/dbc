@@ -444,15 +444,31 @@ func (p *chatPane) modelName() string {
 // UI so the two cannot send the assistant different things. What the TUI
 // adds is its grid's view of the result: hidden columns stay out, and a
 // header sort's order goes along.
+//
+// A result tab shared with the assistant (resulttabs.go) goes with every
+// question on its connection, whether or not it is the tab on screen — so
+// its view goes too: the grid on screen's, and, when the shared tab is
+// another, that tab's parked grid's. The workspace matches each view to a
+// result by GridView.Result; without the parked one, columns the user hid
+// in the shared tab would reach the model.
 func (m *Model) chatContext(question string) (ctx ai.Context, refs []db.TableRef) {
-	view := workspace.GridView{SortCol: -1}
-	if g := m.grid; g.res != nil {
-		view = workspace.GridView{
-			Result: g.res, Hidden: g.HiddenCols(),
-			SortCol: g.sortCol, SortDesc: g.sortDesc, Order: g.order,
-		}
+	views := []workspace.GridView{gridView(m.grid)}
+	if g := m.sharedParkedGrid(); g != nil {
+		views = append(views, gridView(g))
 	}
-	return m.ws.ChatContext(question, m.editorState(), view)
+	return m.ws.ChatContext(question, m.editorState(), views...)
+}
+
+// gridView is a grid's view of its result as the assistant's data rule
+// needs it; a grid with no result has none (SortCol -1).
+func gridView(g *grid) workspace.GridView {
+	if g.res == nil {
+		return workspace.GridView{SortCol: -1}
+	}
+	return workspace.GridView{
+		Result: g.res, Hidden: g.HiddenCols(),
+		SortCol: g.sortCol, SortDesc: g.sortDesc, Order: g.order,
+	}
 }
 
 // askAbout opens the assistant with a question drafted in the composer —

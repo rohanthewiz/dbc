@@ -136,7 +136,8 @@ A dbc web script tab: Monaco in Go, errors marked 600 ms after typing (the
 same `script.Check`), `sdb` completion and hover, explicit `Ctrl+S` save
 (drafts survive a reload in localStorage), and Run saves first. It is never
 connected; a script names its own connections. Each `s.Show` of a run is
-kept (newest 20) behind "Result 1 · 2 · 3"; the TUI keeps only the last.
+kept (newest 20) in the one result tab the run lands in, behind
+"Result 1 · 2 · 3" — in the TUI too (`[` / `]` step through them).
 
 To check these in the real UIs, use the e2e suites (SKILL.md): the web
 step "script tabs" (`web/e2e/scripts_test.go`) and the TUI step that drives

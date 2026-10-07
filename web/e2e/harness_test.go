@@ -450,20 +450,24 @@ func waitConnected(t *testing.T, p *rod.Page, conn string) {
 	}`, conn)
 }
 
-// gridSeq is the result on show in the grid (0: none); each new result
-// takes a higher one, so "the grid moved on" is a seq above the last.
+// gridSeq is the result on show in the grid (0: none). A result keeps its
+// seq for as long as it is the same result — going back to an earlier
+// result tab, or to an earlier s.Show, lands on its old, lower seq — so
+// "the grid moved on" is a seq other than the last, not a higher one.
 func gridSeq(t *testing.T, p *rod.Page) int {
 	t.Helper()
 	n, _ := eval(t, p, `() => dbc.grid.view().seq`).(float64)
 	return int(n)
 }
 
-// waitResult waits for a result newer than after, whose header holds
-// every column in cols, and returns its grid-info line ("3 rows").
+// waitResult waits for a result other than the one whose seq is after
+// (see gridSeq), whose header holds every column in cols, and returns its
+// grid-info line ("3 rows").
 func waitResult(t *testing.T, p *rod.Page, after int, cols ...string) string {
 	t.Helper()
 	waitFor(t, p, fmt.Sprintf("a result with columns %v", cols), `(after, cols) => {
-	  if (dbc.grid.view().seq <= after || document.getElementById("grid").hidden) return false;
+	  const seq = dbc.grid.view().seq;
+	  if (!seq || seq === after || document.getElementById("grid").hidden) return false;
 	  const head = [...document.querySelectorAll("#grid .gh .hc")].map((h) => h.textContent);
 	  return cols.every((c) => head.some((h) => h.includes(c)));
 	}`, after, cols)

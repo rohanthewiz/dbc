@@ -39,30 +39,68 @@ import (
 // drawn by explain.Picture) and plan.mmd (a Mermaid flowchart) — see
 // handlePlanFile.
 
-// planState is a tab's plan and the one it replaced, when that was a plan
-// of the same statement — the "before" of a tuning session. Guarded by
-// tab.viewMu; the plans themselves are never modified once landed.
+// planState is a connection's plan in a tab and the one it replaced, when
+// that was a plan of the same statement — the "before" of a tuning
+// session. Guarded by tab.viewMu; the plans themselves are never modified
+// once landed.
+//
+// A tab keeps one per connection (tab.ps), as the workspace keeps a result
+// set per connection: the Plan tab beside a connection's results is that
+// connection's plan, so switching the tab to another connection shows the
+// other's (or none), and switching back brings the first back — "before"
+// and all. A before/after comparison never pairs plans from two
+// connections: the same statement on two databases is two subjects.
+//
+//	tab.ps["pg"]   ─► {plan, prev, seq 4}
+//	tab.ps["lite"] ─► {plan, prev: nil, seq 2}
+//	planState() = tab.ps[ws.Active()]
 type planState struct {
 	plan, prev *explain.Plan
-	seq        int // moves with the plan, so the page can tell a new one
+	// seq moves with the plan, so the page can tell a new one. It is drawn
+	// from the tab's one counter (tab.planSeq), not counted per connection:
+	// two connections' first plans must not both be "1", or a page that
+	// switched connections would take the other's plan for the one it has.
+	seq int
 }
 
-// setPlan installs a newly landed plan, keeping the old one as its "before"
-// when both explain the same statement.
-func (t *tab) setPlan(p *explain.Plan) (prev *explain.Plan) {
+// setPlan installs a plan newly landed on conn, keeping that connection's
+// old one as its "before" when both explain the same statement.
+func (t *tab) setPlan(conn string, p *explain.Plan) (prev *explain.Plan) {
 	t.viewMu.Lock()
 	defer t.viewMu.Unlock()
-	if explain.SameSubject(t.ps.plan, p) {
-		prev = t.ps.plan
+	if t.ps == nil {
+		t.ps = map[string]planState{}
 	}
-	t.ps = planState{plan: p, prev: prev, seq: t.ps.seq + 1}
+	if old := t.ps[conn].plan; explain.SameSubject(old, p) {
+		prev = old
+	}
+	t.planSeq++
+	t.ps[conn] = planState{plan: p, prev: prev, seq: t.planSeq}
 	return prev
 }
 
+// planState is the plan of the tab's active connection (the zero value,
+// no plan, before one landed there).
 func (t *tab) planState() planState {
+	conn := t.ws.Active() // the workspace's lock, never taken under viewMu
 	t.viewMu.Lock()
 	defer t.viewMu.Unlock()
-	return t.ps
+	return t.ps[conn]
+}
+
+// renamePlans moves conn from's plan to to (a renamed connection), or
+// drops it when to is "" (a removed one).
+func (t *tab) renamePlans(from, to string) {
+	t.viewMu.Lock()
+	defer t.viewMu.Unlock()
+	ps, ok := t.ps[from]
+	if !ok {
+		return
+	}
+	delete(t.ps, from)
+	if to != "" {
+		t.ps[to] = ps
+	}
 }
 
 // explainEvent reports an explain that landed.
@@ -84,11 +122,11 @@ func (s *Server) deliverExplain(t *tab, ev *workspace.ExplainDone) {
 	out := explainEvent{Tag: ev.Tag, Conn: ev.Conn, OK: ev.Err == nil,
 		Stopped: errors.Is(ev.Err, db.ErrCanceled), Status: ev.Status}
 	if ev.Err == nil && ev.Plan != nil {
-		prev := t.setPlan(ev.Plan)
-		t.notes(workspace.PlanNotes(ev.Plan, prev, ev.Elapsed))
+		prev := t.setPlan(ev.Conn, ev.Plan)
+		t.notesOn(ev.Conn, workspace.PlanNotes(ev.Plan, prev, ev.Elapsed))
 		out.HasPlan, out.Status = true, workspace.PlanStatus(ev.Plan)
 	}
-	t.notes(ev.Notes)
+	t.notesOn(ev.Conn, ev.Notes)
 	_, out.Stateful = t.ws.Session()
 	t.send("explain", out)
 }
@@ -118,8 +156,7 @@ func (s *Server) handleExplain(ctx rweb.Context) error {
 		// the TUI's reexplain: the plan's statement, on the active
 		// connection — said out loud when that is not where it came from
 		if active := t.ws.Active(); p.Conn != "" && p.Conn != active {
-			t.send("log", logLine{Level: "warn", Text: "this plan is from " + p.Conn + " and " + active +
-				" is active — explaining on " + active})
+			t.logOn(active, "warn", "this plan is from "+p.Conn+" and "+active+" is active — explaining on "+active)
 		}
 		st, err = t.ws.Explain(p.Statement, "", req.Analyze)
 	} else {

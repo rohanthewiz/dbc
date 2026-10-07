@@ -57,23 +57,44 @@ func (m *Model) explainDone(ev *workspace.ExplainDone) tea.Cmd {
 		return nil
 	}
 	m.catsAfterTransition()
+	// an explain that lands after the tab switched away writes to its own
+	// connection's log, as a run does (landedHere)
+	onScreen := m.landedHere(ev.Conn, ev.Tag, ev.Err, "plan")
 	if ev.Err != nil {
-		m.notes(ev.Notes)
-		m.setStatus(ev.Status)
+		m.notesTo(ev.Conn, ev.Notes)
+		if onScreen {
+			m.setStatus(ev.Status)
+		}
 		return nil
 	}
-	m.showPlan(ev.Plan)
-	m.logPlan(ev.Plan, ev.Elapsed)
-	m.notes(ev.Notes)
+	v := m.showPlanOn(ev.Conn, ev.Plan)
+	m.logPlan(ev.Conn, ev.Plan, v.prev, ev.Elapsed)
+	m.notesTo(ev.Conn, ev.Notes)
 	return nil
 }
 
-// showPlan installs a plan and turns the results pane to it.
-func (m *Model) showPlan(p *explain.Plan) {
-	m.planv.set(p)
+// showPlan installs a plan on the connection on screen and turns the
+// results pane to it.
+func (m *Model) showPlan(p *explain.Plan) { m.showPlanOn(m.ws.Active(), p) }
+
+// showPlanOn installs a plan in conn's plan view (resulttabs.go) and, when
+// conn is the connection on screen, turns the results pane to it. An
+// explain that lands after the tab switched away goes to its own
+// connection's view, turned to the plan for when the tab comes back: the
+// plan of one connection never shows while on another. It returns the view
+// the plan went to, whose prev is the "before" of a re-explain.
+func (m *Model) showPlanOn(conn string, p *explain.Plan) *planView {
+	m.syncResults() // planFor is the connection on screen before it is compared
+	v := m.planViewFor(conn)
+	v.set(p)
+	if conn != m.planFor {
+		m.showParkedPlan(conn)
+		return v
+	}
 	m.resTab = tabPlan
 	m.focus = focusGrid
 	m.setStatus(planStatus(p))
+	return v
 }
 
 // planStatus is the status-bar summary of a plan — workspace.PlanStatus,
@@ -86,9 +107,11 @@ func countSev(p *explain.Plan) (crit, warn int) { return p.Findings() }
 // logPlan writes the plan's gist to the log: its size and cost, the
 // comparison with the last plan of the statement, and the findings — so the
 // log alone tells the story of a tuning session. The words are
-// workspace.PlanNotes, shared with dbc web.
-func (m *Model) logPlan(p *explain.Plan, elapsed time.Duration) {
-	m.notes(workspace.PlanNotes(p, m.planv.prev, elapsed))
+// workspace.PlanNotes, shared with dbc web. prev is the plan p replaced in
+// its view, when it explains the same statement. conn is the connection the
+// plan is of: its log gets them, on screen or not (notesTo).
+func (m *Model) logPlan(conn string, p, prev *explain.Plan, elapsed time.Duration) {
+	m.notesTo(conn, workspace.PlanNotes(p, prev, elapsed))
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +139,10 @@ func (m *Model) planKey(k tea.KeyPressMsg) tea.Cmd {
 	case "c", "menu":
 		m.openPlanMenu(v.area.X+2, v.area.Y+3)
 		return nil
+	}
+	// { } P x: the connection's result tabs, as from the grid
+	if cmd, used := m.resultTabKey(k); used {
+		return cmd
 	}
 	v.key(k)
 	return nil

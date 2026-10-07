@@ -783,6 +783,8 @@
     items.push({ head: "" }, { label: "Export to file…", key: "^E", why: why(), act: () => exportMenuAt(x, y) },
       { label: "✦ Ask the assistant about this result", key: "^I", why: why(),
         act: () => dbc.cmd.askAbout("Explain this result — anything notable in it?") });
+    // the result tab this result is in: pin it, close it (app.js)
+    if (dbc.cmd.resultTabItems) items.push(...dbc.cmd.resultTabItems());
     dbc.menu.open(x, y, items);
   }
 

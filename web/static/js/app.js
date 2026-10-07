@@ -72,7 +72,8 @@
     app: document.querySelector(".app"), sidebar: document.querySelector(".sidebar"),
     sideSplit: $("side-split"), sideFold: $("side-fold"),
     sideConns: $("side-conns"), sideHsplit: $("side-hsplit"),
-    logSplit: $("log-split"), log: $("log"), results: $("results"),
+    // logBox is what the results | log bar sizes: the log's header and its lines
+    logSplit: $("log-split"), log: $("log"), logBox: $("logbox"), results: $("results"),
   };
 
   function setBusy(busy) {
@@ -909,6 +910,8 @@
         dbc.conns.draw(d.conns);
         if (d.renamed) connRenamed(d.renamed.from, d.renamed.to);
         markInUse(); // the rows are new: their marks and tooltips with them
+        syncResultTabs(); // an edit may have turned ai_rows on or off: canShare
+        dbc.chat.refresh();
       } else if (ev.type === "inuse") {
         inuse = d.tabs || [];
         markInUse();
@@ -926,32 +929,49 @@
     if (t !== state.tab) { onBackground(t, ev.type, d); return; }
     switch (ev.type) {
       case "log":
-        log(d.level, d.text);
+        log(d.level, d.text, logRoute(t, d));
         break;
       case "busy":
       case "tick":
         setBusy(true);
         setStatus(d.status || d.tag + "…", "warn");
         break;
-      case "run":
+      case "run": {
         setBusy(false);
         els.stateful.hidden = !d.stateful;
-        setStatus(d.status || (d.ok ? "done" : "failed"), d.ok ? "" : d.stopped ? "warn" : "err");
-        if (d.hasResult) {
+        // a run lands in the result set of the connection it ran on: when
+        // the tab has moved to another since, there is nothing to draw —
+        // the result is waiting in that connection's set, its log lines in
+        // that connection's log, and offScreen says so here. A script tab
+        // is on no connection the page tracks, and never switches: its
+        // runs are always its own.
+        const here = sameConn(t, d);
+        if (here) setStatus(d.status || (d.ok ? "done" : "failed"), d.ok ? "" : d.stopped ? "warn" : "err");
+        else offScreen("run", d);
+        if (here && d.hasResult) {
+          keepView(t); // the result it replaces (or the pinned one it left) keeps its view
           dbc.grid.load();
           if (dbc.cmd.showResults) dbc.cmd.showResults();
         }
+        drawResultTabs(d);
         drawSets(d.sets);
-        if (dbc.cmd.onRunPlan) dbc.cmd.onRunPlan(d);
+        if (here && dbc.cmd.onRunPlan) dbc.cmd.onRunPlan(d);
         dbc.chat.refresh(); // the last statement, error or result moved
         break;
+      }
       case "result": // a script's s.Show, mid-run
+        if (!sameConn(t, d || {})) break; // see "run"
+        keepView(t);
         dbc.grid.load();
         if (dbc.cmd.showResults) dbc.cmd.showResults();
+        drawResultTabs(d);
         drawSets(d && d.sets);
         break;
       case "explain":
         setBusy(false);
+        // its plan went to its own connection's (see "run"): loading "the
+        // plan" now would fetch the one of the connection on screen
+        if (!sameConn(t, d)) { offScreen("explain", d); break; }
         if (dbc.cmd.onExplain) dbc.cmd.onExplain(d);
         break;
       case "connecting":
@@ -967,7 +987,14 @@
         showSide(d);
         if (d.status) setStatus(d.status);
         else if (!state.busy) setStatus("ready on " + d.active);
-        if (d.changed) saveTab(t);
+        if (d.changed) {
+          saveTab(t);
+          // the results pane and the log follow the connection: its own
+          // result set (tabs, the grid with the view it was left in, its
+          // plan) and its own log
+          showResultSet(t, d);
+        }
+        showLogOf(t);
         followConsole(t, d.console);
         dbc.chat.refresh(); // another catalog: other tables' schema
         break;
@@ -983,6 +1010,23 @@
     trackTab(t, ev.type, d);
   }
 
+  // offScreen tells, in the log and status bar on screen, what became of a
+  // run or explain (type) that landed on a connection the tab has since
+  // left: its result or plan and its log lines are that connection's,
+  // waiting for the tab to come back. The TUI's landedHere, in its words.
+  function offScreen(type, d) {
+    const failed = !d.ok && !d.stopped;
+    const verb = d.ok ? "finished" : d.stopped ? "was stopped" : "failed";
+    const what = failed ? "error" : type === "explain" ? "plan" : "result";
+    const tag = d.tag + " on " + d.conn + " " + verb;
+    log("muted", tag + " — its " + what + " and log lines are " + d.conn + "'s (switch back to " + d.conn + " to see them)");
+    setStatus(tag, d.ok ? "" : d.stopped ? "warn" : "err");
+  }
+
+  // sameConn says whether event d (a "run", a "result") landed in the
+  // result set tab t has on screen — its connection's.
+  const sameConn = (t, d) => !!t.script || !d.conn || d.conn === t.conn;
+
   // trackTab keeps a tab's strip marks in step with its events: busy while
   // it runs, the session-state mark after each run.
   function trackTab(t, type, d) {
@@ -997,12 +1041,12 @@
   }
 
   // onBackground handles a query tab's event while another is on screen:
-  // its log lines go to the one log, named; its outcome marks the tab; the
-  // rest (its result, its plan) is fetched when the tab is shown.
+  // its log lines go to its connection's log, named; its outcome marks the
+  // tab; the rest (its result, its plan) is fetched when the tab is shown.
   function onBackground(t, type, d) {
     switch (type) {
       case "log":
-        log(d.level, "[" + t.title + "] " + d.text);
+        log(d.level, "[" + t.title + "] " + d.text, logRoute(t, d));
         break;
       case "run":
       case "explain":
@@ -1097,6 +1141,7 @@
       const pc = cons.get(docOf(prev));
       if (pc) pc.text = prev.buffer; // what a textarea editor reopens it with
       prev.grid = dbc.grid.snapshot();
+      keepView(prev, prev.grid);
       prev.planOpen = dbc.cmd.planOpen();
       saveTab(prev);
       saveConsole(docOf(prev));
@@ -1105,6 +1150,7 @@
     state.ws = t.ws;
     t.done = false;
     setMode(t);
+    showLogOf(t); // its connection's log (as saved; the workspace's answer corrects it)
     if (t.script) {
       // its file, read before it is shown (at boot, or when it was opened);
       // a read that failed then is tried again here
@@ -1123,6 +1169,7 @@
     saveLayout(Object.assign({ tab: t.key }, plansChanged()));
     dbc.cmd.resetPlan();
     dbc.grid.clear();
+    drawResultTabs(null);
     drawSets(null);
     setBusy(false);
     els.stateful.hidden = true;
@@ -1192,6 +1239,7 @@
     if (t.script) { applyScriptState(st, fresh); return; }
     state.active = st.active;
     t.conn = st.active;
+    showLogOf(t);
     followConsole(t, st.console);
     markActive(st.active, st.connecting || "");
     showSide(st);
@@ -1202,8 +1250,9 @@
     else if (fresh && t.status) setStatus(t.status, t.level);
     else setStatus(st.active ? "ready on " + st.active : "not connected", "");
     if (st.hasResult) {
-      if (fresh) dbc.grid.restore(t.grid); else dbc.grid.load();
+      if (fresh) dbc.grid.restore(viewFor(t, st) || t.grid); else dbc.grid.load();
     }
+    drawResultTabs(st);
     drawSets(st.sets);
     if (dbc.cmd.onState) dbc.cmd.onState(Object.assign({}, st, { openPlan: fresh && t.planOpen }));
     dbc.chat.onState(st);
@@ -1217,6 +1266,7 @@
   // a template's connections, start from there.
   function applyScriptState(st, fresh) {
     const t = state.tab;
+    showLogOf(t);
     markActive("", "");
     showSide({ tables: [] });
     drawScriptHead();
@@ -1227,8 +1277,9 @@
     else if (fresh && t.status) setStatus(t.status, t.level);
     else setStatus(t.script + " — Ctrl+Enter saves and runs it, Ctrl+S saves", "");
     if (st.hasResult) {
-      if (fresh) dbc.grid.restore(t.grid); else dbc.grid.load();
+      if (fresh) dbc.grid.restore(viewFor(t, st) || t.grid); else dbc.grid.load();
     }
+    drawResultTabs(st);
     drawSets(st.sets);
     if (dbc.cmd.onState) dbc.cmd.onState(Object.assign({}, st, { openPlan: fresh && t.planOpen }));
     dbc.chat.onState(st);
@@ -1612,7 +1663,7 @@
   function setEditorHeight(px) {
     // the log sits below the results now at a height of its own choosing,
     // so the editor's room is what the column has less the log's
-    const max = els.work.getBoundingClientRect().height - els.log.getBoundingClientRect().height - 120;
+    const max = els.work.getBoundingClientRect().height - els.logBox.getBoundingClientRect().height - 120;
     dbc.editor.setHeight(Math.max(60, Math.min(px, max)));
   }
 
@@ -1655,14 +1706,14 @@
   // its bar and a couple of rows. Measured live — the editor's height and
   // the window's both move that ceiling.
   function setLogHeight(px) {
-    const room = els.log.getBoundingClientRect().height + els.results.getBoundingClientRect().height - 90;
+    const room = els.logBox.getBoundingClientRect().height + els.results.getBoundingClientRect().height - 90;
     els.work.style.setProperty("--log-h", Math.round(Math.max(40, Math.min(px, room))) + "px");
   }
   dragRows(els.logSplit, {
-    start: () => els.log.getBoundingClientRect().height,
+    start: () => els.logBox.getBoundingClientRect().height,
     set: setLogHeight,
     dir: -1, // the log is below its bar: dragging up grows it
-    done: () => saveLayout({ logHeight: String(Math.round(els.log.getBoundingClientRect().height)) }),
+    done: () => saveLayout({ logHeight: String(Math.round(els.logBox.getBoundingClientRect().height)) }),
     reset: () => { els.work.style.removeProperty("--log-h"); saveLayout({ logHeight: "" }); },
   });
 
@@ -2235,6 +2286,265 @@
       setStatus(err.message, err.status === 409 ? "warn" : "err");
     }
   });
+
+  // ── result tabs ────────────────────────────────────────────────────────
+  // The results bar's strip: the result tabs of the query tab's connection
+  // (web/resulttabs.go, workspace/results.go). A run replaces the result in
+  // the tab it started on unless that tab is pinned (⚑), in which case it
+  // opens a new one, up to resultTabMax; switching the query tab's
+  // connection puts that connection's set on screen.
+  //
+  //   ▦ Results  ◈ Plan │ [1 cats ×] [2 ⚑ owners] [3 select now()] 3/10 │ Result 1 · 2 │ 8 rows …
+  //
+  // ⚑ rather than 📌: a glyph in the text's own color and width, so a
+  // pinned tab is not wider or louder than its neighbours, and the same
+  // mark the TUI draws on its strip.
+  //
+  // Each result's GRID VIEW (sort, hidden columns, widths, scroll, cursor)
+  // is kept per query tab, keyed by the result's seq — the workspace's
+  // number for it, unique across all of the tab's connections — so going
+  // back to a result tab, or to a connection, finds the grid as it was
+  // left. The map is bounded rather than pruned to the strip on screen:
+  // the strip shows one connection's tabs, and pruning to it would throw
+  // away every other connection's views. VIEWS_MAX of the most recently
+  // kept are plenty for 10 tabs on a few connections, and a view is a few
+  // small arrays.
+  const VIEWS_MAX = 64;
+  const viewsOf = (t) => t.rviews || (t.rviews = new Map());
+
+  // keepView stores the grid's view of the result it shows (snap, or a
+  // fresh snapshot) under that result's seq, for when it comes back.
+  function keepView(t, snap) {
+    if (!t) return;
+    snap = snap === undefined ? dbc.grid.snapshot() : snap;
+    if (!snap) return;
+    const m = viewsOf(t);
+    m.delete(snap.seq); // re-inserted last: the map's order is the age
+    m.set(snap.seq, snap);
+    while (m.size > VIEWS_MAX) m.delete(m.keys().next().value);
+  }
+
+  // viewFor is the kept view of the result d says is on screen (d: a
+  // workspace state, an event or a strip answer), or null.
+  function viewFor(t, d) {
+    const cur = d && (d.resultTabs || []).find((r) => r.id === d.resultTab);
+    return (cur && viewsOf(t).get(cur.seq)) || null;
+  }
+
+  // showResultOf puts on the grid the result d says is on screen: with
+  // its kept view, or loaded fresh (which keeps the transpose and, for
+  // the same columns, the hidden ones), or nothing.
+  function showResultOf(t, d) {
+    if (!d.hasResult) { dbc.grid.clear(); return; }
+    const snap = viewFor(t, d);
+    if (snap) dbc.grid.restore(snap); else dbc.grid.load();
+  }
+
+  // showResultSet redraws the results pane for the connection the query
+  // tab just moved to (a "conn" that changed it, a disconnect): its result
+  // tabs, the result on screen there, its script switcher, and its plan —
+  // the Plan tab stays up if it was and the new connection has a plan.
+  function showResultSet(t, d) {
+    keepView(t);
+    drawResultTabs(d);
+    drawSets(d.sets);
+    showResultOf(t, d);
+    const open = dbc.cmd.planOpen();
+    dbc.cmd.resetPlan();
+    if (d.hasPlan) dbc.cmd.onState({ hasPlan: true, openPlan: open });
+    else if (open) dbc.cmd.onPlanPane(false);
+  }
+
+  // drawResultTabs draws the strip from d's resultTabs / resultTab /
+  // resultTabMax (null or an empty set hides it).
+  let rtabState = null; // the set last drawn, for the keys and the menus
+  function drawResultTabs(d) {
+    const box = $("rstrip");
+    box.replaceChildren();
+    rtabState = d && d.resultTabs && d.resultTabs.length ? d : null;
+    box.hidden = !rtabState;
+    if (!rtabState) return;
+    rtabState.resultTabs.forEach((r, i) => {
+      const what = r.exec ? dbc.plural(r.affected || 0, "row") + " affected"
+        : r.shows ? dbc.plural(r.shows, "result") + " shown" : dbc.plural(r.rows, "row");
+      const tip = (r.stmt || r.title) + "\n" + what + (r.pinned ? " · pinned: a run opens a new tab instead of replacing this one" : "") +
+        (r.shared ? " · shared with the assistant: it goes with every question on this connection" : "") +
+        "\nclick shows it · right-click: pin, share, close";
+      box.append(el("button", { type: "button", role: "tab", class: "rt" + (r.id === rtabState.resultTab ? " on" : ""),
+        "data-rt": String(r.id), "aria-selected": r.id === rtabState.resultTab ? "true" : "false", title: tip },
+      el("span", "n", String(i + 1)),
+      r.pinned ? el("span", { class: "pin", "aria-label": "pinned" }, "⚑") : null,
+      r.shared ? el("span", { class: "shr", "aria-label": "shared with the assistant", title: "shared with the assistant" }, "✦") : null,
+      el("span", "tt", r.title),
+      el("span", { class: "x", "data-close": String(r.id), title: "Close this result tab (x)" }, "×")));
+    });
+    box.append(el("span", { class: "rcount", title: "result tabs on this connection, and how many it keeps (result_tabs)" },
+      rtabState.resultTabs.length + "/" + rtabState.resultTabMax));
+  }
+
+  // resultTabOp is a click on the strip, its menu, or a key: the workspace
+  // does it (POST …/result-tab) and answers with the set as it now is.
+  async function resultTabOp(op, id) {
+    const t = state.tab;
+    if (!t || !t.ws) return;
+    const before = dbc.grid.snapshot();
+    keepView(t, before);
+    let r;
+    try {
+      r = await api("POST", dbc.wsPath("/result-tab"), { id, op });
+    } catch (e) {
+      // a tab gone meanwhile (closed elsewhere, dropped by a run past the
+      // cap), a share on a connection without ai_rows: the server has
+      // logged why; redraw from the set as it is
+      setStatus(e.message, e.status === 409 ? "warn" : "err");
+      await syncResultTabs();
+      return;
+    }
+    if (state.tab !== t) return;
+    drawResultTabs(r);
+    drawSets(r.sets);
+    if (op === "share" || op === "unshare") { dbc.chat.refresh(); return; } // what the next question sends moved
+    if (op === "pin" || op === "unpin") return; // nothing moved on screen
+    const cur = (r.resultTabs || []).find((x) => x.id === r.resultTab);
+    if (!before || !cur || cur.seq !== before.seq) {
+      showResultOf(t, r);
+      if (r.hasResult && dbc.cmd.showResults) dbc.cmd.showResults();
+    }
+    if (r.status) setStatus(r.status, "");
+    dbc.chat.refresh(); // the result the assistant would be shown moved
+  }
+
+  // stepResultTab is { (-1) and } (+1): the neighbouring tab, stopping at
+  // either end as the TUI's does.
+  function stepResultTab(dir) {
+    const d = rtabState;
+    if (!d) { log("warn", "no result tabs on this connection yet — run a query"); return; }
+    const i = d.resultTabs.findIndex((r) => r.id === d.resultTab) + dir;
+    if (i >= 0 && i < d.resultTabs.length) resultTabOp("show", d.resultTabs[i].id);
+  }
+
+  // curResultTab is the result tab on screen, or null.
+  const curResultTab = () => (rtabState ? rtabState.resultTabs.find((r) => r.id === rtabState.resultTab) || null : null);
+
+  function togglePin() {
+    const r = curResultTab();
+    if (!r) { log("warn", "no result tab to pin — run a query"); return; }
+    resultTabOp(r.pinned ? "unpin" : "pin", r.id);
+  }
+
+  function closeCurrent() {
+    const r = curResultTab();
+    if (r) resultTabOp("close", r.id);
+  }
+
+  // toggleShare is S: share the result tab on screen with the assistant,
+  // or stop sharing it. (s is taken: the grid sorts by it, the plan saves.)
+  function toggleShare() {
+    const r = curResultTab();
+    if (!r) { log("warn", "no result tab to share — run a query"); return; }
+    if (!r.shared && !rtabState.canShare) { log("warn", noShare()); return; }
+    resultTabOp(r.shared ? "unshare" : "share", r.id);
+  }
+  const noShare = () => "set ai_rows = true on " + (state.tab && state.tab.conn || "this connection") +
+    " to share its results with the assistant";
+
+  // syncResultTabs redraws the strip from the workspace — after a refusal,
+  // and when a connection's ai_rows may have changed (the "conns" event),
+  // which is what canShare reads.
+  async function syncResultTabs() {
+    const t = state.tab;
+    if (!t || !t.ws) return;
+    try {
+      const st = await api("GET", dbc.wsPath(""));
+      if (state.tab === t) drawResultTabs(st);
+    } catch (_) { /* the stream's onerror deals with a lost window */ }
+  }
+  dbc.cmd.syncResultTabs = syncResultTabs;
+
+  // sharedView is the grid view kept for the result tab shared with the
+  // assistant, when it is not the one on screen (the grid's own view
+  // covers that), for chat.js to send with a question: the server needs
+  // its hidden columns and sort, or what the user hid there would reach
+  // the model. null when nothing is shared off screen, or no view was
+  // kept — the tab was never left with anything hidden or sorted.
+  dbc.cmd.sharedView = function () {
+    const t = state.tab, d = rtabState;
+    const sh = d && d.resultTabs.find((r) => r.shared);
+    if (!t || !sh || sh.id === d.resultTab) return null;
+    const snap = viewsOf(t).get(sh.seq);
+    return snap ? { seq: sh.seq, sort: snap.sort, desc: snap.desc, hidden: snap.hidden } : null;
+  };
+
+  // resultTabItems is the strip's menu for tab r (and, for the tab on
+  // screen, the grid's menu's last section).
+  function resultTabItems(r) {
+    if (!r) return [];
+    const unpinned = rtabState ? rtabState.resultTabs.filter((x) => !x.pinned).length : 0;
+    return [
+      { head: "result tab" },
+      { label: r.pinned ? "Unpin — a run may replace it" : "Pin — a run opens a new tab instead", key: "P",
+        act: () => resultTabOp(r.pinned ? "unpin" : "pin", r.id) },
+      { label: r.shared ? "✦ Stop sharing with the assistant" : "✦ Share with the assistant", key: "S",
+        why: r.shared || rtabState.canShare ? "" : noShare(),
+        act: () => resultTabOp(r.shared ? "unshare" : "share", r.id) },
+      { label: "Close this result tab", key: "x", act: () => resultTabOp("close", r.id) },
+      { label: "Close unpinned tabs", why: unpinned ? "" : "every tab is pinned", act: () => resultTabOp("close-unpinned", 0) },
+    ];
+  }
+  dbc.cmd.resultTabItems = () => resultTabItems(curResultTab());
+
+  $("rstrip").addEventListener("click", (e) => {
+    const x = e.target.closest("[data-close]");
+    if (x) { resultTabOp("close", Number(x.dataset.close)); return; }
+    const b = e.target.closest("button[data-rt]");
+    if (!b) return;
+    if (b.classList.contains("on")) { if (dbc.cmd.showResults) dbc.cmd.showResults(); return; }
+    resultTabOp("show", Number(b.dataset.rt));
+  });
+  $("rstrip").addEventListener("contextmenu", (e) => {
+    const b = e.target.closest("button[data-rt]");
+    if (!b || !rtabState) return;
+    e.preventDefault();
+    const r = rtabState.resultTabs.find((x) => x.id === Number(b.dataset.rt));
+    const items = resultTabItems(r);
+    if (r && r.id !== rtabState.resultTab) items.splice(1, 0, { label: "Show it", act: () => resultTabOp("show", r.id) });
+    dbc.menu.open(e.clientX, e.clientY, items);
+  });
+
+  // The strip's keys, anywhere in the results pane — the grid or the plan
+  // (both pass keys they do not use up to here), and an exec result's
+  // message: { } step, P pins or unpins, S shares with the assistant or
+  // stops, x closes. None of them is a key the grid or the plan view has.
+  els.results.addEventListener("keydown", (e) => {
+    if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target.closest("input, textarea, select, [contenteditable]")) return;
+    const acts = { "{": () => stepResultTab(-1), "}": () => stepResultTab(1), P: togglePin, x: closeCurrent, S: toggleShare };
+    const f = acts[e.key];
+    if (f) { e.preventDefault(); f(); }
+  });
+
+  // ── the log ────────────────────────────────────────────────────────────
+  // One log per connection (core.js): the pane shows the active query
+  // tab's. A script tab is on no connection — its scripts name their own —
+  // so it keeps a log of its own, by the tab's key (stable across a
+  // rename), which its runs' lines go to whatever connection they name.
+  const SCRIPT_LOG = "\u0001tab:"; // cannot be a connection name's start
+  const logKeyOf = (t) => (!t ? "" : t.script ? SCRIPT_LOG + t.key : t.conn || "");
+  dbc.logKey = () => logKeyOf(state.tab);
+
+  // logRoute is the log a line of tab t's event goes to: the connection
+  // the server stamped on it, else the tab's — except in a script tab,
+  // whose own log takes every line.
+  const logRoute = (t, d) => (t.script ? logKeyOf(t) : d.conn || t.conn || "");
+
+  // showLogOf puts tab t's log on screen, its header naming whose it is.
+  function showLogOf(t) {
+    if (t !== state.tab) return;
+    dbc.showLog(logKeyOf(t), !t ? "" : t.script ? t.title : t.conn || "");
+  }
+
+  $("log-copy").addEventListener("click", () => dbc.clip.copyText(dbc.logText(), "the log"));
+  $("log-clear").addEventListener("click", () => dbc.clearLog());
 
   // runScriptTab is Run in a script tab: save, then run the saved file.
   async function runScriptTab(t) {
@@ -2840,6 +3150,16 @@
       ["- · + · =", "hide the column · show all · fit it"], ["click a header", "sort: asc, desc, off"],
       ["t · ⇄ Transpose", "turn the grid on its side — each row a column; copies and exports follow"],
       ["p", "the plan, when there is one"],
+    ]],
+    ["Result tabs", [
+      ["click a tab · { · }", "show it · the previous · the next (in the grid or the plan)"],
+      ["P · right-click a tab", "pin it: a run then opens a new tab instead of replacing it · pin, share, close"],
+      ["S", "share it with the assistant: it goes with every question on the connection (needs ai_rows = true) · again stops"],
+      ["x · × on a tab", "close it"],
+      ["switch the connection", "its own result tabs, plan and log come back as they were left"],
+    ]],
+    ["Log", [
+      ["⧉ Copy · ✕ Clear", "copy · clear the log of the connection on screen (each connection keeps its own)"],
     ]],
     ["Plan", [
       ["←↑↓→ · Enter", "walk the steps · fold"], ["1–4", "the metric"], ["f · g", "fit · graph"],

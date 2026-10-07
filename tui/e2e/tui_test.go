@@ -73,9 +73,24 @@ func TestTUI(t *testing.T) {
 		})
 	})
 
-	step(t, "a click on another connection switches to it", func() {
+	step(t, "a click on another connection switches to it, with results and a log of its own", func() {
 		u.click(" lite2 ", 2)
-		u.waitFor("● lite2", " dogs ", "Tables · 1")
+		u.waitFor("● lite2", " dogs ", "Tables · 1", "Log · lite2")
+		// lite2 has run nothing: none of lite's rows, no result tab
+		u.waitGone("│ Ada ")
+		u.waitGone("preview owners")
+		// back to lite, the row under the Connections title (the toolbar's
+		// chip says lite2 now, so " lite " is not a safe anchor): its
+		// result is back on its result tab, sorted as it was left, and
+		// the log is lite's again
+		x, y := u.find("Connections")
+		u.clickAt(x, y+1)
+		u.waitFor("Log · lite ─", "1 preview owners", "│ Ada ", "│ Bo ")
+		u.waitUntil("Bo still above Ada", func(string) bool {
+			_, bo := u.find("│ Bo ")
+			_, ada := u.find("│ Ada ")
+			return bo < ada
+		})
 	})
 
 	step(t, "F1 opens the keys dialog, Esc closes it", func() {
@@ -89,7 +104,7 @@ func TestTUI(t *testing.T) {
 		u.ctrl('b')
 		u.waitGone("Connections")
 		u.ctrl('b')
-		u.waitFor("Connections", "● lite2")
+		u.waitFor("Connections", "● lite")
 	})
 
 	step(t, "t transposes the grid and back", func() {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/ai"
 	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/export"
 	"github.com/rohanthewiz/dbc/sdb/sdbapi"
 	"github.com/rohanthewiz/dbc/userdata"
 	"github.com/rohanthewiz/dbc/workspace"
@@ -812,6 +813,12 @@ type chatReq struct {
 	Attach   bool      `json:"attach"` // the context chip is on
 	Editor   runReq    `json:"editor"`
 	View     *chatGrid `json:"view"`
+	// Shared is the grid view the page kept for the result tab shared with
+	// the assistant, when that tab is not the one on screen (View covers
+	// it when it is). nil when nothing is shared, or the page kept no view
+	// of it — it was never looked at with anything hidden or sorted, so
+	// it goes unsorted with every column, as it would have been shown.
+	Shared *chatGrid `json:"shared"`
 	// Script is the script's file name when asked from a script tab: the
 	// editor then holds Go, and workspace.ScriptChatContext reads it as a
 	// script rather than picking a SQL statement out of it.
@@ -849,14 +856,56 @@ func (s *Server) chatContext(t *tab, req chatReq) (ai.Context, []db.TableRef, er
 			return ai.Context{}, nil, conflict("the result changed while you were asking — the grid is reloading; ask again")
 		}
 	}
+	views := []workspace.GridView{view}
+	if g := req.Shared; g != nil && g.Seq > 0 {
+		sv, found := sharedView(t.ws, g)
+		switch {
+		case found:
+			views = append(views, sv)
+		case len(g.Hidden) > 0:
+			// the same rule as the view on screen: a view that names no
+			// result the tab holds any more cannot say which columns to keep
+			// back, and sending them all is what hiding was meant to stop
+			return ai.Context{}, nil, conflict("the shared result changed while you were asking — ask again")
+		}
+	}
 	if req.Script != "" {
 		// Base: the name only labels the source in the prompt; the page
 		// sends a scripts_dir file name, and a path has no business there.
-		ctx, refs := t.ws.ScriptChatContext(req.Question, filepath.Base(req.Script), req.Editor.Buffer, view)
+		ctx, refs := t.ws.ScriptChatContext(req.Question, filepath.Base(req.Script), req.Editor.Buffer, views...)
 		return ctx, refs, nil
 	}
-	ctx, refs := t.ws.ChatContext(req.Question, ed, view)
+	ctx, refs := t.ws.ChatContext(req.Question, ed, views...)
 	return ctx, refs, nil
+}
+
+// sharedView builds the GridView of a result tab that is not on screen —
+// the shared one — from the view the page kept of it: the tab whose result
+// has seq g.Seq, sorted here as the grid would sort it (workspace.SortRows,
+// the grid's comparison), its hidden columns as the page hid them. The
+// workspace matches it to the shared result by GridView.Result. Not cached
+// like t.view: it is built per question (or chip forecast) for a tab off
+// screen, and sorting one result's rows is cheap next to what asking costs.
+func sharedView(ws *workspace.Workspace, g *chatGrid) (workspace.GridView, bool) {
+	tabs, _ := ws.ResultTabs()
+	for _, rt := range tabs {
+		r := rt.Result
+		if rt.Seq != g.Seq || r == nil {
+			continue
+		}
+		sortCol, desc := g.Sort, g.Desc
+		if sortCol < -1 || sortCol >= len(r.Columns) {
+			sortCol = -1
+		}
+		if sortCol == -1 {
+			desc = false
+		}
+		order := make([]int, len(r.Rows))
+		workspace.SortRows(order, r, sortCol, desc, export.NumericColumns(r))
+		return workspace.GridView{Result: r, Hidden: cleanHidden(g.Hidden, len(r.Columns)),
+			SortCol: sortCol, SortDesc: desc, Order: order}, true
+	}
+	return workspace.GridView{SortCol: -1}, false
 }
 
 // cleanHidden makes a page's hidden-column list what ai.Context promises:

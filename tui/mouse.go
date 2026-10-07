@@ -165,6 +165,11 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 	if i, ok := m.tabChipAt(x, y); ok {
 		return m.tabClick(i, n)
 	}
+	// the log's ⧉ copy and ✕ clear sit on its top border, which is also
+	// the splitter that resizes it: a press on them is the control's
+	if cmd, ok := m.logControlAt(x, y); ok {
+		return cmd
+	}
 	if k := m.splitterAt(x, y); k != dragNone {
 		m.drag.kind = k
 		return nil
@@ -177,6 +182,10 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 	// with the tabs, at its right end (resultsets.go)
 	if i, ok := m.resultSetAt(x, y); ok {
 		return m.showScriptResult(i)
+	}
+	// the result tabs, on its bottom border (resulttabs.go)
+	if id, _, ok := m.resultTabAt(x, y); ok {
+		return m.showResultTab(id)
 	}
 
 	switch {
@@ -430,6 +439,7 @@ func (m *Model) mouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 		}
 		m.grid.Scroll(dy, dx)
 	case l.logR.Contains(x, y):
+		m.syncLog()
 		m.logp.scroll(dy)
 	case l.conns.Contains(x, y):
 		m.conns.scroll(dy)
@@ -489,6 +499,10 @@ func (m *Model) rightClick(x, y int) tea.Cmd {
 	if i, ok := m.tabChipAt(x, y); ok {
 		m.focus = focusEditor
 		return m.openTabMenu(i, x, y+1)
+	}
+	if id, ok := m.resultTabLabelAt(x, y); ok {
+		m.focus = focusGrid
+		return m.openResultTabMenu(id, x, y)
 	}
 	switch {
 	case l.editor.Contains(x, y):

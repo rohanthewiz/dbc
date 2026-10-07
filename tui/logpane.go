@@ -7,7 +7,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// logPane is the scrolling message log under the grid.
+// logPane is the scrolling message log under the grid — one per connection
+// (logs.go), of which the pane shows the query tab's.
 //
 // Lines are stored whole and WRAPPED AT DRAW TIME to the pane's width, so a
 // resize (or dragging the border) rewraps everything instead of leaving
@@ -55,9 +56,19 @@ func (l *logPane) add(kind logKind, text string) {
 		}
 		l.lines = append(l.lines, logLine{at: time.Now(), kind: k, text: part})
 	}
+	l.trim()
+}
+
+// trim drops the oldest lines past logMaxLines.
+func (l *logPane) trim() {
 	if over := len(l.lines) - logMaxLines; over > 0 {
 		l.lines = l.lines[over:]
 	}
+}
+
+// clear empties the log and pins the view back to the newest line.
+func (l *logPane) clear() {
+	l.lines, l.top, l.follow, l.total = nil, 0, true, 0
 }
 
 // Text returns the whole log as plain text, for "copy log".

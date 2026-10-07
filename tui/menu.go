@@ -235,6 +235,11 @@ func (m *Model) openGridMenu(x, y int) {
 		items = append(items, heading(""),
 			menuItem{label: "◈ Show the plan", key: "p", act: func(m *Model) tea.Cmd { m.resTab = tabPlan; return nil }})
 	}
+	// the result tab this result is in: keep it (pin) or let it go
+	if rt := m.resultTabItems(); len(rt) > 0 {
+		items = append(items, heading(""))
+		items = append(items, rt...)
+	}
 	items = append(items,
 		heading(""),
 		menuItem{label: "Export to file…", key: "^E", why: why,
@@ -437,11 +442,13 @@ func (m *Model) openTableMenu(x, y int, onRow bool) {
 	m.openMenu(x, y, items)
 }
 
-// openLogMenu is the log's context menu.
+// openLogMenu is the log's context menu. Both rows act on the log on
+// screen — the connection's (logs.go) — as its title's ⧉ copy and ✕ clear
+// do.
 func (m *Model) openLogMenu(x, y int) {
 	m.openMenu(x, y, []menuItem{
-		{label: "Copy log", act: func(m *Model) tea.Cmd { return m.copyString(m.logp.Text(), "the log") }},
-		{label: "Clear log", act: func(m *Model) tea.Cmd { m.logp.lines = nil; return nil }},
+		{label: "Copy log", key: "y", act: func(m *Model) tea.Cmd { return m.copyLog() }},
+		{label: "Clear log", key: "x", act: func(m *Model) tea.Cmd { return m.clearLog() }},
 	})
 }
 

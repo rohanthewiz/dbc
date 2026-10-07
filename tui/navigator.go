@@ -474,6 +474,7 @@ func (m *Model) disconnectNow() tea.Cmd {
 	}
 	m.notes(st.Notes)
 	m.setStatus("disconnected")
+	m.syncResults() // on no connection: no connection's results
 	m.schemaLoading = ""
 	m.refreshConns()
 	m.refreshTables()

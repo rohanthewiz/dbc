@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"time"
 
@@ -40,8 +41,22 @@ type GridView struct {
 // catalog query) — and refs is the same tables as the catalog knows them,
 // for that lookup.
 //
+// A result tab the user SHARED (ShareResultTab) changes which result goes:
+// the shared one, whatever the caret is on, framed as shared (ai.Context
+// Shared) — explicit beats implied. The statement under the caret still
+// goes as "this query", with its error when it is the one that just
+// failed; the shared result's own statement goes along to say what the
+// rows are of, and names tables for the schema lookup too.
+//
+// views are the UI's grids: the one on screen and, when the shared tab is
+// not on screen, that tab's (its parked grid, or the page's snapshot of
+// it). Each is matched to a result by GridView.Result, so passing one that
+// matches nothing is harmless. A shared result with no matching view goes
+// unsorted and with nothing hidden — a UI that kept a view for it must
+// pass it, or columns the user hid would reach the model.
+//
 // It is cheap enough to call every frame, as the TUI's context chip does.
-func (w *Workspace) ChatContext(question string, ed Editor, view GridView) (ctx ai.Context, refs []db.TableRef) {
+func (w *Workspace) ChatContext(question string, ed Editor, views ...GridView) (ctx ai.Context, refs []db.TableRef) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	ctx = w.chatBaseLocked()
@@ -49,17 +64,44 @@ func (w *Workspace) ChatContext(question string, ed Editor, view GridView) (ctx 
 	if stmts, _ := Pick(ed); len(stmts) > 0 {
 		cur = stmts[len(stmts)-1]
 	}
+	last := w.lastLocked()
 	if cur == "" {
-		cur = w.lastStmt
+		cur = last.lastStmt
 	}
 	ctx.Query = cur
 	ctx.Plan = w.planForChatLocked(cur)
-	refs = w.mentionedLocked(&ctx, cur, question)
-	if cur == "" || cur != w.lastStmt {
+	sh, at := w.activeSetLocked().sharedTab()
+	if sh != nil {
+		refs = w.mentionedLocked(&ctx, cur+"\n"+sh.stmt, question)
+		if cur != "" && cur == last.lastStmt {
+			ctx.Err = last.lastErr
+		}
+		attachShared(&ctx, sh, at, cur, views)
 		return ctx, refs
 	}
-	w.attachLastRunLocked(&ctx, view)
+	refs = w.mentionedLocked(&ctx, cur, question)
+	if cur == "" || cur != last.lastStmt {
+		return ctx, refs
+	}
+	w.attachLastRunLocked(&ctx, views)
 	return ctx, refs
+}
+
+// attachShared puts a shared result tab's result into ctx — sh at position
+// at in its strip, so it is named "result 2" as the UIs number it — with
+// whichever of views is that result's grid. query is the SQL in question:
+// the shared result's statement goes along only when it differs.
+func attachShared(ctx *ai.Context, sh *resultTab, at int, query string, views []GridView) {
+	ctx.Shared, ctx.SharedLabel = true, fmt.Sprintf("result %d", at+1)
+	if sh.stmt != query {
+		ctx.SharedFrom = sh.stmt
+	}
+	r := sh.res
+	if r == nil || r.IsExec {
+		return
+	}
+	ctx.Columns, ctx.Rows, ctx.Truncated = r.Columns, r.Rows, r.Truncated
+	applyView(ctx, r, views)
 }
 
 // ScriptChatContext is ChatContext for a script tab: the editor holds a Go
@@ -81,7 +123,7 @@ func (w *Workspace) ChatContext(question string, ed Editor, view GridView) (ctx 
 //
 // The sdb API summary is not set here: it goes once per conversation,
 // which only the assistant (the caller) knows — see ai.Context.ScriptAPI.
-func (w *Workspace) ScriptChatContext(question, name, source string, view GridView) (ctx ai.Context, refs []db.TableRef) {
+func (w *Workspace) ScriptChatContext(question, name, source string, views ...GridView) (ctx ai.Context, refs []db.TableRef) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	ctx = w.chatBaseLocked()
@@ -92,12 +134,29 @@ func (w *Workspace) ScriptChatContext(question, name, source string, view GridVi
 		cc, _ := w.cfg.ConnByName(n)
 		ctx.ScriptConns = append(ctx.ScriptConns, n+" ("+cc.Driver+")")
 	}
-	refs = w.mentionedLocked(&ctx, source, question)
-	if name == "" || name != w.lastScript {
+	// a shared result tab goes as it does from a query tab (ChatContext):
+	// in place of this script's own last run, which is then not asked about
+	if sh, at := w.activeSetLocked().sharedTab(); sh != nil {
+		refs = w.mentionedLocked(&ctx, source+"\n"+sh.stmt, question)
+		attachShared(&ctx, sh, at, "", views)
 		return ctx, refs
 	}
-	w.attachLastRunLocked(&ctx, view)
+	refs = w.mentionedLocked(&ctx, source, question)
+	if name == "" || name != w.lastLocked().lastScript {
+		return ctx, refs
+	}
+	w.attachLastRunLocked(&ctx, views)
 	return ctx, refs
+}
+
+// lastLocked is the active connection's result set for reading its last
+// run — an empty one before anything ran there, so callers need no nil
+// check. It is never stored: a run lands in a set made by setLocked.
+func (w *Workspace) lastLocked() *resultSet {
+	if s := w.activeSetLocked(); s != nil {
+		return s
+	}
+	return &resultSet{cur: -1}
 }
 
 // chatBaseLocked is what every question carries whatever it is about: the
@@ -125,30 +184,41 @@ func (w *Workspace) mentionedLocked(ctx *ai.Context, text, question string) (ref
 // attachLastRunLocked puts the last run's outcome into ctx: its error, or
 // else its result as the grid shows it (view). The caller has decided the
 // last run is the one the question is about.
-func (w *Workspace) attachLastRunLocked(ctx *ai.Context, view GridView) {
-	if w.lastErr != "" {
-		ctx.Err = w.lastErr
+func (w *Workspace) attachLastRunLocked(ctx *ai.Context, views []GridView) {
+	if e := w.lastLocked().lastErr; e != "" {
+		ctx.Err = e
 		return
 	}
-	if r := w.lastRes; r != nil && !r.IsExec {
+	var r *model.Result
+	if t := w.curLocked(); t != nil {
+		r = t.res
+	}
+	if r != nil && !r.IsExec {
 		ctx.Columns, ctx.Rows, ctx.Truncated = r.Columns, r.Rows, r.Truncated
-		// Columns hidden in the grid are left out, as copies and exports
-		// leave them out — see package ai's HIDDEN COLUMNS for why. The
-		// guard makes sure the view describes this very result, so Hidden
-		// is indexed by its columns.
-		//
-		// A header sort goes too: rows are sent in the grid's order and the
-		// model is told so. Only the prefix of the order that could be sent
-		// is copied — this runs every frame for the chip — and it IS copied,
-		// because a grid re-sorts its order in place and a submit's context
-		// waits for its schema lookup before it is built into a prompt.
-		if view.Result == r {
-			ctx.Hidden = view.Hidden
-			if view.SortCol >= 0 && view.SortCol < len(r.Columns) {
-				ctx.Order = slices.Clone(view.Order[:min(len(view.Order), max(ctx.MaxRows, 0))])
-				ctx.SortedBy, ctx.SortDesc = r.Columns[view.SortCol], view.SortDesc
-			}
-		}
+		applyView(ctx, r, views)
+	}
+}
+
+// applyView carries the grid's view of r into ctx. Columns hidden in the
+// grid are left out, as copies and exports leave them out — see package
+// ai's HIDDEN COLUMNS for why. Only a view of this very result is used
+// (GridView.Result == r), so Hidden is indexed by its columns.
+//
+// A header sort goes too: rows are sent in the grid's order and the model
+// is told so. Only the prefix of the order that could be sent is copied —
+// this runs every frame for the chip — and it IS copied, because a grid
+// re-sorts its order in place and a submit's context waits for its schema
+// lookup before it is built into a prompt.
+func applyView(ctx *ai.Context, r *model.Result, views []GridView) {
+	i := slices.IndexFunc(views, func(v GridView) bool { return v.Result == r })
+	if i < 0 {
+		return
+	}
+	view := views[i]
+	ctx.Hidden = view.Hidden
+	if view.SortCol >= 0 && view.SortCol < len(r.Columns) {
+		ctx.Order = slices.Clone(view.Order[:min(len(view.Order), max(ctx.MaxRows, 0))])
+		ctx.SortedBy, ctx.SortDesc = r.Columns[view.SortCol], view.SortDesc
 	}
 }
 

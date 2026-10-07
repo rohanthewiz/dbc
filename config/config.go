@@ -27,6 +27,15 @@ const (
 	// once someone raises max_rows for an export.
 	defaultMaxDisplayRows = 2000
 
+	// DefaultResultTabs is how many result tabs one connection's result set
+	// holds when result_tabs is not set (see Config.ResultTabs), and
+	// MaxResultTabs the most it may be set to. Each tab keeps a whole
+	// result — up to max_rows rows — alive for as long as its query tab
+	// lives, per connection that tab has visited, so the ceiling is there
+	// to keep a typo (1000) from quietly pinning a lot of memory.
+	DefaultResultTabs = 10
+	MaxResultTabs     = 50
+
 	// DefaultConnIdleTimeout is how long a pooled connection may sit unused
 	// before the pool closes it (conn_idle_timeout). database/sql's own
 	// default is forever, which keeps server-side backends — their memory and
@@ -200,6 +209,14 @@ type Config struct {
 	// display cap.
 	MaxDisplayRows int `toml:"max_display_rows"`
 
+	// ResultTabs caps the tabs in one connection's result set: each query
+	// tab keeps a result set per connection it has been on, and a run
+	// lands in the set's current tab, or in a new one when that tab is
+	// pinned. Past the cap the oldest unpinned tab is dropped. Unset is
+	// DefaultResultTabs; Load keeps it within 1…MaxResultTabs. Read it
+	// through ResultTabLimit, which also covers a Config built in code.
+	ResultTabs int `toml:"result_tabs"`
+
 	// The AI assistant (package ai). AIAgent picks the ACP backend —
 	// "copilot" (the default), "claude" or "gemini"; AIModel is a preferred
 	// model id, applied when the agent offers it. AIContextRows caps how many
@@ -269,6 +286,7 @@ func Load(explicit string) (*Config, error) {
 func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 	cfg := &Config{MaxRows: defaultMaxRows,
 		MaxDisplayRows: defaultMaxDisplayRows, AIContextRows: DefaultAIContextRows,
+		ResultTabs:      DefaultResultTabs,
 		ConnIdleTimeout: DefaultConnIdleTimeout, ConnectTimeout: DefaultConnectTimeout, PlanTheme: "dark"}
 
 	path := explicit
@@ -304,6 +322,7 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 	if cfg.MaxDisplayRows < 0 {
 		cfg.MaxDisplayRows = defaultMaxDisplayRows
 	}
+	cfg.checkResultTabs()
 	cfg.checkDuration("conn_idle_timeout", &cfg.ConnIdleTimeout, DefaultConnIdleTimeout)
 	cfg.checkDuration("connect_timeout", &cfg.ConnectTimeout, DefaultConnectTimeout)
 	cfg.checkPlanTheme()
@@ -392,6 +411,32 @@ func (c *Config) checkPlanTheme() {
 			"plan_theme = %q is not a theme (use \"light\" or \"dark\"); using dark", c.PlanTheme))
 		c.PlanTheme = "dark"
 	}
+}
+
+// checkResultTabs keeps result_tabs within 1…MaxResultTabs, saying so when
+// it had to: a set of no tabs could hold no result at all, and one past the
+// ceiling is more likely a typo than a wish.
+func (c *Config) checkResultTabs() {
+	switch {
+	case c.ResultTabs < 1:
+		c.Warnings = append(c.Warnings, fmt.Sprintf(
+			"result_tabs = %d is too few (at least 1); using %d", c.ResultTabs, DefaultResultTabs))
+		c.ResultTabs = DefaultResultTabs
+	case c.ResultTabs > MaxResultTabs:
+		c.Warnings = append(c.Warnings, fmt.Sprintf(
+			"result_tabs = %d is more than %d; using %d", c.ResultTabs, MaxResultTabs, MaxResultTabs))
+		c.ResultTabs = MaxResultTabs
+	}
+}
+
+// ResultTabLimit is how many tabs one connection's result set may hold:
+// ResultTabs, or DefaultResultTabs for a Config that never went through
+// Load (a test's, an ad-hoc one) and so left it zero.
+func (c *Config) ResultTabLimit() int {
+	if c == nil || c.ResultTabs < 1 {
+		return DefaultResultTabs
+	}
+	return min(c.ResultTabs, MaxResultTabs)
 }
 
 // demoFallback fills cfg with the built-in demo connections, used when there

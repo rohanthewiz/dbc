@@ -52,7 +52,12 @@ type Model struct {
 	editor *editor
 	grid   *grid
 	planv  *planView // the results pane's Plan tab
+	// logp is the log on screen: the shown connection's, one of logs
+	// (logs.go), keyed by connection ("" for none: the holding log);
+	// logFor is whose it is. syncLog keeps logp in step with the tab.
 	logp   *logPane
+	logs   map[string]*logPane
+	logFor string
 	conns  *list
 	tables *list
 	chat   *chatPane
@@ -88,6 +93,18 @@ type Model struct {
 
 	resTab  resultsTab // which tab the results pane shows: the grid or the plan
 	resZoom bool       // the results pane has the whole centre column (z)
+
+	// The results pane per connection (resulttabs.go). planFor is the
+	// connection m.planv and m.resTab belong to; plans parks the other
+	// connections' plan views. gridConn and gridFor are the connection
+	// and result-tab ID m.grid shows (gridFor 0: no tab), and rgrids parks
+	// the grids of the other result tabs, by connection then ID. All four
+	// are the query tab's, swapped with it in park / load.
+	planFor  string
+	plans    map[string]connPane
+	gridConn string
+	gridFor  int
+	rgrids   map[string]map[int]*grid
 
 	// sizes the user can change by dragging a pane border
 	sideW  int
@@ -183,7 +200,6 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Model {
 		editor: newEditor(false),
 		grid:   newGrid(),
 		planv:  newPlanView(),
-		logp:   newLogPane(),
 		conns:  newList(),
 		tables: newList(),
 		sideW:  26,
@@ -264,7 +280,7 @@ func (m *Model) startupLog() {
 		m.logf(logInfo, "loaded config from %s", m.cfg.Path)
 	}
 	m.log(logMuted, "keys: ^R run · ^⇧R/⌥R run all · ^X explain · ⌥X explain analyze · ^K stop · ^A assistant · ^E export · ^P history · ^O scripts · "+
-		"^Space suggest · F12/⇧F12/F2 definition/uses/rename · ⌥T/⌥W/⌥1…9 tabs · ⌥N/⌥C new/next console · ^T tables · ^L conns · ^B sidebar · F1 keys · x disconnect · a/e add/edit connection · d/s database/schema · Tab focus · y/Y/c copy · t transpose · Enter inspect · -/+ hide/show column · ^Q quit")
+		"^Space suggest · F12/⇧F12/F2 definition/uses/rename · ⌥T/⌥W/⌥1…9 tabs · ⌥N/⌥C new/next console · ^T tables · ^L conns · ^B sidebar · F1 keys · x disconnect · a/e add/edit connection · d/s database/schema · Tab focus · y/Y/c copy · t transpose · Enter inspect · -/+ hide/show column · { } P S x result tabs · ^Q quit")
 	m.log(logMuted, "mouse: click to focus · drag to select · right-click for menus · "+
 		"drag borders to resize · hold Shift (⌥ on macOS) to select terminal text")
 	for _, w := range m.cfg.Warnings {
@@ -397,10 +413,14 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 	case *workspace.ExplainDone:
 		return m.explainDone(msg)
 	case *workspace.ScriptShow:
-		m.showResult(msg.Result)
+		// already in the result set of the connection the script started
+		// on; drawn only while that is the one on screen
+		if msg.Conn == m.ws.Active() {
+			m.showResult(msg.Result)
+		}
 		return nil
 	case *workspace.ScriptPrint:
-		m.log(logInfo, msg.Text)
+		m.logTo(msg.Conn, logInfo, msg.Text)
 		return nil
 	case complLoadedMsg:
 		return m.complLoaded(msg)
@@ -604,7 +624,7 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		}
 		return m.listKey(m.tables, k, m.tablePicked)
 	case focusLog:
-		m.logp.key(k)
+		return m.logKeyPress(k)
 	case focusChat:
 		return m.chatKey(k)
 	}
@@ -647,6 +667,9 @@ func (m *Model) gridKey(k tea.KeyPressMsg) tea.Cmd {
 		return m.stepScriptResult(-1)
 	case "]":
 		return m.stepScriptResult(1)
+	case "{", "}", "P", "S", "s", "x":
+		cmd, _ := m.resultTabKey(k)
+		return cmd
 	case "p":
 		if m.planv.plan == nil {
 			m.log(logWarn, "no plan yet — Ctrl+X explains the statement under the caret")
@@ -770,10 +793,13 @@ func (m *Model) quitCmd() tea.Cmd {
 // always drawn in front of it.
 func (m *Model) setStatus(text string) { m.status = text }
 
-// log appends a line to the log pane.
-func (m *Model) log(kind logKind, text string) { m.logp.add(kind, text) }
+// log appends a line to the log of the connection on screen (logs.go).
+func (m *Model) log(kind logKind, text string) {
+	m.syncLog()
+	m.logp.add(kind, text)
+}
 
 // logf is log with formatting.
 func (m *Model) logf(kind logKind, format string, args ...any) {
-	m.logp.add(kind, fmt.Sprintf(format, args...))
+	m.log(kind, fmt.Sprintf(format, args...))
 }

@@ -310,3 +310,36 @@ func TestScriptQuestion(t *testing.T) {
 		t.Errorf("the API went with SQL:\n%s", p.Text)
 	}
 }
+
+// A result the user shared on purpose is framed as one — which, and from
+// which statement — goes even beside the query's own error, and is named
+// in the note; the data rule still decides its rows.
+func TestSharedResult(t *testing.T) {
+	cols, rows := result(25)
+	p := Build("compare", Context{Conn: "dev", Query: "SELEC 1", Err: "syntax error",
+		Columns: cols, Rows: rows, SendRows: true, MaxRows: 10,
+		Shared: true, SharedLabel: "result 2", SharedFrom: "SELECT * FROM cats"}, false)
+	if !strings.Contains(p.Text, "The user shared a result with you (result 2), from a different statement:\n```sql\nSELECT * FROM cats\n```") {
+		t.Errorf("framing:\n%s", p.Text)
+	}
+	if got := strings.Count(p.Text, "| cat |"); got != 10 {
+		t.Errorf("sent %d rows beside the error, want 10", got)
+	}
+	if p.Note != "sent: query, error, shared result 2: 10 of 25 rows" {
+		t.Errorf("note = %q", p.Note)
+	}
+
+	// the query's own result, shared: no "different statement"
+	p = Build("q", Context{Conn: "dev", Query: "SELECT 1", Columns: cols, Rows: rows[:2], SendRows: true, MaxRows: 10,
+		Shared: true, SharedLabel: "result 1"}, false)
+	if !strings.Contains(p.Text, "The user shared a result with you (result 1).\nIts complete result (2 rows)") {
+		t.Errorf("own result:\n%s", p.Text)
+	}
+
+	// ai_rows turned off after sharing: names only, and the note says why
+	p = Build("q", Context{Conn: "prod", Columns: cols, Rows: rows, MaxRows: 10,
+		Shared: true, SharedLabel: "result 3"}, false)
+	if strings.Contains(p.Text, "| cat |") || p.Note != `sent: shared result 3: column names · rows not sent — set ai_rows = true on connection "prod" to include them` {
+		t.Errorf("withheld: note %q\n%s", p.Note, p.Text)
+	}
+}

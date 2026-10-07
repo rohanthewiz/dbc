@@ -205,10 +205,13 @@ type wsState struct {
 	HasPlan    bool     `json:"hasPlan"`  // the Plan tab has something to show
 	Stateful   bool     `json:"stateful"` // the "session state" badge; see runEvent
 	Warnings   []string `json:"warnings,omitempty"`
-	// Sets: the last script run's shown results, when it showed more than
-	// one, for the results bar's switcher (see resultSets)
+	// Sets: the shown results of the script whose output is on screen,
+	// when it showed more than one, for the results bar's switcher (see
+	// resultSets)
 	Sets *resultSets `json:"sets,omitempty"`
 	sideState
+	// the active connection's result tabs (resulttabs.go)
+	resultTabsState
 }
 
 func (s *Server) state(t *tab) wsState {
@@ -216,7 +219,7 @@ func (s *Server) state(t *tab) wsState {
 		ID: t.id, Win: t.win.id, Active: t.ws.Active(), Connected: t.ws.Catalog() != nil,
 		Busy: t.ws.Busy(), Status: t.ws.RunningStatus(),
 		HasResult: t.ws.LastResult() != nil, HasPlan: t.planState().plan != nil,
-		Sets: scriptSets(t.ws), sideState: s.sidebar(t.ws),
+		Sets: scriptSets(t.ws), sideState: s.sidebar(t.ws), resultTabsState: resultTabsOf(t.ws),
 	}
 	if name, ok := t.ws.Connecting(); ok {
 		st.Connecting = name
@@ -358,11 +361,17 @@ func (s *Server) handleConnect(ctx rweb.Context) error {
 	if st.Job == nil {
 		// already on it, catalog loaded: nothing to do, but the page may
 		// be reattaching and want its sidebar — send the state it has
-		t.send("conn", connEvent{Active: t.ws.Active(), sideState: s.sidebar(t.ws)})
+		t.send("conn", s.connEventOf(t, false, false, ""))
 		return ok(ctx, map[string]any{"connecting": false})
 	}
 	t.send("connecting", map[string]string{"name": req.Name})
 	s.hub.announceInUse()
+	// "connecting to lite…" is about neither connection's results: it goes
+	// to whichever log the tab shows now (no conn stamped), as the TUI's
+	// does — not to the active one's, which for a workspace that never
+	// connected is the config's default rather than anything on screen
+	t.notesOn("", st.Notes)
+	st.Notes = nil
 	s.launch(t, st)
 	return ok(ctx, map[string]any{"connecting": true})
 }
@@ -392,8 +401,11 @@ func (s *Server) handleDisconnect(ctx rweb.Context) error {
 	if err != nil {
 		return fail(ctx, err)
 	}
+	// the "conn" first: the page then shows the no-connection log, and
+	// "disconnected from pg" lands in it, where it is seen — sent before,
+	// it would go to pg's log just as that one left the screen
+	t.send("conn", s.connEventOf(t, true, false, "disconnected"))
 	t.notes(st.Notes)
-	t.send("conn", connEvent{Active: "", Changed: true, Status: "disconnected", sideState: s.sidebar(t.ws)})
 	s.hub.announceInUse()
 	go func() {
 		s.deliver(t, st.Job())

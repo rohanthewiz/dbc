@@ -106,6 +106,18 @@ type Context struct {
 	SortedBy string
 	SortDesc bool
 
+	// Shared marks a result the user SHARED with the assistant on purpose —
+	// a result tab picked with "Share with the assistant" — rather than the
+	// one that rides along because it is Query's own last run. A shared
+	// result is framed as such, goes even beside an error (Err is then the
+	// query's, the result is another run's), and is named in the note.
+	// SharedLabel names it as the UI does ("result 2"); SharedFrom is the
+	// statement it is the result of, when that is not Query ("" when it is,
+	// or for a script's shown result, whose statement is not known).
+	Shared      bool
+	SharedLabel string
+	SharedFrom  string
+
 	// SendRows is the connection's ai_rows opt-in; MaxRows is ai_context_rows.
 	SendRows bool
 	MaxRows  int
@@ -230,9 +242,16 @@ func Build(question string, ctx Context, first bool) Prompt {
 	}
 
 	withheld := ""
-	if ctx.Columns != nil && ctx.Err == "" {
+	// An error replaces the query's own result (a failed run has none worth
+	// reading); a result the user shared is another run's, and goes beside it.
+	if ctx.Columns != nil && (ctx.Err == "" || ctx.Shared) {
 		n := rowsToSend(ctx)
 		shown, hidden := splitHidden(ctx)
+		lead := "" // the note's prefix for this result: "shared result 2: "
+		if ctx.Shared {
+			sb.WriteString(sharedText(ctx))
+			lead = "shared " + pick(ctx.SharedLabel != "", ctx.SharedLabel, "result") + ": "
+		}
 		switch {
 		case n > 0:
 			picked := pickRows(ctx, n)
@@ -259,7 +278,7 @@ func Build(question string, ctx Context, first bool) Prompt {
 			if len(how) > 0 {
 				rows += " (" + strings.Join(how, ", ") + ")"
 			}
-			sent = append(sent, rows)
+			sent = append(sent, lead+rows)
 		default:
 			// Column names are schema, not contents, so they go even when
 			// rows do not: "why is price a string?" needs them. No values
@@ -270,7 +289,7 @@ func Build(question string, ctx Context, first bool) Prompt {
 			fmt.Fprintf(&sb, "Its result has the columns: %s (%s rows; the values are not shared).\n\n",
 				strings.Join(names(ctx.Columns, shown), ", "), totalRows(ctx))
 			sb.WriteString(hiddenText(ctx.Columns, hidden))
-			sent = append(sent, "column names")
+			sent = append(sent, lead+"column names")
 			if !ctx.SendRows && len(ctx.Rows) > 0 {
 				withheld = fmt.Sprintf("rows not sent — set ai_rows = true on connection %q to include them",
 					ctx.Conn)
@@ -289,6 +308,17 @@ func Build(question string, ctx Context, first bool) Prompt {
 		note += " · " + withheld
 	}
 	return Prompt{Text: sb.String(), Note: note}
+}
+
+// sharedText introduces a result the user shared: which one, and the
+// statement it came from when that is not the SQL in question — so the
+// model reads "Its result" below as that statement's, not Query's.
+func sharedText(ctx Context) string {
+	label := pick(ctx.SharedLabel != "", " ("+ctx.SharedLabel+")", "")
+	if from := strings.TrimSpace(ctx.SharedFrom); from != "" {
+		return fmt.Sprintf("The user shared a result with you%s, from a different statement:\n```sql\n%s\n```\n", label, from)
+	}
+	return fmt.Sprintf("The user shared a result with you%s.\n", label)
 }
 
 // rowsToSend is how many rows the data rule allows for this context.

@@ -423,8 +423,12 @@
   // script: in a script tab the editor holds Go, and the server must read it
   // as the script it is (workspace.ScriptChatContext), not pick a SQL
   // statement out of it — the chip then says "script", not "query".
+  // shared: the view kept for the result tab shared with the assistant,
+  // when it is not the one on screen (app.js sharedView) — its hidden
+  // columns stay hidden from the model, as the grid's do.
   const request = (question) => ({
     question, attach: els.attach.checked, editor: dbc.cmd.editorState(), view: gridView(),
+    shared: dbc.cmd.sharedView ? dbc.cmd.sharedView() : null,
     script: inScriptTab() ? state.tab.script : "",
   });
 
@@ -441,9 +445,11 @@
       await api("POST", dbc.wsPath("/chat/ask"), request(q));
     } catch (e) {
       if (e.status === 409 && /ask again/.test(e.message)) {
-        // the grid was drawn from a result a rerun replaced: catch up and
-        // ask once more, with the view of the result that is there now
+        // the grid was drawn from a result a rerun replaced (or the strip
+        // from a set that moved on): catch up and ask once more, with the
+        // views of the results that are there now
         await dbc.grid.load();
+        if (dbc.cmd.syncResultTabs) await dbc.cmd.syncResultTabs();
         try {
           await api("POST", dbc.wsPath("/chat/ask"), request(q));
           return;

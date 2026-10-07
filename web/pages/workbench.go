@@ -36,10 +36,11 @@ type Workbench struct {
 //	├ sidebar ──────┬ [Query 1][Query 2 ●][+]   query tabs ────────────────┬┬ assistant (Ctrl+I) ──────┤
 //	│               ├ editor (textarea, upgraded to Monaco) ────────────────┤│                          │
 //	│ Connections   ├ ═ splitter (drag; the height is saved) ═══════════════┤│ ✦ Copilot · model ▾  ⟲ ✕ │
-//	│ Tables        │ results bar: [Results][◈ Plan] · 8 rows ⇄ ⧉ Copy ⤓ Export ││ transcript               │
+//	│ Tables        │ results bar: [Results][◈ Plan] [1 cats][2 ⚑ owners] · 8 rows ⇄ ⧉ ⤓ ││ transcript │
 //	│               │ the grid (virtualized) — or the plan view             ││ [✓] with: query, …       │
 //	│               ├ ═ log-split (drag; the log's height is saved) ═════════┤│                          │
-//	│               │ log                                                   ││ composer          ⏎ send │
+//	│               │ Log · conn                         ⧉ Copy  ✕ Clear    ││                          │
+//	│               │ log lines (the tab's connection's)                    ││ composer          ⏎ send │
 //	└ status bar ──────────────────────────────────────────────── keys · ⌨ keys ┴──────────────────────────┘
 //
 // The assistant pane is hidden until opened; ║ on its left edge drags its
@@ -98,6 +99,11 @@ func (p Workbench) Render() string {
 								b.ButtonClass("rtab", "id", "plan-tab", "type", "button", "role", "tab", "data-rtab", "plan", "hidden", "hidden",
 									"title", "The last plan (p from the grid)").T("◈ Plan"),
 							),
+							// the result tabs of the query tab's connection: a run
+							// replaces the one on screen unless it is pinned (app.js
+							// drawResultTabs, web/resulttabs.go)
+							b.DivClass("rstrip", "id", "rstrip", "hidden", "hidden", "role", "tablist",
+								"aria-label", "Result tabs — { } switch, P pins, x closes").R(),
 							// a script run's results, when it showed more than one:
 							// "Result 1 · 2 · 3" (app.js drawSets)
 							b.SpanClass("rsets", "id", "rsets", "hidden", "hidden", "role", "group", "aria-label", "The script's results").R(),
@@ -126,7 +132,20 @@ func (p Workbench) Render() string {
 					// sizes the log (its height is saved as "logHeight")
 					b.DivClass("splitter", "id", "log-split", "role", "separator",
 						"aria-orientation", "horizontal", "title", "Drag to resize the log (double-click to reset)").R(),
-					b.SectionClass("log", "id", "log", "aria-label", "Log").R(),
+					// a log per connection (core.js dbc.log): the header names
+					// the one shown — the query tab's connection's — and copies
+					// or clears it; #log holds its lines
+					b.SectionClass("logbox", "id", "logbox", "aria-label", "Log").R(
+						b.DivClass("loghead").R(
+							b.SpanClass("logtitle").T("Log"),
+							b.SpanClass("logconn", "id", "log-conn").R(),
+							b.ButtonClass("logbtn", "id", "log-copy", "type", "button",
+								"title", "Copy this connection's log").T("⧉ Copy"),
+							b.ButtonClass("logbtn", "id", "log-clear", "type", "button",
+								"title", "Clear this connection's log").T("✕ Clear"),
+						),
+						b.DivClass("log", "id", "log", "role", "log").R(),
+					),
 				),
 				p.chat(b),
 				b.FooterClass("statusbar").R(

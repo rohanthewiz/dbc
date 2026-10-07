@@ -212,6 +212,7 @@ func newPGCopy(ctx context.Context, c Conn, table string, cols []string, setup [
 		return nil, serr.Wrap(err, "op", "begin")
 	}
 	for _, s := range setup {
+		c.trace(s)
 		if _, err = conn.ExecContext(ctx, s); err != nil {
 			endTx(conn, "ROLLBACK")
 			return nil, serr.Wrap(err, "op", "setup", "stmt", clip(s))
@@ -409,6 +410,7 @@ func newInserter(ctx context.Context, c Conn, table string, cols []string, setup
 		return nil, serr.Wrap(err, "op", "begin")
 	}
 	for _, s := range setup {
+		c.trace(s)
 		if _, err = tx.ExecContext(ctx, s); err != nil {
 			_ = tx.Rollback()
 			return nil, serr.Wrap(err, "op", "setup", "stmt", clip(s))

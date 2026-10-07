@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-151
+**Next ID:** N-152
 
 ## Open
 
@@ -230,6 +230,12 @@ ten session docs in `ai_docs/claude_sessions/`
   run whose statements include a DDL verb, or a script. Other query tabs on
   the same connection keep their stale list either way, as they do for row
   counts until their own recount.
+  Updated `2026-1007-1423-script-ddl-log`: a script now reports each DDL
+  statement as it runs (`sdb.S.logDDL`, classified by `sqlsplit.IsDDL`), so
+  "or a script" can narrow to a script that ran DDL. `IsDDL` counts
+  TRUNCATE/GRANT/REVOKE but not ATTACH/DETACH; `workspace.ddlVerbs` is the
+  reverse. They answer different questions (DDL vs catalog-changing), so
+  check which this needs before sharing one.
 
 - **N-150** · raised `2026-1007-1347-connection-refresh` · value low
   Refresh has not been tried against a real Postgres. Keeping the listed
@@ -238,6 +244,15 @@ ten session docs in `ai_docs/claude_sessions/`
   and e2e tests). Add a step to `TestLiveWorkspacePickSchema`: pick a
   schema, create a table in it through the pool, Refresh, and check that
   the schema stays picked and the table is listed.
+
+- **N-151** · raised `2026-1007-1423-script-ddl-log` · value low
+  `dbc copy` does not log its DDL. It runs through `sdb.S` like a script, but
+  only `script.run` turns the DDL log on (`LogDDL`), so on a terminal a
+  `--create` or `--truncate` copy shows no `DDL dst: CREATE TABLE …` line
+  before its progress. It would be one `LogDDL()` call in `runCopy`, which
+  prints to stderr only when stderr is a terminal. `TestRunCopy` asserts that
+  output is empty for a `Create` copy, so that assertion would need to
+  change. Left out because the ask named scripts.
 
 ## Roadmap
 

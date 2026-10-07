@@ -232,6 +232,35 @@ func TestFirstKeyword(t *testing.T) {
 	}
 }
 
+// IsDDL goes by the leading keyword, past comments, and only by it: a DDL
+// word later in a statement (a column named "drop", a DELETE's text) does
+// not count, nor does DDL a DO block hides.
+func TestIsDDL(t *testing.T) {
+	cases := map[string]bool{
+		"CREATE TABLE t (id int)":                     true,
+		"create or replace view v as select 1":        true,
+		"-- why\n/* how */ ALTER TABLE t ADD c int":   true,
+		"DROP INDEX IF EXISTS i":                      true,
+		"TRUNCATE TABLE t":                            true,
+		"RENAME TABLE a TO b":                         true,
+		"COMMENT ON TABLE t IS 'x'":                   true,
+		"GRANT SELECT ON t TO r":                      true,
+		"revoke all on t from r":                      true,
+		"SELECT drop FROM t":                          false,
+		"DELETE FROM t WHERE note = 'CREATE TABLE x'": false,
+		"INSERT INTO t VALUES (1)":                    false,
+		"WITH x AS (SELECT 1) SELECT * FROM x":        false,
+		"DO $$ BEGIN CREATE TABLE t (id int); END $$": false,
+		"":                  false,
+		"-- CREATE TABLE t": false,
+	}
+	for in, want := range cases {
+		if got := IsDDL(in); got != want {
+			t.Errorf("IsDDL(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestVerbs(t *testing.T) {
 	cases := []struct {
 		in   string

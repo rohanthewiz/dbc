@@ -112,8 +112,16 @@ func Run(s *sdb.S) error {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(printed, "|"); got != "  a → b: 4 rows|rows=6 skipped=2|breeds=4" {
-		t.Errorf("printed %q", got)
+	// The DDL log: Copy's Create and the Writer's Setup, each before the
+	// rows it readies. The dangling Writer's Truncate is a DELETE on SQLite
+	// (data, not DDL), so it adds no line. The CREATE's column list is
+	// createDDL's business, so only its head is checked.
+	if len(printed) != 5 || !strings.HasPrefix(printed[0], `DDL b: CREATE TABLE IF NOT EXISTS "cats" (`) {
+		t.Fatalf("printed %q", printed)
+	}
+	wantLog := "  a → b: 4 rows|rows=6 skipped=2|DDL b: CREATE TABLE breeds (id INTEGER PRIMARY KEY, breed TEXT)|breeds=4"
+	if got := strings.Join(printed[1:], "|"); got != wantLog {
+		t.Errorf("printed %q, want %q after the Copy's CREATE", got, wantLog)
 	}
 	if got := query(t, mgr, "b", "SELECT name FROM cats ORDER BY id"); len(got) != 6 || got[0][0] != "WHISKERS" {
 		t.Errorf("b.cats = %v", got)
@@ -122,6 +130,63 @@ func Run(s *sdb.S) error {
 	want := "[[3 maine coon] [5 bengal] [6 siamese] [8 maine coon]]"
 	if s := fmtRows(got); s != want {
 		t.Errorf("b.breeds = %s, want %s (the dangling truncate must have rolled back)", s, want)
+	}
+}
+
+// Every DDL statement a script runs through Query or Exec is logged before
+// it runs, and only DDL: a SELECT or INSERT adds no line, a CREATE behind a
+// comment or after an INSERT in one Exec does, and a DROP that fails gets a
+// "failed" line even though the script carries on past the error.
+func TestScriptLogsDDL(t *testing.T) {
+	mgr, printed, err := runScript(t, `package main
+
+import "github.com/rohanthewiz/dbc/sdb"
+
+func Run(s *sdb.S) error {
+	if _, err := s.Exec("a", "-- scratch\nCREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)"); err != nil {
+		return err
+	}
+	if _, err := s.Query("a", "SELECT count(*) FROM cats"); err != nil {
+		return err
+	}
+	if _, err := s.Exec("a", "INSERT INTO notes VALUES (1, 'x'); ALTER TABLE notes ADD COLUMN at TEXT"); err != nil {
+		return err
+	}
+	if _, err := s.Exec("a", "DROP TABLE nope"); err == nil {
+		s.Print("dropped a table that does not exist")
+	}
+	s.Print("done")
+	return nil
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"DDL a: -- scratch\nCREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)",
+		"DDL a: ALTER TABLE notes ADD COLUMN at TEXT",
+		"DDL a: DROP TABLE nope",
+	}
+	if len(printed) != 5 || strings.Join(printed[:3], "|") != strings.Join(want, "|") {
+		t.Fatalf("printed %q, want %q then a failed line and done", printed, want)
+	}
+	if !strings.HasPrefix(printed[3], "DDL a failed: ") || !strings.Contains(printed[3], "nope") || printed[4] != "done" {
+		t.Errorf("after the DROP: %q", printed[3:])
+	}
+	// both halves of the two-statement Exec ran
+	if got := query(t, mgr, "a", "SELECT id, body, at FROM notes"); fmtRows(got) != "[[1 x NULL]]" {
+		t.Errorf("notes = %v", got)
+	}
+
+	// The log belongs to running a script: a session a host drives itself,
+	// as dbc copy does, has it off.
+	var direct []string
+	s := sdb.New(mgr, nil, func(line string) { direct = append(direct, line) })
+	if _, err = s.Exec("a", "CREATE TABLE quiet (id INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	if len(direct) != 0 {
+		t.Errorf("a session outside script.Run logged %q", direct)
 	}
 }
 

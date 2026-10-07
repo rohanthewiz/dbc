@@ -18,6 +18,7 @@ import (
 	"github.com/rohanthewiz/dbc/explain"
 	"github.com/rohanthewiz/dbc/export"
 	"github.com/rohanthewiz/dbc/model"
+	"github.com/rohanthewiz/dbc/sqlsplit"
 	"github.com/rohanthewiz/serr"
 )
 
@@ -40,6 +41,10 @@ type S struct {
 	ctx   context.Context
 	// open tracks the run's Readers and Writers for Release (etl.go).
 	open openSet
+	// ddl is the DDL log switch (LogDDL). It is set by the host before Run
+	// is called and never cleared, so it needs no lock: a script's own
+	// goroutines all start after the write.
+	ddl bool
 }
 
 // New builds a script session. show receives results pushed via Show;
@@ -58,6 +63,53 @@ func (s *S) WithContext(ctx context.Context) *S {
 		s.ctx = ctx
 	}
 	return s
+}
+
+// LogDDL turns on the DDL log for the rest of the session: every data
+// definition statement it runs (sqlsplit.IsDDL: CREATE, ALTER, DROP,
+// TRUNCATE, RENAME, COMMENT, GRANT, REVOKE) is written to the script output,
+// as Print does, the moment before it runs:
+//
+//	DDL warehouse: CREATE INDEX orders_user_idx ON orders (user_id)
+//
+// That covers a script's Query and Exec and what Copy and Writer run to
+// ready a destination (a Create's CREATE TABLE, Truncate, a Writer's
+// Setup). Statements a script runs through DB's raw handle are out of its
+// sight.
+//
+// Logging before the statement, as Postgres's log_statement = 'ddl' does,
+// rather than after it, puts a long CREATE INDEX or an ALTER stuck behind a
+// lock in the log while it is still running. A Query or Exec that then
+// fails adds a "DDL <conn> failed" line, since a script may carry on past
+// the error; a failed Copy or Writer stops with an error naming the
+// statement anyway.
+//
+// script.Run turns this on for every script, whichever UI runs it. The
+// session's other host, dbc copy, leaves it off. There is deliberately no
+// way to turn it off again, so a script cannot opt out of its own log.
+func (s *S) LogDDL() *S {
+	s.ddl = true
+	return s
+}
+
+// logDDL writes the DDL log line for each DDL statement in stmt when the
+// log is on (LogDDL), and reports whether it wrote any. stmt is split
+// first: one Exec can carry several statements (a script's migration
+// pasted in whole), and a CREATE after an INSERT is still a CREATE. Each
+// line is the statement as written, only trimmed — a multi-line CREATE
+// TABLE keeps its shape, and both UIs' logs draw that as one entry.
+func (s *S) logDDL(conn, stmt string) bool {
+	if !s.ddl {
+		return false
+	}
+	logged := false
+	for _, st := range sqlsplit.Split(stmt) {
+		if sqlsplit.IsDDL(st.Text) {
+			s.Print("DDL %s: %s", conn, st.Text)
+			logged = true
+		}
+	}
+	return logged
 }
 
 // Ctx returns the session's context. Long-running scripts can select on
@@ -121,10 +173,20 @@ func (s *S) Exec(conn, stmt string, args ...any) (int64, error) {
 // script output rather than back to the script so that Query's signature
 // stays as scripts know it, and so they read in the log next to the
 // script's own Print lines, in the order things happened.
+//
+// DDL is logged around the statement (LogDDL):
+//
+//	DDL a: DROP TABLE staging          before it runs
+//	NOTICE: …                          what the server said while it ran
+//	DDL a failed: no such table: …     only when it failed
 func (s *S) run(conn, stmt string, args ...any) (*Result, error) {
+	ddl := s.logDDL(conn, stmt)
 	r, notices, err := s.mgr.RunNotices(s.Ctx(), conn, stmt, args...)
 	for _, n := range notices {
 		s.Print("%s", n.String())
+	}
+	if err != nil && ddl {
+		s.Print("DDL %s failed: %v", conn, err)
 	}
 	return r, err
 }

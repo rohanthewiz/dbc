@@ -77,6 +77,21 @@ type Conn struct {
 	Name   string
 	DB     *sql.DB
 	Engine Engine
+	// Trace, when set, is handed each statement a transfer runs to ready
+	// this end for the rows — Copy's CREATE TABLE, a Writer's Setup, its
+	// TRUNCATE or the DELETE standing in for one — just before it runs.
+	// The rows' own traffic (the SELECT, the COPY, the INSERT batches) is
+	// not: it changes no structure, and would be a call per batch. dbc's
+	// scripts log the DDL among these (sdb.S.LogDDL), which is why the
+	// statements are handed over as written rather than summarized.
+	Trace func(stmt string)
+}
+
+// trace hands stmt to c.Trace, when there is one.
+func (c Conn) trace(stmt string) {
+	if c.Trace != nil {
+		c.Trace(stmt)
+	}
 }
 
 // QuoteIdent quotes one identifier for the engine, doubling any embedded

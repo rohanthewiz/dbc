@@ -81,6 +81,16 @@ dbc runs it regardless. Connection names come from config /
 `sdb.Result`: `Columns []string`, `Rows [][]string`, `Raw [][]any`,
 `Duration`, `Affected`.
 
+Every DDL statement a script runs is logged with the `Print` lines, just
+before it runs: `DDL <conn>: <statement as written>`. A failed `Query` or
+`Exec` adds `DDL <conn> failed: <err>`. DDL here means a statement starting
+with CREATE, ALTER, DROP, TRUNCATE, RENAME, COMMENT, GRANT or REVOKE
+(`sqlsplit.IsDDL`). The log covers `Query`/`Exec` (each statement of a
+multi-statement one) and the CREATE TABLE, TRUNCATE and Setup that
+`Copy`/`Writer` run. Statements run through `s.DB` are not logged, and
+`dbc copy` logs nothing. A script cannot turn the log off, so when you
+check a script's output, expect these lines among its own.
+
 ## ETL
 
 | Method | Purpose |

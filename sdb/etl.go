@@ -54,6 +54,8 @@ type openSet struct {
 
 // etlConn resolves a connection name to the etl package's view of it: the
 // pool, opened on first use under the run's context, and its SQL dialect.
+// Its Trace feeds the DDL log (LogDDL), so the CREATE TABLE a Copy makes or
+// a Writer's Setup runs is logged as a script's own Exec of it would be.
 func (s *S) etlConn(name string) (etl.Conn, error) {
 	drv, err := s.mgr.DriverOf(name)
 	if err != nil {
@@ -67,7 +69,8 @@ func (s *S) etlConn(name string) (etl.Conn, error) {
 	if err != nil {
 		return etl.Conn{}, err
 	}
-	return etl.Conn{Name: name, DB: dbh, Engine: e}, nil
+	trace := func(stmt string) { s.logDDL(name, stmt) }
+	return etl.Conn{Name: name, DB: dbh, Engine: e, Trace: trace}, nil
 }
 
 // Copy copies table from connection src into connection dst:

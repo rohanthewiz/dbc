@@ -90,6 +90,10 @@ func run(path string, s *sdb.S, load func(*interp.Interpreter) error) (err error
 		return serr.New("Run has the wrong signature", "script", path,
 			"want", "func Run(s *sdb.S) error", "got", v.Type().String())
 	}
+	// Every script logs its DDL (sdb.S.LogDDL). It is turned on here, the
+	// one path all hosts run a script through — headless, TUI, dbc web —
+	// rather than by each host, so a new host cannot forget it.
+	s.LogDDL()
 	// Registered after the recover above, so it runs first on a panic too:
 	// whatever the script left open is rolled back / closed before the
 	// panic becomes an error.

@@ -1517,6 +1517,35 @@ passes. See [Scripts headless](#scripts-headless).
 `Duration`, and `Affected`. Use the placeholder style of the target driver
 (`$1` postgres/bytdb, `?` mysql/sqlite).
 
+#### The DDL log
+
+Every DDL statement a script runs is logged where `s.Print` lines go (the
+connection's log in the TUI and dbc web; stdout or stderr headless) just
+before it runs, verbatim. That means `CREATE`, `ALTER`, `DROP`, `TRUNCATE`,
+`RENAME`, `COMMENT`, `GRANT` and `REVOKE`. It is always on, and a script
+cannot turn it off:
+
+```
+DDL local: CREATE TABLE IF NOT EXISTS staging (id int PRIMARY KEY, body text)
+DDL local: DROP TABLE nope
+DDL local failed: SQL logic error: no such table: nope (1)
+```
+
+It covers `s.Query` and `s.Exec`, and each statement of a multi-statement
+`Exec`. It also covers what `s.Copy` and `s.Writer` run to prepare a
+destination: a `Create`'s `CREATE TABLE`, a `Truncate`, and a Writer's
+`Setup`. A `Query` or `Exec` that fails adds a `failed` line, because a
+script may carry on past the error. Logging before the statement rather than
+after it means a long `CREATE INDEX`, or an `ALTER` waiting on a lock, shows
+up while it is still running. It has limits:
+
+- It works from each statement's first keyword, so DDL inside a function
+  body or a Postgres `DO` block is not seen.
+- Statements run through the raw `s.DB` handle are not logged.
+- On SQLite and MySQL a `Truncate` runs as a `DELETE`, which is not DDL, so
+  it adds no line.
+- `dbc copy` is not a script and logs nothing.
+
 Sample scripts live in [`scripts/`](scripts/): parameter loops, multi-host
 sweeps, CSV/HTML report generation, and copying tables between connections.
 They are the browser's Examples.

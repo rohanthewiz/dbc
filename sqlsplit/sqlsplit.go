@@ -94,6 +94,34 @@ func FirstKeyword(sql string) string {
 	return wordAt(sql, keywordAt(sql, 0))
 }
 
+// ddlVerbs are the leading keywords of the statements IsDDL counts as data
+// definition: the ones that change what the database holds as structure, or
+// who may use it, rather than the rows in it.
+//
+// The engines do not agree on the edges, so this is their union:
+//
+//	CREATE ALTER DROP RENAME COMMENT   DDL everywhere it exists
+//	TRUNCATE                           DDL to MySQL (it commits implicitly
+//	                                   and cannot be rolled back there);
+//	                                   Postgres logs it as data modification
+//	GRANT REVOKE                       strictly DCL, but Postgres's
+//	                                   log_statement = 'ddl' logs them too
+//
+// A wider net suits the one caller, a log of schema changes: a TRUNCATE or
+// a REVOKE missing from it is worse than one line too many.
+var ddlVerbs = map[string]bool{
+	"create": true, "alter": true, "drop": true, "rename": true, "comment": true,
+	"truncate": true, "grant": true, "revoke": true,
+}
+
+// IsDDL reports whether stmt is a data definition statement, by its leading
+// keyword (ddlVerbs). It is lexical like the rest of the package, so DDL
+// that runs out of sight of the statement's first word — inside a function
+// body, a Postgres DO block, an EXECUTE of a string — is not seen.
+func IsDDL(stmt string) bool {
+	return ddlVerbs[FirstKeyword(stmt)]
+}
+
 // StmtVerbs is the shape of a statement's verbs: what it does at the top
 // level, and — for a WITH — what each of its CTEs does.
 type StmtVerbs struct {

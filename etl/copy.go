@@ -405,8 +405,10 @@ func prepareDest(ctx context.Context, src Conn, table string, dst Conn, dest str
 		return nil, err
 	}
 	if dst.Engine.transactionalDDL() {
+		// traced by the Writer, with the rest of its Setup
 		return []string{ddl}, nil
 	}
+	dst.trace(ddl)
 	if _, err = dst.DB.ExecContext(ctx, ddl); err != nil {
 		return nil, serr.Wrap(err, "conn", dst.Name, "op", "create table", "stmt", clip(ddl))
 	}

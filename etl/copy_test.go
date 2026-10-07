@@ -107,6 +107,33 @@ func TestCopySQLiteToBytdbCreates(t *testing.T) {
 	}
 }
 
+// Trace sees each statement that readies a destination, in the order run,
+// down both of Create's paths: on bytdb, which runs no DDL in a transaction,
+// the CREATE goes on its own before the load; on SQLite it is the first of
+// the Writer's Setup. Truncate follows it on each, as that engine spells it.
+// The source's Trace sees nothing: reading readies nothing.
+func TestCopyTracesSetup(t *testing.T) {
+	ctx := context.Background()
+	for _, e := range []Engine{Bytdb, SQLite} {
+		src, dst := fileConn(t, SQLite, "src.db"), fileConn(t, e, "dst")
+		seedCats(t, src)
+		var srcSaw, dstSaw []string
+		src.Trace = func(stmt string) { srcSaw = append(srcSaw, stmt) }
+		dst.Trace = func(stmt string) { dstSaw = append(dstSaw, stmt) }
+
+		if _, err := Copy(ctx, src, "cats", dst, CopyOptions{Create: true, Truncate: true}); err != nil {
+			t.Fatalf("%s: %v", e, err)
+		}
+		if len(dstSaw) != 2 || !strings.HasPrefix(dstSaw[0], `CREATE TABLE IF NOT EXISTS "cats"`) ||
+			dstSaw[1] != e.truncateStmt("cats") {
+			t.Errorf("%s: dst traced %q, want the CREATE then %q", e, dstSaw, e.truncateStmt("cats"))
+		}
+		if len(srcSaw) != 0 {
+			t.Errorf("%s: src traced %q", e, srcSaw)
+		}
+	}
+}
+
 // N-129: bytdb has no numeric type, so Create used to fail on one ("unknown
 // column type"); and SQLite's "DECIMAL(10,2)" missed the numeric family,
 // landing in a text column that refuses SQLite's int64/float64 values.

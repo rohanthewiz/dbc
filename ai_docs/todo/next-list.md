@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-152
+**Next ID:** N-154
 
 ## Open
 
@@ -92,22 +92,6 @@ ten session docs in `ai_docs/claude_sessions/`
   filter line over the list, as the pickers' `pickModal` filters. Offered
   at the end of the session; the user did not answer.
 
-- **N-144** · raised `2026-1007-1156-pg-copy-hardening` · value low
-  A Postgres `Query` that is a `DELETE … RETURNING` (a "move rows" copy)
-  fails on the direct path with a bare syntax error. `describe` wraps it
-  in `SELECT * FROM (…) LIMIT 0`, which can't hold DML. `COPY (…) TO
-  STDOUT` could, and the row path (Args or a Transform) already runs it,
-  committing the source only when its Reader closes. Either describe DML
-  another way or refuse it up front with a clear message. Query is
-  documented as "any SELECT", so nothing promises it today.
-
-- **N-146** · raised `2026-1007-1245-result-tabs-per-connection` · value low
-  Share more than one result with the assistant. One tab per connection is
-  shared today (`workspace.ShareResultTab` moves the share), which covers
-  "explain this result" but not "why do these two differ?". It would need
-  `ai.Context` to carry several results, each with its own view, and a
-  chip that names them all. Contingent on someone asking to compare.
-
 - **N-147** · raised `2026-1007-1245-result-tabs-per-connection` · value low
   One result tab per statement for a multi-statement run. Run all (or a
   selection of several) still lands only the last statement's result, in
@@ -131,14 +115,22 @@ ten session docs in `ai_docs/claude_sessions/`
   reverse. They answer different questions (DDL vs catalog-changing), so
   check which this needs before sharing one.
 
-- **N-151** · raised `2026-1007-1423-script-ddl-log` · value low
-  `dbc copy` does not log its DDL. It runs through `sdb.S` like a script, but
-  only `script.run` turns the DDL log on (`LogDDL`), so on a terminal a
-  `--create` or `--truncate` copy shows no `DDL dst: CREATE TABLE …` line
-  before its progress. It would be one `LogDDL()` call in `runCopy`, which
-  prints to stderr only when stderr is a terminal. `TestRunCopy` asserts that
-  output is empty for a `Create` copy, so that assertion would need to
-  change. Left out because the ask named scripts.
+- **N-152** · raised `2026-1007-1553-pg-copy-move-rows` · value low
+  A write `Query` from MySQL (MariaDB), SQLite or bytdb commits as it runs,
+  before the load, so a move whose load fails loses its rows there. Only
+  Postgres reads in a transaction (`Read`) that Copy can hold until the load
+  commits. SQLite and bytdb could read in one too; check what a held read
+  transaction costs a file database (a writer locked out for the copy).
+  Contingent on someone moving rows off a non-Postgres source.
+
+- **N-153** · raised `2026-1007-1553-pg-copy-move-rows` · value low
+  A same-database move whose load waits on the source's own uncommitted
+  write now hangs until canceled. Examples: an archive with a foreign key
+  into the table being emptied, or rows moved back into the table they came
+  from. Postgres cannot see the cycle, which runs through this process
+  (as with TRUNCATE in `loadOptions`). Before N-144's fix the same copy
+  committed the source and lost the rows. A `lock_timeout` on the load
+  within one database would turn it into an error.
 
 ## Validate
 
@@ -327,6 +319,22 @@ call.
   them to the driver as they are, which refuses a `[]string` or a map. Do
   the same conversions there, or document the difference.
 
+- **N-146** · raised `2026-1007-1245-result-tabs-per-connection` · value low
+  Share more than one result with the assistant. One tab per connection is
+  shared today (`workspace.ShareResultTab` moves the share), which covers
+  "explain this result" but not "why do these two differ?". It would need
+  `ai.Context` to carry several results, each with its own view, and a
+  chip that names them all. Contingent on someone asking to compare.
+
+- **N-151** · raised `2026-1007-1423-script-ddl-log` · value low
+  `dbc copy` does not log its DDL. It runs through `sdb.S` like a script, but
+  only `script.run` turns the DDL log on (`LogDDL`), so on a terminal a
+  `--create` or `--truncate` copy shows no `DDL dst: CREATE TABLE …` line
+  before its progress. It would be one `LogDDL()` call in `runCopy`, which
+  prints to stderr only when stderr is a terminal. `TestRunCopy` asserts that
+  output is empty for a `Create` copy, so that assertion would need to
+  change. Left out because the ask named scripts.
+
 ## Non-goals
 
 - **N-012** · declined `2026-0728-2000-stmt-under-cursor-and-query-cancel` —
@@ -354,6 +362,15 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-144** · raised `2026-1007-1156-pg-copy-hardening` · value low
+  A Postgres `Query` that is a `DELETE … RETURNING` (a "move rows" copy)
+  fails on the direct path with a bare syntax error. `describe` wraps it
+  in `SELECT * FROM (…) LIMIT 0`, which can't hold DML. `COPY (…) TO
+  STDOUT` could, and the row path (Args or a Transform) already runs it,
+  committing the source only when its Reader closes. Either describe DML
+  another way or refuse it up front with a clear message. Query is
+  documented as "any SELECT", so nothing promises it today.
+  closed 2026-10-07, `2026-1007-1553-pg-copy-move-rows` (from the cats-todo backlog): DML is described another way. `describe` now parses the query and describes it without running it (pgconn `Prepare` on the unnamed statement), so a write with `RETURNING` or a writing `WITH` copies on the direct path. On the way: the row path lost a failed move's rows, because the Reader committed the source at its last row, before the load's commit failed. Both paths now commit the source after the load (`Reader.holdTx`/`rollback`, `copyDirect`'s end). A write without `RETURNING` is refused from its text before it runs, on every engine (`returnsRows`), and `$1` without Args gets a clear refusal on the direct path. Live `TestLivePGMoveRows` and SQLite `TestCopyQueryThatWrites` both fail on the old code; checked with a script through the built binary.
 - **N-140** · raised `2026-1007-1036-trailing-comment-split` · value low
   A comment on its own line between two statements still heads the one
   below it, so a separator such as `---` is inside that statement's gutter

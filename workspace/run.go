@@ -193,6 +193,9 @@ func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 		// nothing. over counts the ones let go here.
 		var rows []landing
 		over := 0
+		// a write gets no tab, so its count is logged instead — in a run
+		// of several statements only; a single one's is in the done note
+		wl := writeLog{on: len(stmts) > 1}
 		for i, stmt := range stmts {
 			w.stepTo(gen, i+1)
 			var notices []db.Notice
@@ -210,6 +213,9 @@ func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 				res = nil
 				break
 			}
+			if res != nil && res.IsExec {
+				notes = append(notes, wl.see(i+1, len(stmts), stmt, res)...)
+			}
 			if res != nil && !res.IsExec {
 				rows = append(rows, landing{title: resultTitle(tag, stmt), stmt: stmt, res: res, n: i + 1})
 				if len(rows) > limit {
@@ -218,6 +224,9 @@ func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 				}
 			}
 		}
+		// the folded writes' line closes the per-statement lines, ahead
+		// of the run's outcome (a failure's error included)
+		notes = append(notes, wl.fold()...)
 		// The notices go in first: landRun appends the closing "completed"
 		// or failure note after them, so the log reads in the order things
 		// happened, the RAISE lines before the run's outcome.
@@ -230,6 +239,72 @@ func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 		Notes: []Note{notef(Info, "running %s on %s — %s", tag, conn, Preview(strings.Join(stmts, "; ")))},
 	}, nil
 }
+
+// writeLines is how many writes of one run get a log line each; the rest
+// are folded into one line (writeLog.fold), so a script of 500 INSERTs
+// adds six lines to the log, not 500.
+const writeLines = 5
+
+// writeLog writes the log lines that give each write of a run of several
+// statements its count. Since a write gets no result tab (results.go), and
+// the done note names the result on screen, a write's "n affected" had no
+// other place: after `SELECT …; UPDATE …` the UPDATE's count was lost.
+//
+// "Write" here is a statement that may change rows or the catalog
+// (db.ChangesRows): a SET or a BEGIN gets no line, and nor does the
+// COMMIT or ROLLBACK that ends a transaction — "0 affected" after either
+// is noise. Statements that return rows get none either: each has its tab.
+// A failed statement gets none: the error says what happened to it.
+//
+//	statement 2/500: 3 affected — UPDATE t SET …
+//	statement 3/500: done — CREATE TABLE u (…)      (DDL: no count worth giving)
+//	…                                                 (writeLines lines in all)
+//	… 495 more writes, to statement 500: 495 affected in all
+//
+// The fold line totals the affected counts; a DDL among them adds nothing
+// to it. It comes once the run is over, so a stopped or failed run still
+// gets it, for the writes that went through.
+type writeLog struct {
+	on       bool  // the run has several statements
+	logged   int   // writes given a line of their own
+	folded   int   // writes past writeLines
+	affected int64 // the folded writes' affected rows, summed
+	last     int   // the last folded write's statement number
+}
+
+// see logs (or folds) statement n of total, which ran with result res.
+func (l *writeLog) see(n, total int, stmt string, res *model.Result) []Note {
+	if !l.on || !db.ChangesRows(stmt) || txnEndVerbs[sqlsplit.FirstKeyword(stmt)] {
+		return nil
+	}
+	if l.logged >= writeLines {
+		l.folded++
+		l.affected += max(res.Affected, 0)
+		l.last = n
+		return nil
+	}
+	l.logged++
+	what := fmt.Sprintf("%d affected", res.Affected)
+	if sqlsplit.ChangesCatalog(stmt) {
+		// a DDL's count means nothing: 0 on most drivers, and on SQLite
+		// the last INSERT's, which sqlite3_changes still holds. A CREATE
+		// TABLE … AS SELECT's rows go unsaid with it.
+		what = "done"
+	}
+	return []Note{notef(Info, "statement %d/%d: %s — %s", n, total, what, Preview(stmt))}
+}
+
+// fold is the line for the writes past writeLines, or none.
+func (l *writeLog) fold() []Note {
+	if l.folded == 0 {
+		return nil
+	}
+	return []Note{notef(Info, "… %s, to statement %d: %d affected in all",
+		plural(l.folded, "more write", "more writes"), l.last, l.affected)}
+}
+
+// txnEndVerbs end a transaction: commitVerbs and the ways to roll back.
+var txnEndVerbs = map[string]bool{"commit": true, "end": true, "rollback": true, "abort": true}
 
 // noticeNotes turns server notices (RAISE NOTICE and its kin) into log
 // lines. A WARNING is shown as one; the chattier severities (NOTICE, INFO,

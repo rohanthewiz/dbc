@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-139
+**Next ID:** N-141
 
 ## Open
 
@@ -148,13 +148,13 @@ ten session docs in `ai_docs/claude_sessions/`
   or result, the sdb API summary); in the TUI scripts go to `$EDITOR`, so
   the assistant sees only a script run's result. After a TUI script run it
   could attach `ScriptChatContext` for that script.
-- **N-138** · raised `2026-1007-0229-next-list-sweep-3` · value low
-  ETL values that MySQL cannot hold: a Postgres `timestamptz 'infinity'`
-  into a DATETIME fails the load (cleanly, it rolls back; pinned in
-  `etl/live_mysql_test.go`), and an unsigned BIGINT above 2^63 would
-  overflow the signed BIGINT a created column gets. Mapping infinity to
-  `9999-12-31` or NULL is a decision about the data, so it is left to a
-  `Where` or a Transform. Neither has been seen in practice.
+
+- **N-140** · raised `2026-1007-1036-trailing-comment-split` · value low
+  A comment on its own line between two statements still heads the one
+  below it, so a separator such as `---` is inside that statement's gutter
+  marker (and its text). The marker could start at the statement's first
+  code line instead, leaving header comments unmarked. Offered at the end
+  of the session; the user did not answer.
 
 ## Roadmap
 
@@ -215,6 +215,14 @@ call.
   two windows grouping at once; fix would be page-side deltas or a
   per-group stamp.
 
+- **N-138** · raised `2026-1007-0229-next-list-sweep-3` · value low
+  ETL values that MySQL cannot hold: a Postgres `timestamptz 'infinity'`
+  into a DATETIME fails the load (cleanly, it rolls back; pinned in
+  `etl/live_mysql_test.go`), and an unsigned BIGINT above 2^63 would
+  overflow the signed BIGINT a created column gets. Mapping infinity to
+  `9999-12-31` or NULL is a decision about the data, so it is left to a
+  `Where` or a Transform. Neither has been seen in practice.
+
 ## Non-goals
 
 - **N-012** · declined `2026-0728-2000-stmt-under-cursor-and-query-cancel` —
@@ -242,6 +250,12 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-139** · raised `2026-1007-1036-trailing-comment-split` · value medium
+  A comment after a statement's semicolon, on the same line, was taken as
+  the next statement's header: the next statement's gutter marker started
+  on that line (the two read as one), and Ctrl+R with the caret in the
+  comment ran the next statement. From the cats-todo backlog.
+  closed 2026-10-07, `2026-1007-1036-trailing-comment-split`: the splitter gives the rest of a semicolon's line, when it holds only blanks and comments, to the statement it ends (`chunk.tail`, `remarkEnd` in `sqlsplit/sqlsplit.go`): the caret there picks that statement and the next one starts on the line below. Code after the semicolon on the same line still starts the next statement there, its comment included. Unit tests in sqlsplit and workspace; checked against a fresh `dbc web`'s `/api/v1/stmt` and a headless run.
 - **N-136** · raised `2026-1006-2224-scripts-tui-browser` · value low
   The TUI keeps only the last of a script's `s.Show`s: each one replaces
   the grid. dbc web keeps the newest 20 (`Workspace.ScriptResults`,

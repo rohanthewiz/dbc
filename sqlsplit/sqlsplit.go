@@ -17,12 +17,26 @@ type Stmt struct {
 	End   int    // byte offset just past Text in the buffer
 
 	spanStart int // start of the whole chunk, leading comments/blanks included
-	spanEnd   int // end of the whole chunk, terminating semicolon included
+	spanEnd   int // end of the whole chunk: its semicolon and that line's trailing remark included
 }
 
 // chunk is a raw semicolon-delimited span, before trimming.
+//
+// end and tail differ only when the semicolon is followed, on its own line,
+// by nothing but blanks and comments ("SELECT 1; -- ran at 15:29"). That rest
+// of the line is the ended statement's remark: end stays just past the
+// semicolon so the statement's text is cut there, while tail runs to the end
+// of the line so a caret in the remark still belongs to this statement — and
+// the next chunk starts after it rather than claiming it as a header.
+//
+//	SELECT 1; -- note⏎---⏎SELECT 2;
+//	└──────┘                          chunk 1's text
+//	└───────┘                         start … end
+//	└───────────────┘                 start … tail (what IndexAt matches on)
+//	                 └────────────┘   chunk 2, from the newline: "---" heads it
 type chunk struct {
 	start, end int
+	tail       int  // end of the span: end, or past a same-line trailing remark
 	hasCode    bool // saw something outside whitespace and comments
 }
 
@@ -48,7 +62,7 @@ func Split(sql string) []Stmt {
 			Start:     c.start + lead,
 			End:       c.start + lead + len(text),
 			spanStart: c.start,
-			spanEnd:   c.end,
+			spanEnd:   c.tail,
 		})
 	}
 	return out
@@ -56,9 +70,11 @@ func Split(sql string) []Stmt {
 
 // IndexAt returns the index in stmts of the statement the cursor sits in,
 // where offset is a byte offset into the same buffer stmts came from. A
-// cursor in the blank space or comments between two statements belongs to the
-// following one; past the last statement it belongs to that last one. It
-// returns -1 when stmts is empty.
+// cursor after a statement's semicolon but still on its line, among nothing
+// but blanks and comments, belongs to that statement; one in the blank space
+// or comments on the lines between two statements belongs to the following
+// one; past the last statement it belongs to that last one. It returns -1
+// when stmts is empty.
 func IndexAt(stmts []Stmt, offset int) int {
 	if len(stmts) == 0 {
 		return -1
@@ -308,8 +324,11 @@ func scan(sql string) []chunk {
 			hasCode = true
 		case c == ';':
 			i++
-			out = append(out, chunk{start: start, end: i, hasCode: hasCode})
-			start, hasCode = i, false
+			tail := remarkEnd(sql, i)
+			out = append(out, chunk{start: start, end: i, tail: tail, hasCode: hasCode})
+			// the remark holds no semicolon that could end a statement (its
+			// comments were skipped whole), so the scan resumes past it
+			start, hasCode, i = tail, false, tail
 		default:
 			if !isSpace(c) {
 				hasCode = true
@@ -318,9 +337,43 @@ func scan(sql string) []chunk {
 		}
 	}
 	if start < len(sql) {
-		out = append(out, chunk{start: start, end: len(sql), hasCode: hasCode})
+		out = append(out, chunk{start: start, end: len(sql), tail: len(sql), hasCode: hasCode})
 	}
 	return out
+}
+
+// remarkEnd returns where the trailing remark after a semicolon ends, where i
+// is just past the semicolon: the end of the line (before its newline, so a
+// caret at the start of the next line is not in it) when the rest of the line
+// holds only blanks and comments, else i itself — code on the same line
+// starts the next statement there, and any comment before that code is the
+// next statement's, as it was before.
+//
+// A block comment that opens on the line counts even when it closes on a
+// later one: it started as a remark on this statement, and what decides is
+// the line it closes on. The end of the buffer ends the line too, which
+// covers an unterminated comment.
+func remarkEnd(s string, i int) int {
+	j := i
+	for j < len(s) {
+		switch {
+		case s[j] == '\n':
+			return j
+		case s[j] == ' ', s[j] == '\t', s[j] == '\r', s[j] == '\v', s[j] == '\f':
+			j++
+		case isLineCommentAt(s, j):
+			// a line comment runs to the newline, which ends the remark
+			if nl := strings.IndexByte(s[j:], '\n'); nl >= 0 {
+				return j + nl
+			}
+			return len(s)
+		case isBlockCommentAt(s, j):
+			j = skipBlockComment(s, j)
+		default:
+			return i // code follows on the same line
+		}
+	}
+	return len(s)
 }
 
 func isLineCommentAt(s string, i int) bool {

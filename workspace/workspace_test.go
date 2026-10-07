@@ -109,6 +109,27 @@ func TestPick(t *testing.T) {
 	}
 }
 
+// A comment after a statement's semicolon, on its line, is that statement's:
+// Ctrl+R with the caret in it runs that statement, and the next statement's
+// gutter marker starts on the line below rather than taking in the line above.
+func TestPickTrailingComment(t *testing.T) {
+	text := "select max(ts) from t; -- 2026-10-05T15:29:34-05:00\n" +
+		"---\n" +
+		"DO $$\nBEGIN\n  RAISE NOTICE 'hi';\nEND $$;"
+	eol := strings.IndexByte(text, '\n')
+	got, tag := Pick(Editor{Text: text, Caret: eol})
+	if strings.Join(got, "|") != "select max(ts) from t" || tag != "statement 1/2" {
+		t.Errorf("caret at the end of the commented line: Pick = %q, %q; want the select", got, tag)
+	}
+	r := StmtRange(text, strings.Index(text, "RAISE"))
+	if r[0] != eol+1 || text[r[1]-len("END $$"):r[1]] != "END $$" {
+		t.Errorf("StmtRange of the DO block = %v (%q), want it to start on the line after the comment", r, text[r[0]:r[1]])
+	}
+	if r := StmtRange(text, eol); r[1] > eol || r[0] != 0 {
+		t.Errorf("StmtRange at the trailing comment = %v, want the select's line only", r)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // The run slot
 // ---------------------------------------------------------------------------

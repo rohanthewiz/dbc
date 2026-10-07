@@ -43,8 +43,15 @@ func TestSplit(t *testing.T) {
 		{"backslash quote", `SELECT 'it\'s; here';SELECT 2`, []string{`SELECT 'it\'s; here'`, "SELECT 2"}},
 		{"quoted ident", `SELECT "a;b" FROM t;SELECT 2`, []string{`SELECT "a;b" FROM t`, "SELECT 2"}},
 		{"backquoted ident", "SELECT `a;b` FROM t;SELECT 2", []string{"SELECT `a;b` FROM t", "SELECT 2"}},
-		// a comment after the terminator belongs to the following statement
-		{"line comment", "SELECT 1; -- drop; this\nSELECT 2", []string{"SELECT 1", "-- drop; this\nSELECT 2"}},
+		// a comment on the terminator's line is the ended statement's remark,
+		// not the next statement's header; one on a later line is the header
+		{"line comment", "SELECT 1; -- drop; this\nSELECT 2", []string{"SELECT 1", "SELECT 2"}},
+		{"line comment on its own line", "SELECT 1;\n-- drop; this\nSELECT 2", []string{"SELECT 1", "-- drop; this\nSELECT 2"}},
+		{"trailing comment then header", "SELECT 1; -- ran 15:29\n---\nSELECT 2",
+			[]string{"SELECT 1", "---\nSELECT 2"}},
+		{"trailing block comment", "SELECT 1; /* a; b */\nSELECT 2", []string{"SELECT 1", "SELECT 2"}},
+		{"trailing block comment spanning lines", "SELECT 1; /* a;\n b */ -- c\nSELECT 2", []string{"SELECT 1", "SELECT 2"}},
+		{"trailing comment with CRLF", "SELECT 1; -- x\r\nSELECT 2", []string{"SELECT 1", "SELECT 2"}},
 		{"comment-only span kept with stmt", "-- note; here\nSELECT 1", []string{"-- note; here\nSELECT 1"}},
 		{"block comment", "SELECT 1; /* a; b */ SELECT 2", []string{"SELECT 1", "/* a; b */ SELECT 2"}},
 		{"nested block comment", "SELECT 1 /* a /* b; */ c */ + 1;SELECT 2",
@@ -117,6 +124,65 @@ func TestIndexAtSkipsCommentOnlySpans(t *testing.T) {
 	}
 	if got := IndexAt(stmts, 3); got != 0 { // cursor inside the comment span
 		t.Errorf("IndexAt = %d, want 0", got)
+	}
+}
+
+// A comment after a statement's semicolon, on the same line, is part of that
+// statement's span: the caret in it picks that statement, and the next
+// statement's range starts on the line below — not on the comment, which made
+// the two read as one in the editor's gutter.
+func TestIndexAtTrailingComment(t *testing.T) {
+	const sql = "select max(t.ts) from s.t t; -- 2026-10-05T15:29:34-05:00\n" +
+		"---\n" +
+		"DO $$\nDECLARE\n  n int;\nBEGIN\n  RAISE NOTICE '%', n;\nEND $$;"
+	stmts := Split(sql)
+	if len(stmts) != 2 {
+		t.Fatalf("got %d statements %q, want 2", len(stmts), texts(stmts))
+	}
+	if got, want := stmts[1].Start, strings.Index(sql, "---"); got != want {
+		t.Errorf("second statement starts at %d (%q), want %d — the line after the trailing comment",
+			got, sql[got:min(got+12, len(sql))], want)
+	}
+	eol := strings.IndexByte(sql, '\n')
+	cases := []struct {
+		name   string
+		offset int
+		want   int
+	}{
+		{"just past the semicolon", strings.Index(sql, ";") + 1, 0},
+		{"inside the trailing comment", strings.Index(sql, "2026"), 0},
+		{"end of the trailing comment's line", eol, 0},
+		{"start of the next line", eol + 1, 1},
+		{"inside the dollar-quoted body", strings.Index(sql, "RAISE"), 1},
+		{"end of buffer", len(sql), 1},
+	}
+	for _, c := range cases {
+		if got := IndexAt(stmts, c.offset); got != c.want {
+			t.Errorf("%s: IndexAt(%d) = %d, want %d", c.name, c.offset, got, c.want)
+		}
+	}
+}
+
+// Code after a semicolon on the same line starts the next statement there, so
+// a comment between them is that statement's, and blanks after a semicolon
+// with nothing else on the line stay with the statement they follow.
+func TestIndexAtSameLine(t *testing.T) {
+	const sql = "SELECT 1; /* two */ SELECT 2;   \nSELECT 3"
+	stmts := Split(sql)
+	eq(t, texts(stmts), []string{"SELECT 1", "/* two */ SELECT 2", "SELECT 3"})
+	cases := []struct {
+		offset int
+		want   int
+	}{
+		{strings.Index(sql, ";") + 1, 0},  // just past the first semicolon
+		{strings.Index(sql, "two"), 1},    // in the comment before code on the same line
+		{strings.Index(sql, "\n"), 1},     // in the blanks after the second semicolon
+		{strings.Index(sql, "\n") + 1, 2}, // the next line
+	}
+	for _, c := range cases {
+		if got := IndexAt(stmts, c.offset); got != c.want {
+			t.Errorf("IndexAt(%d) = %d, want %d", c.offset, got, c.want)
+		}
 	}
 }
 

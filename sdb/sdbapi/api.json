@@ -54,7 +54,7 @@
         {
           "name": "Truncate",
           "type": "bool",
-          "doc": "Truncate empties the destination first, in the load's transaction:\nif the copy fails, the old rows are still there."
+          "doc": "Truncate empties the destination first, in the load's transaction:\nif the copy fails, the old rows are still there. Within one Postgres\ndatabase it is a DELETE rather than a TRUNCATE, whose lock would\nstall the copy's own read — so a table can be copied onto itself\nwith a Transform to rewrite it in place."
         },
         {
           "name": "BatchSize",
@@ -64,7 +64,7 @@
         {
           "name": "Transform",
           "type": "func(row []any) ([]any, error)",
-          "doc": "Transform is called on every row before it is written, and may\nchange values in place or return a new row of the same length.\nReturning a nil row skips it; returning an error stops the copy and\nrolls the destination back."
+          "doc": "Transform is called on every row before it is written, and may\nchange values in place or return a new row of the same length.\nReturning a nil row skips it; returning an error stops the copy and\nrolls the destination back. Into Postgres a value may also be a Go\nslice (an array: []string into text[]), a map or struct (JSON), a\ntime.Duration (an interval), a pointer, or a driver.Valuer."
         },
         {
           "name": "Progress",
@@ -422,7 +422,7 @@
         {
           "name": "Close",
           "sig": "func (r *Reader) Close() error",
-          "doc": "Close releases the query's connection. It is safe to call more than once,\nand a deferred Close after reading to the end costs nothing.",
+          "doc": "Close releases the query's connection — on Postgres after ending the\nread's transaction: COMMIT when the read went well (to the end, or\nstopped early by the caller), ROLLBACK after a failure. It is safe to\ncall more than once, and a deferred Close after reading to the end costs\nnothing.",
           "params": []
         },
         {

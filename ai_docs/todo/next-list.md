@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-142
+**Next ID:** N-145
 
 ## Open
 
@@ -168,6 +168,32 @@ ten session docs in `ai_docs/claude_sessions/`
   already keys (`j k g G c e d s #`), so it would be a `/` that opens a
   filter line over the list, as the pickers' `pickModal` filters. Offered
   at the end of the session; the user did not answer.
+
+- **N-142** · raised `2026-1007-1156-pg-copy-hardening` · value low
+  A Postgres→Postgres copy of a `money` column between servers whose
+  `lc_monetary` differs is untested and unpinned. money's text follows the
+  locale (`$1,234.56` vs `1.234,56 €`), and the destination parses it with
+  its own, so the copy may fail or misread. `pgPinOutput` pins
+  DateStyle/IntervalStyle/float digits but not this. Setting `lc_monetary`
+  to `C` on both ends of a copy would fix it, but the test container had
+  no second locale to prove it with.
+
+- **N-143** · raised `2026-1007-1156-pg-copy-hardening` · value low
+  The Go values a Transform or Writer may now hand Postgres (a slice → an
+  array, a map/struct → JSON, a `time.Duration`, a pointer, a
+  `driver.Valuer`) are encoded only by the Postgres writer
+  (`etl/pgtext.go`). The INSERT path for MySQL, SQLite and bytdb passes
+  them to the driver as they are, which refuses a `[]string` or a map. Do
+  the same conversions there, or document the difference.
+
+- **N-144** · raised `2026-1007-1156-pg-copy-hardening` · value low
+  A Postgres `Query` that is a `DELETE … RETURNING` (a "move rows" copy)
+  fails on the direct path with a bare syntax error. `describe` wraps it
+  in `SELECT * FROM (…) LIMIT 0`, which can't hold DML. `COPY (…) TO
+  STDOUT` could, and the row path (Args or a Transform) already runs it,
+  committing the source only when its Reader closes. Either describe DML
+  another way or refuse it up front with a clear message. Query is
+  documented as "any SELECT", so nothing promises it today.
 
 ## Roadmap
 

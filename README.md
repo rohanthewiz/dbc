@@ -1487,7 +1487,11 @@ How it moves the rows:
   `COPY` cannot take bind parameters, so `Args` goes row by row.
 - **Into Postgres** otherwise: `COPY … FROM STDIN` in text format, so the
   server parses each value as it would a literal — `"42"` from MySQL loads
-  into an `integer`.
+  into an `integer`. Besides what a `Reader` yields, a `Transform` or a
+  `Writer` may hand over a Go slice (an array: `[]string` into `text[]`,
+  `[][]int` into `int[][]`), a map or struct (JSON, for `jsonb`), a
+  `time.Duration` (an `interval`), a pointer (`nil` is NULL), or an
+  `sql.NullString` or other `driver.Valuer`.
 - **Into MySQL, SQLite or bytdb**: multi-row `INSERT` batches (500 rows,
   fewer for wide tables), the full-batch statement prepared once.
 
@@ -1497,13 +1501,27 @@ was: the old rows still there, a table it was creating not created. Two
 engines can't do DDL that way: on bytdb and MySQL the `CREATE TABLE` runs
 just before the load, so a failure there can leave an empty new table, but
 never a partial one. MySQL's `Truncate` is a `DELETE`, since its `TRUNCATE`
-commits on the spot.
+commits on the spot. So is Postgres's when source and destination are the
+same database (one connection, or two names for it): `TRUNCATE`'s lock
+would stall the copy's own read of the table, so a table copied onto itself
+to rewrite it through a `Transform` works — at `DELETE`'s speed on a big
+table.
+
+Reading from Postgres pins the settings that shape a value's text —
+`DateStyle` to ISO, `IntervalStyle` to `postgres`, `extra_float_digits` to
+exact — for that read only. A copy between two servers configured
+differently (one with `DateStyle = 'SQL, DMY'`, say) then moves dates,
+intervals and floats unchanged rather than swapping day and month. A
+`Query` may end in `;` or a comment, but holds one statement.
 
 `Create` copies a Postgres table to Postgres with its exact column types,
 `NOT NULL`s and primary key. Between other engines each column gets a broad
 type (integer, float, numeric, boolean, date, timestamp, bytes, or text) and
-the source's primary key, where it can be read. Defaults, sequences, other
-indexes and constraints are not copied. bytdb requires a primary key, so to
+the source's primary key, where it can be read. A Postgres `Query` copied
+to Postgres keeps each column's type name but not its length or precision
+(`varchar(80)` becomes `varchar`), and a user type — an enum, a
+composite — becomes `text`, since it may not exist on the destination.
+Defaults, sequences, other indexes and constraints are not copied. bytdb requires a primary key, so to
 copy a query into bytdb, create the table first. bytdb has no exact decimal
 type, so a numeric column created there is `double precision`: values with
 more than about 15 significant digits get rounded. To keep every digit,
@@ -1512,7 +1530,8 @@ and MySQL, whose numerics arrive as text, but not from SQLite.
 
 A `Reader` has no `max_rows` cap and keeps values typed: `int64`,
 `float64`, `bool`, `string`, `time.Time`, `[]byte` for binary columns, `nil`
-for NULL. Postgres `numeric`, `uuid` and arrays arrive in their text form. A
+for NULL. Postgres `numeric`, `uuid`, intervals, arrays and ranges arrive
+in their text form, the same from every server (ISO dates, exact floats). A
 `Reader` or `Writer` a script leaves open is closed, or rolled back, when
 `Run` returns. A Writer is never committed unless the script calls `Close`.
 [`scripts/copy_table.go`](scripts/copy_table.go) shows all three levels, up

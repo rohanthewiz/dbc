@@ -24,9 +24,15 @@ import (
 // that is not a binary type becomes a string. MySQL's text protocol returns
 // nearly every value as bytes, and without this a VARCHAR would load into
 // Postgres as bytea hex or fail outright.
+//
+// On Postgres the values pgx does not decode — intervals, arrays, ranges,
+// composites — arrive as the server's text for them, and the read pins the
+// settings that shape that text (see pgPinOutput): an interval or a date[]
+// reads the same from every server, whatever its DateStyle.
 type Reader struct {
 	ctx     context.Context
 	conn    string
+	tx      *sql.Tx // Postgres: the read's transaction, which scopes pgPinOutput
 	rows    *sql.Rows
 	cols    []string
 	dbTypes []string // driver type names, upper case ("INT4", "VARCHAR", "")
@@ -38,19 +44,71 @@ type Reader struct {
 	closed  bool
 }
 
+// pgPinOutput fixes, for the current transaction only (set_config's
+// is_local), the session settings that decide how Postgres writes a value
+// as text. A database or role can set any of them (ALTER DATABASE … SET
+// DateStyle …), and text written under one server's settings is read back
+// under another's — the destination of a copy — so without this a copy
+// between two differently configured servers changes values:
+//
+//	setting             a server may say      so the text reads    pinned to
+//	DateStyle           SQL, DMY / German     "15/03/2024"         ISO: 2024-03-15
+//	                    → the destination, MDY, refuses it — or, when the
+//	                      day is ≤ 12, silently swaps day and month
+//	IntervalStyle       sql_standard          "-1-2 …"             postgres: explicit
+//	                    → a leading sign applies to every field     signs per field
+//	extra_float_digits  0 (pre-12 default)    0.1+0.2 → "0.3"      3: exact
+//
+// Only the output half of DateStyle is set: "ISO" alone keeps the
+// session's field order, so a literal in the caller's own query
+// ('02/01/2024' in a Where) still means what it meant. Input under the
+// pinned IntervalStyle and float digits is unchanged for every value a
+// query would sensibly contain. TimeZone is left alone: ISO output carries
+// the offset, so the instant survives any destination zone.
+const pgPinOutput = `SELECT set_config('datestyle', 'ISO', true),
+	set_config('intervalstyle', 'postgres', true),
+	set_config('extra_float_digits', '3', true)`
+
 // Read runs query on c and returns a Reader positioned before the first row.
 // The query runs under ctx; canceling it stops the fetch.
+//
+// On Postgres the query runs in a transaction of its own, which pins the
+// text output settings (pgPinOutput) for this read and no other: the
+// connection goes back to the pool with the session's own settings. The
+// transaction commits when the Reader closes, so a query with side effects
+// (DELETE … RETURNING, nextval) keeps them just as it would have
+// unwrapped; a read that fails or is canceled rolls them back.
 func Read(ctx context.Context, c Conn, query string, args ...any) (*Reader, error) {
-	rows, err := c.DB.QueryContext(ctx, query, args...)
+	var (
+		tx   *sql.Tx
+		rows *sql.Rows
+		err  error
+	)
+	if c.Engine == Postgres {
+		if tx, err = c.DB.BeginTx(ctx, nil); err != nil {
+			return nil, serr.Wrap(canceled(ctx, err), "conn", c.Name, "op", "read", "query", clip(query))
+		}
+		if _, err = tx.ExecContext(ctx, pgPinOutput); err == nil {
+			rows, err = tx.QueryContext(ctx, query, args...)
+		}
+	} else {
+		rows, err = c.DB.QueryContext(ctx, query, args...)
+	}
 	if err != nil {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
 		return nil, serr.Wrap(canceled(ctx, err), "conn", c.Name, "op", "read", "query", clip(query))
 	}
 	cols, err := rows.Columns()
 	if err != nil {
 		_ = rows.Close()
+		if tx != nil {
+			_ = tx.Rollback()
+		}
 		return nil, serr.Wrap(err, "conn", c.Name, "op", "read columns")
 	}
-	rd := &Reader{ctx: ctx, conn: c.Name, rows: rows, cols: cols,
+	rd := &Reader{ctx: ctx, conn: c.Name, tx: tx, rows: rows, cols: cols,
 		dbTypes: make([]string, len(cols)), binary: make([]bool, len(cols)),
 		holders: make([]any, len(cols))}
 	// Column types are advisory: a driver that cannot report them leaves the
@@ -84,7 +142,12 @@ func (r *Reader) Next() bool {
 		if err := r.rows.Err(); err != nil {
 			r.err = serr.Wrap(canceled(r.ctx, err), "conn", r.conn, "op", "read", "after_rows", itoa(r.n))
 		}
-		_ = r.Close()
+		// Close commits the read's transaction on Postgres; a failed commit
+		// is the read's failure (a DELETE … RETURNING whose rows were all
+		// read but whose delete did not stick).
+		if err := r.Close(); err != nil && r.err == nil {
+			r.err = serr.Wrap(canceled(r.ctx, err), "conn", r.conn, "op", "end read")
+		}
 		return false
 	}
 	if err := r.rows.Scan(r.holders...); err != nil {
@@ -118,12 +181,23 @@ func (r *Reader) Count() int64 { return r.n }
 // Err returns the error that stopped Next early, if any.
 func (r *Reader) Err() error { return r.err }
 
-// Close releases the query's connection. It is safe to call more than once,
-// and a deferred Close after reading to the end costs nothing.
+// Close releases the query's connection — on Postgres after ending the
+// read's transaction: COMMIT when the read went well (to the end, or
+// stopped early by the caller), ROLLBACK after a failure. It is safe to
+// call more than once, and a deferred Close after reading to the end costs
+// nothing.
 func (r *Reader) Close() error {
 	if r.closed {
 		return nil
 	}
 	r.closed = true
-	return r.rows.Close()
+	err := r.rows.Close()
+	if r.tx != nil {
+		if err == nil && r.err == nil {
+			err = r.tx.Commit()
+		} else {
+			_ = r.tx.Rollback()
+		}
+	}
+	return err
 }

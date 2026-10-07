@@ -10,6 +10,8 @@ import (
 
 	pgxstdlib "github.com/jackc/pgx/v5/stdlib"
 	"github.com/rohanthewiz/serr"
+
+	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
 // CopyOptions shape a Copy. The zero value copies every column and row of
@@ -36,7 +38,10 @@ type CopyOptions struct {
 	// other than the key, and constraints are not copied.
 	Create bool
 	// Truncate empties the destination first, in the load's transaction:
-	// if the copy fails, the old rows are still there.
+	// if the copy fails, the old rows are still there. Within one Postgres
+	// database it is a DELETE rather than a TRUNCATE, whose lock would
+	// stall the copy's own read — so a table can be copied onto itself
+	// with a Transform to rewrite it in place.
 	Truncate bool
 	// BatchSize is rows per INSERT on non-Postgres destinations (see
 	// WriteOptions.BatchSize).
@@ -44,7 +49,9 @@ type CopyOptions struct {
 	// Transform is called on every row before it is written, and may
 	// change values in place or return a new row of the same length.
 	// Returning a nil row skips it; returning an error stops the copy and
-	// rolls the destination back.
+	// rolls the destination back. Into Postgres a value may also be a Go
+	// slice (an array: []string into text[]), a map or struct (JSON), a
+	// time.Duration (an interval), a pointer, or a driver.Valuer.
 	Transform func(row []any) ([]any, error)
 	// Progress, when set, is called every ProgressEvery rows (default
 	// 100000) with the running total.
@@ -134,7 +141,21 @@ func copySource(e Engine, table string, opt CopyOptions) (query, dest string, er
 		if opt.To == "" {
 			return "", "", serr.New("etl: To (the destination table) is required with Query")
 		}
-		return strings.TrimSuffix(strings.TrimSpace(opt.Query), ";"), opt.To, nil
+		// The query is wrapped — COPY (…) TO STDOUT, and a subquery to
+		// describe it — so its own terminator has to go, wherever it sits:
+		// "…; -- done" ends in a comment, not the semicolon. The splitter
+		// knows strings, quoted names, comments and dollar quotes, so it
+		// finds the real one; it also catches two statements, which no
+		// wrapper can hold.
+		stmts := sqlsplit.Split(opt.Query)
+		switch len(stmts) {
+		case 0:
+			return "", "", serr.New("etl: Query has no statement in it")
+		case 1:
+			return stmts[0].Text, opt.To, nil
+		}
+		return "", "", serr.New("etl: Query holds more than one statement; a copy reads from one",
+			"statements", itoa(int64(len(stmts))))
 	case strings.TrimSpace(table) == "":
 		return "", "", serr.New("etl: no source table (or Query) given")
 	}
@@ -178,8 +199,7 @@ func copyRows(ctx context.Context, src Conn, table, query string, dst Conn, dest
 	if err != nil {
 		return err
 	}
-	w, err := NewWriter(ctx, dst, dest, rd.Columns(),
-		WriteOptions{Setup: setup, Truncate: opt.Truncate, BatchSize: opt.BatchSize})
+	w, err := NewWriter(ctx, dst, dest, rd.Columns(), loadOptions(ctx, src, dst, dest, setup, opt))
 	if err != nil {
 		return err
 	}
@@ -233,7 +253,7 @@ func copyDirect(ctx context.Context, src Conn, table, query string, dst Conn, de
 	if err != nil {
 		return err
 	}
-	w, err := NewWriter(ctx, dst, dest, cols, WriteOptions{Setup: setup, Truncate: opt.Truncate})
+	w, err := NewWriter(ctx, dst, dest, cols, loadOptions(ctx, src, dst, dest, setup, opt))
 	if err != nil {
 		return err
 	}
@@ -244,12 +264,25 @@ func copyDirect(ctx context.Context, src Conn, table, query string, dst Conn, de
 	if err != nil {
 		return serr.Wrap(err, "conn", src.Name, "op", "checkout")
 	}
+	// The rows are the source's text output, handed to the destination
+	// unread, so the settings that shape it are pinned for the COPY TO
+	// (pgPinOutput) — in a transaction, which scopes them to it.
+	if _, err = conn.ExecContext(ctx, "BEGIN"); err == nil {
+		_, err = conn.ExecContext(ctx, pgPinOutput)
+	}
+	if err != nil {
+		discard(conn)
+		return serr.Wrap(canceled(ctx, err), "conn", src.Name, "op", "pin output settings")
+	}
 	err = conn.Raw(func(dc any) error {
 		pc, ok := dc.(*pgxstdlib.Conn)
 		if !ok {
 			return serr.New("etl: not a pgx connection")
 		}
-		_, err := pc.Conn().PgConn().CopyTo(ctx, sink, "COPY ("+query+") TO STDOUT")
+		// The newline before ")" ends a line comment the query or its
+		// Where may finish with ("… -- newest first"), which would
+		// otherwise swallow the paren and the rest of the statement.
+		_, err := pc.Conn().PgConn().CopyTo(ctx, sink, "COPY ("+query+"\n) TO STDOUT")
 		return err
 	})
 	if err != nil {
@@ -260,9 +293,65 @@ func copyDirect(ctx context.Context, src Conn, table, query string, dst Conn, de
 		}
 		return serr.Wrap(err, "conn", src.Name, "op", "copy out")
 	}
-	_ = conn.Close()
+	// The read is over: end its transaction, which only scoped the pinned
+	// settings, and give the connection back before the load commits — as
+	// the row path's Reader does when it reaches the end. A COMMIT that
+	// fails here means a broken connection, not a broken copy, but it is
+	// still reported, and the deferred Abort then rolls the load back.
+	if err = endTx(conn, "COMMIT"); err != nil {
+		return serr.Wrap(err, "conn", src.Name)
+	}
 	st.Rows, err = w.Close()
 	return err
+}
+
+// loadOptions are the Writer's options for a copy's load: the Setup from
+// prepareDest, then Truncate — which is TRUNCATE, except when the source and
+// destination are the same Postgres database. There it is a DELETE, in the
+// load's transaction like the TRUNCATE would be.
+//
+// TRUNCATE takes an ACCESS EXCLUSIVE lock, held until the load commits, and
+// within one database the copy's own read may need that table: a table
+// copied onto itself to rewrite it through a Transform, a Query or a view
+// over the destination. The read then waits on the lock, the load waits on
+// the rows, and Postgres cannot see the cycle — it runs through this
+// process — so the copy hangs until canceled:
+//
+//	load (dst tx):  BEGIN; TRUNCATE t ──holds ACCESS EXCLUSIVE on t──┐
+//	read (src):     SELECT … FROM t   ◄──waits for that lock─────────┘
+//	load:           waits for rows from the read
+//
+// DELETE's ROW EXCLUSIVE lock does not conflict with a read, and the read's
+// snapshot does not see the uncommitted delete, so it reads the old rows
+// while the load replaces them. The cost is DELETE's: slower than TRUNCATE
+// on a big table, and dead rows for vacuum — paid only within one database.
+func loadOptions(ctx context.Context, src, dst Conn, dest string, setup []string, opt CopyOptions) WriteOptions {
+	wo := WriteOptions{Setup: setup, Truncate: opt.Truncate, BatchSize: opt.BatchSize}
+	if opt.Truncate && src.Engine == Postgres && dst.Engine == Postgres && samePGDatabase(ctx, src, dst) {
+		wo.Setup = append(append([]string(nil), setup...), "DELETE FROM "+Postgres.QuoteTable(dest))
+		wo.Truncate = false
+	}
+	return wo
+}
+
+// samePGDatabase reports whether two Postgres connections reach the same
+// database of the same running server. One pool always does. Two pools —
+// two connection names, one perhaps through a different host name or
+// role — are compared by database name and the server's start time, which
+// tells servers apart even behind the same address (two containers on
+// one port mapping, a restart). The time is compared as epoch seconds,
+// not as text in each session's TimeZone. A lookup that fails reports
+// false: the copy then truncates as it always has.
+func samePGDatabase(ctx context.Context, a, b Conn) bool {
+	if a.DB == b.DB {
+		return true
+	}
+	const q = `SELECT current_database() || '@' || extract(epoch FROM pg_postmaster_start_time())::text`
+	var ka, kb string
+	if a.DB.QueryRowContext(ctx, q).Scan(&ka) != nil || b.DB.QueryRowContext(ctx, q).Scan(&kb) != nil {
+		return false
+	}
+	return ka == kb
 }
 
 // rawSink is the io.Writer the source's CopyTo writes into. COPY text is one
@@ -291,7 +380,8 @@ func (s *rawSink) Write(p []byte) (int, error) {
 // describe returns a query's column names and driver type names without
 // fetching its rows.
 func describe(ctx context.Context, c Conn, query string) ([]string, []string, error) {
-	rd, err := Read(ctx, c, "SELECT * FROM ("+query+") AS etl_src LIMIT 0")
+	// "\n)": see copyDirect — a trailing line comment must not eat the paren.
+	rd, err := Read(ctx, c, "SELECT * FROM ("+query+"\n) AS etl_src LIMIT 0")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -364,10 +454,16 @@ func createDDL(ctx context.Context, src Conn, table string, fromQuery bool, dst 
 		if !fromQuery {
 			pk = sourceKey(ctx, src, table, cols)
 		}
+		var byOID map[string]string
+		if src.Engine == Postgres && e == Postgres {
+			byOID = pgOIDTypeNames(ctx, src, types)
+		}
 		for i, name := range cols {
 			f := familyOf(types[i])
 			typ := e.columnType(f)
 			switch {
+			case byOID[types[i]] != "":
+				typ = byOID[types[i]]
 			case src.Engine == Postgres && e == Postgres:
 				typ = pgTypeName(types[i])
 			case e == MySQL && slices.Contains(pk, name) && (f == famText || f == famBytes):
@@ -452,17 +548,96 @@ func sourceKey(ctx context.Context, src Conn, table string, copied []string) []s
 }
 
 // pgTypeName turns a pgx-reported type name into one usable in DDL: "INT4"
-// → "int4", array "_TEXT" → "text[]", and an unknown type (a user enum,
-// reported as "") → text, which takes any value's text form.
+// → "int4", array "_TEXT" → "text[]". Anything that cannot be a column's
+// type becomes text, which takes any value's text form:
+//
+//	""                 no type reported
+//	"790", "16385"     a type pgx does not register, which its database/sql
+//	                   driver reports by OID — money, timetz, a user enum or
+//	                   composite (pgOIDTypeNames names the built-in ones
+//	                   before this is reached)
+//	record, unknown    pseudo-types: an anonymous ROW(…), an untyped literal
+//
+// Two names mean something else when written bare in DDL, because the
+// driver reports the type without its length:
+//
+//	bit   ─► varbit   bare "bit" is bit(1), which refuses a bit(4)'s value
+//	char  ─► "char"   pgx's "char" is Postgres's one-byte internal type;
+//	                  unquoted, char is character(1)
 func pgTypeName(t string) string {
-	if t == "" {
+	t = strings.ToLower(t)
+	if t == "" || isDigits(t) {
 		return "text"
 	}
-	t = strings.ToLower(t)
-	if strings.HasPrefix(t, "_") {
-		return t[1:] + "[]"
+	base, array := strings.CutPrefix(t, "_")
+	switch base {
+	case "record", "unknown":
+		return "text"
+	case "bit":
+		base = "varbit"
+	case "char":
+		base = `"char"`
 	}
-	return t
+	if array {
+		return base + "[]"
+	}
+	return base
+}
+
+func isDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// pgOIDTypeNames names, from the source catalog, the column types pgx
+// reported as bare OIDs, for a Postgres-to-Postgres Create from a Query —
+// where there is no source table whose catalog entry could be copied.
+//
+// Only built-in types (pg_catalog's, e.g. money, timetz, pg_lsn and their
+// arrays) are named. A user type — an enum, a composite, an extension's
+// citext — is left out, so it becomes text: it lives in the source database
+// and may well not exist on the destination, and text takes its values
+// whichever it is. A lookup that fails is the same as no lookup: every
+// unnamed OID becomes text.
+func pgOIDTypeNames(ctx context.Context, src Conn, types []string) map[string]string {
+	var oids []string
+	for _, t := range types {
+		if isDigits(t) && !slices.Contains(oids, t) {
+			oids = append(oids, t)
+		}
+	}
+	if len(oids) == 0 {
+		return nil
+	}
+	// format_type, not typname: it spells arrays "money[]" and the
+	// multi-word types the way DDL takes them ("time with time zone").
+	// Pseudo-types (typtype 'p') cannot be a column's type.
+	rows, err := src.DB.QueryContext(ctx, `SELECT t.oid::text, format_type(t.oid, NULL)
+		FROM pg_type t
+		WHERE t.oid = ANY(string_to_array($1, ',')::oid[])
+		  AND t.typnamespace = 'pg_catalog'::regnamespace AND t.typtype <> 'p'
+		  AND (t.typelem = 0 OR (SELECT e.typnamespace = 'pg_catalog'::regnamespace
+		                         FROM pg_type e WHERE e.oid = t.typelem))`, strings.Join(oids, ","))
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	names := map[string]string{}
+	for rows.Next() {
+		var oid, name string
+		if rows.Scan(&oid, &name) != nil {
+			return nil
+		}
+		names[oid] = name
+	}
+	if rows.Err() != nil {
+		return nil
+	}
+	return names
 }
 
 type pgColumn struct {

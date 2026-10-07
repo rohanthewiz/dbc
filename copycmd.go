@@ -157,11 +157,12 @@ func checkCopyFlags() error {
 //
 // Copying a table onto itself (same connection, same name) is refused: with
 // no Transform to change the rows it can only duplicate them, fail on the
-// key, or — with --truncate — empty the table it is reading. On Postgres that
-// last one is worse than empty: the load's TRUNCATE holds an exclusive lock
-// the source's COPY then waits on, so the run hangs until Ctrl+C. The names
-// are compared as typed, so `orders` against `public.orders` is not caught;
-// that is a guard against the slip, not a proof.
+// key, or — with --truncate — put back exactly the rows it emptied, at the
+// cost of rewriting the whole table. (A script's s.Copy allows it, because
+// there a Transform makes it an in-place rewrite; etl empties the table
+// with DELETE then, as TRUNCATE's lock would stall the copy's own read.)
+// The names are compared as typed, so `orders` against `public.orders` is
+// not caught; that is a guard against the slip, not a proof.
 func copyRequest(args []string) (copyReq, error) {
 	const use = "usage: dbc copy --from <conn> --to <conn> [--create] [--truncate] [--where SQL] <table> [dest-table]"
 	switch {

@@ -101,13 +101,20 @@ Behavior worth knowing before promising anything to the user:
   MySQL/SQLite/bytdb: multi-row `INSERT` batches.
 - A failed or stopped copy leaves the destination as it was — except that on
   bytdb and MySQL `CREATE TABLE` runs before the load, so a failure can leave
-  an empty new table. MySQL `Truncate` is a `DELETE`.
+  an empty new table. MySQL `Truncate` is a `DELETE`; so is Postgres's
+  within one database, which is what lets a table be copied onto itself
+  with a `Transform` (an in-place rewrite) instead of deadlocking.
+- Into Postgres, a `Transform`/`Writer` value may be a Go slice (→ array),
+  map or struct (→ JSON), `time.Duration` (→ interval), pointer, or
+  `driver.Valuer` (`sql.NullString`).
+- A Postgres read pins `DateStyle` ISO, `IntervalStyle` postgres and exact
+  floats for itself, so servers configured differently copy correctly.
 - `Create` keeps exact types only Postgres → Postgres; otherwise columns get
   broad types and the source PK. No defaults, sequences, other indexes.
 - bytdb needs a primary key (create the table first to copy a query into
   it) and has no exact decimal: `numeric` lands as `double precision`.
 - `Reader` values: `int64`, `float64`, `bool`, `string`, `time.Time`,
-  `[]byte`, `nil`; Postgres `numeric`/`uuid`/arrays as text. An unclosed
+  `[]byte`, `nil`; Postgres `numeric`/`uuid`/intervals/arrays/ranges as text. An unclosed
   Writer is rolled back when `Run` returns, never committed.
 
 ## The scripts browser (TUI and dbc web)

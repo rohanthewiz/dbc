@@ -84,13 +84,6 @@ ten session docs in `ai_docs/claude_sessions/`
   the assistant sees only a script run's result. After a TUI script run it
   could attach `ScriptChatContext` for that script.
 
-- **N-140** · raised `2026-1007-1036-trailing-comment-split` · value low
-  A comment on its own line between two statements still heads the one
-  below it, so a separator such as `---` is inside that statement's gutter
-  marker (and its text). The marker could start at the statement's first
-  code line instead, leaving header comments unmarked. Offered at the end
-  of the session; the user did not answer.
-
 - **N-141** · raised `2026-1007-1054-web-tab-to-table-find` · value low
   The TUI's Tables pane has no type-to-find. dbc web's sidebar now has a
   table box under db/schema (a schema picked with Tab lands there, typing
@@ -98,23 +91,6 @@ ten session docs in `ai_docs/claude_sessions/`
   already keys (`j k g G c e d s #`), so it would be a `/` that opens a
   filter line over the list, as the pickers' `pickModal` filters. Offered
   at the end of the session; the user did not answer.
-
-- **N-142** · raised `2026-1007-1156-pg-copy-hardening` · value low
-  A Postgres→Postgres copy of a `money` column between servers whose
-  `lc_monetary` differs is untested and unpinned. money's text follows the
-  locale (`$1,234.56` vs `1.234,56 €`), and the destination parses it with
-  its own, so the copy may fail or misread. `pgPinOutput` pins
-  DateStyle/IntervalStyle/float digits but not this. Setting `lc_monetary`
-  to `C` on both ends of a copy would fix it, but the test container had
-  no second locale to prove it with.
-
-- **N-143** · raised `2026-1007-1156-pg-copy-hardening` · value low
-  The Go values a Transform or Writer may now hand Postgres (a slice → an
-  array, a map/struct → JSON, a `time.Duration`, a pointer, a
-  `driver.Valuer`) are encoded only by the Postgres writer
-  (`etl/pgtext.go`). The INSERT path for MySQL, SQLite and bytdb passes
-  them to the driver as they are, which refuses a `[]string` or a map. Do
-  the same conversions there, or document the difference.
 
 - **N-144** · raised `2026-1007-1156-pg-copy-hardening` · value low
   A Postgres `Query` that is a `DELETE … RETURNING` (a "move rows" copy)
@@ -334,6 +310,23 @@ call.
   `9999-12-31` or NULL is a decision about the data, so it is left to a
   `Where` or a Transform. Neither has been seen in practice.
 
+- **N-142** · raised `2026-1007-1156-pg-copy-hardening` · value low
+  A Postgres→Postgres copy of a `money` column between servers whose
+  `lc_monetary` differs is untested and unpinned. money's text follows the
+  locale (`$1,234.56` vs `1.234,56 €`), and the destination parses it with
+  its own, so the copy may fail or misread. `pgPinOutput` pins
+  DateStyle/IntervalStyle/float digits but not this. Setting `lc_monetary`
+  to `C` on both ends of a copy would fix it, but the test container had
+  no second locale to prove it with.
+
+- **N-143** · raised `2026-1007-1156-pg-copy-hardening` · value low
+  The Go values a Transform or Writer may now hand Postgres (a slice → an
+  array, a map/struct → JSON, a `time.Duration`, a pointer, a
+  `driver.Valuer`) are encoded only by the Postgres writer
+  (`etl/pgtext.go`). The INSERT path for MySQL, SQLite and bytdb passes
+  them to the driver as they are, which refuses a `[]string` or a map. Do
+  the same conversions there, or document the difference.
+
 ## Non-goals
 
 - **N-012** · declined `2026-0728-2000-stmt-under-cursor-and-query-cancel` —
@@ -361,6 +354,13 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-140** · raised `2026-1007-1036-trailing-comment-split` · value low
+  A comment on its own line between two statements still heads the one
+  below it, so a separator such as `---` is inside that statement's gutter
+  marker (and its text). The marker could start at the statement's first
+  code line instead, leaving header comments unmarked. Offered at the end
+  of the session; the user did not answer.
+  closed 2026-10-07, `2026-1007-1541-stmt-marker-skips-header-comments` (from the cats-todo backlog): `sqlsplit.Stmt` gains `CodeStart`, the first byte outside blanks and comments (an open paren counts as code), and `workspace.StmtRange` starts the marker there, so the TUI and dbc web both leave a `---` header unmarked. The text is unchanged (it still carries the header comment, which runs and goes to history), and a caret on the header still picks the statement below. Unit tests in sqlsplit (`TestSplitCodeStart`) and workspace; checked against a fresh `dbc web`'s `/api/v1/stmt`.
 - **N-148** · raised `2026-1007-1245-result-tabs-per-connection` · value low
   A dbc web script tab's log is keyed by the query tab, not the script: it
   survives a rename, but opening the script again in a new tab (or after

@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-154
+**Next ID:** N-156
 
 ## Open
 
@@ -92,13 +92,6 @@ ten session docs in `ai_docs/claude_sessions/`
   filter line over the list, as the pickers' `pickModal` filters. Offered
   at the end of the session; the user did not answer.
 
-- **N-147** · raised `2026-1007-1245-result-tabs-per-connection` · value low
-  One result tab per statement for a multi-statement run. Run all (or a
-  selection of several) still lands only the last statement's result, in
-  one tab. DBeaver and DataGrip open a tab per statement that returns rows;
-  with result tabs that is now a small step (placeLocked per statement),
-  but it would interact with the cap and with "a run replaces its tab".
-
 - **N-149** · raised `2026-1007-1347-connection-refresh` · value medium
   The sidebar does not relist after DDL run in dbc (CREATE / DROP / ALTER /
   RENAME of a table). The completion cache is dropped already
@@ -131,6 +124,15 @@ ten session docs in `ai_docs/claude_sessions/`
   (as with TRUNCATE in `loadOptions`). Before N-144's fix the same copy
   committed the source and lost the rows. A `lock_timeout` on the load
   within one database would turn it into an error.
+
+- **N-155** · raised `2026-1007-1606-run-all-tab-per-statement` · value low
+  A run of several statements reports only one count: that of the result
+  on screen. A write's "n affected" was lost before too unless it came
+  last; since N-147 a write gets no result tab, so after
+  `SELECT …; UPDATE …` even the last UPDATE's count is gone (the done note
+  names the SELECT's rows). DataGrip writes a line per statement to its
+  output. Could log one line per write statement (folded
+  past a few, so a script of 500 INSERTs does not flood the log).
 
 ## Validate
 
@@ -234,6 +236,14 @@ and `raised`.
   and e2e tests). Add a step to `TestLiveWorkspacePickSchema`: pick a
   schema, create a table in it through the pool, Refresh, and check that
   the schema stays picked and the table is listed.
+
+- **N-154** · raised `2026-1007-1606-run-all-tab-per-statement` · value low
+  Tabs per statement (N-147) have not been watched in a browser. The
+  workspace tests cover the strip, the web wire test covers the "run" event,
+  and the TUI test covers its model; the page's JS is unchanged because it
+  already redraws the strip from the run event. Add a step to the go-rod
+  test in `web/e2e`: run all on two SELECTs, see two tabs with the second
+  on the grid, run again and see the same two tabs refilled.
 
 ## Roadmap
 
@@ -361,6 +371,14 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-147** · raised `2026-1007-1245-result-tabs-per-connection` · value low
+  One result tab per statement for a multi-statement run. Run all (or a
+  selection of several) still lands only the last statement's result, in
+  one tab. DBeaver and DataGrip open a tab per statement that returns rows;
+  with result tabs that is now a small step (placeLocked per statement),
+  but it would interact with the cap and with "a run replaces its tab".
+  closed 2026-10-07, `2026-1007-1606-run-all-tab-per-statement`: a run of several statements gives each statement that returned rows a tab (`placeRunLocked`); a write gets none, and with no rows anywhere the last result lands alone. One run's tabs form a group (`resultTab.run`). A rerun of several statements refills the group in order and closes the tabs it has no result for; a single-statement run replaces only its own tab. New tabs go after the group's last. The cap drops other runs' unpinned tabs before the run's own oldest, so the last results show, with a log line for the rest. A failed run still lands the results before the failure. The assistant gets the on-screen tab's rows only when that tab holds the statement under the caret (`attachTabLocked`). `RunDone.Tabs` added; `RunDone.Result` is the result on screen, and can be set alongside `Err`.
 
 - **N-144** · raised `2026-1007-1156-pg-copy-hardening` · value low
   A Postgres `Query` that is a `DELETE … RETURNING` (a "move rows" copy)

@@ -221,13 +221,6 @@ ten session docs in `ai_docs/claude_sessions/`
   with result tabs that is now a small step (placeLocked per statement),
   but it would interact with the cap and with "a run replaces its tab".
 
-- **N-148** · raised `2026-1007-1245-result-tabs-per-connection` · value low
-  A dbc web script tab's log is keyed by the query tab, not the script: it
-  survives a rename, but opening the script again in a new tab (or after
-  closing its tab) starts an empty log. Key it by the script's name if
-  script logs turn out to be read across tabs. Logs are per page (lost on
-  a reload) in dbc web and per process in the TUI; neither is persisted.
-
 - **N-149** · raised `2026-1007-1347-connection-refresh` · value medium
   The sidebar does not relist after DDL run in dbc (CREATE / DROP / ALTER /
   RENAME of a table). The completion cache is dropped already
@@ -340,6 +333,13 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-148** · raised `2026-1007-1245-result-tabs-per-connection` · value low
+  A dbc web script tab's log is keyed by the query tab, not the script: it
+  survives a rename, but opening the script again in a new tab (or after
+  closing its tab) starts an empty log. Key it by the script's name if
+  script logs turn out to be read across tabs. Logs are per page (lost on
+  a reload) in dbc web and per process in the TUI; neither is persisted.
+  closed 2026-10-07, `2026-1007-1411-script-log-by-name` (from the cats-todo backlog): a script tab's log is keyed by the script's name (`"\x01script:" + name`, `logKeyOf` in `web/static/js/app.js`), so closing the tab and opening the script again shows its earlier lines. A rename moves the log, whether or not a tab is open on it (`dbc.moveLog` in `core.js`, called from `scriptKit.renamed`). Lines are appended to the target, so the rename's double apply (response and event) is harmless. Trash and restore keep the name, so they keep the log. On the way: the log header now follows a rename (it kept reading `Log · <old name>`). Logs are still per page; README says so. Covered by the "script tabs" e2e step: the log after a rename, the query tab's log without the script's lines, and the log back in a new tab after a close.
 - **N-139** · raised `2026-1007-1036-trailing-comment-split` · value medium
   A comment after a statement's semicolon, on the same line, was taken as
   the next statement's header: the next statement's gutter marker started

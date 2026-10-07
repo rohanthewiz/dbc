@@ -2234,8 +2234,14 @@
       if (state.tab && state.tab.script === name) drawScriptHead();
     },
     checked: (name) => { if (state.tab && state.tab.script === name) drawScriptHead(); },
-    // a script was renamed (here or in another window): its tabs follow
+    // a script was renamed (here or in another window): its tabs follow,
+    // and so does its log — whether or not a tab has it open, since the
+    // log is the name's (see "the log" below), and left under the old name
+    // it would be stranded, or read by a later script of that name.
+    // Applied twice in this window (response and event); the second move
+    // finds nothing to move (core.js moveLog).
     renamed: (from, to) => {
+      dbc.moveLog(scriptLogKey(from), scriptLogKey(to));
       let moved = false;
       for (const t of tabs) {
         if (t.script !== from) continue;
@@ -2246,7 +2252,12 @@
       }
       if (moved) {
         renderTabs();
-        if (state.tab && state.tab.script === to) drawScriptHead();
+        if (state.tab && state.tab.script === to) {
+          drawScriptHead();
+          // the log's header named the old name ("Log · <script>"); only
+          // for the script on screen, as a re-show scrolls the log down
+          showLogOf(state.tab);
+        }
       }
     },
   });
@@ -2545,10 +2556,30 @@
   // ── the log ────────────────────────────────────────────────────────────
   // One log per connection (core.js): the pane shows the active query
   // tab's. A script tab is on no connection — its scripts name their own —
-  // so it keeps a log of its own, by the tab's key (stable across a
-  // rename), which its runs' lines go to whatever connection they name.
-  const SCRIPT_LOG = "\u0001tab:"; // cannot be a connection name's start
-  const logKeyOf = (t) => (!t ? "" : t.script ? SCRIPT_LOG + t.key : t.conn || "");
+  // so it keeps a log of its own, which its runs' lines go to whatever
+  // connection they name.
+  //
+  // A SCRIPT'S LOG IS KEYED BY THE SCRIPT'S NAME, not by the tab showing
+  // it. One tab per script (openScript), so while the tab is open the two
+  // are the same log; the difference is what outlives the tab. Keyed by
+  // the tab, closing it and opening the script again (a new tab, a new
+  // key) started an empty log, and the last run's lines were unreachable
+  // for the rest of the page's life (N-148). Keyed by the name:
+  //
+  //   open report.go   ─► "\x01script:report.go"  ◄─ runs, checks, saves
+  //   close the tab    ─►   (the lines stay, like any connection's)
+  //   open it again    ─► the same key: the lines are there
+  //   rename to x.go   ─► moved to "\x01script:x.go" (scriptKit.renamed)
+  //   trash / restore  ─► same name, same log: a trashed script's tab stays
+  //                       open (Ctrl+S saves it back), and so does its log
+  //
+  // The cost is that a later script given a name used earlier in the page
+  // (after the first was trashed) reads on in the earlier one's lines.
+  // Each line is timestamped, and a ✕ clear starts it afresh. Logs are
+  // still the page's: a reload starts every log empty.
+  const SCRIPT_LOG = "\u0001script:"; // cannot be a connection name's start
+  const scriptLogKey = (name) => SCRIPT_LOG + name;
+  const logKeyOf = (t) => (!t ? "" : t.script ? scriptLogKey(t.script) : t.conn || "");
   dbc.logKey = () => logKeyOf(state.tab);
 
   // logRoute is the log a line of tab t's event goes to: the connection

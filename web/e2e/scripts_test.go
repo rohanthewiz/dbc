@@ -48,8 +48,10 @@ func Run(s *sdb.S) error {
 //	▶ Run                  ─► both s.Shows: the switcher, the log line
 //	an unsaved edit        ─► kept across a reload (the draft)
 //	a save over a change   ─► the conflict: the disk's text, undo gets ours
-//	rename, trash, restore ─► the tab follows each, the file moves
+//	rename, trash, restore ─► the tab follows each, the file moves; the
+//	                          log goes with the name
 //	close with changes     ─► asked first; Discard closes
+//	open it again          ─► a new tab, the script's log as it was left
 func scriptTabs(t *testing.T, e *env, p *rod.Page) {
 	dir := filepath.Join(e.home, ".config", "dbc", "scripts")
 	disk := func(name string) string {
@@ -249,6 +251,13 @@ func scriptTabs(t *testing.T, e *env, p *rod.Page) {
 	eval(t, p, `() => { document.querySelector(".modal input.hfilter").value = "e2e_renamed.go"; document.querySelector(".modal button.primary").click(); }`)
 	waitFor(t, p, "the tab renamed", `() => document.querySelector("#qtabs .qtab.script .qt").textContent === "e2e_renamed.go" &&
 	  document.getElementById("active-conn").textContent === "▷ e2e_renamed.go"`)
+	// The log is the script's, by name (N-148): it follows the rename,
+	// keeping the conflict's line from before it, under the new name.
+	waitFor(t, p, "the log renamed with the script", `() => {
+	  const log = document.getElementById("log").textContent;
+	  return document.getElementById("log-conn").textContent === "· e2e_renamed.go" &&
+	    log.includes("e2e_report.go was changed elsewhere") && log.includes("renamed e2e_report.go to e2e_renamed.go");
+	}`)
 	if d := disk("e2e_renamed.go"); d != draft {
 		t.Fatalf("e2e_renamed.go on disk:\n%s", d)
 	}
@@ -281,6 +290,9 @@ func scriptTabs(t *testing.T, e *env, p *rod.Page) {
 	waitFor(t, p, "the script tab closed, the query tab back", `() =>
 	  !document.querySelector("#qtabs .qtab.script") && !document.querySelector(".app").classList.contains("script-mode") &&
 	  (`+ownDraft+`)("e2e_renamed.go") === ""`)
+	if got := evalStr(t, p, `() => document.getElementById("log").textContent.includes("renamed e2e_report.go") ? "the script's lines" : "its own"`); got != "its own" {
+		t.Fatalf("the query tab's log shows %s", got)
+	}
 	if d := disk("e2e_renamed.go"); d != draft {
 		t.Fatalf("Discard changed the file:\n%s", d)
 	}
@@ -299,6 +311,13 @@ func scriptTabs(t *testing.T, e *env, p *rod.Page) {
 	    document.getElementById("active-conn").textContent.startsWith("▷ e2e_renamed.go ●") &&
 	    localStorage.getItem("dbc.script.draft.e2egone:e2e_renamed.go") === null &&
 	    (`+ownDraft+`)("e2e_renamed.go").includes("closed window's draft");
+	}`)
+	// a new tab (a new tab key), and still the script's log: what was said
+	// before the close — the rename, the trash — is there to read
+	waitFor(t, p, "the script's log back in its new tab", `() => {
+	  const log = document.getElementById("log").textContent;
+	  return document.getElementById("log-conn").textContent === "· e2e_renamed.go" &&
+	    log.includes("renamed e2e_report.go to e2e_renamed.go") && log.includes("moved e2e_renamed.go to the trash");
 	}`)
 	eval(t, p, `() => document.querySelector("#qtabs .qtab.script .qx").click()`)
 	waitFor(t, p, "the close prompt again", `() => !!document.querySelector(".modal .mfoot button")`)

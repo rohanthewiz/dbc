@@ -89,6 +89,8 @@
   //   logs: "pg"   ─► [div, div, …]   ◄── shown (#log holds these nodes)
   //         "lite" ─► [div, …]
   //         ""     ─► the holding log: lines about no connection
+  //         "\x01script:report.go" ─► a script's (app.js keys a script
+  //                                   tab's log by its script, not the tab)
   //
   // A line names its log (the server stamps a run's lines with the
   // connection it ran on, so a pg run's outcome lands in pg's log even
@@ -167,6 +169,34 @@
   dbc.clearLog = function () {
     linesOf(shownLog).length = 0;
     $("log").replaceChildren();
+  };
+
+  // moveLog moves log from's lines to log to — a script's log following
+  // its rename. They are APPENDED to whatever to already holds rather than
+  // replacing it, for two reasons:
+  //   - a rename is applied twice in the window that made it (its response
+  //     and its "scripts" event, scripts.js renamed); the second move finds
+  //     from empty, and an append of nothing leaves to as the first made it,
+  //     where a replace would wipe it;
+  //   - to may already hold lines (a trashed script of that name whose tab
+  //     is still open), and nothing in a log is dropped but by its ✕ clear.
+  // The shown log follows the move, so a script tab on screen keeps showing
+  // its lines (its header is the caller's: showLog with the new title).
+  dbc.moveLog = function (from, to) {
+    if (from === to || from === "" || to === "") return; // the holding log is not a script's
+    const moved = logs.get(from);
+    logs.delete(from);
+    if (moved && moved.length) {
+      const into = linesOf(to);
+      into.push(...moved);
+      trim(into);
+    }
+    if (shownLog === from) shownLog = to;
+    if (shownLog === to) {
+      const log = $("log");
+      log.replaceChildren(...linesOf(to));
+      log.scrollTop = log.scrollHeight;
+    }
   };
 
   // setStatus writes the status bar — the active query tab's — and keeps

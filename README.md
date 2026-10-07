@@ -1091,6 +1091,10 @@ where it can't be seen. `⧉ copy` on the log's title puts the connection's
 log on the clipboard (one `HH:MM:SS message` line each), and `✕ clear`
 empties it; in the terminal, `y` and `x` do the same with the log focused.
 In `dbc web` a script tab, which is on no connection, has a log of its own.
+It is the script's log, kept by its name: close the tab and open the script
+again, and its earlier lines are there; rename the script and the log moves
+with it. Logs are kept while the page is open in `dbc web` (a reload starts
+them empty) and while dbc runs in the terminal; neither is saved.
 
 ### Stopping a long query
 

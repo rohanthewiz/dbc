@@ -101,22 +101,8 @@ func writePicks(path string, all map[string]SchemaPick) error {
 	if err != nil {
 		return serr.Wrap(err, "op", "encode schema picks")
 	}
-	if err = os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return serr.Wrap(err, "op", "save schema picks")
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".schema-picks-*")
-	if err != nil {
-		return serr.Wrap(err, "op", "save schema picks")
-	}
-	_, err = tmp.Write(append(bs, '\n'))
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Rename(tmp.Name(), path)
-	}
-	if err != nil {
-		_ = os.Remove(tmp.Name())
+	// user-only, as the file always was (it came from CreateTemp)
+	if err = writeAtomic(path, append(bs, '\n'), 0o600); err != nil {
 		return serr.Wrap(err, "op", "save schema picks", "path", path)
 	}
 	return nil

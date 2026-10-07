@@ -101,7 +101,7 @@ flags = ["--config", "-c", "--conn", "-f", "--file", "-t", "--format", "-o", "--
          "--tx", "-k", "--keep-going",
          "--demo", "--driver", "--dsn", "--tls", "--tls-ca", "--tls-cert", "--tls-key",
          "--tls-key-password", "--dir", "--allow-missing",
-         "--from", "--to", "--create", "--truncate", "--where",
+         "--check", "--from", "--to", "--create", "--truncate", "--where",
          "-a", "--analyze", "--open", "--fail-on", "--theme",
          "--table", "--depth", "--views",
          "--listen", "--no-open", "--secret", "--help", "-v", "--version"]

@@ -1271,6 +1271,18 @@ re-run. The full Go standard library is available. The `//go:build ignore`
 line just keeps `go build` from compiling script files if they live inside a
 Go module; dbc runs them regardless.
 
+`dbc script --check NAME` checks a script without running any of it (not
+`Run`, not `init()`): syntax, that it is `package main` with a
+`func Run(s *sdb.S) error`, and the interpreter's compile pass (undefined
+names, type mismatches, an import other than the standard library and
+`sdb`). It also warns about the map-assignment quirk below. See
+[Scripts headless](#scripts-headless).
+
+The samples in the repo's `scripts/` are built into the binary as examples,
+along with new-script templates (blank, query and show, a loop over
+parameters, copying a table, exporting a report). The scripts browser in dbc
+web and the TUI will offer them; they are not read from disk.
+
 ### The `sdb.S` API
 
 | Method | Purpose |
@@ -1398,6 +1410,7 @@ Everything works without the TUI, for cron jobs and shell pipelines:
 ./dbc -c local-pg < report.sql                   # … or piped to stdin
 ./dbc script scripts/loop_params.go              # run a Go script
 ./dbc script copy_mytable                        # … one from scripts_dir, by name
+./dbc script --check copy_mytable                # check it without running it
 ./dbc scripts                                    # list scripts_dir (and say where it is)
 ./dbc copy --from prod --to local --create orders # copy a table across connections
 ```
@@ -1516,6 +1529,8 @@ input; neither do `--tx` and `-k`, since a script runs its statements itself):
 ./dbc -t csv -o report.csv script scripts/loop.go  # straight to a file
 ./dbc script nightly_report                        # by name, from scripts_dir
 ./dbc scripts -t json                              # the scripts, as JSON
+./dbc script --check nightly_report                # check, don't run (exit 1 on an error)
+./dbc script --check -t json ~/scripts/*.go        # several, diagnostics as JSON
 ```
 
 The argument is a file path, as it always was. If no such file exists and
@@ -1524,6 +1539,14 @@ optional; a file in the current directory wins over a script of the same
 name. `dbc scripts` lists name, modified time, size and description (the
 script's opening comment, to its first sentence), with the directory on
 stderr so `-t json` stays one document.
+
+`--check` takes one or more scripts (names or paths) and runs none of them.
+It prints one line per problem on stdout, as a compiler does
+(`file:line:col: message`, with `warning:` before a warning), and nothing for
+a clean script. It exits 1 when any script has an error and 0 when there are
+only warnings, so it can gate a scripts repo in CI. `-t json` prints one JSON
+array of `{file, line, col, severity, msg}` instead (`[]` when clean). Only
+the config is read; nothing is connected.
 
 On stdout, in a block format (`text`, `markdown`, `csv`, `tsv`), each result a
 script pushes with `s.Show` is written the moment it is shown, so it lands in

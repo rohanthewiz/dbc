@@ -28,6 +28,8 @@ func Run(s *sdb.S) error {
 dbc script s.go                 # text tables + Print lines on stdout
 dbc script copy_mytable         # a script in scripts_dir, by name (.go optional)
 dbc scripts                     # list scripts_dir; its path on stderr
+dbc script --check s.go         # check without running: file:line:col: msg, exit 1 on an error
+dbc script --check -t json a b  # … as one JSON array of {file,line,col,severity,msg}
 dbc -t json script s.go | jq .  # one JSON array of every Show; Print → stderr
 dbc -t csv -o out.csv script s.go
 ```
@@ -91,8 +93,8 @@ Behavior worth knowing before promising anything to the user:
 
 - **Two-value assignment into a map element stores nothing.**
   `m[k], _ = v.(string)`, `m[k], _ = other[k]`, `m[k], _ = f()` silently
-  drop the write; `m[k], _ = <-ch` panics (traefik/yaegi#1655). Assign to a
-  local first:
+  drop the write; `m[k], _ = <-ch` panics (traefik/yaegi#1655).
+  `dbc script --check` warns on each one. Assign to a local first:
 
   ```go
   v, _ := x.(string)
@@ -101,3 +103,6 @@ Behavior worth knowing before promising anything to the user:
 
 - A script is interpreted: keep it to stdlib + `sdb`. Third-party imports
   are not available.
+- **yaegi's compile pass is not the Go compiler.** `--check` catches
+  undefined names, type mismatches and bad imports, but an unused variable
+  or import passes, and only the first compile error is reported.

@@ -104,6 +104,7 @@ Exit codes: `0` ok, `1` failure, `2` bad usage (incl. unknown connection),
 | Command | Use | README section |
 | --- | --- | --- |
 | `dbc script FILE.go\|NAME` | run a Go script headless (`-t`/`-o` apply); a bare NAME is looked up in `scripts_dir` | Scripts headless |
+| `dbc script --check NAME\|FILE…` | check scripts without running them (parse, `Run`'s signature, yaegi compile, the map-assign lint); exit 1 on an error, `-t json` for JSON | Scripts headless |
 | `dbc scripts [-t json]` | list `scripts_dir` (default `~/.config/dbc/scripts`); the directory goes to stderr | Scripts headless |
 | `dbc copy --from A --to B [--create] [--truncate] [--where C] SRC [DST]` | copy a table across connections/engines in one transaction | Copy headless |
 | `dbc explain [-a] [-t text\|json\|markdown\|html\|pdf\|png\|jpeg\|mermaid] [--fail-on warn\|crit] "SQL"` | plan + findings; one statement | Explain headless |

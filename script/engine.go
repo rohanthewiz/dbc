@@ -15,19 +15,16 @@ import (
 	"github.com/rohanthewiz/serr"
 )
 
-// Run interprets the Go script at path and invokes its Run(s *sdb.S) error.
-func Run(path string, s *sdb.S) (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = serr.New("script panicked", "script", path, "panic", fmt.Sprint(r))
-		}
-	}()
-
+// newInterp is the interpreter every script gets: the standard library plus
+// the sdb API, and nothing else. Run and Check (check.go) both start from
+// it, so a script Check passes imports exactly what Run will give it; two
+// hand-kept copies of this list would drift the first time sdb grew a type.
+func newInterp() (*interp.Interpreter, error) {
 	i := interp.New(interp.Options{})
-	if err = i.Use(stdlib.Symbols); err != nil {
-		return serr.Wrap(err, "phase", "load stdlib symbols")
+	if err := i.Use(stdlib.Symbols); err != nil {
+		return nil, serr.Wrap(err, "phase", "load stdlib symbols")
 	}
-	if err = i.Use(interp.Exports{
+	if err := i.Use(interp.Exports{
 		"github.com/rohanthewiz/dbc/sdb/sdb": {
 			"S":          reflect.ValueOf((*sdb.S)(nil)),
 			"Result":     reflect.ValueOf((*model.Result)(nil)),
@@ -42,7 +39,22 @@ func Run(path string, s *sdb.S) (err error) {
 			"WriteOpts": reflect.ValueOf((*sdb.WriteOpts)(nil)),
 		},
 	}); err != nil {
-		return serr.Wrap(err, "phase", "load sdb symbols")
+		return nil, serr.Wrap(err, "phase", "load sdb symbols")
+	}
+	return i, nil
+}
+
+// Run interprets the Go script at path and invokes its Run(s *sdb.S) error.
+func Run(path string, s *sdb.S) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = serr.New("script panicked", "script", path, "panic", fmt.Sprint(r))
+		}
+	}()
+
+	i, err := newInterp()
+	if err != nil {
+		return err
 	}
 
 	if _, err = i.EvalPath(path); err != nil {

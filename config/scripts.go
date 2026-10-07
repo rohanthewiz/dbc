@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/rohanthewiz/dbc/scripts"
+	"github.com/rohanthewiz/dbc/userdata"
 )
 
 // Where Go scripts live. scripts_dir used to be used as written, and its
@@ -112,24 +115,35 @@ func (c *Config) FindScript(arg string) (string, error) {
 }
 
 // legacyScriptsWarning explains a move nobody would otherwise notice: the
-// cwd has a ./scripts with Go files in it — where dbc used to look — but
+// cwd has a ./scripts with scripts in it — where dbc used to look — but
 // scripts are now read from somewhere else that has none. Only that
 // combination warns; once the user has scripts in the new place, or there
 // is no ./scripts, nothing is said on every start.
+//
+// Two kinds of file in ./scripts do not count, since moving them would
+// gain nothing: an exact copy of a sample the binary carries (a dbc
+// checkout's ./scripts is the samples, which dbc now offers as Examples),
+// and a Go file of another package (the checkout's scripts/embed.go).
 func legacyScriptsWarning(resolved string) string {
 	old := absOr(legacyScriptsDir)
 	if old == resolved {
 		return ""
 	}
-	oldFiles, _ := filepath.Glob(filepath.Join(old, "*.go"))
-	if len(oldFiles) == 0 {
+	infos, _ := userdata.ListScripts(old) // a missing ./scripts lists none
+	own := 0
+	for _, in := range infos {
+		if src, err := os.ReadFile(filepath.Join(old, in.Name)); err == nil && !scripts.IsExample(src) {
+			own++
+		}
+	}
+	if own == 0 {
 		return ""
 	}
 	if newFiles, _ := filepath.Glob(filepath.Join(resolved, "*.go")); len(newFiles) > 0 {
 		return ""
 	}
 	return fmt.Sprintf("scripts are read from %s now, not ./scripts (%d .go files there): "+
-		"move them, or set scripts_dir in the config", resolved, len(oldFiles))
+		"move them, or set scripts_dir in the config", resolved, own)
 }
 
 // TildePath shortens a path under the home directory to "~/…" for display

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rohanthewiz/dbc/scripts"
 )
 
 // isolate gives a test its own HOME and cwd, so neither the user's
@@ -150,6 +152,36 @@ func TestLegacyScriptsWarning(t *testing.T) {
 	}
 	if w := legacyScriptsWarning(resolved); w != "" {
 		t.Errorf("new place has scripts: warned %q", w)
+	}
+}
+
+// A dbc checkout's ./scripts holds the samples (byte for byte the ones the
+// binary carries) and embed.go: nothing there to move, so no warning. One
+// edited sample is the user's own, and is.
+func TestLegacyScriptsWarningSkipsSamples(t *testing.T) {
+	_, cwd := isolate(t)
+	resolved := t.TempDir()
+	old := filepath.Join(cwd, "scripts")
+	if err := os.Mkdir(old, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, text string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(old, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, ex := range scripts.Examples() {
+		write(ex.Name, ex.Text)
+	}
+	write("embed.go", "// Package scripts …\npackage scripts\n")
+	if w := legacyScriptsWarning(resolved); w != "" {
+		t.Errorf("samples only: warned %q", w)
+	}
+	ex := scripts.Examples()[0]
+	write(ex.Name, ex.Text+"// mine now\n")
+	if w := legacyScriptsWarning(resolved); !strings.Contains(w, "(1 .go") {
+		t.Errorf("an edited sample: warning = %q, want one counting 1 file", w)
 	}
 }
 

@@ -4,8 +4,8 @@ Raised 2026-10-06. The ask: dbc.app looks for scripts in `~/scripts`; the
 scripts UI needs a revamp; scripts should be creatable and editable from the
 app, not only from an outside editor.
 
-This is a plan. **Phase 1 is done** (2026-10-06); phases 2–6 are not
-started. The decisions table was accepted as recommended.
+This is a plan. **Phases 1 and 2 are done** (2026-10-06); phases 3–6 are
+not started. The decisions table was accepted as recommended.
 
 ## The one-paragraph version
 
@@ -330,6 +330,41 @@ Each phase ships alone and leaves main releasable.
    wrong signature, compile error with position, and the map-comma-ok lint.
    Check must never execute: a script whose `init()` writes a file is
    checked and the file must not appear.
+
+   **Outcome (2026-10-06).**
+   - Store (`userdata/scripts.go`): `ValidScriptName`, `ReadScript`,
+     `SaveScript` (rev check; `base ""` creates and returns
+     `ErrScriptExists` over a file; a deleted file is a conflict with rev
+     ""), `RenameScript` (a case-only rename is allowed), `TrashScript`,
+     `ListTrash` and `RestoreScript(dir, id, to)`.
+     - `to` restores under another name when the old one is taken.
+     - Trash IDs are `<stem>.<unix ms>.go`, with the newest 50 kept.
+     - Saves are atomic, keep an existing file's mode, and write through
+       a symlink.
+     - `ScriptInfo` gained `Rev`. `ListScripts` skips a Go file of another
+       package (the checkout's `scripts/embed.go`).
+   - Shared helpers: `userdata/files.go` has `textRev` (`ConsoleRev` now
+     calls it) and `writeAtomic` (schema picks use it).
+   - `script/check.go`: `Check(name, src) []Diag`, sharing `newInterp()`
+     with `Run`. yaegi's `Compile` reports `line:col: msg`, stops at its
+     first error, and runs neither `init()` nor var initializers.
+     - One Check costs about 2 ms, so there is no caching.
+     - An import a script cannot have gets a plain message (no GOPATH
+       advice).
+     - Unused variables and imports pass. yaegi is not gc.
+   - `scripts/embed.go` (package `scripts`) embeds the samples. They are
+     named in the directive, because `*.go` would also embed the package's
+     tests; `TestSamplesAllEmbedded` guards the list.
+     - Templates are in `scripts/templates/`: blank, query, loop, copy,
+       export. `"{{conn}}"`/`"{{conn2}}"` are filled with `strconv.Quote`d
+       names by `Fill`.
+     - Every example and filled template passes Check. blank, query, loop
+       and export run on SQLite (`script/templates_test.go`).
+   - The legacy `./scripts` warning ignores exact copies of the samples, so
+     a checkout no longer warns.
+   - `dbc script --check NAME|PATH…` (`scriptcheck.go`): compiler lines on
+     stdout, `-t json` for one array, exit 1 on an error. Warnings alone
+     exit 0.
 3. **Web API.** The routes in §5, the `scripts` hub event, and the `sdb` API
    JSON generator. Tests in `web/` beside `consoles_test.go`, including a
    `:name` of `../x.go` and of an example name.

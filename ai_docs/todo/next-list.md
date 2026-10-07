@@ -29,7 +29,7 @@ ten session docs in `ai_docs/claude_sessions/`
   between Open and Roadmap is fine.
 - Open and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-132
+**Next ID:** N-133
 
 ## Open
 
@@ -189,6 +189,12 @@ ten session docs in `ai_docs/claude_sessions/`
   `$EDITOR`, and `dbc script --check`. Until the Examples land, `./dbc` in
   a checkout with no `dbc.toml` and an empty `~/.config/dbc/scripts` warns
   that `./scripts` is no longer read.
+  Updated `2026-1006-1915-scripts-store-check-examples`: phase 2 is done.
+  It added the store (save with rev check, rename, trash/restore),
+  `script.Check`, the embedded examples and templates, and
+  `dbc script --check`. A checkout no longer warns about `./scripts`,
+  because copies of the samples are skipped. Left: phases 3–6 (web API, web
+  UI, TUI browser, docs rewrite).
 - **N-131** · raised `2026-1006-1855-scripts-dir-resolution` · value medium
   Copying a SQLite table into bytdb fails on a boolean column: SQLite
   hands back `adopted` as int64 0/1, and bytdb's bool column refuses it
@@ -196,6 +202,14 @@ ten session docs in `ai_docs/claude_sessions/`
   `s.Copy("demo-sqlite", "demo-bytdb", "cats", …)`; the other direction
   works. Coerce 0/1 to bool in the etl writer for a bool destination
   column, or in bytdb's coerce.
+- **N-132** · raised `2026-1006-1915-scripts-store-check-examples` · value low
+  The built-in examples (`scripts/embed.go`) are reachable only from Go
+  until the scripts browser lands (phases 3–5). So `dbc script loop_params`
+  in a fresh install, with an empty scripts dir, fails "no script", and
+  `dbc scripts` does not mention the examples. Options: fall back to a
+  built-in example by name after `scripts_dir`, and list examples (marked
+  as such) in `dbc scripts`. Offered at the end of the session; the user
+  did not answer.
 
 ## Roadmap
 

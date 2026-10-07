@@ -7,6 +7,7 @@
 //	dbc -f - < report.sql          … or from stdin, spelled out
 //	dbc < report.sql               … or from stdin, when it is a pipe or a file
 //	dbc script scripts/loop.go     run a Go script headless
+//	dbc script --check NAME        check a script without running it (see scriptcheck.go)
 //	dbc copy --from a --to b t     copy a table between connections (see copycmd.go)
 //	dbc migrate up                 apply pending migrations (see migrate.go)
 //	dbc explain -a "SELECT …"      show a statement's plan and findings (see explain.go)
@@ -89,6 +90,7 @@ var (
 	flagFile   string
 	flagFormat = "text"
 	flagOut    string
+	flagCheck  bool // dbc script --check
 	flagDemo   string
 	flagDriver string
 	flagDSN    string
@@ -187,7 +189,13 @@ func newCLI() *cli.Command {
 				Name:      "script",
 				Usage:     "run a Go script headless: a file, or a NAME from scripts_dir",
 				ArgsUsage: "<file.go|NAME>",
-				Action:    scriptAction,
+				Flags: []cli.Flag{
+					// one or more scripts with --check (see scriptcheck.go)
+					&cli.BoolFlag{Name: "check",
+						Usage:       "check the scripts (parse, Run's signature, compile) without running them; exit 1 on an error",
+						Destination: &flagCheck},
+				},
+				Action: scriptAction,
 			},
 			scriptsCommand(),
 			copyCommand(),
@@ -245,9 +253,13 @@ func rootAction(ctx context.Context, cmd *cli.Command) error {
 }
 
 func scriptAction(ctx context.Context, cmd *cli.Command) error {
+	if flagCheck {
+		scriptCheckAction(cmd.Args().Slice())
+		return nil
+	}
 	refuseQueryFlags("script")
 	if cmd.Args().Len() != 1 {
-		usage("usage: dbc script <file.go|NAME>")
+		usage("usage: dbc script [--check] <file.go|NAME>")
 	}
 	// A script names its own connections, so nothing is opened for it up
 	// front: each demo it uses seeds on first use.

@@ -290,13 +290,7 @@ func adoptFlat(root string, d ConsoleDB, flat string) {
 // the TUI, another dbc web window, an editor outside dbc — changing the file
 // changes it, with no counter to keep in step. A console with no file is
 // revision "".
-func ConsoleRev(text string, exists bool) string {
-	if !exists {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(text))
-	return hex.EncodeToString(sum[:8])
-}
+func ConsoleRev(text string, exists bool) string { return textRev(text, exists) }
 
 // LoadConsole returns a console's text and whether it has a file at all. The
 // difference matters: a console emptied on purpose stays empty, where one

@@ -76,14 +76,6 @@ ten session docs in `ai_docs/claude_sessions/`
   filter line over the list, as the pickers' `pickModal` filters. Offered
   at the end of the session; the user did not answer.
 
-- **N-167** · raised `2026-1008-1826-script-rename-f2` · value low
-  Script F2 can rename a method that satisfies an interface only an import
-  knows, such as `String()` for `fmt.Stringer`. Imports are faked, so the
-  recheck sees no error, and `s.Print(v)` silently stops calling it.
-  (`Error()` is safe, because `error` is a universe type and the recheck
-  catches the break.) Refuse, or warn on, a method whose name is a
-  well-known interface's (String, Format, MarshalJSON, Scan, Value…).
-
 
 ## Validate
 
@@ -412,6 +404,14 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-167** · raised `2026-1008-1826-script-rename-f2` · value low
+  Script F2 can rename a method that satisfies an interface only an import
+  knows, such as `String()` for `fmt.Stringer`. Imports are faked, so the
+  recheck sees no error, and `s.Print(v)` silently stops calling it.
+  (`Error()` is safe, because `error` is a universe type and the recheck
+  catches the break.) Refuse, or warn on, a method whose name is a
+  well-known interface's (String, Format, MarshalJSON, Scan, Value…).
+  closed 2026-10-08, `2026-1008-1834-script-rename-kept-methods` (from the cats-todo backlog): `script/rename_iface.go`. A concrete type's method whose name and signature are a well-known interface's is refused both ways — up front as `Symbol.Fixed` (the box does not open), and as a rename *to* such a name, since the method would start being called. The signature is read from the declaration's syntax (imported parameter types are invalid under stand-in imports), normalized (`f.State` under a renamed import → `fmt.State`, `uint8` → `byte`, `interface{}` → `any`, a script's own type as `main.T`), so `String(w int) string` or `Len() int64` still rename. An interface's own method is not refused. `Error()` is on the list after all: the recheck catches a break only where the script uses the value as an `error`, not when fmt finds it by asserting. The list covers fmt, encoding/json/xml/gob's marshalers, `sql.Scanner`/`driver.Valuer`, errors' Unwrap/Is/As, io's Read/Write/Close/WriteTo/ReadFrom, and sort/heap. Tests in `script/rename_test.go`.
 - **N-164** · raised `2026-1008-1518-script-goto-def-usages-inline-diags` · value low
   Rename (F2) in a script tab. `script.Resolve` already finds every use of a
   name the script declares, scope by scope, so the edits are those spans.

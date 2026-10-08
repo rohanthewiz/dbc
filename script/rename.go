@@ -43,7 +43,11 @@ import (
 // name), and an embedded field or a type something embeds (the field is
 // named after the type, so one would have to follow the other, and its
 // selectors with it; renaming them by hand is clearer than a rename that
-// quietly reaches into other structs).
+// quietly reaches into other structs). Also a concrete type's method that
+// satisfies a well-known interface, String() string for fmt.Stringer and
+// the like: code outside the script calls it by name (rename_iface.go,
+// WHY SOME METHOD NAMES ARE KEPT, which refuses renaming one to such a
+// name too).
 
 // Edit replaces [From, To) of the script with Text. From == To inserts.
 type Edit struct {
@@ -96,6 +100,12 @@ func Rename(src string, caret int, name string) (edits []Edit, err error) {
 	if msg := c.taken(obj, sym, name); msg != "" {
 		return nil, errors.New(msg)
 	}
+	// the other half of WHY SOME METHOD NAMES ARE KEPT: a method renamed
+	// to String() string would start being called by fmt, which no
+	// recheck under stand-in imports can see
+	if msg := c.keptMethod(obj, name); msg != "" {
+		return nil, errors.New(msg)
+	}
 	edits = make([]Edit, 0, len(sym.Uses))
 	for _, u := range sym.Uses {
 		if _, ok := obj.(*types.PkgName); ok && sym.Def != nil && u == *sym.Def && isPathLit(src[u.From:u.To]) {
@@ -125,6 +135,9 @@ func (c *checked) fixed(obj types.Object, sym Symbol) string {
 	case *types.Func:
 		if o.Name() == "Run" && c.pkg != nil && o.Parent() == c.pkg.Scope() {
 			return "Run is the script's entry point: dbc calls it by that name"
+		}
+		if msg := c.keptMethod(o, o.Name()); msg != "" {
+			return msg // String() for fmt.Stringer and the like (rename_iface.go)
 		}
 	case *types.Var:
 		if o.Embedded() {

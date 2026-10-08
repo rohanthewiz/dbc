@@ -87,6 +87,38 @@ func TestRename(t *testing.T) {
 }
 
 // The name it already has is nothing to do, not an error.
+// A well-known method name with another signature, or on an interface,
+// satisfies nothing outside the script: it renames like any method.
+func TestRenameKeptMethodNot(t *testing.T) {
+	for _, c := range []struct{ name, src, to string }{
+		{"String with a parameter",
+			header + "type t int\n\nfunc (t) ▮String(w int) string { return \"\" }\n\nfunc Run(s *sdb.S) error {\n\ts.Print(t(1).String(2))\n\treturn nil\n}\n",
+			"Pad"},
+		{"Len returning int64",
+			header + "type t []int\n\nfunc (x t) ▮Len() int64 { return 0 }\n\nfunc Run(s *sdb.S) error {\n\treturn nil\n}\n",
+			"Size"},
+		{"String with the script's own string type",
+			header + "type string int\ntype t int\n\nfunc (t) ▮String() string { return 0 }\n\nfunc Run(s *sdb.S) error {\n\treturn nil\n}\n",
+			"Text"},
+		{"an interface's own String",
+			header + "type named interface{ ▮String() string }\n\nfunc Run(s *sdb.S) error {\n\tvar n named\n\t_ = n.String()\n\treturn nil\n}\n",
+			"Name"},
+		{"a method renamed to String with another signature",
+			header + "type t int\n\nfunc (t) ▮str() int { return 0 }\n\nfunc Run(s *sdb.S) error {\n\ts.Print(t(1).str())\n\treturn nil\n}\n",
+			"String"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			src, caret := cut(t, c.src)
+			if sym := Resolve(src, caret); sym.Fixed != "" {
+				t.Fatalf("fixed = %q, want none", sym.Fixed)
+			}
+			if edits, err := Rename(src, caret, c.to); err != nil || len(edits) == 0 {
+				t.Errorf("Rename = %v, %v; want edits", edits, err)
+			}
+		})
+	}
+}
+
 func TestRenameSameName(t *testing.T) {
 	src, caret := cut(t, runBody("\t▮n := 1\n\ts.Print(n)\n"))
 	if edits, err := Rename(src, caret, "n"); err != nil || len(edits) != 0 {
@@ -143,6 +175,26 @@ func TestRenameRefused(t *testing.T) {
 		{"a builtin's use captured",
 			runBody("\t▮n := \"abc\"\n\ts.Print(len(n))\n"), "len",
 			"renaming n to len would change what len on line 7 means"},
+
+		// methods code outside the script calls by name (rename_iface.go)
+		{"String() away from fmt.Stringer",
+			header + "type cents int\n\nfunc (c cents) ▮String() string { return \"$\" }\n\nfunc Run(s *sdb.S) error {\n\ts.Print(\"%v\", cents(1))\n\treturn nil\n}\n",
+			"Text", "String() string satisfies fmt.Stringer"},
+		{"Error() away, never used as an error",
+			header + "type oops struct{}\n\nfunc (*oops) ▮Error() string { return \"oops\" }\n\nfunc Run(s *sdb.S) error {\n\treturn nil\n}\n",
+			"Msg", "Error() string satisfies error"},
+		{"Format under a renamed fmt import",
+			"package main\n\nimport (\n\tf \"fmt\"\n\n\t\"github.com/rohanthewiz/dbc/sdb\"\n)\n\ntype t int\n\nfunc (t) ▮Format(st f.State, verb int32) {}\n\nfunc Run(s *sdb.S) error {\n\treturn nil\n}\n",
+			"F", "Format(fmt.State, rune) satisfies fmt.Formatter"},
+		{"Value for driver.Valuer",
+			"package main\n\nimport (\n\t\"database/sql/driver\"\n\n\t\"github.com/rohanthewiz/dbc/sdb\"\n)\n\ntype t int\n\nfunc (t) ▮Value() (driver.Value, error) { return nil, nil }\n\nfunc Run(s *sdb.S) error {\n\treturn nil\n}\n",
+			"V", "satisfies driver.Valuer"},
+		{"Less, its parameters grouped",
+			header + "type by []int\n\nfunc (b by) ▮Less(i, j int) bool { return b[i] < b[j] }\n\nfunc Run(s *sdb.S) error {\n\treturn nil\n}\n",
+			"Lt", "Less(int, int) bool satisfies sort.Interface"},
+		{"a method renamed to String() string",
+			header + "type cents int\n\nfunc (c cents) ▮str() string { return \"$\" }\n\nfunc Run(s *sdb.S) error {\n\ts.Print(cents(1).str())\n\treturn nil\n}\n",
+			"String", "as String() string, str would satisfy fmt.Stringer"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			src, caret := cut(t, c.src)

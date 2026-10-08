@@ -253,6 +253,7 @@ func (s *Server) routes() {
 	r.Get("/api/v1/script-api", s.handleScriptAPI)
 	r.Post("/api/v1/script-check", s.handleScriptCheck)
 	r.Post("/api/v1/script-symbol", s.handleScriptSymbol)
+	r.Post("/api/v1/script-symbol-rename", s.handleScriptSymbolRename)
 	r.Get("/api/v1/script-examples/:name", s.handleScriptExample)
 	r.Get("/api/v1/script-templates/:name", s.handleScriptTemplate)
 	r.Post("/api/v1/script-trash/:id/restore", s.handleScriptRestore)

@@ -43,6 +43,8 @@ func Run(s *sdb.S) error {
 //	Ctrl+O on an empty dir ─► the templates and the examples are listed
 //	New from "query"       ─► a named file, opened in a script tab (Go)
 //	a compile error        ─► a marker, "1 error" in the header, ● unsaved
+//	F12, Shift+F12, F2     ─► the declaration, the usages, a rename — the
+//	                          outer n's, not a shadowing n's
 //	completion             ─► s. lists S's methods; s.Query(" the connections
 //	fixed, Ctrl+S          ─► on disk, ● gone
 //	▶ Run                  ─► both s.Shows: the switcher, the log line
@@ -154,6 +156,31 @@ func scriptTabs(t *testing.T, e *env, p *rod.Page) {
 	}`)
 	p.Keyboard.MustType(input.Escape)
 	waitFor(t, p, "the usages list closed", `() => !document.querySelector(".reference-zone-widget .ref-tree .monaco-list-row")`)
+
+	// ── rename (F2), scope-aware ──────────────────────────────────────────
+	// from the same outer n: the box opens on it, and the new name lands on
+	// its declaration and its use, never on the if's own n
+	eval(t, p, caretOnN)
+	p.Keyboard.MustType(input.F2)
+	waitFor(t, p, "the rename box holding n", `() => { const i = document.querySelector(".rename-box input"); return !!i && i.value === "n"; }`)
+	eval(t, p, `() => { const i = document.querySelector(".rename-box input"); i.value = "total"; i.focus(); }`)
+	p.Keyboard.MustType(input.Enter)
+	waitFor(t, p, "the outer n renamed, the if's n not", `() => {
+	  const m = monaco.editor.getEditors()[0].getModel();
+	  return m.getLineContent(6) === "\ttotal := 1" && m.getLineContent(7) === "\tif n := 2; n > 1 {" &&
+	    m.getLineContent(8) === "\t\ts.Print(n)" && m.getLineContent(10) === "\ts.Print(total)";
+	}`)
+	// an sdb member is not the script's to rename: the box says why
+	// instead of opening (the first rename's box stays in the DOM, hidden,
+	// so "not open" is "not laid out")
+	eval(t, p, `() => { const ed = monaco.editor.getEditors()[0]; ed.setPosition({ lineNumber: 10, column: 5 }); ed.focus(); }`)
+	p.Keyboard.MustType(input.F2)
+	waitFor(t, p, "the refusal beside the caret", `() => {
+	  const m = document.querySelector(".monaco-editor-overlaymessage");
+	  const box = document.querySelector(".rename-box");
+	  return !!m && /Print\sbelongs\sto\san\simported\spackage/.test(m.textContent) && !(box && box.offsetParent);
+	}`)
+	p.Keyboard.MustType(input.Escape)
 
 	// ── completion from the sdb API, and connection names ────────────────
 	setText("package main\n\nimport \"github.com/rohanthewiz/dbc/sdb\"\n\nfunc Run(db *sdb.S) error {\n\t\n\treturn nil\n}\n")

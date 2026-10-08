@@ -41,6 +41,7 @@ import (
 //	POST   /api/v1/script-trash/:id/restore   {to?} → {name}
 //	POST   /api/v1/script-check               {name, text} → {diags}  (unsaved text)
 //	POST   /api/v1/script-symbol              {text, caret} → script.Symbol  (F12, Shift+F12)
+//	POST   /api/v1/script-symbol-rename       {text, caret, name} → {edits}  (F2)
 //	GET    /api/v1/script-examples/:name      a built-in example's text
 //	GET    /api/v1/script-templates/:name     a template, filled with connections
 //	GET    /api/v1/script-api                 the sdb API, for completion
@@ -303,11 +304,12 @@ func (s *Server) handleScriptCheck(ctx rweb.Context) error {
 	return ok(ctx, map[string]any{"diags": nonNil(script.Check(cmp.Or(req.Name, "script.go"), req.Text))})
 }
 
-// scriptSymbolReq is a go to definition / usages request: the editor's
+// scriptSymbolReq is a go to definition / usages / rename request: the editor's
 // text, saved or not, and the caret, in UTF-16 units as Monaco counts.
 type scriptSymbolReq struct {
 	Text  string `json:"text"`
 	Caret int    `json:"caret"`
+	Name  string `json:"name"` // the new name, for a rename
 }
 
 // handleScriptSymbol is POST /api/v1/script-symbol: what the name under a
@@ -345,6 +347,36 @@ func (s *Server) handleScriptSymbol(ctx rweb.Context) error {
 		sym.Def = &d
 	}
 	return ok(ctx, sym)
+}
+
+// handleScriptSymbolRename is POST /api/v1/script-symbol-rename: the edits
+// that rename the name under a script tab's caret (script.Rename). The
+// rename box first asks script-symbol, whose fixed says why a name cannot
+// be renamed before the box opens; this is the second request, with the
+// new name. A refusal — the name taken in that scope, not a Go name, a
+// renamed script that would mean something else — is a 400 with
+// script.Rename's sentence, which Monaco shows by the rename box, as the
+// SQL editor's rename (handleRename) does.
+//
+// Offsets are UTF-16 units both ways, as for script-symbol.
+func (s *Server) handleScriptSymbolRename(ctx rweb.Context) error {
+	var req scriptSymbolReq
+	if err := decode(ctx, &req); err != nil {
+		return fail(ctx, err)
+	}
+	if len(req.Text) > userdata.MaxScriptBytes {
+		return fail(ctx, badRequest("the script is too long to rename in"))
+	}
+	edits, err := script.Rename(req.Text, byteOffset(req.Text, req.Caret), req.Name)
+	if err != nil {
+		return fail(ctx, badRequest("%s", err.Error()))
+	}
+	// Rename's edits follow its uses, in text order: one counter walks once
+	c := &utf16Counter{s: req.Text}
+	for i, e := range edits {
+		edits[i].From, edits[i].To = c.of(e.From), c.of(e.To)
+	}
+	return ok(ctx, map[string]any{"edits": edits})
 }
 
 // handleScriptExample is GET /api/v1/script-examples/:name: a built-in

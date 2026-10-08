@@ -13,7 +13,8 @@ import (
 // Go to definition and usages in a script: the name under the caret, where
 // the script declares it, and every place the script uses it. The script
 // editor's F12 / Ctrl+click and Shift+F12 (web/scripts.go, scripts.js) ask
-// here, as the SQL editor's ask sqlcomplete.Resolve.
+// here, as the SQL editor's ask sqlcomplete.Resolve. F2's rename
+// (rename.go) starts from the same answer.
 //
 //	src, caret ─► go/parser ─► go/types (imports faked, errors ignored)
 //	                              │
@@ -66,6 +67,8 @@ type Symbol struct {
 	At   Span   `json:"at"`  // the occurrence under the caret
 	Def  *Span  `json:"def"` // nil: declared outside the script
 	Uses []Span `json:"uses"`
+	// Fixed says why F2 cannot rename it; "" when it can (rename.go).
+	Fixed string `json:"fixed,omitempty"`
 }
 
 // Resolve finds the symbol at byte offset caret of src. A caret just past a
@@ -76,64 +79,111 @@ type Symbol struct {
 // checker over odd input is a symbol with no kind, never a crash of the
 // server that asked.
 func Resolve(src string, caret int) (sym Symbol) {
-	sym.Uses = []Span{}
 	defer func() {
 		if r := recover(); r != nil {
 			sym = Symbol{Uses: []Span{}}
 		}
 	}()
+	c := checkSrc(src)
+	if c == nil {
+		return Symbol{Uses: []Span{}}
+	}
+	sym, _ = c.resolve(caret)
+	return sym
+}
+
+// checked is a script parsed and type-checked once, for Resolve and for
+// Rename (which checks twice: the script, then the script renamed).
+type checked struct {
+	fset *token.FileSet
+	f    *ast.File
+	tf   *token.File
+	pkg  *types.Package
+	info *types.Info
+	errs []types.Error // every error the checker reported, in order
+
+	// a type switch's per-clause objects folded onto one; see key
+	alias    map[types.Object]types.Object
+	tsIdents map[*ast.Ident]types.Object
+}
+
+// checkSrc parses and checks src; nil when the parser could build nothing.
+func checkSrc(src string) *checked {
 	fset := token.NewFileSet()
 	// SkipObjectResolution: go/types resolves scopes itself; the parser's
 	// older, deprecated ast.Object pass would only be thrown away
 	f, _ := parser.ParseFile(fset, "script.go", src, parser.AllErrors|parser.SkipObjectResolution)
 	if f == nil {
-		return sym
+		return nil
 	}
-	tf := fset.File(f.Pos())
-	off := func(p token.Pos) int { return tf.Offset(p) }
-
-	info := &types.Info{
+	c := &checked{fset: fset, f: f, tf: fset.File(f.Pos())}
+	c.info = &types.Info{
 		Defs:      map[*ast.Ident]types.Object{},
 		Uses:      map[*ast.Ident]types.Object{},
 		Implicits: map[ast.Node]types.Object{},
+		Scopes:    map[ast.Node]*types.Scope{},
 	}
 	conf := types.Config{
 		Importer: fakeImporter{},
-		Error:    func(error) {}, // keep going past every error; see above
+		// keep going past every error (see WHY THE IMPORTS ARE FAKED);
+		// Rename compares the list before and after
+		Error: func(err error) {
+			if te, ok := err.(types.Error); ok {
+				c.errs = append(c.errs, te)
+			}
+		},
 	}
-	_, _ = conf.Check("main", fset, []*ast.File{f}, info)
+	c.pkg, _ = conf.Check("main", fset, []*ast.File{f}, c.info)
+	c.alias, c.tsIdents = typeSwitchAliases(f, c.info)
+	return c
+}
 
-	id := identAt(f, caret, off)
+// off is p as a byte offset of the script.
+func (c *checked) off(p token.Pos) int { return c.tf.Offset(p) }
+
+// line is the 1-based line of byte offset off, for messages.
+func (c *checked) line(off int) int { return c.tf.Line(c.tf.Pos(off)) }
+
+// key is the object ident i means, nil for none.
+//
+// A type switch's x in `switch x := v.(type)` declares no object of its
+// own: each case clause gets an implicit one, so x in one clause and x in
+// the next are different objects to the checker. To the reader they are
+// one name, so every clause's object, and the switch's ident itself, are
+// folded onto one representative before comparing.
+func (c *checked) key(i *ast.Ident) types.Object {
+	if rep, ok := c.tsIdents[i]; ok {
+		return rep
+	}
+	o := c.info.Defs[i]
+	if o == nil {
+		o = c.info.Uses[i]
+	}
+	if rep, ok := c.alias[o]; ok {
+		return rep
+	}
+	return o
+}
+
+// resolve is Resolve over a checked script, also handing back the object
+// the caret is on (nil for none, or an imported member) for Rename.
+func (c *checked) resolve(caret int) (Symbol, types.Object) {
+	sym := Symbol{Uses: []Span{}}
+	id := identAt(c.f, caret, c.off)
 	if id == nil || id.Name == "_" {
-		return sym
+		return sym, nil
 	}
-	at := Span{off(id.Pos()), off(id.End())}
+	at := Span{c.off(id.Pos()), c.off(id.End())}
 
-	// A type switch's x in `switch x := v.(type)` declares no object of its
-	// own: each case clause gets an implicit one, so x in one clause and x
-	// in the next are different objects to the checker. To the reader they
-	// are one name, so every clause's object, and the switch's ident
-	// itself, are folded onto one representative before comparing.
-	alias, tsIdents := typeSwitchAliases(f, info)
-	key := func(i *ast.Ident) types.Object {
-		if rep, ok := tsIdents[i]; ok {
-			return rep
-		}
-		o := info.Defs[i]
-		if o == nil {
-			o = info.Uses[i]
-		}
-		if rep, ok := alias[o]; ok {
-			return rep
-		}
-		return o
-	}
-
-	obj := key(id)
+	obj := c.key(id)
 	if obj == nil {
 		// unresolved: an imported package's member, selected from a
 		// variable or the package name (see WHAT AN IMPORTED MEMBER GETS)
-		return selectorUses(f, info, id, at, off)
+		sym = selectorUses(c.f, c.info, id, at, c.off)
+		if sym.Kind != "" {
+			sym.Fixed = sym.Name + " belongs to an imported package: renaming it here would not rename it there"
+		}
+		return sym, nil
 	}
 
 	sym.Name, sym.At, sym.Kind = id.Name, at, kindOf(obj)
@@ -141,23 +191,24 @@ func Resolve(src string, caret int) (sym Symbol) {
 	// ident can be in both maps (an embedded field defines the field and
 	// uses the type), so uses are deduped by offset.
 	seen := map[int]bool{}
-	ast.Inspect(f, func(n ast.Node) bool {
+	ast.Inspect(c.f, func(n ast.Node) bool {
 		i, ok := n.(*ast.Ident)
-		if !ok || key(i) != obj || seen[off(i.Pos())] {
+		if !ok || c.key(i) != obj || seen[c.off(i.Pos())] {
 			return true
 		}
-		seen[off(i.Pos())] = true
-		sym.Uses = append(sym.Uses, Span{off(i.Pos()), off(i.End())})
+		seen[c.off(i.Pos())] = true
+		sym.Uses = append(sym.Uses, Span{c.off(i.Pos()), c.off(i.End())})
 		return true
 	})
-	sym.Def = declSpan(f, obj, tf, off)
+	sym.Def = declSpan(c.f, obj, c.tf, c.off)
 	if sym.Def != nil && !seen[sym.Def.From] {
 		// an unnamed import is declared by its path literal, which no
 		// ident covers: it joins the list beside the uses
 		sym.Uses = append(sym.Uses, *sym.Def)
 	}
 	slices.SortFunc(sym.Uses, func(a, b Span) int { return a.From - b.From })
-	return sym
+	sym.Fixed = c.fixed(obj, sym)
+	return sym, obj
 }
 
 // identAt is the identifier at byte offset caret: one the caret is inside

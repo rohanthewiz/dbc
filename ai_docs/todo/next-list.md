@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-167
+**Next ID:** N-168
 
 ## Open
 
@@ -76,20 +76,13 @@ ten session docs in `ai_docs/claude_sessions/`
   filter line over the list, as the pickers' `pickModal` filters. Offered
   at the end of the session; the user did not answer.
 
-- **N-161** · raised `2026-1008-1331-postgres-in-docker` · value low
-  `pgdocker.Versions` lists 18 to 14 by hand, each with its end-of-life
-  date (14 drops out on 2026-11-12 by itself). PostgreSQL 19 was still
-  beta on Docker Hub on 2026-10-08 (`19beta1`, no `19`). Add it once
-  `postgres:19` is published, with its EOL from
-  postgresql.org/support/versioning. Check `dataDir` too, in case the
-  image moves its data again, as 18 did.
-
-- **N-164** · raised `2026-1008-1518-script-goto-def-usages-inline-diags` · value low
-  Rename (F2) in a script tab. `script.Resolve` already finds every use of a
-  name the script declares, scope by scope, so the edits are those spans.
-  Refuse an imported member (`s.Query`), a builtin, or a new name that is
-  already taken in that scope (go/types' `Scope.LookupParent`). Mirror the
-  SQL editor's rename provider (`editor.js` `registerSymbols`).
+- **N-167** · raised `2026-1008-1826-script-rename-f2` · value low
+  Script F2 can rename a method that satisfies an interface only an import
+  knows, such as `String()` for `fmt.Stringer`. Imports are faked, so the
+  recheck sees no error, and `s.Print(v)` silently stops calling it.
+  (`Error()` is safe, because `error` is a universe type and the recheck
+  catches the break.) Refuse, or warn on, a method whose name is a
+  well-known interface's (String, Format, MarshalJSON, Scan, Value…).
 
 
 ## Validate
@@ -378,6 +371,14 @@ call.
   transaction costs a file database (a writer locked out for the copy).
   Contingent on someone moving rows off a non-Postgres source.
 
+- **N-161** · raised `2026-1008-1331-postgres-in-docker` · value low
+  `pgdocker.Versions` lists 18 to 14 by hand, each with its end-of-life
+  date (14 drops out on 2026-11-12 by itself). PostgreSQL 19 was still
+  beta on Docker Hub on 2026-10-08 (`19beta1`, no `19`). Add it once
+  `postgres:19` is published, with its EOL from
+  postgresql.org/support/versioning. Check `dataDir` too, in case the
+  image moves its data again, as 18 did.
+
 ## Non-goals
 
 - **N-012** · declined `2026-0728-2000-stmt-under-cursor-and-query-cancel` —
@@ -411,6 +412,13 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-164** · raised `2026-1008-1518-script-goto-def-usages-inline-diags` · value low
+  Rename (F2) in a script tab. `script.Resolve` already finds every use of a
+  name the script declares, scope by scope, so the edits are those spans.
+  Refuse an imported member (`s.Query`), a builtin, or a new name that is
+  already taken in that scope (go/types' `Scope.LookupParent`). Mirror the
+  SQL editor's rename provider (`editor.js` `registerSymbols`).
+  closed 2026-10-08, `2026-1008-1826-script-rename-f2` (from the cats-todo backlog): F2 in a script tab renames through `script.Rename` (`script/rename.go`, `POST /api/v1/script-symbol-rename`, a provider in `scripts.js` modelled on `registerSymbols`). The rename box does not open on `Symbol.Fixed`: an imported member, a builtin, the script's `Run`, an embedded field, or a type that something embeds. A taken name is caught by `Scope.Lookup` at the declaration (package scope and file scope checked against each other) and by `LookupParent` at every use. Then the renamed text is type-checked again: every ident must bind as before and no new error may appear. That catches field/method collisions and an outer name's uses captured by the renamed one. An unnamed import gets a name (`import db "…/sdb"`). Tests in script and web; web e2e gains F2 on the shadowed-n script and a refusal on `s.Print`.
 - **N-165** · raised `2026-1008-1518-script-goto-def-usages-inline-diags` · value medium
   The SQL editor's Shift+F12 has Monaco's two-reference quirk. With just
   the declaration and one use (an alias used once), Go to References jumps

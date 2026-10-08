@@ -272,6 +272,26 @@ func TestScriptSymbol(t *testing.T) {
 	}
 }
 
+// script-symbol-rename answers edits in UTF-16 units, as script-symbol does,
+// and a refusal is a 400 carrying script.Rename's sentence for the rename box.
+func TestScriptSymbolRename(t *testing.T) {
+	e, _ := scriptEnv(t)
+	text := "package main\n\nimport \"github.com/rohanthewiz/dbc/sdb\"\n\n" +
+		"func Run(s *sdb.S) error {\n\tmsg := \"🐈 \"\n\ts.Print(msg + msg)\n\treturn nil\n}\n"
+	units := func(s string) int { return len(utf16.Encode([]rune(s))) }
+	last := units(text[:strings.LastIndex(text, "msg)")])
+	b, _ := json.Marshal(scriptSymbolReq{Text: text, Caret: last, Name: "note"})
+	got := decodeData[struct{ Edits []script.Edit }](t, e.api("POST", "/api/v1/script-symbol-rename", string(b), 200))
+	if len(got.Edits) != 3 || got.Edits[2] != (script.Edit{From: last, To: last + 3, Text: "note"}) {
+		t.Fatalf("edits = %+v, want 3, the last at %d", got.Edits, last)
+	}
+
+	b, _ = json.Marshal(scriptSymbolReq{Text: text, Caret: last, Name: "s"})
+	if env := e.api("POST", "/api/v1/script-symbol-rename", string(b), 400); !strings.Contains(env.Error, "s is already declared") {
+		t.Errorf("rename to s: error = %q", env.Error)
+	}
+}
+
 func strconvQuote(s string) string { b, _ := json.Marshal(s); return string(b) }
 
 // The list carries the built-in examples and the templates; an example's

@@ -77,6 +77,13 @@
 // it. Scope is honoured — a shadowing err is its own symbol — and a member
 // of sdb or another import (s.Query) has no declaration in the script, so
 // F12 finds none, but Shift+F12 still lists its uses from the same s.
+//
+// RENAME. F2 on a name renames every use of it the same scope-aware way
+// (POST /api/v1/script-symbol-rename, script.Rename), as F2 in a SQL tab
+// renames an alias. The box does not open on what cannot be renamed — an
+// imported member, a builtin, Run — and a new name already taken in that
+// scope, or one that would change what another name means, is refused
+// with the server's sentence beside the box.
 (function () {
   "use strict";
 
@@ -905,6 +912,35 @@
           return s.uses
             .filter((u) => ctx.includeDeclaration || !s.def || u.from !== s.def.from)
             .map((u) => ({ uri: model.uri, range: rangeOf(model, u) }));
+        },
+      });
+      // F2, as editor.js registerSymbols does it for SQL: the symbol
+      // request says where the box opens and what it holds, or why it does
+      // not open (s.fixed); the edits come from the server, which refuses
+      // a taken name. versionId makes Monaco drop the edits if the text
+      // changed while the request was out, rather than apply offsets that
+      // no longer point at the name.
+      monaco.languages.registerRenameProvider("go", {
+        async resolveRenameLocation(model, pos) {
+          const s = await symbolAt(model, pos);
+          const here = new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column);
+          if (!s) return { range: here, text: "", rejectReason: "Nothing to rename here: rename works on a name the script declares." };
+          if (s.fixed) return { range: here, text: "", rejectReason: s.fixed };
+          return { range: rangeOf(model, s.at), text: s.name };
+        },
+        async provideRenameEdits(model, pos, newName) {
+          const versionId = model.getVersionId();
+          let r;
+          try {
+            r = await api("POST", "/api/v1/script-symbol-rename", { text: model.getValue(), caret: model.getOffsetAt(pos), name: newName });
+          } catch (err) {
+            return { edits: [], rejectReason: err.message };
+          }
+          return {
+            edits: (r.edits || []).map((e) => ({
+              resource: model.uri, versionId, textEdit: { range: rangeOf(model, e), text: e.text },
+            })),
+          };
         },
       });
 

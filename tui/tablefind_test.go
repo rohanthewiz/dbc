@@ -157,7 +157,7 @@ func TestTablesFindAcrossCatalogs(t *testing.T) {
 	key(t, m, "/")
 	typeText(t, m, "cat")
 	key(t, m, "down")
-	key(t, m, "tab") // off the line, filter kept
+	key(t, m, "tab")                                 // off the line, filter kept
 	if name, _ := m.currentTable(); name != "cats" { // catnip sorts first
 		t.Fatalf("cursor on %q, want cats", name)
 	}

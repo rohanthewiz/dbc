@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-163
+**Next ID:** N-164
 
 ## Open
 
@@ -217,6 +217,8 @@ and `raised`.
   the TUI test drives its confirm menu both ways. Add a step to the go-rod
   test in `web/e2e`: run an INSERT into a scratch table, press `r`, see the
   modal, Keep the result (nothing runs), then Run it again (a new seq).
+  Updated `2026-1008-1450-rerun-button-on-result-tab`: a click on the tab's
+  ↻ reaches the same `rerun`, so the step can click it instead of `r`.
 
 - **N-162** · raised `2026-1008-1331-postgres-in-docker` · value low
   Postgres in Docker is covered by unit tests over a fake docker CLI, a
@@ -226,6 +228,13 @@ and `raised`.
   Stop row in a real terminal; dbc web's Start (the waiting message, then
   connect) and the Stop row in a browser; the macOS app finding `docker`
   outside PATH (`binDirs`).
+- **N-163** · raised `2026-1008-1450-rerun-button-on-result-tab` · value low
+  The TUI's ↻ after the current result tab is covered by model-level tests
+  over a rendered frame (`TestRerunByClick`, `TestResultTabPartsRerun`),
+  not seen in a real terminal. Check: the glyph takes one cell and lines up
+  with its click target, its colour reads under a cats theme as well as
+  the built-in dark one, and the write confirm opened from the bottom
+  border stays on screen.
 
 ## Roadmap
 

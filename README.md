@@ -339,6 +339,7 @@ with no database picker.
 | assistant | `⤓ insert` on a code block | puts that SQL in the editor at the caret |
 | results title | click `Results` / `◈ Plan` | switches the results pane between the grid and the plan |
 | result tabs (the results pane's bottom border) | click · right-click | shows that result · rerun its query, pin or unpin, share with the assistant, close, close the unpinned ones (see [Result tabs](#result-tabs-and-the-log-per-connection)) |
+| ↻ after the result tab on screen | click | reruns its query into that tab, as `r` does (a statement that writes asks first) |
 | log title | click `⧉ copy` / `✕ clear` | copies the connection's log to the clipboard / empties it |
 | plan | click / double-click / right-click | select a step (fold it) / step menu: copy, zoom the flame graph, ask the assistant |
 | plan | `▸`/`▾` beside a step | folds or unfolds it |
@@ -385,7 +386,7 @@ dragging.
 | `p` | *(results)* Switch between the result grid and the plan |
 | `{` / `}` | *(results, plan)* The previous / next result tab of the connection (see [Result tabs](#result-tabs-and-the-log-per-connection)) |
 | `P` · `x` | *(results, plan)* Pin the result tab (a run then opens a new one) or unpin it · close it |
-| `r` | *(results, plan)* Rerun the result tab's query into that same tab, pinned or not (a statement that writes asks first) |
+| `r` | *(results, plan)* Rerun the result tab's query into that same tab, pinned or not (a statement that writes asks first); or click its ↻ |
 | `S` | *(results, plan)* Share the result tab with the assistant, or stop sharing it (`s` too; needs `ai_rows` — see [Sharing a result](#ai-assistant)) |
 | `[` / `]` | *(results)* After a script that showed several results (`s.Show`): the previous / next one within its result tab — also a click on its number in "Result 1 · 2 · 3" on the results title |
 | `z` | *(results)* Give the results pane the whole column / give it back |
@@ -1131,7 +1132,7 @@ A set holds **result tabs**, drawn on the results pane's bottom border in
 the terminal and on the results bar in `dbc web`:
 
 ```
-╰─ 1⚑ select * from orders · 2✦ columns cats · 3 select count(*) … ── { } switch · r rerun · P pin · S share · x close ─╯
+╰─ 1⚑ select * from orders · 2✦ columns cats · 3 select count(*) … ↻ ── { } switch · r rerun · P pin · S share · x close ─╯
 ```
 
 A run **replaces the result in the tab it started from**, unless that tab
@@ -1144,8 +1145,9 @@ its statement (or `preview cats`, `columns cats`, `script x.go`). A script's
 `s.Show` results all land in one tab, where "Result 1 · 2 · 3" steps through
 them.
 
-**Rerun** a tab (`r`, or **↻ Rerun its query** on its right-click menu) to
-bring its result up to date: its statement runs again, on the same session,
+**Rerun** a tab (`r`, a click on the **↻** beside the tab on screen, or
+**↻ Rerun its query** on its right-click menu) to bring its result up to
+date: its statement runs again, on the same session,
 and the fresh result goes back **into that same tab** — a pinned one
 included, which stays pinned, in its place in the strip, with its name (a
 shared tab stays shared). The pin keeps a result from being replaced by

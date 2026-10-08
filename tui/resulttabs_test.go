@@ -560,7 +560,7 @@ func TestRerunKeepsTheSort(t *testing.T) {
 	m.focus = focusGrid
 	key(t, m, "P")
 	m.grid.Sort(0)
-	m.grid.Sort(0) // descending
+	m.grid.Sort(0)                               // descending
 	runSQL(t, m, "INSERT INTO pet VALUES ('d')") // a new tab: the select's is pinned
 	m.focus = focusGrid
 	key(t, m, "{")
@@ -574,6 +574,101 @@ func TestRerunKeepsTheSort(t *testing.T) {
 	runSQL(t, m, "SELECT name FROM pet WHERE name <> 'c'")
 	if m.grid.sortCol != -1 || colVals(m.grid) != "b,a,d" {
 		t.Errorf("an edited run: sort %d rows %s, want result order b,a,d", m.grid.sortCol, colVals(m.grid))
+	}
+}
+
+// The current result tab's ↻ on the strip reruns its query with a click,
+// as r does: into the same tab, a pinned one included; a statement that
+// writes asks first, at the click. Only the current tab has one.
+func TestRerunByClick(t *testing.T) {
+	m := newTestModel(t)
+	runSQL(t, m, "CREATE TABLE tick (x INTEGER)")
+	runSQL(t, m, "SELECT count(*) AS n FROM tick")
+	m.focus = focusGrid
+	key(t, m, "P")
+	pinned := curID(m)
+	runSQL(t, m, "INSERT INTO tick VALUES (1)") // a new tab: the count's is pinned
+
+	// one ↻, right after the current (second) tab's label, its title cut
+	line := frame(m).Line(stripRow(m))
+	if strings.Count(line, "↻") != 1 || !strings.Contains(line, " 2 INSERT INTO tick VALUES… ↻ ") {
+		t.Fatalf("one ↻, after the current tab's label: %q", line)
+	}
+
+	// the INSERT's tab: the click asks, and keeping the result runs nothing
+	x, y := findText(t, frame(m), "↻")
+	click(t, m, x, y)
+	if m.menu == nil || !strings.Contains(menuLabels(m), "may change the database") {
+		t.Fatalf("no confirm for a write; menu %v", m.menu != nil)
+	}
+	if m.menu.x != x || m.menu.y != y {
+		t.Errorf("the confirm opened at (%d,%d), want the click's (%d,%d)", m.menu.x, m.menu.y, x, y)
+	}
+	pickMenu(t, m, "Keep the result")
+	if m.ws.Busy() {
+		t.Fatal("the write ran without being confirmed")
+	}
+	click(t, m, x, y)
+	pickMenu(t, m, "Run it again") // two rows now
+
+	// the pinned count: shown, then its ↻ refreshes it in place
+	x, y = findText(t, frame(m), " 1⚑")
+	click(t, m, x+1, y)
+	if curID(m) != pinned || m.grid.res.Rows[0][0] != "0" {
+		t.Fatalf("not on the pinned count: %d, %v", curID(m), m.grid.res.Rows)
+	}
+	x, y = findText(t, frame(m), "↻")
+	click(t, m, x, y)
+	tabs, cur := m.ws.ResultTabs()
+	if len(tabs) != 2 || tabs[cur].ID != pinned || !tabs[cur].Pinned || m.focus != focusGrid {
+		t.Fatalf("after ↻: %+v at %d, focus %v", tabs, cur, m.focus)
+	}
+	if m.grid.res.Rows[0][0] != "2" {
+		t.Errorf("the grid shows %v, want the 2 rows inserted", m.grid.res.Rows)
+	}
+	if log := logText(m); !strings.Contains(log, "rerun SELECT count(*) AS n FROM tick completed on demo-sqlite") {
+		t.Errorf("log: %s", log)
+	}
+}
+
+// resultTabParts gives the current tab a ↻ only when it has a statement
+// (a script's tab has none to rerun), in every form that fits one: after
+// the label, or between the compact form's count and its ›, which drops
+// it before it drops the steps.
+func TestResultTabPartsRerun(t *testing.T) {
+	tabs := []workspace.ResultTab{
+		{ID: 1, Title: "select * from cats", Stmt: "select * from cats"},
+		{ID: 2, Title: "script x.go"},
+		{ID: 3, Title: "orders", Stmt: "select * from orders"},
+	}
+	text := func(ps []rtabPart) string {
+		var b strings.Builder
+		for _, p := range ps {
+			b.WriteString(p.text)
+		}
+		return b.String()
+	}
+	reruns := func(ps []rtabPart) int {
+		n := 0
+		for _, p := range ps {
+			if p.rerun {
+				n++
+			}
+		}
+		return n
+	}
+	if p := resultTabParts(tabs, 2, 200); reruns(p) != 1 || !strings.HasSuffix(text(p), " 3 orders ↻ ") {
+		t.Errorf("wide, on 3: %q", text(p))
+	}
+	if p := resultTabParts(tabs, 1, 200); reruns(p) != 0 {
+		t.Errorf("a script's tab got a ↻: %q", text(p))
+	}
+	// numbers alone do not fit in 12 cells (" 1 ↻ · 2 · 3 " is 13), so compact
+	if p := resultTabParts(tabs, 0, 12); text(p) != " ‹ 1/3 ↻ › " {
+		t.Errorf("compact = %q", text(p))
+	}
+	if p := resultTabParts(tabs, 0, 9); text(p) != " ‹ 1/3 › " {
+		t.Errorf("compact without room for ↻ = %q", text(p))
 	}
 }
 

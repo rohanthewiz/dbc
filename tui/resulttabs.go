@@ -45,8 +45,9 @@ import (
 // tabs and a script's "Result 1 · 2 · 3" switcher, and a spreadsheet's
 // sheet tabs sit at the bottom too:
 //
-//	╰─ 1 select * from cats · 2⚑ orders · 3✦ columns cats ── { } switch · r rerun · P pin · x close ─╯
-//	   └────── a chip ─────┘  └─ pinned ─┘  └ shared with the assistant ┘
+//	╰─ 1 select * from cats · 2⚑ orders ↻ · 3✦ columns cats ── { } switch · r rerun · P pin · x close ─╯
+//	   └────── a chip ─────┘  └ current ┘│ └ shared with the assistant ┘
+//	                                     └ a click reruns the current tab's query (r)
 //
 // A tab SHARED with the assistant (s, or its menu) sends its result with
 // every question on the connection, whichever tab is on screen; the
@@ -295,19 +296,27 @@ func (m *Model) pinResultTab(id, pos int, pin bool) tea.Cmd {
 // among the grid's own, and an INSERT run twice by a stray keypress is not
 // undone by a second one.
 func (m *Model) rerunCurResultTab() tea.Cmd {
+	// below the grid's cursor; on the plan view, where the grid is not
+	// drawn, at the pane's top left as the plan's own menu opens
+	x, y := m.grid.cursorScreen()
+	if m.resTab == tabPlan && m.planv.plan != nil {
+		x, y = m.planv.area.X+2, m.planv.area.Y+2
+	}
+	return m.rerunCurResultTabAt(x, y+1)
+}
+
+// rerunCurResultTabAt is rerunCurResultTab with the confirm for a write
+// opened at (x, y): r puts it at the grid's cursor, a click on the strip's
+// ↻ where the click was, so the question comes up under the pointer that
+// asked for it.
+func (m *Model) rerunCurResultTabAt(x, y int) tea.Cmd {
 	t, pos, _, ok := m.curResultTab()
 	if !ok {
 		m.log(logWarn, noResultTab)
 		return nil
 	}
 	if t.Writes {
-		// below the grid's cursor; on the plan view, where the grid is not
-		// drawn, at the pane's top left as the plan's own menu opens
-		x, y := m.grid.cursorScreen()
-		if m.resTab == tabPlan && m.planv.plan != nil {
-			x, y = m.planv.area.X+2, m.planv.area.Y+2
-		}
-		m.openMenu(x, y+1, []menuItem{
+		m.openMenu(x, y, []menuItem{
 			heading(fmt.Sprintf("result %d's statement may change the database", pos)),
 			{label: "Keep the result as it is", act: func(m *Model) tea.Cmd { return nil }},
 			{label: "↻ Run it again — " + truncate(t.Title, rtabMaxTitle),
@@ -506,13 +515,21 @@ func (m *Model) openResultTabMenu(id, x, y int) tea.Cmd {
 // ---------------------------------------------------------------------------
 
 // rtabPart is one run of text in the strip before it is placed: a chip
-// (to > 0, the result tab it shows), the current tab (on), or plain text.
+// (to > 0, the result tab it shows), the current tab (on), the current
+// tab's ↻ (rerun), or plain text.
 type rtabPart struct {
 	text  string
 	to    int  // the result tab a click shows; 0 for text that is not a chip
 	on    bool // the tab on screen
 	arrow bool // the compact form's ‹ or ›
+	rerun bool // the ↻ after the current tab: a click reruns its query
 }
+
+// rtabRerun is the ↻ drawn after the current tab's label. Only the current
+// tab gets one: a click on any other label shows it first (and then its ↻
+// is there), and one on every label would cost the titles two cells each.
+// It follows the label's own trailing space, so it reads " 2 orders ↻ ".
+const rtabRerun = "↻ "
 
 // rtabMaxTitle bounds one label's title: a long statement preview would
 // otherwise take the whole border.
@@ -545,6 +562,9 @@ func resultTabParts(tabs []workspace.ResultTab, cur, w int) []rtabPart {
 		}
 		return s + " "
 	}
+	// a script's tab has no statement to rerun (RerunResultTab refuses
+	// it), so it gets no ↻ rather than one that only logs a refusal
+	rerun := cur >= 0 && cur < len(tabs) && tabs[cur].Stmt != ""
 	build := func(tw int) []rtabPart {
 		var out []rtabPart
 		for i, t := range tabs {
@@ -552,6 +572,9 @@ func resultTabParts(tabs []workspace.ResultTab, cur, w int) []rtabPart {
 				out = append(out, rtabPart{text: "·"})
 			}
 			out = append(out, rtabPart{text: label(i, tw), to: t.ID, on: i == cur})
+			if i == cur && rerun {
+				out = append(out, rtabPart{text: rtabRerun, rerun: true})
+			}
 		}
 		return out
 	}
@@ -579,6 +602,15 @@ func resultTabParts(tabs []workspace.ResultTab, cur, w int) []rtabPart {
 		on = itoa(cur+1) + "/" + itoa(len(tabs)) + tabMarks(tabs[cur])
 	}
 	p := []rtabPart{{text: " ‹ ", to: prev, arrow: true}, {text: on, on: true}, {text: " › ", to: next, arrow: true}}
+	// the ↻ between the count and the ›, " ‹ 2/7 ↻ › ", when it fits; the
+	// steps matter more than it does (r still reruns), so it is the first
+	// thing dropped
+	if rerun {
+		withRerun := slices.Insert(slices.Clone(p), 2, rtabPart{text: " ↻", rerun: true})
+		if rtabWidth(withRerun) <= w {
+			return withRerun
+		}
+	}
 	if rtabWidth(p) <= w {
 		return p
 	}
@@ -613,6 +645,7 @@ func rtabWidth(parts []rtabPart) int {
 // no change.
 func (m *Model) drawResultTabs(c *Canvas, r Rect) {
 	m.lay.rtabChips = m.lay.rtabChips[:0]
+	m.lay.rtabRerun = Rect{}
 	if r.W < 12 || r.H < 3 {
 		return
 	}
@@ -638,11 +671,24 @@ func (m *Model) drawResultTabs(c *Canvas, r Rect) {
 			st = on
 		case p.arrow && p.to == 0:
 			st = off.Dim() // the dead end of the compact form
+		case p.rerun:
+			// the current tab's colour, so it reads as that tab's, but not
+			// underlined: it is a control beside the label, not part of it
+			st = onBg(m.st.title, bg).Bold()
+			if m.focus == focusGrid {
+				st = onBg(m.st.titleFocus, bg).Bold()
+			}
 		}
 		start := x
 		x = s.Put(x, 0, p.text, st)
 		if p.to > 0 && !p.on {
 			m.lay.rtabChips = append(m.lay.rtabChips, rtabChip{id: p.to, r: Rect{r.X + start, y, x - start, 1}, arrow: p.arrow})
+		}
+		if p.rerun {
+			// the glyph's own cell, not the space beside it: a click just
+			// past the ↻ only focuses the results. Cells, not bytes, before it.
+			gx := start + width(p.text[:strings.Index(p.text, "↻")])
+			m.lay.rtabRerun = Rect{r.X + gx, y, width("↻"), 1}
 		}
 	}
 	// the hint ends one ─ short of the ╯, with at least one ─ before it
@@ -653,6 +699,11 @@ func (m *Model) drawResultTabs(c *Canvas, r Rect) {
 	if x+width(hint)+1 <= r.W-2 {
 		s.PutRight(r.W-2, 0, hint, off.Italic().Dim())
 	}
+}
+
+// resultTabRerunAt reports whether (x, y) is on the current tab's ↻.
+func (m *Model) resultTabRerunAt(x, y int) bool {
+	return m.lay.rtabRerun.Contains(x, y)
 }
 
 // resultTabAt reports the strip chip at (x, y): the result tab it shows,

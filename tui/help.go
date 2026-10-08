@@ -91,7 +91,7 @@ var keyGroups = []keyGroup{
 		{"[ · ]", "a script's previous · next shown result (or click a number on the title)"},
 		{"{ · }", "the connection's previous · next result tab (or click one on the bottom border)"},
 		{"P · x", "pin the result tab — the next run opens a new one — or unpin it · close it"},
-		{"r", "rerun the result tab's query into that tab, pinned or not (a write asks first)"},
+		{"r", "rerun the result tab's query into that tab, pinned or not (a write asks first) — or click its ↻"},
 		{"S", "share the result tab with the assistant (✦: it goes with every question; needs ai_rows) — or stop"},
 		{"right-click a result tab", "rerun, pin or unpin, share, close, close the unpinned ones"},
 		{"z", "give the results the whole column — and back"},

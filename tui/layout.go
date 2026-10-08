@@ -54,9 +54,11 @@ type layout struct {
 	setChips []setChip
 
 	// rtabChips are the result tabs' chips on the results pane's bottom
-	// border, as drawn (resulttabs.go); logCopy and logClear are the log
-	// title's ⧉ copy and ✕ clear (logs.go), zero when not drawn
+	// border, as drawn (resulttabs.go), and rtabRerun the current tab's ↻
+	// beside them; logCopy and logClear are the log title's ⧉ copy and ✕
+	// clear (logs.go). Each Rect is zero when not drawn.
 	rtabChips         []rtabChip
+	rtabRerun         Rect
 	logCopy, logClear Rect
 
 	splitSide, splitChat, splitEd, splitLog Rect

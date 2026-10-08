@@ -183,7 +183,14 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 	if i, ok := m.resultSetAt(x, y); ok {
 		return m.showScriptResult(i)
 	}
-	// the result tabs, on its bottom border (resulttabs.go)
+	// the result tabs, on its bottom border (resulttabs.go): the current
+	// tab's ↻ reruns its query — through r's path, so a write asks first,
+	// in a menu at the click, as the strip's right-click menu opens (the
+	// menu keeps itself on screen when drawn)
+	if m.resultTabRerunAt(x, y) {
+		m.focus = focusGrid
+		return m.rerunCurResultTabAt(x, y)
+	}
 	if id, _, ok := m.resultTabAt(x, y); ok {
 		return m.showResultTab(id)
 	}

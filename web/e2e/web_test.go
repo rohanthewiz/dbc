@@ -681,6 +681,17 @@ func resultTabsPerConn(t *testing.T, _ *env, p *rod.Page) {
 	waitFor(t, p, "the rerun still sorted by age", `() => dbc.grid.view().sort === 1 && !dbc.grid.view().desc &&
 	  (document.querySelector('#grid .gh .hc[data-c="1"]') || {}).textContent.includes("▲")`)
 
+	// the tab on screen carries a ↻, the only one in the strip; a click on
+	// it is r: a fresh result in the same pinned tab, the sort kept
+	waitFor(t, p, "one ↻, on the tab on screen", `() => document.querySelectorAll("#rstrip .rr").length === 1 &&
+	  !!document.querySelector("#rstrip .rt.on .rr")`)
+	before = gridSeq(t, p)
+	clickAt(t, p, `#rstrip .rt.on .rr`, proto.InputMouseButtonLeft)
+	waitResult(t, p, before, "name", "age")
+	waitFor(t, p, "the ↻ rerun in place, still sorted", `() => document.querySelectorAll("#rstrip .rt").length === 2 &&
+	  document.querySelector("#rstrip .rt:nth-child(1)").classList.contains("on") &&
+	  !!document.querySelector("#rstrip .rt:nth-child(1) .pin") && dbc.grid.view().sort === 1`)
+
 	setClipboard(t, p, "sentinel")
 	p.MustElement("#log-copy").MustClick()
 	waitFor(t, p, "the log copied", `() => [...document.querySelectorAll("#log > div")].some((d) => d.textContent.includes("copied the log"))`)

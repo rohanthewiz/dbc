@@ -934,8 +934,9 @@ a.btnlink:hover { border-color: var(--accent); }
 /* the results bar's "Result 1 · 2 · 3": each result a script run showed */
 /* the result tabs of the query tab's connection (app.js drawResultTabs):
    a number and a short title each, the current one lit like the Results
-   tab; ⚑ marks a pinned one, ✦ the one shared with the assistant; ×
-   closes (shown on hover, and on the current one). The strip shrinks
+   tab; ⚑ marks a pinned one, ✦ the one shared with the assistant; ↻ (on
+   the current one only) reruns its query; × closes (shown on hover, and
+   on the current one). The strip shrinks
    before the actions do, its titles first. */
 .rstrip { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 0 1 auto; overflow: hidden; }
 .rstrip .rt {
@@ -951,6 +952,8 @@ a.btnlink:hover { border-color: var(--accent); }
 .rstrip .rt .x { flex: none; visibility: hidden; padding: 0 2px; border-radius: 2px; }
 .rstrip .rt:hover .x, .rstrip .rt.on .x { visibility: visible; }
 .rstrip .rt .x:hover { color: var(--err); background: var(--panel); }
+.rstrip .rt .rr { flex: none; padding: 0 2px; border-radius: 2px; }
+.rstrip .rt .rr:hover { color: var(--fg); background: var(--panel); }
 .rstrip .rcount { flex: none; color: var(--muted); font-size: 11px; margin-left: 2px; }
 .rsets { display: flex; align-items: center; gap: 1px; color: var(--muted); }
 .rsets .rslabel { margin: 0 4px 0 8px; }

@@ -2625,13 +2625,19 @@
         : r.shows ? dbc.plural(r.shows, "result") + " shown" : dbc.plural(r.rows, "row");
       const tip = (r.stmt || r.title) + "\n" + what + (r.pinned ? " · pinned: a run opens a new tab instead of replacing this one" : "") +
         (r.shared ? " · shared with the assistant: it goes with every question on this connection" : "") +
-        "\nclick shows it · r reruns it · right-click: rerun, pin, share, close";
+        "\nclick shows it · ↻ or r reruns it · right-click: rerun, pin, share, close";
       box.append(el("button", { type: "button", role: "tab", class: "rt" + (r.id === rtabState.resultTab ? " on" : ""),
         "data-rt": String(r.id), "aria-selected": r.id === rtabState.resultTab ? "true" : "false", title: tip },
       el("span", "n", String(i + 1)),
       r.pinned ? el("span", { class: "pin", "aria-label": "pinned" }, "⚑") : null,
       r.shared ? el("span", { class: "shr", "aria-label": "shared with the assistant", title: "shared with the assistant" }, "✦") : null,
       el("span", "tt", r.title),
+      // ↻ on the tab on screen only: a click on another tab shows it, so
+      // its rerun is one click further anyway (or its right-click menu's
+      // row), and a ↻ on every tab would crowd a strip that shrinks titles
+      // first. A script's tab has no statement to rerun, so no ↻.
+      r.id === rtabState.resultTab && r.stmt ? el("span", { class: "rr", "data-rerun": String(r.id),
+        title: "Rerun its query into this tab (r)" + (r.writes ? " — it may change the database: asks first" : "") }, "↻") : null,
       el("span", { class: "x", "data-close": String(r.id), title: "Close this result tab (x)" }, "×")));
     });
     box.append(el("span", { class: "rcount", title: "result tabs on this connection, and how many it keeps (result_tabs)" },
@@ -2798,6 +2804,15 @@
   $("rstrip").addEventListener("click", (e) => {
     const x = e.target.closest("[data-close]");
     if (x) { resultTabOp("close", Number(x.dataset.close)); return; }
+    // ↻ goes through rerun as r does, so a statement that writes still
+    // asks first; the tab is looked up in the set drawn, not trusted
+    // from the attribute, so a strip redrawn meanwhile reruns nothing stale
+    const rr = e.target.closest("[data-rerun]");
+    if (rr) {
+      const r = rtabState && rtabState.resultTabs.find((t) => t.id === Number(rr.dataset.rerun));
+      if (r) rerun(r);
+      return;
+    }
     const b = e.target.closest("button[data-rt]");
     if (!b) return;
     if (b.classList.contains("on")) { if (dbc.cmd.showResults) dbc.cmd.showResults(); return; }
@@ -3478,7 +3493,7 @@
     ["Result tabs", [
       ["click a tab · { · }", "show it · the previous · the next (in the grid or the plan)"],
       ["P · right-click a tab", "pin it: a run then opens a new tab instead of replacing it · rerun, pin, share, close"],
-      ["r", "rerun its query into the same tab, pinned or not (a statement that writes asks first)"],
+      ["r · ↻", "rerun its query into the same tab, pinned or not (a statement that writes asks first) — ↻ is on the tab on screen"],
       ["S", "share it with the assistant: it goes with every question on the connection (needs ai_rows = true) · again stops"],
       ["x · × on a tab", "close it"],
       ["switch the connection", "its own result tabs, plan and log come back as they were left"],

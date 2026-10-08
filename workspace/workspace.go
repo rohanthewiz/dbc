@@ -378,12 +378,22 @@ func (w *Workspace) LastResult() *model.Result {
 // whenever the result on screen does — a run, a show, another result tab
 // or connection — and only then. 0 with no result.
 func (w *Workspace) LastResultSeq() (*model.Result, int) {
+	r, seq, _ := w.LastResultRerun()
+	return r, seq
+}
+
+// LastResultRerun is LastResultSeq plus rerunOf: the seq of the result the
+// one on screen replaced when it is a rerun of its tab's statement, else 0
+// (ResultTab.RerunOf). All three are read under one lock, so they always
+// describe the same result — a run landing between two calls cannot pair
+// one result with another's rerun.
+func (w *Workspace) LastResultRerun() (r *model.Result, seq, rerunOf int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if t := w.curLocked(); t != nil {
-		return t.res, t.seq
+		return t.res, t.seq, t.rerunOf
 	}
-	return nil, 0
+	return nil, 0, 0
 }
 
 // MaxScriptResults caps how many of one script run's s.Show results are
@@ -428,7 +438,7 @@ func (w *Workspace) ShowScriptResult(i int) error {
 		}
 		return refuse(Invalid, Warn, "no result %d — the script in this result tab showed %d", i+1, n)
 	}
-	t.res, t.seq = t.shows[i].res, t.shows[i].seq
+	t.res, t.seq, t.rerunOf = t.shows[i].res, t.shows[i].seq, 0
 	return nil
 }
 

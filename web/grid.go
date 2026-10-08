@@ -81,13 +81,14 @@ type resultView struct {
 	sortCol int
 	desc    bool
 	order   []int
+	rerunOf int // the seq this result replaced as a rerun, else 0 (workspace.ResultTab.RerunOf)
 }
 
 // view returns the tab's current result with its display order for the
 // given sort, (re)building the cache when the result or the sort moved. A
 // nil view means there is no result.
 func (t *tab) view(sortCol int, desc bool) *resultView {
-	r, seq := t.ws.LastResultSeq()
+	r, seq, rerunOf := t.ws.LastResultRerun()
 	t.viewMu.Lock()
 	defer t.viewMu.Unlock()
 	if r == nil {
@@ -98,7 +99,7 @@ func (t *tab) view(sortCol int, desc bool) *resultView {
 	// same *Result to two shows, which are still two results to the page
 	if v.res != r || v.seq != seq {
 		num := export.NumericColumns(r)
-		*v = resultView{res: r, seq: seq, numeric: num, sortCol: -2}
+		*v = resultView{res: r, seq: seq, numeric: num, sortCol: -2, rerunOf: rerunOf}
 		v.widths, v.content = colWidths(r, num)
 	}
 	if sortCol < -1 || sortCol >= len(r.Columns) {
@@ -137,6 +138,11 @@ type resultPage struct {
 	Rows  int  `json:"rows"`  // the result's rows
 	Sort  int  `json:"sort"`  // the result column sorted on, -1 for none
 	Desc  bool `json:"desc"`
+	// RerunOf is the seq of the result this one replaced as a rerun of its
+	// tab's statement, 0 otherwise: the grid keeps its sort across a rerun
+	// of the result it was showing, and starts any other new result
+	// unsorted (grid.js load).
+	RerunOf int `json:"rerunOf,omitempty"`
 
 	From  int         `json:"from"`
 	Cells [][]*string `json:"cells"` // display rows from From; nil is SQL NULL
@@ -163,7 +169,7 @@ func (s *Server) handleResult(ctx rweb.Context) error {
 		Seq: v.seq, Conn: r.Conn, Exec: r.IsExec, Affected: r.Affected,
 		Status:  workspace.ResultStatus(r, s.cfg.MaxRows, total),
 		Columns: r.Columns, Numeric: v.numeric,
-		Total: total, Rows: len(r.Rows), Sort: v.sortCol, Desc: v.desc,
+		Total: total, Rows: len(r.Rows), Sort: v.sortCol, Desc: v.desc, RerunOf: v.rerunOf,
 		From: from, Cells: make([][]*string, 0, to-from),
 	}
 	pg.Widths, pg.Content = v.widths, v.content

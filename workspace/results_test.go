@@ -770,6 +770,35 @@ func TestRerunPinnedTab(t *testing.T) {
 	}
 }
 
+// A rerun's result names the seq of the one it replaced (RerunOf), for a
+// UI to keep its grid's sort across the refresh; any other run into the
+// tab — the edited statement, the common loop — names none, nor does a
+// rerun's result once another run has replaced it.
+func TestRerunNotesTheResultItReplaced(t *testing.T) {
+	w := newTestWorkspace(t)
+	run(t, w, "SELECT 1 AS n")
+	id := got(w)
+	_, seq := w.LastResultSeq()
+	if _, _, of := w.LastResultRerun(); of != 0 {
+		t.Fatalf("a first run's RerunOf = %d, want 0", of)
+	}
+
+	if ev := rerun(t, w, id); ev.Err != nil {
+		t.Fatal(ev.Err)
+	}
+	_, seq2, of := w.LastResultRerun()
+	tabs, cur := w.ResultTabs()
+	if of != seq || tabs[cur].RerunOf != seq || tabs[cur].Seq != seq2 {
+		t.Errorf("after the rerun: RerunOf %d (tab %+v), want %d", of, tabs[cur], seq)
+	}
+
+	run(t, w, "SELECT 2 AS n") // the edit-and-run loop: same tab, a new question
+	tabs, cur = w.ResultTabs()
+	if got(w) != id || tabs[cur].RerunOf != 0 {
+		t.Errorf("an edited run into tab %d: %+v, want RerunOf 0 in tab %d", got(w), tabs[cur], id)
+	}
+}
+
 // A rerun needs no room: at the cap with every tab pinned — where a run is
 // refused — rerunning one of them still lands, in place. A shared tab
 // stays shared, and an app run's tab keeps its tag for a title.

@@ -44,7 +44,12 @@ import (
 //	result cols   0    1    2    3    4        hidden = {1, 3}
 //	cols        [ 0,        2,        4 ]      display col 1 → result col 2
 type grid struct {
-	res   *model.Result
+	res *model.Result
+	// seq is res's workspace seq (workspace.ResultTab.Seq), kept by
+	// syncResults: a rerun's result names the seq it replaced (RerunOf),
+	// and the sort carries over only when that is the result this grid
+	// was showing (SetRerun)
+	seq   int
 	order []int // display row → result row
 	shown int   // display cap (max_display_rows); rows past it are not drawn
 
@@ -141,11 +146,33 @@ func newGrid() *grid {
 // common loop is edit-the-WHERE-and-re-run, and losing the layout on every
 // run would make hiding and resizing not worth doing. Any other result —
 // a different query, a table preview — starts fresh.
+//
+// The sort is not kept: an edited statement is a new question, and its
+// rows start in the order it returned them. A rerun of the same statement
+// is the exception — SetRerun.
 func (g *grid) SetResult(r *model.Result, displayCap int) {
+	g.setResult(r, displayCap, false)
+}
+
+// SetRerun is SetResult for a rerun of the result on screen (the r key:
+// workspace.RerunResultTab), which keeps the sort as well when the columns
+// are the same. A refresh asks the same question again, so a pinned
+// result you had sorted comes back sorted rather than needing its header
+// clicked again. Different columns (the table was altered) start fresh,
+// as any other result does: the sort column may no longer mean the same.
+func (g *grid) SetRerun(r *model.Result, displayCap int) {
+	g.setResult(r, displayCap, true)
+}
+
+// setResult is SetResult and SetRerun: rerun keeps the sort along with
+// the layout, under the same same-columns test.
+func (g *grid) setResult(r *model.Result, displayCap int, rerun bool) {
 	keep := r != nil && g.res != nil && slices.Equal(g.res.Columns, r.Columns) &&
 		len(g.hidden) == len(r.Columns) && len(g.userW) == len(r.Columns)
 	g.res = r
-	g.sortCol, g.sortDesc = -1, false
+	if !keep || !rerun {
+		g.sortCol, g.sortDesc = -1, false
+	}
 	g.cur, g.anc, g.sel = cell2{}, cell2{}, false
 	g.top, g.leftCol = 0, 0
 	if r == nil {
@@ -181,6 +208,10 @@ func (g *grid) SetResult(r *model.Result, displayCap int) {
 	// result column to carry the (reset) cursor onto
 	g.cols = g.cols[:0]
 	g.rebuildCols()
+	// a kept sort orders the NEW rows: order above is result order
+	if g.sortCol >= 0 {
+		g.applySort()
+	}
 }
 
 // contentWidth measures result column c: its header (plus room for the sort

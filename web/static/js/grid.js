@@ -114,12 +114,22 @@
   // it, keeping hidden columns and hand-set widths when its columns are the
   // same as the last one's: the common loop is edit-the-WHERE-and-rerun,
   // and losing the layout on every run would make hiding not worth doing.
+  //
+  // The SORT is kept only across a rerun of the result on screen (the r
+  // key, ↻: d.rerunOf is the seq it replaced) with the same columns. A
+  // refresh is the same question asked again, and a pinned result you had
+  // sorted should come back sorted; an edited statement run into the tab
+  // is a new question, whose rows start in the order it returned them.
+  // The page was asked for under the old sort, so a kept sort costs no
+  // second fetch — only a reset one does.
   async function load() {
     let d;
     const ws = dbc.state.ws;
     try {
       d = await query(0, g.seq ? g.sort : -1, g.desc);
-      if (d && d.seq !== g.seq && d.sort !== -1) d = await query(0, -1, false); // a new result starts unsorted
+      if (d && d.seq !== g.seq && d.sort !== -1 && !rerunOf(d, g.seq, g.cols)) {
+        d = await query(0, -1, false); // a new result starts unsorted
+      }
     } catch (e) {
       dbc.log("err", "could not load the result: " + e.message);
       return;
@@ -136,11 +146,24 @@
     viewChanged();
   }
 
+  // sameCols: two results' columns are the same names in the same order —
+  // what makes a view's column indexes (hidden, widths, sort) mean the
+  // same columns on both.
+  const sameCols = (a, b) => !!a && a.length === b.length && a.every((c, i) => c === b[i]);
+
+  // rerunOf: page d is a rerun of the result seq (cols its columns) with
+  // the same columns, so a view of that result carries over to it whole,
+  // sort included. A result with no columns (an exec's) has no view.
+  const rerunOf = (d, seq, cols) => !!seq && d.rerunOf === seq && d.columns.length > 0 && sameCols(cols, d.columns);
+
+  // adopt makes page d the grid's result. The sort is the page's own — the
+  // order its rows came in, which load and restore settled on — so the
+  // header's arrow always matches the rows under it.
   function adopt(d) {
-    const same = g.cols.length === d.columns.length && g.cols.every((c, i) => c === d.columns[i]);
+    const same = sameCols(g.cols, d.columns);
     Object.assign(g, {
       seq: d.seq, conn: d.conn, cols: d.columns, numeric: d.numeric, auto: d.widths, content: d.content,
-      total: d.total, rows: d.rows, sort: -1, desc: false,
+      total: d.total, rows: d.rows, sort: d.sort, desc: d.desc,
       cur: { row: 0, col: 0 }, anc: { row: 0, col: 0 }, sel: false,
     });
     if (!same) { g.hidden = new Set(); g.userW = new Map(); g.recFit = 0; g.fnFit = 0; }
@@ -177,7 +200,7 @@
   // starts fresh, as any new result does.
   function snapshot() {
     if (!g.seq) return null;
-    return { seq: g.seq, sort: g.sort, desc: g.desc, hidden: [...g.hidden], userW: [...g.userW],
+    return { seq: g.seq, cols: g.cols, sort: g.sort, desc: g.desc, hidden: [...g.hidden], userW: [...g.userW],
       cur: Object.assign({}, g.cur), top: root.scrollTop, left: root.scrollLeft, flip: g.flip, recFit: g.recFit, fnFit: g.fnFit };
   }
 
@@ -191,7 +214,9 @@
     let d;
     try {
       d = await query(0, snap ? snap.sort : -1, snap ? snap.desc : false);
-      if (d && (!snap || d.seq !== snap.seq) && d.sort !== -1) d = await query(0, -1, false);
+      if (d && (!snap || d.seq !== snap.seq) && d.sort !== -1 && !(snap && rerunOf(d, snap.seq, snap.cols))) {
+        d = await query(0, -1, false);
+      }
     } catch (e) {
       dbc.log("err", "could not load the result: " + e.message);
       return;
@@ -208,6 +233,15 @@
       render();
       root.scrollTop = snap.top;
       root.scrollLeft = snap.left;
+    } else if (snap && rerunOf(d, snap.seq, snap.cols)) {
+      // a rerun of the snapshot's result that landed while this tab was
+      // away: its layout carries over as load would have carried it on
+      // screen (sort already applied by the query above), but not the
+      // cursor or scroll — the rows under them are new
+      Object.assign(g, { hidden: new Set(snap.hidden), userW: new Map(snap.userW),
+        recFit: snap.recFit || 0, fnFit: snap.fnFit || 0 });
+      rebuildVis();
+      render();
     }
     viewChanged();
   }

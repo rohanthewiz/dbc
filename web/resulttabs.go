@@ -57,6 +57,11 @@ type resultTabRef struct {
 	Shows    int    `json:"shows,omitempty"`    // a script's s.Show results it holds
 	Shared   bool   `json:"shared,omitempty"`   // shared with the assistant
 	Writes   bool   `json:"writes,omitempty"`   // rerunning it may change the database: the page asks first
+	// RerunOf: the seq of the result a rerun of the tab replaced (0: not
+	// a rerun's). A rerun that lands while the page is looking elsewhere
+	// has no view kept under its own seq; the page then restores the
+	// sort and layout it kept for the result it replaced (app.js viewFor).
+	RerunOf int `json:"rerunOf,omitempty"`
 }
 
 // resultTabsState is the active connection's result set: its tabs in strip
@@ -79,7 +84,7 @@ func resultTabsOf(ws *workspace.Workspace) resultTabsState {
 		CanShare: ws.CanShareResults()}
 	for i, t := range tabs {
 		ref := resultTabRef{ID: t.ID, Seq: t.Seq, Title: t.Title, Stmt: t.Stmt, Pinned: t.Pinned, Shows: t.Shows,
-			Shared: t.Shared, Writes: t.Writes}
+			Shared: t.Shared, Writes: t.Writes, RerunOf: t.RerunOf}
 		if r := t.Result; r != nil {
 			ref.Rows, ref.Exec, ref.Affected = len(r.Rows), r.IsExec, r.Affected
 		}

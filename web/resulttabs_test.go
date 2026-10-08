@@ -375,6 +375,13 @@ func TestRerunOnTheWire(t *testing.T) {
 	if r := tb.ws.LastResult(); r == nil || len(r.Rows) != 1 || r.Rows[0][0] != "1" {
 		t.Errorf("rerun result = %+v", r)
 	}
+	// the rerun names the result it replaced, on the strip and on the
+	// grid's page, for the page to keep its sort (grid.js load, viewFor)
+	pg := decodeData[resultPage](t, e.api("GET", "/api/v1/ws/"+id+"/result?n=1", "", 200))
+	if run.ResultTabs[0].RerunOf != seq || pg.RerunOf != seq || run.ResultTabs[1].RerunOf != 0 {
+		t.Errorf("rerunOf: tab %d, page %d, other tab %d; want %d, %d, 0",
+			run.ResultTabs[0].RerunOf, pg.RerunOf, run.ResultTabs[1].RerunOf, seq, seq)
+	}
 
 	e.api("POST", "/api/v1/ws/"+id+"/rerun", `{"id":9999}`, 400)
 }

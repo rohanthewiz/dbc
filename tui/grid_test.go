@@ -301,6 +301,31 @@ func TestGridLayoutSurvivesARerun(t *testing.T) {
 	}
 }
 
+// A rerun (SetRerun) keeps the sort along with the layout, re-applied to
+// the new rows; any other new result (SetResult) — or a rerun whose columns
+// changed — starts in result order.
+func TestGridSortSurvivesOnlyARerun(t *testing.T) {
+	g := newGrid()
+	g.SetResult(pets(), 0)
+	g.Sort(1)
+	g.Sort(1) // name, descending
+	r := pets()
+	r.Rows[0][1], r.Raw[0][1] = "Zed", "Zed" // the refresh's rows differ: the order must be rebuilt
+	g.SetRerun(r, 0)
+	if g.sortCol != 1 || !g.sortDesc || names(g) != "Zed,luna,Bella" {
+		t.Errorf("rerun: sort %d desc %v rows %s, want 1 desc Zed,luna,Bella", g.sortCol, g.sortDesc, names(g))
+	}
+	g.SetResult(pets(), 0)
+	if g.sortCol != -1 || names(g) != "Whiskers,luna,Bella" {
+		t.Errorf("a new result: sort %d rows %s, want result order", g.sortCol, names(g))
+	}
+	g.Sort(1)
+	g.SetRerun(&model.Result{Columns: []string{"id", "nom"}, Rows: [][]string{{"1", "a"}}, Raw: [][]any{{1, "a"}}}, 0)
+	if g.sortCol != -1 {
+		t.Errorf("a rerun with other columns kept sort %d", g.sortCol)
+	}
+}
+
 // A numeric column is sized from every row, since numbers grow down a
 // result: an id that reaches four digits at row 1,000 must not show "10…".
 // A text column is still sized from the first widthSample rows.

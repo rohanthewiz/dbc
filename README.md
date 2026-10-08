@@ -902,7 +902,7 @@ into Teams. The header
 marks where columns are hidden with `║`, the bottom strip counts them, and
 the copy's log line says how many were left out. Hidden columns and
 hand-set widths survive re-running a query with the same columns; any other
-result starts fresh.
+result starts fresh. The sort survives only a rerun of the result tab (`r`).
 
 `Ctrl+T` is the `\dt`: it runs the active driver's catalog query and drops
 the tables and views into the results as `table_schema · table_name ·
@@ -1150,7 +1150,8 @@ and the fresh result goes back **into that same tab** — a pinned one
 included, which stays pinned, in its place in the strip, with its name (a
 shared tab stays shared). The pin keeps a result from being replaced by
 *other* runs; rerunning the tab is how you ask for that result again. The
-tab comes on screen, its hidden columns and widths kept. A rerun is a run:
+tab comes on screen with its hidden columns, its widths and its sort kept
+(a statement edited and run into the tab starts unsorted). A rerun is a run:
 one at a time, `Ctrl+K` stops it, and if it fails the tab keeps its old
 result. A tab whose statement may write (an `INSERT`'s "n affected") asks
 before running it again, and a script's tab has no statement to rerun — run

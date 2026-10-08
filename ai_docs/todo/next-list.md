@@ -76,16 +76,6 @@ ten session docs in `ai_docs/claude_sessions/`
   filter line over the list, as the pickers' `pickModal` filters. Offered
   at the end of the session; the user did not answer.
 
-- **N-158** · raised `2026-1008-0000-rerun-result-tab` · value low
-  A rerun of a result tab (`r`, `RerunResultTab`) drops the grid's sort in
-  both UIs: the TUI's `grid.SetResult` resets `sortCol` even when it keeps
-  hidden columns and widths for identical columns, and dbc web's
-  `grid.load` starts a new seq with no sort. Refreshing a pinned result you
-  had sorted then needs the header clicked again. Could keep the sort when
-  the columns match, as the hidden columns are kept — though for an
-  edit-the-WHERE run the result-order reset may be what is wanted, so
-  perhaps for a rerun only.
-
 - **N-161** · raised `2026-1008-1331-postgres-in-docker` · value low
   `pgdocker.Versions` lists 18 to 14 by hand, each with its end-of-life
   date (14 drops out on 2026-11-12 by itself). PostgreSQL 19 was still
@@ -396,6 +386,16 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-158** · raised `2026-1008-0000-rerun-result-tab` · value low
+  A rerun of a result tab (`r`, `RerunResultTab`) drops the grid's sort in
+  both UIs: the TUI's `grid.SetResult` resets `sortCol` even when it keeps
+  hidden columns and widths for identical columns, and dbc web's
+  `grid.load` starts a new seq with no sort. Refreshing a pinned result you
+  had sorted then needs the header clicked again. Could keep the sort when
+  the columns match, as the hidden columns are kept — though for an
+  edit-the-WHERE run the result-order reset may be what is wanted, so
+  perhaps for a rerun only.
+  closed 2026-10-08, `2026-1008-1429-rerun-keeps-sort`: a rerun now keeps the sort, and only a rerun does. The workspace records on the tab the seq of the result a rerun replaced (`resultTab.rerunOf`, exported as `ResultTab.RerunOf` and `LastResultRerun`; any other landing sets 0). The TUI grid tracks its seq; `syncResults` calls the new `grid.SetRerun` when `RerunOf` equals that seq, which keeps the sort (re-applied to the new rows) under the same same-columns test as hidden columns and widths. dbc web's `/result` page and the strip carry `rerunOf`. `grid.js` `load` keeps the sort when `rerunOf` is the seq on screen and the columns match, and `adopt` now takes the sort from the page. For a rerun that lands while the page is on another query tab or connection, `viewFor` falls back to the replaced result's kept view, and `restore` carries its sort, hidden columns and widths over (not the cursor or scroll). An edited statement run into the tab still starts in result order. Tests `TestRerunNotesTheResultItReplaced`, `TestGridSortSurvivesOnlyARerun`, `TestRerunKeepsTheSort`, `TestRerunOnTheWire` (rerunOf on the wire), and the e2e `resultTabsPerConn` step (the rerun stays sorted, arrow and all). The background-landing path in web (`viewFor`'s fallback) has no e2e check.
 - **N-155** · raised `2026-1007-1606-run-all-tab-per-statement` · value low
   A run of several statements reports only one count: that of the result
   on screen. A write's "n affected" was lost before too unless it came

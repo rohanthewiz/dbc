@@ -2574,10 +2574,17 @@
   }
 
   // viewFor is the kept view of the result d says is on screen (d: a
-  // workspace state, an event or a strip answer), or null.
+  // workspace state, an event or a strip answer), or null. A rerun's
+  // result that has no view of its own yet — it landed while the page was
+  // on another query tab or connection — gets the view of the result it
+  // replaced (cur.rerunOf): grid.restore carries that one's sort and
+  // layout over when the columns match, as grid.load does for a rerun
+  // that lands on screen.
   function viewFor(t, d) {
     const cur = d && (d.resultTabs || []).find((r) => r.id === d.resultTab);
-    return (cur && viewsOf(t).get(cur.seq)) || null;
+    if (!cur) return null;
+    const m = viewsOf(t);
+    return m.get(cur.seq) || (cur.rerunOf && m.get(cur.rerunOf)) || null;
   }
 
   // showResultOf puts on the grid the result d says is on screen: with
@@ -2693,8 +2700,8 @@
   //
   // A tab not on screen is shown first, so the grid the rerun's result
   // loads into is that tab's own: grid.load keeps the hidden columns of a
-  // result with the same columns, as a refresh has, but only from the
-  // grid it replaces. A statement that may write (r.writes: the tab of an
+  // result with the same columns, as a refresh has — and, for a rerun of
+  // the result on screen, its sort — but only from the grid it replaces. A statement that may write (r.writes: the tab of an
   // INSERT's "n affected") is asked about first — r sits among the grid's
   // keys, and a write run twice is not undone by a third keypress.
   async function rerun(r) {

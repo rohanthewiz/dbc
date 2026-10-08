@@ -65,7 +65,10 @@ import (
 // result in place, as a failed run always does. A tab of a script's
 // shows has no statement to rerun; a tab of a multi-statement run's group
 // reruns its own statement alone and, as a single statement run on it
-// would, leaves the group.
+// would, leaves the group. A rerun's result notes the seq of the one it
+// replaced (rerunOf), so a UI can keep the grid's sort across the refresh
+// — and only across a refresh: any other run into the tab starts in
+// result order.
 //
 // One tab per set may be SHARED with the assistant (ShareResultTab, on a
 // connection with ai_rows only): its result goes with every question asked
@@ -128,6 +131,16 @@ type resultTab struct {
 	// run is the run that filled the tab (its runGen): tabs sharing it are
 	// one multi-statement run's group, which a rerun refills together
 	run int
+	// rerunOf is the seq of the result that res replaced when res is a
+	// RERUN of this tab's own statement (RerunResultTab), else 0. A UI
+	// carries its view of the old result — the grid's sort — over to the
+	// new one only then: a refresh is the same question asked again, where
+	// an edited statement run into the tab is a new one whose rows start in
+	// result order. A seq, not a flag, so a UI can check the rerun replaced
+	// the very result it was showing: one that missed a landing (an edited
+	// run into the tab, then a rerun of that) would otherwise carry a sort
+	// over from a different question.
+	rerunOf int
 }
 
 // landing is one result a run puts in a tab: what placeRunLocked takes.
@@ -291,6 +304,11 @@ func (w *Workspace) placeRunLocked(conn string, target *resultTab, run int, grou
 		w.resSeq++
 		if i < len(slots) {
 			t := slots[i]
+			// read before the seq moves: the result this one replaces
+			t.rerunOf = 0
+			if t == w.runAgain {
+				t.rerunOf = t.seq
+			}
 			t.title, t.stmt, t.res, t.seq, t.run = l.title, l.stmt, l.res, w.resSeq, run
 			t.shows, t.cut = nil, 0
 			placed = append(placed, t)
@@ -366,7 +384,7 @@ func (w *Workspace) showLocked(conn string, target *resultTab, title string, r *
 		t.shows = slices.Clone(t.shows[1:])
 		t.cut++
 	}
-	t.res, t.seq = r, w.resSeq
+	t.res, t.seq, t.rerunOf = r, w.resSeq, 0
 	s.cur = i // a show moves the grid to it, as a landed run does
 }
 
@@ -391,6 +409,10 @@ type ResultTab struct {
 	// affected" landed in the tab — so a UI asks before it does. False
 	// for a tab with no statement, which cannot be rerun at all.
 	Writes bool
+	// RerunOf is the Seq of the result this one replaced when it is a rerun
+	// of the tab's own statement (RerunResultTab), 0 for any other landing.
+	// A UI keeps its grid's sort across a rerun on it — see resultTab.
+	RerunOf int
 }
 
 // ResultTabs is the active connection's result set: its tabs in strip
@@ -407,7 +429,7 @@ func (w *Workspace) ResultTabs() (tabs []ResultTab, cur int) {
 	for i, t := range s.tabs {
 		tabs[i] = ResultTab{ID: t.id, Seq: t.seq, Title: t.title, Stmt: t.stmt, Pinned: t.pinned,
 			Result: t.res, Shows: len(t.shows), Shared: t == shared,
-			Writes: t.stmt != "" && db.ChangesRows(t.stmt)}
+			Writes: t.stmt != "" && db.ChangesRows(t.stmt), RerunOf: t.rerunOf}
 	}
 	return tabs, s.cur
 }

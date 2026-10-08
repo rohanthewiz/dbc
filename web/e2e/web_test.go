@@ -669,7 +669,8 @@ func resultTabsPerConn(t *testing.T, _ *env, p *rod.Page) {
 	  document.querySelector("#rstrip .rt:nth-child(1)").classList.contains("on")`, liteSeq)
 
 	// r reruns the pinned tab's query into that same tab: a new result
-	// (seq) in it, still pinned and on screen, no tab added
+	// (seq) in it, still pinned and on screen, no tab added — and still
+	// sorted by age (N-158): a refresh keeps the sort, header arrow and all
 	eval(t, p, `() => { dbc.grid.focus();
 	  document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "r", bubbles: true, cancelable: true })); }`)
 	waitResult(t, p, liteSeq, "name", "age")
@@ -677,6 +678,8 @@ func resultTabsPerConn(t *testing.T, _ *env, p *rod.Page) {
 	  document.querySelector("#rstrip .rt:nth-child(1)").classList.contains("on") &&
 	  !!document.querySelector("#rstrip .rt:nth-child(1) .pin") &&
 	  document.getElementById("log").textContent.includes("rerun SELECT name, age FROM cats ORDER BY id completed on lite")`)
+	waitFor(t, p, "the rerun still sorted by age", `() => dbc.grid.view().sort === 1 && !dbc.grid.view().desc &&
+	  (document.querySelector('#grid .gh .hc[data-c="1"]') || {}).textContent.includes("▲")`)
 
 	setClipboard(t, p, "sentinel")
 	p.MustElement("#log-copy").MustClick()

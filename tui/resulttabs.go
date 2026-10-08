@@ -96,9 +96,9 @@ func (m *Model) syncResults() {
 	}
 
 	tabs, cur := m.ws.ResultTabs()
-	id, res := 0, (*model.Result)(nil)
+	id, res, seq, rerunOf := 0, (*model.Result)(nil), 0, 0
 	if cur >= 0 {
-		id, res = tabs[cur].ID, tabs[cur].Result
+		id, res, seq, rerunOf = tabs[cur].ID, tabs[cur].Result, tabs[cur].Seq, tabs[cur].RerunOf
 	}
 	if conn != m.gridConn || id != m.gridFor {
 		m.parkGrid()
@@ -108,13 +108,24 @@ func (m *Model) syncResults() {
 		}
 		m.grid, m.gridConn, m.gridFor = g, conn, id
 	}
-	// self-heal: a rerun replaced the result in this very tab (same id), or
+	// self-heal: a run replaced the result in this very tab (same id), or
 	// a script's switcher moved within it. SetResult keeps the hidden
-	// columns and widths when the columns are the same, as a rerun always
-	// has; a different query starts fresh.
+	// columns and widths when the columns are the same, as a rerun's
+	// always are; a different query starts fresh.
+	//
+	// A RERUN of the result this grid was showing (r: its RerunOf is the
+	// grid's seq) keeps the sort too — SetRerun. Matched on the seq rather
+	// than "the result is a rerun's": a grid parked while its tab was
+	// refilled more than once (an edited run, then a rerun of THAT) holds
+	// a different question's result, whose sort means nothing here.
 	if m.grid.res != res {
-		m.grid.SetResult(res, m.cfg.MaxDisplayRows)
+		if rerunOf != 0 && rerunOf == m.grid.seq {
+			m.grid.SetRerun(res, m.cfg.MaxDisplayRows)
+		} else {
+			m.grid.SetResult(res, m.cfg.MaxDisplayRows)
+		}
 	}
+	m.grid.seq = seq
 	m.pruneGrids(conn, tabs)
 }
 
@@ -309,8 +320,8 @@ func (m *Model) rerunCurResultTab() tea.Cmd {
 
 // rerunResultTab reruns result tab id's statement as a run: the running
 // status, the ticker, and its RunDone landing in that tab (syncResults
-// then keeps the tab's grid — its hidden columns and widths — when the
-// columns come back the same, as a refresh's do). A refusal (busy, a
+// then keeps the tab's grid — its hidden columns, widths and sort — when
+// the columns come back the same, as a refresh's do). A refusal (busy, a
 // script's tab) goes to the log.
 func (m *Model) rerunResultTab(id int) tea.Cmd {
 	return m.startRun(m.ws.RerunResultTab(id))

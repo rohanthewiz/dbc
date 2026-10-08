@@ -548,3 +548,41 @@ func TestRerunResultTab(t *testing.T) {
 	}
 	m.menu = nil
 }
+
+// r keeps the grid's sort: a pinned result you had sorted comes back
+// sorted from its refresh, over its new rows. An edited statement run into
+// the same tab starts in result order, as any new question does.
+func TestRerunKeepsTheSort(t *testing.T) {
+	m := newTestModel(t)
+	runSQL(t, m, "CREATE TABLE pet (name TEXT)")
+	runSQL(t, m, "INSERT INTO pet VALUES ('b'), ('c'), ('a')")
+	runSQL(t, m, "SELECT name FROM pet")
+	m.focus = focusGrid
+	key(t, m, "P")
+	m.grid.Sort(0)
+	m.grid.Sort(0) // descending
+	runSQL(t, m, "INSERT INTO pet VALUES ('d')") // a new tab: the select's is pinned
+	m.focus = focusGrid
+	key(t, m, "{")
+	key(t, m, "r")
+	if m.grid.sortCol != 0 || !m.grid.sortDesc || colVals(m.grid) != "d,c,b,a" {
+		t.Fatalf("after r: sort %d desc %v rows %s, want 0 desc d,c,b,a",
+			m.grid.sortCol, m.grid.sortDesc, colVals(m.grid))
+	}
+
+	key(t, m, "P") // unpinned, so the next run replaces it
+	runSQL(t, m, "SELECT name FROM pet WHERE name <> 'c'")
+	if m.grid.sortCol != -1 || colVals(m.grid) != "b,a,d" {
+		t.Errorf("an edited run: sort %d rows %s, want result order b,a,d", m.grid.sortCol, colVals(m.grid))
+	}
+}
+
+// colVals is the grid's first column, top to bottom, in display order.
+func colVals(g *grid) string {
+	var out []string
+	for row := range g.Rows() {
+		v, _, _ := g.value(row, 0)
+		out = append(out, v)
+	}
+	return strings.Join(out, ",")
+}

@@ -45,6 +45,7 @@ import (
 	"strings"
 
 	"github.com/rohanthewiz/dbc/erd"
+	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
@@ -60,7 +61,10 @@ const (
 	KindJoin     Kind = "join"  // a whole join clause or ON condition from a foreign key
 	KindKeyword  Kind = "keyword"
 	KindFunction Kind = "function"
-	KindType     Kind = "type"
+	// KindProcedure is a stored procedure (Request.Routines), which only
+	// CALL runs; a stored function is a KindFunction like a built-in one.
+	KindProcedure Kind = "procedure"
+	KindType      Kind = "type"
 )
 
 // Item is one suggestion.
@@ -109,6 +113,9 @@ type Request struct {
 	// Schema is the connection's tables, columns and keys (the ERD's
 	// reading of the catalog); nil offers only the dialect's vocabulary.
 	Schema *erd.Schema
+	// Routines is the connection's stored functions and procedures
+	// (routines.go); nil offers only the dialect's built-in functions.
+	Routines []model.Routine
 	// Driver is the connection's driver as configured (postgres, pg,
 	// mysql, sqlite, bytdb …), for the dialect's vocabulary and quoting.
 	Driver string
@@ -183,23 +190,40 @@ type completer struct {
 	bySchema map[string][]*erd.Table
 	schemas  []string // distinct schema names, in catalog order
 
+	// the routines, grouped by schema and name (routines.go): in catalog
+	// order, and by lower(schema)
+	routines  []*rgroup
+	rbySchema map[string][]*rgroup
+	// manySchemas reports that the tables and routines together span more
+	// than one schema, so a routine's schema is worth showing and its
+	// bare name may resolve elsewhere. The tables' own test stays
+	// len(schemas) > 1: a routine-only schema changes nothing about them.
+	manySchemas bool
+
 	items []Item
 	seen  map[string]bool // Kind + Insert, so one thing is offered once
 }
 
 func (c *completer) index() {
 	c.byName, c.bySchema, c.seen = map[string][]*erd.Table{}, map[string][]*erd.Table{}, map[string]bool{}
-	if c.req.Schema == nil {
-		return
-	}
-	for _, t := range c.req.Schema.Tables {
-		n, s := strings.ToLower(t.Name), strings.ToLower(t.Schema)
-		c.byName[n] = append(c.byName[n], t)
-		if _, ok := c.bySchema[s]; !ok {
-			c.schemas = append(c.schemas, t.Schema)
+	if c.req.Schema != nil {
+		for _, t := range c.req.Schema.Tables {
+			n, s := strings.ToLower(t.Name), strings.ToLower(t.Schema)
+			c.byName[n] = append(c.byName[n], t)
+			if _, ok := c.bySchema[s]; !ok {
+				c.schemas = append(c.schemas, t.Schema)
+			}
+			c.bySchema[s] = append(c.bySchema[s], t)
 		}
-		c.bySchema[s] = append(c.bySchema[s], t)
 	}
+	c.indexRoutines()
+	all := len(c.bySchema) // both maps are keyed by lower(schema)
+	for s := range c.rbySchema {
+		if _, ok := c.bySchema[s]; !ok {
+			all++
+		}
+	}
+	c.manySchemas = all > 1
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +343,23 @@ func (c *completer) suggest(before []tok) {
 			q0 = prev(4).text
 		}
 		c.qualified(q0, q.text)
+		if q0 == "" {
+			// schema.▮ may name a routine too: which kind, the word
+			// before the qualifier says (CALL s.▮, FROM s.▮, SELECT s.▮)
+			filter, call := qualifiedRoutines(before[:n-2])
+			c.routineSuggestions(c.rbySchema[strings.ToLower(q.text)], filter, 1, call, true)
+		}
+		return
+	}
+
+	// a routine's name: CALL ▮, DROP FUNCTION ▮, EXECUTE FUNCTION ▮ …
+	// (routines.go). A word that merely reads like one of these keywords
+	// — a column named call — is told apart by what precedes it.
+	if filter, call, ok := routineAfter(before); ok {
+		c.routineSuggestions(c.routines, filter, 0, call, false)
+		// below them the vocabulary, for what may come instead of a
+		// name: DROP FUNCTION IF EXISTS, CREATE FUNCTION's new name
+		c.keywords(5)
 		return
 	}
 
@@ -494,6 +535,8 @@ func (c *completer) tables(join bool) {
 	if join {
 		c.joinClauses()
 	}
+	// a set-returning function reads like a table: FROM generate_report(…)
+	c.routineSuggestions(c.routines, rowSources, 3, true, false)
 	if c.req.Schema == nil {
 		return
 	}
@@ -551,6 +594,9 @@ func (c *completer) expression(rank int) {
 		}
 	}
 	c.functions(rank + 3)
+	// the database's own after the built-ins, so a name that is both is
+	// offered once, as the built-in Postgres resolves it to
+	c.routineSuggestions(c.routines, callable, rank+3, true, false)
 	c.keywords(rank + 4)
 }
 

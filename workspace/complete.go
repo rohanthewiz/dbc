@@ -8,6 +8,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/erd"
+	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/sqlcomplete"
 	"github.com/rohanthewiz/dbc/sqlsplit"
 )
@@ -71,6 +72,18 @@ import (
 // Like Diagram and LookupColumns, the load runs on the POOL, never the
 // pinned session: it must not wait for the user's long query, nor read the
 // schema from inside their open transaction.
+//
+// THE ROUTINES (stored functions and procedures, Manager.Routines) are read
+// by the same load, after the schema, and cached beside it: one cache, one
+// generation, so the drops above cover them too — a CREATE FUNCTION is DDL
+// like any other. They are read from the same schemas the tables were
+// (every one, or the scoped few), and only once the schema read succeeded:
+// a server that failed it would make the routine read wait out a second
+// timeout for the same failure. Their read is best effort. A failure (an
+// old server without prokind, a role that cannot see pg_proc) leaves the
+// cache without routines and is not reported: the tables and columns are
+// what completion is for, and a note about functions on every connect
+// would be noise.
 
 // CompletionTimeout bounds reading a schema for completion. The ERD's bound:
 // the same three catalog queries.
@@ -82,14 +95,15 @@ const complRetry = 5 * time.Minute
 
 // complState is the completion cache. It is guarded by Workspace.mu.
 type complState struct {
-	conn    string
-	gen     int           // the complGen it was loaded for
-	schema  *erd.Schema   // nil while loading, or when the load failed
-	path    []string      // the search path bare names resolve through; nil: the dialect's default
-	scope   []string      // the schemas a scoped load read; nil: every schema
-	err     error         // what the load failed with
-	at      time.Time     // when the load ended
-	loading chan struct{} // closed when the load in flight ends; nil when none is
+	conn     string
+	gen      int             // the complGen it was loaded for
+	schema   *erd.Schema     // nil while loading, or when the load failed
+	routines []model.Routine // the stored functions and procedures; nil when none or unread
+	path     []string        // the search path bare names resolve through; nil: the dialect's default
+	scope    []string        // the schemas a scoped load read; nil: every schema
+	err      error           // what the load failed with
+	at       time.Time       // when the load ended
+	loading  chan struct{}   // closed when the load in flight ends; nil when none is
 }
 
 // covers reports whether the cache holds the schema the sidebar shows:
@@ -146,6 +160,7 @@ func (w *Workspace) Complete(buffer string, caret int) (res sqlcomplete.Result, 
 	conn, focus := w.active, w.schema
 	var sc *erd.Schema
 	var path []string
+	var routines []model.Routine
 	ready = true
 	if conn != "" {
 		c := w.compl
@@ -157,7 +172,7 @@ func (w *Workspace) Complete(buffer string, caret int) (res sqlcomplete.Result, 
 		case c.err != nil && time.Since(c.at) > complRetry:
 			ready = false // time to try again
 		default:
-			sc, path = c.schema, c.path
+			sc, path, routines = c.schema, c.path, c.routines
 		}
 	}
 	w.mu.Unlock()
@@ -169,7 +184,7 @@ func (w *Workspace) Complete(buffer string, caret int) (res sqlcomplete.Result, 
 		driver = cc.Driver
 	}
 	return sqlcomplete.Complete(sqlcomplete.Request{
-		Schema: sc, Driver: driver, Focus: focus, SearchPath: path, Buffer: buffer, Caret: caret,
+		Schema: sc, Routines: routines, Driver: driver, Focus: focus, SearchPath: path, Buffer: buffer, Caret: caret,
 	}), true
 }
 
@@ -228,12 +243,16 @@ func (w *Workspace) LoadCompletions(ctx context.Context) error {
 	w.mu.Unlock()
 
 	sc, path, scope, err := w.readCompletions(ctx, conn, focus, scoped)
+	var routines []model.Routine
+	if err == nil {
+		routines = w.readRoutines(ctx, conn, scope)
+	}
 
 	w.mu.Lock()
 	// a newer load (after the cache was dropped and asked for again) owns
 	// the state now; this one's outcome is for a schema that is gone
 	if w.compl.loading == done {
-		w.compl = complState{conn: conn, gen: gen, schema: sc, path: path, scope: scope, err: err, at: time.Now()}
+		w.compl = complState{conn: conn, gen: gen, schema: sc, routines: routines, path: path, scope: scope, err: err, at: time.Now()}
 	}
 	w.mu.Unlock()
 	close(done)
@@ -283,6 +302,19 @@ func (w *Workspace) readCompletions(ctx context.Context, conn, focus string, sco
 		return nil, path, nil, err
 	}
 	return sc, path, scope, nil
+}
+
+// readRoutines reads the stored functions and procedures for the cache, from
+// scope's schemas (nil: every one), with a CompletionTimeout of their own.
+// A failure is nil routines and nothing more (see THE ROUTINES above).
+func (w *Workspace) readRoutines(ctx context.Context, conn string, scope []string) []model.Routine {
+	rctx, cancel := context.WithTimeout(ctx, CompletionTimeout)
+	defer cancel()
+	routines, err := w.mgr.Routines(rctx, conn, scope)
+	if err != nil {
+		return nil
+	}
+	return routines
 }
 
 // navigable reports whether conn's driver lists its tables by schema

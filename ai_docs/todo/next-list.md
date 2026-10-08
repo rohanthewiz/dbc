@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-156
+**Next ID:** N-158
 
 ## Open
 
@@ -186,6 +186,22 @@ and `raised`.
   already redraws the strip from the run event. Add a step to the go-rod
   test in `web/e2e`: run all on two SELECTs, see two tabs with the second
   on the grid, run again and see the same two tabs refilled.
+
+- **N-156** · raised `2026-1007-2355-routine-completion` · value medium
+  `TestLiveWorkspaceNotices` (Postgres) fails on main since N-155's
+  per-write log lines: a `DO` block now gets a "statement 1/2: 0 affected"
+  line between the NOTICE and the WARNING, and the test wants NOTICE,
+  WARNING, then the done note. Confirmed on a clean HEAD worktree, so not
+  the routine work. Repair the test (expect the write lines, or check the
+  order of the three it names); decide while there whether a `DO` should
+  count as a write that gets a line at all.
+- **N-157** · raised `2026-1007-2355-routine-completion` · value low
+  Routine completion has not been watched in either UI. The workspace's
+  live tests cover the cache and the suggestions on postgres:17 and
+  mysql:8.4. Not seen: the TUI popup's `λ` glyph for a procedure, Monaco's
+  Method icon for `kind: "procedure"` (`editor.js` kindOf), or a signature
+  doc in either. Add a step to the go-rod test in `web/e2e` (`CALL ▮` on a
+  connection with a procedure), or check by hand.
 
 ## Roadmap
 

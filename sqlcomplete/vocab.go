@@ -300,6 +300,7 @@ last_value(expr) → same type | expr at the window frame's last row
 
 const pgStarts = `
 TABLE
+CALL
 VALUES
 CREATE MATERIALIZED VIEW
 CREATE SCHEMA
@@ -655,6 +656,7 @@ regclass
 
 const mysqlStarts = `
 REPLACE INTO
+CALL
 INSERT IGNORE INTO
 SHOW TABLES
 SHOW CREATE TABLE

@@ -359,6 +359,7 @@
     return ({
       column: K.Field, table: K.Struct, view: K.Interface, schema: K.Module, alias: K.Variable,
       join: K.Reference, keyword: K.Keyword, function: K.Function, type: K.TypeParameter,
+      procedure: K.Method, // a stored procedure, which CALL runs
     })[k] ?? K.Text;
   }
 

@@ -406,16 +406,18 @@ in the file: their Edit and Remove rows say so.
 ### Completion
 
 The editor suggests what comes next from the connection's schema — its
-tables, columns, types and foreign keys, read once per connection — and
-from the dialect's vocabulary:
+tables, columns, types and foreign keys, and its stored functions and
+procedures, read once per connection — and from the dialect's vocabulary:
 
 | Where | Suggested |
 | --- | --- |
-| `FROM ▮` · `UPDATE ▮` · `INTO ▮` | tables and views (the browsed schema's first), schemas, the statement's CTEs |
+| `FROM ▮` · `UPDATE ▮` · `INTO ▮` | tables and views (the browsed schema's first), schemas, the statement's CTEs; then set-returning functions (`SETOF`, `TABLE(…)`) |
 | `JOIN ▮` | first the tables a foreign key links to the ones already named, as whole clauses: `customers c ON c.id = o.customer_id` |
 | `ON ▮` | the foreign key's condition between the table just joined and the others |
-| `o.▮` | the columns of the table or CTE alias `o` stands for (a `SELECT *` CTE included); `public.▮` lists a schema's tables |
-| `SELECT ▮` · `WHERE ▮` · `= ▮` … | the columns of every table the statement names — written after the caret too, so `SELECT ▮ FROM orders` works — qualified when two share a name; then functions and keywords |
+| `o.▮` | the columns of the table or CTE alias `o` stands for (a `SELECT *` CTE included); `public.▮` lists a schema's tables, and its routines of the kind the context calls for |
+| `SELECT ▮` · `WHERE ▮` · `= ▮` … | the columns of every table the statement names — written after the caret too, so `SELECT ▮ FROM orders` works — qualified when two share a name; then functions (built-in and the database's own) and keywords |
+| `CALL ▮` | the database's procedures |
+| `DROP FUNCTION ▮` · `ALTER PROCEDURE ▮` · `EXECUTE FUNCTION ▮` … | the functions, procedures or (for a trigger) trigger functions, by name |
 | `INSERT INTO t (▮` | `t`'s columns |
 | `::▮` · `CAST(x AS ▮` | type names |
 | after a finished phrase | the clauses that can follow it: `WHERE`, `GROUP BY`, `ILIKE`, `ON CONFLICT` … |
@@ -434,6 +436,17 @@ otherwise: with `search_path = app, public`, `app.users` goes in as
 `users`, and a `public.users` it shadows as `public.users`. That is the
 path a new connection gets from the role and database, not a
 `SET search_path` run in your session.
+
+Stored functions and procedures come from `pg_proc` on Postgres and
+`information_schema.routines` on MySQL (SQLite and bytdb have none to
+list). A function goes in as a call with the caret between its
+parentheses, qualified by the same `search_path` rule as a table, and its
+overloads are one suggestion whose detail lists every signature. What no
+statement calls is left out: the built-ins of `pg_catalog` (the
+vocabulary has those), and an extension's type I/O and index-support
+functions (those taking `internal` or `cstring`). Trigger functions are
+offered only after `EXECUTE FUNCTION`, procedures only after `CALL` (and
+`PROCEDURE`/`ROUTINE`).
 
 In the terminal the list opens by itself after `.` or `::` and on the second
 letter of a word, and follows your typing; `Ctrl+Space` asks anywhere. `↑`/`↓`

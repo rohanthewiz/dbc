@@ -290,6 +290,7 @@ var complGlyph = map[sqlcomplete.Kind]string{
 	sqlcomplete.KindColumn: "·", sqlcomplete.KindTable: "▦", sqlcomplete.KindView: "◫",
 	sqlcomplete.KindSchema: "◆", sqlcomplete.KindAlias: "@", sqlcomplete.KindJoin: "⋈",
 	sqlcomplete.KindKeyword: "k", sqlcomplete.KindFunction: "ƒ", sqlcomplete.KindType: "τ",
+	sqlcomplete.KindProcedure: "λ",
 }
 
 // draw paints the popup under the word being typed — at (x, y), the caret's

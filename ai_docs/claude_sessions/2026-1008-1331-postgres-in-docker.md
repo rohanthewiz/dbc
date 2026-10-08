@@ -139,6 +139,6 @@ No questions were asked. These were judgement calls:
 
 ## Next
 
-Closed: None. Declined: None. Raised: N-160, N-161, N-162.
+Closed: None. Declined: N-160 (after the wrap: Stop stays refused while connected). Raised: N-160, N-161, N-162.
 Deferred: None. Promoted: None. Moved: None.
 Updated: None. Full list: `ai_docs/todo/next-list.md`.

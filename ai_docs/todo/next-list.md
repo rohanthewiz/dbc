@@ -90,13 +90,7 @@ ten session docs in `ai_docs/claude_sessions/`
   Refuse an imported member (`s.Query`), a builtin, or a new name that is
   already taken in that scope (go/types' `Scope.LookupParent`). Mirror the
   SQL editor's rename provider (`editor.js` `registerSymbols`).
-- **N-165** · raised `2026-1008-1518-script-goto-def-usages-inline-diags` · value medium
-  The SQL editor's Shift+F12 has Monaco's two-reference quirk. With just
-  the declaration and one use (an alias used once), Go to References jumps
-  instead of listing, and from the use it does nothing. Script tabs now bind
-  Shift+F12 to their own "Go to Usages"
-  (`editor.action.referenceSearch.trigger`, always the list); do the same
-  for SQL tabs, or widen that action's precondition.
+
 
 ## Validate
 
@@ -417,6 +411,14 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-165** · raised `2026-1008-1518-script-goto-def-usages-inline-diags` · value medium
+  The SQL editor's Shift+F12 has Monaco's two-reference quirk. With just
+  the declaration and one use (an alias used once), Go to References jumps
+  instead of listing, and from the use it does nothing. Script tabs now bind
+  Shift+F12 to their own "Go to Usages"
+  (`editor.action.referenceSearch.trigger`, always the list); do the same
+  for SQL tabs, or widen that action's precondition.
+  closed 2026-10-08, `2026-1008-1537-sql-usages-and-v0.11.0`: the `dbc.goToUsages` action (Shift+F12 and the right-click "Go to Usages", `editor.action.referenceSearch.trigger`) now has the precondition `editorHasReferenceProvider` instead of `dbcScript`, so SQL tabs get it too and always see the list. e2e `aliasRename` adds a step for an alias used once (`SELECT c.name FROM cats c`, caret on the use): two rows. With the old precondition the step times out.
 - **N-158** · raised `2026-1008-0000-rerun-result-tab` · value low
   A rerun of a result tab (`r`, `RerunResultTab`) drops the grid's sort in
   both UIs: the TUI's `grid.SetResult` resets `sortCol` even when it keeps

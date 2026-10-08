@@ -10,6 +10,8 @@ Session: `59967169-68ca-4752-833d-c2c860d291d0`
 2. "Add a 'Stop container' entry in the menu and why not add the docker
    menu item under the '+' too?"
 3. `/sess-wrap`.
+4. After the wrap, on N-160: "refuse to stop while you are connected".
+   Then `/sw` again.
 
 ## Decisions
 
@@ -64,6 +66,9 @@ No questions were asked. These were judgement calls:
   Remove: the TUI's `connInUse`, the web's `inUseRefusal` across windows.
   The JS mirrors the name pattern only to decide whether to show the row;
   the server checks it with `StopTarget`. After a stop the pool is dropped.
+  After the wrap the user confirmed the refusal (N-160 declined): Stop
+  never disconnects for you, so it can never silently roll back an open
+  transaction.
   A container that is already stopped is "was not running", not an error.
 - **+ became a dropdown.** In dbc web, **+** opens a menu: Add a
   connection… (first and focused, so + Enter is still the form) and

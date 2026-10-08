@@ -685,17 +685,18 @@
       id: "dbc.askScript", label: "✦ Ask the assistant about this script", contextMenuGroupId: "navigation",
       contextMenuOrder: 0, precondition: "dbcScript", run: () => dbc.cmd.askAbout("Explain this script."),
     });
-    // Go to Usages, in a script tab: Shift+F12 and the right-click menu,
-    // beside Monaco's own Go to Definition. It always opens the usages list
-    // (the peek), where Monaco's Go to References — Shift+F12's default —
+    // Go to Usages: Shift+F12 and the right-click menu, beside Monaco's own
+    // Go to Definition, in every tab. It always opens the usages list (the
+    // peek), where Monaco's Go to References — Shift+F12's default —
     // second-guesses a short answer: with just the declaration and one use
     // it jumps between them instead of listing, and from the use it does
-    // nothing at all. A local used once is the commonest case in a script,
-    // so the list is asked for outright. The answer is scripts.js's
-    // reference provider either way.
+    // nothing at all. A name used once is the commonest case in both
+    // editors (a script's local, a query's alias: SELECT c.name FROM cats
+    // c), so the list is asked for outright. The answer is the language's
+    // reference provider — registerSymbols for SQL, scripts.js for Go.
     ed.addAction({
       id: "dbc.goToUsages", label: "Go to Usages", contextMenuGroupId: "navigation", contextMenuOrder: 1.5,
-      keybindings: [K.Shift | C.F12], precondition: "dbcScript",
+      keybindings: [K.Shift | C.F12], precondition: "editorHasReferenceProvider",
       run: () => ed.trigger("dbc", "editor.action.referenceSearch.trigger", {}),
     });
   }

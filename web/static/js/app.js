@@ -3463,7 +3463,7 @@
       ["Ctrl+Space", "suggestions from the schema (also as you type, and after “.”)"],
       ["Tab · Enter · Esc", "in the suggestions: pick · pick · close"],
       ["F12 · Ctrl+click", "on a table alias, a CTE name or a column the query names: go to where it is declared"],
-      ["Shift+F12", "list its uses in the statement"],
+      ["Shift+F12", "Go to Usages: list its uses in the statement"],
       ["F2", "rename it everywhere in the statement (also in the right-click menu)"],
     ]],
     ["Query tabs", [
@@ -3480,7 +3480,7 @@
       ["Ctrl+S", "save it (a script never autosaves; unsaved edits survive a reload in this browser)"],
       ["✓ Check", "compile it without running — errors are also marked as you type, each message shown after its line"],
       ["F12 · Ctrl+click", "on a name the script declares: go to its declaration"],
-      ["Shift+F12", "list its usages — scope-aware, so a shadowing err is its own; an sdb member's from the same s"],
+      ["Shift+F12", "Go to Usages: list them — scope-aware, so a shadowing err is its own; an sdb member's from the same s"],
       ["Ctrl+Space · s. · sdb.", "the sdb API: methods, fields and their docs; connection names inside a connection argument"],
       ["click a connection", "put its name in at the caret"],
       ["Result 1 · 2 · 3", "on the results bar: each result the script showed"],

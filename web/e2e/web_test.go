@@ -231,6 +231,28 @@ func aliasRename(t *testing.T, _ *env, p *rod.Page) {
 	p.Keyboard.MustType(input.Escape)
 	waitFor(t, p, "the references list closed", `() => !document.querySelector(".reference-zone-widget .ref-tree .monaco-list-row")`)
 
+	// an alias used once: two references, the declaration and the use.
+	// Shift+F12 (dbc's Go to Usages) still lists both, from the use —
+	// Monaco's own Go to References would do nothing there (N-165)
+	eval(t, p, `() => {
+	  dbc.editor.setText("SELECT c.name FROM cats c");
+	  const ed = monaco.editor.getEditors()[0];
+	  ed.setPosition({ lineNumber: 1, column: 8 }); // on the use, "c."
+	  ed.focus();
+	}`)
+	if err := p.Keyboard.Press(input.ShiftLeft); err != nil {
+		t.Fatal(err)
+	}
+	p.Keyboard.MustType(input.F12)
+	if err := p.Keyboard.Release(input.ShiftLeft); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, p, "the usages list of an alias used once", `() =>
+	  document.querySelectorAll(".reference-zone-widget .ref-tree .monaco-list-row").length === 2`)
+	p.Keyboard.MustType(input.Escape)
+	waitFor(t, p, "the usages list closed", `() => !document.querySelector(".reference-zone-widget .ref-tree .monaco-list-row")`)
+	eval(t, p, `(sql) => dbc.editor.setText(sql)`, cte) // back to the CTE, for F2 below
+
 	eval(t, p, `() => {
 	  const ed = monaco.editor.getEditors()[0];
 	  ed.setPosition({ lineNumber: 1, column: 53 });

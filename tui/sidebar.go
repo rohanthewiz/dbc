@@ -70,11 +70,11 @@ func (m *Model) refreshTables() {
 func (m *Model) relistTables() {
 	was := ""
 	if it, ok := m.tables.current(); ok {
-		was, _ = it.data.(string)
+		was = itemKey(it) // a table's name, or a routine's signature (routines.go)
 	}
 	m.fillTables()
 	for i, it := range m.tables.items {
-		if name, _ := it.data.(string); was != "" && name == was {
+		if was != "" && itemKey(it) == was {
 			m.tables.cur = i
 			break
 		}
@@ -96,6 +96,10 @@ func (m *Model) relistTables() {
 // the count is what would be cut. Views have no count (see db/rowcount.go)
 // and keep "view" there instead.
 func (m *Model) fillTables() {
+	if m.routinesShown() {
+		m.fillRoutines() // the pane's other list (routines.go)
+		return
+	}
 	r := m.ws.Catalog()
 	if r == nil || len(r.Columns) < 2 {
 		m.tables.set(nil)
@@ -173,14 +177,19 @@ func (m *Model) connPicked() tea.Cmd {
 // tablePicked previews the table under the cursor. The statement goes into
 // the history like a typed one — it is what the user would have typed — but
 // NOT into the editor, whose contents are the user's.
+//
+// With the pane listing routines, the pick is the routine's DDL instead.
 func (m *Model) tablePicked() tea.Cmd {
-	it, ok := m.tables.current()
+	if m.routinesShown() {
+		return m.routinePicked()
+	}
+	name, ok := m.currentTable()
 	if !ok {
 		return nil
 	}
-	stmt := fmt.Sprintf("SELECT * FROM %s LIMIT 100", it.data.(string))
+	stmt := fmt.Sprintf("SELECT * FROM %s LIMIT 100", name)
 	m.focus = focusGrid
-	return m.startRun(m.ws.RunStmts([]string{stmt}, "preview "+it.label)) // records it, then runs
+	return m.startRun(m.ws.RunStmts([]string{stmt}, "preview "+name)) // records it, then runs
 }
 
 // tableColumns lists the information_schema.columns rows of the table under
@@ -188,10 +197,13 @@ func (m *Model) tablePicked() tea.Cmd {
 // Markdown or HTML. Recorded in the history like a preview; see
 // workspace.ShowColumns.
 func (m *Model) tableColumns() tea.Cmd {
-	it, ok := m.tables.current()
+	if m.tableOnly("Show columns") {
+		return nil
+	}
+	name, ok := m.currentTable()
 	if !ok {
 		return nil
 	}
 	m.focus = focusGrid
-	return m.startRun(m.ws.ShowColumns(it.data.(string)))
+	return m.startRun(m.ws.ShowColumns(name))
 }

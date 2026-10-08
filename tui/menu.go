@@ -410,9 +410,13 @@ func (m *Model) openConnMenu(x, y int, target string) {
 // menu reads the same wherever the pane was clicked. The navigator's pickers
 // come last, live wherever the connection has them.
 func (m *Model) openTableMenu(x, y int, onRow bool) {
+	if m.routinesShown() {
+		m.openRoutineMenu(x, y, onRow) // the pane lists routines (routines.go)
+		return
+	}
 	name, noTable := "", "right-click a table for this"
-	if it, ok := m.tables.current(); ok && onRow {
-		name, noTable = it.data.(string), ""
+	if t, ok := m.currentTable(); ok && onRow {
+		name, noTable = t, ""
 	}
 	noTables := ""
 	if len(m.tables.items) == 0 {
@@ -436,7 +440,18 @@ func (m *Model) openTableMenu(x, y int, onRow bool) {
 		}},
 		{label: "Copy name", why: noTable, act: func(m *Model) tea.Cmd { return m.copyString(name, "the table name") }},
 		{label: countsLabel, key: "#", act: func(m *Model) tea.Cmd { return m.toggleRowCounts() }},
+		{label: "Show routines", key: "f", why: m.noRoutinesWhy(),
+			act: func(m *Model) tea.Cmd { return m.toggleRoutines() }},
 	}
+	m.openMenu(x, y, append(items, m.navMenuItems()...))
+}
+
+// navMenuItems are the navigator's pickers, under a rule, for the Tables
+// pane's menus — the tables' and the routines' alike, since the database
+// and schema picked are those of both lists. None on a driver without
+// either picker.
+func (m *Model) navMenuItems() []menuItem {
+	var items []menuItem
 	if dbRow, schemaRow := m.navRows(); dbRow || schemaRow {
 		dbWhy, schemaWhy := "", ""
 		if !dbRow {
@@ -451,7 +466,7 @@ func (m *Model) openTableMenu(x, y int, onRow bool) {
 			menuItem{label: "Pick schema…", key: "s", why: schemaWhy,
 				act: func(m *Model) tea.Cmd { m.openSchemaPicker(); return nil }})
 	}
-	m.openMenu(x, y, items)
+	return items
 }
 
 // openLogMenu is the log's context menu. Both rows act on the log on

@@ -256,6 +256,7 @@ func (w *Workspace) cancelCatalogWorkLocked() {
 		w.schemaCancel()
 		w.schemaCancel = nil
 	}
+	w.cancelRoutinesLocked() // the old list's routines; see routinesJobLocked
 }
 
 // listSchemas reads a database's schemas for the sidebar's picker: with
@@ -483,6 +484,7 @@ func (w *Workspace) landConnect(ev *Connected, gen int, kind connectKind) {
 	w.dropCompletionsLocked()
 	if ev.Catalog != nil {
 		ev.Counts = w.countsJobLocked(ev.Name, gen, db.TableRefs(ev.Catalog.Rows))
+		ev.Routines = w.routinesJobLocked(ev.Name, gen)
 	}
 	if ev.Changed {
 		ev.Notes = append(ev.Notes, notef(Ok, "connected to %s", ev.Name))
@@ -532,14 +534,15 @@ func countOf(n int, noun string) string {
 }
 
 // setCatalogLocked installs a connection's catalog and its index. Row counts
-// belong to the catalog they were counted for, so they go with it.
+// belong to the catalog they were counted for, so they go with it, as do
+// the routines read beside it (routines.go).
 //
 // The index is told the database's whole schema list (w.schemas, which the
 // caller sets first), since the catalog may hold one schema's tables: names
 // are then qualified as on a many-schema database, and a schema.table in a
 // question can reach a schema the sidebar has not loaded (TableIndex.SetSchemas).
 func (w *Workspace) setCatalogLocked(tables *model.Result) {
-	w.catalog, w.tableIdx, w.rowCounts = tables, nil, nil
+	w.catalog, w.tableIdx, w.rowCounts, w.routines = tables, nil, nil, nil
 	if tables != nil {
 		w.tableIdx = db.NewTableIndex(db.TableRefs(tables.Rows))
 		if len(w.schemas) > 0 {
@@ -609,6 +612,7 @@ func (w *Workspace) PickSchema(pick SchemaPick) (Start, error) {
 		// (complete.go), and the new w.schema re-ranks it on the next ask
 		w.setCatalogLocked(cat)
 		ev.Counts = w.countsJobLocked(name, gen, db.TableRefs(cat.Rows))
+		ev.Routines = w.routinesJobLocked(name, gen)
 		return ev
 	}
 	return Start{Job: job}, nil

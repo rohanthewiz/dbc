@@ -336,6 +336,9 @@ func (m *Model) render() (*Canvas, *caret) {
 		if m.ws.RowCountsShown() {
 			title += " · rows"
 		}
+		if m.routinesShown() {
+			title = m.routinesTitle() // the pane's other list (routines.go)
+		}
 		m.drawPane(c, l.tables, title, focusTables, m.st.panel, m.drawTablesPane)
 	}
 

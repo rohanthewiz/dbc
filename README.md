@@ -207,6 +207,22 @@ until the numbers land. They show as `cats (8)` in `dbc web`, where hovering
 says "cats with 8 rows", and a right-aligned `8` in the terminal. The switch
 is per query tab, and unticking it cancels a counting still running.
 
+The same list can show the schema's stored functions and procedures
+instead of its tables, on Postgres and MySQL: click **Routines** beside
+**Tables** in the heading in `dbc web`, or press `f` in the terminal's
+Tables pane (the title then reads `Routines · 3`; `f` again goes back). The
+list is the schema the tables are of — pick another schema and its
+routines come with it — and each row shows its kind (`fn`, `proc`, `agg`,
+`trigger`, `window`), with the arguments of overloads that share a name.
+`Enter` or a double-click on one shows its DDL: the `CREATE` statement as
+the server renders it (`pg_get_functiondef`, MySQL's `SHOW CREATE
+FUNCTION|PROCEDURE`), colored as SQL, with **Copy** (`y`) and **Insert
+into editor** (`i`, at the caret — nothing in the editor is replaced). On
+Postgres an aggregate has no such rendering and says so. Like the row
+counts, the switch is per query tab, and the routines are read only while
+it is on; a `CREATE FUNCTION` run in dbc relists them, as a `CREATE TABLE`
+does the tables.
+
 On Postgres the whole list is counted in one statement (`query_to_xml` runs
 a `count(*)` per table server-side); if that fails — a table you can see
 but not `SELECT` from, say — each table is counted on its own, so only that
@@ -303,6 +319,8 @@ with no database picker.
 | tables | `c` on the selected table | show its columns: its `information_schema.columns` rows (name, type, nullable, default, length) in the grid, ready to copy |
 | tables | `#` | show or hide each table's row count (an exact `count(*)` per table; off by default) |
 | tables | `e` on the selected table | diagram it and its neighbours (an ERD, below), saved as a PNG and opened |
+| tables | `f` | *(Postgres, MySQL)* list the schema's functions and procedures in place of its tables, and back |
+| routines | `Enter` / double-click / right-click | show its DDL (`y` copies it, `i` inserts it at the editor's caret) / the same / show DDL, insert name, copy name, show tables |
 | editor | click, drag, double-, triple-click | caret, selection, word, line |
 | editor | right-click | run, copy, cut, select all, undo, history, ask the assistant; go to definition, usages, rename; the consoles |
 | editor | `Ctrl`+click | go to where the alias or CTE under the pointer is declared |

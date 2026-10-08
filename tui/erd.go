@@ -42,11 +42,14 @@ type erdMsg struct {
 // neighbours one foreign-key hop out: what it references and what
 // references it, which is what "how does this table fit in" asks.
 func (m *Model) tableDiagram() tea.Cmd {
-	it, ok := m.tables.current()
+	if m.tableOnly("A diagram") {
+		return nil
+	}
+	name, ok := m.currentTable()
 	if !ok {
 		return nil
 	}
-	return m.diagram(erd.Selection{Tables: []string{it.data.(string)}, Depth: 1}, false)
+	return m.diagram(erd.Selection{Tables: []string{name}, Depth: 1}, false)
 }
 
 // diagram reads the schema, narrowed to sel, and either saves and opens the

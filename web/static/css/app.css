@@ -192,6 +192,26 @@ body.row-dragging { cursor: row-resize; user-select: none; }
 #tables li .rows { color: var(--muted); }
 #tables li.view::after { content: " (view)"; color: var(--muted); }
 #tables li.none { color: var(--muted); cursor: default; font-family: inherit; }
+/* a routine's row: its kind muted after the name, and an overload's
+   arguments, which tell it from the others of its name */
+#tables li .rkind { color: var(--muted); }
+#tables li .rargs { color: var(--muted); }
+/* the Tables heading's two words, which switch the list between the
+   schema's tables and its routines: the one on is lit, the other a button
+   in the heading's muted voice */
+.smodes { display: inline-flex; align-items: baseline; gap: 8px; min-width: 0; }
+.smode { border: 0; background: none; padding: 0; cursor: pointer;
+  font: inherit; text-transform: inherit; letter-spacing: inherit; color: var(--muted); }
+.smode.on { color: var(--fg); cursor: default; }
+.smode:not(.on):hover { color: var(--accent); }
+/* the DDL viewer: the inspector's box, colored as the assistant's code
+   blocks are */
+.ddl .hl-k { color: var(--accent); font-weight: 700; }
+.ddl .hl-s, .ddl .hl-n { color: var(--warn); }
+.ddl .hl-c { color: var(--muted); font-style: italic; }
+.ddl .hl-i { text-decoration: underline; }
+.ddl .hl-p { color: var(--err); }
+.ddl .ival { max-height: 70vh; white-space: pre; overflow: auto; word-break: normal; }
 /* the schema filter under the Tables heading: a search box styled like
    the other inputs (.hfilter), and under it — while the box has focus —
    the matching schemas. The list sits in the column's flow, not floated

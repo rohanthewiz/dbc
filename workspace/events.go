@@ -130,6 +130,12 @@ type Connected struct {
 	// reads a table's rows, and the list must never wait for that. nil
 	// while the sidebar's counts are off (Workspace.ShowRowCounts).
 	Counts Job
+	// Routines, when non-nil, reads the stored functions and procedures
+	// of the schema the catalog lists, for the sidebar's routines list;
+	// its event is a *RoutinesLoaded. Separate, as Counts is, so the
+	// tables draw at once. nil while the routines list is off
+	// (Workspace.ShowRoutines) and on a driver with none (db.HasRoutines).
+	Routines Job
 }
 
 // RunDone lands a run of statements, or of a script.
@@ -241,9 +247,36 @@ type SchemaLoaded struct {
 	Notes []Note
 	// Counts is the row counting of the new tables, as on Connected.
 	Counts Job
+	// Routines reads the new schema's routines, as on Connected.
+	Routines Job
+}
+
+// RoutinesLoaded lands the stored functions and procedures of the schema
+// the sidebar lists (Workspace.Routines keeps them too, so a UI redrawing
+// its list later finds them there).
+type RoutinesLoaded struct {
+	Conn     string
+	Schema   string          // the schema they are of; "" for every schema
+	Routines []model.Routine // read-only; nil when the read failed (Notes say why)
+	// Stale reports a read a later connect, schema pick or switch-off has
+	// superseded: nothing landed, and a UI draws nothing.
+	Stale bool
+	Notes []Note
+}
+
+// RoutineDDL lands a routine's definition (Workspace.RoutineDDL), as its
+// server renders it, for a UI to show.
+type RoutineDDL struct {
+	Conn    string
+	Routine model.Routine
+	DDL     string // the CREATE statement, ending in ";"; "" when Err is set
+	Err     error
+	Notes   []Note
 }
 
 func (*SchemaLoaded) event()    {}
+func (*RoutinesLoaded) event()  {}
+func (*RoutineDDL) event()      {}
 func (*Connected) event()       {}
 func (*RowCounts) event()       {}
 func (*RunDone) event()         {}

@@ -300,6 +300,17 @@ can type into to narrow; `Enter` or a click picks. The schema picked is
 remembered per connection, across restarts too (in
 `~/.config/dbc/schema-picks.json`).
 
+The terminal's Tables pane finds a table as the web's table box does: press
+`/` in it for a `⌕` line over the list, and type — the list narrows to the
+names holding what you typed, in any case, and the title reads
+`Tables · 3 of 40`. While you type, the pane's letter keys are text; `↑` `↓`
+move through the matches, `Enter` previews the one under the cursor (or
+shows a routine's DDL, with the routines listed) and leaves the filter in
+place, and `Esc` clears it with the cursor kept on the table you found.
+Back in the pane, `/` (or a click on the line) goes on typing and `Esc`
+clears. A new catalog — another connection, database or schema — starts
+with no filter.
+
 The assistant matches table names in the loaded schema, and also
 `schema.table` names in any other schema of the database. The ERD
 button diagrams the picked schema. No table list is cut at `max_rows`, which applies only to results you ask

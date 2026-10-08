@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -130,7 +129,7 @@ func routineItems(rs []model.Routine, manySchemas bool) []listItem {
 
 // fillRoutines is fillTables for the routines list.
 func (m *Model) fillRoutines() {
-	m.tables.set(routineItems(m.ws.Routines(), len(m.ws.Schemas()) > 1))
+	m.setTableRows(routineItems(m.ws.Routines(), len(m.ws.Schemas()) > 1))
 }
 
 // routinesLanded draws the routines a Routines job read, keeping the
@@ -240,6 +239,7 @@ func (m *Model) openRoutineMenu(x, y int, onRow bool) {
 		}},
 		{label: "Copy name", why: noRoutine, act: func(m *Model) tea.Cmd { return m.copyString(name, "the routine name") }},
 		{label: "Show tables", key: "f", act: func(m *Model) tea.Cmd { return m.toggleRoutines() }},
+		{label: "Find a routine…", key: "/", act: func(m *Model) tea.Cmd { m.openTableFind(); return nil }},
 	}
 	m.openMenu(x, y, append(items, m.navMenuItems()...))
 }
@@ -412,7 +412,7 @@ func (d *ddlModal) wheel(m *Model, x, y, dy int) { d.top = max(d.top+dy, 0) }
 // "Routines · 3", or "Routines" until they land.
 func (m *Model) routinesTitle() string {
 	if rs := m.ws.Routines(); rs != nil {
-		return fmt.Sprintf("Routines · %d", len(rs))
+		return "Routines · " + m.tablesTitleCount() // "3 of 12" while filtered
 	}
 	return "Routines"
 }

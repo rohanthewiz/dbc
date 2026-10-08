@@ -227,6 +227,8 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 			m.openDatabasePicker()
 		case l.schemaRow.Contains(x, y):
 			m.openSchemaPicker()
+		case l.findRow.Contains(x, y):
+			m.openTableFind() // back into the filter line
 		default:
 			if i := m.tables.indexAt(x, y); i >= 0 {
 				m.tables.cur = i

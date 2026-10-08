@@ -60,7 +60,10 @@ type Model struct {
 	logFor string
 	conns  *list
 	tables *list
-	chat   *chatPane
+	// tfind is the Tables pane's type-to-find (tablefind.go), per tab as
+	// tables is; nil until the first /
+	tfind *tableFind
+	chat  *chatPane
 
 	// Overlays, drawn on top of everything. At most one menu and one modal;
 	// a menu may sit over a modal (a right-click inside it), never the
@@ -588,7 +591,7 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 
 	// ? is a typed character in the editor and the assistant's input, so
 	// it opens the keys only where nothing takes text (F1 works anywhere)
-	if s == "?" && m.focus != focusEditor && m.focus != focusChat {
+	if s == "?" && m.focus != focusEditor && m.focus != focusChat && !m.findEditing() {
 		m.openHelp()
 		return nil
 	}
@@ -626,11 +629,24 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		}
 		return m.listKey(m.conns, k, m.connPicked)
 	case focusTables:
+		// the filter line, while it is typed in, takes the letters below
+		// as text (tablefind.go)
+		if m.findEditing() {
+			return m.tableFindKey(k)
+		}
 		// c ("Show columns"), e (diagram it), d (database), s (schema),
 		// # (row counts) and f (routines in place of tables) are the
 		// tables list's letter keys: the list's own keys are movement and
 		// Enter, so they shadow nothing
 		switch k.String() {
+		case "/":
+			m.openTableFind()
+			return nil
+		case "esc":
+			if m.tfind.active() {
+				m.clearTableFind()
+				return nil
+			}
 		case "#":
 			return m.toggleRowCounts()
 		case "f":
@@ -766,6 +782,8 @@ func (m *Model) paste(s string) tea.Cmd {
 		m.modal.paste(m, s)
 	case m.focus == focusChat:
 		m.chat.input.Insert(s)
+	case m.findEditing():
+		m.tableFindPaste(s)
 	case m.focus == focusEditor:
 		m.editor.Insert(s)
 		m.drag.follow = true

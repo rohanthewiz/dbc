@@ -61,6 +61,7 @@ type queryTab struct {
 	grid   *grid
 	planv  *planView
 	tables *list
+	tfind  *tableFind
 
 	resTab        resultsTab
 	schemaLoading string
@@ -226,7 +227,7 @@ func (m *Model) tagFor(t *queryTab, cmd tea.Cmd) tea.Cmd {
 
 // park copies the Model's per-tab fields into t (the tab being left).
 func (m *Model) park(t *queryTab) {
-	t.ws, t.editor, t.grid, t.planv, t.tables = m.ws, m.editor, m.grid, m.planv, m.tables
+	t.ws, t.editor, t.grid, t.planv, t.tables, t.tfind = m.ws, m.editor, m.grid, m.planv, m.tables, m.tfind
 	t.resTab, t.schemaLoading, t.status, t.complSt = m.resTab, m.schemaLoading, m.status, m.complSt
 	t.console, t.consoleName, t.consoleText, t.consoleDB = m.console, m.consoleName, m.consoleText, m.consoleDB
 	t.planFor, t.plans, t.gridConn, t.gridFor, t.rgrids = m.planFor, m.plans, m.gridConn, m.gridFor, m.rgrids
@@ -234,7 +235,7 @@ func (m *Model) park(t *queryTab) {
 
 // load copies t's fields into the Model (the tab coming on screen).
 func (m *Model) load(t *queryTab) {
-	m.ws, m.editor, m.grid, m.planv, m.tables = t.ws, t.editor, t.grid, t.planv, t.tables
+	m.ws, m.editor, m.grid, m.planv, m.tables, m.tfind = t.ws, t.editor, t.grid, t.planv, t.tables, t.tfind
 	m.resTab, m.schemaLoading, m.status, m.complSt = t.resTab, t.schemaLoading, t.status, t.complSt
 	m.console, m.consoleName, m.consoleText, m.consoleDB = t.console, t.consoleName, t.consoleText, t.consoleDB
 	m.planFor, m.plans, m.gridConn, m.gridFor, m.rgrids = t.planFor, t.plans, t.gridConn, t.gridFor, t.rgrids

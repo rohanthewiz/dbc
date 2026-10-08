@@ -128,10 +128,11 @@ func (m *Model) schemaLabel() string {
 }
 
 // drawTablesPane is the Tables pane's body: the navigator's rows, when the
-// connection has them, then the list. The rows' rects go into the layout
-// for clicks, as the toolbar's buttons do.
-func (m *Model) drawTablesPane(s Surface) {
-	m.lay.dbRow, m.lay.schemaRow = Rect{}, Rect{}
+// connection has them, the filter line while it is up, then the list. The
+// rows' rects go into the layout for clicks, as the toolbar's buttons do.
+// It returns the filter line's caret while the line is typed in.
+func (m *Model) drawTablesPane(s Surface) *caret {
+	m.lay.dbRow, m.lay.schemaRow, m.lay.findRow = Rect{}, Rect{}, Rect{}
 	bg := m.st.panel
 	y := 0
 	row := func(icon, label string) Rect {
@@ -151,8 +152,23 @@ func (m *Model) drawTablesPane(s Surface) {
 	if schemaRow && s.H()-y > 2 {
 		m.lay.schemaRow = row("◫", m.schemaLabel())
 	}
+	// Typing goes to the line only while the pane has focus: focus moving
+	// off it (Tab, a click elsewhere, a preview's jump to the grid) ends
+	// the typing, so coming back finds the pane's letters as keys again,
+	// with the filter still applied. Settled here, where every frame
+	// passes, rather than at each of the many places focus moves.
+	if m.tfind != nil && m.focus != focusTables {
+		m.tfind.editing = false
+	}
+	var cur *caret
+	if m.tfind.active() && s.H()-y > 1 {
+		m.lay.findRow, cur = m.drawTableFind(s, y)
+		y++
+	}
 	empty := "(none yet)"
 	switch {
+	case m.tfind.active() && m.tfind.input.Text() != "" && len(m.tfind.all) > 0:
+		empty = "no match"
 	case m.ws.Active() == "":
 		empty = "not connected"
 	case m.routinesShown() && m.ws.Routines() == nil:
@@ -163,6 +179,7 @@ func (m *Model) drawTablesPane(s Surface) {
 		empty = "no tables"
 	}
 	m.tables.draw(s.Sub(Rect{0, y, s.W(), s.H() - y}), m.st, bg, m.focus == focusTables, empty)
+	return cur
 }
 
 // commas formats n with thousands separators, as the web's picker does.

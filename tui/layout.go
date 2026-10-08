@@ -43,6 +43,8 @@ type layout struct {
 	// the Tables pane's navigator rows, as drawn (zero when the connection
 	// has none; see navigator.go)
 	dbRow, schemaRow Rect
+	// and its filter line (tablefind.go), zero while it is down
+	findRow Rect
 
 	// the results pane's title tabs, as drawn (zero when there is no plan
 	// and the title is the plain one)
@@ -330,8 +332,8 @@ func (m *Model) render() (*Canvas, *caret) {
 			m.conns.draw(s, m.st, m.st.panel, m.focus == focusConns, "no connections")
 		})
 		title := "Tables"
-		if n := len(m.tables.items); n > 0 {
-			title = fmt.Sprintf("Tables · %d", n)
+		if n := m.tableRowsTotal(); n > 0 {
+			title = "Tables · " + m.tablesTitleCount() // "3 of 40" while filtered
 		}
 		// the row counts' switch, so a list without numbers reads as
 		// "counts off" (# turns them on), not as "nothing counted"
@@ -341,7 +343,12 @@ func (m *Model) render() (*Canvas, *caret) {
 		if m.routinesShown() {
 			title = m.routinesTitle() // the pane's other list (routines.go)
 		}
-		m.drawPane(c, l.tables, title, focusTables, m.st.panel, m.drawTablesPane)
+		m.drawPane(c, l.tables, title, focusTables, m.st.panel, func(s Surface) {
+			// the filter line's caret (tablefind.go)
+			if p := m.drawTablesPane(s); p != nil && m.modal == nil && m.menu == nil {
+				cur = p
+			}
+		})
 	}
 
 	m.drawPane(c, l.editor, m.editorTitle(), focusEditor, m.st.base, func(s Surface) {

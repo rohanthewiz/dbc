@@ -121,6 +121,7 @@ var keyGroups = []keyGroup{
 		{"c · e", "(tables) show its columns · diagram it (ERD)"},
 		{"#", "(tables) show or hide row counts (an exact count(*) per table)"},
 		{"f", "(tables) list the schema's functions and procedures in place of its tables, and back"},
+		{"/", "(tables) find: type to narrow the list · Enter previews · Esc clears"},
 		{"Enter · 2×click", "(routines) show its DDL — y copies it, i inserts it in the editor"},
 	}},
 	{"Assistant", [][2]string{

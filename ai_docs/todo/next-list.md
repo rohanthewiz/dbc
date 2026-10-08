@@ -68,14 +68,6 @@ ten session docs in `ai_docs/claude_sessions/`
   the assistant sees only a script run's result. After a TUI script run it
   could attach `ScriptChatContext` for that script.
 
-- **N-141** · raised `2026-1007-1054-web-tab-to-table-find` · value low
-  The TUI's Tables pane has no type-to-find. dbc web's sidebar now has a
-  table box under db/schema (a schema picked with Tab lands there, typing
-  narrows the list, Enter previews). In the TUI the pane's letters are
-  already keys (`j k g G c e d s #`), so it would be a `/` that opens a
-  filter line over the list, as the pickers' `pickModal` filters. Offered
-  at the end of the session; the user did not answer.
-
 
 ## Validate
 
@@ -403,6 +395,15 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-141** · raised `2026-1007-1054-web-tab-to-table-find` · value low
+  The TUI's Tables pane has no type-to-find. dbc web's sidebar now has a
+  table box under db/schema (a schema picked with Tab lands there, typing
+  narrows the list, Enter previews). In the TUI the pane's letters are
+  already keys (`j k g G c e d s #`), so it would be a `/` that opens a
+  filter line over the list, as the pickers' `pickModal` filters. Offered
+  at the end of the session; the user did not answer.
+  closed 2026-10-08, `2026-1008-1844-tui-tables-find` (from the cats-todo backlog): `tui/tablefind.go`. `/` in the Tables pane (or the pane menu's "Find a table…" / "Find a routine…") opens a `⌕` line under the navigator rows. Typing narrows the list case-insensitively anywhere in the name, as `pickModal` does, and the title reads `Tables · 3 of 40` (`Routines · …` likewise). While typing, letters are text and `?` is not help; ↑↓/PgUp/PgDn/Ctrl+N move; Enter previews (a routine: its DDL) and keeps the filter; Esc clears and keeps the cursor on the found row. Off the line, `/` or a click on it resumes and Esc clears. Typing ends whenever focus leaves the pane (settled in `drawTablesPane`). The filter sits between catalog and list (`setTableRows`, which `fillTables`/`fillRoutines` now call), so row counts and relists land under it. It is per tab (`tfind`, parked/loaded with `tables`). `refreshTables` (a new catalog) drops the text, and a relist keeps it. The "Diagram all tables" item's "no tables" check uses the unfiltered total. Tests `TestTablesFind`, `TestTablesFindEdges`, `TestTablesFindAcrossCatalogs`; README and F1 keys updated.
 
 - **N-167** · raised `2026-1008-1826-script-rename-f2` · value low
   Script F2 can rename a method that satisfies an interface only an import

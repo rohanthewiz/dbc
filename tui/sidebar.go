@@ -57,8 +57,18 @@ func (m *Model) refreshConns() {
 
 // refreshTables rebuilds the tables list from the active connection's
 // catalog, with the cursor back at the top: a new catalog is a new list.
+//
+// A filter typed over the old list goes with it: its text was a fragment
+// of the old catalog's names. A line still being typed in stays open,
+// empty, so the find can go on in the new list.
 func (m *Model) refreshTables() {
 	m.tables.cur = 0
+	if f := m.tfind; f != nil {
+		f.input.SetText("")
+		if !f.editing {
+			m.tfind = nil
+		}
+	}
 	m.fillTables()
 }
 
@@ -102,7 +112,7 @@ func (m *Model) fillTables() {
 	}
 	r := m.ws.Catalog()
 	if r == nil || len(r.Columns) < 2 {
-		m.tables.set(nil)
+		m.setTableRows(nil)
 		return
 	}
 	counts := m.ws.RowCounts()
@@ -122,7 +132,7 @@ func (m *Model) fillTables() {
 		}
 		items = append(items, it)
 	}
-	m.tables.set(items)
+	m.setTableRows(items) // through the pane's filter (tablefind.go)
 }
 
 // toggleRowCounts is the tables list's # key (and its menu's "Show row

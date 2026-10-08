@@ -419,7 +419,7 @@ func (m *Model) openTableMenu(x, y int, onRow bool) {
 		name, noTable = t, ""
 	}
 	noTables := ""
-	if len(m.tables.items) == 0 {
+	if m.tableRowsTotal() == 0 { // the catalog's, not the filter's
 		noTables = "no tables listed"
 	}
 	// the counts' switch, worded as what picking it does
@@ -442,6 +442,7 @@ func (m *Model) openTableMenu(x, y int, onRow bool) {
 		{label: countsLabel, key: "#", act: func(m *Model) tea.Cmd { return m.toggleRowCounts() }},
 		{label: "Show routines", key: "f", why: m.noRoutinesWhy(),
 			act: func(m *Model) tea.Cmd { return m.toggleRoutines() }},
+		{label: "Find a table…", key: "/", act: func(m *Model) tea.Cmd { m.openTableFind(); return nil }},
 	}
 	m.openMenu(x, y, append(items, m.navMenuItems()...))
 }

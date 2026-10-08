@@ -87,7 +87,8 @@ func TestSplitOffsets(t *testing.T) {
 
 // CodeStart skips the comments heading a statement (own-line, block, nested,
 // several), but not an open paren, and is Start when nothing heads it. Text
-// and Start still include the heading comments.
+// and Start still include the heading comments — those touching the code: a
+// blank line detaches the comments above it from Text.
 func TestSplitCodeStart(t *testing.T) {
 	cases := []struct {
 		name, sql, code string // code: what the last statement's CodeStart points at
@@ -95,7 +96,14 @@ func TestSplitCodeStart(t *testing.T) {
 	}{
 		{"no header", "SELECT 1;\nSELECT 2", "SELECT 2", "SELECT 2"},
 		{"separator line", "SELECT 1; -- ran\n---\nSELECT 2", "SELECT 2", "---\nSELECT 2"},
-		{"several comments", "SELECT 1;\n-- a\n\n  -- b\nSELECT 2", "SELECT 2", "-- a\n\n  -- b\nSELECT 2"},
+		{"several comments", "SELECT 1;\n-- a\n  -- b\nSELECT 2", "SELECT 2", "-- a\n  -- b\nSELECT 2"},
+		{"blank line between comments", "SELECT 1;\n-- a\n\n  -- b\nSELECT 2", "SELECT 2", "-- b\nSELECT 2"},
+		{"blank line above the code", "SELECT 1;\n-- CREATE SCHEMA s;\n---\n\n\nselect 2", "select 2", "select 2"},
+		{"whitespace-only blank line", "SELECT 1;\n-- a\n \t \nSELECT 2", "SELECT 2", "SELECT 2"},
+		{"blank line with CRLF", "SELECT 1;\r\n-- a\r\n\r\n-- b\r\nSELECT 2", "SELECT 2", "-- b\r\nSELECT 2"},
+		{"empty line inside a block comment", "SELECT 1;\n/* a\n\n b */\nSELECT 2", "SELECT 2", "/* a\n\n b */\nSELECT 2"},
+		{"blank line after a block comment", "SELECT 1;\n/* a */\n\n-- b\nSELECT 2", "SELECT 2", "-- b\nSELECT 2"},
+		{"blank line before same-line comment", "SELECT 1;\n-- a\n\n/* x */ SELECT 2", "SELECT 2", "/* x */ SELECT 2"},
 		{"block comment over lines", "SELECT 1;\n/* a\n b */\nSELECT 2", "SELECT 2", "/* a\n b */\nSELECT 2"},
 		{"nested block comment", "SELECT 1;\n/* a /* b */ c */ SELECT 2", "SELECT 2", "/* a /* b */ c */ SELECT 2"},
 		{"comment before code on the same line", "SELECT 1; /* x */ SELECT 2", "SELECT 2", "/* x */ SELECT 2"},

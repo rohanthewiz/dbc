@@ -137,6 +137,24 @@ func TestPickTrailingComment(t *testing.T) {
 	}
 }
 
+// Comments a blank line cuts off from the query do not run with it — a
+// commented-out statement above a query is not the query's header — while a
+// caret in them still picks the query below.
+func TestPickDetachedComments(t *testing.T) {
+	text := "-- CREATE SCHEMA IF NOT EXISTS lymbic_stg;\n---\n\n\nselect * from lymbic_stg.jobs;"
+	for _, caret := range []int{0, strings.Index(text, "---"), strings.Index(text, "from")} {
+		got, tag := Pick(Editor{Text: text, Caret: caret})
+		if strings.Join(got, "|") != "select * from lymbic_stg.jobs" || tag != "query" {
+			t.Errorf("caret %d: Pick = %q, %q; want the select alone", caret, got, tag)
+		}
+	}
+	// without the blank line the comments head the query and run with it
+	text = "-- all jobs\nselect * from jobs;"
+	if got, _ := Pick(Editor{Text: text, Caret: len(text)}); strings.Join(got, "|") != "-- all jobs\nselect * from jobs" {
+		t.Errorf("Pick with a touching comment = %q, want the comment kept", got)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // The run slot
 // ---------------------------------------------------------------------------

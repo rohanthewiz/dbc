@@ -19,6 +19,19 @@ import "strings"
 //	SELECT 1; -- note⏎
 //	---⏎                 ← Start: Text begins with the header comment
 //	SELECT 2;            ← CodeStart: the first byte outside blanks/comments
+//
+// Only the comments touching the statement head it, though: a blank line
+// detaches everything above it. That is how a commented-out statement or a
+// note left between queries reads, and running it along with the query
+// would put it in the run's log and history as if it belonged there. A
+// caret in a detached comment still picks the statement below (IndexAt goes
+// by the whole span), as a caret on a blank line does.
+//
+//	-- CREATE SCHEMA s;⏎  ┐ detached: in the span, not in Text
+//	---⏎                  ┘
+//	⏎                     ← the blank line that detaches them
+//	-- all jobs⏎          ← Start: the comment block touching the code
+//	SELECT * FROM jobs;   ← CodeStart
 type Stmt struct {
 	Text      string // statement text, trimmed, terminating semicolon removed
 	Start     int    // byte offset of Text in the buffer
@@ -67,14 +80,20 @@ func Split(sql string) []Stmt {
 			continue
 		}
 		start := c.start + lead
+		end := start + len(text)
+		// the chunk has code (hasCode), so codeAt stops inside Text; it
+		// starts on a token boundary (only blanks were skipped to reach
+		// Start), so it cannot mistake a comment's inside for code
+		code := codeAt(sql, start)
+		// drop heading comments a blank line cuts off from the code; start
+		// only moves forward, onto a comment or the code itself, so Text
+		// stays a trimmed slice of the buffer
+		start = headStart(sql, start, code)
 		out = append(out, Stmt{
-			Text:  text,
-			Start: start,
-			End:   start + len(text),
-			// the chunk has code (hasCode), so codeAt stops inside Text; it
-			// starts on a token boundary (only blanks were skipped to reach
-			// Start), so it cannot mistake a comment's inside for code
-			CodeStart: codeAt(sql, start),
+			Text:      sql[start:end],
+			Start:     start,
+			End:       end,
+			CodeStart: code,
 			spanStart: c.start,
 			spanEnd:   c.tail,
 		})
@@ -321,6 +340,54 @@ func codeAt(sql string, i int) int {
 		}
 	}
 	return len(sql)
+}
+
+// headStart returns where a statement's heading comments begin, given that
+// sql[i:code] holds only blanks and comments, i is on a non-blank, and code
+// is the statement's first code: the first comment after the last blank line
+// in that run, or code when a blank line sits right above it. A blank line
+// is one holding only whitespace outside any comment, so an empty line
+// inside a block comment does not detach anything.
+//
+//	-- a⏎        i (on a non-blank, so its line is never blank)
+//	⏎            blank: cut
+//	-- b⏎        first comment after a cut → head
+//	SELECT 1     code
+//
+// The walk tracks whether the line so far is empty. A line comment eats its
+// own newline, so the line after it starts empty; a block comment leaves
+// the walk on the line it closes on, which then holds content.
+func headStart(sql string, i, code int) int {
+	head := i
+	empty := false // the current line holds nothing but whitespace so far
+	cut := false   // a blank line has passed since the last comment
+	for i < code {
+		switch {
+		case sql[i] == '\n':
+			if empty {
+				cut = true
+			}
+			empty = true
+			i++
+		case isSpace(sql[i]):
+			i++
+		case isLineCommentAt(sql, i), isBlockCommentAt(sql, i):
+			if cut {
+				head, cut = i, false
+			}
+			if isLineCommentAt(sql, i) {
+				i, empty = skipLineComment(sql, i), true
+			} else {
+				i, empty = skipBlockComment(sql, i), false
+			}
+		default:
+			return head // not reached: only blanks and comments precede code
+		}
+	}
+	if cut {
+		return code
+	}
+	return head
 }
 
 // wordAt returns the word starting at i, lowercased ("" when there is none).

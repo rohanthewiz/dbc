@@ -194,7 +194,7 @@ func (m *Model) connected(ev *workspace.Connected) tea.Cmd {
 		m.relistTables()
 	}
 	m.catsAfterTransition()
-	return tea.Batch(m.tag(m.releaseThenClose(ev)), m.tag(job(ev.Counts)))
+	return tea.Batch(m.tag(m.releaseThenClose(ev)), m.tag(job(ev.Counts)), m.tag(job(ev.Routines)))
 }
 
 // sessionReleased tells the user when a released session took state with

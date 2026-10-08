@@ -120,6 +120,19 @@ type Workspace struct {
 	// scans. It is the workspace's, not the Manager's, so each dbc web tab
 	// (and each TUI tab) has its own.
 	showCounts bool
+	// routines are the stored functions and procedures of the schema the
+	// catalog lists (all of them when it lists every schema's), for the
+	// sidebar's routines list, once the Routines job of the landing that
+	// loaded the catalog has run; nil until then, and while showRoutines
+	// is off. routineCancel and routineGen are countCancel and countGen's
+	// counterparts: see routinesJobLocked.
+	routines      []model.Routine
+	routineCancel context.CancelFunc
+	routineGen    int
+	// showRoutines is the sidebar's routines switch (ShowRoutines): the
+	// list is read only while it is on, so a connect costs no pg_proc
+	// read for a sidebar showing tables. Per workspace, as showCounts is.
+	showRoutines bool
 
 	// sets are the results pane's contents, one result set per connection
 	// this workspace has been on — result tabs, the plan, and the last

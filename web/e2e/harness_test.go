@@ -159,7 +159,8 @@ INSERT INTO cats (name, breed, age) VALUES ('Tom', 'tabby', 3), ('Mia', 'siamese
 		// dropped again when the test ends
 		drop := `DROP SCHEMA IF EXISTS e2e_a CASCADE; DROP SCHEMA IF EXISTS e2e_b CASCADE`
 		e.dbc(t, "pg", drop+`; CREATE SCHEMA e2e_a; CREATE SCHEMA e2e_b;
-CREATE TABLE e2e_a.alpha (id int); CREATE TABLE e2e_b.beta (id int, label text)`)
+CREATE TABLE e2e_a.alpha (id int); CREATE TABLE e2e_b.beta (id int, label text);
+CREATE FUNCTION e2e_b.twice(n int) RETURNS int LANGUAGE sql AS 'SELECT n * 2'`)
 		t.Cleanup(func() { e.dbc(t, "pg", drop) })
 	}
 	e.seedChats(t)

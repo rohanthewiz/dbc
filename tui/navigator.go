@@ -155,6 +155,10 @@ func (m *Model) drawTablesPane(s Surface) {
 	switch {
 	case m.ws.Active() == "":
 		empty = "not connected"
+	case m.routinesShown() && m.ws.Routines() == nil:
+		empty = "loading routines…"
+	case m.routinesShown():
+		empty = "no routines"
 	case m.ws.Catalog() != nil:
 		empty = "no tables"
 	}
@@ -324,7 +328,7 @@ func (m *Model) schemaLoaded(ev *workspace.SchemaLoaded) tea.Cmd {
 	if ev.Catalog != nil {
 		m.refreshTables()
 	}
-	return m.tag(job(ev.Counts))
+	return tea.Batch(m.tag(job(ev.Counts)), m.tag(job(ev.Routines)))
 }
 
 // ---------------------------------------------------------------------------

@@ -51,6 +51,7 @@ func TestWeb(t *testing.T) {
 		{"refresh a connection", refreshConn},
 		{"connection form fields and DSN", connForm},
 		{"postgres schema picker", pgSchemaPicker},
+		{"postgres routines", pgRoutines},
 		{"tabs survive a reload", tabsSurviveReload},
 		{"sidebar fold keys", sidebarFoldKeys},
 		{"other tabs' connections", otherTabsConns},
@@ -847,6 +848,63 @@ func connForm(t *testing.T, e *env, p *rod.Page) {
 	if b, err := os.ReadFile(filepath.Join(e.home, ".config", "dbc", "connections.toml")); err != nil || !strings.Contains(string(b), "lite3") {
 		t.Fatalf("lite3 is not in connections.toml (%v):\n%s", err, b)
 	}
+
+	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
+	waitConnected(t, p, "lite")
+}
+
+// pgRoutines: on Postgres the heading's Routines word lists the picked
+// schema's functions in place of its tables; Enter on one opens its DDL in
+// a viewer, whose i puts it in the editor; Tables brings the tables back.
+// On SQLite, which stores no routines, the word is not offered. Runs only
+// with DBC_LIVE_PG_DSN.
+func pgRoutines(t *testing.T, e *env, p *rod.Page) {
+	if e.pgDSN == "" {
+		t.Skip("set DBC_LIVE_PG_DSN to check the routines list")
+	}
+	if hidden, _ := eval(t, p, `() => document.getElementById("mode-routines").hidden`).(bool); !hidden {
+		t.Fatal("Routines offered on SQLite")
+	}
+	clickAt(t, p, `#conns .conn-item[data-conn="pg"]`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "connected to pg with its schema picker and the Routines word", `() => dbc.state.active === "pg" &&
+	  !document.querySelector("#conns .conn-item.connecting") &&
+	  !document.getElementById("table-filter").hidden && !document.getElementById("mode-routines").hidden`)
+	box := p.MustElement("#table-schema")
+	box.MustClick()
+	waitFor(t, p, "the schema list", `() => !document.getElementById("schema-list").hidden`)
+	box.MustInput("e2e_b")
+	waitFor(t, p, "the list narrowed to e2e_b", `() => {
+	  const rows = [...document.querySelectorAll("#schema-list li")].filter((li) => !li.hidden);
+	  return rows.length >= 1 && rows[0].textContent.includes("e2e_b");
+	}`)
+	p.Keyboard.MustType(input.Enter)
+	waitFor(t, p, "e2e_b's tables", `() =>
+	  [...document.querySelectorAll("#tables li[data-name]")].map((l) => l.dataset.name).join() === "e2e_b.beta"`)
+
+	clickAt(t, p, "#mode-routines", proto.InputMouseButtonLeft)
+	waitFor(t, p, "e2e_b's routines, the find box and heading following", `() =>
+	  [...document.querySelectorAll("#tables li[data-ri]")].map((l) => l.dataset.name).join() === "e2e_b.twice" &&
+	  document.getElementById("mode-routines").classList.contains("on") &&
+	  document.getElementById("find-label").textContent === "routine" &&
+	  document.getElementById("row-counts-box").hidden`)
+	selectTable(t, p, "e2e_b.twice")
+	p.Keyboard.MustType(input.Enter)
+	waitFor(t, p, "the DDL viewer", `() => {
+	  const m = document.querySelector(".modal .inspect.ddl pre");
+	  return !!m && m.textContent.startsWith("CREATE OR REPLACE FUNCTION e2e_b.twice(n integer)") &&
+	    m.textContent.trimEnd().endsWith(";") && !!m.querySelector(".hl-k") &&
+	    document.querySelector(".modal .mtitle").textContent.includes("DDL · e2e_b.twice");
+	}`)
+	was := evalStr(t, p, `() => dbc.editor.text()`)
+	p.Keyboard.MustType(input.KeyI)
+	waitFor(t, p, "the DDL in the editor, the viewer closed", `() =>
+	  !dbc.modal.isOpen() && dbc.editor.text().includes("SELECT n * 2")`)
+	eval(t, p, `(s) => dbc.editor.setText(s)`, was)
+
+	clickAt(t, p, "#mode-tables", proto.InputMouseButtonLeft)
+	waitFor(t, p, "e2e_b's tables again", `() =>
+	  [...document.querySelectorAll("#tables li[data-name]")].map((l) => l.dataset.name).join() === "e2e_b.beta" &&
+	  !document.getElementById("row-counts-box").hidden`)
 
 	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite")

@@ -63,7 +63,8 @@
     rowCounts: $("row-counts"), rowCountsBox: $("row-counts-box"),
     tableFilter: $("table-filter"), tableSchema: $("table-schema"), schemaList: $("schema-list"),
     dbFilter: $("db-filter"), tableDb: $("table-db"), dbList: $("db-list"),
-    findFilter: $("find-filter"), tableFind: $("table-find"),
+    findFilter: $("find-filter"), tableFind: $("table-find"), findLabel: $("find-label"),
+    modeTables: $("mode-tables"), modeRoutines: $("mode-routines"),
     active: $("active-conn"), stateful: $("stateful"), busy: $("busy"),
     run: $("run"), runAll: $("run-all"), stop: $("stop"), history: $("history-btn"), scripts: $("scripts-btn"),
     check: $("check-btn"), save: $("save-btn"), rsets: $("rsets"),
@@ -212,6 +213,7 @@
     side = s || { tables: [] };
     allTables = side.tables || [];
     loadingSchema = false;
+    drawModes();
     drawRowCountsBox();
     dbPicker.draw();
     drawSchemaFilter();
@@ -287,6 +289,7 @@
   // find's matches — the find box's own accent border marks that
   // narrowing, as the schema box's marks a pick.
   function drawTables() {
+    if (side.showRoutines) { drawRoutines(); return; } // the list's other mode
     const pick = schemaPick();
     const inPick = side.navigable || pick === null ? allTables : allTables.filter((t) => t.schema === pick);
     const total = schemaTotal();
@@ -336,6 +339,205 @@
     const first = els.tables.firstElementChild;
     first.tabIndex = 0;
     if (find !== "" || document.activeElement === els.tableFind) selectRow(first, false);
+  }
+
+  // ── the routines list ──────────────────────────────────────────────────
+  // The heading's Tables · Routines words switch the list between the
+  // schema's tables and its stored functions and procedures — the TUI's f
+  // (tui/routines.go). The switch is the tab's on the server
+  // (Workspace.ShowRoutines), as the rows box is, so it follows whichever
+  // tab is on screen (side.showRoutines), and while it is on every
+  // connect, refresh and schema pick reads the routines again:
+  //
+  //	click Routines ─► POST /routines {on} ─► … ─► "routines" (the list)
+  //	"conn" (a connect, a pick) ─► routines null: "loading…" ─► "routines"
+  //	Enter · double-click a routine ─► POST /ddl ─► "ddl" ─► the viewer
+  //
+  // The rows are #tables's own, so the find box, the arrows and the
+  // selection serve both modes unchanged; a routine's row carries its
+  // index into side.routines (data-ri) beside the name (data-name), and
+  // the handful of table-only keys (c, e) say so on one.
+  const routinesOn = () => !!side.showRoutines;
+
+  // drawModes lights the heading word of the list shown, offers Routines
+  // only where the driver stores any, and puts the find box and the rows
+  // box in step: counts are a table's, so the box goes with the routines.
+  function drawModes() {
+    const on = routinesOn();
+    els.modeRoutines.hidden = !side.hasRoutines && !on;
+    els.modeTables.classList.toggle("on", !on);
+    els.modeRoutines.classList.toggle("on", on);
+    els.modeTables.setAttribute("aria-pressed", String(!on));
+    els.modeRoutines.setAttribute("aria-pressed", String(on));
+    els.rowCountsBox.hidden = on;
+    els.findLabel.textContent = on ? "routine" : "table";
+    els.tableFind.placeholder = on ? "type to find a routine" : "type to find a table";
+    els.tableFind.setAttribute("aria-label", on ? "Find a routine" : "Find a table");
+  }
+
+  // setRoutines switches the list. Optimistic, as the rows box is: the
+  // list says "loading…" at once, and the "routines" event — sent on every
+  // outcome, a failed read included (web/routines.go) — fills it in.
+  function setRoutines(on) {
+    const t = state.tab;
+    if (!t || !t.ws || routinesOn() === on) return;
+    side.showRoutines = on;
+    side.routines = null;
+    els.tableFind.value = "";
+    drawModes();
+    drawTables();
+    els.tables.scrollTop = 0;
+    api("POST", dbc.wsPath("/routines"), { on }).catch((e) => {
+      log("err", e.message);
+      side.showRoutines = !on;
+      if (t === state.tab) { drawModes(); drawTables(); }
+    });
+  }
+  els.modeTables.addEventListener("click", () => setRoutines(false));
+  els.modeRoutines.addEventListener("click", () => setRoutines(true));
+
+  // KIND_SHORT is a routine's kind as its row shows it: short, since the
+  // sidebar is narrow — the TUI's words (tui/routines.go routineKind).
+  const KIND_SHORT = { function: "fn", procedure: "proc", aggregate: "agg", window: "window", trigger: "trigger" };
+
+  // drawRoutines is drawTables for the routines: side.routines narrowed by
+  // the find box (the same matcher: name first, schema.name with a dot).
+  // A null list is one still loading. The schema prefix is muted, and left
+  // off while one schema is listed, as a table's is.
+  function drawRoutines() {
+    const list = side.routines;
+    const find = els.tableFind.value.trim();
+    els.tables.replaceChildren();
+    els.findFilter.classList.toggle("on", find !== "");
+    els.tableCount.textContent = list && list.length ? "· " + list.length : "";
+    if (loadingSchema || !list) {
+      els.tables.append(el("li", "none", "loading routines…"));
+      return;
+    }
+    if (!list.length) {
+      els.tables.append(el("li", "none", "no routines"));
+      return;
+    }
+    const index = new Map(list.map((r, i) => [r, i]));
+    const shown = findTables(list, find);
+    if (!shown.length) {
+      els.tables.append(el("li", "none", "no routine matches “" + find + "” — Esc clears"));
+      return;
+    }
+    const one = side.navigable && schemaPick() !== null;
+    for (const r of shown) {
+      const li = el("li", { tabindex: "-1", "data-name": r.qname, "data-ri": String(index.get(r)) });
+      const dot = r.qname.lastIndexOf(".");
+      if (dot > 0 && !one) li.append(el("span", "schema", r.qname.slice(0, dot + 1)), r.qname.slice(dot + 1));
+      else if (dot > 0) li.append(r.qname.slice(dot + 1));
+      else li.append(r.qname);
+      if (r.overloaded) li.append(el("span", "rargs", "(" + r.args + ")"));
+      li.append(el("span", "rkind", " " + (KIND_SHORT[r.kind] || r.kind)));
+      li.title = signature(r) + "\nEnter or double-click shows its DDL, right-click for more";
+      els.tables.append(li);
+    }
+    const first = els.tables.firstElementChild;
+    first.tabIndex = 0;
+    if (find !== "" || document.activeElement === els.tableFind) selectRow(first, false);
+  }
+
+  // signature is a routine as its tooltip and the viewer's heading show
+  // it: "function public.total(o integer) → numeric".
+  function signature(r) {
+    return r.kind + " " + (r.schema ? r.schema + "." : "") + r.name + "(" + (r.args || "") + ")" +
+      (r.result ? " → " + r.result : "");
+  }
+
+  // routinesLanded draws a "routines" event's list, keeping the routine
+  // selected selected and the list where it was scrolled: a relist after a
+  // run's CREATE FUNCTION lands this way, and must not throw the user back
+  // to the top. A routine is matched by its signature and id, since
+  // overloads share a name and the indexes are the new list's.
+  function routinesLanded(d) {
+    const key = (r) => r.qname + "(" + r.args + ")" + (r.id || "");
+    const sel = els.tables.querySelector("li.sel[data-ri]");
+    const was = sel && routineOf(sel) ? key(routineOf(sel)) : null;
+    const changed = routinesOn() !== !!d.on;
+    side.showRoutines = !!d.on;
+    side.routines = d.routines;
+    drawModes();
+    if (!changed && !routinesOn()) return; // the tables are up, and stay
+    const top = els.tables.scrollTop;
+    drawTables();
+    els.tables.scrollTop = top;
+    if (!was) return;
+    for (const li of els.tables.querySelectorAll("li[data-ri]")) {
+      const r = routineOf(li);
+      if (r && key(r) === was) { selectRow(li, false); break; }
+    }
+  }
+
+  // routineOf is the routine a row of the list stands for.
+  const routineOf = (li) => (side.routines || [])[Number(li.dataset.ri)];
+
+  // openRow is a row's Enter and double-click: a table's rows previewed,
+  // or a routine's DDL read.
+  function openRow(li) {
+    if (!routinesOn()) { preview(li.dataset.name); return; }
+    const r = routineOf(li);
+    if (r) showDDL(r);
+  }
+
+  // showDDL asks for a routine's definition; it arrives as a "ddl" event
+  // (onDDL), or a failure as a log line.
+  async function showDDL(r) {
+    setStatus("reading the DDL of " + r.qname + "…", "warn");
+    try {
+      await api("POST", dbc.wsPath("/ddl"), { schema: r.schema, name: r.name, kind: r.kind, args: r.args, id: r.id || "" });
+    } catch (e) {
+      setStatus(e.message, "err");
+    }
+  }
+
+  // onDDL shows a routine's definition in a viewer — the grid inspector's
+  // box, colored as the assistant's SQL blocks — with the two things one
+  // does with it: copy it, or put it in the editor at the caret (the
+  // editor's text is the user's, so nothing there is replaced).
+  function onDDL(d) {
+    setStatus("ready on " + state.active);
+    const r = d.routine, ddl = d.ddl;
+    const pre = el("pre", "ival", dbc.hl("sql", ddl));
+    const cp = el("button", { type: "button", class: "primary" }, "⧉ Copy");
+    const ins = el("button", { type: "button", title: "Put the DDL in the editor at the caret" }, "↳ Insert into editor");
+    const doCopy = () => dbc.clip.copyText(ddl, "the DDL of " + r.qname);
+    const doInsert = () => {
+      dbc.modal.close();
+      dbc.editor.insert(ddl);
+      dbc.editor.focus();
+      log("ok", "inserted the DDL of " + r.qname);
+    };
+    cp.addEventListener("click", doCopy);
+    ins.addEventListener("click", doInsert);
+    dbc.modal.open({
+      title: "DDL · " + r.qname, cls: "wide", focus: cp,
+      body: el("div", "inspect ddl", el("div", "ihead", signature(r)), pre),
+      foot: el("div", "mfoot", cp, ins, el("span", "hint", "y copies · i inserts · Esc closes")),
+      onKey: (e) => {
+        if (e.ctrlKey || e.metaKey || e.altKey) return false;
+        if (e.key === "y") { doCopy(); return true; }
+        if (e.key === "i") { doInsert(); return true; }
+        if (e.key === "q") { dbc.modal.close(); return true; }
+        return false;
+      },
+    });
+  }
+
+  // routineMenu is the list's right-click menu on a routine.
+  function routineMenu(x, y, li) {
+    const r = routineOf(li);
+    if (!r) return;
+    dbc.menu.open(x, y, [
+      { head: r.qname },
+      { label: "Show DDL", key: "Enter", act: () => showDDL(r) },
+      { label: "Insert the name at the caret", act: () => dbc.editor.insert(r.qname) },
+      { label: "Copy name", act: () => dbc.clip.copyText(r.qname, "the routine name") },
+      { label: "Show tables", act: () => setRoutines(false) },
+    ]);
   }
 
   // ── finding a table ────────────────────────────────────────────────────
@@ -424,7 +626,7 @@
     } else if (e.key === "Enter") {
       e.preventDefault();
       const li = els.tables.querySelector("li.sel") || els.tables.querySelector("li[data-name]");
-      if (li) { selectRow(li, false); preview(li.dataset.name); }
+      if (li) { selectRow(li, false); openRow(li); }
     } else if (e.key === "Escape") {
       // first press drops the find, a second leaves the box: the pickers' Esc
       e.preventDefault();
@@ -842,14 +1044,19 @@
   });
   els.tables.addEventListener("dblclick", (e) => {
     const li = e.target.closest("li[data-name]");
-    if (li) preview(li.dataset.name);
+    if (li) openRow(li);
   });
   els.tables.addEventListener("keydown", (e) => {
     const li = e.target.closest("li[data-name]");
     if (!li) return;
     let next = null;
-    if (e.key === "Enter") { e.preventDefault(); preview(li.dataset.name); return; }
+    if (e.key === "Enter") { e.preventDefault(); openRow(li); return; }
     // plain c only: a chord with it (⌘C copying a selection) is not ours
+    if ((e.key === "c" || e.key === "e") && !e.ctrlKey && !e.metaKey && !e.altKey && routinesOn()) {
+      e.preventDefault();
+      log("warn", (e.key === "c" ? "Show columns" : "A diagram") + " is for tables — click Tables above the list");
+      return;
+    }
     if (e.key === "c" && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault(); columns(li.dataset.name); return;
     }
@@ -882,6 +1089,7 @@
     if (!li) return;
     e.preventDefault();
     pickTable(li);
+    if (routinesOn()) { routineMenu(e.clientX, e.clientY, li); return; }
     const name = li.dataset.name;
     dbc.menu.open(e.clientX, e.clientY, [
       { head: name },
@@ -890,6 +1098,7 @@
       { label: "Diagram around it (ERD)", key: "e", act: () => dbc.erd.open(name) },
       { label: "Insert the name at the caret", act: () => dbc.editor.insert(name) },
       { label: "Copy name", act: () => dbc.clip.copyText(name, "the table name") },
+      ...(side.hasRoutines ? [{ label: "Show routines", act: () => setRoutines(true) }] : []),
     ]);
   });
 
@@ -1010,6 +1219,14 @@
         // for a connection this tab has since left: the next "conn" and
         // its own "counts" redraw the list
         if (d.active === state.active) showCounts(d.tables || []);
+        break;
+      case "routines":
+        // for a connection this tab has since left: the next "conn" and
+        // its own "routines" redraw the list
+        if (d.active === state.active) routinesLanded(d);
+        break;
+      case "ddl":
+        if (sameConn(t, d)) onDDL(d);
         break;
     }
     trackTab(t, ev.type, d);
@@ -3281,6 +3498,8 @@
       ["on a table: Enter · c · e", "preview its rows · show its columns · diagram it and its neighbours (ERD)"],
       ["on a table: another letter · /", "find a table starting with it · back to the table box"],
       ["ERD beside Tables", "diagram every table and key: PNG, JPEG or Mermaid"],
+      ["Tables · Routines", "list the schema's tables, or its functions and procedures (Postgres, MySQL)"],
+      ["on a routine: Enter · double-click", "show its DDL — y copies it, i inserts it at the editor's caret"],
     ]],
     ["Splitters", [
       ["drag a bar", "resize the panes either side — the size is saved"],

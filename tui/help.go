@@ -120,6 +120,8 @@ var keyGroups = []keyGroup{
 		{"d · s", "(tables) pick a database · a schema"},
 		{"c · e", "(tables) show its columns · diagram it (ERD)"},
 		{"#", "(tables) show or hide row counts (an exact count(*) per table)"},
+		{"f", "(tables) list the schema's functions and procedures in place of its tables, and back"},
+		{"Enter · 2×click", "(routines) show its DDL — y copies it, i inserts it in the editor"},
 	}},
 	{"Assistant", [][2]string{
 		{"Enter · ⇧Enter", "send · new line"},

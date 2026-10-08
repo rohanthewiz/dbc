@@ -81,3 +81,71 @@ func TestRoutinesQuery(t *testing.T) {
 		t.Errorf("scoped query: %s", q)
 	}
 }
+
+// The id column, sixth, is the routine's ID; rows without it still read.
+func TestBuildRoutinesID(t *testing.T) {
+	got := BuildRoutines([][]string{
+		{"public", "total", "f", "o integer", "numeric", "16384"},
+		{"shop", "total", "function", "o INT", "int", ""},
+		{"public", "old", "f", "", "integer"},
+	})
+	if len(got) != 3 || got[0].ID != "16384" || got[1].ID != "" || got[2].ID != "" {
+		t.Fatalf("ids: %+v", got)
+	}
+	if got[0].QName() != "public.total" || (model.Routine{Name: "bare"}).QName() != "bare" {
+		t.Errorf("qname: %q", got[0].QName())
+	}
+}
+
+// RoutineDDLQuery names a Postgres routine by its oid — refusing an
+// aggregate, which pg_get_functiondef cannot render, and an id that is not
+// an oid, which would otherwise go into the statement — and a MySQL one by
+// its quoted schema and name, FUNCTION or PROCEDURE by kind.
+func TestRoutineDDLQuery(t *testing.T) {
+	for _, c := range []struct {
+		driver string
+		r      model.Routine
+		want   string // "" when refused
+		col    int
+	}{
+		{"postgres", model.Routine{Schema: "public", Name: "total", Kind: model.RoutineFunction, ID: "16384"},
+			"SELECT pg_catalog.pg_get_functiondef(16384::oid)", 0},
+		{"pg", model.Routine{Name: "archive", Kind: model.RoutineProcedure, ID: "7"},
+			"SELECT pg_catalog.pg_get_functiondef(7::oid)", 0},
+		{"pg", model.Routine{Name: "touch", Kind: model.RoutineTrigger, ID: "9"},
+			"SELECT pg_catalog.pg_get_functiondef(9::oid)", 0},
+		{"pg", model.Routine{Name: "my_sum", Kind: model.RoutineAggregate, ID: "8"}, "", 0},
+		{"pg", model.Routine{Name: "total", Kind: model.RoutineFunction, ID: "1); DROP TABLE x; --"}, "", 0},
+		{"pg", model.Routine{Name: "total", Kind: model.RoutineFunction}, "", 0},
+		{"mysql", model.Routine{Schema: "shop", Name: "total", Kind: model.RoutineFunction},
+			"SHOW CREATE FUNCTION `shop`.`total`", 2},
+		{"mysql", model.Routine{Schema: "shop", Name: "re`build", Kind: model.RoutineProcedure},
+			"SHOW CREATE PROCEDURE `shop`.`re``build`", 2},
+		{"mysql", model.Routine{Name: "total", Kind: model.RoutineFunction},
+			"SHOW CREATE FUNCTION `total`", 2},
+		{"sqlite", model.Routine{Name: "x", Kind: model.RoutineFunction}, "", 0},
+	} {
+		got, err := RoutineDDLQuery(c.driver, c.r)
+		if c.want == "" {
+			if err == nil {
+				t.Errorf("%s %+v: %q, want a refusal", c.driver, c.r, got)
+			}
+			continue
+		}
+		if err != nil || got != c.want {
+			t.Errorf("%s %+v: %q, %v; want %q", c.driver, c.r, got, err, c.want)
+		}
+		if col := RoutineDDLColumn(c.driver); col != c.col {
+			t.Errorf("%s: column %d, want %d", c.driver, col, c.col)
+		}
+	}
+}
+
+func TestHasRoutines(t *testing.T) {
+	for d, want := range map[string]bool{"postgres": true, "pg": true, "mysql": true, "mariadb": true,
+		"sqlite": false, "bytdb": false, "nope": false} {
+		if HasRoutines(d) != want {
+			t.Errorf("HasRoutines(%q) = %v", d, !want)
+		}
+	}
+}

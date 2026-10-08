@@ -578,6 +578,14 @@ type sideState struct {
 	// RowCounts is the tab's "rows" box (Workspace.ShowRowCounts): the
 	// page ticks it to match whenever it draws this tab's sidebar.
 	RowCounts bool `json:"rowCounts"`
+	// ShowRoutines is the tab's Tables / Routines switch
+	// (Workspace.ShowRoutines), and Routines its list: null while off or
+	// loading, which a "routines" event then fills (routines.go).
+	// HasRoutines says the driver stores any, so the page offers the
+	// switch at all.
+	ShowRoutines bool         `json:"showRoutines"`
+	HasRoutines  bool         `json:"hasRoutines,omitempty"`
+	Routines     []routineRef `json:"routines"`
 	// Console is the database the connection is on, as a set of SQL
 	// consoles: the page swaps the tab's console when it changes. nil with
 	// no connection (the tab keeps the console it had) or consoles off.
@@ -614,13 +622,14 @@ func (s *Server) sidebar(ws *workspace.Workspace) sideState {
 
 // sidebar is the tab's sideState now, but for its console.
 func sidebar(cfg *config.Config, ws *workspace.Workspace) sideState {
-	st := sideState{Tables: tables(ws), Schema: ws.CatalogSchema(), RowCounts: ws.RowCountsShown()}
+	st := sideState{Tables: tables(ws), Schema: ws.CatalogSchema(), RowCounts: ws.RowCountsShown(),
+		ShowRoutines: ws.RoutinesShown(), Routines: routines(ws)}
 	active := ws.Active()
 	cc, ok := cfg.ConnByName(active)
 	if !ok {
 		return st
 	}
-	st.Base, st.Navigable = active, db.Navigable(cc.Driver)
+	st.Base, st.Navigable, st.HasRoutines = active, db.Navigable(cc.Driver), db.HasRoutines(cc.Driver)
 	if cc.Base != "" {
 		st.Base = cc.Base
 	}
@@ -763,6 +772,9 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 		if ev.Counts != nil {
 			go func() { s.deliver(t, ev.Counts()) }()
 		}
+		if ev.Routines != nil {
+			go func() { s.deliver(t, ev.Routines()) }()
+		}
 	case *workspace.SchemaLoaded:
 		if ev.Stale {
 			return // a later pick or connect will report
@@ -771,6 +783,22 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 		t.send("conn", s.connEventOf(t, false, ev.Catalog == nil, ""))
 		if ev.Counts != nil {
 			go func() { s.deliver(t, ev.Counts()) }()
+		}
+		if ev.Routines != nil {
+			go func() { s.deliver(t, ev.Routines()) }()
+		}
+	case *workspace.RoutinesLoaded:
+		if ev.Stale {
+			return // a later landing, or the switch going off, owns the list
+		}
+		t.notesOn(ev.Conn, ev.Notes)
+		t.send("routines", routinesEventOf(t))
+	case *workspace.RoutineDDL:
+		t.notesOn(ev.Conn, ev.Notes)
+		if ev.Err == nil {
+			r := ev.Routine
+			t.send("ddl", ddlEvent{Conn: ev.Conn, DDL: ev.DDL, Routine: routineRef{Schema: r.Schema, Name: r.Name,
+				QName: r.QName(), Kind: string(r.Kind), Args: r.Args, Result: r.Result, ID: r.ID}})
 		}
 	case *workspace.RowCounts:
 		if ev.Stale {

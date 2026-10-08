@@ -216,7 +216,8 @@ func (p Workbench) topbar(b *element.Builder) any {
 //	│ CONNECTIONS     + ‹ │
 //	│ …                   │
 //	├ side-hsplit ════════┤
-//	│ TABLES 12  ☐rows ERD│  side-tables: the rest
+//	│ TABLES ROUTINES 12 ☐rows ERD│  side-tables: the rest; the two
+//	│                     │  words switch the list below
 //	│ [type a schema…]    │  tfilter: only when several schemas
 //	│ [type to find…]     │  find-filter: narrows the list below
 //	│ …                   │  #tables scrolls; the lines above stay put
@@ -238,8 +239,21 @@ func (p Workbench) sidebar(b *element.Builder) any {
 			// exact count(*), a scan of the table, so it runs only when
 			// asked for (db/rowcount.go). app.js ticks it to the tab's
 			// state (sideState.RowCounts) whenever it draws a sidebar.
+			//
+			// The heading's first words switch the list below between
+			// the schema's tables and its stored functions and
+			// procedures (Workspace.ShowRoutines): the pickers above
+			// and the find box serve both, so one list with two modes
+			// rather than a second pane. Routines is shown only on a
+			// driver that stores them (app.js, from side.hasRoutines).
 			b.H2Class("hrow").R(
-				b.Span().R(b.T("Tables "), b.SpanClass("count", "id", "table-count").R()),
+				b.SpanClass("smodes").R(
+					b.ButtonClass("smode on", "id", "mode-tables", "type", "button", "aria-pressed", "true",
+						"title", "List the schema's tables and views").T("Tables"),
+					b.ButtonClass("smode", "id", "mode-routines", "type", "button", "aria-pressed", "false", "hidden", "hidden",
+						"title", "List the schema's stored functions and procedures — Enter or a double-click shows one's DDL").T("Routines"),
+					b.SpanClass("count", "id", "table-count").R(),
+				),
 				b.SpanClass("hbtns").R(
 					b.LabelClass("hchk", "id", "row-counts-box",
 						"title", "Show each table's row count — an exact count(*) per table, which can take a while on big tables").R(
@@ -291,7 +305,7 @@ func (p Workbench) sidebar(b *element.Builder) any {
 			// the tab is on a connection (app.js drawFindBox).
 			b.DivClass("tfilter", "id", "find-filter", "hidden", "hidden").R(
 				b.DivClass("trow").R(
-					b.LabelClass("tlabel", "for", "table-find").T("table"),
+					b.LabelClass("tlabel", "id", "find-label", "for", "table-find").T("table"),
 					b.Input("id", "table-find", "type", "search",
 						"aria-label", "Find a table", "aria-controls", "tables",
 						"placeholder", "type to find a table",

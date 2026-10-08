@@ -19,6 +19,21 @@ type Routine struct {
 	// Result is what a function returns: "integer", "SETOF orders",
 	// "TABLE(id integer, total numeric)"; "" for a procedure.
 	Result string
+	// ID tells one overload from another when the routine's definition is
+	// asked for (db.Manager.RoutineDDL): Postgres's pg_proc oid, as text.
+	// "" on MySQL, which has no overloads — schema, name and kind are
+	// enough there.
+	ID string
+}
+
+// QName is the routine's name qualified by its schema, as a sidebar and
+// a log line show it: "public.order_total". A routine read without a
+// schema is its bare name.
+func (r Routine) QName() string {
+	if r.Schema == "" {
+		return r.Name
+	}
+	return r.Schema + "." + r.Name
 }
 
 // RoutineKind says how a routine is called.

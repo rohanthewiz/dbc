@@ -61,13 +61,6 @@ ten session docs in `ai_docs/claude_sessions/`
   them. A small modal list (line + text, Enter jumps) if stepping is not
   enough.
 
-- **N-137** · raised `2026-1007-0229-next-list-sweep-3` · value low
-  The TUI assistant does not send a script's context. dbc web's script
-  tabs now do (N-134: the source as Go, the connections, the run's error
-  or result, the sdb API summary); in the TUI scripts go to `$EDITOR`, so
-  the assistant sees only a script run's result. After a TUI script run it
-  could attach `ScriptChatContext` for that script.
-
 
 ## Validate
 
@@ -395,6 +388,14 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-137** · raised `2026-1007-0229-next-list-sweep-3` · value low
+  The TUI assistant does not send a script's context. dbc web's script
+  tabs now do (N-134: the source as Go, the connections, the run's error
+  or result, the sdb API summary); in the TUI scripts go to `$EDITOR`, so
+  the assistant sees only a script run's result. After a TUI script run it
+  could attach `ScriptChatContext` for that script.
+  closed 2026-10-08, `2026-1008-1856-tui-assistant-script-context` (from the cats-todo backlog): while the last run on the connection was a script (`workspace.LastScript`, the path now kept beside `lastScript` via `RunDone.ScriptPath`) and the editor is untouched since the run started (`editor.Stamp`/`Touched`: an edit or a caret move), `tui.chatContext` asks `ScriptChatContext` with the file's source — re-read only when its size or mtime changes, "" if it is gone — instead of the editor's statement. A statement or explain run clears it as before. The sdb API summary goes once per conversation (`chatPane.apiSent`, reset with `first`), and the chip forecasts it. The premise was off: the TUI sent nothing of a script run, since `lastStmt` is "" after one. The empty pane's hint and the README's TUI scripts section say so. Tests `TestAssistantAsksAboutTheScriptThatRan`, `TestAssistantScriptResultThenAStatementRun`, `TestAssistantRereadsAnEditedScript`.
 
 - **N-141** · raised `2026-1007-1054-web-tab-to-table-find` · value low
   The TUI's Tables pane has no type-to-find. dbc web's sidebar now has a

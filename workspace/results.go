@@ -165,8 +165,12 @@ type resultSet struct {
 	// it failed with — the assistant's "this query" and "✦ ask why"
 	lastStmt   string
 	lastScript string // the script's file name when the last run was one
-	lastErr    string
-	plan       *explain.Plan // the last plan: an explain's, or one detected in a result
+	// lastScriptPath is that script's file as it was run (RunDone
+	// ScriptPath): the TUI reads the source from it to ask about the
+	// script (LastScript). Set and cleared with lastScript.
+	lastScriptPath string
+	lastErr        string
+	plan           *explain.Plan // the last plan: an explain's, or one detected in a result
 
 	// shared is the tab the user shared with the assistant (ShareResultTab):
 	// its result goes with every question asked on this connection until

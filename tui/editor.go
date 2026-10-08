@@ -68,6 +68,30 @@ type editor struct {
 	// marksVer is still the edit version they were found at.
 	marks    []editorMark
 	marksVer int
+
+	// stamp is the edit version and caret as Stamp last noted them, so a
+	// caller can ask later whether the user has been back in the editor
+	// since (Touched) — see Model.chatContext, which yields a script's
+	// context to the editor's statement once it has.
+	stamp editorStamp
+}
+
+// editorStamp is an editor's edit version and caret at one moment; the
+// zero value is "never stamped".
+type editorStamp struct {
+	set     bool
+	version int
+	cur     pos
+}
+
+// Stamp notes the editor as it is now, for Touched.
+func (e *editor) Stamp() { e.stamp = editorStamp{set: true, version: e.version, cur: e.cur} }
+
+// Touched reports whether the editor was edited, or its caret moved, since
+// Stamp — true when it was never stamped. A caret move counts: clicking a
+// statement is as much "I am looking at this" as typing one.
+func (e *editor) Touched() bool {
+	return !e.stamp.set || e.stamp.version != e.version || e.stamp.cur != e.cur
 }
 
 // pos is a caret position: row, and column in runes.

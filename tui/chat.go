@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/rohanthewiz/dbc/ai"
 	"github.com/rohanthewiz/dbc/codehl"
 	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/sdb/sdbapi"
 	"github.com/rohanthewiz/dbc/userdata"
 	"github.com/rohanthewiz/dbc/workspace"
 )
@@ -107,6 +109,13 @@ type chatPane struct {
 	first     bool   // the next turn is the conversation's first
 	pending   string // a prompt written before the handshake finished
 	attach    bool   // send context with the next question
+	// apiSent: the sdb API summary has gone in this conversation (with
+	// its first question about a script), so later script questions leave
+	// it out — reset with first, for the same reason first is
+	apiSent bool
+	// script caches the source of the script last asked about — see
+	// scriptSource
+	script scriptFile
 
 	// signing in to the agent — see chatsignin.go
 	needAuth  bool        // the agent refused for lack of sign-in
@@ -311,7 +320,7 @@ func (m *Model) resetChat() tea.Cmd {
 	p := m.chat
 	p.close()
 	p.c, p.state, p.streaming, p.pending = nil, chatIdle, false, ""
-	p.msgs, p.first, p.top, p.follow = nil, true, 0, true
+	p.msgs, p.first, p.apiSent, p.top, p.follow = nil, true, false, 0, true
 	p.archiveID, p.archiveStart = "", time.Time{}
 	m.chatLoadRecent()
 	return m.ensureChat()
@@ -451,12 +460,83 @@ func (p *chatPane) modelName() string {
 // another, that tab's parked grid's. The workspace matches each view to a
 // result by GridView.Result; without the parked one, columns the user hid
 // in the shared tab would reach the model.
+//
+// AFTER A SCRIPT RUN the question is about the script. dbc web asks about
+// a script from its script tab, whose editor holds the source; the TUI's
+// scripts go to $EDITOR, so its editor holds SQL that has nothing to do
+// with the script. Instead, while the last run on the connection was a
+// script (workspace.LastScript) the question goes as dbc web's script tab
+// sends it — workspace.ScriptChatContext with the file's source: the
+// script as Go, the configured connections, the tables its SQL names, its
+// error or shown result, and once per conversation the sdb API.
+//
+// It lasts until the user is back in the editor: an edit there or a caret
+// move since the script started (editor.Touched) makes the statement
+// under the caret "this query" again, as does running one (the workspace
+// then forgets the script). Without that yield, a user who ran a script
+// and then typed a query to ask about would have the script answered
+// instead — the chip shows which one goes.
+//
+//	last run on conn ── a statement / none ─────────────► ChatContext(editor)
+//	                 └─ a script ─┬─ editor touched since ─► ChatContext(editor)
+//	                              └─ not touched ─────────► ScriptChatContext(file)
 func (m *Model) chatContext(question string) (ctx ai.Context, refs []db.TableRef) {
 	views := []workspace.GridView{gridView(m.grid)}
 	if g := m.sharedParkedGrid(); g != nil {
 		views = append(views, gridView(g))
 	}
+	if path := m.ws.LastScript(); path != "" && !m.editor.Touched() {
+		ctx, refs = m.ws.ScriptChatContext(question, filepath.Base(path), m.chat.scriptSource(path), views...)
+		return m.chat.withAPI(ctx), refs
+	}
 	return m.ws.ChatContext(question, m.editorState(), views...)
+}
+
+// withAPI adds the sdb API summary to a script question's context when
+// this conversation has not been sent it yet (ai.Context.ScriptAPI). The
+// send (finishSubmit marks it sent) and the chip's forecast both get their
+// context from chatContext, so the chip says "sdb API" exactly when the
+// question would carry it — dbc web's rule (web assistant.withAPILocked).
+func (p *chatPane) withAPI(ctx ai.Context) ai.Context {
+	if ctx.Script != "" && !p.apiSent {
+		ctx.ScriptAPI = sdbapi.Summary()
+	}
+	return ctx
+}
+
+// scriptFile is a script's source as last read, with the file's size and
+// modification time then.
+type scriptFile struct {
+	path string
+	size int64
+	mod  time.Time
+	text string
+}
+
+// scriptSource is the source of the script at path, for a question about
+// it. The chip builds a context every frame, so the file is read again
+// only when its size or modification time has changed — a stat per frame
+// rather than a read — which still picks up an edit made outside dbc (a
+// second pane's editor) before the next question. A file that cannot be
+// read (trashed since it ran) gives "": the question still carries the
+// run's error or result, under the script's name.
+func (p *chatPane) scriptSource(path string) string {
+	fi, err := os.Stat(path)
+	if err != nil {
+		p.script = scriptFile{}
+		return ""
+	}
+	c := &p.script
+	if c.path == path && c.size == fi.Size() && c.mod.Equal(fi.ModTime()) {
+		return c.text
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		p.script = scriptFile{}
+		return ""
+	}
+	*c = scriptFile{path: path, size: fi.Size(), mod: fi.ModTime(), text: string(b)}
+	return c.text
 }
 
 // gridView is a grid's view of its result as the assistant's data rule
@@ -561,6 +641,9 @@ func (m *Model) chatSchema(msg chatSchemaMsg) tea.Cmd {
 // until the handshake completes.
 func (m *Model) finishSubmit(question string, ctx ai.Context) {
 	p := m.chat
+	if ctx.ScriptAPI != "" {
+		p.apiSent = true
+	}
 	prompt := ai.Build(question, ctx, p.first)
 	p.first = false
 	p.add(roleNote, "▤ "+prompt.Note)
@@ -934,6 +1017,9 @@ func (m *Model) drawChat(c *Canvas, r Rect) *caret {
 				"names go with each question. Result rows go only " +
 				"on connections with ai_rows = true (up to ai_context_rows of them), " +
 				"in the grid's sort order and without its hidden columns.",
+			"",
+			"After a script run (^O) questions are about the script — its source, " +
+				"its error or shown result — until you are back in the editor.",
 			"",
 			"SQL in answers gets ⤓ insert, which puts it in the editor.",
 			"",

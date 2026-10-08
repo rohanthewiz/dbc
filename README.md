@@ -1609,6 +1609,14 @@ and nothing is suspended. As in dbc web, a script that shows several
 results keeps them (the newest 20): "Result 1 · 2 · 3" on the results
 title switches between them, by a click or `[` / `]` in the grid.
 
+After a script run the assistant is asked about that script, as a dbc web
+script tab asks: the file's source as Go, the connection names and drivers,
+the tables its SQL names, the run's error or shown result, and on the
+conversation's first script question the `sdb` API summary. This lasts until
+you are back in the editor — an edit or a caret move there, or a run of a
+statement, makes the statement under the caret the subject again. The chip
+above the assistant's input says which one goes.
+
 ### Checking without running
 
 `dbc script --check NAME` checks a script without running any of it (not

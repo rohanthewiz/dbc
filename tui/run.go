@@ -250,8 +250,17 @@ func (m *Model) listTables() tea.Cmd {
 
 // runScript runs a Go script. Its s.Show and s.Print reach Update through
 // the workspace's sink (m.send) as they happen.
+//
+// The editor is stamped as the run starts: until it is touched again, the
+// assistant is asked about this script rather than the statement under the
+// caret (chatContext). Only a started run stamps — a refused one leaves
+// the last run, and so what the assistant is asked about, as it was.
 func (m *Model) runScript(path string) tea.Cmd {
-	return m.startRun(m.ws.RunScript(path))
+	st, err := m.ws.RunScript(path)
+	if err == nil {
+		m.editor.Stamp()
+	}
+	return m.startRun(st, err)
 }
 
 // tickCmd schedules the next elapsed-time refresh for run gen of the tab

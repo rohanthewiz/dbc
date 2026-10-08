@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -946,5 +947,126 @@ func TestAssistantMenuSignInWhenSignedIn(t *testing.T) {
 	}
 	if m.chat.state != chatReady {
 		t.Errorf("state = %v", m.chat.state)
+	}
+}
+
+// tempScript writes a script into a temp dir and returns its path.
+func tempScript(t *testing.T, name, src string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// After a script run the assistant is asked about the script, as dbc web's
+// script tab asks (N-137): its source fenced as Go and named, the
+// connections, its error, and the sdb API summary on the conversation's
+// first script question only. Once the user is back in the editor (a caret
+// move), the statement under the caret is the question's subject again.
+func TestAssistantAsksAboutTheScriptThatRan(t *testing.T) {
+	f := fakeAssistant(t, nil)
+	m := newTestModel(t)
+	path := tempScript(t, "broken.go", `package main
+
+import "github.com/rohanthewiz/dbc/sdb"
+
+func Run(s *sdb.S) error {
+	_, err := s.Query("demo-sqlite", "SELECT * FROM no_such_table")
+	return err
+}
+`)
+	drive(t, m, nil, m.runScript(path))
+	if !strings.Contains(m.ws.LastErr(), "no_such_table") {
+		t.Fatalf("the script should have failed on no_such_table; log: %s", logText(m))
+	}
+	key(t, m, "ctrl+a")
+	pumpChat(t, m, func() bool { return m.chat.state == chatReady })
+
+	// the chip forecasts the script, the error and the API before sending
+	if c := frame(m); !strings.Contains(c.String(), "script") || !strings.Contains(c.String(), "sdb API") {
+		t.Errorf("the chip should say the script and the sdb API go:\n%s", c.String())
+	}
+	typeText(t, m, "why did it fail?")
+	key(t, m, "enter")
+	pumpChat(t, m, func() bool { return !m.chat.streaming })
+	p := lastPrompt(t, f)
+	for _, want := range []string{"The Go script in question (broken.go)", "```go", `s.Query("demo-sqlite"`,
+		"Running it failed with", "no_such_table", "The sdb API, by signature", "demo-sqlite (sqlite)"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt is missing %q:\n%s", want, p)
+		}
+	}
+	if strings.Contains(p, "The SQL in question") {
+		t.Errorf("the editor's SQL should not go with a script question:\n%s", p)
+	}
+
+	// the API summary went once; the next script question leaves it out
+	typeText(t, m, "and now?")
+	key(t, m, "enter")
+	pumpChat(t, m, func() bool { return !m.chat.streaming })
+	if p := lastPrompt(t, f); !strings.Contains(p, "broken.go") || strings.Contains(p, "The sdb API, by signature") {
+		t.Errorf("the second script question should carry the script but not the API again:\n%s", p)
+	}
+
+	// back in the editor: its statement is "this query" again
+	m.focus = focusEditor
+	key(t, m, "right")
+	if ctx, _ := m.chatContext("q"); ctx.Script != "" || !strings.Contains(ctx.Query, "FROM cats") {
+		t.Errorf("after a caret move the editor's statement should go, got script %q query %q", ctx.Script, ctx.Query)
+	}
+}
+
+// A script that showed a result sends that result (rows with ai_rows), and
+// running a statement from the editor afterwards ends the script's turn even
+// without touching the editor — the workspace forgets the script.
+func TestAssistantScriptResultThenAStatementRun(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.Connections[0].AIRows = true
+	drive(t, m, nil, m.runScript("../scripts/loop_params.go"))
+	ctx, _ := m.chatContext("why these cats?")
+	if ctx.Script != "loop_params.go" || !strings.Contains(ctx.Query, "func Run(s *sdb.S) error") {
+		t.Fatalf("the script should be the subject: script %q query %q", ctx.Script, ctx.Query)
+	}
+	if ctx.Err != "" || len(ctx.Columns) == 0 || len(ctx.Rows) == 0 {
+		t.Errorf("its shown result should go: err %q columns %v rows %d", ctx.Err, ctx.Columns, len(ctx.Rows))
+	}
+	if ctx.ScriptAPI == "" {
+		t.Error("the conversation's first script question should carry the sdb API")
+	}
+
+	key(t, m, "ctrl+r")
+	if m.ws.LastScript() != "" {
+		t.Fatal("a statement run should replace the script as the last run")
+	}
+	if ctx, _ := m.chatContext("q"); ctx.Script != "" || ctx.ScriptAPI != "" {
+		t.Errorf("after a statement run the script should not go: %q", ctx.Script)
+	}
+}
+
+// The script's source is read again when the file changes on disk, so an
+// edit made outside dbc after the run is what the next question carries.
+func TestAssistantRereadsAnEditedScript(t *testing.T) {
+	m := newTestModel(t)
+	src := "package main\n\nimport \"github.com/rohanthewiz/dbc/sdb\"\n\nfunc Run(s *sdb.S) error {\n\treturn nil\n}\n"
+	path := tempScript(t, "edited.go", src)
+	drive(t, m, nil, m.runScript(path))
+	if ctx, _ := m.chatContext(""); ctx.Query != src {
+		t.Fatalf("query = %q, want the file's source", ctx.Query)
+	}
+	edited := strings.Replace(src, "return nil", "s.Print(\"hi\")\n\treturn nil", 1)
+	if err := os.WriteFile(path, []byte(edited), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if ctx, _ := m.chatContext(""); ctx.Query != edited {
+		t.Errorf("query = %q, want the edited source", ctx.Query)
+	}
+	// a script trashed since it ran still goes by name, without source
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if ctx, _ := m.chatContext(""); ctx.Script != "edited.go" || ctx.Query != "" {
+		t.Errorf("a gone script: script %q query %q", ctx.Script, ctx.Query)
 	}
 }

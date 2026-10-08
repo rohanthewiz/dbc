@@ -384,7 +384,7 @@ func (w *Workspace) RunScript(path string) (Start, error) {
 		func(msg string) { w.emit(&ScriptPrint{Text: msg, Conn: conn}) },
 	).WithContext(ctx)
 	job := func() Event {
-		ev := &RunDone{Tag: tag, Conn: conn, Script: true, Err: script.Run(path, s)}
+		ev := &RunDone{Tag: tag, Conn: conn, Script: true, ScriptPath: path, Err: script.Run(path, s)}
 		// which rows a script wrote is not known here, so it is taken to
 		// have written: a script is more often a data chore than a
 		// report. Whether it changed the catalog is known — S notes each
@@ -515,7 +515,7 @@ func (w *Workspace) landRun(ev *RunDone, gen int, eff runEffects, rows []landing
 	// which is not the active one if the tab switched meanwhile
 	set := w.setLocked(ev.Conn)
 	if len(ev.Stmts) > 0 {
-		set.lastStmt, set.lastScript = ev.Stmts[len(ev.Stmts)-1], ""
+		set.lastStmt, set.lastScript, set.lastScriptPath = ev.Stmts[len(ev.Stmts)-1], "", ""
 	}
 	if ev.Script {
 		// A script's run replaces the last statement rather than leaving
@@ -524,6 +524,7 @@ func (w *Workspace) landRun(ev *RunDone, gen int, eff runEffects, rows []landing
 		// assistant as that statement's ("why did this SELECT fail?" with
 		// the script's error). The tag is "script <name>" (RunScript).
 		set.lastStmt, set.lastScript = "", strings.TrimPrefix(ev.Tag, "script ")
+		set.lastScriptPath = ev.ScriptPath
 	}
 	if ev.Err != nil {
 		w.failedLocked(set, ev.Err, ev.Tag, ev.Elapsed, &ev.Notes, &ev.Status)

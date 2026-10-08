@@ -151,13 +151,17 @@ type RunDone struct {
 	Result *model.Result
 	// Tabs is how many result tabs the run filled, one per statement that
 	// returned rows (results.go); 0 for a script and when nothing landed.
-	Tabs    int
-	Plan    *explain.Plan // Result is itself a query plan (an EXPLAIN the user typed)
-	Err     error         // the failure, or db.ErrCanceled when stopped
-	Script  bool
-	Elapsed time.Duration
-	Stale   bool // a straggler from a run already written off: draw nothing
-	Notes   []Note
+	Tabs   int
+	Plan   *explain.Plan // Result is itself a query plan (an EXPLAIN the user typed)
+	Err    error         // the failure, or db.ErrCanceled when stopped
+	Script bool
+	// ScriptPath is the script's file, as RunScript was given it, for a
+	// script run; "" otherwise. Tag names only its base name, and a UI
+	// that asks the assistant about the script needs its source.
+	ScriptPath string
+	Elapsed    time.Duration
+	Stale      bool // a straggler from a run already written off: draw nothing
+	Notes      []Note
 	// Status is for the status bar when the run failed or stopped. On
 	// success it is "": the summary depends on how many rows the UI shows
 	// (see ResultStatus).

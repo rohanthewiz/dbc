@@ -98,7 +98,7 @@ func (w *Workspace) landExplain(ev *ExplainDone, gen int) {
 	if ev.Err != nil {
 		// remembered like a failed run's, so "✦ ask why" carries the error
 		// with the statement that caused it
-		set.lastStmt, set.lastScript = ev.Stmt, ""
+		set.lastStmt, set.lastScript, set.lastScriptPath = ev.Stmt, "", ""
 		w.failedLocked(set, ev.Err, ev.Tag, ev.Elapsed, &ev.Notes, &ev.Status)
 		return
 	}

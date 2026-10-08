@@ -351,6 +351,20 @@ func (w *Workspace) LastStmt() string {
 	return ""
 }
 
+// LastScript is the file of the script the last run on the active
+// connection was, as RunScript was given it — "" before any run, and once
+// a statement (or explain) has run there since. A UI whose scripts are not
+// in an editor of its own (the TUI's go to $EDITOR) reads the source from
+// it to ask the assistant about that script (ScriptChatContext).
+func (w *Workspace) LastScript() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if s := w.activeSetLocked(); s != nil {
+		return s.lastScriptPath
+	}
+	return ""
+}
+
 // LastErr is what the last run on the active connection failed with, ""
 // if it worked. A stopped run leaves it alone: stopping is the user's
 // choice, not a failure to explain.

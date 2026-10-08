@@ -90,6 +90,9 @@ type Model struct {
 	savedActiveTab  int
 	// connTestSeq numbers connection-form tests across forms (connform.go)
 	connTestSeq int
+	// pgDockerBusy is the PostgreSQL major a "Postgres in Docker" start is
+	// bringing up, "" when none is (pgdocker.go): one at a time.
+	pgDockerBusy string
 
 	resTab  resultsTab // which tab the results pane shows: the grid or the plan
 	resZoom bool       // the results pane has the whole centre column (z)
@@ -447,6 +450,15 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 		return m.catsHandle(msg)
 	case connTestMsg:
 		return m.connTestDone(msg)
+	case pgDockerListMsg:
+		return m.pgDockerMenu(msg)
+	case pgDockerProgressMsg:
+		m.log(logInfo, string(msg))
+		return nil
+	case pgDockerStartedMsg:
+		return m.pgDockerStarted(msg)
+	case pgDockerStoppedMsg:
+		return m.pgDockerStopped(msg)
 	case scriptEditedMsg:
 		return m.scriptEdited(msg)
 	}
@@ -605,7 +617,7 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 			// x, it acts on what the tab is on (Workspace.Refresh)
 			return m.refreshCatalog()
 		}
-		if m.connKey(k) { // a/+ add, e edit (connform.go)
+		if m.connKey(k) { // a add, + add menu, e edit (connform.go)
 			return nil
 		}
 		return m.listKey(m.conns, k, m.connPicked)

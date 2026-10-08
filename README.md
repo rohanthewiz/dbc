@@ -23,7 +23,7 @@ the GitHub Releases page. `dbc version` (or `dbc --version`) prints the version.
 
 ### Tests
 
-`go test ./...` runs the unit tests. Three opt-in suites need more than Go:
+`go test ./...` runs the unit tests. Four opt-in suites need more than Go:
 
 - **Live databases** (`db/live_*`): set `DBC_LIVE_PG_DSN` and/or
   `DBC_LIVE_MYSQL_DSN` to a throwaway Postgres or MySQL.
@@ -31,10 +31,17 @@ the GitHub Releases page. `dbc version` (or `dbc --version`) prints the version.
   enters dbc's dependencies): `cd web/e2e && DBC_E2E=1 go test -count=1 -v .`
   It builds dbc, serves `dbc web` from a temporary HOME on two SQLite files,
   and drives a headless Chrome through it: sign-in, a run, the Tables list,
-  Show columns, copies, switching, Disconnect, Refresh, the connection form and tabs
-  across a reload. A JavaScript error on the page fails it. `DBC_E2E_CHROME`
+  Show columns, copies, switching, Disconnect, Refresh, the connection form,
+  the Postgres in Docker dialog (opened, never started) and tabs across a
+  reload. A JavaScript error on the page fails it. `DBC_E2E_CHROME`
   names the browser, `DBC_E2E_HEADFUL=1` shows it, and `DBC_LIVE_PG_DSN`
   adds the Postgres schema picker.
+- **Postgres in Docker** (`pgdocker`): `DBC_LIVE_DOCKER=1 go test -run
+  LiveDocker -v ./pgdocker`, with Docker running, starts a real container,
+  connects through the connection it registers, restarts it, then removes
+  the container and its volume. `DBC_LIVE_DOCKER_PG` picks the version
+  (default: the newest). A `dbc-pg<version>` container that is already
+  there makes it skip rather than touch it.
 - **The TUI in a terminal** (`tui/e2e`, also a module of its own):
   `cd tui/e2e && DBC_TUI_E2E=1 go test -count=1 -v .` It builds dbc, runs
   the TUI in a 140×45 pseudo-terminal on two SQLite files, and reads the
@@ -290,7 +297,7 @@ with no database picker.
 | anywhere | click | focuses that pane — the keyboard follows the mouse |
 | toolbar | click | Run, Stop, Explain, Copy ▾, Export, History, Scripts, Tables, Assistant; `● conn ▾` switches connection |
 | connections | click | connects |
-| connections | right-click (or the toolbar's `● conn ▾`) | **Disconnect** the active connection, **Refresh** it (read its databases, schemas and tables again, for what another client created or dropped — the session and any open transaction stay), then the list to connect to; on a row, **Edit…** and **Remove…** for a connection added in dbc (below); **Add a connection…** |
+| connections | right-click (or the toolbar's `● conn ▾`) | **Disconnect** the active connection, **Refresh** it (read its databases, schemas and tables again, for what another client created or dropped — the session and any open transaction stay), then the list to connect to; on a row, **Edit…** and **Remove…** for a connection added in dbc (below), and **Stop container** on one Postgres in Docker made; **Add a connection…**; **Postgres in Docker…** ([below](#postgres-in-docker)) |
 | tables | click `⛁ db ▾` / `◫ schema ▾` | *(Postgres; MySQL has `⛁ db` only)* pick another of the server's databases / another schema, from a list you can type into |
 | tables | click / double-click / right-click | select / preview the first 100 rows / show columns, diagram it, diagram all tables, copy the ERD as Mermaid, insert name, copy name |
 | tables | `c` on the selected table | show its columns: its `information_schema.columns` rows (name, type, nullable, default, length) in the grid, ready to copy |
@@ -349,7 +356,7 @@ dragging.
 | `F1` · `?` | Every key, in a dialog (`?` outside the editor and the assistant's input) |
 | `x` | *(connections)* Disconnect without picking another connection. If the session may hold a transaction, dbc asks first, because disconnecting rolls it back |
 | `r` | *(connections)* Refresh the active connection: read its databases, schemas and tables again, on the schema the list shows now. The session, and any transaction open on it, stays; if the tables cannot be read, the old list stays up |
-| `a` / `+` · `e` | *(connections)* Add a connection · edit the one under the cursor (see [Adding connections](#adding-connections-in-the-terminal)) |
+| `a` · `+` · `e` | *(connections)* Add a connection · a menu of **Add a connection…** and **Postgres in Docker…** · edit the one under the cursor (see [Adding connections](#adding-connections-in-the-terminal)) |
 | `d` / `s` | *(tables, Postgres; `d` on MySQL too)* Pick a database / a schema |
 | `Ctrl+G` | *(inside Cats)* Hand the statement to an agent in another pane |
 | `y` / `Y` / `c` | *(results)* Copy the cell or range / the row / open the copy menu |
@@ -381,8 +388,9 @@ In terminals that deliver the kitty keyboard protocol, `⌘E`, `⌘P`, and
 
 #### Adding connections in the terminal
 
-`a` (or `+`) in the Connections pane, or **Add a connection…** in its
-right-click menu, opens the same form as `dbc web`'s **+** (see
+`a` in the Connections pane, or **Add a connection…** in its right-click
+menu or in the menu `+` opens there (beside **Postgres in Docker…**), opens
+the same form as `dbc web`'s **+** (see
 [the browser workbench](#the-browser-workbench-dbc-web)): name, driver,
 *Enter as* **Fields** (host, port, user, password, database and options —
 or a file for SQLite and bytdb) or the whole **DSN**, TLS for Postgres and
@@ -403,6 +411,40 @@ or removed — disconnect (`x`) or switch first — though whether the
 assistant may see its rows can change at any time. A rename takes the
 connection's schema picks along. The config file's connections are changed
 in the file: their Edit and Remove rows say so.
+
+#### Postgres in Docker
+
+**Postgres in Docker…** in the connections menu — the TUI's and
+`dbc web`'s — starts a PostgreSQL server in a local container and adds the
+connection to it, for a scratch database without installing anything but
+Docker. Pick a version from the supported ones (PostgreSQL 18 back to 14;
+each leaves the list at its [end of life](https://www.postgresql.org/support/versioning/)):
+the TUI shows them as a menu, `dbc web` as a dropdown. Beside each is the
+state of its container, if there is one (`running on :5518`, `stopped`).
+
+A pick pulls `postgres:<version>` if Docker does not have it yet (about
+150 MB; the log says so), runs it as the container `dbc-pg<version>`
+(`dbc-pg18`) on `127.0.0.1` port `55<version>` (`5518`, or any free port
+when that one is taken), with its data in the Docker volume
+`dbc-pg<version>-data` and a generated password. Once the server accepts
+connections, dbc adds `docker-pg<version>` to `connections.toml` (as the
+image's `postgres` superuser on its `postgres` database) and connects to it.
+Picking the same version again starts the container if it was stopped, and
+reuses it and its connection as they are. If the container was removed and
+made again, the connection is pointed at the new one. A config-file
+connection that already has the name is left alone, and the new one is
+`docker-pg18-2`.
+
+**Stop container dbc-pg18** in the right-click menu of a connection made
+this way stops its container (`docker stop`). It is refused while a query
+tab is on the connection: disconnect first, as for **Remove…**. The data
+stays, and picking the version again starts the container. dbc never
+removes containers: `docker rm dbc-pg18` does, keeping the data in the
+volume, which the next pick reattaches. `docker volume rm dbc-pg18-data` deletes the data.
+A container named `dbc-pg18` that dbc did not create is refused, not used.
+The `docker` CLI must be installed and running (Docker Desktop, colima,
+Rancher Desktop…). dbc looks for it on `PATH`, then in the usual install
+directories, so the macOS app finds it too.
 
 ### Completion
 
@@ -1240,7 +1282,12 @@ is shown by one browser tab of dbc web at a time: a second browser tab gets
 the saved tabs the first is not showing, or a fresh one, with sessions of its
 own. Closing a browser tab frees its tabs for the next one opened.
 
-**Adding connections.** The **+** beside *Connections* opens a form: name,
+**Postgres in Docker…**, under **+** or in a connection's right-click menu,
+starts a local PostgreSQL in a container and adds its connection; see
+[Postgres in Docker](#postgres-in-docker).
+
+**Adding connections.** The **+** beside *Connections* opens a menu:
+**Add a connection…** and **Postgres in Docker…**. The first opens a form: name,
 driver, the connection itself, [TLS](#tls), and whether the assistant may see
 result rows (`ai_rows`). *Enter as* switches between **Fields** (host, port,
 user, password, database and extra options, or a file for SQLite and bytdb)

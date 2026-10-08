@@ -314,7 +314,7 @@ func (p Workbench) connsList(b *element.Builder) any {
 			// keeps the label left and both buttons together on the right
 			b.SpanClass("hbtns").R(
 				b.ButtonClass("hadd", "id", "conn-add", "type", "button",
-					"title", "Add a connection", "aria-label", "Add a connection").T("+"),
+					"title", "Add a connection, or start Postgres in Docker", "aria-label", "Add a connection", "aria-haspopup", "menu").T("+"),
 				// folds the column away; the › tab on the edge (side-split)
 				// is its mirror and brings it back
 				b.ButtonClass("hadd side-fold", "id", "side-fold", "type", "button",

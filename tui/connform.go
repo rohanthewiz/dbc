@@ -23,7 +23,9 @@ import (
 // are package connedit's, shared with dbc web, so the two forms agree on
 // every rule; this file is only the drawing and the keys.
 //
-//	Connections pane ── a / + ──────────────► Add a connection
+//	Connections pane ── a ──────────────────► Add a connection
+//	                 ── + ──────────────────► menu: Add a connection… ·
+//	                                          Postgres in Docker… (pgdocker.go)
 //	                 ── e, or right-click ──► Edit… (connections added here)
 //	                 ── right-click ────────► Remove… ─► confirm menu
 //
@@ -957,7 +959,8 @@ func (m *Model) connRemovedFromTabs(name string) {
 
 // connMenuItems are the connections menu's rows for the connection target
 // (the row right-clicked; "" when none): edit and remove, live only for one
-// added here, then add.
+// added here, then add — by the form, or by starting Postgres in Docker
+// (pgdocker.go), which adds the connection itself.
 func (m *Model) connMenuItems(target string, x, y int) []menuItem {
 	items := []menuItem{heading("connections")}
 	if target != "" {
@@ -973,17 +976,35 @@ func (m *Model) connMenuItems(target string, x, y int) []menuItem {
 				act: func(m *Model) tea.Cmd { m.openConnForm(target); return nil }},
 			menuItem{label: "Remove " + target + "…", why: removeWhy,
 				act: func(m *Model) tea.Cmd { return m.removeConn(target, x, y) }})
+		// a Postgres in Docker connection's container (pgdocker.go)
+		if it, ok := m.pgDockerStopItem(target); ok {
+			items = append(items, it)
+		}
 	}
-	return append(items, menuItem{label: "+ Add a connection…", key: "a",
-		act: func(m *Model) tea.Cmd { m.openConnForm(""); return nil }})
+	return append(items, m.connAddItems(x, y)...)
 }
 
-// connKey is the Connections pane's own letter keys: a/+ add, e edit the
-// row under the cursor. It reports whether it used k.
+// connAddItems are the two ways to add a connection: the form, and
+// Postgres in Docker, which adds its own. The connections menu ends with
+// them, and + in the Connections pane opens them alone — dbc web's + has
+// the same two rows. The form leads, so + then Enter is still the form.
+func (m *Model) connAddItems(x, y int) []menuItem {
+	return []menuItem{
+		{label: "+ Add a connection…", key: "a", act: func(m *Model) tea.Cmd { m.openConnForm(""); return nil }},
+		m.pgDockerItem(x, y),
+	}
+}
+
+// connKey is the Connections pane's own letter keys: a add (the form), +
+// the ways to add (the form, or Postgres in Docker), e edit the row under
+// the cursor. It reports whether it used k.
 func (m *Model) connKey(k tea.KeyPressMsg) bool {
 	switch k.String() {
-	case "a", "+":
+	case "a":
 		m.openConnForm("")
+	case "+":
+		// under the pane's top row, as a dropdown from its title
+		m.openMenu(m.conns.view.X+1, m.conns.view.Y, append([]menuItem{heading("add a connection")}, m.connAddItems(m.conns.view.X+1, m.conns.view.Y)...))
 	case "e":
 		if it, ok := m.conns.current(); ok {
 			m.openConnForm(it.data.(string))

@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-160
+**Next ID:** N-163
 
 ## Open
 
@@ -85,6 +85,21 @@ ten session docs in `ai_docs/claude_sessions/`
   the columns match, as the hidden columns are kept — though for an
   edit-the-WHERE run the result-order reset may be what is wanted, so
   perhaps for a rerun only.
+
+- **N-160** · raised `2026-1008-1331-postgres-in-docker` · value low
+  **Stop container** (the connections menu, both UIs) is refused while
+  dbc is on the Docker connection: "disconnect first", the same rule as
+  **Remove…**. It could disconnect for the user instead, with one less
+  step. It doesn't today because the stop would then silently roll back an
+  open transaction. Left for the user to decide; a confirm that names an
+  open transaction would cover both.
+- **N-161** · raised `2026-1008-1331-postgres-in-docker` · value low
+  `pgdocker.Versions` lists 18 to 14 by hand, each with its end-of-life
+  date (14 drops out on 2026-11-12 by itself). PostgreSQL 19 was still
+  beta on Docker Hub on 2026-10-08 (`19beta1`, no `19`). Add it once
+  `postgres:19` is published, with its EOL from
+  postgresql.org/support/versioning. Check `dataDir` too, in case the
+  image moves its data again, as 18 did.
 
 ## Validate
 
@@ -219,6 +234,15 @@ and `raised`.
   the TUI test drives its confirm menu both ways. Add a step to the go-rod
   test in `web/e2e`: run an INSERT into a scratch table, press `r`, see the
   modal, Keep the result (nothing runs), then Run it again (a new seq).
+
+- **N-162** · raised `2026-1008-1331-postgres-in-docker` · value low
+  Postgres in Docker is covered by unit tests over a fake docker CLI, a
+  live test (`DBC_LIVE_DOCKER=1`, passed on 17 and 18), and a web e2e step
+  that opens the dialog from + and the right-click menu but never presses
+  Start. Not seen by hand: the TUI's version menu, the `+` menu and the
+  Stop row in a real terminal; dbc web's Start (the waiting message, then
+  connect) and the Stop row in a browser; the macOS app finding `docker`
+  outside PATH (`binDirs`).
 
 ## Roadmap
 

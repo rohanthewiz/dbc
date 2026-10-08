@@ -120,6 +120,11 @@ type Server struct {
 	// consoleMu makes a console save's read-compare-write one step (see
 	// consoles.go), and orders renames and deletes with it.
 	consoleMu sync.Mutex
+
+	// pgDockerOne lets one "Postgres in Docker" start run at a time across
+	// windows (pgdocker.go): two windows picking the same version would
+	// race one container's creation and one connection's registration.
+	pgDockerOne sync.Mutex
 }
 
 //go:embed all:static
@@ -227,6 +232,9 @@ func (s *Server) routes() {
 	r.Get("/api/v1/conns/:name/parts", s.handleConnParts)
 	r.Put("/api/v1/conns/:name", s.handleConnEdit)
 	r.Delete("/api/v1/conns/:name", s.handleConnDelete)
+	r.Get("/api/v1/pgdocker", s.handlePGDocker)
+	r.Post("/api/v1/pgdocker", s.handlePGDockerStart)
+	r.Post("/api/v1/pgdocker/stop", s.handlePGDockerStop)
 	r.Get("/api/v1/tabs", s.handleTabs)
 	r.Put("/api/v1/tabs/:id", s.handleSaveTab)
 	r.Delete("/api/v1/tabs/:id", s.handleDeleteTab)

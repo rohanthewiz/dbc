@@ -3271,8 +3271,8 @@
       ["Enter · Shift+Enter", "send · new line"], ["Ctrl+K", "stop the answer"], ["Esc", "back to the editor"],
     ]],
     ["Sidebar", [
-      ["click a connection", "switch this tab to it"], ["+ beside Connections", "add a connection"],
-      ["right-click a connection", "connect · refresh its schemas and tables · remove one added here"],
+      ["click a connection", "switch this tab to it"], ["+ beside Connections", "add a connection, or start Postgres in Docker"],
+      ["right-click a connection", "connect · refresh its schemas and tables · remove one added here · stop a Postgres in Docker container"],
       ["‹ beside Connections · Ctrl+B", "hide it; the › tab on the left edge brings it back"],
       ["drag its right edge", "resize it (double-click the edge: the default width)"],
       ["drag the bar above Tables", "share the column between the lists"],

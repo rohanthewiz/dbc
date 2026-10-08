@@ -197,7 +197,12 @@ func TestConnFormRefusalStaysInForm(t *testing.T) {
 	m := newTestModel(t)
 	m.saved = config.OpenSaved(filepath.Join(t.TempDir(), "connections.toml"))
 	key(t, m, "ctrl+l")
+	// + is the ways to add, the form first: + then Enter is the form
 	typeText(t, m, "+")
+	if m.menu == nil || menuRow(t, m, "Postgres in Docker").act == nil {
+		t.Fatal("+ did not open the add menu")
+	}
+	key(t, m, "enter")
 	cf := connFormOf(t, m)
 	key(t, m, "enter") // nothing filled in: the fields are built first, as in dbc web
 	if !strings.Contains(cf.msg, "host") || m.modal == nil {

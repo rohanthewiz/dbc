@@ -397,8 +397,148 @@
     });
   }
 
+  // ── Postgres in Docker ─────────────────────────────────────────────────
+  // openPGDocker is the Connections menu's "Postgres in Docker…": a
+  // dropdown of the supported PostgreSQL majors (the server's list, which
+  // drops a version at its end of life), each with the state of dbc's
+  // container for it. Start brings that container up — pulled, created or
+  // restarted (package pgdocker) — and adds its connection, which the tab
+  // then connects to, as after a saved form.
+  //
+  //   open ─► GET /pgdocker ─► Docker usable? fill the dropdown : say why
+  //   Start ─► POST /pgdocker {major} ─► ok: redraw, log the steps, connect
+  //                                  └► not ok: docker's words in the box
+  //
+  // The POST answers once the server accepts connections, a minute or more
+  // when the image is downloaded first, so the box says that while it waits.
+  function openPGDocker() {
+    const pick = el("select", { id: "pg-version", disabled: "disabled" });
+    const result = el("div", { class: "connresult", "aria-live": "polite", hidden: "hidden" });
+    const start = el("button", { type: "button", class: "primary", disabled: "disabled" }, "Start");
+    const cancel = el("button", { type: "button" }, "Cancel");
+    cancel.addEventListener("click", () => dbc.modal.close());
+
+    function say(level, text) {
+      result.hidden = false;
+      result.className = "connresult " + level;
+      result.textContent = text;
+    }
+
+    // ready: Docker answered and there is a version to start; open: the
+    // dialog is still up (an answer after Cancel is dropped)
+    let ready = false, open = true;
+    const busy = (on) => { start.disabled = on || !ready; pick.disabled = on || !ready; };
+
+    say("", "asking Docker…");
+    dbc.api("GET", "/api/v1/pgdocker").then((r) => {
+      if (!open) return;
+      if (!r.ok) {
+        say("err", r.error);
+        return;
+      }
+      r.versions.forEach((v, i) => {
+        // a version whose support ends within the year says so, as a
+        // reason to prefer a newer one
+        let label = "PostgreSQL " + v.major;
+        if (i === 0) label += " (newest)";
+        else if (new Date(v.eol) - Date.now() < 365 * 864e5) {
+          label += " (support ends " + new Date(v.eol).toLocaleDateString(undefined, { month: "short", year: "numeric" }) + ")";
+        }
+        if (v.status) label += " — " + v.status;
+        pick.append(el("option", { value: v.major }, label));
+      });
+      ready = r.versions.length > 0;
+      result.hidden = true;
+      busy(false);
+      pick.focus();
+    }).catch((e) => { if (open) say("err", e.message); });
+
+    async function run() {
+      if (start.disabled) return;
+      const major = pick.value;
+      busy(true);
+      say("", "Starting PostgreSQL " + major + "… A version's first start downloads its image " +
+        "(about 150 MB), which can take a minute or two.");
+      try {
+        const r = await dbc.api("POST", "/api/v1/pgdocker", { major });
+        for (const st of r.steps || []) dbc.log("info", st);
+        if (!r.ok) {
+          if (open) { say("err", r.error); busy(false); }
+          else dbc.log("err", r.error);
+          return;
+        }
+        draw(r.conns); // the "conns" event will say the same; this is sooner
+        if (open) dbc.modal.close();
+        const what = r.added ? "added connection " + r.name
+          : r.updated ? "updated connection " + r.name + " to the new container" : "connection " + r.name;
+        dbc.log("ok", "PostgreSQL " + major + (r.created ? " started" : " running") + " in container " +
+          r.container + " on 127.0.0.1:" + r.port + " — " + what);
+        for (const w of r.warnings || []) dbc.log("warn", w);
+        if (r.created) dbc.log("info", "its data is kept in the Docker volume " + r.volume +
+          "; stop it with: docker stop " + r.container);
+        dbc.cmd.connect(r.name);
+      } catch (e) {
+        if (open) { say("err", e.message); busy(false); }
+        else dbc.log("err", "Postgres in Docker: " + e.message);
+      }
+    }
+    start.addEventListener("click", run);
+
+    dbc.modal.open({
+      title: "Postgres in Docker", focus: cancel,
+      body: el("div", "connbody",
+        el("div", "connform",
+          el("label", { for: "pg-version" }, "Version"), pick,
+          el("span"), el("span", "hint full", "Runs in a container on 127.0.0.1, with its data in a Docker " +
+            "volume, and adds a connection to it.")),
+        result),
+      foot: el("div", "mfoot", el("span", "hint", ""), start, cancel),
+      // Enter starts, from anywhere but the open dropdown's own list
+      onKey: (e) => {
+        if (e.key !== "Enter" || e.target.tagName === "SELECT") return false;
+        run();
+        return true;
+      },
+      // closing does not stop a start already sent: the server finishes it,
+      // and run() logs the outcome instead of showing it here
+      onClose: () => { open = false; dbc.editor.focus(); },
+    });
+  }
+
+  // stopPGDocker stops the container behind name, a connection Postgres in
+  // Docker made (POST /pgdocker/stop). The server refuses while a query tab
+  // in any window is on it; the menu row already says so for this tab's.
+  async function stopPGDocker(name, container) {
+    dbc.log("info", "stopping container " + container + "…");
+    try {
+      const r = await dbc.api("POST", "/api/v1/pgdocker/stop", { conn: name });
+      if (!r.ok) dbc.log("err", "could not stop " + r.container + ": " + r.error);
+      else if (!r.was_running) dbc.log("info", "container " + r.container + " was not running");
+      else dbc.log("ok", "stopped container " + r.container + " — Postgres in Docker… starts it again, its data intact");
+    } catch (e) {
+      dbc.log(e.status === 409 ? "warn" : "err", "could not stop " + container + ": " + e.message);
+    }
+  }
+
+  // PG_CONN is the names Postgres in Docker gives its connections
+  // ("docker-pg18", or "docker-pg18-2" beside a config file's
+  // "docker-pg18"); the major names the container. It only decides
+  // whether the Stop row shows — the server checks the name for itself
+  // (pgdocker.StopTarget), so keep the two patterns in step.
+  const PG_CONN = /^docker-pg(\d+)(?:-\d+)?$/;
+
+  // addItems are the two ways to add a connection, for the right-click
+  // menu's foot and the + dropdown. The form leads, so + then Enter is
+  // still the form.
+  const addItems = () => [
+    { label: "Add a connection…", act: openAdd },
+    { label: "Postgres in Docker…", act: openPGDocker },
+  ];
+
   // The right-click menu: connect (or, on the row this tab is on or is
-  // connecting to, disconnect), refresh, or edit or remove one added here.
+  // connecting to, disconnect), refresh, or edit or remove one added here;
+  // on a connection Postgres in Docker made, stop its container (stopItem);
+  // then the ways to add one (addItems), as under +.
   // For the config file's, Edit and Remove are shown and say why they
   // cannot, rather than being absent and leaving the user to wonder where
   // they went — and Refresh likewise on a row the tab is not on.
@@ -433,12 +573,27 @@
       b.dataset.saved
         ? { label: "Remove…", act: () => confirmRemove(name) }
         : { label: "Remove…", why: fromFile + "remove it" },
+      ...stopItem(b, name, on || dialing),
       { head: "" },
-      { label: "Add a connection…", act: openAdd },
+      ...addItems(),
     ]);
   });
 
-  document.getElementById("conn-add").addEventListener("click", openAdd);
+  // stopItem is the Stop row for a connection Postgres in Docker made
+  // (none for any other). While this tab is on it, the row says why not:
+  // the stop would cut the tab's session.
+  function stopItem(b, name, onIt) {
+    const m = b.dataset.saved && PG_CONN.exec(name);
+    if (!m) return [];
+    const container = "dbc-pg" + m[1];
+    return [onIt
+      ? { label: "Stop container " + container, why: "this tab is on " + name + " — disconnect it first" }
+      : { label: "Stop container " + container, act: () => stopPGDocker(name, container) }];
+  }
 
-  dbc.conns = { draw, openAdd, openEdit };
+  // + is a dropdown of the ways to add: the form, or Postgres in Docker
+  const addBtn = document.getElementById("conn-add");
+  addBtn.addEventListener("click", () => dbc.menu.at(addBtn, addItems()));
+
+  dbc.conns = { draw, openAdd, openEdit, openPGDocker };
 })();

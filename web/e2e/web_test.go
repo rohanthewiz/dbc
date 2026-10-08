@@ -50,6 +50,7 @@ func TestWeb(t *testing.T) {
 		{"disconnect and reconnect", disconnect},
 		{"refresh a connection", refreshConn},
 		{"connection form fields and DSN", connForm},
+		{"postgres in docker dialog", pgDockerDialog},
 		{"postgres schema picker", pgSchemaPicker},
 		{"tabs survive a reload", tabsSurviveReload},
 		{"sidebar fold keys", sidebarFoldKeys},
@@ -789,7 +790,10 @@ func refreshConn(t *testing.T, e *env, p *rod.Page) {
 // "Enter as" call for, and a connection given as fields tests, saves and
 // connects.
 func connForm(t *testing.T, e *env, p *rod.Page) {
+	// + is a dropdown: the form, or Postgres in Docker
 	p.MustElement("#conn-add").MustClick()
+	waitFor(t, p, "the + menu", `() => !!document.querySelector(".menu")`)
+	menuPick(t, p, "Add a connection…")
 	waitFor(t, p, "the form", `() => !!document.getElementById("cf-name")`)
 
 	// shown reports which of the form's controls a person can see. Hidden
@@ -850,6 +854,43 @@ func connForm(t *testing.T, e *env, p *rod.Page) {
 
 	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite")
+}
+
+// pgDockerDialog: "Postgres in Docker…" — under + and in a connection's
+// right-click menu — opens a
+// dialog whose dropdown fills with the supported versions once Docker
+// answers — or, where Docker is not installed or not running, says so in
+// the dialog's box with Start left off. It never presses Start: that would
+// pull an image and leave a container on the machine running the test.
+func pgDockerDialog(t *testing.T, _ *env, p *rod.Page) {
+	// in a connection's right-click menu, and under + (opened from there)
+	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonRight)
+	waitFor(t, p, "the row in the right-click menu", `() => [...document.querySelectorAll(".menu .mitem .ml")]
+	  .some((m) => m.textContent === "Postgres in Docker…")`)
+	p.MustElement("body").MustClick() // close it
+	waitFor(t, p, "the menu closed", `() => !document.querySelector(".menu")`)
+	p.MustElement("#conn-add").MustClick()
+	waitFor(t, p, "the + menu", `() => !!document.querySelector(".menu")`)
+	menuPick(t, p, "Postgres in Docker…")
+	waitFor(t, p, "Docker's answer", `() => {
+	  const s = document.getElementById("pg-version"), r = document.querySelector(".modal .connresult");
+	  return !!s && (s.options.length > 0 || (!!r && !r.hidden && r.classList.contains("err")));
+	}`)
+	got := evalStr(t, p, `() => {
+	  const s = document.getElementById("pg-version");
+	  const start = [...document.querySelectorAll(".modal button")].find((b) => b.textContent === "Start");
+	  if (s.options.length === 0) return "down:" + start.disabled + ":" + document.querySelector(".modal .connresult").textContent;
+	  return "up:" + start.disabled + ":" + [...s.options].map((o) => o.textContent).join("|");
+	}`)
+	switch {
+	case strings.HasPrefix(got, "up:false:PostgreSQL ") && strings.Contains(got, "(newest)"):
+	case strings.HasPrefix(got, "down:true:") && strings.Contains(strings.ToLower(got), "docker"):
+		t.Logf("Docker is not usable here; the dialog said: %s", got)
+	default:
+		t.Fatalf("dialog state %q", got)
+	}
+	p.MustElementR(".modal button", "^Cancel$").MustClick()
+	waitFor(t, p, "the dialog closed", `() => !document.querySelector(".modal")`)
 }
 
 // pgSchemaPicker: on Postgres the Tables list is one schema's, and the

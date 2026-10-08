@@ -67,8 +67,16 @@
 // THE CHECK. ~600 ms after typing stops, the tab's text — unsaved — goes to
 // POST /api/v1/script-check (script.Check: parse, Run's signature, yaegi's
 // compile, the map comma-ok lint; it never runs the script), and what comes
-// back becomes Monaco markers. ✓ Check does the same at once and also lists
-// the findings in the log.
+// back becomes Monaco markers — and, as ced draws them, a dot in the gutter
+// and the message after the line (editor.js setMarkers). ✓ Check does the
+// same at once and also lists the findings in the log.
+//
+// GO TO DEFINITION AND USAGES. F12 (or Ctrl/⌘+click) and Shift+F12 on a
+// name ask POST /api/v1/script-symbol (script.Resolve: go/types over the
+// tab's text, saved or not) where the script declares it and where it uses
+// it. Scope is honoured — a shadowing err is its own symbol — and a member
+// of sdb or another import (s.Query) has no declaration in the script, so
+// F12 finds none, but Shift+F12 still lists its uses from the same s.
 (function () {
   "use strict";
 
@@ -864,6 +872,39 @@
             }
           }
           return { suggestions: [] };
+        },
+      });
+
+      // go to definition and usages (see the top of the file): one
+      // request answers both, so each provider asks for the symbol and
+      // takes the half it needs. A failed request is no answer — Monaco
+      // then says "no definition found" — and the status bar reports a
+      // lost server on its own.
+      const symbolAt = async (model, pos) => {
+        try {
+          const s = await api("POST", "/api/v1/script-symbol", { text: model.getValue(), caret: model.getOffsetAt(pos) });
+          return s && s.kind ? s : null;
+        } catch (_) {
+          return null;
+        }
+      };
+      const rangeOf = (model, sp) => {
+        const a = model.getPositionAt(sp.from), b = model.getPositionAt(sp.to);
+        return new monaco.Range(a.lineNumber, a.column, b.lineNumber, b.column);
+      };
+      monaco.languages.registerDefinitionProvider("go", {
+        async provideDefinition(model, pos) {
+          const s = await symbolAt(model, pos);
+          return s && s.def ? { uri: model.uri, range: rangeOf(model, s.def) } : null;
+        },
+      });
+      monaco.languages.registerReferenceProvider("go", {
+        async provideReferences(model, pos, ctx) {
+          const s = await symbolAt(model, pos);
+          if (!s) return [];
+          return s.uses
+            .filter((u) => ctx.includeDeclaration || !s.def || u.from !== s.def.from)
+            .map((u) => ({ uri: model.uri, range: rangeOf(model, u) }));
         },
       });
 

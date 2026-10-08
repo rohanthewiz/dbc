@@ -40,6 +40,7 @@ import (
 //	DELETE /api/v1/scripts/:name              to .trash → {id}
 //	POST   /api/v1/script-trash/:id/restore   {to?} → {name}
 //	POST   /api/v1/script-check               {name, text} → {diags}  (unsaved text)
+//	POST   /api/v1/script-symbol              {text, caret} → script.Symbol  (F12, Shift+F12)
 //	GET    /api/v1/script-examples/:name      a built-in example's text
 //	GET    /api/v1/script-templates/:name     a template, filled with connections
 //	GET    /api/v1/script-api                 the sdb API, for completion
@@ -300,6 +301,50 @@ func (s *Server) handleScriptCheck(ctx rweb.Context) error {
 		return fail(ctx, badRequest("the script is %d KB; scripts are checked up to %d KB", len(req.Text)>>10, userdata.MaxScriptBytes>>10))
 	}
 	return ok(ctx, map[string]any{"diags": nonNil(script.Check(cmp.Or(req.Name, "script.go"), req.Text))})
+}
+
+// scriptSymbolReq is a go to definition / usages request: the editor's
+// text, saved or not, and the caret, in UTF-16 units as Monaco counts.
+type scriptSymbolReq struct {
+	Text  string `json:"text"`
+	Caret int    `json:"caret"`
+}
+
+// handleScriptSymbol is POST /api/v1/script-symbol: what the name under a
+// script tab's caret is, where the script declares it and where it uses it
+// (script.Resolve, go/types over the text alone — nothing is compiled by
+// yaegi, nothing runs). Like script-check it belongs to no workspace: a
+// script is not tied to a tab's connection.
+//
+// Offsets go in and come back in UTF-16 units, the SQL editor's symbol
+// rule (symbol.go): converted to bytes for the resolver and back for
+// Monaco, so a non-ASCII string literal before the caret does not shift
+// every range after it. A caret on nothing is a symbol with no kind, not
+// an error; Monaco then says "no definition found" itself.
+func (s *Server) handleScriptSymbol(ctx rweb.Context) error {
+	var req scriptSymbolReq
+	if err := decode(ctx, &req); err != nil {
+		return fail(ctx, err)
+	}
+	if len(req.Text) > userdata.MaxScriptBytes {
+		return ok(ctx, script.Symbol{Uses: []script.Span{}})
+	}
+	sym := script.Resolve(req.Text, byteOffset(req.Text, req.Caret))
+	// the uses come sorted, so one counter walks the text once; at and
+	// def are converted with fresh counters, as they may be anywhere
+	c := &utf16Counter{s: req.Text}
+	units := func(c *utf16Counter, sp script.Span) script.Span {
+		return script.Span{From: c.of(sp.From), To: c.of(sp.To)}
+	}
+	for i, u := range sym.Uses {
+		sym.Uses[i] = units(c, u)
+	}
+	sym.At = units(&utf16Counter{s: req.Text}, sym.At)
+	if sym.Def != nil {
+		d := units(&utf16Counter{s: req.Text}, *sym.Def)
+		sym.Def = &d
+	}
+	return ok(ctx, sym)
 }
 
 // handleScriptExample is GET /api/v1/script-examples/:name: a built-in

@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-164
+**Next ID:** N-167
 
 ## Open
 
@@ -83,6 +83,20 @@ ten session docs in `ai_docs/claude_sessions/`
   `postgres:19` is published, with its EOL from
   postgresql.org/support/versioning. Check `dataDir` too, in case the
   image moves its data again, as 18 did.
+
+- **N-164** · raised `2026-1008-1518-script-goto-def-usages-inline-diags` · value low
+  Rename (F2) in a script tab. `script.Resolve` already finds every use of a
+  name the script declares, scope by scope, so the edits are those spans.
+  Refuse an imported member (`s.Query`), a builtin, or a new name that is
+  already taken in that scope (go/types' `Scope.LookupParent`). Mirror the
+  SQL editor's rename provider (`editor.js` `registerSymbols`).
+- **N-165** · raised `2026-1008-1518-script-goto-def-usages-inline-diags` · value medium
+  The SQL editor's Shift+F12 has Monaco's two-reference quirk. With just
+  the declaration and one use (an alias used once), Go to References jumps
+  instead of listing, and from the use it does nothing. Script tabs now bind
+  Shift+F12 to their own "Go to Usages"
+  (`editor.action.referenceSearch.trigger`, always the list); do the same
+  for SQL tabs, or widen that action's precondition.
 
 ## Validate
 
@@ -235,6 +249,14 @@ and `raised`.
   with its click target, its colour reads under a cats theme as well as
   the built-in dark one, and the write confirm opened from the bottom
   border stays on screen.
+
+- **N-166** · raised `2026-1008-1518-script-goto-def-usages-inline-diags` · value low
+  The script tab's inline error notes (gutter dot, box, end-of-line
+  message: `editor.js` `diagDecos`, `.diag-*` in `app.css`) were seen in
+  headless Chrome on the dark theme only. Check them on the light theme
+  (does `--warn` read on a light background?), and with a long yaegi
+  message on a narrow editor (cut at 160 characters, then scrolls
+  horizontally).
 
 ## Roadmap
 

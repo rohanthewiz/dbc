@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/script"
@@ -244,6 +245,31 @@ func TestScriptCheckRoute(t *testing.T) {
 	}
 	b, _ := json.Marshal(scriptCheck{Text: strings.Repeat("x", 1<<20+1)})
 	e.api("POST", "/api/v1/script-check", string(b), 400)
+}
+
+// script-symbol answers in UTF-16 units both ways: with a non-BMP rune
+// (two units, four bytes) in a string before the name, the caret Monaco
+// sends and the ranges it gets back are units, not bytes.
+func TestScriptSymbol(t *testing.T) {
+	e, _ := scriptEnv(t)
+	text := "package main\n\nimport \"github.com/rohanthewiz/dbc/sdb\"\n\n" +
+		"func Run(s *sdb.S) error {\n\tmsg := \"🐈 \"\n\ts.Print(msg + msg)\n\treturn nil\n}\n"
+	units := func(s string) int { return len(utf16.Encode([]rune(s))) }
+	decl := units(text[:strings.Index(text, "msg :=")])
+	last := units(text[:strings.LastIndex(text, "msg)")])
+	b, _ := json.Marshal(scriptSymbolReq{Text: text, Caret: last + 1})
+	sym := decodeData[script.Symbol](t, e.api("POST", "/api/v1/script-symbol", string(b), 200))
+	if sym.Kind != "var" || sym.Name != "msg" || sym.Def == nil || *sym.Def != (script.Span{From: decl, To: decl + 3}) {
+		t.Fatalf("symbol = %+v, want var msg declared at %d", sym, decl)
+	}
+	if len(sym.Uses) != 3 || sym.Uses[2] != (script.Span{From: last, To: last + 3}) || sym.At != sym.Uses[2] {
+		t.Errorf("uses = %+v, at = %+v; want 3, the last at %d", sym.Uses, sym.At, last)
+	}
+	// nothing under the caret is an answer, not an error
+	b, _ = json.Marshal(scriptSymbolReq{Text: text, Caret: 1})
+	if sym := decodeData[script.Symbol](t, e.api("POST", "/api/v1/script-symbol", string(b), 200)); sym.Kind != "" || sym.Uses == nil {
+		t.Errorf("caret on a keyword = %+v", sym)
+	}
 }
 
 func strconvQuote(s string) string { b, _ := json.Marshal(s); return string(b) }

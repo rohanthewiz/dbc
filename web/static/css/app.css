@@ -359,6 +359,18 @@ body.side-dragging { cursor: col-resize; user-select: none; }
 .editor-wrap.monaco-on #editor { visibility: hidden; }
 /* the statement under the caret: a bar in the gutter, as the TUI marks it */
 .stmt-mark { background: var(--accent); width: 3px !important; margin-left: 3px; }
+/* a script check's findings, beside the squiggles (editor.js diagDecos):
+   a dot in the gutter's decoration strip (the statement bar's, which a
+   script tab never draws), a box where the error is, the message after
+   the line */
+.diag-dot::after { content: ""; position: absolute; left: 1px; top: 50%; width: 6px; height: 6px;
+  margin-top: -3px; border-radius: 50%; background: var(--err); }
+.diag-dot.warn::after { background: var(--warn); }
+.diag-at.err { outline: 1px solid var(--err); outline-offset: -1px; border-radius: 2px; }
+.diag-at.warn { outline: 1px dotted var(--warn); outline-offset: -1px; border-radius: 2px; }
+.diag-note { font-style: normal; white-space: pre; }
+.diag-note.err { color: var(--err); }
+.diag-note.warn { color: var(--warn); }
 
 /* Positioned and lifted: Monaco's content layer (.lines-content — absolute,
    contain:strict, transformed, and 2^24px square) is clipped on screen

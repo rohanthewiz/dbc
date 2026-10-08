@@ -186,24 +186,29 @@
     // hover's message, F8 to walk them. A document not open (or the plain
     // textarea, which cannot draw them) is skipped; the next check after
     // it opens marks it.
+    //
+    // A squiggle alone is easy to miss, and its message waits behind a
+    // hover. So, as ced draws a Go error, each diagnosed line also gets
+    // decorations (diagDecos) that need no gesture:
+    //
+    //	 ● 	println("Hello, World!"[)]   × missing ',' before newline in argument list
+    //	 │                         └┬┘   └── the message, after the line's end
+    //	 └ a dot in the gutter      └ a box around where the error is
+    //
+    // Every diagnosed line shows its message, not just the caret's (ced's
+    // rule, made for gopls's dozens of findings): a check here reports at
+    // most ten syntax errors, or one compile error and a lint or two, so
+    // the lines stay readable — and the point is to see an error without
+    // first putting the caret on it.
     setMarkers(key, diags) {
       const d = docs.get(key);
       if (!ed || !d) return;
       const m = d.model, S = monaco.MarkerSeverity;
-      monaco.editor.setModelMarkers(m, "dbc", (diags || []).map((x) => {
-        const line = Math.min(Math.max(1, x.line || 1), m.getLineCount());
-        // col 0 is a message about the line as a whole (yaegi does not
-        // always say where); a col marks the word that starts there, or
-        // one character when nothing word-like does
-        let a = 1, b = m.getLineMaxColumn(line);
-        if (x.col > 0) {
-          a = Math.min(x.col, b);
-          const w = m.getWordAtPosition({ lineNumber: line, column: a });
-          b = w && w.startColumn === a ? w.endColumn : Math.min(a + 1, m.getLineMaxColumn(line));
-        }
-        return { severity: x.severity === "error" ? S.Error : S.Warning, message: x.msg,
-          startLineNumber: line, startColumn: a, endLineNumber: line, endColumn: Math.max(b, a + 1) };
-      }));
+      const at = (diags || []).map((x) => ({ x, r: diagRange(m, x) }));
+      monaco.editor.setModelMarkers(m, "dbc", at.map(({ x, r }) => ({
+        severity: x.severity === "error" ? S.Error : S.Warning, message: x.msg, ...r,
+      })));
+      d.diagIds = m.deltaDecorations(d.diagIds || [], diagDecos(m, at));
     },
     // ready runs fn(monaco) once Monaco has loaded — at once if it has. A
     // page whose Monaco never loads never calls it (the textarea has no
@@ -328,6 +333,67 @@
       });
     }
     decos.set(list);
+  }
+
+  // diagRange is where a diag is marked, as Monaco range fields. Col 0 is
+  // a message about the line as a whole (yaegi does not always say where);
+  // a col marks the word that starts there, or one character when nothing
+  // word-like does. A col at or past the line's end — go/parser puts "missing
+  // ','" at the newline — marks the line's last character instead, as ced
+  // does: a mark on nothing would be drawn after the end-of-line message.
+  function diagRange(m, x) {
+    const line = Math.min(Math.max(1, x.line || 1), m.getLineCount());
+    let a = 1, b = m.getLineMaxColumn(line);
+    if (x.col > 0) {
+      a = Math.min(x.col, b);
+      if (a === b && b > 1) a = b - 1;
+      const w = m.getWordAtPosition({ lineNumber: line, column: a });
+      b = w && w.startColumn === a ? w.endColumn : Math.min(a + 1, m.getLineMaxColumn(line));
+    }
+    return { startLineNumber: line, startColumn: a, endLineNumber: line, endColumn: Math.max(b, a + 1) };
+  }
+
+  // diagDecos is setMarkers' always-visible half: per diagnosed line, a
+  // gutter dot and the worst diag's message after the line ("(+n more)"
+  // when it has company — the hover and F8 have them all), and per diag a
+  // box over its range. An error outranks a warning on the same line, and
+  // colours the dot and the message.
+  //
+  // The message rides an "after" injected text on a range spanning the
+  // whole line, with stickiness that grows as the user types at either
+  // edge: typing at the end of the line pushes the note along rather than
+  // splitting the new text from the old. The decorations are replaced by
+  // the next check (~600 ms after typing stops), so a fixed line loses
+  // its note almost as soon as it is fixed.
+  const NOTE_MAX = 160; // a long yaegi message is cut; the hover has it whole
+  function diagDecos(m, at) {
+    const byLine = new Map();
+    for (const it of at) {
+      const l = it.r.startLineNumber;
+      if (!byLine.has(l)) byLine.set(l, []);
+      byLine.get(l).push(it.x);
+    }
+    const out = [];
+    for (const [line, xs] of byLine) {
+      const worst = xs.find((x) => x.severity === "error") || xs[0];
+      const sev = worst.severity === "error" ? "err" : "warn";
+      let msg = String(worst.msg || "").replace(/\s+/g, " ").trim();
+      if (msg.length > NOTE_MAX) msg = msg.slice(0, NOTE_MAX - 1) + "…";
+      if (xs.length > 1) msg += "  (+" + (xs.length - 1) + " more)";
+      out.push({
+        range: new monaco.Range(line, 1, line, m.getLineMaxColumn(line)),
+        options: {
+          linesDecorationsClassName: "diag-dot " + sev,
+          stickiness: monaco.editor.TrackedRangeStickiness.AlwaysGrowsWhenTypingAtEdges,
+          after: { content: "\u2003" + (sev === "err" ? "× " : "⚠ ") + msg, inlineClassName: "diag-note " + sev },
+        },
+      });
+    }
+    for (const { x, r } of at) {
+      out.push({ range: new monaco.Range(r.startLineNumber, r.startColumn, r.endLineNumber, r.endColumn),
+        options: { inlineClassName: "diag-at " + (x.severity === "error" ? "err" : "warn") } });
+    }
+    return out;
   }
 
   // ── completions ────────────────────────────────────────────────────────
@@ -618,6 +684,19 @@
     ed.addAction({
       id: "dbc.askScript", label: "✦ Ask the assistant about this script", contextMenuGroupId: "navigation",
       contextMenuOrder: 0, precondition: "dbcScript", run: () => dbc.cmd.askAbout("Explain this script."),
+    });
+    // Go to Usages, in a script tab: Shift+F12 and the right-click menu,
+    // beside Monaco's own Go to Definition. It always opens the usages list
+    // (the peek), where Monaco's Go to References — Shift+F12's default —
+    // second-guesses a short answer: with just the declaration and one use
+    // it jumps between them instead of listing, and from the use it does
+    // nothing at all. A local used once is the commonest case in a script,
+    // so the list is asked for outright. The answer is scripts.js's
+    // reference provider either way.
+    ed.addAction({
+      id: "dbc.goToUsages", label: "Go to Usages", contextMenuGroupId: "navigation", contextMenuOrder: 1.5,
+      keybindings: [K.Shift | C.F12], precondition: "dbcScript",
+      run: () => ed.trigger("dbc", "editor.action.referenceSearch.trigger", {}),
     });
   }
 

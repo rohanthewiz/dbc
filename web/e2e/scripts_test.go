@@ -116,6 +116,44 @@ func scriptTabs(t *testing.T, e *env, p *rod.Page) {
 	waitFor(t, p, "the header and the strip saying so", `() =>
 	  document.getElementById("active-conn").textContent === "▷ e2e_report.go ● · 1 error" &&
 	  !!document.querySelector("#qtabs .qtab.script.on .qdirty")`)
+	// …and shown with no hover needed, as ced shows a Go error: a dot in
+	// the gutter, a box on the name, the message after the line (Monaco
+	// draws an injected text's spaces as no-break spaces, hence \s)
+	waitFor(t, p, "the error's dot, box and end-of-line message", `() => {
+	  const n = document.querySelector(".monaco-editor .diag-note.err");
+	  return !!n && /undefined:\snope/.test(n.textContent) &&
+	    !!document.querySelector(".monaco-editor .diag-dot.err") &&
+	    !!document.querySelector(".monaco-editor .diag-at.err");
+	}`)
+
+	// ── go to definition and usages, scope-aware ──────────────────────────
+	// the n printed on line 10 is the outer one (line 6), not the if's own
+	// n of line 7: F12 lands on line 6, and Shift+F12 (dbc's Go to Usages)
+	// lists only the two — a list even of two, where Monaco's own Go to
+	// References would jump, or from the use do nothing
+	setText("package main\n\nimport \"github.com/rohanthewiz/dbc/sdb\"\n\nfunc Run(s *sdb.S) error {\n" +
+		"\tn := 1\n\tif n := 2; n > 1 {\n\t\ts.Print(n)\n\t}\n\ts.Print(n)\n\treturn nil\n}\n")
+	caretOnN := `() => { const ed = monaco.editor.getEditors()[0]; ed.setPosition({ lineNumber: 10, column: 10 }); ed.focus(); }`
+	eval(t, p, caretOnN)
+	p.Keyboard.MustType(input.F12)
+	waitFor(t, p, "the caret on the outer n's declaration", `() => {
+	  const at = monaco.editor.getEditors()[0].getPosition();
+	  return at.lineNumber === 6 && at.column === 2;
+	}`)
+	eval(t, p, caretOnN)
+	if err := p.Keyboard.Press(input.ShiftLeft); err != nil {
+		t.Fatal(err)
+	}
+	p.Keyboard.MustType(input.F12)
+	if err := p.Keyboard.Release(input.ShiftLeft); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, p, "the usages list: the declaration and the one use, not the if's n", `() => {
+	  const rows = [...document.querySelectorAll(".reference-zone-widget .ref-tree .monaco-list-row")];
+	  return rows.length === 2 && rows[0].textContent.includes("n := 1") && rows[1].textContent.includes("s.Print(n)");
+	}`)
+	p.Keyboard.MustType(input.Escape)
+	waitFor(t, p, "the usages list closed", `() => !document.querySelector(".reference-zone-widget .ref-tree .monaco-list-row")`)
 
 	// ── completion from the sdb API, and connection names ────────────────
 	setText("package main\n\nimport \"github.com/rohanthewiz/dbc/sdb\"\n\nfunc Run(db *sdb.S) error {\n\t\n\treturn nil\n}\n")

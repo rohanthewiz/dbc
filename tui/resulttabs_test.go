@@ -498,3 +498,53 @@ func TestShareResultTab(t *testing.T) {
 		t.Error("an unshared tab still goes as shared")
 	}
 }
+
+// r reruns the current result tab's query into that tab — a pinned one
+// included, which stays pinned — and a tab whose query writes asks first.
+// The strip's menu offers the same.
+func TestRerunResultTab(t *testing.T) {
+	m := newTestModel(t)
+	runSQL(t, m, "CREATE TABLE tick (x INTEGER)")
+	runSQL(t, m, "SELECT count(*) AS n FROM tick")
+	m.focus = focusGrid
+	key(t, m, "P")
+	pinned := curID(m)
+	runSQL(t, m, "INSERT INTO tick VALUES (1)") // a new tab: the count's is pinned
+	m.focus = focusGrid
+
+	// the INSERT's tab: r asks before it writes again, and Esc keeps it
+	key(t, m, "r")
+	if m.menu == nil || !strings.Contains(menuLabels(m), "may change the database") {
+		t.Fatalf("no confirm for a write; menu %v", m.menu != nil)
+	}
+	key(t, m, "esc")
+	if m.ws.Busy() {
+		t.Fatal("the write ran without being confirmed")
+	}
+	// confirmed, it runs: two rows now, which the count's rerun shows
+	key(t, m, "r")
+	pickMenu(t, m, "Run it again")
+
+	key(t, m, "{")
+	if curID(m) != pinned || m.grid.res.Rows[0][0] != "0" {
+		t.Fatalf("not on the pinned count: %d, %v", curID(m), m.grid.res.Rows)
+	}
+	key(t, m, "r")
+	tabs, cur := m.ws.ResultTabs()
+	if len(tabs) != 2 || tabs[cur].ID != pinned || !tabs[cur].Pinned {
+		t.Fatalf("after r: %+v at %d", tabs, cur)
+	}
+	if m.grid.res.Rows[0][0] != "2" {
+		t.Errorf("the grid shows %v, want the 2 rows inserted", m.grid.res.Rows)
+	}
+	if log := logText(m); !strings.Contains(log, "rerun SELECT count(*) AS n FROM tick completed on demo-sqlite") {
+		t.Errorf("log: %s", log)
+	}
+
+	x, y := findText(t, frame(m), " 1⚑")
+	rightClick(t, m, x+1, y)
+	if m.menu == nil || !strings.Contains(menuLabels(m), "↻ Rerun its query") {
+		t.Fatalf("strip menu = %v", m.menu != nil)
+	}
+	m.menu = nil
+}

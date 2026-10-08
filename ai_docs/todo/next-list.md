@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-158
+**Next ID:** N-160
 
 ## Open
 
@@ -75,6 +75,16 @@ ten session docs in `ai_docs/claude_sessions/`
   already keys (`j k g G c e d s #`), so it would be a `/` that opens a
   filter line over the list, as the pickers' `pickModal` filters. Offered
   at the end of the session; the user did not answer.
+
+- **N-158** · raised `2026-1008-0000-rerun-result-tab` · value low
+  A rerun of a result tab (`r`, `RerunResultTab`) drops the grid's sort in
+  both UIs: the TUI's `grid.SetResult` resets `sortCol` even when it keeps
+  hidden columns and widths for identical columns, and dbc web's
+  `grid.load` starts a new seq with no sort. Refreshing a pinned result you
+  had sorted then needs the header clicked again. Could keep the sort when
+  the columns match, as the hidden columns are kept — though for an
+  edit-the-WHERE run the result-order reset may be what is wanted, so
+  perhaps for a rerun only.
 
 ## Validate
 
@@ -202,6 +212,13 @@ and `raised`.
   Method icon for `kind: "procedure"` (`editor.js` kindOf), or a signature
   doc in either. Add a step to the go-rod test in `web/e2e` (`CALL ▮` on a
   connection with a procedure), or check by hand.
+- **N-159** · raised `2026-1008-0000-rerun-result-tab` · value low
+  dbc web's confirm before rerunning a tab whose statement may write
+  (`rerun` in `app.js`, the "Run this statement again?" modal) has not been
+  seen in a browser. The wire test checks `writes` on the strip's refs and
+  the TUI test drives its confirm menu both ways. Add a step to the go-rod
+  test in `web/e2e`: run an INSERT into a scratch table, press `r`, see the
+  modal, Keep the result (nothing runs), then Run it again (a new seq).
 
 ## Roadmap
 

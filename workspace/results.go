@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/explain"
 	"github.com/rohanthewiz/dbc/model"
 )
@@ -45,6 +46,26 @@ import (
 // may have cost minutes. (Pinning the last unpinned tab while a run is in
 // flight can still leave it nowhere to land; the set then goes one over
 // the cap rather than lose either result.)
+//
+// A tab can be RERUN (RerunResultTab): its own statement runs again and
+// the fresh result goes back in that same tab, pinned or shared or not,
+// with its pin, its share and its title left as they were. The pin keeps a
+// result from being replaced by OTHER runs; rerunning the tab's own
+// statement is the user asking for that result to be brought up to date —
+// what DataGrip's refresh on a pinned tab does — and opening a new tab for
+// it would leave a stale copy behind and lose the pin's place in the
+// strip:
+//
+//	before    [#1 ⚑ orders (yesterday)] [#4 cats]     #4 current
+//	rerun #1  ─► runs #1's statement ─► target #1 even though pinned
+//	after     [#1 ⚑ orders (now)] [#4 cats]           #1 current, still pinned
+//
+// A rerun runs on the tab's connection's session like any run (one at a
+// time, the same session state), and a failed one leaves the tab's old
+// result in place, as a failed run always does. A tab of a script's
+// shows has no statement to rerun; a tab of a multi-statement run's group
+// reruns its own statement alone and, as a single statement run on it
+// would, leaves the group.
 //
 // One tab per set may be SHARED with the assistant (ShareResultTab, on a
 // connection with ai_rows only): its result goes with every question asked
@@ -253,7 +274,10 @@ func (w *Workspace) placeLocked(conn string, target *resultTab, title, stmt stri
 func (w *Workspace) placeRunLocked(conn string, target *resultTab, run int, group bool, ls []landing) (*resultTab, int) {
 	s := w.setLocked(conn)
 	var slots []*resultTab
-	if target != nil && slices.Contains(s.tabs, target) && !s.kept(target) {
+	// a kept target is refilled only by a rerun of that very tab: the pin
+	// (or share) keeps the tab's result from OTHER runs, while rerunning
+	// its own statement is how the user asks for it fresh
+	if target != nil && slices.Contains(s.tabs, target) && (!s.kept(target) || target == w.runAgain) {
 		slots = []*resultTab{target}
 		if group {
 			slots = slices.DeleteFunc(slices.Clone(s.tabs), func(t *resultTab) bool {
@@ -362,6 +386,11 @@ type ResultTab struct {
 	Result *model.Result
 	Shows  int  // how many s.Show results of a script it holds (0 for a run's own)
 	Shared bool // shared with the assistant (ShareResultTab)
+	// Writes: rerunning the tab (RerunResultTab) would run a statement that
+	// may change the database (db.ChangesRows) — an INSERT whose "n
+	// affected" landed in the tab — so a UI asks before it does. False
+	// for a tab with no statement, which cannot be rerun at all.
+	Writes bool
 }
 
 // ResultTabs is the active connection's result set: its tabs in strip
@@ -377,7 +406,8 @@ func (w *Workspace) ResultTabs() (tabs []ResultTab, cur int) {
 	shared, _ := s.sharedTab()
 	for i, t := range s.tabs {
 		tabs[i] = ResultTab{ID: t.id, Seq: t.seq, Title: t.title, Stmt: t.stmt, Pinned: t.pinned,
-			Result: t.res, Shows: len(t.shows), Shared: t == shared}
+			Result: t.res, Shows: len(t.shows), Shared: t == shared,
+			Writes: t.stmt != "" && db.ChangesRows(t.stmt)}
 	}
 	return tabs, s.cur
 }
@@ -414,7 +444,8 @@ func (w *Workspace) ShowResultTab(id int) error {
 }
 
 // PinResultTab pins or unpins result tab id. A pinned tab keeps its
-// result: the next run that would have replaced it opens a new tab.
+// result: the next run that would have replaced it opens a new tab. Only a
+// rerun of the tab itself (RerunResultTab) refreshes it in place.
 func (w *Workspace) PinResultTab(id int, pin bool) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -424,6 +455,32 @@ func (w *Workspace) PinResultTab(id int, pin bool) error {
 	}
 	s.tabs[i].pinned = pin
 	return nil
+}
+
+// RerunResultTab runs result tab id's statement again, on the active
+// connection, and lands the result back in that tab — even a pinned or
+// shared one, which keeps its pin, share and title (see the package
+// comment). It is refused, like any run, while a run is in flight, and
+// for a tab that holds a script's shows, which has no statement: running
+// the script again is how those are refreshed.
+//
+// The statement is not recorded in the history again: it got there when
+// it was first run by hand (an app run's — a table preview's, "list
+// tables" — never belonged there), and a refresh is not a new query to
+// recall.
+func (w *Workspace) RerunResultTab(id int) (Start, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	s, i, err := w.tabLocked(id)
+	if err != nil {
+		return Start{}, err
+	}
+	t := s.tabs[i]
+	if t.stmt == "" {
+		return Start{}, refuse(Invalid, Warn,
+			"result %d holds a script's results, not a statement's — run the script again to refresh them", i+1)
+	}
+	return w.runLocked([]string{t.stmt}, "rerun "+t.title, t)
 }
 
 // CloseResultTab closes result tab id, pinned or not. When it was on

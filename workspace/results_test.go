@@ -713,3 +713,160 @@ func TestRunAllUnderTheCap(t *testing.T) {
 		t.Errorf("notes = %+v", ev.Notes)
 	}
 }
+
+// rerun reruns result tab id and runs its job, failing the test on a
+// refusal.
+func rerun(t *testing.T, w *Workspace, id int) *RunDone {
+	t.Helper()
+	st, err := w.RerunResultTab(id)
+	if err != nil {
+		t.Fatalf("rerun %d: %v", id, err)
+	}
+	return st.Job().(*RunDone)
+}
+
+// A rerun brings a pinned tab's result up to date IN that tab: same id,
+// same place in the strip, still pinned, title kept, a new seq — and it
+// comes on screen, whichever tab was. The other tabs are untouched.
+func TestRerunPinnedTab(t *testing.T) {
+	w := newTestWorkspace(t)
+	run(t, w, "CREATE TABLE counted (x INTEGER)")
+	run(t, w, "SELECT count(*) AS n FROM counted")
+	pinned := got(w)
+	before := w.LastResult().Rows[0][0]
+	if err := w.PinResultTab(pinned, true); err != nil {
+		t.Fatal(err)
+	}
+	_, seq := w.LastResultSeq()
+	run(t, w, "INSERT INTO counted VALUES (1)") // a new tab: the current one is pinned
+	ids, other := tabIDs(w)
+	if other == pinned || len(ids) != 2 {
+		t.Fatalf("the write landed in %d (tabs %v)", other, ids)
+	}
+	otherRes := w.LastResult()
+
+	ev := rerun(t, w, pinned)
+	if ev.Err != nil || !strings.HasPrefix(ev.Tag, "rerun ") {
+		t.Fatalf("rerun: %+v", ev)
+	}
+	got2, cur := tabIDs(w)
+	if !slices.Equal(got2, ids) || cur != pinned {
+		t.Fatalf("after the rerun: tabs %v cur %d, want %v cur %d", got2, cur, ids, pinned)
+	}
+	r, seq2 := w.LastResultSeq()
+	if seq2 == seq || r.Rows[0][0] == before {
+		t.Errorf("not refreshed: seq %d → %d, n %v → %v", seq, seq2, before, r.Rows[0][0])
+	}
+	tabs, _ := w.ResultTabs()
+	if !tabs[0].Pinned || tabs[0].Title != "SELECT count(*) AS n FROM counted" {
+		t.Errorf("the rerun tab = %+v", tabs[0])
+	}
+	if tabs[1].Result != otherRes {
+		t.Error("the rerun touched another tab")
+	}
+	// the write's tab may write again; the count's may not
+	if tabs[0].Writes || !tabs[1].Writes {
+		t.Errorf("Writes = %v, %v", tabs[0].Writes, tabs[1].Writes)
+	}
+}
+
+// A rerun needs no room: at the cap with every tab pinned — where a run is
+// refused — rerunning one of them still lands, in place. A shared tab
+// stays shared, and an app run's tab keeps its tag for a title.
+func TestRerunKeptTabsAtTheCap(t *testing.T) {
+	w := newTestWorkspace(t)
+	w.cfg.ResultTabs = 2
+	w.cfg.Connections[0].AIRows = true
+	run(t, w, "SELECT 1 AS n")
+	first := got(w)
+	_ = w.PinResultTab(first, true)
+	st, err := w.ShowColumns("cats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Job()
+	cols := got(w)
+	if err := w.ShareResultTab(cols, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.RunStmts([]string{"SELECT 2"}, "query"); err == nil {
+		t.Fatal("a run with every tab kept at the cap was not refused")
+	}
+
+	rerun(t, w, cols)
+	tabs, cur := w.ResultTabs()
+	if len(tabs) != 2 || tabs[cur].ID != cols || !tabs[cur].Shared || tabs[cur].Title != "columns cats" {
+		t.Errorf("after rerunning the shared tab: %+v at %d", tabs, cur)
+	}
+	rerun(t, w, first)
+	if tabs, cur = w.ResultTabs(); len(tabs) != 2 || tabs[cur].ID != first || !tabs[cur].Pinned {
+		t.Errorf("after rerunning the pinned tab: %+v at %d", tabs, cur)
+	}
+}
+
+// A rerun that fails leaves the tab's old result, as any failed run does;
+// a script's tab has no statement to rerun; and a rerun is a run — one at
+// a time.
+func TestRerunRefusalsAndFailure(t *testing.T) {
+	w := newTestWorkspace(t)
+	run(t, w, "CREATE TABLE gone (x INTEGER)")
+	run(t, w, "INSERT INTO gone VALUES (7)")
+	run(t, w, "SELECT x FROM gone")
+	id := got(w)
+	_ = w.PinResultTab(id, true)
+	old := w.LastResult()
+	run(t, w, "DROP TABLE gone")
+	if ev := rerun(t, w, id); ev.Err == nil {
+		t.Fatal("a rerun on a dropped table did not fail")
+	}
+	_ = w.ShowResultTab(id)
+	if w.LastResult() != old {
+		t.Error("the failed rerun replaced the tab's result")
+	}
+
+	st, err := w.RunScript("../testdata/show_two.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Job()
+	_, err = w.RerunResultTab(got(w))
+	refusal(t, err, Invalid)
+	if !strings.Contains(err.Error(), "script") {
+		t.Errorf("refusal = %q", err)
+	}
+
+	st, err = w.RunStmts([]string{"SELECT 1"}, "query")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = w.RerunResultTab(id)
+	refusal(t, err, Busy)
+	st.Job()
+	if _, err = w.RerunResultTab(12345); err == nil {
+		t.Error("a rerun of no tab was not refused")
+	}
+}
+
+// A rerun of one tab of a multi-statement run's group refills just that
+// tab and takes it out of the group, as a single statement run on it does:
+// the next run-all refills the rest of the group, not it.
+func TestRerunGroupTab(t *testing.T) {
+	w := newTestWorkspace(t)
+	run(t, w, "SELECT 1 AS a", "SELECT 2 AS b")
+	ids, _ := tabIDs(w)
+	if len(ids) != 2 {
+		t.Fatalf("tabs = %v", ids)
+	}
+	other := w.LastResult()
+	rerun(t, w, ids[0])
+	if now, cur := tabIDs(w); !slices.Equal(now, ids) || cur != ids[0] {
+		t.Fatalf("after the rerun: %v cur %d", now, cur)
+	}
+	_ = w.ShowResultTab(ids[1])
+	if w.LastResult() != other {
+		t.Error("the rerun refilled the group's other tab")
+	}
+	if fmt.Sprint(titles(w)) != "[SELECT 1 AS a SELECT 2 AS b]" {
+		t.Errorf("titles = %v", titles(w))
+	}
+}

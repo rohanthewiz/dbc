@@ -2401,7 +2401,7 @@
         : r.shows ? dbc.plural(r.shows, "result") + " shown" : dbc.plural(r.rows, "row");
       const tip = (r.stmt || r.title) + "\n" + what + (r.pinned ? " · pinned: a run opens a new tab instead of replacing this one" : "") +
         (r.shared ? " · shared with the assistant: it goes with every question on this connection" : "") +
-        "\nclick shows it · right-click: pin, share, close";
+        "\nclick shows it · r reruns it · right-click: rerun, pin, share, close";
       box.append(el("button", { type: "button", role: "tab", class: "rt" + (r.id === rtabState.resultTab ? " on" : ""),
         "data-rt": String(r.id), "aria-selected": r.id === rtabState.resultTab ? "true" : "false", title: tip },
       el("span", "n", String(i + 1)),
@@ -2469,6 +2469,48 @@
     if (r) resultTabOp("close", r.id);
   }
 
+  // rerun runs result tab r's statement again, back into that tab — a
+  // pinned one included, which stays pinned (POST …/rerun,
+  // Workspace.RerunResultTab). The outcome lands as any run's: a "run"
+  // event, which redraws the strip and loads the grid.
+  //
+  // A tab not on screen is shown first, so the grid the rerun's result
+  // loads into is that tab's own: grid.load keeps the hidden columns of a
+  // result with the same columns, as a refresh has, but only from the
+  // grid it replaces. A statement that may write (r.writes: the tab of an
+  // INSERT's "n affected") is asked about first — r sits among the grid's
+  // keys, and a write run twice is not undone by a third keypress.
+  async function rerun(r) {
+    if (!r) return;
+    if (!r.stmt) { log("warn", "a script's results — run the script again to refresh them"); return; }
+    const go = async () => {
+      if (rtabState && r.id !== rtabState.resultTab) await resultTabOp("show", r.id);
+      try {
+        await api("POST", dbc.wsPath("/rerun"), { id: r.id });
+      } catch (e) {
+        // the server logged the refusal's words already (busy, a tab gone)
+        setStatus(e.message, e.status === 409 ? "warn" : "err");
+      }
+    };
+    if (!r.writes) { go(); return; }
+    const yes = el("button", { type: "button", class: "primary" }, "Run it again");
+    const no = el("button", { type: "button" }, "Keep the result");
+    yes.addEventListener("click", () => { dbc.modal.close(); go(); });
+    no.addEventListener("click", () => dbc.modal.close());
+    dbc.modal.open({
+      title: "Run this statement again?", focus: no,
+      body: el("div", "confirm", el("p", null, "It may change the database — rerunning it does that again:"),
+        el("pre", null, r.stmt)),
+      foot: el("div", "mfoot", yes, no),
+    });
+  }
+
+  function rerunCurrent() {
+    const r = curResultTab();
+    if (!r) { log("warn", "no result tab to rerun — run a query"); return; }
+    rerun(r);
+  }
+
   // toggleShare is S: share the result tab on screen with the assistant,
   // or stop sharing it. (s is taken: the grid sorts by it, the plan saves.)
   function toggleShare() {
@@ -2514,6 +2556,10 @@
     const unpinned = rtabState ? rtabState.resultTabs.filter((x) => !x.pinned).length : 0;
     return [
       { head: "result tab" },
+      // picking the row is the ask, but a write still gets rerun's
+      // confirm: a menu row is one misclick away from its neighbours
+      { label: "↻ Rerun its query" + (r.writes ? " — it writes again" : ""), key: "r",
+        why: r.stmt ? "" : "a script's results — run the script again to refresh them", act: () => rerun(r) },
       { label: r.pinned ? "Unpin — a run may replace it" : "Pin — a run opens a new tab instead", key: "P",
         act: () => resultTabOp(r.pinned ? "unpin" : "pin", r.id) },
       { label: r.shared ? "✦ Stop sharing with the assistant" : "✦ Share with the assistant", key: "S",
@@ -2545,12 +2591,14 @@
 
   // The strip's keys, anywhere in the results pane — the grid or the plan
   // (both pass keys they do not use up to here), and an exec result's
-  // message: { } step, P pins or unpins, S shares with the assistant or
-  // stops, x closes. None of them is a key the grid or the plan view has.
+  // message: { } step, P pins or unpins, r reruns, S shares with the
+  // assistant or stops, x closes. None of them is a key the grid or the
+  // plan view has.
   els.results.addEventListener("keydown", (e) => {
     if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.target.closest("input, textarea, select, [contenteditable]")) return;
-    const acts = { "{": () => stepResultTab(-1), "}": () => stepResultTab(1), P: togglePin, x: closeCurrent, S: toggleShare };
+    const acts = { "{": () => stepResultTab(-1), "}": () => stepResultTab(1), P: togglePin, r: rerunCurrent, x: closeCurrent,
+      S: toggleShare };
     const f = acts[e.key];
     if (f) { e.preventDefault(); f(); }
   });
@@ -3205,7 +3253,8 @@
     ]],
     ["Result tabs", [
       ["click a tab · { · }", "show it · the previous · the next (in the grid or the plan)"],
-      ["P · right-click a tab", "pin it: a run then opens a new tab instead of replacing it · pin, share, close"],
+      ["P · right-click a tab", "pin it: a run then opens a new tab instead of replacing it · rerun, pin, share, close"],
+      ["r", "rerun its query into the same tab, pinned or not (a statement that writes asks first)"],
       ["S", "share it with the assistant: it goes with every question on the connection (needs ai_rows = true) · again stops"],
       ["x · × on a tab", "close it"],
       ["switch the connection", "its own result tabs, plan and log come back as they were left"],

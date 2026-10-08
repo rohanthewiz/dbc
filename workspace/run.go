@@ -158,6 +158,14 @@ func (w *Workspace) ShowColumns(qname string) (Start, error) {
 func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	return w.runLocked(stmts, tag, nil)
+}
+
+// runLocked is Run with mu held. again is the result tab the run is a
+// rerun of (RerunResultTab), or nil for any other run: with it, the run
+// lands in that tab whatever the tab on screen is, kept or not, and its
+// result keeps the tab's title.
+func (w *Workspace) runLocked(stmts []string, tag string, again *resultTab) (Start, error) {
 	if w.active == "" {
 		return Start{}, refuse(NoConnection, Warn, "no active connection — pick one in the sidebar")
 	}
@@ -166,16 +174,32 @@ func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 	}
 	// the result tab this run will land in is picked now, not when it lands
 	// (results.go) — and a run with nowhere to land is refused before it
-	// costs anything
-	target, err := w.targetLocked(w.active)
-	if err != nil {
-		return Start{}, err
+	// costs anything. A rerun needs no pick: it lands where its statement's
+	// result already is, so it never needs room either.
+	target := again
+	if again == nil {
+		var err error
+		if target, err = w.targetLocked(w.active); err != nil {
+			return Start{}, err
+		}
 	}
 	ctx, err := w.beginRunLocked(tag)
 	if err != nil {
 		return Start{}, err
 	}
 	w.runTarget = target
+	// the title is read now, under mu, for the job to use without it: the
+	// tab's title is the workspace's to change, and the job runs unlocked
+	keepTitle := ""
+	if again != nil {
+		w.runAgain, w.runTitle, keepTitle = again, again.title, again.title
+	}
+	titleOf := func(stmt string) string {
+		if keepTitle != "" {
+			return keepTitle
+		}
+		return resultTitle(tag, stmt)
+	}
 	conn, gen := w.active, w.runGen
 	w.runStep, w.runSteps = 0, len(stmts)
 	// read now, under mu: no more results than this can be on screen at
@@ -217,7 +241,7 @@ func (w *Workspace) Run(stmts []string, tag string) (Start, error) {
 				notes = append(notes, wl.see(i+1, len(stmts), stmt, res)...)
 			}
 			if res != nil && !res.IsExec {
-				rows = append(rows, landing{title: resultTitle(tag, stmt), stmt: stmt, res: res, n: i + 1})
+				rows = append(rows, landing{title: titleOf(stmt), stmt: stmt, res: res, n: i + 1})
 				if len(rows) > limit {
 					rows = slices.Delete(rows, 0, 1)
 					over++
@@ -398,6 +422,7 @@ func (w *Workspace) beginRunLocked(tag string) (context.Context, error) {
 	// Run and RunScript set the target after this; an explain lands no
 	// result, so it keeps none, and no run's shows carry over
 	w.runTarget, w.showTab = nil, nil
+	w.runAgain, w.runTitle = nil, ""
 	w.runGen++
 	return ctx, nil
 }
@@ -518,7 +543,11 @@ func (w *Workspace) landRun(ev *RunDone, gen int, eff runEffects, rows []landing
 		// no statement returned rows: the last one's result (its "n
 		// affected") lands alone, as a single statement's always did
 		last := ev.Stmts[len(ev.Stmts)-1]
-		rows = []landing{{title: resultTitle(ev.Tag, last), stmt: last, res: ev.Result, n: len(ev.Stmts)}}
+		title := w.runTitle // a rerun's: the tab keeps its name
+		if title == "" {
+			title = resultTitle(ev.Tag, last)
+		}
+		rows = []landing{{title: title, stmt: last, res: ev.Result, n: len(ev.Stmts)}}
 	}
 	shown := 0
 	if len(rows) > 0 {

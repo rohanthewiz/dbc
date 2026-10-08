@@ -133,6 +133,13 @@ type Workspace struct {
 	// it started (targetLocked); nil for a new tab. showTab is the tab a
 	// script run's s.Show results are going to, once its first has landed.
 	runTarget, showTab *resultTab
+	// runAgain is the tab the run in flight is a rerun of
+	// (RerunResultTab): it refills that tab even when it is kept — pinned
+	// or shared — which no other run may. runTitle, when set, is the title
+	// its result keeps, in place of one derived from the run's tag. Both
+	// are cleared by beginRunLocked, so they never outlive their run.
+	runAgain *resultTab
+	runTitle string
 
 	// planChat caches plan as the assistant is shown it — ChatContext is
 	// built every frame by the TUI's context chip, and the plan does not

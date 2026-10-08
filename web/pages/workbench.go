@@ -103,7 +103,7 @@ func (p Workbench) Render() string {
 							// replaces the one on screen unless it is pinned (app.js
 							// drawResultTabs, web/resulttabs.go)
 							b.DivClass("rstrip", "id", "rstrip", "hidden", "hidden", "role", "tablist",
-								"aria-label", "Result tabs — { } switch, P pins, x closes").R(),
+								"aria-label", "Result tabs — { } switch, r reruns, P pins, x closes").R(),
 							// a script run's results, when it showed more than one:
 							// "Result 1 · 2 · 3" (app.js drawSets)
 							b.SpanClass("rsets", "id", "rsets", "hidden", "hidden", "role", "group", "aria-label", "The script's results").R(),

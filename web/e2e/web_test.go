@@ -666,6 +666,16 @@ func resultTabsPerConn(t *testing.T, _ *env, p *rod.Page) {
 	waitFor(t, p, "the first tab back, with its sort", `(seq) => dbc.grid.view().seq === seq && dbc.grid.view().sort === 1 &&
 	  document.querySelector("#rstrip .rt:nth-child(1)").classList.contains("on")`, liteSeq)
 
+	// r reruns the pinned tab's query into that same tab: a new result
+	// (seq) in it, still pinned and on screen, no tab added
+	eval(t, p, `() => { dbc.grid.focus();
+	  document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "r", bubbles: true, cancelable: true })); }`)
+	waitResult(t, p, liteSeq, "name", "age")
+	waitFor(t, p, "the pinned tab rerun in place", `() => document.querySelectorAll("#rstrip .rt").length === 2 &&
+	  document.querySelector("#rstrip .rt:nth-child(1)").classList.contains("on") &&
+	  !!document.querySelector("#rstrip .rt:nth-child(1) .pin") &&
+	  document.getElementById("log").textContent.includes("rerun SELECT name, age FROM cats ORDER BY id completed on lite")`)
+
 	setClipboard(t, p, "sentinel")
 	p.MustElement("#log-copy").MustClick()
 	waitFor(t, p, "the log copied", `() => [...document.querySelectorAll("#log > div")].some((d) => d.textContent.includes("copied the log"))`)
@@ -682,6 +692,9 @@ func resultTabsPerConn(t *testing.T, _ *env, p *rod.Page) {
 	  .find((m) => m.textContent.includes("Share with the assistant"));
 	  return b ? b.className + "|" + b.title : ""; }`); !strings.Contains(got, "off|") || !strings.Contains(got, "ai_rows = true on lite") {
 		t.Fatalf("the share row = %q", got)
+	}
+	if got := evalStr(t, p, `() => [...document.querySelectorAll(".menu .mitem")].map((m) => m.textContent).join("|")`); !strings.Contains(got, "↻ Rerun its query") {
+		t.Fatalf("the strip menu = %q", got)
 	}
 	menuPick(t, p, "Close this result tab")
 	waitFor(t, p, "one tab left, on screen, its result in the grid", `() => document.querySelectorAll("#rstrip .rt").length === 1 &&

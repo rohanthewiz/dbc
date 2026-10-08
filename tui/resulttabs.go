@@ -45,7 +45,7 @@ import (
 // tabs and a script's "Result 1 · 2 · 3" switcher, and a spreadsheet's
 // sheet tabs sit at the bottom too:
 //
-//	╰─ 1 select * from cats · 2⚑ orders · 3✦ columns cats ─── { } switch · P pin · x close ─╯
+//	╰─ 1 select * from cats · 2⚑ orders · 3✦ columns cats ── { } switch · r rerun · P pin · x close ─╯
 //	   └────── a chip ─────┘  └─ pinned ─┘  └ shared with the assistant ┘
 //
 // A tab SHARED with the assistant (s, or its menu) sends its result with
@@ -271,11 +271,49 @@ func (m *Model) pinResultTab(id, pos int, pin bool) tea.Cmd {
 		return nil
 	}
 	if pin {
-		m.logf(logInfo, "pinned result %d — the next run opens a new tab (P unpins)", pos)
+		m.logf(logInfo, "pinned result %d — the next run opens a new tab (r reruns this one in place, P unpins)", pos)
 	} else {
 		m.logf(logInfo, "unpinned result %d — a run on it replaces its result", pos)
 	}
 	return nil
+}
+
+// rerunCurResultTab is r: run the current result tab's statement again,
+// into that tab — pinned or not (workspace.RerunResultTab). A statement
+// that may write asks first, in a menu at the grid's cursor: the key sits
+// among the grid's own, and an INSERT run twice by a stray keypress is not
+// undone by a second one.
+func (m *Model) rerunCurResultTab() tea.Cmd {
+	t, pos, _, ok := m.curResultTab()
+	if !ok {
+		m.log(logWarn, noResultTab)
+		return nil
+	}
+	if t.Writes {
+		// below the grid's cursor; on the plan view, where the grid is not
+		// drawn, at the pane's top left as the plan's own menu opens
+		x, y := m.grid.cursorScreen()
+		if m.resTab == tabPlan && m.planv.plan != nil {
+			x, y = m.planv.area.X+2, m.planv.area.Y+2
+		}
+		m.openMenu(x, y+1, []menuItem{
+			heading(fmt.Sprintf("result %d's statement may change the database", pos)),
+			{label: "Keep the result as it is", act: func(m *Model) tea.Cmd { return nil }},
+			{label: "↻ Run it again — " + truncate(t.Title, rtabMaxTitle),
+				act: func(m *Model) tea.Cmd { return m.rerunResultTab(t.ID) }},
+		})
+		return nil
+	}
+	return m.rerunResultTab(t.ID)
+}
+
+// rerunResultTab reruns result tab id's statement as a run: the running
+// status, the ticker, and its RunDone landing in that tab (syncResults
+// then keeps the tab's grid — its hidden columns and widths — when the
+// columns come back the same, as a refresh's do). A refusal (busy, a
+// script's tab) goes to the log.
+func (m *Model) rerunResultTab(id int) tea.Cmd {
+	return m.startRun(m.ws.RerunResultTab(id))
 }
 
 // closeCurResultTab is x: close the current result tab.
@@ -356,7 +394,8 @@ func (m *Model) sharedParkedGrid() *grid {
 }
 
 // resultTabKey handles the result-tab keys, shared by the grid and the plan
-// view: { } step, P pins, S (or s) shares with the assistant, x closes.
+// view: { } step, P pins, r reruns, S (or s) shares with the assistant, x
+// closes.
 // used is false for any other key. S is the documented key because it is
 // dbc web's too, where s is already the grid's sort; s is kept here, where
 // it is free, as the shorter way to the same toggle.
@@ -368,6 +407,8 @@ func (m *Model) resultTabKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 		return m.stepResultTab(1), true
 	case "P":
 		return m.togglePin(), true
+	case "r":
+		return m.rerunCurResultTab(), true
 	case "S", "s":
 		return m.toggleShare(), true
 	case "x":
@@ -377,8 +418,8 @@ func (m *Model) resultTabKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 }
 
 // resultTabItems are the result-tab rows of a menu (the strip's, and the
-// grid's), acting on the current tab: pin, share with the assistant,
-// close, close the unpinned ones; none when there is no tab.
+// grid's), acting on the current tab: rerun, pin, share with the
+// assistant, close, close the unpinned ones; none when there is no tab.
 func (m *Model) resultTabItems() []menuItem {
 	t, pos, n, ok := m.curResultTab()
 	if !ok {
@@ -401,7 +442,18 @@ func (m *Model) resultTabItems() []menuItem {
 		share = menuItem{label: "✦ Stop sharing with the assistant", key: "S",
 			act: func(m *Model) tea.Cmd { return m.shareResultTab(t.ID, pos, false) }}
 	}
-	items := []menuItem{pin, share,
+	// rerun goes through r's own path, so a write is asked about from the
+	// menu too: a menu row is one misclick from its neighbours (dbc web's
+	// row does the same). The menu acts on the current tab, which is t.
+	rerun := menuItem{label: "↻ Rerun its query", key: "r",
+		act: func(m *Model) tea.Cmd { return m.rerunCurResultTab() }}
+	switch {
+	case t.Stmt == "":
+		rerun.why = "a script's results — run the script again to refresh them"
+	case t.Writes:
+		rerun.label = "↻ Rerun its query — it writes again"
+	}
+	items := []menuItem{rerun, pin, share,
 		{label: "Close this result tab", key: "x", act: func(m *Model) tea.Cmd { return m.closeResultTab(t.ID, pos) }}}
 	tabs, _ := m.ws.ResultTabs()
 	if unpinned := countUnpinned(tabs); unpinned > 0 && n > 1 {
@@ -459,8 +511,8 @@ const rtabMaxTitle = 24
 // are discoverable without the help dialog; rtabShareHint where the
 // connection may share results with the assistant (ai_rows).
 const (
-	rtabHint      = " { } switch · P pin · x close "
-	rtabShareHint = " { } switch · P pin · S share · x close "
+	rtabHint      = " { } switch · r rerun · P pin · x close "
+	rtabShareHint = " { } switch · r rerun · P pin · S share · x close "
 )
 
 // resultTabParts lays out the strip for a border w cells wide (the corners

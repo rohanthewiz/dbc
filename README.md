@@ -313,7 +313,7 @@ with no database picker.
 | `‹` on Connections · `›` on the left edge | click | fold the sidebar away · bring it back (`Ctrl+B`) |
 | assistant | `⤓ insert` on a code block | puts that SQL in the editor at the caret |
 | results title | click `Results` / `◈ Plan` | switches the results pane between the grid and the plan |
-| result tabs (the results pane's bottom border) | click · right-click | shows that result · pin or unpin, share with the assistant, close, close the unpinned ones (see [Result tabs](#result-tabs-and-the-log-per-connection)) |
+| result tabs (the results pane's bottom border) | click · right-click | shows that result · rerun its query, pin or unpin, share with the assistant, close, close the unpinned ones (see [Result tabs](#result-tabs-and-the-log-per-connection)) |
 | log title | click `⧉ copy` / `✕ clear` | copies the connection's log to the clipboard / empties it |
 | plan | click / double-click / right-click | select a step (fold it) / step menu: copy, zoom the flame graph, ask the assistant |
 | plan | `▸`/`▾` beside a step | folds or unfolds it |
@@ -360,6 +360,7 @@ dragging.
 | `p` | *(results)* Switch between the result grid and the plan |
 | `{` / `}` | *(results, plan)* The previous / next result tab of the connection (see [Result tabs](#result-tabs-and-the-log-per-connection)) |
 | `P` · `x` | *(results, plan)* Pin the result tab (a run then opens a new one) or unpin it · close it |
+| `r` | *(results, plan)* Rerun the result tab's query into that same tab, pinned or not (a statement that writes asks first) |
 | `S` | *(results, plan)* Share the result tab with the assistant, or stop sharing it (`s` too; needs `ai_rows` — see [Sharing a result](#ai-assistant)) |
 | `[` / `]` | *(results)* After a script that showed several results (`s.Show`): the previous / next one within its result tab — also a click on its number in "Result 1 · 2 · 3" on the results title |
 | `z` | *(results)* Give the results pane the whole column / give it back |
@@ -1057,7 +1058,7 @@ A set holds **result tabs**, drawn on the results pane's bottom border in
 the terminal and on the results bar in `dbc web`:
 
 ```
-╰─ 1⚑ select * from orders · 2✦ columns cats · 3 select count(*) … ─── { } switch · P pin · S share · x close ─╯
+╰─ 1⚑ select * from orders · 2✦ columns cats · 3 select count(*) … ── { } switch · r rerun · P pin · S share · x close ─╯
 ```
 
 A run **replaces the result in the tab it started from**, unless that tab
@@ -1069,6 +1070,18 @@ without its result landing on the one you are reading. A tab is named after
 its statement (or `preview cats`, `columns cats`, `script x.go`). A script's
 `s.Show` results all land in one tab, where "Result 1 · 2 · 3" steps through
 them.
+
+**Rerun** a tab (`r`, or **↻ Rerun its query** on its right-click menu) to
+bring its result up to date: its statement runs again, on the same session,
+and the fresh result goes back **into that same tab** — a pinned one
+included, which stays pinned, in its place in the strip, with its name (a
+shared tab stays shared). The pin keeps a result from being replaced by
+*other* runs; rerunning the tab is how you ask for that result again. The
+tab comes on screen, its hidden columns and widths kept. A rerun is a run:
+one at a time, `Ctrl+K` stops it, and if it fails the tab keeps its old
+result. A tab whose statement may write (an `INSERT`'s "n affected") asks
+before running it again, and a script's tab has no statement to rerun — run
+the script again instead. A rerun is not added to the history again.
 
 A run of **several statements** (Run all, or a selection of several) opens
 a tab per statement that returns rows, as DBeaver and DataGrip do; an
@@ -1284,7 +1297,7 @@ file's connections are changed in the file. The TUI has the same form —
 | `F12` · `Shift+F12` · `F2` | on an alias, a CTE name or a column the query names: go to its declaration · list its uses · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename)) |
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | new tab · close tab · go to tab |
 | `Alt+N` · `Alt+C` | new console · next console of the tab's database |
-| `{` · `}` · `P` · `S` · `x` | in the results: previous · next result tab · pin · share with the assistant · close |
+| `{` · `}` · `P` · `r` · `S` · `x` | in the results: previous · next result tab · pin · rerun its query into it · share with the assistant · close |
 | `F1` or `?` | every key |
 
 On a Mac, `⌘` works wherever `Ctrl` is listed.

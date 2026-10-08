@@ -672,7 +672,7 @@ func (m *Model) gridKey(k tea.KeyPressMsg) tea.Cmd {
 		return m.stepScriptResult(-1)
 	case "]":
 		return m.stepScriptResult(1)
-	case "{", "}", "P", "S", "s", "x":
+	case "{", "}", "P", "r", "S", "s", "x":
 		cmd, _ := m.resultTabKey(k)
 		return cmd
 	case "p":

@@ -23,6 +23,15 @@ import (
 //	POST …/ws/:id/result-tab  ─┘
 //	       {id, op: show | pin | unpin | close | close-unpinned | share | unshare}
 //
+//	POST …/ws/:id/rerun {id}  ─► a run of the tab's own statement, back into
+//	                            that tab (pinned or not); its outcome is a
+//	                            "run" event like any run's
+//
+// RERUN is its own endpoint, not a result-tab op: the ops change the strip
+// and answer with it at once, while a rerun is a RUN — it takes the run
+// slot, ticks, can be stopped, and lands later on the stream — so it is
+// answered as /run is, with the run's tag.
+//
 // SHARING: one result tab per connection's set may be shared with the
 // assistant (workspace.ShareResultTab) — its result then goes with every
 // question on that connection, whatever the caret is on. Only a connection
@@ -47,6 +56,7 @@ type resultTabRef struct {
 	Affected int64  `json:"affected,omitempty"` // …and how many it changed
 	Shows    int    `json:"shows,omitempty"`    // a script's s.Show results it holds
 	Shared   bool   `json:"shared,omitempty"`   // shared with the assistant
+	Writes   bool   `json:"writes,omitempty"`   // rerunning it may change the database: the page asks first
 }
 
 // resultTabsState is the active connection's result set: its tabs in strip
@@ -69,7 +79,7 @@ func resultTabsOf(ws *workspace.Workspace) resultTabsState {
 		CanShare: ws.CanShareResults()}
 	for i, t := range tabs {
 		ref := resultTabRef{ID: t.ID, Seq: t.Seq, Title: t.Title, Stmt: t.Stmt, Pinned: t.Pinned, Shows: t.Shows,
-			Shared: t.Shared}
+			Shared: t.Shared, Writes: t.Writes}
 		if r := t.Result; r != nil {
 			ref.Rows, ref.Exec, ref.Affected = len(r.Rows), r.IsExec, r.Affected
 		}
@@ -137,6 +147,37 @@ func (s *Server) handleResultTab(ctx rweb.Context) error {
 		return fail(ctx, err)
 	}
 	return ok(ctx, s.resultTabOut(t))
+}
+
+// rerunReq names the result tab to rerun.
+type rerunReq struct {
+	ID int `json:"id"`
+}
+
+// handleRerun is POST /api/v1/ws/:id/rerun {id}: result tab id's statement
+// run again into that tab (workspace.RerunResultTab) — the r key, and the
+// strip's "↻ Rerun its query". Refusals are a run's (busy → 409) or the
+// tab's (gone, a script's → 400), logged as /run logs its own. Whether a
+// write should be asked about is the page's to ask (resultTabRef.Writes);
+// by the time this is called the user has said yes.
+func (s *Server) handleRerun(ctx rweb.Context) error {
+	t, err := s.hub.get(ctx.Request().PathParam("id"))
+	if err != nil {
+		return fail(ctx, err)
+	}
+	var req rerunReq
+	if err = decode(ctx, &req); err != nil {
+		return fail(ctx, err)
+	}
+	st, err := t.ws.RerunResultTab(req.ID)
+	if err != nil {
+		if r, isRefusal := asRefusal(err); isRefusal {
+			t.notes([]workspace.Note{r.Note})
+		}
+		return fail(ctx, err)
+	}
+	s.launch(t, st)
+	return ok(ctx, map[string]any{"tag": st.Tag})
 }
 
 // shareNote logs a share or unshare in the connection's log, naming the

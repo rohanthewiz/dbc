@@ -140,7 +140,7 @@ func (m *Model) planKey(k tea.KeyPressMsg) tea.Cmd {
 		m.openPlanMenu(v.area.X+2, v.area.Y+3)
 		return nil
 	}
-	// { } P x: the connection's result tabs, as from the grid
+	// { } P r x: the connection's result tabs, as from the grid
 	if cmd, used := m.resultTabKey(k); used {
 		return cmd
 	}

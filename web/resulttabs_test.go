@@ -342,3 +342,39 @@ func TestShareResultTab(t *testing.T) {
 		t.Errorf("unshare logs = %q", logs)
 	}
 }
+
+// POST …/rerun runs a result tab's statement back into that tab: a pinned
+// one stays pinned and keeps its id, and the outcome is a "run" event like
+// any run's. A write's tab says so (writes), for the page to ask first;
+// a tab that is gone is a 400.
+func TestRerunOnTheWire(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	e.runEv(id, s, "CREATE TABLE tick (x INTEGER)")
+	run := e.runEv(id, s, "SELECT count(*) AS n FROM tick")
+	pinned := run.ResultTab
+	e.tabOp(id, pinned, "pin", 200)
+	run = e.runEv(id, s, "INSERT INTO tick VALUES (1)")
+	if len(run.ResultTabs) != 2 || run.ResultTab == pinned || !run.ResultTabs[1].Writes || run.ResultTabs[0].Writes {
+		t.Fatalf("after the write: %+v", run.resultTabsState)
+	}
+	seq := run.ResultTabs[0].Seq
+
+	env := e.api("POST", "/api/v1/ws/"+id+"/rerun", fmt.Sprintf(`{"id":%d}`, pinned), 200)
+	if tag := decodeData[map[string]any](t, env)["tag"]; tag != "rerun SELECT count(*) AS n FROM tick" {
+		t.Errorf("tag = %v", tag)
+	}
+	run = decodeData[runEvent](t, testEnvelope{Data: s.awaitFrom(t, id, "run").Data})
+	if len(run.ResultTabs) != 2 || run.ResultTab != pinned || !run.ResultTabs[0].Pinned || run.ResultTabs[0].Seq == seq {
+		t.Fatalf("after the rerun: %+v", run.resultTabsState)
+	}
+	if run.ResultTabs[0].Title != "SELECT count(*) AS n FROM tick" || e.seqNow(id) != run.ResultTabs[0].Seq {
+		t.Errorf("rerun tab = %+v, page seq %d", run.ResultTabs[0], e.seqNow(id))
+	}
+	tb, _ := e.srv.hub.get(id)
+	if r := tb.ws.LastResult(); r == nil || len(r.Rows) != 1 || r.Rows[0][0] != "1" {
+		t.Errorf("rerun result = %+v", r)
+	}
+
+	e.api("POST", "/api/v1/ws/"+id+"/rerun", `{"id":9999}`, 400)
+}

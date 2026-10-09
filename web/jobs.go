@@ -35,7 +35,9 @@ import (
 //	DELETE /api/v1/jobs/:name?win=          to .trash → {id}
 //	POST   /api/v1/job-trash/:id/restore    {to?} → {name}
 //	GET    /api/v1/job-examples/:name       a built-in example's text
-//	POST   /api/v1/job-check                {text} → {diags, fires}  (the next five fires per cron line)
+//	POST   /api/v1/job-check                {text} → {diags, fires, layout}  (the next five fires
+//	                                        per cron line; where the jobs tab draws each step)
+//	GET    /api/v1/jobs/:name/layout        the saved job's (or the example's) layout
 //
 // Every change to a job tells every window ("jobs") and the scheduler,
 // which reads the directory again at once.
@@ -60,6 +62,12 @@ import (
 // `dbc job run` included:
 //
 //	GET    /api/v1/runs?kind=&name=&status=&since=&limit=   adds {runs}: the history, newest first
+//	GET    /api/v1/runs/:id                 the record, and for a job its layout (as it ran)
+//	POST   /api/v1/runs/:id/cancel          409 when another process runs it (`dbc run cancel`)
+//
+// THE LAYOUT is package jobs' (layout.go, over package dag): the server
+// places the cards and the page draws them, so the jobs tab's canvas and
+// the Runs view's run page put each step where the other does.
 
 // jobsList is GET /api/v1/jobs.
 type jobsList struct {
@@ -281,6 +289,8 @@ func (s *Server) handleJobCheck(ctx rweb.Context) error {
 	}
 	spec, err := jobs.ParseJob(req.Text)
 	if err != nil {
+		// no layout: the page keeps the last one it had while the text
+		// is half-typed (the JSON view)
 		return ok(ctx, map[string]any{"diags": []pipeline.Diag{{Severity: pipeline.SevError,
 			Msg: strings.TrimPrefix(err.Error(), "json: ")}}, "fires": []cronFires{}})
 	}
@@ -303,7 +313,26 @@ func (s *Server) handleJobCheck(ctx rweb.Context) error {
 		}
 		fires = append(fires, cf)
 	}
-	return ok(ctx, map[string]any{"diags": nonNil(diags), "fires": fires})
+	return ok(ctx, map[string]any{"diags": nonNil(diags), "fires": fires, "layout": spec.Layout()})
+}
+
+// handleJobLayout is GET /api/v1/jobs/:name/layout: where the jobs tab
+// draws a saved job's steps (the user's file, else the example of that
+// name). The tab itself asks job-check, which lays out the text being
+// edited; this is for a caller with only a name.
+func (s *Server) handleJobLayout(ctx rweb.Context) error {
+	name, err := jobName(ctx)
+	if err != nil {
+		return fail(ctx, err)
+	}
+	spec, _, err := jobs.LoadJob(s.cfg.JobsDir, name)
+	if err != nil {
+		if strings.Contains(err.Error(), "no such job") {
+			return fail(ctx, notFound("no job %s in %s, and no example of that name", name, config.TildePath(s.cfg.JobsDir)))
+		}
+		return fail(ctx, badRequest("%s does not parse: %s", name, strings.TrimPrefix(err.Error(), "json: ")))
+	}
+	return ok(ctx, spec.Layout())
 }
 
 // jobRunReq is POST /api/v1/jobs/:name/run's body; empty is fine.

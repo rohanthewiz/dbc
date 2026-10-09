@@ -11,7 +11,7 @@ pipelines inside a job; and a monitoring view for jobs, pipelines and
 fragments, with drilldown.
 
 This is a plan. The decisions table was accepted as recommended
-(2026-10-09). **Phases 1, 2 and 3 are done** (2026-10-09): see their
+(2026-10-09). **Phases 1 to 4 are done** (2026-10-09): see their
 outcomes under *Phases*. The decisions table is the part to read first; everything after
 it follows the recommended column.
 
@@ -1017,6 +1017,57 @@ plugin descriptors are rich enough.
 - Tests: route tests; e2e: start the example job, watch the run page
   reach `succeeded`, open a fragment, see the node counters.
 - Outcome: the monitoring view the ask describes, with drilldown.
+
+  ✅ **Done 2026-10-09.** What landed, and where it differs from the sketch:
+  - Package `dag` (`Ranks`, `Layers`, `Neighbours`, `Order`, `WrapTarget`,
+    `Wrap`, `Place`, and `Layout` running them all): `erd/layout.go`'s
+    steps 1–4 now call it, with its groups, boxes, widening and routing
+    its own. erd's output is unchanged — not only by its tests: the
+    layouts of the fixtures and of 300 random schemas (cycles, duplicate
+    keys, self-references) were fingerprinted before and after, and match.
+  - `jobs.LayoutSteps`, `Spec.Layout`, `Run.Layout`: a card per step,
+    left to right by rank, never wrapped (a wrapped rank would read as
+    "runs after"); the card size is the server's (`Layout.Card`). Routes:
+    `GET /api/v1/jobs/:name/layout` as sketched, and — what the tab uses —
+    `job-check` returns the layout of the text being edited, and
+    `GET /api/v1/runs/:id` a job run's as it ran.
+  - The jobs tab (`jobs.js`, `t.job`, `#jobp`, a saved tab's `job`
+    column): the DAG canvas over the editor, as a pipeline's is. **No
+    positions of the user's**: the cards go where the layout puts them,
+    re-laid at once after a change of shape. A palette of pipelines (the
+    user's, then the examples); drop on a card = a step after it; an
+    output ● dragged to a card = a dependency (a loop refused); Delete,
+    Ctrl+D. The inspector: the job's params, cron lines each with its next
+    five fires as you type, the zone, catch-up, the webhook (its URL and a
+    ⧉ curl), the policy; a step's pipeline (↗ opens it), afters, and the
+    pipeline's params with their defaults. ▶ Run saves, runs and turns the
+    tab to its Runs face on the new run's page; the design cards show the
+    newest run's states. JSON view, drafts, conflicts as a pipeline tab's.
+    The scripts browser has Jobs, Job examples and job trash; + New ▾ → Job.
+  - The Runs view (`runs.js`): a dialog (`Alt+R`, ◷ Runs on the top bar)
+    and a job tab's face — **not a tab of its own**. The list (filters:
+    which job or pipeline, status, age; live rows over the history). The
+    run page: the DAG with states, times, rows and the critical path in
+    bold; a step's fragments as bars on the run's time axis; a fragment's
+    nodes (in, out, batches, rows/s, time, the error pinned); the log
+    narrowed to the selection; Stop, copy id, open the file. Live from the
+    `job.*` events; a run another process runs is re-read every 2 s.
+    **Open preview** cannot bring back a past run's preview rows (they are
+    not recorded): it goes to the tab whose grid has them (the run's
+    origin), or previews the fragment again.
+  - `dbc run cancel ID` asks a running dbc web through its API (`--url`,
+    `--secret` / `$DBC_WEB_SECRET`: dbc web keeps its secret in memory
+    only), waits for the run to end and says how. Found on the way:
+    `Engine.Cancel` of a run another process was running answered as if
+    stopped; it is now `ErrElsewhere`, a 409.
+  - `jobs.Spec.JSON` puts arrays of scalars on one line, as a pipeline's
+    (`pipeline.CompactArrays`), and so does the canvas (`jobText`).
+  - Tests: `dag`, `jobs` (`TestLayoutSteps`, `TestSpecJSONCompact`), web
+    routes (`TestJobLayout`, `TestRunRecordLayoutAndCancelElsewhere`,
+    `TestJobTabSaved`), the CLI's client (`TestWebClient`), and the web e2e
+    step "job tabs and the runs view": the example copied and laid out, a
+    drag and a wire, a save, a run to succeeded, a step, a fragment and
+    its counters, the dialog, a reload, a new job run live and stopped.
 
 ### Phase 5 — the TUI
 

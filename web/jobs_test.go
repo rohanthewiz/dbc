@@ -212,3 +212,93 @@ func TestJobRunAndWebhook(t *testing.T) {
 	}
 	e.api("GET", "/api/v1/runs?since=yesterday", "", 400)
 }
+
+// The layout: job-check lays out the text being edited, and
+// /api/v1/jobs/:name/layout a saved job — a diamond's root left, its two
+// middle steps stacked in the next column, its last step right.
+func TestJobLayout(t *testing.T) {
+	e, _ := jobEnv(t)
+	diamond := `{"name": "d", "pipelines": [{"id": "a", "pipeline": "quick"}, {"id": "b", "pipeline": "quick", "after": ["a"]},
+	  {"id": "c", "pipeline": "quick", "after": ["a"]}, {"id": "z", "pipeline": "quick", "after": ["b", "c"]}]}`
+	type checked struct {
+		Layout *jobs.Layout `json:"layout"`
+	}
+	got := decodeData[checked](t, e.api("POST", "/api/v1/job-check", `{"text": `+jsonString(diamond)+`}`, 200)).Layout
+	if got == nil || len(got.Nodes) != 4 || got.Card[0] <= 0 || got.W <= 0 {
+		t.Fatalf("layout = %+v", got)
+	}
+	a, b, c, z := got.Nodes["a"], got.Nodes["b"], got.Nodes["c"], got.Nodes["z"]
+	if !(a[0] < b[0] && b[0] == c[0] && c[0] < z[0]) || b[1] == c[1] || a[1] != z[1] {
+		t.Errorf("not a diamond left to right: %+v", got.Nodes)
+	}
+	// a half-typed job has diags but no layout: the page keeps its last
+	if l := decodeData[checked](t, e.api("POST", "/api/v1/job-check", `{"text": "{"}`, 200)).Layout; l != nil {
+		t.Errorf("unparsable text laid out: %+v", l)
+	}
+
+	e.putJob("d.json", diamond, "", 200)
+	saved := decodeData[jobs.Layout](t, e.api("GET", "/api/v1/jobs/d.json/layout", "", 200))
+	if saved.Nodes["z"] != z || saved.W != got.W {
+		t.Errorf("saved layout %+v, want the check's %+v", saved, got)
+	}
+	// the example, when no file of that name
+	if ex := decodeData[jobs.Layout](t, e.api("GET", "/api/v1/jobs/nightly.json/layout", "", 200)); len(ex.Nodes) != 4 {
+		t.Errorf("example layout = %+v", ex)
+	}
+	e.api("GET", "/api/v1/jobs/none.json/layout", "", 404)
+}
+
+// A run's record comes with its DAG's layout for a job (as the run ran);
+// cancel refuses a run another process is running, rather than answer
+// "stopped" for a run nothing here can stop.
+func TestRunRecordLayoutAndCancelElsewhere(t *testing.T) {
+	e, d := jobEnv(t)
+	_, s := e.open()
+	e.putJob("two.json", `{"name": "two", "pipelines": [{"id": "a", "pipeline": "quick"}, {"id": "b", "pipeline": "quick", "after": ["a"]}],
+	  "triggers": {"webhook": true}}`, "", 200)
+	run := decodeData[runEnvelope](t, e.api("POST", "/api/v1/jobs/two.json/run", "", 200)).Run
+	awaitJob[runEnvelope](t, s, "job.done")
+	type withLayout struct {
+		jobs.Run
+		Layout *jobs.Layout `json:"layout"`
+	}
+	rec := decodeData[withLayout](t, e.api("GET", "/api/v1/runs/"+run.ID, "", 200))
+	if rec.Layout == nil || len(rec.Layout.Nodes) != 2 || rec.Layout.Nodes["a"][0] >= rec.Layout.Nodes["b"][0] {
+		t.Errorf("record layout = %+v", rec.Layout)
+	}
+	// a finished run: cancel is no error (it lost the race)
+	e.api("POST", "/api/v1/runs/"+run.ID+"/cancel", "", 200)
+
+	// a record another process writes: running, its heartbeat fresh
+	other := jobs.Run{ID: "20261009-120000-abcd", Kind: jobs.KindJob, Name: "cron", Trigger: jobs.TriggerCLI,
+		Status: "running", Started: time.Now()}
+	bs, _ := json.Marshal(other)
+	if err := userdata.SaveRun(d.runs, other.Kind, other.Name, other.ID, bs); err != nil {
+		t.Fatal(err)
+	}
+	if env := e.api("POST", "/api/v1/runs/"+other.ID+"/cancel", "", 409); !strings.Contains(env.Error, "another process") {
+		t.Errorf("cancel elsewhere = %q", env.Error)
+	}
+	e.api("POST", "/api/v1/runs/20261009-120000-ffff/cancel", "", 404)
+	// a pipeline run's record has no layout
+	prun := decodeData[runEnvelope](t, e.api("POST", "/api/v1/pipeline-run", `{"name": "quick.json"}`, 200)).Run
+	for awaitJob[runEnvelope](t, s, "job.done").Run.ID != prun.ID {
+	}
+	if raw := decodeData[map[string]json.RawMessage](t, e.api("GET", "/api/v1/runs/"+prun.ID, "", 200)); raw["layout"] != nil {
+		t.Errorf("a pipeline run came with a layout: %s", raw["layout"])
+	}
+}
+
+// A saved tab may name a job — one the store would accept, and never
+// beside a script or a pipeline.
+func TestJobTabSaved(t *testing.T) {
+	e, _ := jobEnv(t)
+	e.api("PUT", "/api/v1/tabs/j1", `{"title":"x","job":"../x.json"}`, 400)
+	e.api("PUT", "/api/v1/tabs/j1", `{"title":"x","job":"a.json","pipeline":"a.json"}`, 400)
+	e.api("PUT", "/api/v1/tabs/j1", `{"title":"x","job":"a.json","script":"a.go"}`, 400)
+	e.api("PUT", "/api/v1/tabs/j1", `{"title":"a.json","job":"a.json","conn":"demo-sqlite"}`, 200)
+	tabs := decodeData[[]savedTab](t, e.api("GET", "/api/v1/tabs", "", 200))
+	if len(tabs) != 1 || tabs[0].Job != "a.json" || tabs[0].ConsoleDB != nil {
+		t.Errorf("tabs = %+v", tabs)
+	}
+}

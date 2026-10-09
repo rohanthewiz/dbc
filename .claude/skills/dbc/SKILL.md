@@ -113,6 +113,7 @@ Exit codes: `0` ok, `1` failure, `2` bad usage (incl. unknown connection),
 | `dbc job check NAME…` / `dbc jobs [-t json]` | validate a job and every pipeline it runs (exit 1 on an error) / list `jobs_dir` and the examples with schedule, next fire, last run | Jobs headless |
 | `dbc runs [--job N\|--pipeline N] [--status S] [--since 7d] [--limit N]` | the run records in `runs_dir` (every process's: dbc web's schedule, cron, headless), newest first; a dead process's `running` reads `interrupted` | Jobs headless |
 | `dbc runs --sql "SELECT …"` / `dbc run show ID [-t json]` | query the records as tables `runs`, `pipelines`, `fragments`, `nodes` (a throwaway bytdb) / one run as a tree, or its record | Jobs headless |
+| `dbc run cancel ID [--url U] [--secret S]` | stop a run of a running `dbc web` (a scheduled job, a run started in the browser) through its API; needs the secret dbc web was started with (`$DBC_WEB_SECRET`); waits for it to end | Jobs headless |
 | `dbc copy --from A --to B [--create] [--truncate] [--where C] SRC [DST]` | copy a table across connections/engines in one transaction | Copy headless |
 | `dbc explain [-a] [-t text\|json\|markdown\|html\|pdf\|png\|jpeg\|mermaid] [--fail-on warn\|crit] "SQL"` | plan + findings; one statement | Explain headless |
 | `dbc erd [-t mermaid\|markdown\|png\|jpeg] [--table T] [--depth N] [--views]` | schema diagram | Diagrams headless |

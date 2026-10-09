@@ -64,6 +64,7 @@ func TestWeb(t *testing.T) {
 		{"script tabs", scriptTabs},
 		{"pipeline tabs", pipelineTabs},
 		{"job runs in the log", jobRuns},
+		{"job tabs and the runs view", jobTabs},
 	}
 	// DBC_E2E_STEPS narrows a run to the steps whose names contain one of
 	// its comma-separated words (plus the sign-in and boot every step

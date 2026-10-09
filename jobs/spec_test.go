@@ -71,3 +71,48 @@ func TestCheckJob(t *testing.T) {
 		t.Errorf("root = %q", r)
 	}
 }
+
+// A half-built job still lays out: an after naming no step or the step
+// itself is ignored, a step named twice keeps its first place, and a cycle
+// is cut rather than refused. A run lays out from its record.
+func TestLayoutSteps(t *testing.T) {
+	l := LayoutSteps([]string{"a", "b", "c", "b"}, [][]string{nil, {"a", "nope", "b"}, {"b"}, {"c"}})
+	if len(l.Nodes) != 3 || l.Card != [2]float64{cardW, cardH} {
+		t.Fatalf("layout = %+v", l)
+	}
+	if !(l.Nodes["a"][0] < l.Nodes["b"][0] && l.Nodes["b"][0] < l.Nodes["c"][0]) {
+		t.Errorf("a chain not left to right: %+v", l.Nodes)
+	}
+	if l.W < 3*cardW || l.H < cardH {
+		t.Errorf("size %vx%v", l.W, l.H)
+	}
+	cyc := LayoutSteps([]string{"x", "y"}, [][]string{{"y"}, {"x"}})
+	if len(cyc.Nodes) != 2 || cyc.Nodes["x"] == cyc.Nodes["y"] {
+		t.Errorf("cycle = %+v", cyc.Nodes)
+	}
+	if empty := LayoutSteps(nil, nil); len(empty.Nodes) != 0 || empty.W != 0 {
+		t.Errorf("empty = %+v", empty)
+	}
+	r := &Run{Pipelines: []PipelineRun{{ID: "a"}, {ID: "b", After: []string{"a"}}}}
+	if rl := r.Layout(); rl.Nodes["a"][0] >= rl.Nodes["b"][0] {
+		t.Errorf("run layout = %+v", rl.Nodes)
+	}
+}
+
+// Spec.JSON puts arrays of scalars on one line, as a pipeline's, and
+// reads back the same job.
+func TestSpecJSONCompact(t *testing.T) {
+	s := &Spec{Name: "j", Pipelines: []Step{{ID: "a", Pipeline: "p"}, {ID: "b", Pipeline: "p", After: []string{"a"}}},
+		Triggers: Triggers{Schedule: []string{"0 2 * * *", "30 4 * * 1"}}}
+	text, err := s.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, `"after": ["a"]`) || !strings.Contains(text, `"schedule": ["0 2 * * *", "30 4 * * 1"]`) {
+		t.Errorf("not compact:\n%s", text)
+	}
+	back, err := ParseJob(text)
+	if err != nil || back.Pipelines[1].After[0] != "a" || len(back.Triggers.Schedule) != 2 {
+		t.Errorf("round trip: %v %+v", err, back)
+	}
+}

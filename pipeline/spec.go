@@ -114,17 +114,24 @@ func (s *Spec) JSON() (string, error) {
 	if err := enc.Encode(s); err != nil {
 		return "", serr.Wrap(err, "op", "encode pipeline")
 	}
-	// an array of scalars — an edge ["src", "dst"], a position [40, 80] —
-	// on one line: the encoder's one-element-per-line form makes a
-	// two-word edge six lines, and the file is meant to be read
-	return scalarArrayRe.ReplaceAllStringFunc(buf.String(), func(m string) string {
+	return CompactArrays(buf.String()), nil
+}
+
+// CompactArrays puts every array of scalars in indented JSON on one line —
+// an edge ["src", "dst"], a position [40, 80], a job step's after: the
+// encoder's one-element-per-line form makes a two-word edge six lines, and
+// a spec file is meant to be read. Pipelines and jobs are written so, and
+// so are they by the canvases in dbc web (pipelines.js specText, jobs.js
+// jobText), so a file saved from either diffs like one saved by dbc.
+func CompactArrays(indented string) string {
+	return scalarArrayRe.ReplaceAllStringFunc(indented, func(m string) string {
 		inner := strings.TrimSpace(m[1 : len(m)-1])
 		var items []string
 		for _, it := range strings.Split(inner, ",") {
 			items = append(items, strings.TrimSpace(it))
 		}
 		return "[" + strings.Join(items, ", ") + "]"
-	}), nil
+	})
 }
 
 // scalarArrayRe matches a JSON array whose elements are all strings

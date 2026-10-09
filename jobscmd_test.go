@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,5 +82,42 @@ func TestRunsSQLTables(t *testing.T) {
 		if got[0].Rows[0][i] != w {
 			t.Errorf("column %s = %q, want %q", got[0].Columns[i], got[0].Rows[0][i], w)
 		}
+	}
+}
+
+// dbc run cancel's client: the Bearer secret on every call, dbc web's
+// envelope unwrapped — the data on success, the server's words and the
+// status on a refusal, status 0 when nothing answers.
+func TestWebClient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer s3cret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"success": false, "error": "sign in"}`))
+			return
+		}
+		if r.URL.Path == "/api/v1/runs/x/cancel" {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"success": false, "error": "run x is running in another process"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"success": true, "data": {"run": "y"}}`))
+	}))
+	defer srv.Close()
+	c := &webClient{base: srv.URL, secret: "s3cret", http: srv.Client()}
+	data, status, err := c.call(context.Background(), http.MethodPost, "/api/v1/runs/y/cancel")
+	if err != nil || status != 200 || string(data) != `{"run": "y"}` {
+		t.Errorf("ok call = %s %d %v", data, status, err)
+	}
+	_, status, err = c.call(context.Background(), http.MethodPost, "/api/v1/runs/x/cancel")
+	if status != http.StatusConflict || err == nil || !strings.Contains(err.Error(), "another process") {
+		t.Errorf("refused call = %d %v", status, err)
+	}
+	c.secret = "wrong"
+	if _, status, _ = c.call(context.Background(), http.MethodGet, "/"); status != http.StatusUnauthorized {
+		t.Errorf("bad secret = %d", status)
+	}
+	srv.Close()
+	if _, status, err = c.call(context.Background(), http.MethodGet, "/"); status != 0 || err == nil {
+		t.Errorf("nothing there = %d %v", status, err)
 	}
 }

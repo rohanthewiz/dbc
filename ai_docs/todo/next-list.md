@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-183
+**Next ID:** N-186
 
 ## Open
 
@@ -77,12 +77,16 @@ ten session docs in `ai_docs/claude_sessions/`
   it and the last to type wins, as script drafts did before N-135. Port the
   script drafts' owner and heartbeat scheme (`scripts.js` DRAFTS), or share
   it between the two kits.
+  Updated `2026-1009-1349-phase-4-jobs-tab-runs-view`: job tabs (`jobs.js`) have the same scheme
+  (`dbc.job.draft.<name>`) and the same gap; the fix should cover all three kits.
 - **N-178** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
   The assistant in a pipeline tab is handed the pipeline's JSON as "the
   query": the editor under the canvas holds it, and `ChatContext` reads the
   editor's text as SQL. Give it the pipeline as a pipeline (the spec, the
   plugins' summary from `pipeline.Plugins()`, the last run's error or
   preview), as N-134 did for script tabs, or leave the editor out there.
+  Updated `2026-1009-1349-phase-4-jobs-tab-runs-view`: a job tab's hidden editor holds the job's JSON
+  too (`j:<name>`), so its assistant reads a job as SQL the same way.
 - **N-179** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
   Fragments are reordered from a lane's ⋯ menu (Move up / Move down). The
   plan sketched dragging a lane by its header; add it if the menu turns
@@ -93,6 +97,8 @@ ten session docs in `ai_docs/claude_sessions/`
   `"on_eror"` — is dropped by the first edit, silently. The check flags it
   first ("unknown field"), but the drop is not said. Keep unknown keys
   through the round trip, or refuse canvas edits while the text has any.
+  Updated `2026-1009-1349-phase-4-jobs-tab-runs-view`: the job canvas does the same (`jobText`), and
+  its check flags the key as `jobs.ParseJob`'s unknown field.
 - **N-181** · raised `2026-1009-1254-phase-3-jobs-scheduler-runs` · value low
   `dbc job run --wait=false` (plan §4/§5): return the run id as soon as it
   has started, for an external trigger that polls `dbc run show ID`. The
@@ -107,6 +113,27 @@ ten session docs in `ai_docs/claude_sessions/`
   the run's stats. `jq` reads both; a single `json.load` refuses them.
   Older than Phase 3 (seen while checking it). Put the results inside the
   stats document, or send them to stderr under `-t json`.
+- **N-183** · raised `2026-1009-1349-phase-4-jobs-tab-runs-view` · value low
+  A run another process runs — a cron's `dbc job run` — cannot be stopped
+  from dbc web's Runs view or `dbc run cancel`: dbc web's engine has no
+  hold on it, so cancel answers 409 (`jobs.ErrElsewhere`) and points at
+  Ctrl+C there. Writing the process's PID (and host) into the run record
+  would let `dbc run cancel` signal a local one (SIGINT, so it rolls back)
+  when dbc web is not its owner; the record's heartbeat already says
+  whether it is alive.
+- **N-184** · raised `2026-1009-1349-phase-4-jobs-tab-runs-view` · value low
+  A job tab's Runs face sits in the editor's pane, about a third of the
+  work column by default: the run page's DAG fills it, and the drilldown
+  (fragments, nodes, log) is below, out of sight until scrolled (a click on
+  a step or fragment now scrolls its section in). Give the run page more
+  room while it is up — fold the results under it, or let ◷ Runs open the
+  page in the Runs dialog, which has the whole window.
+- **N-185** · raised `2026-1009-1349-phase-4-jobs-tab-runs-view` · value low
+  A preview sink's rows from a real run land in the grid of the tab that
+  started it; a scheduled, webhook or CLI run has no such tab, and run
+  records keep no rows, so the run page's ◎ can only preview the fragment
+  again, today. Keep a capped preview (say the first 50 rows per preview
+  node) in the record, for the run page to show as it was.
 
 ## Validate
 
@@ -140,6 +167,10 @@ and `raised`.
   capture across the page), a wire dragged port to card, trackpad pinch to
   zoom (sent as Ctrl+wheel), and ⌘S / ⌘↩ from the canvas. Chrome is covered
   by the web e2e step "pipeline tabs".
+  Updated `2026-1009-1349-phase-4-jobs-tab-runs-view`: add job tabs and the Runs view: the palette drag
+  onto a card, a wire to a card, ⌥R for the Runs dialog (Option may type a
+  character first), Backspace back from a run page, and the ⧉ curl copy.
+  Chrome is covered by the web e2e step "job tabs and the runs view".
 - **N-087** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
   Drive the TUI's new navigator by hand in a real terminal on a big
   Postgres: the picker rows, `d`/`s`, typing into a 150-schema list, the
@@ -330,6 +361,8 @@ call.
   Updated `2026-1009-1122-phase-2-pipeline-tab`: add the pipeline canvas — the palette drag, wiring,
   panning, and the wheel (a plain wheel pans, Ctrl+wheel zooms; Firefox's
   line-mode wheel is scaled in `stage.js` but has not been seen).
+  Updated `2026-1009-1349-phase-4-jobs-tab-runs-view`: add the job canvas (the same stage, drags and
+  wires) and the Runs view's timeline bars (`width: max(2px, …%)`).
 
 - **N-098** · raised `2026-1002-1239-web-conn-marks` · value medium
   Close a configured connection's pool when a tab switches away from it and
@@ -452,6 +485,13 @@ call.
   processes), the webhook, `dbc jobs`, `dbc job run|check`, `dbc runs
   [--sql]`, `dbc run show`. Phase 4 is next: the `dag` layout package,
   the jobs tab, the Runs view with drilldown, and `dbc run cancel`.
+  Updated `2026-1009-1349-phase-4-jobs-tab-runs-view`: Phase 4 is in — package `dag` (erd's layout
+  steps 1–4, its output unchanged), the job layout (job-check, the jobs
+  layout route, a job run's record), job tabs (`jobs.js`), the Runs view
+  (`runs.js`: Alt+R, ◷ Runs, a job tab's face; the run page's DAG with the
+  critical path, fragments on the run's time axis, node counters, the
+  filtered log, live), `dbc run cancel` through dbc web's API. Phase 5,
+  the TUI (browser, Runs modal, run monitor tree), is next.
 
 ## Non-goals
 

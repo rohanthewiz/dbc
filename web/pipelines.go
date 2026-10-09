@@ -561,6 +561,14 @@ func (s *Server) handleRuns(ctx rweb.Context) error {
 	return ok(ctx, out)
 }
 
+// runRecord is GET /api/v1/runs/:id: the run's record, and for a job the
+// layout of its steps as the record has them (jobs.Run.Layout) — the run
+// page draws the DAG the run ran, whatever its file says since.
+type runRecord struct {
+	jobs.Run
+	Layout *jobs.Layout `json:"layout,omitempty"`
+}
+
 // handleRunRecord is one run's record with its log: live, kept in memory,
 // or read back from runs_dir.
 func (s *Server) handleRunRecord(ctx rweb.Context) error {
@@ -569,13 +577,25 @@ func (s *Server) handleRunRecord(ctx rweb.Context) error {
 	if !found {
 		return fail(ctx, notFound("no run %q (not running, and no record of it in %s)", id, config.TildePath(s.cfg.RunsDir)))
 	}
-	return ok(ctx, r)
+	out := runRecord{Run: r}
+	if r.Kind == jobs.KindJob {
+		l := r.Layout()
+		out.Layout = &l
+	}
+	return ok(ctx, out)
 }
 
+// handleRunCancel stops a run of this server's engine — from a page's
+// Stop, or `dbc run cancel` with the Bearer secret. A run another process
+// is running (its record's heartbeat is fresh) is refused with 409 and
+// says so, rather than answer "stopped" for a run nothing here can stop.
 func (s *Server) handleRunCancel(ctx rweb.Context) error {
 	id := ctx.Request().PathParam("id")
 	if err := s.jobs.Cancel(id); err != nil {
-		return fail(ctx, notFound("no run %q", id))
+		if errors.Is(err, jobs.ErrElsewhere) {
+			return fail(ctx, conflict("%s", strings.TrimPrefix(err.Error(), jobs.ErrElsewhere.Error()+": ")))
+		}
+		return fail(ctx, notFound("no run %q (not running, and no record of it in %s)", id, config.TildePath(s.cfg.RunsDir)))
 	}
 	return ok(ctx, map[string]string{"run": id})
 }

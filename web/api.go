@@ -70,7 +70,7 @@ func (s *Server) savedTabs(saved []Tab) []savedTab {
 	tabs := make([]savedTab, 0, len(saved))
 	for _, t := range saved {
 		st := savedTab{Tab: t}
-		if t.Conn != "" && t.Script == "" && t.Pipeline == "" { // a script or pipeline tab shows no console
+		if t.Conn != "" && t.Script == "" && t.Pipeline == "" && t.Job == "" { // a file's tab shows no console
 			st.ConsoleDB = s.consoleFor(t.Conn)
 		}
 		tabs = append(tabs, st)
@@ -123,8 +123,18 @@ func (s *Server) saveTab(winID string, t Tab) error {
 	if t.Pipeline != "" && !userdata.ValidPipelineName(t.Pipeline) {
 		return badRequest("not a pipeline name: %q", t.Pipeline)
 	}
-	if t.Script != "" && t.Pipeline != "" {
-		return badRequest("a tab edits a script or a pipeline, not both")
+	// and a job tab its job (jobs.go)
+	if t.Job != "" && !userdata.ValidJobName(t.Job) {
+		return badRequest("not a job name: %q", t.Job)
+	}
+	files := 0
+	for _, f := range []string{t.Script, t.Pipeline, t.Job} {
+		if f != "" {
+			files++
+		}
+	}
+	if files > 1 {
+		return badRequest("a tab edits one file: a script, a pipeline or a job")
 	}
 	if err := s.hub.claimOne(winID, t.ID); err != nil {
 		return err

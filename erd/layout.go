@@ -4,6 +4,7 @@ import (
 	"math"
 	"sort"
 
+	"github.com/rohanthewiz/dbc/dag"
 	"github.com/rohanthewiz/dbc/raster"
 )
 
@@ -41,7 +42,9 @@ import (
 // (trees and shallow DAGs around a few hub tables) well, and draws the same
 // schema the same way every time.
 //
-// The steps, per connected group of tables:
+// The steps, per connected group of tables — 1 to 4 are package dag's,
+// which the jobs tab of dbc web lays its pipelines out with too; erd keeps
+// the boxes, the groups, and 5:
 //  1. rank: a table's rank is one more than its deepest parent's (a cycle
 //     of keys is cut at its back edge first), then every root is pulled
 //     right to sit just left of its nearest child, so a lookup table used
@@ -74,7 +77,7 @@ const (
 	groupGap   = 56.0  // between two connected groups, and before the loose tables
 	looseGap   = 24.0  // between the loose tables' columns
 	maxRows    = 40    // columns shown per table before "… n more"
-	sweeps     = 8     // barycenter passes; converges long before this on real schemas
+	sweeps     = dag.Sweeps
 	titleH     = 58.0  // the title and legend band
 	sectionH   = 26.0  // the "tables without relationships" caption
 	minPicture = 720.0 // the title and legend need room even for one table
@@ -88,11 +91,10 @@ type box struct {
 	nameW   float64   // the name column's width inside the box
 	x, y    float64
 	w, h    float64
-	rank    int
-	col     int     // its column's index within its group, left to right
-	pos     float64 // position within its rank, 0…1, for the barycenter
-	nbrs    []*box  // tables it shares a key with (not itself)
-	hasRels bool    // any relationship, a self-reference included
+	rank    int    // its rank within its group (dag.Ranks)
+	col     int    // its column's index within its group, left to right
+	nbrs    []*box // tables it shares a key with (not itself)
+	hasRels bool   // any relationship, a self-reference included
 }
 
 // rowY is the vertical centre of a column's row, where a line attaches.
@@ -279,210 +281,70 @@ func (l *layout) groups() [][]*box {
 // top of this file for the steps.
 func layGroup(g []*box, rels []*Rel, byT map[*Table]*box, x0, y0 float64, paths map[*Rel]*path) (w, h float64) {
 	in := make(map[*box]bool, len(g))
-	for _, b := range g {
+	idx := make(map[*box]int, len(g))
+	for i, b := range g {
 		in[b] = true
+		idx[b] = i
 	}
-	// parents and children within the group, deduplicated (two keys
-	// between the same pair of tables are one ranking constraint)
-	parents, children := map[*box][]*box{}, map[*box][]*box{}
-	seen := map[[2]*box]bool{}
+	// The group as package dag sees it: node i is g[i] (the schema's table
+	// order, which is where every sweep starts, so the result is stable),
+	// and an edge per relationship, parent → child, in the schema's
+	// relationship order. dag ranks two keys between one pair of tables as
+	// one constraint and skips a self-reference, but lets both keys pull
+	// in the ordering — as the tables' nbrs do.
+	var edges []dag.Edge
 	for _, r := range rels {
 		c, p := byT[r.Child], byT[r.Parent]
-		if c == p || !in[c] || seen[[2]*box{c, p}] {
+		if !in[c] {
 			continue
 		}
-		seen[[2]*box{c, p}] = true
-		parents[c] = append(parents[c], p)
-		children[p] = append(children[p], c)
+		edges = append(edges, dag.Edge{From: idx[p], To: idx[c]})
+	}
+	ws, hs := make([]float64, len(g)), make([]float64, len(g))
+	for i, b := range g {
+		ws[i], hs[i] = b.w, b.h
 	}
 
-	// 1. Rank. A depth-first walk up the parent links marks the edges that
-	// close a cycle (a → b → a: two tables referencing each other, or a
-	// longer loop) as back edges, which ranking ignores — a cycle has no
-	// longest path. The walk starts from each table in order, so which
-	// edge of a cycle is cut is deterministic.
-	const (
-		white = iota
-		grey
-		black
-	)
-	state := map[*box]int{}
-	back := map[[2]*box]bool{}
-	var visit func(*box)
-	visit = func(b *box) {
-		state[b] = grey
-		for _, p := range parents[b] {
-			switch state[p] {
-			case white:
-				visit(p)
-			case grey:
-				back[[2]*box{b, p}] = true
-			}
-		}
-		state[b] = black
-	}
-	for _, b := range g {
-		if state[b] == white {
-			visit(b)
-		}
-	}
-	rank := map[*box]int{}
-	done := map[*box]bool{}
-	var rankOf func(*box) int
-	rankOf = func(b *box) int {
-		if done[b] {
-			return rank[b]
-		}
-		r := 0
-		for _, p := range parents[b] {
-			if !back[[2]*box{b, p}] {
-				r = max(r, rankOf(p)+1)
-			}
-		}
-		rank[b], done[b] = r, true
-		return r
-	}
-	for _, b := range g {
-		rankOf(b)
-	}
-	// Pull each root (a table with no parents) right, to one rank left of
-	// its nearest child. Longest-path ranking puts every root at rank 0,
-	// so a lookup table referenced only from deep in the graph would
-	// otherwise sit at the far left with one long line to it.
-	for _, b := range g {
-		if len(parents[b]) > 0 || len(children[b]) == 0 {
-			continue
-		}
-		nearest := math.MaxInt
-		for _, c := range children[b] {
-			nearest = min(nearest, rank[c])
-		}
-		if nearest-1 > rank[b] {
-			rank[b] = nearest - 1
-		}
-	}
-	maxRank := 0
-	for _, b := range g {
-		b.rank = rank[b]
-		maxRank = max(maxRank, b.rank)
-	}
-	layers := make([][]*box, maxRank+1)
-	for _, b := range g { // g is in table order: the first sweep's start
-		layers[b.rank] = append(layers[b.rank], b)
+	// 1. Rank: parents left; a cycle of keys cut at its back edge; a root
+	// pulled right to just left of its nearest child (dag.Ranks).
+	rank := dag.Ranks(len(g), edges)
+	for i, b := range g {
+		b.rank = rank[i]
 	}
 
-	// 2. Order: the barycenter heuristic. A table's key is the mean
-	// position (0…1 within its own rank) of its neighbours in any other
-	// rank; each rank is re-sorted by it, and positions updated, over a
-	// few sweeps. A table with no neighbours outside its rank keeps its
-	// place. The sort is stable, so ties keep the previous order and the
-	// result is deterministic.
-	setPos := func(layer []*box) {
-		for i, b := range layer {
-			b.pos = (float64(i) + 0.5) / float64(len(layer))
-		}
-	}
-	for _, layer := range layers {
-		setPos(layer)
-	}
-	for range sweeps {
-		for _, layer := range layers {
-			key := make(map[*box]float64, len(layer))
-			for _, b := range layer {
-				sum, n := 0.0, 0
-				for _, nb := range b.nbrs {
-					if nb.rank != b.rank && in[nb] {
-						sum += nb.pos
-						n++
-					}
-				}
-				if n > 0 {
-					key[b] = sum / float64(n)
-				} else {
-					key[b] = b.pos
-				}
-			}
-			sort.SliceStable(layer, func(i, j int) bool { return key[layer[i]] < key[layer[j]] })
-			setPos(layer)
-		}
-	}
+	// 2. Order: the barycenter heuristic over sweeps passes (dag.Order).
+	layers := dag.Layers(rank)
+	dag.Order(layers, rank, dag.Neighbours(len(g), edges), sweeps)
 
-	// 3. Wrap tall ranks. The target is the side of a square of the
-	// group's total box area (with some air), but never shorter than its
-	// tallest box, so one very tall table does not force every rank to
-	// split.
-	area, tallest := 0.0, 0.0
-	for _, b := range g {
-		area += (b.w + rankGap) * (b.h + stackGap)
-		tallest = math.Max(tallest, b.h)
-	}
-	target := math.Max(tallest, math.Sqrt(area)*0.9)
-	var cols [][]*box
-	for _, layer := range layers {
-		var col []*box
-		colH := 0.0
-		for _, b := range layer {
-			if len(col) > 0 && colH+stackGap+b.h > target {
-				cols = append(cols, col)
-				col, colH = nil, 0
-			}
-			if len(col) > 0 {
-				colH += stackGap
-			}
-			col = append(col, b)
-			colH += b.h
-		}
-		if len(col) > 0 {
-			cols = append(cols, col)
-		}
-	}
+	// 3. Wrap tall ranks into several columns: the target is about a
+	// square of the group's box area, never shorter than its tallest box
+	// (dag.WrapTarget), so one very tall table does not force every rank
+	// to split.
+	cols := dag.Wrap(layers, hs, stackGap, dag.WrapTarget(ws, hs, rankGap, stackGap))
 
 	// 4. Place: columns left to right, each as wide as its widest box and
-	// centred vertically on the tallest column. extra[i][j] is room added
-	// to the gap above column i's box j, beyond stackGap, when more lines
-	// cross that gap than it holds (see step 5); it starts at nothing.
+	// centred vertically on the tallest column (dag.Place). extra[i][j] is
+	// room added to the gap above column i's box j, beyond stackGap, when
+	// more lines cross that gap than it holds (see step 5); it starts at
+	// nothing. The columns' box lists are made once: routing keeps them.
 	placed := make([]*column, len(cols))
 	extra := make([][]float64, len(cols))
+	colBoxes := make([][]*box, len(cols))
 	for i, col := range cols {
 		extra[i] = make([]float64, len(col))
+		for _, v := range col {
+			colBoxes[i] = append(colBoxes[i], g[v])
+		}
 	}
 	place := func() {
-		h = 0
-		heights := make([]float64, len(cols))
-		for i, col := range cols {
-			for j, b := range col {
-				if j > 0 {
-					heights[i] += stackGap + extra[i][j]
-				}
-				heights[i] += b.h
-			}
-			h = math.Max(h, heights[i])
+		p := dag.Place(cols, ws, hs, x0, y0, rankGap, stackGap, extra)
+		for i, b := range g {
+			b.x, b.y, b.col = p.X[i], p.Y[i], p.Col[i]
 		}
-		x := x0
-		for i, col := range cols {
-			colW := 0.0
-			for _, b := range col {
-				colW = math.Max(colW, b.w)
-			}
-			y := y0 + (h-heights[i])/2
-			for j, b := range col {
-				// boxes narrower than the column are centred in it, so
-				// lines in both directions have about the same room
-				b.x = x + (colW-b.w)/2
-				b.y = y
-				b.col = i
-				y += b.h + stackGap
-				if j+1 < len(col) {
-					y += extra[i][j+1]
-				}
-			}
-			placed[i] = &column{x: x, w: colW, boxes: col}
-			x += colW
-			if i < len(cols)-1 {
-				x += rankGap
-			}
+		for i := range cols {
+			placed[i] = &column{x: p.ColX[i], w: p.ColW[i], boxes: colBoxes[i]}
 		}
-		w = x - x0
+		w, h = p.W, p.H
 	}
 	place()
 

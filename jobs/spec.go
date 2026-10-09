@@ -131,7 +131,8 @@ func ParseJob(text string) (*Spec, error) {
 	return &s, nil
 }
 
-// JSON is the job as the file holds it, two-space indented.
+// JSON is the job as the file holds it, two-space indented, with arrays
+// of scalars (a step's after, the schedule) on one line, as a pipeline's.
 func (s *Spec) JSON() (string, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -140,7 +141,7 @@ func (s *Spec) JSON() (string, error) {
 	if err := enc.Encode(s); err != nil {
 		return "", serr.Wrap(err, "op", "encode job")
 	}
-	return buf.String(), nil
+	return pipeline.CompactArrays(buf.String()), nil
 }
 
 // Step is the step with id, or nil.

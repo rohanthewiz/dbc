@@ -634,12 +634,15 @@
     let browser = null;
 
     // listAll is the browser's data: the scripts list, and the pipelines
-    // list beside it (got.p; empty when it cannot be read — the scripts
-    // still show).
+    // and jobs lists beside it (got.p, got.j; empty when one cannot be read
+    // — the scripts still show).
     async function listAll() {
       const pipes = host.pipes ? host.pipes() : null;
-      const [got, p] = await Promise.all([list(), pipes ? pipes.list().catch(() => null) : null]);
+      const jobs = host.jobs ? host.jobs() : null;
+      const [got, p, j] = await Promise.all([list(), pipes ? pipes.list().catch(() => null) : null,
+        jobs ? jobs.list().catch(() => null) : null]);
       got.p = p || { pipelines: [], examples: [], trash: [] };
+      got.j = j || { jobs: [], examples: [], trash: [] };
       return got;
     }
 
@@ -647,10 +650,10 @@
       let got;
       try { got = await listAll(); } catch (err) { log("err", "scripts: " + err.message); return; }
       let rows = [], cur = 0, showTrash = false, seq = 0;
-      const input = el("input", { type: "search", class: "hfilter", placeholder: "filter scripts, pipelines and examples…",
+      const input = el("input", { type: "search", class: "hfilter", placeholder: "filter scripts, pipelines, jobs and examples…",
         "aria-label": "Filter scripts", spellcheck: "false", autocomplete: "off" });
       const ul = el("ul", { class: "hlist slist", role: "listbox" });
-      const newBtn = el("button", { type: "button", class: "primary", title: "A new pipeline, or a script from a template (Alt+N)" }, "+ New ▾");
+      const newBtn = el("button", { type: "button", class: "primary", title: "A new job or pipeline, or a script from a template (Alt+N)" }, "+ New ▾");
       const dirBtn = el("button", { type: "button", class: "linkish", title: "Copy the scripts directory's path" });
       const hint = el("span", "hint", "Enter run · ⇧Enter edit · F2 rename · Ctrl+Del trash · Esc close");
 
@@ -687,8 +690,26 @@
           rows.push({ head: "Pipeline examples · Enter makes your own copy" });
           for (const x of pex) rows.push({ kind: "pexample", name: x.name, desc: x.desc });
         }
+        // jobs (jobs.js): DAGs of those pipelines — the user's, with when
+        // the scheduler fires each next, then the built-in ones
+        rows.push({ head: "Jobs · " + (got.j.short || got.j.dir || "jobs_dir") });
+        const jl = got.j.jobs.filter((x) => hit(x.name, x.desc));
+        for (const x of jl) {
+          const next = x.next ? "next " + new Date(x.next).toTimeString().slice(0, 5) : "";
+          const last = x.last ? (x.last.status === "succeeded" ? "✓" : x.last.status === "running" ? "●" : "✗") + " " + ago(x.last.started) : "";
+          rows.push({ kind: "job", name: x.name, when: [last, next].filter(Boolean).join(" · ") || ago(x.mod),
+            desc: x.desc || (x.pipelines ? dbc.plural(x.pipelines, "pipeline") : "does not parse") });
+        }
+        if (!got.j.jobs.length) rows.push({ note: "none yet — copy an example below, or + New ▾ → Job" });
+        else if (!jl.length) rows.push({ note: "no job matches" });
+        const jex = got.j.examples.filter((x) => hit(x.name, x.desc));
+        if (jex.length) {
+          rows.push({ head: "Job examples · Enter makes your own copy" });
+          for (const x of jex) rows.push({ kind: "jexample", name: x.name, desc: x.desc });
+        }
         const trashed = got.trash.map((t) => ({ kind: "trash", t, name: t.name, at: t.trashed }))
           .concat(got.p.trash.map((t) => ({ kind: "ptrash", t, name: t.name, at: t.trashed })))
+          .concat(got.j.trash.map((t) => ({ kind: "jtrash", t, name: t.name, at: t.trashed })))
           .sort((a, b) => String(b.at).localeCompare(String(a.at)));
         if (trashed.length) {
           rows.push({ head: "Trash (" + trashed.length + ") " + (showTrash ? "▾" : "▸"), toggle: true });
@@ -726,7 +747,15 @@
               dbc.menu.open(at.left, at.bottom + 2, host.pipes().items(r.name).map((it) => ({ ...it, act: () => { dbc.modal.close(); it.act(); } })));
             })];
         }
+        if (r.kind === "job") {
+          return [b("▶", "Open it and run it (Enter)", () => go(r, "run")), b("✎", "Open it on the canvas (Shift+Enter)", () => go(r, "edit")),
+            b("⋯", "More: its runs, duplicate, rename, trash, copy path", (ev) => {
+              const at = ev.currentTarget.getBoundingClientRect();
+              dbc.menu.open(at.left, at.bottom + 2, host.jobs().items(r.name).map((it) => ({ ...it, act: () => { dbc.modal.close(); it.act(); } })));
+            })];
+        }
         if (r.kind === "pexample") return [b("⧉ Copy", "Make an editable copy in your pipelines (Enter)", () => go(r, "run"))];
+        if (r.kind === "jexample") return [b("⧉ Copy", "Make an editable copy in your jobs (Enter)", () => go(r, "run"))];
         if (r.kind === "example") return [b("⧉ Copy", "Make an editable copy in your scripts (Enter)", () => go(r, "run"))];
         if (r.kind === "template") return [b("+ New", "A new script from this template (Enter)", () => go(r, "run"))];
         return [b("↺ Restore", "Put it back in the scripts directory (Enter)", () => go(r, "run"))];
@@ -775,13 +804,23 @@
           await host.pipes().copyExample(r.name);
         } else if (r.kind === "ptrash") {
           await host.pipes().restore(r.t);
+        } else if (r.kind === "job") {
+          const jobs = host.jobs();
+          await jobs.edit(r.name);
+          if (what !== "edit") jobs.run(r.name);
+        } else if (r.kind === "jexample") {
+          await host.jobs().copyExample(r.name);
+        } else if (r.kind === "jtrash") {
+          await host.jobs().restore(r.t);
         }
       }
 
       function newMenu(x, y) {
-        const pipes = host.pipes ? host.pipes() : null;
-        const head = pipes ? [{ head: "new pipeline" },
-          { label: "Pipeline — a source into a preview, on the canvas", act: () => { dbc.modal.close(); pipes.newPipeline(); } }] : [];
+        const pipes = host.pipes ? host.pipes() : null, jobs = host.jobs ? host.jobs() : null;
+        const head = (jobs ? [{ head: "new job" },
+          { label: "Job — pipelines in a DAG, run on a schedule or by hand", act: () => { dbc.modal.close(); jobs.newJob(); } }] : [])
+          .concat(pipes ? [{ head: "new pipeline" },
+            { label: "Pipeline — a source into a preview, on the canvas", act: () => { dbc.modal.close(); pipes.newPipeline(); } }] : []);
         dbc.menu.open(x, y, head.concat([{ head: "new script from" }], got.templates.map((t) => ({
           label: t.title, act: () => { dbc.modal.close(); newFrom(t); },
         }))));
@@ -822,12 +861,17 @@
           const r = current();
           if (e.key === "F2" && r && r.kind === "script") { dbc.modal.close(); rename(r.name); return true; }
           if (e.key === "F2" && r && r.kind === "pipeline") { dbc.modal.close(); host.pipes().rename(r.name); return true; }
+          if (e.key === "F2" && r && r.kind === "job") { dbc.modal.close(); host.jobs().rename(r.name); return true; }
           if ((e.key === "Delete" || e.key === "Backspace") && (e.ctrlKey || e.metaKey) && r && r.kind === "script") {
             trash(r.name);
             return true;
           }
           if ((e.key === "Delete" || e.key === "Backspace") && (e.ctrlKey || e.metaKey) && r && r.kind === "pipeline") {
             host.pipes().trash(r.name);
+            return true;
+          }
+          if ((e.key === "Delete" || e.key === "Backspace") && (e.ctrlKey || e.metaKey) && r && r.kind === "job") {
+            host.jobs().trash(r.name);
             return true;
           }
           if (e.altKey && e.code === "KeyN") {

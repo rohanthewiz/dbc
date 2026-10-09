@@ -1505,37 +1505,20 @@
     }
 
     // JOB RUNS (a DAG of pipelines: web/jobs.go) come on the same job.*
-    // events, but no pipeline tab is theirs — the jobs tab that draws them
-    // is still to come — so they are kept apart from the pipeline runs
-    // above (a job called "nightly" must not light up nightly.json's
-    // canvas): their start and end are one line each in the log on screen,
-    // and their own lines are kept under the job's log key, for that tab.
-    // jobRuns: run id → job name.
-    const JOB_LOG = "\u0001job:";
-    const jobRuns = new Map();
+    // events, but they are the job tab's (jobs.js) and the Runs view's
+    // (runs.js), not a pipeline tab's: a job called "nightly" must not
+    // light up nightly.json's canvas, and a job step's lines (named by
+    // the step) must not land in a pipeline's log. So they are only
+    // recognised here, and passed over. jobRuns: the job runs going now.
+    const jobRuns = new Set();
     function onJobEvent(type, d) {
-      if (type === "job.notice") {
-        log(d.level === "err" ? "err" : d.level === "warn" ? "warn" : "info", d.text);
-        return true;
-      }
+      if (type === "job.notice") return true; // the scheduler's word: jobs.js logs it
       const head = (type === "job.run" || type === "job.done") ? d.run : null;
-      if (head && head.kind === "job") jobRuns.set(head.id, head.name);
+      if (head && head.kind === "job") jobRuns.add(head.id);
       const id = head ? head.id : d.run;
-      const name = jobRuns.get(id);
-      if (name === undefined) return false;
-      if (type === "job.run") {
-        log("accent", (head.status === "queued" ? "⏸ job " + name + " queued behind its last run" : "▶ job " + name + " started") +
-          " (" + head.trigger + (head.by ? ": " + head.by : "") + ") — run " + id);
-      } else if (type === "job.line") {
-        log(d.level === "err" ? "err" : "info", (d.name ? "[" + d.name + "] " : "") + d.text, JOB_LOG + name);
-      } else if (type === "job.done") {
-        const took = Date.parse(head.ended) - Date.parse(head.started);
-        log(head.status === "succeeded" ? "ok" : head.status === "canceled" ? "warn" : "err",
-          "job " + name + " " + head.status + " in " + fmtDur(took) + (head.error ? " — " + head.error : "") +
-          " (dbc run show " + id + ")");
-        jobRuns.delete(id);
-      }
-      return true; // job.progress, job.state, job.preview: for the jobs tab
+      if (!jobRuns.has(id)) return false;
+      if (type === "job.done") jobRuns.delete(id);
+      return true;
     }
 
     // onEvent is a window-level "pipelines" or "job.*" event.
@@ -1580,7 +1563,7 @@
       let got;
       try { got = await api("GET", "/api/v1/runs"); } catch (_) { return; }
       const pipe = (h) => h.kind !== "job";
-      for (const h of got.running || []) if (!pipe(h)) jobRuns.set(h.id, h.name);
+      for (const h of got.running || []) if (!pipe(h)) jobRuns.add(h.id);
       for (const h of [...(got.recent || [])].reverse().filter(pipe)) track(h);
       for (const h of (got.running || []).filter(pipe)) host.runState(track(h), true);
       if (shown) renderCanvas();

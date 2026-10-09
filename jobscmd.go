@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -22,6 +25,7 @@ import (
 	"github.com/rohanthewiz/dbc/scripts"
 	"github.com/rohanthewiz/dbc/sqlsplit"
 	"github.com/rohanthewiz/dbc/userdata"
+	"github.com/rohanthewiz/dbc/web"
 )
 
 // The job and run commands: the headless face of package jobs, so a job
@@ -36,6 +40,7 @@ import (
 //	dbc runs --sql "SELECT …"                  the records as tables (runs, pipelines, fragments, nodes)
 //	                                           in a throwaway bytdb, queried like any connection
 //	dbc run show ID                            one run as a tree: job → pipelines → fragments → nodes
+//	dbc run cancel ID [--url U] [--secret S]   stop a run of a running dbc web, through its API
 //
 // `dbc job run` runs the job in this process, on an engine of its own,
 // and writes its record to runs_dir like every run. Its lines stream as a
@@ -109,13 +114,28 @@ func runsCommand() *cli.Command {
 func runCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "run",
-		Usage: "show one run's record (dbc run help)",
+		Usage: "show one run's record, or stop a run of dbc web (dbc run help)",
 		Commands: []*cli.Command{
 			{
 				Name:      "show",
 				Usage:     "show a run as a tree — job, pipelines, fragments, nodes — or its record with -t json",
 				ArgsUsage: "<run id>",
 				Action:    runShowAction,
+			},
+			{
+				Name:  "cancel",
+				Usage: "stop a run of a running dbc web (a scheduled job, a run started in the browser)",
+				Description: "Asks the dbc web at --url to stop the run, through its API, with the secret dbc web was " +
+					"started with (dbc web --secret, or $DBC_WEB_SECRET for both). It waits for the run to end and " +
+					"prints how it ended. A run that a `dbc job run` is running is stopped where it runs (Ctrl+C there).",
+				ArgsUsage: "<run id>",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "url", Value: "http://" + web.DefaultListen, Sources: cli.EnvVars("DBC_WEB_URL"),
+						Usage: "the dbc web to ask, `URL` ($DBC_WEB_URL)", Destination: &flagCancelURL},
+					&cli.StringFlag{Name: "secret", Sources: cli.EnvVars("DBC_WEB_SECRET"),
+						Usage: "dbc web's login `SECRET` ($DBC_WEB_SECRET)", Destination: &flagCancelSecret},
+				},
+				Action: runCancelAction,
 			},
 		},
 	}
@@ -440,6 +460,132 @@ func runShowAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	fmt.Print(r.Tree())
 	return nil
+}
+
+var flagCancelURL, flagCancelSecret string
+
+// runCancelAction is `dbc run cancel ID`: a run belongs to the process
+// whose engine runs it, and for a scheduled job or a run started in the
+// browser that is dbc web — so this command asks dbc web, over its API,
+// as curl would:
+//
+//	dbc run cancel ──POST /api/v1/runs/ID/cancel──► dbc web ──► its engine cancels the run
+//	               ◄──── 200 | 404 no such run | 409 another process runs it
+//	               ──GET /api/v1/runs/ID (until it has ended, ≤ 15s)──► how it ended
+//
+// WHY THE SECRET IS ASKED FOR. dbc web keeps its launch secret in memory
+// only (web/auth.go: nothing on disk, a restart signs everyone out), so
+// there is no file to find it in; a dbc web meant to be driven from a
+// shell is started with --secret (or $DBC_WEB_SECRET), and this command
+// reads the same variable. Exit 0 when the run is stopped (or had already
+// ended), 1 otherwise.
+func runCancelAction(ctx context.Context, cmd *cli.Command) error {
+	refuseQueryFlags("run cancel")
+	if cmd.Args().Len() != 1 {
+		usage("usage: dbc run cancel <run id> [--url URL] [--secret SECRET]")
+	}
+	id := cmd.Args().First()
+	if !userdata.ValidRunID(id) {
+		usage(fmt.Sprintf("%q is not a run id (20261009-020000-7f3a; dbc runs lists them)", id))
+	}
+	if flagCancelSecret == "" {
+		fmt.Fprintln(os.Stderr, "dbc run cancel needs dbc web's secret: start dbc web with --secret S (or $DBC_WEB_SECRET), "+
+			"and give the same here (--secret S, or the same $DBC_WEB_SECRET)")
+		os.Exit(1)
+	}
+	base := strings.TrimRight(flagCancelURL, "/")
+	c := &webClient{base: base, secret: flagCancelSecret, http: &http.Client{Timeout: 10 * time.Second}}
+	// a run that has ended already is said so, not "stopped": the record
+	// first, then the cancel only for one that runs
+	read := func() (jobs.Run, int, error) {
+		var r jobs.Run
+		data, status, err := c.call(ctx, http.MethodGet, "/api/v1/runs/"+url.PathEscape(id))
+		if err == nil {
+			err = json.Unmarshal(data, &r)
+		}
+		return r, status, err
+	}
+	r, status, err := read()
+	if err == nil && r.Status != pipeline.Running && r.Status != pipeline.Queued {
+		fmt.Printf("run %s (%s %s) had already ended: %s\n", id, r.Kind, r.Name, r.Status)
+		return nil
+	}
+	if err == nil {
+		_, status, err = c.call(ctx, http.MethodPost, "/api/v1/runs/"+url.PathEscape(id)+"/cancel")
+	}
+	if err != nil {
+		switch {
+		case status == 0:
+			fmt.Fprintf(os.Stderr, "no dbc web answers at %s (%v) — is it running? --url or $DBC_WEB_URL names another\n", base, err)
+		case status == http.StatusUnauthorized:
+			fmt.Fprintf(os.Stderr, "dbc web at %s refused the secret — give the one it was started with\n", base)
+		default:
+			fmt.Fprintln(os.Stderr, err.Error())
+		}
+		os.Exit(1)
+	}
+	// the cancel is asked; the run rolls its sinks back and ends on its
+	// own goroutine, so follow it to the end it reaches
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if r, _, err := read(); err == nil {
+			switch r.Status {
+			case pipeline.Running, pipeline.Queued:
+			case pipeline.Canceled:
+				fmt.Printf("stopped run %s (%s %s) — dbc run show %s\n", id, r.Kind, r.Name, id)
+				return nil
+			default:
+				fmt.Printf("run %s (%s %s) had already ended: %s\n", id, r.Kind, r.Name, r.Status)
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			fmt.Printf("asked run %s to stop; it is still rolling back — dbc run show %s says when it has\n", id, id)
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+// webClient calls a running dbc web's API with its secret as a Bearer
+// token — the door web/auth.go keeps for curl and scripts.
+type webClient struct {
+	base, secret string
+	http         *http.Client
+}
+
+// call makes one request and unwraps dbc web's envelope ({success, data,
+// error}): the data on success; on failure an error in the server's own
+// words, with the HTTP status (0 when nothing answered).
+func (c *webClient) call(ctx context.Context, method, path string) (json.RawMessage, int, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.secret)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	var env struct {
+		Success bool            `json:"success"`
+		Data    json.RawMessage `json:"data"`
+		Error   string          `json:"error"`
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if json.Unmarshal(body, &env) != nil || !env.Success {
+		msg := env.Error
+		if msg == "" {
+			msg = strings.TrimSpace(string(body))
+		}
+		return nil, resp.StatusCode, fmt.Errorf("dbc web: %s (%s)", msg, resp.Status)
+	}
+	return env.Data, resp.StatusCode, nil
 }
 
 // ---------------------------------------------------------------------------

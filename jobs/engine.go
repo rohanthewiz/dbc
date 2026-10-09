@@ -246,11 +246,13 @@ type Options struct {
 
 // ErrBusy is a start refused because what it would run is running: the
 // same pipeline, the same job (overlap: skip), or another run from the
-// same origin. ErrClosed is a start after Close. Hosts map ErrBusy to
-// "conflict".
+// same origin. ErrClosed is a start after Close. Hosts map ErrBusy (and
+// ErrElsewhere) to "conflict".
 var (
 	ErrBusy   = errors.New("already running")
 	ErrClosed = errors.New("the engine is shutting down")
+	// ErrElsewhere is a Cancel of a run another process is running.
+	ErrElsewhere = errors.New("not this process's run")
 )
 
 // busyError is a start refused as ErrBusy, in words that say what is
@@ -767,15 +769,25 @@ func (r *Run) clone() Run {
 // Cancel stops a run: its context is canceled, every fragment in flight
 // rolls its sinks back, a job's steps not started yet are skipped, and
 // RunDone follows with status canceled. A run already finished is not an
-// error (it lost the race); an unknown id is.
+// error (it lost the race); an unknown id is, and so is a run whose record
+// says another process is running it right now (ErrElsewhere) — a cron's
+// `dbc job run`, another dbc web: this engine has no hold on it, and
+// saying nothing would read as stopped.
 func (e *Engine) Cancel(id string) error {
 	e.mu.Lock()
 	lr, live := e.live[id]
 	known := live || slices.ContainsFunc(e.done, func(r *Run) bool { return r.ID == id })
 	e.mu.Unlock()
 	if !known {
-		if _, ok := e.fromDisk(id); !ok {
+		r, ok := e.fromDisk(id)
+		if !ok {
 			return serr.New("no such run", "run", id)
+		}
+		// fromDisk settles a record: one whose writer died reads
+		// interrupted, so running or queued here has a live writer
+		if r.Status == pipeline.Running || r.Status == pipeline.Queued {
+			return fmt.Errorf("%w: run %s (%s %s) is running in another process — a `dbc job run` from a shell "+
+				"or cron, or another dbc web; stop it there (Ctrl+C)", ErrElsewhere, id, r.Kind, r.Name)
 		}
 		return nil
 	}

@@ -238,10 +238,25 @@ run|check|export NAME` (`-p k=v`, `--preview N`, `--fragment F`, `-t json`),
   fires, `POST /api/v1/jobs/:name/run` = manual with the cookie, webhook
   with the Bearer secret and only for `triggers.webhook`),
   `GET /api/v1/runs?kind=&name=&status=&since=&limit=` adds the history;
-  window events `jobs`, `job.state`, `job.notice`. The page has no jobs tab
-  yet: `pipelines.js` keeps job runs apart and logs their start and end.
-- The plan for the rest (the jobs tab and Runs view, the TUI, plugin
-  files) is `ai_docs/plans/pipelines.md`.
+  window events `jobs`, `job.state`, `job.notice`. `job-check` also returns
+  the job's **layout** (`jobs.Spec.Layout`, over package `dag`, which
+  `erd/layout.go` uses for ranking, ordering and placing too); so does
+  `GET /api/v1/jobs/:name/layout`, and `GET /api/v1/runs/:id` for a job
+  (`jobs.Run.Layout`, as it ran). `POST /api/v1/runs/:id/cancel` answers
+  409 for a run another process runs (`jobs.ErrElsewhere`).
+- The page: **job tabs** (`web/static/js/jobs.js`, `t.job`, `#jobp`, saved
+  tabs' `job` column) — the DAG canvas (the server's layout; palette of
+  pipelines; wire output ● to a card to add an after), the inspector (cron
+  lines with their next fires, webhook, policy, step params), ▶ Run landing
+  on the tab's Runs face; the **Runs view** (`web/static/js/runs.js`,
+  `Alt+R`, ◷ Runs): the list, and a run page drilling DAG → fragments on
+  the run's time axis → node counters → the filtered log, live from the
+  `job.*` events (another process's run is re-read every 2 s). The web e2e
+  step "job tabs and the runs view" (`web/e2e/jobs_test.go`) drives both.
+- `dbc run cancel ID [--url U] [--secret S]` (`$DBC_WEB_URL`,
+  `$DBC_WEB_SECRET`) stops a run of a running dbc web through that API.
+- The plan for the rest (the TUI, plugin files) is
+  `ai_docs/plans/pipelines.md`.
 
 ## yaegi pitfalls
 

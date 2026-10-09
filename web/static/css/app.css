@@ -988,7 +988,7 @@ a.btnlink:hover { border-color: var(--accent); }
 .slist .sact { display: flex; gap: 4px; flex: none; visibility: hidden; }
 .slist li.cur .sact, .slist li:hover .sact { visibility: visible; }
 .slist .sact button { font-size: 11px; padding: 0 6px; line-height: 1.5; }
-.slist .srow.pipeline .sname { color: var(--accent); }
+.slist .srow.pipeline .sname, .slist .srow.job .sname { color: var(--accent); }
 
 /* ── pipeline tabs ─────────────────────────────────────────────────────────
    A pipeline tab lays its canvas (#pipe, pipelines.js) over the editor, in
@@ -1135,3 +1135,143 @@ a.btnlink:hover { border-color: var(--accent); }
   background: color-mix(in srgb, var(--warn) 10%, transparent); }
 .idiag.error { border-left-color: var(--err); background: color-mix(in srgb, var(--err) 10%, transparent); }
 .pparams .ifield { min-width: 360px; }
+
+/* ── DAG cards: a job's steps (jobs.js on the canvas, runs.js on a run page)
+   A card per step, placed by the server's layout (package dag); an SVG of
+   Bezier edges under them. The card's left edge and glyph carry its state
+   in the run it shows: ● running ✓ succeeded ✗ failed ↷ skipped ■ stopped
+   ⚠ interrupted. On a run page the critical path — the chain of steps that
+   set when the run ended — is drawn bold. */
+.dlayer, .jstage { position: absolute; left: 0; top: 0; }
+.dlayer { position: relative; }
+.dedges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.dedges .edge { fill: none; stroke: var(--muted); stroke-width: 1.6; }
+.dedges .edge.sel { stroke: var(--accent); stroke-width: 2.4; }
+.dedges .edge.crit { stroke: var(--accent); stroke-width: 3; }
+.dedges .edge.to-skipped, .dedges .edge.to-queued { stroke-dasharray: 5 4; }
+.dedges .edge.live { stroke: var(--accent); stroke-dasharray: 5 4; }
+.dedges .ehit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }
+.dcard { position: absolute; padding: 4px 9px 4px 10px; border: 1px solid var(--line); border-left: 3px solid var(--muted);
+  border-radius: 5px; background: var(--panel2); user-select: none; font-size: 12px; line-height: 1.38; cursor: pointer; }
+.dcard.s-running { border-left-color: var(--warn); }
+.dcard.s-succeeded { border-left-color: var(--accent); }
+.dcard.s-failed, .dcard.s-interrupted { border-left-color: var(--err); background: color-mix(in srgb, var(--err) 12%, var(--panel2)); }
+.dcard.s-skipped, .dcard.s-canceled { opacity: .7; }
+.dcard.crit { border-width: 2px; border-left-width: 4px; }
+.dcard.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.dcard.drop { box-shadow: 0 0 0 2px var(--accent); }
+.dcard.bad { border-color: var(--err); }
+.dcard.warn { border-color: var(--warn); }
+.dcard .ctop { display: flex; gap: 5px; align-items: baseline; min-width: 0; }
+.dcard .cid { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dcard .ctime { margin-left: auto; color: var(--muted); font-size: 11px; }
+.dcard .croot { color: var(--accent); }
+.dcard .cd { margin-left: auto; color: var(--warn); }
+.dcard.bad .cd { color: var(--err); }
+.dcard .cp { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dcard .csum, .dcard .cnum, .dcard .cerr { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dcard .csum { color: var(--muted); }
+.dcard .cnum { color: var(--accent); }
+.dcard .cerr { color: var(--err); }
+.dcard .pport { top: calc(50% - 7px); }
+.dst { color: var(--muted); }
+.dst.s-running, .s-running > .dst { color: var(--warn); }
+.dst.s-succeeded { color: var(--accent); }
+.dst.s-failed, .dst.s-interrupted { color: var(--err); }
+
+/* ── job tabs (jobs.js) ──────────────────────────────────────────────────
+   #jobp is a .pipe box: the pipeline tab's bar, palette, canvas and
+   inspector, with the canvas holding DAG cards; its second face, .jruns,
+   holds the Runs view (runs.js) in the canvas's place. */
+.jfaces { display: inline-flex; gap: 0; }
+.jfaces button { border-radius: 0; }
+.jfaces button:first-child { border-radius: 3px 0 0 3px; }
+.jfaces button:last-child { border-radius: 0 3px 3px 0; margin-left: -1px; }
+.jcanvas .dcard { cursor: pointer; }
+.jhint { position: absolute; left: 24px; top: 24px; width: 380px; color: var(--muted); font-style: italic; }
+.jruns { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+.jcronrow { display: flex; gap: 4px; align-items: center; margin-bottom: 2px; }
+.jcronrow input { flex: 1 1 auto; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 3px; padding: 3px 5px; min-width: 0; }
+.jcronrow .jurl { font-size: 11px; color: var(--muted); }
+.jfires { color: var(--muted); font-size: 11px; margin: 0 0 8px; }
+.jfires.bad { color: var(--err); }
+.jafter { margin-bottom: 3px; }
+.jparams .ifield { margin-bottom: 6px; }
+
+/* ── the Runs view (runs.js): a dialog (Alt+R), or a job tab's face ──────
+   A bar of filters over the list; a run page is its bar, then one scroll
+   of sections: the DAG, the step's fragments as bars on the run's time
+   axis, the fragment's nodes, the log of what is picked. */
+.modal.runs { width: min(1180px, calc(100vw - 48px)); height: calc(100vh - 64px); max-height: none; }
+.rvbox { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.rv { flex: 1; min-height: 0; display: flex; flex-direction: column; outline: none; }
+.rvbar { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line);
+  white-space: nowrap; overflow: hidden; font-size: 12px; }
+.rvbar select { font: inherit; font-size: 12px; }
+.rvbar .spacer { flex: 1 1 auto; }
+.rvbar button { font-size: 12px; padding: 1px 8px; }
+.rvlive { color: var(--warn); }
+.rvback { font-weight: 600; }
+.rvhead { display: flex; align-items: baseline; gap: 8px; min-width: 0; overflow: hidden; }
+.rvhead .rvname { color: var(--fg); }
+.rvhead .rvmeta { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.rvacts { display: flex; gap: 6px; }
+.rvlist { flex: 1 1 auto; overflow: auto; padding: 4px 6px; font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.rvrow { display: grid; grid-template-columns: 18px minmax(90px, 1.1fr) 64px 72px 128px 64px minmax(160px, 3fr); gap: 8px;
+  padding: 0 6px; border-radius: 3px; cursor: pointer; white-space: nowrap; }
+.rvrow > span { overflow: hidden; text-overflow: ellipsis; }
+.rvrow:hover { background: var(--panel2); }
+.rvrow.cur { background: var(--sel); }
+.rvkind, .rvtrig, .rvwhen, .rvtook { color: var(--muted); }
+.rvtook { text-align: right; }
+.rvrows { color: var(--accent); }
+.rverr { color: var(--err); }
+.rvsteps span { margin-right: 4px; color: var(--muted); }
+.rvsteps .s-running { color: var(--warn); }
+.rvsteps .s-succeeded { color: var(--accent); }
+.rvsteps .s-failed { color: var(--err); }
+.rvst { text-align: center; color: var(--muted); }
+.rvst.s-running, .rvst.s-queued { color: var(--warn); }
+.rvst.s-succeeded { color: var(--accent); }
+.rvst.s-failed, .rvst.s-interrupted { color: var(--err); }
+.rvscroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 12px 16px; }
+.rvscroll > section { margin-bottom: 14px; }
+.rvsub { display: flex; align-items: baseline; gap: 6px; color: var(--muted); font-size: 12px; margin: 0 0 6px; }
+.rvsub .rvpv { margin-left: auto; font-size: 11px; padding: 0 8px; }
+.rverrline { color: var(--err); font-size: 12px; margin: 0 0 8px; white-space: pre-wrap; }
+.rvparams { color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0 0 8px; }
+.dwrap { overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); max-height: 46vh; }
+/* the timeline: a fragment a row — its name, a bar on the run's axis, its
+   counters */
+.tline { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.trow { display: grid; grid-template-columns: minmax(110px, 180px) 1fr minmax(160px, 280px); gap: 10px; align-items: center;
+  padding: 2px 6px; border-radius: 3px; cursor: pointer; }
+.trow:hover { background: var(--panel2); }
+.trow.sel { background: var(--sel); }
+.tname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ttrack { position: relative; height: 12px; border-radius: 2px; background: color-mix(in srgb, var(--line) 45%, transparent); }
+.tbar { position: absolute; top: 0; bottom: 0; border-radius: 2px; background: var(--muted); }
+.tbar.s-running { background: var(--warn); }
+.tbar.s-succeeded { background: var(--accent); }
+.tbar.s-failed, .tbar.s-interrupted { background: var(--err); }
+.tmeta { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.terr { color: var(--err); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.taxis { display: grid; grid-template-columns: minmax(110px, 180px) 1fr minmax(160px, 280px); gap: 10px; padding: 0 6px;
+  color: var(--muted); font-size: 10px; }
+.taxis .tax { display: flex; justify-content: space-between; }
+/* a fragment's nodes */
+.ntable { border-collapse: collapse; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; min-width: 560px; }
+.ntable th { text-align: left; color: var(--muted); font-weight: 600; padding: 2px 12px 2px 0; border-bottom: 1px solid var(--line); }
+.ntable td { padding: 2px 12px 2px 0; white-space: nowrap; }
+.ntable td.num { text-align: right; }
+.ntable th:nth-child(n+3) { text-align: right; }
+.ntable tr.bad td { color: var(--err); }
+.ntable tr.nerr td { color: var(--err); white-space: pre-wrap; padding-bottom: 6px; }
+.ntable .nplug { color: var(--muted); }
+.rvlog { max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); padding: 4px 8px;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.rvline { white-space: pre-wrap; word-break: break-word; }
+.rvline .t { color: var(--muted); margin-right: 8px; }
+.rvline .err { color: var(--err); }
+.jruns .rvlog { max-height: 240px; }

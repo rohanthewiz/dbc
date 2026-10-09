@@ -1332,7 +1332,9 @@ the run slot, pinned sessions, cancel, history, explain and the assistant's
 data rules behave the same in both. Beside query tabs it has
 [script tabs](#script-tabs-in-dbc-web), which edit and run Go scripts, and
 [pipeline tabs](#pipeline-tabs-in-dbc-web), which draw pipelines on a
-canvas and preview and run them.
+canvas and preview and run them, and
+[job tabs](#job-tabs-and-the-runs-view-in-dbc-web), which draw jobs — DAGs
+of pipelines — beside the **Runs** view (`Alt+R`), every run drilled into.
 
 **Layout.** A draggable bar separates every pair of neighbouring sections:
 the sidebar and the work column, Connections and Tables, the editor and the
@@ -1479,6 +1481,7 @@ file's connections are changed in the file. The TUI has the same form —
 | `F12` · `Shift+F12` · `F2` | on an alias, a CTE name or a column the query names: go to its declaration · list its uses · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename)) |
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | new tab · close tab · go to tab |
 | `Alt+N` · `Alt+C` | new console · next console of the tab's database |
+| `Alt+R` | every run of a job or a pipeline, drilled into (see [Job tabs and the Runs view](#job-tabs-and-the-runs-view-in-dbc-web)) |
 | `{` · `}` · `P` · `r` · `S` · `x` | in the results: previous · next result tab · pin · rerun its query into it · share with the assistant · close |
 | `F1` or `?` | every key |
 
@@ -2133,11 +2136,75 @@ and its log. It is rewritten every two seconds while the run goes, so a
 crash leaves a record the next dbc reads as **interrupted**, and the
 newest `runs_keep` (200) per name are kept. Any process reads them —
 `dbc runs` from a shell sees what `dbc web`'s schedule ran, and the
-other way round. The jobs canvas and the Runs view in dbc web are next
-on the plan ([`ai_docs/plans/pipelines.md`](ai_docs/plans/pipelines.md),
-Phase 4); in dbc web for now a job run's start and end are a line each
-in the log, its scheduler's notes too (a skipped or missed fire, a job
-file that does not parse), and the API above runs and lists them.
+other way round. In dbc web they are the [Runs view](#job-tabs-and-the-runs-view-in-dbc-web).
+
+### Job tabs and the Runs view in dbc web
+
+`Ctrl+O` lists your jobs (with when each fires next and how its last run
+ended) and the examples beside the scripts and pipelines. Copy an
+example, or **+ New ▾ → Job**, and it opens in a **job tab**: its DAG on a
+canvas in the editor's place, a palette of your pipelines and the
+examples on the left, an inspector on the right.
+
+```
+┌ ⧉ nightly.json ●                       ⊞ Design ◷ Runs ⊡ Fit { } JSON ⋯ ┐
+├ pipelines ┬ canvas ─────────────────────────────────────────┬ inspector ─┤
+│ YOURS     │ ┌ copy ◉ ───┐     ┌ clean ─────┐   ┌ report ──┐ │ job        │
+│ orders    │ │⛓ copy-cats●┼──┬─►●⛓ clean-and…●┼─┬►●⛓ cats-re… │ │ schedule   │
+│ EXAMPLES  │ └───────────┘  │  └────────────┘ │ └──────────┘ │ 0 2 * * *  │
+│ copy-cats │                │  ┌ breeds ────┐ │              │ next: Fri… │
+│ …         │                └─►●⛓ breed-co…●┼─┘              │ policy …   │
+└───────────┴──────────────────────────────────────────────────┴────────────┘
+```
+
+- **The cards are placed for you**, left to right by how far downstream
+  each step is, ordered to keep the dependencies from crossing — the same
+  layout the ERD uses, worked out by dbc web. There is nothing to arrange:
+  a step's place says what it waits for.
+- **Build it by dragging.** Drag a pipeline from the palette onto a card
+  to add a step that waits for that card's; onto the canvas, a step after
+  the selected one (the first step is the job's root, `◉`); a click adds
+  it after the selected step. Drag a card's output ● to another card to
+  make that one wait for this one too — a loop is refused. Click a card or
+  a dependency to select it; `Delete` removes it, `Ctrl+D` duplicates a
+  step. The canvas pans, zooms and fits as a pipeline's does.
+- **The inspector**, with nothing selected, edits the job: its name,
+  description and params; its **schedule** — each cron line shows its next
+  five fire times as you type, so you see what you wrote — its time zone,
+  catch-up and **webhook** (with its URL and a ⧉ curl command); and its
+  policy. A step's inspector sets its pipeline (↗ opens it), what it
+  waits for, and the pipeline's params, each with its default and doc.
+- **Checked as you edit**, as `dbc job check` would: every step's pipeline
+  is found and checked too, and what is wrong is marked ⚠ on its card.
+- **▶ Run** (`Ctrl+Enter`) saves, then runs the job in dbc web's engine.
+  The tab turns to its **◷ Runs** face, on the new run's page, live; ■ Stop
+  stops it. A preview sink in one of its pipelines lands its rows in the
+  tab's grid. Back on **⊞ Design**, each card shows its step's state in
+  the job's newest run — this tab's, a scheduled one, another window's.
+- Saving, drafts, `{ } JSON` and rename are the pipeline tab's.
+
+**The Runs view** — `Alt+R` or ◷ Runs on the top bar, for every run; a job
+tab's ◷ Runs for that job's — lists the run records (any process's: a
+cron's `dbc job run` too), newest first, filtered by job or pipeline,
+status and age, with live rows for what runs now. A click opens a **run
+page** that drills down:
+
+```
+‹ Runs  ✓ succeeded nightly · job · manual · 02:00:00 · 3m 12s · 1,204 rows   ⧉ id ↗
+┌ the DAG: each step coloured by its state, its time and rows; the ──────┐
+│ critical path (the chain that set when the run ended) drawn bold      │
+├ ⛓ clean · clean-and-load ✓ — its fragments as bars on the run's ──────┤
+│   time axis, so the wait before a step and its fragments' order show │
+├ ▤ load — its nodes: rows in and out, batches, rows/s, time, the error ┤
+│   pinned to the node that raised it                                   │
+├ log · clean/load — the run's log, narrowed to what is picked ─────────┤
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+A running run's page moves with it (one another process runs is read
+again every two seconds); ■ Stop stops it; ↗ opens its job or pipeline;
+◎ Open preview goes to the tab whose grid holds a preview sink's rows.
+`Backspace` goes back to the list.
 
 ## Headless mode
 
@@ -2439,6 +2506,7 @@ leaves a record in `runs_dir`, as every run does ([Jobs](#jobs)).
 ./dbc runs --job nightly --status failed --since 7d
 ./dbc run show 20261009-020000-7f3a               # one run as a tree: job → pipelines → fragments → nodes
 ./dbc runs --sql "SELECT step, avg(seconds) FROM pipelines GROUP BY step ORDER BY 2 DESC"
+./dbc run cancel 20261009-020000-7f3a --secret S  # stop a run of a running dbc web (its schedule's, the browser's)
 ```
 
 `dbc job run` runs the job in its own process: lines stream with their
@@ -2451,6 +2519,14 @@ without `dbc web`: `0 2 * * * /usr/local/bin/dbc job run nightly`.
 (`run_id`, `step`, …), `fragments` and `nodes`, each with its status,
 times, `seconds` and rows — into a throwaway bytdb and runs the query in
 any `-t` format.
+
+`dbc run cancel` asks a running `dbc web` to stop a run, through its API:
+`--url` (default `http://127.0.0.1:8450`, or `$DBC_WEB_URL`) and the
+secret dbc web was started with (`--secret`, or `$DBC_WEB_SECRET` for
+both — dbc web keeps a fresh one in memory only otherwise). It waits for
+the run to roll back and says how it ended. A run a `dbc job run` is
+running belongs to that process: dbc web refuses it, and Ctrl+C there
+stops it.
 
 ### Multi-statement runs
 

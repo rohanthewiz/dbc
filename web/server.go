@@ -314,6 +314,7 @@ func (s *Server) routes() {
 	r.Delete("/api/v1/jobs/:name", s.handleJobTrash)
 	r.Post("/api/v1/jobs/:name/rename", s.handleJobRename)
 	r.Post("/api/v1/jobs/:name/run", s.handleJobRun)
+	r.Get("/api/v1/jobs/:name/layout", s.handleJobLayout)
 	r.Get("/api/v1/runs", s.handleRuns)
 	r.Get("/api/v1/runs/:id", s.handleRunRecord)
 	r.Post("/api/v1/runs/:id/cancel", s.handleRunCancel)

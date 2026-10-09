@@ -279,6 +279,18 @@ func (u *term) key(code rune, mod ...uv.KeyMod) {
 // ctrl presses Ctrl plus a letter.
 func (u *term) ctrl(r rune) { u.key(r, uv.ModCtrl) }
 
+// raw sends bytes as a terminal would, straight to the pty, for keys the
+// emulator cannot encode: it has no sequence for a shifted function key
+// (vt's key.go knows F1–F12 bare), so Shift+F12 goes as xterm's own
+// "\x1b[24;2~". The emulator's copy loop writes to the same pty; a short
+// write from here lands whole between its writes, as a keypress would.
+func (u *term) raw(seq string) {
+	if _, err := io.WriteString(u.ptmx, seq); err != nil {
+		u.t.Fatalf("pty write: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+}
+
 // typeText types s a key at a time, as a person does, so the editor's
 // per-key behavior (completion opening on the second letter) runs.
 func (u *term) typeText(s string) {

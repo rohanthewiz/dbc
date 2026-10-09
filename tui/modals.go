@@ -41,10 +41,23 @@ func (modalBase) hover(*Model, int, int)              {}
 func (modalBase) wheel(*Model, int, int, int)         {}
 func (modalBase) paste(*Model, string)                {}
 
-// modalRect is where the open modal sits: centered, clamped to the screen.
+// placedModal is a modal that picks its own spot rather than the center:
+// the references list (usages.go) sits under the editor, so the editor
+// stays in view. place reports false to fall back to the center.
+type placedModal interface {
+	place(m *Model) (Rect, bool)
+}
+
+// modalRect is where the open modal sits: centered, clamped to the screen,
+// unless it places itself.
 func (m *Model) modalRect() Rect {
 	if m.modal == nil {
 		return Rect{}
+	}
+	if p, ok := m.modal.(placedModal); ok {
+		if r, ok := p.place(m); ok {
+			return r
+		}
 	}
 	w, h := m.modal.size(m.w, m.h)
 	w, h = min(w, m.w-2), min(h, m.h-2)

@@ -72,16 +72,34 @@ func TestShiftF12MarksUsesAndStepsThroughThem(t *testing.T) {
 	if c.StyleAt(x+7, y).Attr&AttrUnderline == 0 {
 		t.Error("the use is not drawn marked")
 	}
+	// and the references list is open on the use the caret is in
+	u, ok := m.modal.(*usesModal)
+	if !ok {
+		t.Fatalf("modal = %T, want the references list", m.modal)
+	}
+	if u.lst.cur != 0 {
+		t.Errorf("list cursor = %d, want the first use (o.id)", u.lst.cur)
+	}
 
-	// again: the caret steps to the next use, then the next, wrapping
-	start := m.editor.Caret()
+	// again: the list steps to the next use, then the next, wrapping;
+	// Enter puts the caret there
 	drive(t, m, fkey(tea.KeyF12, true))
-	if got, want := m.editor.Caret(), strings.Index(symSQL, "o.total"); got != want || start == got {
+	key(t, m, "enter")
+	if m.modal != nil {
+		t.Fatal("Enter left the list open")
+	}
+	if got, want := m.editor.Caret(), strings.Index(symSQL, "o.total"); got != want {
 		t.Fatalf("caret = %d, want the next use at %d", got, want)
 	}
-	for range 3 {
+	if _, a, b := m.editor.Selection(); a != b {
+		t.Error("Enter left the use selected: a typed key would replace it")
+	}
+	// Shift+F12 with the marks still up reopens the list one use on
+	drive(t, m, fkey(tea.KeyF12, true))
+	for range 2 {
 		drive(t, m, fkey(tea.KeyF12, true))
 	}
+	key(t, m, "enter")
 	if got, want := m.editor.Caret(), strings.Index(symSQL, "o.id"); got != want {
 		t.Errorf("after wrapping, caret = %d, want %d", got, want)
 	}
@@ -92,9 +110,81 @@ func TestShiftF12MarksUsesAndStepsThroughThem(t *testing.T) {
 		t.Error("Esc left the marks")
 	}
 	drive(t, m, fkey(tea.KeyF12, true))
+	key(t, m, "esc") // closes the list, keeps the marks
+	if m.modal != nil || m.editor.liveMarks() == nil {
+		t.Fatalf("Esc in the list: modal %T, marks %v", m.modal, m.editor.liveMarks())
+	}
 	typeText(t, m, "x")
 	if m.editor.liveMarks() != nil {
 		t.Error("an edit left the marks")
+	}
+}
+
+// The list previews each use in the editor as its cursor moves, and Esc
+// puts the caret, selection and scroll back as they were.
+func TestUsesListPreviewsAndEscGoesBack(t *testing.T) {
+	m := symbolModel(t, symSQL, "o.id", 1)
+	before := m.editor.saveCaret()
+	drive(t, m, fkey(tea.KeyF12, true))
+	key(t, m, "down")
+	key(t, m, "down")
+	sel, a, _ := m.editor.Selection()
+	if sel != "o" || a != strings.Index(symSQL, "o\nWHERE") {
+		t.Fatalf("preview selection = %q at %d, want the declaration", sel, a)
+	}
+	key(t, m, "esc")
+	if m.modal != nil {
+		t.Fatal("Esc left the list open")
+	}
+	if got := m.editor.saveCaret(); got != before {
+		t.Errorf("after Esc the editor is at %+v, want %+v", got, before)
+	}
+}
+
+// Each row is the use's line number and its line, the declaration tagged;
+// the list sits under the editor, which stays in view; a click on a row
+// goes to that use.
+func TestUsesListRowsAndClick(t *testing.T) {
+	m := symbolModel(t, symSQL, "o.id", 0)
+	drive(t, m, fkey(tea.KeyF12, true))
+	c := frame(m)
+	r := m.modalRect()
+	if r.Y != m.lay.results.Y || r.X != m.lay.editor.X {
+		t.Errorf("list at %+v, want over the results pane under the editor (%+v)", r, m.lay.editor)
+	}
+	// the editor shows the line too; the list's copy is the one inside r
+	y := -1
+	for yy := r.Y + 1; yy < r.Y+r.H-1; yy++ {
+		if strings.Contains(c.Line(yy), "FROM orders o") {
+			y = yy
+			break
+		}
+	}
+	if y < 0 {
+		t.Fatalf("the declaration's line is not in the list:\n%s", c.String())
+	}
+	if row := c.Line(y); !strings.Contains(row, " 2 ") || !strings.Contains(row, "declared") {
+		t.Errorf("declaration row = %q, want its line number and \"declared\"", row)
+	}
+	click(t, m, r.X+4, y)
+	if m.modal != nil {
+		t.Fatal("a click on a row left the list open")
+	}
+	if got, want := m.editor.Caret(), strings.Index(symSQL, "o\nWHERE"); got != want {
+		t.Errorf("caret = %d, want the declaration at %d", got, want)
+	}
+}
+
+// A name used only where it is declared is marked but gets no list.
+func TestShiftF12OneUseOpensNoList(t *testing.T) {
+	const sql = "WITH t AS (SELECT 1) SELECT 2"
+	m := symbolModel(t, sql, "t AS", 0)
+	drive(t, m, fkey(tea.KeyF12, true))
+	if len(m.editor.liveMarks()) != 1 {
+		t.Fatalf("marks = %v, want the declaration alone", m.editor.liveMarks())
+	}
+	if m.modal != nil {
+		t.Errorf("modal = %T, want no list for one use", m.modal)
 	}
 }
 

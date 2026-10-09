@@ -55,11 +55,6 @@ ten session docs in `ai_docs/claude_sessions/`
   host's palette or its own dark one (`theme.Light()` exists, used for plan
   files). Would need a place to put it (no settings menu) and to decide how
   it interacts with a live cats theme.
-- **N-118** · raised `2026-1005-1450-tui-web-parity` · value low
-  A references list for ⇧F12 in the TUI, like Monaco's peek: today the uses
-  are underlined, listed by line in the log, and ⇧F12 again steps through
-  them. A small modal list (line + text, Enter jumps) if stepping is not
-  enough.
 
 
 ## Validate
@@ -388,6 +383,13 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-118** · raised `2026-1005-1450-tui-web-parity` · value low
+  A references list for ⇧F12 in the TUI, like Monaco's peek: today the uses
+  are underlined, listed by line in the log, and ⇧F12 again steps through
+  them. A small modal list (line + text, Enter jumps) if stepping is not
+  enough.
+  closed 2026-10-08, `2026-1008-1917-tui-references-list` (from the cats-todo backlog): `tui/usages.go` — ⇧F12 still marks and logs the uses, and with two or more opens `usesModal`: one row per use (line number, the line with leading blanks trimmed and the use underlined in the editor's syntax colours, "declared" on the declaration; a long line is shown from just before the use behind `…`). It places itself over the results pane under the editor (new `placedModal` in `modalRect`, centered when that pane is too short) so the editor previews the use the cursor is on, as a selection since the caret is hidden under a modal. ↑↓/PgUp/PgDn/Home/End and ⇧F12 (wraps) step, Enter or a click lands the caret at the use's start (no selection left for a key to replace), Esc or ✕ restores caret, selection and scroll (`caretView`). ⇧F12 again with the marks up reopens the list one use on, so repeated ⇧F12 still steps; a lone declaration gets marks but no list. Help, README. Tests `TestShiftF12MarksUsesAndStepsThroughThem` (reworked), `TestUsesListPreviewsAndEscGoesBack`, `TestUsesListRowsAndClick`, `TestShiftF12OneUseOpensNoList`; e2e step "Shift+F12 lists the uses; Enter goes to one" (new `term.raw`: x/vt cannot encode shifted function keys, so it sends xterm's `ESC[24;2~`).
 
 - **N-137** · raised `2026-1007-0229-next-list-sweep-3` · value low
   The TUI assistant does not send a script's context. dbc web's script

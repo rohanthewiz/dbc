@@ -16,7 +16,8 @@ import (
 //
 //	F12 / Ctrl+click ──► Resolve(text, caret) ──► select the declaration
 //	Shift+F12 ─────────► Resolve ──► mark every use (editor.marks)
-//	   again, on the same symbol ──► caret to the next use (wraps)
+//	                              └─► references list (usesModal, usages.go)
+//	   again, on the same symbol ──► the list, on the next use (wraps)
 //	F2 ────────────────► Resolve: refusal? ─► the log says why
 //	                        └─► rename prompt (promptModal), name filled in
 //	                              Enter ─► ws.Rename ─► one undoable edit
@@ -37,7 +38,8 @@ import (
 //
 // Stepping through the uses needs no extra state either: the marks are the
 // uses in buffer order, so "next" is the first one starting after the
-// caret, wrapping to the first.
+// caret, wrapping to the first. The references list is built from the
+// marks too, so it and the underlines always agree.
 
 // editorMark is a highlighted byte span of the editor's text: a use of the
 // symbol whose usages are shown, def marking its declaration.
@@ -175,10 +177,13 @@ func (m *Model) gotoDefinition() tea.Cmd {
 	return nil
 }
 
-// showUsages (Shift+F12) marks every use of the name under the caret. Asked
-// again on the same symbol, while its marks still show, it moves the caret
-// to the next use instead — the terminal's stand-in for Monaco's list of
-// references, which has no room here.
+// showUsages (Shift+F12) marks every use of the name under the caret and
+// opens the references list over them (usages.go), its cursor on the use
+// the caret is in. Asked again on the same symbol while its marks still
+// show — the list closed with Enter or Esc — it reopens the list one use
+// further on, so pressing Shift+F12 repeatedly still steps through the uses
+// as it did before there was a list. A name used only where it is declared
+// gets the marks and the log line but no list: one row is nothing to pick.
 func (m *Model) showUsages() tea.Cmd {
 	sym := m.symbolAtCaret()
 	if sym.Kind == "" {
@@ -189,8 +194,8 @@ func (m *Model) showUsages() tea.Cmd {
 	for i, u := range sym.Uses {
 		marks[i] = editorMark{from: u.From, to: u.To, def: u == sym.Def}
 	}
-	if live := m.editor.liveMarks(); slices.Equal(live, marks) {
-		m.nextUse(marks)
+	if live := m.editor.liveMarks(); slices.Equal(live, marks) && len(marks) > 1 {
+		m.openUses(symbolWhat(sym), marks, nextUse(marks, m.editor.Caret()))
 		return nil
 	}
 	m.editor.setMarks(marks)
@@ -201,26 +206,37 @@ func (m *Model) showUsages() tea.Cmd {
 			lines = append(lines, n)
 		}
 	}
-	m.logf(logInfo, "%s: %s in this statement (line %s) — Shift+F12 again steps through them, Esc clears",
+	if len(marks) < 2 {
+		m.logf(logInfo, "%s: %s in this statement (line %s) — Esc clears the mark",
+			symbolWhat(sym), plural(len(marks), "use"), strings.Join(lines, ", "))
+		return nil
+	}
+	m.logf(logInfo, "%s: %s in this statement (line %s) — the list steps through them, Esc in the editor clears the marks",
 		symbolWhat(sym), plural(len(marks), "use"), strings.Join(lines, ", "))
+	m.openUses(symbolWhat(sym), marks, useAt(marks, m.editor.Caret()))
 	return nil
 }
 
-// nextUse puts the caret on the first mark that starts after it, wrapping
-// round to the first.
-func (m *Model) nextUse(marks []editorMark) {
-	caret := m.editor.Caret()
-	next := marks[0]
-	for _, mk := range marks {
-		if mk.from > caret {
-			next = mk
-			break
+// useAt is the index of the mark the caret is in or touching — the one
+// Shift+F12 was pressed on — else the first.
+func useAt(marks []editorMark, caret int) int {
+	for i, mk := range marks {
+		if caret >= mk.from && caret <= mk.to {
+			return i
 		}
 	}
-	m.editor.move(m.editor.posAt(next.from), false)
-	m.editor.goal = m.editor.dispCol(m.editor.cur)
-	m.drag.follow = true
-	m.compl = nil
+	return 0
+}
+
+// nextUse is the index of the first mark that starts after the caret,
+// wrapping round to the first.
+func nextUse(marks []editorMark, caret int) int {
+	for i, mk := range marks {
+		if mk.from > caret {
+			return i
+		}
+	}
+	return 0
 }
 
 // startRename (F2) opens the rename prompt on the name under the caret, or

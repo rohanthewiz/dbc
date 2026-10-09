@@ -378,7 +378,7 @@ dragging.
 | `Ctrl+P` | Query history of this database (`Tab`: every database) — filter, then `Enter` inserts (never runs) |
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | A new query tab · close the tab · go to tab N (see [Query tabs](#query-tabs)) |
 | `Alt+N` · `Alt+C` | A new console of the database · the database's next console (see [Consoles](#consoles-and-multi-statement-buffers)) |
-| `F12` · `Shift+F12` · `F2` | *(editor)* On an alias, a CTE name or a column the query names: go to its declaration · mark its uses (again: the next one) · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename)) |
+| `F12` · `Shift+F12` · `F2` | *(editor)* On an alias, a CTE name or a column the query names: go to its declaration · mark and list its uses · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename)) |
 | `Ctrl+Space` | *(editor)* Suggestions at the caret — they also open by themselves after `.`, `::` and two letters of a word (see below) |
 | `Ctrl+T` | List the tables and views on the active connection |
 | `Ctrl+L` | Jump to the connections list |
@@ -537,9 +537,14 @@ three are also in the editor's right-click menu, in the terminal as in
 `dbc web`.
 
 In the terminal, `F12` (or `Ctrl`+click) selects the declaration.
-`Shift+F12` marks every use in the statement (underlined) and names their
-lines in the log; pressed again on the same name it moves the caret to the
-next use, wrapping round, and `Esc` or any edit clears the marks. `F2` opens
+`Shift+F12` marks every use in the statement (underlined), names their
+lines in the log, and opens a references list under the editor — one row
+per use, its line number and text with the use underlined. `↑`/`↓` (or
+`Shift+F12` again, wrapping round) step through it while the editor above
+shows each use; `Enter` or a click puts the caret there and `Esc` goes back
+to where you were. Pressed again on the same name the list reopens on the
+next use. The marks outlive the list: `Esc` in the editor or any edit
+clears them. `F2` opens
 a prompt holding the current name: type the new one and `Enter` renames
 every use as one edit, which one `Ctrl+Z` undoes. A refused rename keeps the
 prompt open and says why under the field. They work within the

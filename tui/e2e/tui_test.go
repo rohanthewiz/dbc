@@ -142,6 +142,20 @@ func TestTUI(t *testing.T) {
 		u.waitFor("SELECT dg.name FROM dogs dg")
 	})
 
+	step(t, "Shift+F12 lists the uses; Enter goes to one", func() {
+		// the caret is still at the end, on the alias's declaration
+		u.raw("\x1b[24;2~") // Shift+F12, as xterm sends it (see raw)
+		u.waitFor("Uses of alias dg · 2", "declared")
+		u.key(uv.KeyUp) // the use in SELECT
+		u.key(uv.KeyEnter)
+		u.waitGone("Uses of alias dg")
+		// the caret is on dg.name: typing lands there
+		u.typeText("x")
+		u.waitFor("SELECT xdg.name FROM dogs dg")
+		u.ctrl('z')
+		u.waitFor("SELECT dg.name FROM dogs dg")
+	})
+
 	step(t, "a in Connections opens the add-connection form", func() {
 		u.ctrl('l')
 		u.key('a')

@@ -199,7 +199,10 @@ type Config struct {
 	// ResolveScriptsDir in scripts.go): as written it is relative to the
 	// config file, and absent it is ~/.config/dbc/scripts.
 	ScriptsDir string `toml:"scripts_dir"`
-	MaxRows    int    `toml:"max_rows"` // rows fetched from the server
+	// PipelinesDir is where pipelines live (pipelines.go): absolute after
+	// Load, ~/.config/dbc/pipelines when the file does not say.
+	PipelinesDir string `toml:"pipelines_dir"`
+	MaxRows      int    `toml:"max_rows"` // rows fetched from the server
 
 	// PGBin is the directory holding PostgreSQL's client tools (pg_dump,
 	// pg_restore) for dumps — `dbc dump` and both UIs' "Dump database…".
@@ -376,6 +379,9 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 func (c *Config) resolveScripts(cfgDir string) {
 	var warns []string
 	c.ScriptsDir, warns = ResolveScriptsDir(c.ScriptsDir, cfgDir)
+	var pw []string
+	c.PipelinesDir, pw = ResolvePipelinesDir(c.PipelinesDir, cfgDir)
+	warns = append(warns, pw...)
 	c.Warnings = append(c.Warnings, warns...)
 	if strings.TrimSpace(c.PGBin) != "" {
 		c.PGBin, warns = resolvePath("pg_bin", c.PGBin, cfgDir)

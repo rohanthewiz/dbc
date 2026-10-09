@@ -1,0 +1,14 @@
+{
+  "name": "copy-cats",
+  "desc": "Copy the demo cats table from the SQLite demo into the bytdb demo, created on the way.",
+  "fragments": [
+    {
+      "name": "cats",
+      "nodes": [
+        { "id": "src", "plugin": "sql.table", "cfg": { "conn": "demo-sqlite", "table": "cats", "order": "id" } },
+        { "id": "dst", "plugin": "sql.write", "cfg": { "conn": "demo-bytdb", "table": "cats_copy", "create": "true", "truncate": "true", "key": "id" } }
+      ],
+      "edges": [ ["src", "dst"] ]
+    }
+  ]
+}

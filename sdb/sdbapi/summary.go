@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/doc"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -70,6 +71,17 @@ func render(api *API) string {
 			head += " = " + t.Of
 		}
 		line("", head, t.Doc)
+		// the pipeline types are a tier of their own (a script writes a
+		// handful of builder calls, not a spec by hand): their statistics
+		// and spec structs are listed by name alone, their fields left
+		// out, so the summary stays at a size the assistant reads every
+		// conversation. Batch, Col and Env keep theirs: a Go node is
+		// written against them.
+		if strings.HasPrefix(t.Of, "pipeline.") && !slices.Contains([]string{"Batch", "Col", "Env"}, t.Name) {
+			if t.Kind == "struct" {
+				continue
+			}
+		}
 		for _, f := range t.Fields {
 			line("  ", f.Name+" "+f.Type, f.Doc)
 		}

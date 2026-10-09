@@ -52,6 +52,8 @@ type S struct {
 	// script may run statements from goroutines of its own.
 	catMu   sync.Mutex
 	catalog map[string]bool
+	// paths is where script and pipeline names resolve (WithPaths).
+	paths Paths
 }
 
 // New builds a script session. show receives results pushed via Show;

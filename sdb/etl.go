@@ -52,11 +52,11 @@ type openSet struct {
 	writers []*etl.Writer
 }
 
-// etlConn resolves a connection name to the etl package's view of it: the
+// ETLConn resolves a connection name to the etl package's view of it: the
 // pool, opened on first use under the run's context, and its SQL dialect.
 // Its Trace feeds the DDL log (LogDDL), so the CREATE TABLE a Copy makes or
 // a Writer's Setup runs is logged as a script's own Exec of it would be.
-func (s *S) etlConn(name string) (etl.Conn, error) {
+func (s *S) ETLConn(name string) (etl.Conn, error) {
 	drv, err := s.mgr.DriverOf(name)
 	if err != nil {
 		return etl.Conn{}, err
@@ -85,11 +85,11 @@ func (s *S) etlConn(name string) (etl.Conn, error) {
 // destination is loaded in one transaction (with its Create and Truncate),
 // so a failed or stopped copy leaves it as it was.
 func (s *S) Copy(src, dst, table string, opt CopyOpts) (CopyStats, error) {
-	from, err := s.etlConn(src)
+	from, err := s.ETLConn(src)
 	if err != nil {
 		return CopyStats{}, err
 	}
-	to, err := s.etlConn(dst)
+	to, err := s.ETLConn(dst)
 	if err != nil {
 		return CopyStats{}, err
 	}
@@ -105,7 +105,7 @@ func (s *S) Copy(src, dst, table string, opt CopyOpts) (CopyStats, error) {
 // Reader runs query on conn and streams its rows. Use the placeholder style
 // of the connection's driver ($1 postgres/bytdb, ? mysql/sqlite).
 func (s *S) Reader(conn, query string, args ...any) (*Reader, error) {
-	c, err := s.etlConn(conn)
+	c, err := s.ETLConn(conn)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +122,7 @@ func (s *S) Reader(conn, query string, args ...any) (*Reader, error) {
 // Writer starts a load into table on conn; rows passed to Write line up
 // with cols. Nothing is visible to other sessions until Close commits.
 func (s *S) Writer(conn, table string, cols []string, opt WriteOpts) (*Writer, error) {
-	c, err := s.etlConn(conn)
+	c, err := s.ETLConn(conn)
 	if err != nil {
 		return nil, err
 	}

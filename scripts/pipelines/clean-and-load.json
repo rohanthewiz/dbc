@@ -1,0 +1,33 @@
+{
+  "name": "clean-and-load",
+  "desc": "Read the demo cats at least min_age old, tidy them in Go, load them into a new table and stamp a log row.",
+  "params": {
+    "min_age": { "default": "2", "doc": "The youngest cat to take, in years" }
+  },
+  "fragments": [
+    {
+      "name": "clean",
+      "batch": 500,
+      "nodes": [
+        { "id": "src", "plugin": "sql.read", "cfg": {
+            "conn": "demo-sqlite",
+            "query": "SELECT id, name, breed, age, adopted FROM cats WHERE age >= ${min_age} ORDER BY id" } },
+        { "id": "tidy", "plugin": "go.transform", "cfg": {
+            "code": "// Upper-case the breed and add a label column.\nfunc Apply(b *sdb.Batch) (*sdb.Batch, error) {\n\tbreed := b.Col(\"breed\")\n\tfor i := range b.Rows {\n\t\tif s, ok := b.Rows[i][breed].(string); ok {\n\t\t\tb.Rows[i][breed] = strings.ToUpper(strings.TrimSpace(s))\n\t\t}\n\t}\n\tb.AddCol(\"label\", \"\", func(row int) any {\n\t\treturn fmt.Sprintf(\"%v (%v)\", b.Get(row, \"name\"), b.Get(row, \"age\"))\n\t})\n\treturn b, nil\n}\n" } },
+        { "id": "keep", "plugin": "rows.filter", "cfg": { "rules": "breed != UNKNOWN" } },
+        { "id": "dst", "plugin": "sql.write", "cfg": { "conn": "demo-sqlite", "table": "cats_clean", "create": "true", "truncate": "true" } },
+        { "id": "peek", "plugin": "preview", "cfg": { "rows": "20" } }
+      ],
+      "edges": [ ["src", "tidy"], ["tidy", "keep"], ["keep", "dst"], ["keep", "peek"] ],
+      "ui": { "src": [40, 80], "tidy": [260, 80], "keep": [480, 80], "dst": [700, 40], "peek": [700, 140] }
+    },
+    {
+      "name": "stamp",
+      "nodes": [
+        { "id": "log", "plugin": "sql.exec", "cfg": {
+            "conn": "demo-sqlite",
+            "sql": "CREATE TABLE IF NOT EXISTS pipeline_log (pipeline TEXT, fragment TEXT, rows INTEGER, at TEXT);\nINSERT INTO pipeline_log VALUES ('clean-and-load', 'clean', ${frag.clean.rows}, datetime('now'))" } }
+      ]
+    }
+  ]
+}

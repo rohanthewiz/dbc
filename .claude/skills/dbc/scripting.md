@@ -158,6 +158,41 @@ To check these in the real UIs, use the e2e suites (SKILL.md): the web
 step "script tabs" (`web/e2e/scripts_test.go`) and the TUI step that drives
 `e` through a stand-in `$EDITOR`.
 
+## Pipelines (package `pipeline`, via `sdb`)
+
+A pipeline is fragments in order; a fragment is one source → transforms →
+sinks (a tree, one input per node) or one action, run in batches
+(`Fragment.Batch`, default 1000) with the sinks committing together at
+the end. Specs are JSON in `~/.config/dbc/pipelines/*.json`
+(`config.PipelinesDir`); three examples are embedded under
+`scripts/pipelines/`. From the shell: `dbc pipelines`, `dbc pipeline
+run|check|export NAME` (`-p k=v`, `--preview N`, `--fragment F`, `-t json`),
+`dbc plugins`.
+
+- Plugins (`pipeline.Plugin`: name, kind, `Fields`, `New`, optional `Check`)
+  register at init: the SQL and row ones in `pipeline/builtin_*.go`, the
+  Go-code ones (`go.transform`, `go.source`, `go.action`, `script.run`) in
+  `script/plugins.go` because they need the interpreter. A `go.*` snippet
+  without a package clause is wrapped (`script.WrapSnippet`): standard
+  packages it names are imported for it. Entry points are plain funcs
+  looked up by name, called once per batch, panics recovered.
+- `pipeline.Host` is what a node sees as `e.S`; `*sdb.S` satisfies it, so
+  `sdb` aliases the types (`sdb.Batch`, `sdb.Env`, `sdb.Cfg`,
+  `sdb.NewPipeline`, `s.RunPipeline`, `s.RunPipelineNamed`,
+  `s.RunPipelineSpec`). Package `pipeline` must not import `sdb`.
+- The builder (`pipeline.Builder`, `sdb.Pipeline`) adds `Func`/`ThenFunc`
+  nodes a script's own Go; `pipeline.Gen` writes a spec as such a script
+  (`dbc pipeline export`); a spec with a func node cannot be exported.
+- `pipeline.Check` is the validation (`Diag{Where, Severity, Msg}`): names,
+  plugin fields, `${…}` references (a param, `frag.<earlier>.<key>`,
+  `run.*`), connection names when given, and the fragment's shape.
+- The direct shape — `sql.read`/`sql.table` on Postgres straight into
+  `sql.write` on Postgres — runs as `etl.Copy` and reports `Direct`.
+- After changing `sdb` or `pipeline` exports: add the symbol to
+  `script/engine.go`'s export map and run `go generate ./sdb/sdbapi`.
+- The plan for the rest (web editor, jobs, scheduler, monitoring, TUI,
+  plugin files) is `ai_docs/plans/pipelines.md`.
+
 ## yaegi pitfalls
 
 - **Two-value assignment into a map element stores nothing.**

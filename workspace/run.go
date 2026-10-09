@@ -382,7 +382,7 @@ func (w *Workspace) RunScript(path string) (Start, error) {
 			w.emit(&ScriptShow{Result: r, Conn: conn})
 		},
 		func(msg string) { w.emit(&ScriptPrint{Text: msg, Conn: conn}) },
-	).WithContext(ctx)
+	).WithContext(ctx).WithPaths(sdb.Paths{ScriptsDir: w.cfg.ScriptsDir, PipelinesDir: w.cfg.PipelinesDir})
 	job := func() Event {
 		ev := &RunDone{Tag: tag, Conn: conn, Script: true, ScriptPath: path, Err: script.Run(path, s)}
 		// which rows a script wrote is not known here, so it is taken to

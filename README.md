@@ -1888,6 +1888,102 @@ store it in the map. Present in yaegi v0.16.1 and on master as of 2026-10;
 tracked upstream in
 [traefik/yaegi#1655](https://github.com/traefik/yaegi/issues/1655).
 
+### Pipelines
+
+A pipeline is the ETL above as data: **fragments** in order, each a tree of
+**nodes** — one source, transforms along the way, sinks at the leaves — or
+a single rowless action. Inside a fragment rows move in **batches** (1000
+by default): the source yields one, each transform reshapes it, each sink
+loads it, and the sinks commit together at the fragment's end, so a
+fragment is all-or-nothing per sink. Nothing passes between fragments but
+what the sinks committed and a few named values, which is what makes a
+fragment restartable on its own and a pipeline readable from any SQL
+console. Pipelines live in `~/.config/dbc/pipelines/<name>.json` (or
+`pipelines_dir` in the config, resolved like `scripts_dir`):
+
+```json
+{
+  "name": "clean-and-load",
+  "params": { "min_age": { "default": "2", "doc": "The youngest cat to take" } },
+  "fragments": [
+    { "name": "clean", "batch": 500,
+      "nodes": [
+        { "id": "src",  "plugin": "sql.read",     "cfg": { "conn": "demo-sqlite",
+            "query": "SELECT id, name, breed, age FROM cats WHERE age >= ${min_age}" } },
+        { "id": "tidy", "plugin": "go.transform", "cfg": { "code": "func Apply(b *sdb.Batch) (*sdb.Batch, error) { … }" } },
+        { "id": "dst",  "plugin": "sql.write",    "cfg": { "conn": "demo-sqlite", "table": "cats_clean", "create": "true", "truncate": "true" } },
+        { "id": "peek", "plugin": "preview",      "cfg": { "rows": "20" } }
+      ],
+      "edges": [ ["src", "tidy"], ["tidy", "dst"], ["tidy", "peek"] ] },
+    { "name": "stamp",
+      "nodes": [ { "id": "log", "plugin": "sql.exec", "cfg": { "conn": "demo-sqlite",
+          "sql": "INSERT INTO pipeline_log VALUES ('clean', ${frag.clean.rows}, datetime('now'))" } } ] }
+  ]
+}
+```
+
+A node is a **plugin** with a config; every value is a string, and `${…}`
+in one is a parameter (`${min_age}`) or a value an earlier fragment
+published (`${frag.clean.rows}`; `sql.exec` publishes `affected`). The
+plugins, and the fields each takes, are listed by `dbc plugins`:
+
+| Plugin | Kind | Does |
+| --- | --- | --- |
+| `sql.read` | source | A query on a connection, streamed and uncapped; `args` bind its placeholders |
+| `sql.table` | source | A table, with `columns`, `where` and `order` |
+| `go.source` | source | `func Next(e *sdb.Env) (*sdb.Batch, error)` until it returns nil |
+| `cols.select` | transform | `keep`, `drop`, `rename` (one `old=new` per line) |
+| `rows.filter` | transform | Rules, one per line: `age >= 3`, `breed in Tabby,Siamese`, `name like %kit%`, `x notnull` |
+| `rows.limit` | transform | The first N rows, then the source stops |
+| `go.transform` | transform | `func Apply(b *sdb.Batch) (*sdb.Batch, error)`, per batch |
+| `sql.write` | sink | A table, by COPY on Postgres and batched INSERT elsewhere, in one transaction; `create`, `truncate`, `key`, `setup` |
+| `preview` | sink | The first N rows to the results view; nothing written |
+| `sql.exec` | action | Statements on a connection; publishes `affected` |
+| `go.action` | action | `func Run(s *sdb.S) error` — a script, inline |
+| `script.run` | action | A saved script by name: every script written so far is a valid fragment |
+
+A `go.*` node's code is interpreted by the same engine scripts are, with
+the standard packages it uses by name imported for it, and called once
+per **batch**: the row loop inside `Apply` runs at the interpreter's
+speed (about 15× slower than compiled Go for a lower-case-and-trim of one
+column — half a millisecond per thousand rows, or some two million rows a
+second), but nothing crosses the interpreter boundary per row. A fragment
+that is exactly `sql.read` or `sql.table` on Postgres into `sql.write` on
+Postgres, nothing between, runs as `s.Copy`'s direct COPY and says so.
+
+A script runs a pipeline by name, or builds one with its own funcs as
+nodes — the one thing the JSON cannot say:
+
+```go
+st, err := s.RunPipelineNamed("clean-and-load", sdb.PipelineOpts{Params: sdb.Params{"min_age": "5"}})
+
+p := sdb.NewPipeline("adhoc")
+f := p.Fragment("cats").Batch(2000)
+f.Node("sql.read", sdb.Cfg{"conn": "prod", "query": "SELECT id, email FROM users"})
+f.ThenFunc(func(b *sdb.Batch) (*sdb.Batch, error) {
+	c := b.Col("email")
+	for i := range b.Rows {
+		if e, ok := b.Rows[i][c].(string); ok {
+			b.Rows[i][c] = strings.ToLower(e)
+		}
+	}
+	return b, nil
+})
+f.Then("sql.write", sdb.Cfg{"conn": "local", "table": "users_copy", "create": "true", "truncate": "true"})
+st, err = s.RunPipeline(p, sdb.PipelineOpts{})
+s.Print("%s", st) // pipeline adhoc: 1 fragment, 48213 rows in 1.4s (succeeded)
+```
+
+`sdb.Batch` is `Cols []sdb.Col` and `Rows [][]any`, with `Col(name)`,
+`Get`, `Set`, `AddCol`, `Drop`, `Keep`, `Rename`, `Filter` and `Clone`.
+The stats name every fragment and node with rows in and out, batches and
+time, and `dbc pipeline export NAME` writes any pipeline file as the
+script above, to run or edit as one. Three examples are built in
+(`dbc pipelines` lists them): `copy-cats`, `clean-and-load` and
+`cats-report`, all on the demo connections. A visual editor and jobs
+(pipelines in a dependency graph, on a schedule) are planned in
+[`ai_docs/plans/pipelines.md`](ai_docs/plans/pipelines.md).
+
 ## Headless mode
 
 Everything works without the TUI, for cron jobs and shell pipelines:
@@ -2155,6 +2251,26 @@ array rather than a run of separate documents. A block format written with
 `s.Print` output is progress, not data, and streams as it happens. It shares
 stdout with a `text` table, but moves to stderr when a machine-readable format
 has stdout to itself, so `./dbc -t json script … | jq` parses.
+
+### Pipelines headless
+
+```sh
+./dbc pipelines                                   # pipelines_dir and the examples
+./dbc pipeline run clean-and-load -p min_age=5    # a path, a name, or an example; -p sets a param
+./dbc pipeline run clean-and-load --preview 20    # the first 20 source rows through, shown, nothing written
+./dbc pipeline run nightly --fragment merge       # one fragment only
+./dbc pipeline run nightly -t json | jq .status   # the run's stats as the document
+./dbc pipeline check nightly.json other.json      # diagnostics; exit 1 on an error
+./dbc pipeline export nightly -o nightly.go       # the pipeline as a dbc script
+./dbc plugins                                     # the node kinds and their fields
+```
+
+The log (fragments starting and ending, DDL, a node's own lines) streams
+as a script's `s.Print` does; what a `preview` sink shows goes out as a
+script's `s.Show` results do; in `text`, one line per fragment follows,
+with every node's rows in and out. Names resolve as scripts do: a file
+here, then `pipelines_dir`, then an example. Exit 0, 1 on failure, 130
+when interrupted — a stop during a load rolls it back first.
 
 ### Multi-statement runs
 

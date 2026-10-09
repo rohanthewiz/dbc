@@ -28,6 +28,7 @@ package scripts
 
 import (
 	"embed"
+	"encoding/json"
 	"io/fs"
 	"slices"
 	"strconv"
@@ -43,6 +44,7 @@ import (
 //
 //go:embed copy_table.go export_report.go loop_params.go plan_check.go sweep_conns.go
 //go:embed templates/*.go
+//go:embed pipelines/*.json
 var files embed.FS
 
 // Example is one built-in sample script.
@@ -167,4 +169,45 @@ func Fill(name string, conns []string) (string, bool) {
 	}
 	r := strings.NewReplacer(`"{{conn}}"`, strconv.Quote(c1), `"{{conn2}}"`, strconv.Quote(c2))
 	return r.Replace(string(bs)), true
+}
+
+// Pipeline is one built-in sample pipeline (pipelines/*.json): read-only,
+// listed after the user's own as the script examples are, and run by name
+// with `dbc pipeline run NAME` when no pipeline of the user's shadows it.
+type Pipeline struct {
+	Name string `json:"name"` // file name, with .json
+	Desc string `json:"desc"` // the spec's own desc
+	Text string `json:"-"`
+}
+
+// Pipelines lists the built-in sample pipelines by name.
+func Pipelines() []Pipeline {
+	ents, _ := fs.ReadDir(files, "pipelines")
+	var out []Pipeline
+	for _, e := range ents {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		bs, err := files.ReadFile("pipelines/" + e.Name())
+		if err != nil {
+			continue
+		}
+		var head struct {
+			Desc string `json:"desc"`
+		}
+		_ = json.Unmarshal(bs, &head)
+		out = append(out, Pipeline{Name: e.Name(), Desc: head.Desc, Text: string(bs)})
+	}
+	slices.SortFunc(out, func(a, b Pipeline) int { return strings.Compare(a.Name, b.Name) })
+	return out
+}
+
+// PipelineByName is the sample pipeline called name, with its text.
+func PipelineByName(name string) (Pipeline, bool) {
+	for _, p := range Pipelines() {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return Pipeline{}, false
 }

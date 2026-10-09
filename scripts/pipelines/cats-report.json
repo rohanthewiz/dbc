@@ -1,0 +1,17 @@
+{
+  "name": "cats-report",
+  "desc": "Cats per breed from the SQLite demo, oldest breed first, shown in the results view.",
+  "fragments": [
+    {
+      "name": "report",
+      "nodes": [
+        { "id": "src", "plugin": "sql.read", "cfg": {
+            "conn": "demo-sqlite",
+            "query": "SELECT breed, count(*) AS cats, avg(age) AS mean_age, max(age) AS oldest FROM cats GROUP BY breed ORDER BY oldest DESC" } },
+        { "id": "cols", "plugin": "cols.select", "cfg": { "keep": "breed, cats, oldest", "rename": "cats=how_many" } },
+        { "id": "show", "plugin": "preview", "cfg": { "rows": "100", "title": "cats by breed" } }
+      ],
+      "edges": [ ["src", "cols"], ["cols", "show"] ]
+    }
+  ]
+}

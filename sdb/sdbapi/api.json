@@ -16,6 +16,290 @@
   ],
   "types": [
     {
+      "name": "Batch",
+      "of": "pipeline.Batch",
+      "kind": "struct",
+      "doc": "Batch is the rows between two nodes of a fragment: columns and rows,\nwith helpers to find, add, drop and filter.",
+      "fields": [
+        {
+          "name": "Cols",
+          "type": "[]Col",
+          "doc": ""
+        },
+        {
+          "name": "Rows",
+          "type": "[][]any",
+          "doc": ""
+        }
+      ],
+      "methods": [
+        {
+          "name": "AddCol",
+          "sig": "func (b *Batch) AddCol(name, dbType string, fill func(row int) any)",
+          "doc": "AddCol appends a column, filled by calling fill for each row (nil fill\nleaves every value NULL). dbType is the driver type name a sink's\nCREATE TABLE should map, or \"\" for text. A column of that name already\nthere is replaced in place instead, so AddCol is also \"set a whole\ncolumn\".",
+          "params": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "dbType",
+              "type": "string"
+            },
+            {
+              "name": "fill",
+              "type": "func(row int) any"
+            }
+          ]
+        },
+        {
+          "name": "Clone",
+          "sig": "func (b *Batch) Clone() *Batch",
+          "doc": "Clone copies the batch: the column list and every row slice, so the\ncopy can be changed without the original seeing it. Values themselves\nare shared ([]byte included), as a transform is not expected to edit a\nvalue in place.",
+          "params": []
+        },
+        {
+          "name": "Col",
+          "sig": "func (b *Batch) Col(name string) int",
+          "doc": "Col is the index of the column called name, or -1. Names are matched\nexactly first, then without regard to case, so \"ID\" finds \"id\" when\nthere is no \"ID\".",
+          "params": [
+            {
+              "name": "name",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "DBTypes",
+          "sig": "func (b *Batch) DBTypes() []string",
+          "doc": "DBTypes lists the columns' driver type names, in order (\"\" where unknown).",
+          "params": []
+        },
+        {
+          "name": "Drop",
+          "sig": "func (b *Batch) Drop(names ...string)",
+          "doc": "Drop removes the named columns (unknown names are ignored).",
+          "params": [
+            {
+              "name": "names",
+              "type": "...string"
+            }
+          ]
+        },
+        {
+          "name": "Filter",
+          "sig": "func (b *Batch) Filter(keep func(row int) bool)",
+          "doc": "Filter keeps the rows keep says to, in order.",
+          "params": [
+            {
+              "name": "keep",
+              "type": "func(row int) bool"
+            }
+          ]
+        },
+        {
+          "name": "Get",
+          "sig": "func (b *Batch) Get(row int, name string) any",
+          "doc": "Get is row's value in the column called name; nil when there is no such\ncolumn or row.",
+          "params": [
+            {
+              "name": "row",
+              "type": "int"
+            },
+            {
+              "name": "name",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "Keep",
+          "sig": "func (b *Batch) Keep(names ...string)",
+          "doc": "Keep reduces the batch to the named columns, in the order given — a\nselect and a reorder in one. A name the batch does not have is ignored.",
+          "params": [
+            {
+              "name": "names",
+              "type": "...string"
+            }
+          ]
+        },
+        {
+          "name": "Len",
+          "sig": "func (b *Batch) Len() int",
+          "doc": "Len is the number of rows; 0 for a nil batch.",
+          "params": []
+        },
+        {
+          "name": "Names",
+          "sig": "func (b *Batch) Names() []string",
+          "doc": "Names lists the column names, in order.",
+          "params": []
+        },
+        {
+          "name": "Rename",
+          "sig": "func (b *Batch) Rename(from, to string) bool",
+          "doc": "Rename changes a column's name, reporting whether it was there.",
+          "params": [
+            {
+              "name": "from",
+              "type": "string"
+            },
+            {
+              "name": "to",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "Result",
+          "sig": "func (b *Batch) Result(conn, query string) *model.Result",
+          "doc": "Result renders the batch as a result set, for the grid (preview) or an\nexport: display strings as db.Manager makes them (NULL, RFC 3339 times,\nbytes in hex) and the typed values as Raw.",
+          "params": [
+            {
+              "name": "conn",
+              "type": "string"
+            },
+            {
+              "name": "query",
+              "type": "string"
+            }
+          ],
+          "connArgs": [
+            0
+          ]
+        },
+        {
+          "name": "Set",
+          "sig": "func (b *Batch) Set(row int, name string, v any) bool",
+          "doc": "Set puts v in row's column called name, reporting whether there was\nsuch a column and row.",
+          "params": [
+            {
+              "name": "row",
+              "type": "int"
+            },
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "v",
+              "type": "any"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Cfg",
+      "of": "pipeline.Config",
+      "kind": "other",
+      "doc": "Cfg is a node's settings, every value a string: sdb.Cfg{\"conn\": \"prod\"}.",
+      "methods": [
+        {
+          "name": "Bool",
+          "sig": "func (c Config) Bool(key string) (bool, error)",
+          "doc": "Bool is the value of key as a boolean: true/false, yes/no, on/off,\n1/0, in any case; unset or blank is false.",
+          "params": [
+            {
+              "name": "key",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "Clone",
+          "sig": "func (c Config) Clone() Config",
+          "doc": "Clone copies the config.",
+          "params": []
+        },
+        {
+          "name": "Duration",
+          "sig": "func (c Config) Duration(key string, def time.Duration) (time.Duration, error)",
+          "doc": "Duration is the value of key as a duration (\"30s\"), or def when unset.",
+          "params": [
+            {
+              "name": "key",
+              "type": "string"
+            },
+            {
+              "name": "def",
+              "type": "time.Duration"
+            }
+          ]
+        },
+        {
+          "name": "Int",
+          "sig": "func (c Config) Int(key string, def int) (int, error)",
+          "doc": "Int is the value of key as an integer, or def when unset.",
+          "params": [
+            {
+              "name": "key",
+              "type": "string"
+            },
+            {
+              "name": "def",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "Lines",
+          "sig": "func (c Config) Lines(key string) []string",
+          "doc": "Lines is the value of key split into lines, each trimmed, blanks\ndropped — for a field whose items may themselves contain commas (a\nfilter rule, an argument value).",
+          "params": [
+            {
+              "name": "key",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "List",
+          "sig": "func (c Config) List(key string) []string",
+          "doc": "List is the value of key split into items: on newlines and commas,\neach trimmed, blanks dropped. \"id, name\" and \"id\\nname\" read alike.",
+          "params": [
+            {
+              "name": "key",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "Str",
+          "sig": "func (c Config) Str(key, def string) string",
+          "doc": "Str is the value of key, or def when unset or blank.",
+          "params": [
+            {
+              "name": "key",
+              "type": "string"
+            },
+            {
+              "name": "def",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Col",
+      "of": "pipeline.Col",
+      "kind": "struct",
+      "doc": "Col is one column of a Batch: its name and the source's type name.",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "DBType",
+          "type": "string",
+          "doc": ""
+        }
+      ]
+    },
+    {
       "name": "CopyOpts",
       "of": "etl.CopyOptions",
       "kind": "struct",
@@ -120,6 +404,472 @@
           "name": "String",
           "sig": "func (s CopyStats) String() string",
           "doc": "",
+          "params": []
+        }
+      ]
+    },
+    {
+      "name": "Env",
+      "of": "pipeline.Env",
+      "kind": "struct",
+      "doc": "Env is what a Go node runs in: the session (S), the parameters, the\nvalues earlier fragments published, and a logger.",
+      "fields": [
+        {
+          "name": "Ctx",
+          "type": "context.Context",
+          "doc": ""
+        },
+        {
+          "name": "S",
+          "type": "Host",
+          "doc": ""
+        },
+        {
+          "name": "Params",
+          "type": "map[string]string",
+          "doc": "Params are the pipeline's parameters, defaults and overrides\nresolved; Vars are the values earlier fragments published, keyed\n\"frag.\u003cfragment\u003e.\u003cname\u003e\" (\"frag.orders.rows\"). Both are what ${…}\nin a node's config was substituted from; a Go node reads them here."
+        },
+        {
+          "name": "Vars",
+          "type": "map[string]string",
+          "doc": ""
+        },
+        {
+          "name": "Batch",
+          "type": "int",
+          "doc": "Batch is the fragment's batch size: how many rows a source yields\nper Next, and so how many a transform sees per Apply."
+        },
+        {
+          "name": "Pipeline",
+          "type": "string",
+          "doc": "Pipeline, Fragment and Node name where the node is, for messages."
+        },
+        {
+          "name": "Fragment",
+          "type": "string",
+          "doc": "Pipeline, Fragment and Node name where the node is, for messages."
+        },
+        {
+          "name": "Node",
+          "type": "string",
+          "doc": "Pipeline, Fragment and Node name where the node is, for messages."
+        },
+        {
+          "name": "SourceEngine",
+          "type": "string",
+          "doc": "SourceEngine is the fragment's source engine (\"postgres\", \"mysql\",\n\"sqlite\", \"bytdb\"; \"\" when the rows did not come from a database),\nset by the source's Open. A sink creating a table on the same engine\nkeeps the source's exact column types with it."
+        },
+        {
+          "name": "Logf",
+          "type": "func(format string, args ...any)",
+          "doc": "Logf writes a line to the run's log, prefixed with the node."
+        }
+      ],
+      "methods": [
+        {
+          "name": "Stop",
+          "sig": "func (e *Env) Stop()",
+          "doc": "Stop asks the fragment to stop pulling batches from the source once the\ncurrent batch has gone through — what rows.limit does on reaching its\ncount. The sinks still commit what they have: a stop is an early end,\nnot a failure.",
+          "params": []
+        },
+        {
+          "name": "Where",
+          "sig": "func (e *Env) Where() string",
+          "doc": "Where names the node for messages: \"orders/clean\".",
+          "params": []
+        }
+      ]
+    },
+    {
+      "name": "Fragment",
+      "of": "pipeline.FragmentBuilder",
+      "kind": "struct",
+      "doc": "",
+      "methods": [
+        {
+          "name": "Batch",
+          "sig": "func (f *FragmentBuilder) Batch(n int) *FragmentBuilder",
+          "doc": "Batch sets the fragment's batch size.",
+          "params": [
+            {
+              "name": "n",
+              "type": "int"
+            }
+          ]
+        },
+        {
+          "name": "Func",
+          "sig": "func (f *FragmentBuilder) Func(fn any) string",
+          "doc": "Func adds a Go value as a node: a Source, Transform, Sink or Action, or\na func of one of these shapes —\n\n\tfunc(e *Env) (*Batch, error)             a source: the next batch, nil at the end\n\tfunc(b *Batch) (*Batch, error)           a transform\n\tfunc(e *Env, b *Batch) (*Batch, error)   a transform with the Env\n\tfunc(e *Env, b *Batch) error             a sink (its rows are counted; nothing to commit)\n\tfunc(e *Env) error                       an action\n\nIts id is the kind, numbered. A spec with a Func cannot be written to\nJSON or exported as a script (the func has no text); it runs.",
+          "params": [
+            {
+              "name": "fn",
+              "type": "any"
+            }
+          ]
+        },
+        {
+          "name": "Named",
+          "sig": "func (f *FragmentBuilder) Named(id, plugin string, cfg Config) string",
+          "doc": "Named is Node with the id chosen.",
+          "params": [
+            {
+              "name": "id",
+              "type": "string"
+            },
+            {
+              "name": "plugin",
+              "type": "string"
+            },
+            {
+              "name": "cfg",
+              "type": "Config"
+            }
+          ]
+        },
+        {
+          "name": "NamedFunc",
+          "sig": "func (f *FragmentBuilder) NamedFunc(id string, fn any) string",
+          "doc": "NamedFunc is Func with the id chosen.",
+          "params": [
+            {
+              "name": "id",
+              "type": "string"
+            },
+            {
+              "name": "fn",
+              "type": "any"
+            }
+          ]
+        },
+        {
+          "name": "Node",
+          "sig": "func (f *FragmentBuilder) Node(plugin string, cfg Config) string",
+          "doc": "Node adds a node of plugin with cfg and returns its id, made from the\nplugin's last word (\"read\", then \"read2\").",
+          "params": [
+            {
+              "name": "plugin",
+              "type": "string"
+            },
+            {
+              "name": "cfg",
+              "type": "Config"
+            }
+          ]
+        },
+        {
+          "name": "OnError",
+          "sig": "func (f *FragmentBuilder) OnError(mode string) *FragmentBuilder",
+          "doc": "OnError sets what the fragment's failure does: \"stop\" (default) or \"continue\".",
+          "params": [
+            {
+              "name": "mode",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "Then",
+          "sig": "func (f *FragmentBuilder) Then(plugin string, cfg Config) string",
+          "doc": "Then is Node wired from the node added last — a linear fragment reads\nas src, Then, Then.",
+          "params": [
+            {
+              "name": "plugin",
+              "type": "string"
+            },
+            {
+              "name": "cfg",
+              "type": "Config"
+            }
+          ]
+        },
+        {
+          "name": "ThenFunc",
+          "sig": "func (f *FragmentBuilder) ThenFunc(fn any) string",
+          "doc": "ThenFunc is Func wired from the node added last.",
+          "params": [
+            {
+              "name": "fn",
+              "type": "any"
+            }
+          ]
+        },
+        {
+          "name": "Wire",
+          "sig": "func (f *FragmentBuilder) Wire(ids ...string) *FragmentBuilder",
+          "doc": "Wire connects the nodes in a chain: rows flow from each to the next.",
+          "params": [
+            {
+              "name": "ids",
+              "type": "...string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "FragmentStats",
+      "of": "pipeline.FragmentStats",
+      "kind": "struct",
+      "doc": "FragmentStats and NodeStats are the parts of RunStats.",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "Status",
+          "type": "Status",
+          "doc": ""
+        },
+        {
+          "name": "Started",
+          "type": "time.Time",
+          "doc": ""
+        },
+        {
+          "name": "Ended",
+          "type": "time.Time",
+          "doc": ""
+        },
+        {
+          "name": "Rows",
+          "type": "int64",
+          "doc": "rows the sinks committed, or an action's rows affected"
+        },
+        {
+          "name": "Direct",
+          "type": "bool",
+          "doc": "ran as a direct Postgres COPY"
+        },
+        {
+          "name": "Nodes",
+          "type": "[]NodeStats",
+          "doc": ""
+        },
+        {
+          "name": "Vars",
+          "type": "map[string]string",
+          "doc": ""
+        },
+        {
+          "name": "Error",
+          "type": "string",
+          "doc": ""
+        }
+      ],
+      "methods": [
+        {
+          "name": "Elapsed",
+          "sig": "func (f *FragmentStats) Elapsed() time.Duration",
+          "doc": "Elapsed is the fragment's wall time so far, or in all.",
+          "params": []
+        }
+      ]
+    },
+    {
+      "name": "NodeStats",
+      "of": "pipeline.NodeStats",
+      "kind": "struct",
+      "doc": "",
+      "fields": [
+        {
+          "name": "ID",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "Plugin",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "In",
+          "type": "int64",
+          "doc": "rows handed to it"
+        },
+        {
+          "name": "Out",
+          "type": "int64",
+          "doc": "rows it handed on (a sink: rows it committed)"
+        },
+        {
+          "name": "Batches",
+          "type": "int64",
+          "doc": "Apply/Write calls"
+        },
+        {
+          "name": "Elapsed",
+          "type": "time.Duration",
+          "doc": "time inside the node"
+        },
+        {
+          "name": "Error",
+          "type": "string",
+          "doc": ""
+        }
+      ]
+    },
+    {
+      "name": "Params",
+      "kind": "other",
+      "doc": "Params are a run's parameter overrides: sdb.Params{\"days\": \"7\"}."
+    },
+    {
+      "name": "Paths",
+      "kind": "struct",
+      "doc": "Paths are the directories a session resolves names in: a script's\n(script.run) and a pipeline's (RunPipelineNamed). The host sets them.",
+      "fields": [
+        {
+          "name": "ScriptsDir",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "PipelinesDir",
+          "type": "string",
+          "doc": ""
+        }
+      ]
+    },
+    {
+      "name": "Pipeline",
+      "of": "pipeline.Builder",
+      "kind": "struct",
+      "doc": "Pipeline is a pipeline being built in Go (sdb.NewPipeline); Fragment\nis one of its fragments being filled.",
+      "methods": [
+        {
+          "name": "Desc",
+          "sig": "func (b *Builder) Desc(d string) *Builder",
+          "doc": "Desc sets the description.",
+          "params": [
+            {
+              "name": "d",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "Fragment",
+          "sig": "func (b *Builder) Fragment(name string) *FragmentBuilder",
+          "doc": "Fragment adds a fragment and returns it to fill.",
+          "params": [
+            {
+              "name": "name",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "Param",
+          "sig": "func (b *Builder) Param(name, def string, doc ...string) *Builder",
+          "doc": "Param declares a parameter with its default (\"\" for none) and,\noptionally, a line of doc.",
+          "params": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "def",
+              "type": "string"
+            },
+            {
+              "name": "doc",
+              "type": "...string"
+            }
+          ]
+        },
+        {
+          "name": "Spec",
+          "sig": "func (b *Builder) Spec() *Spec",
+          "doc": "Spec is the pipeline built so far. It is the builder's own: Run reads\nit, and a later Fragment call extends it.",
+          "params": []
+        }
+      ]
+    },
+    {
+      "name": "PipelineOpts",
+      "of": "pipeline.Options",
+      "kind": "struct",
+      "doc": "PipelineOpts shape a run: Params, a Log line sink, Progress, one\nFragment only, or PreviewRows for a preview that writes nothing.",
+      "fields": [
+        {
+          "name": "Params",
+          "type": "map[string]string",
+          "doc": "Params override the spec's parameter defaults. A name the spec does\nnot declare is an error; a declared parameter with no default and\nno override is one too."
+        },
+        {
+          "name": "Log",
+          "type": "func(line string)",
+          "doc": "Log receives each line of the run's log: the fragments starting and\nending, every node's Logf. Nil means the host's Print."
+        },
+        {
+          "name": "Progress",
+          "type": "func(f FragmentStats)",
+          "doc": "Progress, when set, is called after every batch of a running\nfragment with its counters so far — a snapshot, safe to keep. A host\nthat draws it coalesces; the runner does not throttle."
+        },
+        {
+          "name": "Fragment",
+          "type": "string",
+          "doc": "Fragment, when set, runs only the fragment of that name; the others\nare skipped. A value an earlier fragment would have published is\nthen unknown (pass it as a param, or run them all)."
+        },
+        {
+          "name": "PreviewRows",
+          "type": "int",
+          "doc": "PreviewRows \u003e 0 makes the run a preview: the source stops after\nthat many rows, every sink is replaced by a preview sink (the rows\ngo to the results view, nothing is written), and actions are\nskipped. The way to try a transform on real data."
+        }
+      ]
+    },
+    {
+      "name": "PipelineSpec",
+      "of": "pipeline.Spec",
+      "kind": "struct",
+      "doc": "PipelineSpec is a pipeline as data — what a pipeline file holds.",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "Desc",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "Params",
+          "type": "map[string]Param",
+          "doc": ""
+        },
+        {
+          "name": "Fragments",
+          "type": "[]Fragment",
+          "doc": ""
+        }
+      ],
+      "methods": [
+        {
+          "name": "Clone",
+          "sig": "func (s *Spec) Clone() *Spec",
+          "doc": "Clone copies the spec deeply enough that editing the copy's fragments,\nnodes and configs leaves the original alone (Fn values are shared).",
+          "params": []
+        },
+        {
+          "name": "Fragment",
+          "sig": "func (s *Spec) Fragment(name string) *Fragment",
+          "doc": "Fragment is the fragment called name.",
+          "params": [
+            {
+              "name": "name",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "JSON",
+          "sig": "func (s *Spec) JSON() (string, error)",
+          "doc": "JSON is the spec as the file holds it: two-space indented, one node per\nline group, so a diff reads as the change it is.",
           "params": []
         }
       ]
@@ -420,6 +1170,12 @@
       "doc": "Reader streams a query's rows: for rd.Next() { row := rd.Row() }, then\nrd.Err(). Close it (defer rd.Close()) if you stop before the end.",
       "methods": [
         {
+          "name": "Abort",
+          "sig": "func (r *Reader) Abort()",
+          "doc": "Abort ends the read as a failed one, whatever state it is in: the rows\nare closed and, on Postgres, the read's transaction is rolled back — so\na DELETE … RETURNING whose rows went nowhere (the load that was to take\nthem failed) keeps its rows. Close would commit a read that ran clean to\nthe end; a caller that knows the rows were lost calls this instead. A\nno-op once the Reader is closed.",
+          "params": []
+        },
+        {
           "name": "Close",
           "sig": "func (r *Reader) Close() error",
           "doc": "Close releases the query's connection — on Postgres after ending the\nread's transaction: COMMIT when the read went well (to the end, or\nstopped early by the caller), ROLLBACK after a failure. It is safe to\ncall more than once, and a deferred Close after reading to the end costs\nnothing.",
@@ -525,6 +1281,63 @@
           "name": "RowCount",
           "sig": "func (r *Result) RowCount() int",
           "doc": "RowCount returns the number of data rows.",
+          "params": []
+        }
+      ]
+    },
+    {
+      "name": "RunStats",
+      "of": "pipeline.RunStats",
+      "kind": "struct",
+      "doc": "RunStats is a pipeline's run: each fragment's status, rows and node\ncounters, and the outcome. Its String is a one-line summary.",
+      "fields": [
+        {
+          "name": "Pipeline",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "Status",
+          "type": "Status",
+          "doc": ""
+        },
+        {
+          "name": "Started",
+          "type": "time.Time",
+          "doc": ""
+        },
+        {
+          "name": "Ended",
+          "type": "time.Time",
+          "doc": ""
+        },
+        {
+          "name": "Preview",
+          "type": "bool",
+          "doc": "nothing was written (Options.PreviewRows)"
+        },
+        {
+          "name": "Fragments",
+          "type": "[]FragmentStats",
+          "doc": ""
+        },
+        {
+          "name": "Error",
+          "type": "string",
+          "doc": ""
+        }
+      ],
+      "methods": [
+        {
+          "name": "Rows",
+          "sig": "func (r *RunStats) Rows() int64",
+          "doc": "Rows is the rows every fragment committed, in all.",
+          "params": []
+        },
+        {
+          "name": "String",
+          "sig": "func (r *RunStats) String() string",
+          "doc": "String is a one-line summary: \"pipeline orders-nightly: 2 fragments,\n48213 rows in 1.4s (succeeded)\".",
           "params": []
         }
       ]
@@ -657,6 +1470,23 @@
           ]
         },
         {
+          "name": "LoadPipeline",
+          "sig": "func (s *S) LoadPipeline(name string) (*PipelineSpec, error)",
+          "doc": "LoadPipeline finds a pipeline the way RunPipelineNamed does and parses it.",
+          "params": [
+            {
+              "name": "name",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "Paths",
+          "sig": "func (s *S) Paths() Paths",
+          "doc": "Paths is where the session resolves script and pipeline names.",
+          "params": []
+        },
+        {
           "name": "Print",
           "sig": "func (s *S) Print(format string, args ...any)",
           "doc": "Print writes a Printf-style message to the script output.",
@@ -713,6 +1543,51 @@
           ],
           "connArgs": [
             0
+          ]
+        },
+        {
+          "name": "RunPipeline",
+          "sig": "func (s *S) RunPipeline(p *Pipeline, opt PipelineOpts) (*RunStats, error)",
+          "doc": "RunPipeline runs a pipeline built with NewPipeline. Every fragment runs\nin order, each sink committing at its fragment's end; the stats come\nback complete even on error. Stop (Ctrl+K) cancels the run as it does a\nquery.",
+          "params": [
+            {
+              "name": "p",
+              "type": "*Pipeline"
+            },
+            {
+              "name": "opt",
+              "type": "PipelineOpts"
+            }
+          ]
+        },
+        {
+          "name": "RunPipelineNamed",
+          "sig": "func (s *S) RunPipelineNamed(name string, opt PipelineOpts) (*RunStats, error)",
+          "doc": "RunPipelineNamed runs a saved pipeline: a file path, a name in the\npipelines directory (.json optional), or a built-in example.",
+          "params": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "opt",
+              "type": "PipelineOpts"
+            }
+          ]
+        },
+        {
+          "name": "RunPipelineSpec",
+          "sig": "func (s *S) RunPipelineSpec(spec *PipelineSpec, opt PipelineOpts) (*RunStats, error)",
+          "doc": "RunPipelineSpec runs a pipeline given as data (ParsePipeline, or a\nliteral).",
+          "params": [
+            {
+              "name": "spec",
+              "type": "*PipelineSpec"
+            },
+            {
+              "name": "opt",
+              "type": "PipelineOpts"
+            }
           ]
         },
         {

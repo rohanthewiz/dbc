@@ -199,6 +199,9 @@ func newCLI() *cli.Command {
 				Action: scriptAction,
 			},
 			scriptsCommand(),
+			pipelineCommand(),
+			pipelinesCommand(),
+			pluginsCommand(),
 			copyCommand(),
 			explainCommand(),
 			erdCommand(),
@@ -283,7 +286,7 @@ func scriptAction(ctx context.Context, cmd *cli.Command) error {
 		fmt.Fprintf(os.Stderr, "running the built-in example %s (none of that name in %s)\n",
 			ref.Example.Name, cfg.ScriptsDir)
 	}
-	runScriptHeadless(mgr, ref, outFormat())
+	runScriptHeadless(cfg, mgr, ref, outFormat())
 	return nil
 }
 
@@ -976,7 +979,7 @@ func noteTruncated(w io.Writer, r *model.Result, what string) {
 //     documents, and -o writes one file. A block format collected is
 //     export.RenderOpen's document — the bytes the stream would have written,
 //     so `> file` and `-o file` agree.
-func runScriptHeadless(mgr *db.Manager, ref config.ScriptRef, f export.Format) {
+func runScriptHeadless(cfg *config.Config, mgr *db.Manager, ref config.ScriptRef, f export.Format) {
 	ctx, stop := interruptible()
 	defer stop()
 
@@ -994,7 +997,7 @@ func runScriptHeadless(mgr *db.Manager, ref config.ScriptRef, f export.Format) {
 
 	s := sdb.New(mgr, show,
 		func(msg string) { fmt.Fprintln(logOut, msg) },
-	).WithContext(ctx)
+	).WithContext(ctx).WithPaths(sdb.Paths{ScriptsDir: cfg.ScriptsDir, PipelinesDir: cfg.PipelinesDir})
 
 	var err error
 	if ref.Example != nil {
@@ -1014,7 +1017,10 @@ func runScriptHeadless(mgr *db.Manager, ref config.ScriptRef, f export.Format) {
 		emitScript(results, f)
 	}
 	if err != nil {
-		if errors.Is(err, db.ErrCanceled) {
+		// sdb.IsCanceled, not db.ErrCanceled alone: a stop during a Copy,
+		// Reader or Writer carries context.Canceled (the etl package does
+		// not know db), and used to exit 1 as a failure
+		if sdb.IsCanceled(err) {
 			canceled("script")
 		}
 		fail(err, "script failed")

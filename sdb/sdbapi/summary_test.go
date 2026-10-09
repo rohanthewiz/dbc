@@ -27,8 +27,10 @@ func TestSummary(t *testing.T) {
 			t.Errorf("summary offers host-only %s", name)
 		}
 	}
-	// ~2k tokens; a doc comment growing a paragraph should not make it 5k
-	if len(s) > 12<<10 {
-		t.Errorf("summary is %d bytes; keep it under 12 KB", len(s))
+	// ~3k tokens; a doc comment growing a paragraph should not make it 5k.
+	// (12 KB until the pipeline API — a Batch's helpers and the builder's
+	// calls, which a script writes against — added a tier of its own.)
+	if len(s) > 14<<10 {
+		t.Errorf("summary is %d bytes; keep it under 14 KB", len(s))
 	}
 }

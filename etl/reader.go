@@ -238,3 +238,11 @@ func (r *Reader) rollback() {
 		_ = r.tx.Rollback()
 	}
 }
+
+// Abort ends the read as a failed one, whatever state it is in: the rows
+// are closed and, on Postgres, the read's transaction is rolled back — so
+// a DELETE … RETURNING whose rows went nowhere (the load that was to take
+// them failed) keeps its rows. Close would commit a read that ran clean to
+// the end; a caller that knows the rows were lost calls this instead. A
+// no-op once the Reader is closed.
+func (r *Reader) Abort() { r.rollback() }

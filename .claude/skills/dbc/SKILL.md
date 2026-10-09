@@ -106,6 +106,9 @@ Exit codes: `0` ok, `1` failure, `2` bad usage (incl. unknown connection),
 | `dbc script FILE.go\|NAME` | run a Go script headless (`-t`/`-o` apply); a bare NAME is looked up in `scripts_dir` | Scripts headless |
 | `dbc script --check NAME\|FILE…` | check scripts without running them (parse, `Run`'s signature, yaegi compile, the map-assign lint); exit 1 on an error, `-t json` for JSON | Scripts headless |
 | `dbc scripts [-t json]` | list `scripts_dir` (default `~/.config/dbc/scripts`); the directory goes to stderr | Scripts headless |
+| `dbc pipeline run [-p K=V]… [--preview N] [--fragment F] NAME\|FILE.json` | run a pipeline (fragments of source → transforms → sinks, in batches; `-t json` prints the run stats); a bare NAME is looked up in `pipelines_dir`, then the examples | Pipelines headless |
+| `dbc pipeline check NAME…` / `dbc pipeline export NAME [-o f.go]` | validate without running (exit 1 on an error) / write the pipeline as a dbc script | Pipelines headless |
+| `dbc pipelines [-t json]` / `dbc plugins [-t json]` | list `pipelines_dir` and the examples / list the node kinds and their fields | Pipelines headless |
 | `dbc copy --from A --to B [--create] [--truncate] [--where C] SRC [DST]` | copy a table across connections/engines in one transaction | Copy headless |
 | `dbc explain [-a] [-t text\|json\|markdown\|html\|pdf\|png\|jpeg\|mermaid] [--fail-on warn\|crit] "SQL"` | plan + findings; one statement | Explain headless |
 | `dbc erd [-t mermaid\|markdown\|png\|jpeg] [--table T] [--depth N] [--views]` | schema diagram | Diagrams headless |

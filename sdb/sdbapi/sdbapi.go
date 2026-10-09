@@ -121,7 +121,7 @@ const (
 // whether the sidebar needs relisting (CatalogChanged). Offering them in
 // completion would invite a script to break its own run. TestHostOnlyExist
 // keeps the list in step with sdb.
-var hostOnly = []string{"New", "WithContext", "LogDDL", "Release", "CatalogChanged"}
+var hostOnly = []string{"New", "WithContext", "LogDDL", "Release", "CatalogChanged", "WithPaths", "ETLConn"}
 
 // connParams are the parameter names that mean "a connection name".
 var connParams = []string{"conn", "src", "dst"}

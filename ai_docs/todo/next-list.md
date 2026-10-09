@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-173
+**Next ID:** N-175
 
 ## Open
 
@@ -57,6 +57,16 @@ ten session docs in `ai_docs/claude_sessions/`
   A dump for MySQL connections with mysqldump, behind the same menu row and
   dialog (the row is dimmed on MySQL today). No one has asked; worth it only
   if a MySQL user does.
+- **N-173** · raised `2026-1009-1004-phase-1-pipelines` · value high
+  Pipelines Phase 2: the pipeline tab in dbc web (`ai_docs/plans/
+  pipelines.md`, §6 and Phase 2) — the routes (pipelines store, check,
+  preview, run, export, plugins, schema), a minimal server-wide engine
+  running single pipelines with `job.*` events, `stage.js` factored out of
+  `plan.js`, `pipelines.js` (palette, lane canvas with ports and
+  drag-to-connect, inspector generated from `Field`s, run panel), the
+  scripts browser's Pipelines section, previews into the grid, an e2e
+  step. Phase 1 (the `pipeline` package, the Go plugins, the builder,
+  `dbc pipeline run|check|export`) is done.
 
 ## Validate
 
@@ -374,6 +384,16 @@ call.
   `postgres:19` is published, with its EOL from
   postgresql.org/support/versioning. Check `dataDir` too, in case the
   image moves its data again, as 18 did.
+- **N-174** · raised `2026-1009-1004-phase-1-pipelines` · value medium
+  Pipelines Phases 3–6, in order once Phase 2 is in: jobs (a DAG of
+  pipelines, the in-house cron scheduler in `dbc web`, the webhook, run
+  records as one JSON file per run, `dbc job run`, `dbc runs [--sql]`);
+  the jobs canvas and the Runs view with drilldown (a `dag` layout package
+  extracted from `erd/layout.go`); the TUI browser, Runs modal and run
+  monitor tree; the plugin SDK (user plugin files in
+  `~/.config/dbc/plugins`, `go.sink`, `text.clean`, `lookup`, `cols.cast`,
+  `cols.add`, `rows.dedupe`, `csv.*`/`jsonl.*`, `pipeline.check`,
+  `sql.write` upsert). Each phase's scope is in the plan.
 
 ## Non-goals
 

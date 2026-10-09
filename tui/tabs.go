@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -297,12 +298,29 @@ func (m *Model) arrive() tea.Cmd {
 // that database no other tab shows — or a fresh one — so two tabs on one
 // database never write one file. It connects at once: a tab is for
 // working in, and its session is its own.
-func (m *Model) newTab() tea.Cmd {
+func (m *Model) newTab() tea.Cmd { return m.newTabIn(nil) }
+
+// newTabIn is newTab into group g (its menu's "New tab in <name>", the +
+// chip's right-click, a click on an idle group's chip): the tab starts on
+// g's connection (connFor) rather than the tab on screen's, so it lands
+// where it was asked to. With g nil it is a plain ⌥T, and a tab opened from
+// a tab in an ad-hoc group joins that group (tabgroups.go).
+func (m *Model) newTabIn(g *tabGroup) tea.Cmd {
 	if len(m.tabs) >= maxTabs {
 		m.logf(logWarn, "%d tabs is the most — close one first (⌥W)", maxTabs)
 		return nil
 	}
-	conn := m.ws.Active()
+	conn := m.newTabConn()
+	if g != nil {
+		conn = m.connFor(g, conn)
+		// a connection group outlives its connection being removed; a tab
+		// opened there would only fail to connect
+		if _, ok := m.cfg.ConnByName(conn); g.isConn() && !ok {
+			m.logf(logWarn, "group %s is for %s, which is no longer a connection — Ungroup (⌥G) removes the group", g.name, conn)
+			return nil
+		}
+	}
+	from := m.active()
 	if err := m.saveConsole(); err != nil {
 		m.logf(logWarn, "could not save the console: %s", err.Error())
 	}
@@ -320,16 +338,29 @@ func (m *Model) newTab() tea.Cmd {
 	m.curTab = len(m.tabs) - 1
 	m.load(t)
 	m.focus = focusEditor
-
 	// the console first, so the connect's landing (switchConsole) finds
 	// the editor already on this database and swaps nothing
 	m.openTabConsole(conn)
-	m.logf(logInfo, "%s — its own session; ⌥1…⌥9 switch, ⌥W closes", t.title)
+	var cmd tea.Cmd
 	if conn == "" {
 		t.unconnected = true
-		return nil
+	} else {
+		cmd = m.connectCmd(conn)
 	}
-	return m.connectCmd(conn)
+	// into its group once its connect is in flight, so tabConn reads the
+	// connection it is headed for (the deeper-group exclusions addToGroup
+	// makes depend on it)
+	if g != nil {
+		m.addToGroup(t, g)
+	} else {
+		m.joinNewTab(from, t)
+	}
+	if ng := m.groupOf(t); ng != nil {
+		m.logf(logInfo, "%s in group %s — its own session; ⌥1…⌥9 switch, ⌥W closes", t.title, ng.name)
+	} else {
+		m.logf(logInfo, "%s — its own session; ⌥1…⌥9 switch, ⌥W closes", t.title)
+	}
+	return cmd
 }
 
 // nextTabTitle is "Query N" for the lowest N no tab is titled with.
@@ -381,6 +412,7 @@ func (m *Model) closeTab(i int, confirmed bool) tea.Cmd {
 	ws, left := m.ws, m.ws.Active()
 	m.tabs = append(m.tabs[:m.curTab], m.tabs[m.curTab+1:]...)
 	m.curTab = min(m.curTab, len(m.tabs)-1)
+	m.forgetTab(t)
 	m.load(m.active())
 	m.logf(logInfo, "closed %s", t.title)
 	// the neighbour now on screen arrives as a switch to it would (its
@@ -539,10 +571,22 @@ func (m *Model) otherTabConsoles(d userdata.ConsoleDB) []string {
 // The strip
 // ---------------------------------------------------------------------------
 
-// tabChip is one clickable tab in the strip, as drawn.
+// stripKind is what a chip in the strip stands for.
+type stripKind int
+
+const (
+	stripTab   stripKind = iota // a query tab
+	stripPlus                   // "+": a new tab
+	stripGroup                  // a group's chip, in front of its first tab
+	stripIdle                   // an idle connection group's hollow chip, after the tabs
+)
+
+// tabChip is one clickable chip in the strip, as drawn.
 type tabChip struct {
-	r   Rect
-	idx int // the tab's index; -1 for the "+" chip
+	r    Rect
+	kind stripKind
+	idx  int       // the tab's index (stripTab)
+	g    *tabGroup // stripGroup, stripIdle
 }
 
 // tabLabel is a tab's chip text: its title, the console for the active
@@ -571,13 +615,34 @@ func (m *Model) tabLabel(i int) string {
 	return label
 }
 
+// stripEntry is one chip to draw, before it is placed: its kind and what
+// it stands for, and the group it is drawn in the colour of (nil: none).
+type stripEntry struct {
+	kind stripKind
+	idx  int
+	g    *tabGroup
+	text string // fixed chips' label; a tab's is sized at placing
+}
+
 // drawTabs draws the strip on the editor's top border when there is more
-// than one tab — with one, the border keeps its plain title, so a user who
-// never opens a tab sees no change.
+// than one tab, or any group — with one tab and no groups the border keeps
+// its plain title, so a user who never opens a tab sees no change.
+//
+// Left to right: each group's chip in front of its first tab, the tabs
+// (a folded group's hidden ones skipped), the idle connection groups'
+// hollow chips, then "+". Group chips, idle chips and + have their natural
+// width; the tabs share what is left, each getting an equal share when they
+// do not all fit. A grouped run — chip and members — is joined by the
+// border drawn in the group's colour between them, the terminal's version
+// of the web's underline across a group:
+//
+//	─ prod ─Query 1─Query 3─ Query 2 ─[lite]─ + ─
+//	  ▀▀▀▀ ━━━━━━━━━━━━━━━━         hollow   in the landing group's colour
+//	  chip  members (underlined)
 func (m *Model) drawTabs(c *Canvas) {
 	m.lay.tabChips = m.lay.tabChips[:0]
 	r := m.lay.editor
-	if len(m.tabs) < 2 || r.W < 20 {
+	if (len(m.tabs) < 2 && len(m.groups) == 0) || r.W < 20 {
 		return
 	}
 	s := c.Sub(Rect{r.X + 1, r.Y, r.W - 2, 1})
@@ -586,54 +651,177 @@ func (m *Model) drawTabs(c *Canvas) {
 		border = onBg(m.st.borderFocus, m.st.base)
 	}
 	s.Put(0, 0, strings.Repeat("─", s.W()), border)
-	// each chip gets an equal share when they do not all fit
-	plus := " + "
-	avail := s.W() - width(plus) - 1
-	share := max(6, avail/len(m.tabs)-1)
-	x := 1
+
+	var body, tail []stripEntry
+	shown := 0
 	for i := range m.tabs {
-		label := " " + truncate(m.tabLabel(i), share-2) + " "
-		st := onBg(m.st.title, m.st.base)
-		switch {
-		case i == m.curTab && m.focus == focusEditor:
-			st = m.st.sel
-		case i == m.curTab:
-			st = m.st.buttonHover
-		case m.tabs[i].failed:
-			st = onBg(m.st.err, m.st.base)
+		if text, g, ok := m.groupChipText(i); ok {
+			body = append(body, stripEntry{kind: stripGroup, g: g, text: text})
 		}
-		if x+width(label) > s.W()-width(plus) {
-			break
+		if m.tabHidden(i) {
+			continue // folded into its chip
+		}
+		body = append(body, stripEntry{kind: stripTab, idx: i, g: m.groupOf(m.tabs[i])})
+		shown++
+	}
+	for _, g := range m.idleGroups() {
+		tail = append(tail, stripEntry{kind: stripIdle, g: g, text: "[" + g.name + "]"})
+	}
+	land := m.landing()
+	if len(m.tabs) < maxTabs {
+		tail = append(tail, stripEntry{kind: stripPlus, g: land, text: " + "})
+	}
+
+	// the width the tabs share: the row less the margin, the fixed chips
+	// and one border cell after every chip
+	fixed := 1
+	for _, e := range append(slices.Clip(body), tail...) {
+		fixed++
+		if e.kind != stripTab {
+			fixed += width(e.text)
+		}
+	}
+	share := max(6, (s.W()-fixed)/max(shown, 1))
+	tailW := 0
+	for _, e := range tail {
+		tailW += width(e.text) + 1
+	}
+
+	base := m.st.base
+	x := 1
+	var prev *tabGroup // the group of the chip just drawn, for the joining border
+	place := func(e stripEntry, label string, st Style) {
+		if prev != nil && e.g == prev && e.kind != stripIdle && e.kind != stripPlus {
+			s.Put(x-1, 0, "─", Style{Fg: m.groupColor(prev), Bg: base.Bg})
 		}
 		cr := chip(s, x, 0, label, st)
-		m.lay.tabChips = append(m.lay.tabChips, tabChip{r: cr, idx: i})
+		m.lay.tabChips = append(m.lay.tabChips, tabChip{r: cr, kind: e.kind, idx: e.idx, g: e.g})
 		x += cr.W + 1
-	}
-	if len(m.tabs) < maxTabs {
-		cr := chip(s, x, 0, plus, onBg(m.st.muted, m.st.base))
-		m.lay.tabChips = append(m.lay.tabChips, tabChip{r: cr, idx: -1})
-	}
-}
-
-// tabChipAt is the chip at (x, y): its tab index, -1 for "+", ok false off
-// every chip.
-func (m *Model) tabChipAt(x, y int) (int, bool) {
-	for _, c := range m.lay.tabChips {
-		if c.r.Contains(x, y) {
-			return c.idx, true
+		prev = e.g
+		if e.kind == stripIdle || e.kind == stripPlus {
+			prev = nil
 		}
 	}
-	return 0, false
+	for _, e := range body {
+		var label string
+		var st Style
+		switch e.kind {
+		case stripGroup:
+			label = e.text
+			st = Style{Fg: base.Bg, Bg: m.groupColor(e.g)}.Bold()
+		case stripTab:
+			label = " " + truncate(m.tabLabel(e.idx), share-2) + " "
+			st = onBg(m.st.title, base)
+			if e.g != nil {
+				st = Style{Fg: m.groupColor(e.g), Bg: base.Bg}
+			}
+			switch {
+			case e.idx == m.curTab && m.focus == focusEditor:
+				st = m.st.sel
+			case e.idx == m.curTab:
+				st = m.st.buttonHover
+			case m.tabs[e.idx].failed:
+				st = onBg(m.st.err, base)
+			}
+			if e.g != nil {
+				st = st.Underline()
+			}
+		}
+		if x+width(label) > s.W()-tailW {
+			break
+		}
+		place(e, label, st)
+	}
+	for _, e := range tail {
+		st := onBg(m.st.muted, base)
+		if e.g != nil {
+			// hollow: the group's colour as text, nothing filled — an idle
+			// chip is a rule with no tab, and + is where ⌥T will put one
+			st = Style{Fg: m.groupColor(e.g), Bg: base.Bg}.Underline()
+		}
+		if e.kind == stripIdle {
+			st = Style{Fg: m.groupColor(e.g), Bg: base.Bg}
+		}
+		if x+width(e.text) > s.W() {
+			break
+		}
+		place(e, e.text, st)
+	}
+	m.drawStripHint(s, x, land)
 }
 
-// tabClick handles a left press on a chip: switch, or a double-click
-// renames, or "+" opens a tab.
-func (m *Model) tabClick(idx, clicks int) tea.Cmd {
-	m.focus = focusEditor
-	if idx < 0 {
-		return m.newTab()
+// drawStripHint writes, after the strip, what the chip under the mouse
+// does — a terminal has no tooltips, and a group's chip, an idle chip and
+// a + that joins a group each do something a plain tab does not. Nothing is
+// written over a plain tab, and too long a hint is cut to the room left.
+func (m *Model) drawStripHint(s Surface, x int, land *tabGroup) {
+	if !m.hover.onStrip {
+		return
 	}
-	cmd := m.activate(idx)
+	var hint string
+	for _, c := range m.lay.tabChips {
+		if !c.r.Contains(m.hover.strip[0], m.hover.strip[1]) {
+			continue
+		}
+		switch c.kind {
+		case stripGroup:
+			act := "click folds"
+			if c.g.collapsed {
+				act = "click unfolds"
+			}
+			hint = c.g.name + " — " + m.describeGroup(c.g) + " · " + act + ", right-click: menu"
+		case stripIdle:
+			hint = c.g.name + " — " + m.describeGroup(c.g) + " · click opens a tab on " + c.g.conn
+		case stripPlus:
+			on := m.newTabConn()
+			if on == "" {
+				on = "no connection"
+			}
+			hint = "new tab on " + on + " (⌥T)"
+			if land != nil {
+				hint = "new tab in " + land.name + " on " + m.connFor(land, m.newTabConn()) + " (⌥T)"
+			}
+			if len(m.groups) > 0 {
+				hint += " · right-click: another group"
+			}
+		}
+	}
+	// cut to the room left rather than dropped: the head of the hint (the
+	// group's name, where the tab lands) is the part that matters
+	room := s.W() - x - 2
+	if hint == "" || room < 12 {
+		return
+	}
+	s.Put(x, 0, " "+truncate(hint, room)+" ", onBg(m.st.muted, m.st.base).Italic())
+}
+
+// tabChipAt is the strip's chip at (x, y), ok false off every chip.
+func (m *Model) tabChipAt(x, y int) (tabChip, bool) {
+	for _, c := range m.lay.tabChips {
+		if c.r.Contains(x, y) {
+			return c, true
+		}
+	}
+	return tabChip{}, false
+}
+
+// tabClick handles a left press on a chip: a tab switches (a double-click
+// renames it), + opens a tab, a group's chip folds or unfolds it, and an
+// idle group's chip opens a tab on its connection — the one thing an idle
+// group can usefully do, and folding nothing would look like a dropped
+// click.
+func (m *Model) tabClick(c tabChip, clicks int) tea.Cmd {
+	m.focus = focusEditor
+	switch c.kind {
+	case stripPlus:
+		return m.newTab()
+	case stripGroup:
+		m.toggleGroup(c.g)
+		return nil
+	case stripIdle:
+		return m.newTabIn(c.g)
+	}
+	cmd := m.activate(c.idx)
 	if clicks >= 2 {
 		m.renameTab()
 	}
@@ -642,12 +830,19 @@ func (m *Model) tabClick(idx, clicks int) tea.Cmd {
 
 // openTabMenu is a chip's right-click menu. Right-clicking a tab that is
 // not on screen brings it on screen first, so the menu acts on the tab the
-// user sees — the grammar of every other right-click here.
-func (m *Model) openTabMenu(idx, x, y int) tea.Cmd {
-	if idx < 0 {
+// user sees — the grammar of every other right-click here. A group's chip
+// (or an idle one) opens the group's menu, and + the menu of groups a new
+// tab can go in.
+func (m *Model) openTabMenu(c tabChip, x, y int) tea.Cmd {
+	switch c.kind {
+	case stripPlus:
+		m.openNewTabMenu(x, y)
+		return nil
+	case stripGroup, stripIdle:
+		m.openGroupMenu(c.g, x, y)
 		return nil
 	}
-	cmd := m.activate(idx)
+	cmd := m.activate(c.idx)
 	closeWhy := ""
 	if len(m.tabs) < 2 {
 		closeWhy = "the last tab stays — clear its editor instead"
@@ -658,6 +853,7 @@ func (m *Model) openTabMenu(idx, x, y int) tea.Cmd {
 		{label: "Close tab", key: "⌥W", why: closeWhy, act: func(m *Model) tea.Cmd { return m.closeTab(m.curTab, false) }},
 		{label: "New query tab", key: "⌥T", act: func(m *Model) tea.Cmd { return m.newTab() }},
 	}
+	items = append(items, m.tabGroupItems(m.active(), x, y)...)
 	items = append(items, m.consoleMenuItems()...)
 	m.openMenu(x, y, items)
 	return cmd

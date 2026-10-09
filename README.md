@@ -1123,6 +1123,34 @@ values or temp tables. In the connections list, `●` is the tab's connection
 and `○` one another tab is on; a connection a tab is on cannot be removed or
 re-pointed until that tab moves off it.
 
+#### Tab groups
+
+Tabs can be gathered into **groups**, as in `dbc web`: a short coloured chip
+in the strip with its tabs behind it, their titles underlined in the group's
+colour, and foldable to the chip alone (`prod +2` — two tabs hidden; the tab
+on screen is never folded away).
+
+```
+╭─ prod ─Query 1─Query 3─ wip +2 ─Query 4─ Query 2 ─[lite]─ + ─────╮
+```
+
+- A **connection group** is a rule: every tab on its connection (or on one of
+  its other databases, `prod/analytics`) belongs, including a tab that
+  switches onto it later. A tab can be taken out by hand.
+- An **ad-hoc group** is a hand-picked set; a new tab opened from one of its
+  tabs joins it.
+
+Right-click a tab (or press `⌥G`) → *Add to group…* to start one, or to move
+the tab into an existing one. Click a group's chip to fold or unfold it;
+right-click it for its menu: a new tab in the group (on the group's
+connection), rename, make ad-hoc, close the group's tabs (not one that may
+hold a transaction), ungroup, and its tabs. A connection group with no open
+tab stays as a hollow `[name]` chip after the tabs — click it to open a tab
+on its connection. The `+` wears the colour of the group `⌥T` would put the
+new tab in (hover it to read which), and right-click on `+` opens a tab in
+any group. Names are up to 8 letters or digits. Groups are saved with the
+tabs and follow a renamed connection.
+
 Two tabs on one database get two consoles, never one file written by both: a
 new tab takes a console no other tab shows (or a new one), `⌥C` skips the
 ones other tabs show, and the console menu sends you to the tab that has one.

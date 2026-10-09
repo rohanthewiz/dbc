@@ -34,27 +34,9 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-168
+**Next ID:** N-169
 
 ## Open
-
-- **N-116** · raised `2026-1005-1450-tui-web-parity` · value low
-  Tab groups in the TUI. dbc web has them (`tabgroups.js`: ad-hoc and
-  connection groups, collapse to a chip); the TUI's strip has no groups.
-  Only worth it once someone keeps more tabs than the strip shows.
-  Updated `2026-1005-1533-new-tab-group-target`: the web strip's + now
-  shows the group a new tab joins (its colour, its tooltip), and a
-  right-click on + or a group's "New tab in <group>" opens a tab in any
-  group, on that group's connection. A TUI port should carry both.
-  Updated `2026-1006-1804-idle-connection-group-chips`: a connection group
-  with no tab now keeps a hollow chip at the strip's end (click opens a tab
-  on its connection, right-click its menu); a TUI port should carry that
-  too.
-- **N-117** · raised `2026-1005-1450-tui-web-parity` · value low
-  A light/dark switch in the TUI. dbc web has one; the TUI takes the cats
-  host's palette or its own dark one (`theme.Light()` exists, used for plan
-  files). Would need a place to put it (no settings menu) and to decide how
-  it interacts with a live cats theme.
 
 
 ## Validate
@@ -217,6 +199,16 @@ and `raised`.
   message on a narrow editor (cut at 160 characters, then scrolls
   horizontally).
 
+- **N-168** · raised `2026-1008-1939-tui-tab-groups` · value low
+  Hand-check the TUI's tab groups in a real terminal (and inside cats with a
+  light host theme). The tests read the canvas, not a screen. Checks: a
+  group's chip is filled in its colour with readable text; member titles are
+  underlined and the border between them takes the group's colour; the
+  hollow `[name]` chip and the `+` read as distinct from a member tab; the
+  hover hint after the strip appears on `+` / a chip and goes when the mouse
+  leaves; ⌥G opens under macOS Terminal + tmux, where right-click may not
+  arrive.
+
 ## Roadmap
 
 Wanted, but deliberately not next. Empty at seeding: the session docs never
@@ -283,6 +275,12 @@ call.
   leaves another window's members under the old name. Only matters with
   two windows grouping at once; fix would be page-side deltas or a
   per-group stamp.
+
+- **N-117** · raised `2026-1005-1450-tui-web-parity` · value low
+  A light/dark switch in the TUI. dbc web has one; the TUI takes the cats
+  host's palette or its own dark one (`theme.Light()` exists, used for plan
+  files). Would need a place to put it (no settings menu) and to decide how
+  it interacts with a live cats theme.
 
 - **N-133** · raised `2026-1006-1937-scripts-web-api` · value low
   rweb's radix router (v0.1.32) does not backtrack. Under one method, a
@@ -383,6 +381,20 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-116** · raised `2026-1005-1450-tui-web-parity` · value low
+  Tab groups in the TUI. dbc web has them (`tabgroups.js`: ad-hoc and
+  connection groups, collapse to a chip); the TUI's strip has no groups.
+  Only worth it once someone keeps more tabs than the strip shows.
+  Updated `2026-1005-1533-new-tab-group-target`: the web strip's + now
+  shows the group a new tab joins (its colour, its tooltip), and a
+  right-click on + or a group's "New tab in <group>" opens a tab in any
+  group, on that group's connection. A TUI port should carry both.
+  Updated `2026-1006-1804-idle-connection-group-chips`: a connection group
+  with no tab now keeps a hollow chip at the strip's end (click opens a tab
+  on its connection, right-click its menu); a TUI port should carry that
+  too.
+  closed 2026-10-08, `2026-1008-1939-tui-tab-groups` (from the cats-todo backlog): new `tui/tabgroups.go` — dbc web's model ported decision for decision (ad-hoc and connection groups, deepest connection group wins, exclusions, one group per tab resolved by tab key, `arrangeTabs` reorders `m.tabs` after every Update so ⌥1…9 and the strip agree, fold hides members but never the tab on screen, names ≤8 letters/digits unique case-insensitively, six hues per light/dark background from app.css). The strip (`drawTabs`) draws each group's filled chip before its first tab (`name +N` folded), members underlined in the group's colour and joined by the border in that colour, idle connection groups as hollow `[name]` chips after the tabs (click opens a tab on its connection, right-click its menu), and + in the landing group's colour with a hover hint naming the group (the terminal's tooltip); right-click on + opens a tab in any group (`newTabIn`, on `connFor`'s connection). Chip click folds; chip right-click and the tab menu's group rows reach Add to group… / Remove / the group menu (New tab in, collapse, rename, make ad-hoc, close group's tabs — skipping transactional sessions — ungroup, member rows); ⌥G is the keyboard door. The strip now also shows with one tab when groups exist. Saved in the layout file (`userdata.LayoutTabGroup`, members by saved-tab index); a renamed connection takes its group along; a group whose connection was removed refuses New tab with a pointer to Ungroup. Help, README. Tests in `tui/tabgroups_test.go`.
 
 - **N-118** · raised `2026-1005-1450-tui-web-parity` · value low
   A references list for ⇧F12 in the TUI, like Monaco's peek: today the uses

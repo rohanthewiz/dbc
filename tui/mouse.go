@@ -68,6 +68,11 @@ const multiClickWindow = 400 * time.Millisecond
 type hoverState struct {
 	btn   btnID
 	split dragKind
+	// strip is where the mouse is over the tab strip (onStrip), kept as a
+	// position rather than a chip: the strip is laid out afresh each frame,
+	// and drawStripHint finds the chip there in the frame being drawn
+	strip   [2]int
+	onStrip bool
 }
 
 // now is time.Now, as a var so click-counting tests control the clock.
@@ -162,8 +167,8 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 		m.toggleSidebar()
 		return nil
 	}
-	if i, ok := m.tabChipAt(x, y); ok {
-		return m.tabClick(i, n)
+	if c, ok := m.tabChipAt(x, y); ok {
+		return m.tabClick(c, n)
 	}
 	// the log's ⧉ copy and ✕ clear sit on its top border, which is also
 	// the splitter that resizes it: a press on them is the control's
@@ -355,6 +360,9 @@ func (m *Model) mouseMotion(msg tea.MouseMotionMsg) tea.Cmd {
 		}
 		return nil
 	}
+	if _, ok := m.tabChipAt(x, y); ok {
+		m.hover.strip, m.hover.onStrip = [2]int{x, y}, true
+	}
 	m.hover.split = m.splitterAt(x, y)
 	if m.resTab == tabPlan && m.planv.plan != nil {
 		m.planv.hover(x, y)
@@ -505,9 +513,9 @@ func (m *Model) pressButton(b button) tea.Cmd {
 // current selection — so the menu and the keyboard agree on its target.
 func (m *Model) rightClick(x, y int) tea.Cmd {
 	l := m.lay
-	if i, ok := m.tabChipAt(x, y); ok {
+	if c, ok := m.tabChipAt(x, y); ok {
 		m.focus = focusEditor
-		return m.openTabMenu(i, x, y+1)
+		return m.openTabMenu(c, x, y+1)
 	}
 	if id, ok := m.resultTabLabelAt(x, y); ok {
 		m.focus = focusGrid

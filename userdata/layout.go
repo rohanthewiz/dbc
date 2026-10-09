@@ -31,6 +31,10 @@ type Layout struct {
 	// the one on screen. Empty from an older dbc: one tab, as before.
 	Tabs      []LayoutTab `json:"tabs,omitempty"`
 	ActiveTab int         `json:"active_tab,omitempty"`
+
+	// Groups are the query tabs' groups (tui/tabgroups.go). Empty from an
+	// older dbc, or when none was made.
+	Groups []LayoutTabGroup `json:"groups,omitempty"`
 }
 
 // LayoutTab is one saved query tab: what it is called, the connection it
@@ -40,6 +44,24 @@ type LayoutTab struct {
 	Title   string `json:"title"`
 	Conn    string `json:"conn,omitempty"`
 	Console string `json:"console,omitempty"`
+}
+
+// LayoutTabGroup is one saved tab group. A TUI tab has no identity that
+// outlives the run (its key is minted fresh each start), so Members and
+// Exclude name tabs by their INDEX in Tabs — the strip as it was saved,
+// which is the order restoreTabs rebuilds. dbc web keeps the same record
+// by saved-tab key (web/groups.go's tabGroupRec); the two are not shared,
+// as the tabs themselves are not.
+type LayoutTabGroup struct {
+	Name string `json:"name"`
+	// Conn is a connection group's connection; "" for an ad-hoc group.
+	Conn      string `json:"conn,omitempty"`
+	Members   []int  `json:"members,omitempty"` // ad-hoc: indices into Tabs
+	Exclude   []int  `json:"exclude,omitempty"` // connection: tabs taken out by hand
+	Collapsed bool   `json:"collapsed,omitempty"`
+	// Color indexes the TUI's group hues, kept so a group keeps its colour
+	// across restarts.
+	Color int `json:"color"`
 }
 
 // LayoutFile is where the TUI's layout persists, beside the schema picks.

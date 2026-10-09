@@ -67,8 +67,11 @@ var keyGroups = []keyGroup{
 		{"⌥T · ⌥W", "new tab (its own session and console) · close the tab"},
 		{"⌥1 … ⌥9", "go to tab N"},
 		{"click · double-click a tab", "switch to it · rename it"},
-		{"right-click a tab", "rename, close, new tab, its consoles"},
+		{"right-click a tab", "rename, close, new tab, its group, its consoles"},
 		{"● · • · ◆", "running · finished in the background · may hold a transaction"},
+		{"⌥G", "tab groups: add the tab to one, remove it, each group's menu"},
+		{"click · right-click a group's chip", "fold or unfold it · its menu (new tab in it, rename, ungroup…)"},
+		{"[name] · right-click +", "a connection group with no tab: click opens one · a new tab in any group"},
 	}},
 	{"Scripts browser (^O)", [][2]string{
 		{"Enter · double-click", "run it · edit it (an example: copy it; a trashed one: restore it)"},

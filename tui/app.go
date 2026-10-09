@@ -87,10 +87,15 @@ type Model struct {
 	tabs       []*queryTab
 	curTab     int
 	nextTabKey int
-	// savedLayoutTabs / savedActiveTab are the tabs the last run saved,
-	// held from restoreLayout until New can rebuild them (restoreTabs).
-	savedLayoutTabs []userdata.LayoutTab
-	savedActiveTab  int
+	// groups are the query tabs' groups (tabgroups.go), in the order they
+	// were made; which tabs are in each is resolved, never stored on a tab.
+	groups []*tabGroup
+	// savedLayoutTabs / savedActiveTab / savedLayoutGroups are the tabs and
+	// groups the last run saved, held from restoreLayout until New can
+	// rebuild them (restoreTabs, restoreGroups).
+	savedLayoutTabs   []userdata.LayoutTab
+	savedActiveTab    int
+	savedLayoutGroups []userdata.LayoutTabGroup
 	// connTestSeq numbers connection-form tests across forms (connform.go)
 	connTestSeq int
 	// pgDockerBusy is the PostgreSQL major a "Postgres in Docker" start is
@@ -252,6 +257,7 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Model {
 		m.editor.SetText("SELECT id, name, breed, age, adopted FROM cats ORDER BY age")
 	}
 	m.restoreTabs(m.savedLayoutTabs, m.savedActiveTab)
+	m.restoreGroups(m.savedLayoutGroups)
 
 	m.startupLog()
 	m.setStatus("ready")
@@ -286,7 +292,7 @@ func (m *Model) startupLog() {
 		m.logf(logInfo, "loaded config from %s", m.cfg.Path)
 	}
 	m.log(logMuted, "keys: ^R run · ^⇧R/⌥R run all · ^X explain · ⌥X explain analyze · ^K stop · ^A assistant · ^E export · ^P history · ^O scripts · "+
-		"^Space suggest · F12/⇧F12/F2 definition/uses/rename · ⌥T/⌥W/⌥1…9 tabs · ⌥N/⌥C new/next console · ^T tables · ^L conns · ^B sidebar · F1 keys · x/r disconnect/refresh · a/e add/edit connection · d/s database/schema · Tab focus · y/Y/c copy · t transpose · Enter inspect · -/+ hide/show column · { } P S x result tabs · ^Q quit")
+		"^Space suggest · F12/⇧F12/F2 definition/uses/rename · ⌥T/⌥W/⌥1…9 tabs · ⌥G tab groups · ⌥N/⌥C new/next console · ^T tables · ^L conns · ^B sidebar · F1 keys · x/r disconnect/refresh · a/e add/edit connection · d/s database/schema · Tab focus · y/Y/c copy · t transpose · Enter inspect · -/+ hide/show column · { } P S x result tabs · ^Q quit")
 	m.log(logMuted, "mouse: click to focus · drag to select · right-click for menus · "+
 		"drag borders to resize · hold Shift (⌥ on macOS) to select terminal text")
 	for _, w := range m.cfg.Warnings {
@@ -371,6 +377,12 @@ func (m *Model) shutdown() {
 // Update routes one message.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmd := m.route(msg)
+	// Tab groups are contiguous because the strip itself is reordered
+	// (tabgroups.go). Any message can change a tab's group — a connect
+	// landing on a grouped connection, a menu row, a close — so the pass
+	// runs once here rather than at each of them; it returns at once when
+	// there are no groups.
+	m.arrangeTabs()
 	if m.quit {
 		return m, tea.Quit
 	}
@@ -572,6 +584,9 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		return m.newTab()
 	case "alt+w":
 		return m.closeTab(m.curTab, false)
+	case "alt+g":
+		m.openGroupsMenu()
+		return nil
 	case "alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8", "alt+9":
 		if i := int(s[len(s)-1] - '1'); i < len(m.tabs) {
 			return m.activate(i)

@@ -907,6 +907,9 @@ func (m *Model) connRenamed(from, to string) {
 	}
 	// its log, and every tab's results on it (logs.go), go along too
 	m.renameConnViews(rename)
+	// and a connection group follows its connection, or it would sit idle
+	// on a name nothing is on any more (tabgroups.go)
+	m.renameGroupConns(rename)
 	if err := userdata.MovePicks(m.picksFile, rename); err != nil {
 		m.logf(logWarn, "saved schema picks on %q were not moved to %q, and it will open on its default schema: %s",
 			from, to, serr.StringFromErr(err))

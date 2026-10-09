@@ -51,6 +51,7 @@ func TestWeb(t *testing.T) {
 		{"refresh a connection", refreshConn},
 		{"connection form fields and DSN", connForm},
 		{"postgres in docker dialog", pgDockerDialog},
+		{"dump database dialog", dumpDialog},
 		{"postgres schema picker", pgSchemaPicker},
 		{"postgres routines", pgRoutines},
 		{"tabs survive a reload", tabsSurviveReload},
@@ -928,6 +929,69 @@ func pgDockerDialog(t *testing.T, _ *env, p *rod.Page) {
 	}
 	p.MustElementR(".modal button", "^Cancel$").MustClick()
 	waitFor(t, p, "the dialog closed", `() => !document.querySelector(".modal")`)
+}
+
+// dumpDialog: "Dump database…" is in every connection's right-click menu,
+// dimmed on SQLite. On Postgres (with DBC_LIVE_PG_DSN) it opens the dialog
+// with a suggested file, follows the format (suffix, Jobs, the boxes an
+// archive leaves to pg_restore), and Dump either runs — the outcome
+// arriving in the log on the event stream — or says why not (no pg_dump
+// on this machine) in the dialog.
+func dumpDialog(t *testing.T, e *env, p *rod.Page) {
+	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonRight)
+	waitFor(t, p, "the dimmed row on SQLite", `() => [...document.querySelectorAll(".menu .mitem.off")]
+	  .some((b) => b.textContent.includes("Dump database…") && b.title.includes("Postgres"))`)
+	p.MustElement("body").MustClick()
+	waitFor(t, p, "the menu closed", `() => !document.querySelector(".menu")`)
+	if e.pgDSN == "" {
+		t.Log("set DBC_LIVE_PG_DSN to check the dialog on Postgres")
+		return
+	}
+	clickAt(t, p, `#conns .conn-item[data-conn="pg"]`, proto.InputMouseButtonRight)
+	waitFor(t, p, "the menu", `() => !!document.querySelector(".menu")`)
+	menuPick(t, p, "Dump database…")
+	waitFor(t, p, "the suggested file", `() => {
+	  const o = document.getElementById("dp-out");
+	  return !!o && /\/pg-\d{8}-\d{4}\.sql$/.test(o.value);
+	}`)
+	got := evalStr(t, p, `() => {
+	  const f = document.getElementById("dp-format"), o = document.getElementById("dp-out");
+	  const shown = (id) => !document.getElementById(id).hidden;
+	  const states = [];
+	  for (const v of ["custom", "directory", "split", "plain"]) {
+	    f.value = v; f.dispatchEvent(new Event("change"));
+	    states.push(v + ":" + o.value.replace(/^.*pg-\d{8}-\d{4}/, "") + ":jobs=" + shown("dp-jobs") +
+	      ":owner=" + !document.getElementById("dp-no-owner").closest("label").hidden);
+	  }
+	  return states.join(" ");
+	}`)
+	if want := "custom:.dump:jobs=false:owner=false directory:-dir:jobs=true:owner=false " +
+		"split:-sql:jobs=true:owner=true plain:.sql:jobs=false:owner=true"; got != want {
+		t.Fatalf("format changes:\n got %s\nwant %s", got, want)
+	}
+
+	out := filepath.Join(e.home, "e2e-dump.sql")
+	p.MustElement("#dp-out").MustSelectAllText().MustInput(out)
+	p.MustElementR(".modal button", "^Dump$").MustClick()
+	waitFor(t, p, "the dump's outcome", `() => {
+	  const r = document.querySelector(".modal .connresult");
+	  if (r && !r.hidden && r.classList.contains("err")) return true;
+	  return !document.querySelector(".modal") &&
+	    [...document.querySelectorAll("#log > div")].some((d) => /dumped pg to|dump of pg failed/.test(d.textContent));
+	}`)
+	if open, _ := eval(t, p, `() => !!document.querySelector(".modal")`).(bool); open {
+		said := evalStr(t, p, `() => document.querySelector(".modal .connresult").textContent`)
+		if !strings.Contains(said, "pg_dump") {
+			t.Fatalf("the dialog refused with: %s", said)
+		}
+		t.Logf("no usable pg_dump here; the dialog said: %s", said)
+		p.MustElementR(".modal button", "^Cancel$").MustClick()
+		waitFor(t, p, "the dialog closed", `() => !document.querySelector(".modal")`)
+		return
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Fatalf("the log says dumped, but %s: %v", out, err)
+	}
 }
 
 // pgRoutines: on Postgres the heading's Routines word lists the picked

@@ -125,6 +125,9 @@ type Server struct {
 	// windows (pgdocker.go): two windows picking the same version would
 	// race one container's creation and one connection's registration.
 	pgDockerOne sync.Mutex
+
+	// dumps is the one "Dump database…" running, across windows (dump.go).
+	dumps dumps
 }
 
 //go:embed all:static
@@ -235,6 +238,9 @@ func (s *Server) routes() {
 	r.Get("/api/v1/pgdocker", s.handlePGDocker)
 	r.Post("/api/v1/pgdocker", s.handlePGDockerStart)
 	r.Post("/api/v1/pgdocker/stop", s.handlePGDockerStop)
+	r.Get("/api/v1/dump", s.handleDumpInfo)
+	r.Post("/api/v1/dump", s.handleDumpStart)
+	r.Post("/api/v1/dump/stop", s.handleDumpStop)
 	r.Get("/api/v1/tabs", s.handleTabs)
 	r.Put("/api/v1/tabs/:id", s.handleSaveTab)
 	r.Delete("/api/v1/tabs/:id", s.handleDeleteTab)
@@ -351,6 +357,7 @@ const shutdownGrace = 5 * time.Second
 // rweb's to close (it already has, when Run calls this).
 func (s *Server) Shutdown() {
 	s.opt.Logf("stopping: canceling runs and releasing sessions…")
+	s.stopDump(shutdownGrace) // pg_dump is a child process: it must not outlive dbc
 	if s.hub.closeAll(shutdownGrace) {
 		s.opt.Logf("some sessions did not close within %s — exiting anyway", shutdownGrace)
 	}

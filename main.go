@@ -11,6 +11,7 @@
 //	dbc copy --from a --to b t     copy a table between connections (see copycmd.go)
 //	dbc migrate up                 apply pending migrations (see migrate.go)
 //	dbc explain -a "SELECT …"      show a statement's plan and findings (see explain.go)
+//	dbc dump -c pg -o db.sql       dump a Postgres database with pg_dump (see dumpcmd.go)
 //	dbc web                        the workbench in a browser (see webcmd.go)
 //	dbc version                    print the version (same as --version / -v)
 //
@@ -201,6 +202,7 @@ func newCLI() *cli.Command {
 			copyCommand(),
 			explainCommand(),
 			erdCommand(),
+			dumpCommand(),
 			webCommand(),
 			{
 				// A subcommand as well as the --version / -v flag the cli

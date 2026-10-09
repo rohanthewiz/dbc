@@ -6,6 +6,14 @@
 # are expanded.
 # scripts_dir = "scripts"
 
+# Directory holding PostgreSQL's client tools, pg_dump and pg_restore, for
+# `dbc dump` and "Dump database…" in the TUI and dbc web. Leave it out and dbc
+# looks on PATH and in the usual install places (Homebrew's keg-only libpq and
+# postgresql@N, Postgres.app, /usr/lib/postgresql/N/bin), picking one new
+# enough for the server. Resolved like scripts_dir. $DBC_PG_BIN and --pg-bin
+# override it.
+# pg_bin = "/opt/homebrew/opt/libpq/bin"
+
 # Query results are truncated at this many rows in the client
 max_rows = 1000
 

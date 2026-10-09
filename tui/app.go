@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -101,6 +102,15 @@ type Model struct {
 	// pgDockerBusy is the PostgreSQL major a "Postgres in Docker" start is
 	// bringing up, "" when none is (pgdocker.go): one at a time.
 	pgDockerBusy string
+	// The running dump (dump.go): its connection ("" when none — one at a
+	// time), its cancel, and a channel closed once it has ended and
+	// cleaned up. dumpSeq numbers the form's Dump presses; dumpLastDir is
+	// where the last dump went, for the next form's suggestion.
+	dumpBusy    string
+	dumpCancel  context.CancelFunc
+	dumpWait    chan struct{}
+	dumpSeq     int
+	dumpLastDir string
 
 	resTab  resultsTab // which tab the results pane shows: the grid or the plan
 	resZoom bool       // the results pane has the whole centre column (z)
@@ -363,6 +373,7 @@ func (m *Model) shutdown() {
 		ws.Stop() // the run and any connect still dialing, in every tab
 	}
 	m.catsClose()
+	m.stopDumpForQuit()
 	m.chatSave() // before close: quitting must not discard the conversation
 	m.chat.close()
 	for _, ws := range m.tabWorkspaces() {
@@ -478,6 +489,14 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 		return m.pgDockerStarted(msg)
 	case pgDockerStoppedMsg:
 		return m.pgDockerStopped(msg)
+	case dumpPreparedMsg:
+		return m.dumpPrepared(msg)
+	case dumpLineMsg:
+		m.dumpLine(msg)
+		return nil
+	case dumpDoneMsg:
+		m.dumpDone(msg)
+		return nil
 	case scriptEditedMsg:
 		return m.scriptEdited(msg)
 	}

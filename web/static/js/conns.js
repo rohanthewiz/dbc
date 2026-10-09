@@ -520,6 +520,188 @@
     }
   }
 
+  // ── Dump database ──────────────────────────────────────────────────────
+  // openDump is the Connections menu's "Dump database…" on a Postgres
+  // connection: pg_dump run the way `dbc dump` runs it (package pgdump on
+  // the server — the checks, the connection, the pg_dump picked).
+  //
+  //   open ─► GET /dump?conn=X ─► the suggested path (Downloads, named for
+  //                               the connection and the minute)
+  //   Dump ─► POST /dump {conn, …fields} ─► refused: said in the box
+  //                                      └► started: the dialog closes, and
+  //   the dump reports on the event stream ("dump" events, onDump): each
+  //   line to the log, and whether one is running, for the menu's rows.
+  //
+  // The POST answers once the dump has started, not when it ends: a dump
+  // can take hours, and the stream outlives a reload. One runs at a time,
+  // across windows; the menu offers Stop while it does.
+  //
+  // The path is on the machine dbc web runs on; ~ is its home directory.
+  const PG_DRIVERS = new Set(["postgres", "postgresql", "pg", "pgx"]);
+  const DUMP_FORMATS = [
+    ["plain", "plain — one SQL file, for psql", ".sql"],
+    ["custom", "custom — one archive, for pg_restore", ".dump"],
+    ["directory", "directory — a file per table, for pg_restore (parallel)", "-dir"],
+    ["tar", "tar — one tar archive, for pg_restore", ".tar"],
+    ["split", "split — SQL, a file per table, and a restore.sql for psql", "-sql"],
+  ];
+  const suffixOf = (f) => DUMP_FORMATS.find(([x]) => x === f)[2];
+  const isArchive = (f) => f === "custom" || f === "directory" || f === "tar";
+  const toDir = (f) => f === "directory" || f === "split";
+
+  // dumping is the dump running now ({conn, out, format, started}), or
+  // null — the server's word, from GET /dump at load and "dump" events.
+  let dumping = null;
+  dbc.api("GET", "/api/v1/dump").then((r) => { dumping = r.running || null; }).catch(() => {});
+
+  // onDump takes a "dump" event: a line for the log, or the running state.
+  function onDump(d) {
+    if ("running" in d) dumping = d.running || null;
+    if (d.text) dbc.log(d.level, d.text);
+  }
+
+  function openDump(name) {
+    const input = (id, attrs) => el("input", Object.assign({ type: "text", id, autocomplete: "off",
+      spellcheck: "false", autocapitalize: "off" }, attrs || {}));
+    const format = el("select", { id: "dp-format" });
+    for (const [f, label] of DUMP_FORMATS) format.append(el("option", { value: f }, label));
+    const out = input("dp-out", { class: "mono", placeholder: "~/Downloads/" + name + ".sql" });
+    const jobs = input("dp-jobs", { inputmode: "numeric", placeholder: "1 — tables dumped at once" });
+    const content = el("select", { id: "dp-content" },
+      el("option", { value: "" }, "everything"), el("option", { value: "schema" }, "schema only"),
+      el("option", { value: "data" }, "data only"));
+    const schemas = input("dp-schemas", { class: "mono", placeholder: "all — or patterns: public, sales*" });
+    const tables = input("dp-tables", { class: "mono", placeholder: "all — or patterns: orders, sales.*" });
+    const exclTables = input("dp-excl-tables", { class: "mono", placeholder: "none" });
+    const exclData = input("dp-excl-data", { class: "mono", placeholder: "none — tables kept without their rows" });
+    const extra = input("dp-extra", { class: "mono", placeholder: "other pg_dump options, e.g. --no-comments" });
+    const box = (id, text, title) => {
+      const c = el("input", { type: "checkbox", id });
+      return { c, label: el("label", { class: "check", title }, c, text) };
+    };
+    const noOwner = box("dp-no-owner", "no owners", "no ALTER … OWNER: objects belong to whoever restores");
+    const noPriv = box("dp-no-priv", "no grants", "no GRANT / REVOKE");
+    const inserts = box("dp-inserts", "INSERTs, not COPY", "slower to restore, but readable by more than Postgres");
+    const create = box("dp-create", "CREATE DATABASE first", "the dump makes the database and connects to it");
+    const clean = box("dp-clean", "DROP before creating", "drop each object (with -t split: the database) first");
+    const result = el("div", { class: "connresult", "aria-live": "polite", hidden: "hidden" });
+    const go = el("button", { type: "button", class: "primary" }, "Dump");
+    const cancel = el("button", { type: "button" }, "Cancel");
+    cancel.addEventListener("click", () => dbc.modal.close());
+
+    function say(level, text) {
+      result.hidden = false;
+      result.className = "connresult " + level;
+      result.textContent = text;
+    }
+
+    const rowOf = (text, ctl) => [el("label", { for: ctl.id }, text), ctl];
+    const jobsRow = rowOf("Jobs", jobs);
+    const archiveOnly = [noOwner.label, create.label, clean.label];
+    const outLabel = el("label", { for: "dp-out" }, "To file");
+    const what = el("span", "hint full", "");
+
+    // show follows the format: the directory formats take a directory and
+    // jobs; the archive formats leave owner, create and clean to
+    // pg_restore, so those boxes go (and are not sent)
+    let prevFormat = format.value;
+    function show() {
+      const f = format.value;
+      for (const e of jobsRow) e.hidden = !toDir(f);
+      for (const e of archiveOnly) e.hidden = isArchive(f);
+      outLabel.textContent = toDir(f) ? "To directory" : "To file";
+      what.textContent = toDir(f) ? "a directory that does not exist yet, or is empty" : "";
+      // a suggested name follows the format; one typed by hand stays
+      const old = suffixOf(prevFormat);
+      if (out.value.endsWith(old)) out.value = out.value.slice(0, -old.length) + suffixOf(f);
+      prevFormat = f;
+    }
+    format.addEventListener("change", show);
+
+    let open = true;
+    dbc.api("GET", "/api/v1/dump?conn=" + encodeURIComponent(name)).then((r) => {
+      if (open && !out.value) { out.value = r.out || ""; prevFormat = "plain"; show(); }
+      if (r.running) say("warn", "a dump of " + r.running.conn + " is still running — one at a time");
+    }).catch((e) => { if (open) say("err", e.message); });
+
+    async function run() {
+      if (go.disabled) return;
+      const f = format.value;
+      const body = {
+        conn: name, format: f, out: out.value, jobs: toDir(f) ? jobs.value : "", content: content.value,
+        schemas: schemas.value, tables: tables.value, exclude_tables: exclTables.value, exclude_data: exclData.value,
+        no_privileges: noPriv.c.checked, inserts: inserts.c.checked, extra: extra.value,
+        no_owner: !isArchive(f) && noOwner.c.checked, create: !isArchive(f) && create.c.checked,
+        clean: !isArchive(f) && clean.c.checked,
+      };
+      go.disabled = true;
+      say("", "checking the server's version and finding pg_dump…");
+      try {
+        const r = await dbc.api("POST", "/api/v1/dump", body);
+        if (!r.ok) { if (open) say("err", r.error); return; }
+        if (open) dbc.modal.close(); // the dump's own lines take it from here
+      } catch (e) {
+        if (open) say(e.status === 409 ? "warn" : "err", e.message);
+      } finally {
+        go.disabled = false;
+      }
+    }
+    go.addEventListener("click", run);
+
+    show();
+    dbc.modal.open({
+      title: "Dump " + name, focus: out,
+      body: el("div", "connbody",
+        el("div", "connform",
+          ...rowOf("Format", format),
+          outLabel, out, el("span"), what,
+          ...jobsRow,
+          ...rowOf("What", content),
+          ...rowOf("Schemas", schemas), ...rowOf("Tables", tables),
+          ...rowOf("Skip tables", exclTables), ...rowOf("Skip data of", exclData),
+          el("label", null, "Options"),
+          el("span", "check full", noPriv.label, inserts.label, noOwner.label),
+          el("span"), el("span", "check full", create.label, clean.label),
+          ...rowOf("More options", extra),
+          el("span"), el("span", "hint full", "Written on the machine dbc web runs on (~ is its home). " +
+            "Runs pg_dump — found on PATH, in Homebrew's libpq, or at the config's pg_bin.")),
+        result),
+      foot: el("div", "mfoot", el("span", "hint", ""), go, cancel),
+      onKey: (e) => {
+        if (e.key !== "Enter" || e.target.tagName === "SELECT") return false;
+        run();
+        return true;
+      },
+      onClose: () => { open = false; dbc.editor.focus(); },
+    });
+  }
+
+  // stopDump interrupts the running dump; its end arrives as events.
+  async function stopDump() {
+    try {
+      const r = await dbc.api("POST", "/api/v1/dump/stop", {});
+      if (!r.ok) dbc.log("info", r.error);
+      else dbc.log("info", "stopping the dump of " + r.conn + "…");
+    } catch (e) {
+      dbc.log("err", "could not stop the dump: " + e.message);
+    }
+  }
+
+  // dumpItems are the menu's dump rows for the connection name: Dump
+  // database…, dimmed with the reason where it cannot run, and Stop while
+  // a dump is running.
+  function dumpItems(b, name) {
+    const label = "Dump database…";
+    if (!PG_DRIVERS.has((b.dataset.driver || "").toLowerCase())) {
+      return [{ label, why: "pg_dump dumps Postgres databases only" }];
+    }
+    if (dumping) {
+      return [{ label, why: "a dump of " + dumping.conn + " is still running — one at a time" },
+        { label: "Stop dump of " + dumping.conn, act: stopDump }];
+    }
+    return [{ label, act: () => openDump(name) }];
+  }
+
   // PG_CONN is the names Postgres in Docker gives its connections
   // ("docker-pg18", or "docker-pg18-2" beside a config file's
   // "docker-pg18"); the major names the container. It only decides
@@ -538,7 +720,8 @@
   // The right-click menu: connect (or, on the row this tab is on or is
   // connecting to, disconnect), refresh, or edit or remove one added here;
   // on a connection Postgres in Docker made, stop its container (stopItem);
-  // then the ways to add one (addItems), as under +.
+  // on a Postgres one, dump it (dumpItems); then the ways to add one
+  // (addItems), as under +.
   // For the config file's, Edit and Remove are shown and say why they
   // cannot, rather than being absent and leaving the user to wonder where
   // they went — and Refresh likewise on a row the tab is not on.
@@ -574,6 +757,7 @@
         ? { label: "Remove…", act: () => confirmRemove(name) }
         : { label: "Remove…", why: fromFile + "remove it" },
       ...stopItem(b, name, on || dialing),
+      ...dumpItems(b, name),
       { head: "" },
       ...addItems(),
     ]);
@@ -595,5 +779,5 @@
   const addBtn = document.getElementById("conn-add");
   addBtn.addEventListener("click", () => dbc.menu.at(addBtn, addItems()));
 
-  dbc.conns = { draw, openAdd, openEdit, openPGDocker };
+  dbc.conns = { draw, openAdd, openEdit, openPGDocker, openDump, onDump };
 })();

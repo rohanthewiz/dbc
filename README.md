@@ -324,7 +324,7 @@ with no database picker.
 | anywhere | click | focuses that pane — the keyboard follows the mouse |
 | toolbar | click | Run, Stop, Explain, Copy ▾, Export, History, Scripts, Tables, Assistant; `● conn ▾` switches connection |
 | connections | click | connects |
-| connections | right-click (or the toolbar's `● conn ▾`) | **Disconnect** the active connection, **Refresh** it (read its databases, schemas and tables again, for what another client created or dropped — the session and any open transaction stay), then the list to connect to; on a row, **Edit…** and **Remove…** for a connection added in dbc (below), and **Stop container** on one Postgres in Docker made; **Add a connection…**; **Postgres in Docker…** ([below](#postgres-in-docker)) |
+| connections | right-click (or the toolbar's `● conn ▾`) | **Disconnect** the active connection, **Refresh** it (read its databases, schemas and tables again, for what another client created or dropped — the session and any open transaction stay), then the list to connect to; on a row, **Edit…** and **Remove…** for a connection added in dbc (below), and **Stop container** on one Postgres in Docker made; **Dump database…** on a Postgres one ([below](#dumping-a-database)); **Add a connection…**; **Postgres in Docker…** ([below](#postgres-in-docker)) |
 | tables | click `⛁ db ▾` / `◫ schema ▾` | *(Postgres; MySQL has `⛁ db` only)* pick another of the server's databases / another schema, from a list you can type into |
 | tables | click / double-click / right-click | select / preview the first 100 rows / show columns, diagram it, diagram all tables, copy the ERD as Mermaid, insert name, copy name |
 | tables | `c` on the selected table | show its columns: its `information_schema.columns` rows (name, type, nullable, default, length) in the grid, ready to copy |
@@ -475,6 +475,48 @@ A container named `dbc-pg18` that dbc did not create is refused, not used.
 The `docker` CLI must be installed and running (Docker Desktop, colima,
 Rancher Desktop…). dbc looks for it on `PATH`, then in the usual install
 directories, so the macOS app finds it too.
+
+#### Dumping a database
+
+**Dump database…** in a Postgres connection's right-click menu — in the TUI
+and in `dbc web` — dumps it with `pg_dump`, exactly as
+[`dbc dump`](#dumps-headless-postgres) does, from a form:
+
+```
+╭─ Dump pg ───────────────────────────────────────────────────────── ✕ ╮
+│ Format         plain   custom   directory   tar   split              │
+│               one SQL file, for psql                                 │
+│ To file       ~/Downloads/pg-20261009-1430.sql                       │
+│ What           everything   schema only   data only                  │
+│ Schemas       all — or patterns: public, sales*                      │
+│ Tables        all — or patterns: orders, sales.*                     │
+│ Skip tables   none                                                   │
+│ Skip data of  none — tables kept without their rows                  │
+│ Options       [ ] no owners   [ ] no grants   [ ] INSERTs, not COPY  │
+│               [ ] CREATE DATABASE first   [ ] DROP before creating   │
+│ More options  other pg_dump options, e.g. --no-comments              │
+│  ⇩ Dump    Cancel                                                    │
+╰──────────────────────────────────────────────────────────────────────╯
+```
+
+The file suggested is in Downloads (else your home directory), named for
+the connection and the minute. Its suffix follows the format as you change
+it, unless you have typed a name of your own. `~` is the home directory;
+`dbc web` writes on the machine it runs on. **directory** and **split** take
+a directory (new, or empty) and a **Jobs** count of tables dumped at once.
+The archive formats hide the owner, create and drop boxes: those are
+`pg_restore`'s choices when you restore. Patterns are `pg_dump`'s, separated
+by commas or spaces.
+
+**Dump** first checks the form, asks the server its version and finds a
+`pg_dump` new enough. Anything wrong is said in the form, which stays open.
+Then the dump runs in the background. Each step and each line `pg_dump`
+writes go to the log, and the last line says where the dump went, its size,
+and how to restore it. A dump that fails or is stopped leaves no partial
+file behind. While one runs, the menu offers **Stop dump of X** instead (one
+dump at a time). Quitting the TUI or stopping `dbc web` stops it too. To
+point dbc at client tools it doesn't find itself, set `pg_bin` in the
+config (or `$DBC_PG_BIN`).
 
 ### Completion
 
@@ -1351,6 +1393,13 @@ own. Closing a browser tab frees its tabs for the next one opened.
 starts a local PostgreSQL in a container and adds its connection; see
 [Postgres in Docker](#postgres-in-docker).
 
+**Dump database…** in a Postgres connection's right-click menu dumps it with
+`pg_dump` from a dialog, as the TUI does; see
+[Dumping a database](#dumping-a-database). The dump runs on the server in
+the background, so the dialog closes once it starts. Its progress and outcome
+reach every window's log over the event stream, and a reload doesn't lose
+them.
+
 **Adding connections.** The **+** beside *Connections* opens a menu:
 **Add a connection…** and **Postgres in Docker…**. The first opens a form: name,
 driver, the connection itself, [TLS](#tls), and whether the assistant may see
@@ -1855,6 +1904,7 @@ Everything works without the TUI, for cron jobs and shell pipelines:
 ./dbc script --check copy_mytable                # check it without running it
 ./dbc scripts                                    # list scripts_dir (and say where it is)
 ./dbc copy --from prod --to local --create orders # copy a table across connections
+./dbc dump -c prod -t split -j 4 -o prod-sql     # dump a Postgres database, a file per table
 ```
 
 | Flag | |
@@ -1960,6 +2010,101 @@ are bytes: write them with `-o`, or pipe them. dbc refuses to print them on
 a terminal. `--table` takes a name as the sidebar shows it (`schema.name`
 on a connection with several schemas), and can be repeated or
 comma-separated. A table that isn't there is a usage error (exit 2).
+
+### Dumps headless (Postgres)
+
+`dbc dump` runs PostgreSQL's own `pg_dump` against a configured connection,
+so you don't have to restate its host, credentials and TLS settings for
+`pg_dump`. The TUI and `dbc web` do the same from a form
+([Dumping a database](#dumping-a-database)):
+
+```sh
+./dbc dump -c prod -o prod.sql                          # plain SQL, for psql
+./dbc dump -c prod | gzip > prod.sql.gz                 # … to stdout
+./dbc dump -c prod -t custom -o prod.dump               # one archive, for pg_restore
+./dbc dump -c prod -t directory -j 4 -o prod.d          # a file per table, 4 tables at once
+./dbc dump -c prod -t split -j 4 -o prod-sql            # plain SQL, a file per table
+./dbc dump -c prod/analytics --schema-only -o s.sql     # another database on that server
+./dbc dump -c prod --table 'sales.*' --exclude-table-data audit_log -o sales.sql
+./dbc dump -c prod -o x.sql -- --no-comments --lock-wait-timeout=10s   # any other pg_dump option
+./dbc dump -c prod -t split -o out --dry-run            # print the commands, run nothing
+```
+
+`-t` picks the format:
+
+| `-t` | writes | restore with |
+| --- | --- | --- |
+| `plain` (default) | one SQL file, or stdout without `-o` | `psql -X -d TARGET -f prod.sql` |
+| `custom` | one compressed archive (binary: `-o` or a pipe) | `pg_restore -d TARGET prod.dump` |
+| `tar` | one tar archive (binary: `-o` or a pipe) | `pg_restore -d TARGET prod.tar` |
+| `directory` | a directory: a file per table plus `toc.dat` | `pg_restore -j 4 -d TARGET prod.d` |
+| `split` | a directory of plain SQL, a file per table | `psql -X -d TARGET -f prod-sql/restore.sql` |
+
+`directory` and `split` write several files and dump several tables at once
+with `-j N`. They need `-o` naming a directory that doesn't exist yet or is
+empty. The `split` layout is dbc's own:
+
+```
+prod-sql/
+  restore.sql          \ir's the rest in order; psql runs it from any directory
+  1-pre-data.sql       schemas, types, tables, functions, sequences
+  2-data/
+    public.cats.sql    one table's rows each
+    sales.orders.sql
+  2-data-other.sql     sequence positions, large objects (when there are any)
+  3-post-data.sql      indexes, constraints, foreign keys, triggers, matview refresh
+  archive/             only with --keep-archive: the directory dump it was made from
+```
+
+It is made from **one** `pg_dump -Fd` run, which `pg_restore` then writes
+out as SQL a part at a time. So every table comes from the same snapshot, as
+in any single pg_dump. Separate `pg_dump -t` runs per table would each see
+the data at a different moment. Table names that would collide as file names
+(`Cats` and `cats` on a case-insensitive disk) get the entry's id appended. A
+failed or canceled split removes what it wrote.
+
+| Flag | pg_dump's | |
+| --- | --- | --- |
+| `-j`, `--jobs N` | `--jobs` | tables at once (`directory`, `split`), sharing one snapshot |
+| `--schema-only` / `--data-only` | same | definitions only / rows only |
+| `--schema`, `--exclude-schema PATTERN` | `-n`, `-N` | repeatable; pg_dump's patterns (`'sales*'`) |
+| `--table`, `--exclude-table PATTERN` | `-t`, `-T` | repeatable (`-t` is dbc's format flag, hence the long names). As in pg_dump, `--table` dumps just the tables, not their schema: restore into a database that has it |
+| `--exclude-table-data PATTERN` | same | keep the table, not its rows |
+| `--clean`, `--if-exists`, `--create` | same | `plain`; `split` only with `--create` (drop and recreate the database) |
+| `--no-owner`, `--no-privileges` | same | no `ALTER … OWNER`; no `GRANT`/`REVOKE` |
+| `--inserts`, `--column-inserts` | same | rows as `INSERT`s instead of `COPY` |
+| `--compress L` | same | `6`, or `zstd:3`/`lz4`/`gzip:9` with pg_dump 16+ |
+| `--encoding ENC` | same | |
+| `--keep-archive` | | `split`: keep `archive/` too |
+| `--pg-bin DIR` | | where `pg_dump` and `pg_restore` are (also `$DBC_PG_BIN`) |
+| `--dry-run` | | print the command(s); connects to nothing |
+
+dbc refuses flags `pg_dump` would quietly ignore. For example, `--clean` or
+`--no-owner` with an archive format: those are `pg_restore` options for that
+format. Anything else goes to `pg_dump` after `--`, except the options dbc
+sets itself (`--file`, `--format`, `--dbname`, `--host`, `--jobs`, …).
+
+**Which `pg_dump`.** `pg_dump` refuses a server newer than itself. dbc asks
+the server for its version and uses the first `pg_dump` that is new enough. It
+tries `--pg-bin`, `$DBC_PG_BIN` or the config's `pg_bin` if you set one, then `PATH`, then the
+usual install directories: Homebrew's keg-only `libpq` and `postgresql@N`,
+Postgres.app, Debian's `/usr/lib/postgresql/N/bin` and RHEL's
+`/usr/pgsql-N/bin`. With none installed, `brew install libpq` (macOS) or
+`apt install postgresql-client` provides them.
+
+**The connection.** dbc passes the connection to `pg_dump` the way dbc would
+open it: the DSN (URL or `key=value`), the connection's [TLS](#tls) keys, and a
+`NAME/otherdb` database. These go in a libpq service file only you can read,
+and the password goes in `PGPASSWORD`. Neither appears on `pg_dump`'s command
+line, where `ps` would show it. A `tls_key_password` becomes libpq's
+`sslpassword`. `verify-full` with no CA named uses the system trust store
+(`sslrootcert=system`, libpq 16+), as dbc does. DSN keys libpq doesn't take
+(session settings like `search_path`) are left out with a note. pgx's pool
+settings are left out silently.
+
+`pg_dump`'s messages go to stderr as they come. With `-o`, a summary line
+saying how to restore goes to stdout. `Ctrl+C` interrupts `pg_dump` and exits
+130. A connection that isn't Postgres is a usage error (exit 2).
 
 ### Scripts headless
 

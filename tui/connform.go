@@ -962,8 +962,9 @@ func (m *Model) connRemovedFromTabs(name string) {
 
 // connMenuItems are the connections menu's rows for the connection target
 // (the row right-clicked; "" when none): edit and remove, live only for one
-// added here, then add — by the form, or by starting Postgres in Docker
-// (pgdocker.go), which adds the connection itself.
+// added here, Dump database… (dump.go), then add — by the form, or by
+// starting Postgres in Docker (pgdocker.go), which adds the connection
+// itself.
 func (m *Model) connMenuItems(target string, x, y int) []menuItem {
 	items := []menuItem{heading("connections")}
 	if target != "" {
@@ -983,6 +984,8 @@ func (m *Model) connMenuItems(target string, x, y int) []menuItem {
 		if it, ok := m.pgDockerStopItem(target); ok {
 			items = append(items, it)
 		}
+		// pg_dump, for a Postgres connection (dump.go)
+		items = append(items, m.dumpItems(target)...)
 	}
 	return append(items, m.connAddItems(x, y)...)
 }

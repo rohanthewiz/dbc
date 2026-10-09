@@ -1130,6 +1130,8 @@
         onConsolesChanged(d);
       } else if (ev.type === "scripts") {
         scriptKit.onEvent(d);
+      } else if (ev.type === "dump") {
+        dbc.conns.onDump(d); // a running dump's lines and state (conns.js)
       } else if (ev.type.startsWith("chat.")) dbc.chat.onEvent(ev.type, d);
       return;
     }

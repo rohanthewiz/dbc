@@ -201,6 +201,12 @@ type Config struct {
 	ScriptsDir string `toml:"scripts_dir"`
 	MaxRows    int    `toml:"max_rows"` // rows fetched from the server
 
+	// PGBin is the directory holding PostgreSQL's client tools (pg_dump,
+	// pg_restore) for dumps — `dbc dump` and both UIs' "Dump database…".
+	// Empty means look for them (pgdump.Locate). Resolved like scripts_dir:
+	// absolute after Load, relative to the config file as written.
+	PGBin string `toml:"pg_bin"`
+
 	// MaxDisplayRows caps how many of those rows the TUI table renders. It is
 	// separate from MaxRows because the two are limited by different things:
 	// fetching more is a question of memory and patience, rendering more costs
@@ -364,13 +370,17 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 	return cfg, nil
 }
 
-// resolveScripts settles ScriptsDir (see scripts.go) against the config
-// file's directory, "" for the demo fallback, and adds the warnings: unset
-// ${VAR}s, and scripts left behind in a ./scripts dbc no longer reads.
+// resolveScripts settles ScriptsDir (see scripts.go) and PGBin against the
+// config file's directory, "" for the demo fallback, and adds the warnings:
+// unset ${VAR}s, and scripts left behind in a ./scripts dbc no longer reads.
 func (c *Config) resolveScripts(cfgDir string) {
 	var warns []string
 	c.ScriptsDir, warns = ResolveScriptsDir(c.ScriptsDir, cfgDir)
 	c.Warnings = append(c.Warnings, warns...)
+	if strings.TrimSpace(c.PGBin) != "" {
+		c.PGBin, warns = resolvePath("pg_bin", c.PGBin, cfgDir)
+		c.Warnings = append(c.Warnings, warns...)
+	}
 	if w := legacyScriptsWarning(c.ScriptsDir); w != "" {
 		c.Warnings = append(c.Warnings, w)
 	}

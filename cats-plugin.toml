@@ -96,7 +96,7 @@ command = ["./bin/dbc", "web"]
 # dropped in Go fails the tests until it is changed here too.
 [[completions]]
 binary = "dbc"
-subcommands = ["script", "scripts", "copy", "migrate", "explain", "erd", "web", "version"]
+subcommands = ["script", "scripts", "copy", "migrate", "explain", "erd", "dump", "web", "version"]
 flags = ["--config", "-c", "--conn", "-f", "--file", "-t", "--format", "-o", "--out",
          "--tx", "-k", "--keep-going",
          "--demo", "--driver", "--dsn", "--tls", "--tls-ca", "--tls-cert", "--tls-key",
@@ -104,4 +104,8 @@ flags = ["--config", "-c", "--conn", "-f", "--file", "-t", "--format", "-o", "--
          "--check", "--from", "--to", "--create", "--truncate", "--where",
          "-a", "--analyze", "--open", "--fail-on", "--theme",
          "--table", "--depth", "--views",
+         "-j", "--jobs", "--schema-only", "--data-only", "--schema", "--exclude-schema",
+         "--exclude-table", "--exclude-table-data", "--clean", "--if-exists", "--no-owner",
+         "--no-privileges", "--inserts", "--column-inserts", "--compress", "--encoding",
+         "--keep-archive", "--pg-bin", "--dry-run",
          "--listen", "--no-open", "--secret", "--help", "-v", "--version"]

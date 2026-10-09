@@ -118,7 +118,7 @@ var keyGroups = []keyGroup{
 		{"x", "(connections) disconnect"},
 		{"r", "(connections) refresh: read its databases, schemas and tables again"},
 		{"a · + · e", "(connections) add a connection · add one, or start Postgres in Docker · edit the one under the cursor"},
-		{"right-click", "(connections) connect, refresh, edit, remove, add; stop a Postgres in Docker container"},
+		{"right-click", "(connections) connect, refresh, edit, remove, add; dump a Postgres database; stop a Postgres in Docker container"},
 		{"● · ○", "(connections) this tab's connection · another tab's"},
 		{"d · s", "(tables) pick a database · a schema"},
 		{"c · e", "(tables) show its columns · diagram it (ERD)"},

@@ -34,10 +34,29 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-169
+**Next ID:** N-173
 
 ## Open
 
+- **N-170** · raised `2026-1009-0748-pg-dump-cli-tui-web` · value medium
+  Run pg_dump from Docker when no local one is new enough. `pgdump.Locate`
+  refuses a server newer than every pg_dump it finds, and this machine has
+  only Homebrew's postgresql@16 — so the 17 and 18 servers that "Postgres in
+  Docker…" itself starts cannot be dumped here. dbc already drives the docker
+  CLI (package pgdocker): `docker run --rm postgres:<server major> pg_dump`,
+  with the output directory mounted and the service file passed in, would
+  always match the server. Mind the network: a dbc container's server is on
+  127.0.0.1 of the host, not of the pg_dump container.
+- **N-171** · raised `2026-1009-0748-pg-dump-cli-tui-web` · value low
+  dbc web: download a single-file dump (plain, custom, tar) in the browser.
+  Today the dialog writes on the machine dbc web runs on, which is right for
+  the local workbench but not when `--listen` serves another machine.
+  Streaming pg_dump's stdout as the response would do; directory and split
+  stay server-side.
+- **N-172** · raised `2026-1009-0748-pg-dump-cli-tui-web` · value low
+  A dump for MySQL connections with mysqldump, behind the same menu row and
+  dialog (the row is dimmed on MySQL today). No one has asked; worth it only
+  if a MySQL user does.
 
 ## Validate
 
@@ -208,6 +227,13 @@ and `raised`.
   hover hint after the strip appears on `+` / a chip and goes when the mouse
   leaves; ⌥G opens under macOS Terminal + tmux, where right-click may not
   arrive.
+- **N-169** · raised `2026-1009-0748-pg-dump-cli-tui-web` · value low
+  Drive "Dump database…" by hand: in the TUI in a real terminal (a real dump
+  to Downloads, Stop mid-run from the menu, quit mid-dump — stderr should say
+  it was stopped and no `.partial` should stay), and in `dbc.app`'s
+  WKWebView (the dialog, the log lines arriving, `~/Downloads`). The form and
+  run path are unit-tested with a fake pg_dump, and the web dialog passed
+  the e2e suite against a live Postgres 16 with Homebrew's pg_dump 16.
 
 ## Roadmap
 

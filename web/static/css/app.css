@@ -1123,12 +1123,18 @@ a.btnlink:hover { border-color: var(--accent); }
 .ifield .iname { font-size: 12px; color: var(--fg); }
 .ifield .itype { margin-left: 6px; color: var(--muted); font-size: 10px; }
 .ifield .idoc, p.idoc, .isub .idoc { color: var(--muted); font-size: 11px; }
-.ifield input, .ifield textarea, .ifield select, .iparam input {
+.ifield > input, .ifield > textarea, .ifield > select, .iparam input {
   font: inherit; font-size: 12px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 3px;
   padding: 3px 5px; width: 100%; }
-.ifield textarea { resize: vertical; }
-.ifield textarea.code { font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; tab-size: 4; white-space: pre; }
-.ifield input:focus, .ifield textarea:focus, .ifield select:focus, .iparam input:focus { outline: 1px solid var(--accent); }
+.ifield > textarea { resize: vertical; }
+.ifield > textarea.code { font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; tab-size: 4; white-space: pre; }
+/* a code field's small Monaco (pipelines.js codeField): bordered like the
+   boxes around it; its height is set from the text (editor.js mini). The
+   rules above take only a field's own control (">"), so they leave alone
+   the textarea Monaco keeps inside .icode for its input. */
+.ifield .icode { border: 1px solid var(--line); border-radius: 3px; overflow: hidden; background: var(--bg); min-width: 0; }
+.ifield .icode:focus-within { outline: 1px solid var(--accent); }
+.ifield > input:focus, .ifield > textarea:focus, .ifield > select:focus, .iparam input:focus { outline: 1px solid var(--accent); }
 .ifield.check { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; }
 .ifield.check .idoc { flex-basis: 100%; }
 .isub { margin: 10px 0 4px; font-size: 12px; color: var(--fg); }

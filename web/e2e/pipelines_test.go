@@ -3,6 +3,7 @@ package e2e
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -64,14 +65,17 @@ func pipelineTabs(t *testing.T, e *env, p *rod.Page) {
 	}
 
 	// ── src's query, through the inspector ────────────────────────────────
+	defineCodeEd(t, p)
 	clickAt(t, p, `.plane[data-frag="load"] .pcard[data-id="src"] .cid`, proto.InputMouseButtonLeft)
 	waitFor(t, p, "src in the inspector", `() => /sql\.read/.test(document.querySelector(".pinsp .ihead").textContent)`)
-	eval(t, p, `() => {
-	  const q = [...document.querySelectorAll(".pinsp .ifield")].find((f) => f.querySelector(".iname").textContent.startsWith("query"));
-	  const ta = q.querySelector("textarea");
-	  ta.value = "SELECT id, name FROM cats ORDER BY id";
-	  ta.dispatchEvent(new Event("input", { bubbles: true }));
+	// the query is a sql field: a small Monaco editor of its own (editor.js
+	// mini), coloured as the node's connection's dialect (lite: SQLite,
+	// generic sql)
+	waitFor(t, p, "the query's editor", `() => {
+	  const ed = codeEd("query");
+	  return !!ed && ed.getModel().getLanguageId() === "sql";
 	}`)
+	eval(t, p, `() => codeEd("query").setValue("SELECT id, name FROM cats ORDER BY id")`)
 	waitFor(t, p, "the card's summary and the unsaved mark", `() =>
 	  /FROM cats/.test(document.querySelector('.pcard[data-id="src"] .csum').textContent) &&
 	  !!document.querySelector("#qtabs .qtab.pipeline.on .qdirty")`)
@@ -188,6 +192,8 @@ func pipelineTabs(t *testing.T, e *env, p *rod.Page) {
 		t.Fatalf("Run did not save the JSON view's edit first:\n%s", d)
 	}
 
+	pipelineCodeField(t, p, disk)
+
 	// ── ⇪ Go: the same pipeline as a script, in a script tab ──────────────
 	eval(t, p, `() => document.querySelector('.pbar button[data-act="export"]').click()`)
 	waitFor(t, p, "the script's name prompt", `() => { const i = document.querySelector(".modal input.hfilter"); return !!i && i.value === "e2e_pipe.go"; }`)
@@ -196,6 +202,113 @@ func pipelineTabs(t *testing.T, e *env, p *rod.Page) {
 	  const t = document.querySelector("#qtabs .qtab.script.on .qt");
 	  return !!t && t.textContent === "e2e_pipe.go" && monaco.editor.getEditors()[0].getValue().includes("sdb.NewPipeline(");
 	}`)
+}
+
+// pipelineCodeField drives a go field's editor in the inspector (N-175),
+// on the waiting pipeline's go.source, which is on the canvas by now:
+//
+//	select the card     ─► the code in a Monaco editor of its own, as Go
+//	e. typed            ─► sdb.Env's fields and methods offered: e is
+//	                       Next's parameter (scripts.js varType)
+//	an undefined name   ─► the check's mark on that line of the field, with
+//	                       its note — the same editor, kept under the caret
+//	Ctrl+X, nothing     ─► not the workbench's explain (the mini's
+//	selected               dbcScript), Ctrl+S ─► the pipeline saved, as
+//	                       from the canvas (the chords are page-wide)
+//	another card        ─► the editor disposed with the selection
+func pipelineCodeField(t *testing.T, p *rod.Page, disk func(string) string) {
+	defineCodeEd(t, p)
+	// the varType forms the providers read, a parameter among them
+	if got := evalStr(t, p, `() => [
+	  dbc.scripts.varType({}, "func Apply(b *sdb.Batch) (*sdb.Batch, error) {", "b", "s"),
+	  dbc.scripts.varType({}, "func Apply(e *sdb.Env, b *sdb.Batch) (*sdb.Batch, error) {", "e", "s"),
+	  dbc.scripts.varType({}, "func Apply(e *sdb.Env, b *sdb.Batch) (*sdb.Batch, error) {", "b", "s"),
+	  dbc.scripts.varType({}, "o := sdb.CopyOpts{}", "o", "s"),
+	  dbc.scripts.varType({}, "func f(xb *sdb.Batch)", "b", "s"),
+	].join("|")`); got != "Batch|Env|Batch|CopyOpts|" {
+		t.Errorf("varType = %q", got)
+	}
+
+	base := evalNum(t, p, `() => monaco.editor.getEditors().length`)
+	clickAt(t, p, `.plane[data-frag="w"] .pcard[data-id="src"] .cid`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "the go field's editor", `() => {
+	  const ed = codeEd("code");
+	  return !!ed && ed.getModel().getLanguageId() === "go" && /func Next\(e \*sdb\.Env\)/.test(ed.getValue()) &&
+	    !document.querySelector('.pinsp .ifield textarea.code');
+	}`)
+	if n := evalNum(t, p, `() => monaco.editor.getEditors().length`); n != base+1 {
+		t.Fatalf("%v editors with src selected, want %v", n, base+1)
+	}
+
+	// completion on a parameter: a new first line in Next's body, e. typed
+	// as keys (the "." is the provider's trigger)
+	eval(t, p, `() => {
+	  const ed = codeEd("code");
+	  ed.executeEdits("e2e", [{ range: new monaco.Range(2, 1, 2, 1), text: "\t\n" }]);
+	  ed.setPosition({ lineNumber: 2, column: 2 });
+	  ed.focus();
+	}`)
+	p.Keyboard.MustType(input.KeyE, input.Period)
+	// the widget draws only the rows in view: two of Env's fields that sort
+	// near the top
+	waitFor(t, p, "Env's members offered", `() => {
+	  const rows = [...document.querySelectorAll(".pinsp .suggest-widget.visible .monaco-list-row")]
+	    .map((r) => r.getAttribute("aria-label") || r.textContent);
+	  return rows.some((r) => /^Ctx/.test(r)) && rows.some((r) => /^Params/.test(r));
+	}`)
+	p.Keyboard.MustType(input.Escape)
+
+	// a compile error: the mark lands on the field's own line 2, and the
+	// editor is the same one (a check redraws only the list under a caret)
+	eval(t, p, `() => {
+	  const ed = codeEd("code");
+	  ed.__e2e = "kept";
+	  ed.executeEdits("e2e", [{ range: ed.getModel().getFullModelRange(),
+	    text: "func Next(e *sdb.Env) (*sdb.Batch, error) {\n\treturn nil, nope\n}\n" }]);
+	}`)
+	waitFor(t, p, "the check's mark on line 2", `() => {
+	  const ed = codeEd("code");
+	  if (!ed || ed.__e2e !== "kept" || !ed.hasTextFocus()) return false;
+	  const ms = monaco.editor.getModelMarkers({ resource: ed.getModel().uri, owner: "dbc" });
+	  return ms.length === 1 && ms[0].startLineNumber === 2 && /undefined: nope/.test(ms[0].message) &&
+	    [...ed.getContainerDomNode().querySelectorAll(".diag-note")].some((n) => /undefined:\snope/.test(n.textContent)) &&
+	    /undefined: nope/.test(document.querySelector(".pinsp .idiags").textContent);
+	}`)
+	shot(t, p, "pipeline-code-field")
+
+	// Ctrl+X with nothing selected is not the SQL tab's explain here
+	eval(t, p, `() => { window.__explained = 0; window.__explain = dbc.cmd.explain; dbc.cmd.explain = () => { window.__explained++; }; }`)
+	chord(t, p, modCtrl, "x", "KeyX", 88)
+	chord(t, p, modMeta, "x", "KeyX", 88)
+	n := evalNum(t, p, `() => { dbc.cmd.explain = window.__explain; return window.__explained; }`)
+	if n != 0 {
+		t.Errorf("Ctrl+X in a code field explained %v times", n)
+	}
+
+	// back to the waiting source, then Ctrl+S from inside the editor
+	eval(t, p, `(text) => { const ed = codeEd("code"); ed.executeEdits("e2e", [{ range: ed.getModel().getFullModelRange(), text }]); }`,
+		"func Next(e *sdb.Env) (*sdb.Batch, error) {\n\t<-e.Ctx.Done()\n\treturn nil, e.Ctx.Err()\n}\n")
+	waitFor(t, p, "unsaved, the mark gone", `() => !!document.querySelector("#qtabs .qtab.pipeline.on .qdirty") &&
+	  monaco.editor.getModelMarkers({ resource: codeEd("code").getModel().uri, owner: "dbc" }).length === 0`)
+	chord(t, p, modCtrl, "s", "KeyS", 83)
+	waitFor(t, p, "saved from the code field", `() => !document.querySelector("#qtabs .qtab.pipeline.on .qdirty")`)
+	if d := disk("e2e_pipe.json"); !strings.Contains(d, `\t<-e.Ctx.Done()`) || strings.Contains(d, "nope") {
+		t.Fatalf("saved file after the code field's edits:\n%s", d)
+	}
+
+	// another card: the editor goes with the selection
+	clickAt(t, p, `.plane[data-frag="w"] .pcard[data-id="show"] .cid`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "show in the inspector, src's editor disposed", `() =>
+	  /preview/.test(document.querySelector(".pinsp .ihead").textContent) && !codeEd("code") &&
+	  monaco.editor.getEditors().length === `+strconv.Itoa(int(base)))
+}
+
+// defineCodeEd puts codeEd(name) on the page: the Monaco editor of the
+// inspector's code field name, or null. Again after a reload.
+func defineCodeEd(t *testing.T, p *rod.Page) {
+	t.Helper()
+	eval(t, p, `() => { window.codeEd = (name) => monaco.editor.getEditors().find((ed) =>
+	  !!ed.getContainerDomNode().closest('.pinsp .ifield[data-field="' + name + '"]')) || null; }`)
 }
 
 // waitingPipeline is typed into the JSON view: a Go source that waits until

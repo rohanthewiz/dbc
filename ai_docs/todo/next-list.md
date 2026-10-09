@@ -34,15 +34,18 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-192
+**Next ID:** N-196
 
 ## Open
 
 - **N-170** · raised `2026-1009-0748-pg-dump-cli-tui-web` · value medium
   Run pg_dump from Docker when no local one is new enough. `pgdump.Locate`
-  refuses a server newer than every pg_dump it finds, and this machine has
-  only Homebrew's postgresql@16 — so the 17 and 18 servers that "Postgres in
-  Docker…" itself starts cannot be dumped here. dbc already drives the docker
+  refuses a server newer than every pg_dump it finds. (Corrected in
+  `2026-1009-1632-n175-pipeline-code-editors` by `/next-list`: this machine's pg_dump is Homebrew's keg-only
+  libpq 17.5, `/opt/homebrew/opt/libpq/bin`, the first of `probeDirs`; no
+  postgresql@16 keg is installed now. So PG17 dumps here, and the gap is
+  PG18, which `pgdocker.Versions` lists first, the newest a "Postgres in
+  Docker…" container offers.) dbc already drives the docker
   CLI (package pgdocker): `docker run --rm postgres:<server major> pg_dump`,
   with the output directory mounted and the service file passed in, would
   always match the server. Mind the network: a dbc container's server is on
@@ -57,14 +60,6 @@ ten session docs in `ai_docs/claude_sessions/`
   A dump for MySQL connections with mysqldump, behind the same menu row and
   dialog (the row is dimmed on MySQL today). No one has asked; worth it only
   if a MySQL user does.
-- **N-175** · raised `2026-1009-1122-phase-2-pipeline-tab` · value medium
-  The pipeline inspector's SQL and Go fields are plain code boxes
-  (`pipelines.js` field(): a textarea, Tab indents). A `go.transform`'s
-  `Apply` is written there without colouring, `sdb` completion or the
-  check's marks on its lines (its errors are listed under the inspector,
-  as text). Use small Monaco editors for `sql` and `go` fields — the
-  script tab's Go completion (`scripts.js` register) and its markers —
-  disposed when the selection moves.
 - **N-176** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
   A node's `table` field is a plain line. A pipeline tab is on no
   connection, so there is no catalog to pick from; a route listing a
@@ -188,6 +183,35 @@ ten session docs in `ai_docs/claude_sessions/`
   could offer to rename `Plugin.Name` in the new file to match its file
   name, when the name is a plain string literal.
 
+- **N-192** · raised `2026-1009-1632-n175-pipeline-code-editors` · value low
+  A pipeline inspector's `sql` field is coloured but offers no completion:
+  the workspace's SQL providers complete against the tab's connection, and
+  a pipeline tab has none, so they skip the field's model (`editor.js`
+  `minis`). Complete against the node's own `conn` instead: a completion
+  route keyed by a connection name rather than a workspace — the same
+  catalog read N-176 wants for the `table` field, so the two land together.
+- **N-193** · raised `2026-1009-1632-n175-pipeline-code-editors` · value low
+  F12 / Shift+F12 / F2 in a pipeline `go` field find nothing: the Go
+  providers ask `/api/v1/script-symbol`, which resolves a whole file, and
+  a snippet has no package clause (Monaco says "no definition found").
+  Wrap it server-side as `checkSnippet` does (`script.WrapSnippet`) and
+  shift the answer's offsets back by the header's length.
+- **N-194** · raised `2026-1009-1632-n175-pipeline-code-editors` · value low
+  The pipeline inspector is a fixed 280px (`.pinsp`, app.css), which is
+  tight for a Go field: a line of an `Apply` scrolls sideways, and the
+  check's end-of-line note is out of view on all but short lines (the
+  hover and the list under the inspector have it). A splitter on the
+  inspector's edge, as the sidebar has, or a "⤢ wider" on a code field.
+- **N-195** · raised `2026-1009-1632-n175-pipeline-code-editors` · value low
+  A node id may hold dots (`pipeline.ValidName`), but `diagsAt` in
+  `pipelines.js` keys a node's diags by the `where` up to its first dot
+  ("load/my.src.query" → node "my"), and `drawDiags` labels a field diag
+  by what follows the first dot. So a node called `my.src` gets no ⚠ on
+  its card, no list in its inspector and no marks in its code fields.
+  Split `where` against the fragment's node ids instead (the longest id
+  that prefixes it). Seen while writing `fieldMarks`, which matches the
+  whole `frag/id.field` for this reason.
+
 ## Validate
 
 Items whose remaining work is purely testing: hand checks in a real terminal
@@ -225,6 +249,7 @@ and `raised`.
   character first), Backspace back from a run page, and the ⧉ curl copy.
   Chrome is covered by the web e2e step "job tabs and the runs view".
   Updated `2026-1009-1546-phase-6-plugin-sdk-builtins`: add plugin files in WKWebView: a plugin tab (◈) — ⌘S saves and loads it (the log line), the plugin check's markers — and the pipeline palette's Yours section (a drag of a user plugin, a broken file's ⚠ title). Chrome is covered by the web e2e step "plugin files and the palette".
+  Updated `2026-1009-1632-n175-pipeline-code-editors` (N-175): add the pipeline inspector's code editors in WKWebView — a `go` field's suggest box and hover (they are fixed-position overflow widgets, escaping the inspector's scroll), ⌘S and ⌘X from inside one, and a trackpad scroll over a field that has no more to scroll moving the inspector. Chrome is covered by the e2e step "pipeline tabs" (`pipelineCodeField`).
 - **N-087** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
   Drive the TUI's new navigator by hand in a real terminal on a big
   Postgres: the picker rows, `d`/`s`, typing into a 150-schema list, the
@@ -315,7 +340,7 @@ and `raised`.
   test in `web/e2e`: run all on two SELECTs, see two tabs with the second
   on the grid, run again and see the same two tabs refilled.
 
-- **N-156** · raised `2026-1007-2355-routine-completion` · value medium
+- **N-156** · raised `2026-1007-2355-routine-completion` · value high
   `TestLiveWorkspaceNotices` (Postgres) fails on main since N-155's
   per-write log lines: a `DO` block now gets a "statement 1/2: 0 affected"
   line between the NOTICE and the WARNING, and the test wants NOTICE,
@@ -323,6 +348,11 @@ and `raised`.
   the routine work. Repair the test (expect the write lines, or check the
   order of the three it names); decide while there whether a `DO` should
   count as a write that gets a line at all.
+  Updated `2026-1009-1632-n175-pipeline-code-editors` (`/next-list`): still failing on HEAD (`8452803`,
+  postgres:17). The notes are NOTICE, "statement 1/2: 0 affected — DO …",
+  WARNING, "statement 2/2: …", then the done note: five, where the test
+  wants three. Value raised to high: every live run of `./workspace` is red
+  on it, so each session that runs the live suite must route around it.
 - **N-157** · raised `2026-1007-2355-routine-completion` · value low
   Routine completion has not been watched in either UI. The workspace's
   live tests cover the cache and the suggestions on postgres:17 and
@@ -559,6 +589,15 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-175** · raised `2026-1009-1122-phase-2-pipeline-tab` · value medium
+  The pipeline inspector's SQL and Go fields are plain code boxes
+  (`pipelines.js` field(): a textarea, Tab indents). A `go.transform`'s
+  `Apply` is written there without colouring, `sdb` completion or the
+  check's marks on its lines (its errors are listed under the inspector,
+  as text). Use small Monaco editors for `sql` and `go` fields — the
+  script tab's Go completion (`scripts.js` register) and its markers —
+  disposed when the selection moves.
+  closed 2026-10-09, `2026-1009-1632-n175-pipeline-code-editors` (from the cats-todo backlog): `editor.js` `mini()` makes a small Monaco on a model of its own — height follows the text between min and max lines, the page's theme, `setMarkers` drawing the script tab's squiggles, gutter dot, box and end-of-line note; null before Monaco loads, so the inspector keeps its code box until then and is redrawn once it is up. The pipeline inspector's `sql` fields are coloured in the dialect of the node's `conn` (the sidebar's driver, `editor.langOf`), its `go` fields get everything registered for "go" (scripts.js's sdb completion and hover); a Go field's check diags (`code:L:C: …`, already on snippet lines) and a field's own diags are marked on its lines (`fieldMarks`, matched on the exact `frag/id.field`). Editors are disposed before each inspector redraw and when the tab hides. Found on the way: the workbench's `addCommand` chords are page-wide in standalone Monaco, so Ctrl+S / Ctrl+Enter already work from a mini, but `!dbcScript` let Ctrl+X explain from one — each mini sets `dbcScript`; the workspace's SQL completion and symbol providers skip mini models (a pipeline tab has no connection); `scripts.js` `varType` now reads a parameter (`func Apply(b *sdb.Batch)` → `b.` completes); the inspector's `.ifield input/textarea` CSS scoped to a field's own control so it leaves Monaco's input alone. README's inspector paragraph. e2e: "pipeline tabs" types its query into the mini and gains `pipelineCodeField` (Go language, `e.` completion, a compile error marked on line 2 under the caret, Ctrl+X not explaining — shown to fail without the key — Ctrl+S saving from inside, disposal on reselect, `varType` cases). Follow-ups N-192–N-195.
 - **N-174** · raised `2026-1009-1004-phase-1-pipelines` · value medium
   Pipelines Phases 3–6, in order once Phase 2 is in: jobs (a DAG of
   pipelines, the in-house cron scheduler in `dbc web`, the webhook, run

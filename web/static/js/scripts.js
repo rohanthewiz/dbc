@@ -1264,7 +1264,12 @@
   // varType guesses the sdb type a variable holds from how it is made:
   //   v, err := s.Query(…)    the first result of S.Query's signature
   //   v := sdb.CopyOpts{…}    v := &sdb.CopyOpts{…}    var v sdb.CopyOpts
+  //   func Apply(e *sdb.Env, v *sdb.Batch)   a parameter: a Go node's
+  //                           entry points (a pipeline's go.* fields, a
+  //                           plugin file) are handed their batch and env
   // The last such line before the end wins; anything else is unknown ("").
+  // A parameter is matched after "(" or ",", so "a, v *sdb.Batch" (two
+  // names, one type) gives v's type but not a's.
   function varType(A, text, v, recv) {
     const id = v.replace(/[^\w]/g, "");
     if (!id) return "";
@@ -1276,8 +1281,9 @@
         : m[1] === "sdb" ? (A.funcs || []).find((x) => x.name === m[2]) : null;
       if (f) found = firstResult(f.sig);
     }
-    const decl = new RegExp("\\b" + id + "\\s*:=\\s*&?sdb\\.([A-Za-z_]\\w*)\\s*\\{|\\bvar\\s+" + id + "\\s+\\*?sdb\\.([A-Za-z_]\\w*)", "g");
-    for (let m; (m = decl.exec(text));) found = m[1] || m[2];
+    const decl = new RegExp("\\b" + id + "\\s*:=\\s*&?sdb\\.([A-Za-z_]\\w*)\\s*\\{|\\bvar\\s+" + id + "\\s+\\*?sdb\\.([A-Za-z_]\\w*)" +
+      "|[(,]\\s*" + id + "\\s+\\*?sdb\\.([A-Za-z_]\\w*)", "g");
+    for (let m; (m = decl.exec(text));) found = m[1] || m[2] || m[3];
     return found;
   }
 

@@ -2051,8 +2051,12 @@ below it as for a query.
 - **The inspector** is drawn from the plugin's own fields: a connection
   field offers the configured connections (a click on one in the sidebar
   sets it on the selected node), a columns field the columns a preview
-  saw, SQL and Go fields are code boxes. With nothing selected it edits
-  the pipeline's name, description and parameters.
+  saw. SQL and Go fields are small editors: SQL coloured in the dialect
+  of the node's connection, Go with the script tab's `sdb` completion and
+  hover (`b.` in `func Apply(b *sdb.Batch)` lists Batch's methods) and the
+  check's errors marked on their lines. Ctrl+S and Ctrl+Enter work from
+  inside them as from the canvas. With nothing selected it edits the
+  pipeline's name, description and parameters.
 - **Checked as you edit.** Half a second after a change the canvas is
   checked as `dbc pipeline check` would: what is wrong is marked ⚠ on the
   card, the lane or the header (`· 1 error`) and listed in the inspector;

@@ -653,6 +653,12 @@
       filter.addEventListener("input", () => { paletteQ = filter.value.trim().toLowerCase(); renderPalette(); });
       bindPointer();
       bindKeys();
+      // Monaco loads after the page: an inspector drawn before it has its
+      // code fields as plain boxes, and is drawn again with editors — but
+      // not under a caret already in one of those boxes
+      dbc.editor.ready(() => {
+        if (shown && !dom.insp.contains(document.activeElement)) { dom.insp.dataset.sel = ""; renderInspector(); }
+      });
     }
 
     // show puts pipeline name on the canvas (its tab came on screen).
@@ -688,7 +694,9 @@
     function hide() {
       if (shown && shown.json) syncFromEditor(shown);
       shown = null;
-      if (dom) dom.root.hidden = true;
+      // the inspector's editors go with the tab: show draws them again
+      dropCode();
+      if (dom) { dom.root.hidden = true; dom.insp.dataset.sel = ""; }
       flush();
     }
 
@@ -892,9 +900,11 @@
       if (!e || !dom) return;
       const box = dom.insp;
       // a field being typed in keeps its box: redrawing under the caret
-      // would lose it (the canvas redraws; this pane waits for the blur)
+      // would lose it (the canvas redraws; this pane waits for the blur).
+      // A code field's Monaco counts: its input is a textarea in the box.
       if (box.contains(document.activeElement) && box.dataset.sel === selKey(e)) { drawDiags(e); return; }
       box.dataset.sel = selKey(e);
+      dropCode();
       box.replaceChildren();
       if (!e.spec) { box.append(el("p", "pnote", "Fix the JSON to see the inspector.")); return; }
       const s = e.sel;
@@ -918,6 +928,74 @@
       else if (s && s.kind !== "node") ds = da.frag.get(s.frag) || [];
       box.replaceChildren(...ds.map((d) => el("div", "idiag " + d.severity, (d.severity === "error" ? "✗ " : "⚠ ") +
         (d.where && d.where.includes(".") ? d.where.split(".").slice(1).join(".") + ": " : "") + d.msg)));
+      const at = s && s.kind === "node" ? s.frag + "/" + s.id + "." : "";
+      for (const c of codeEds) c.h.setMarkers(fieldMarks(ds, at + c.name, c.name, c.h.editor.getValue()));
+    }
+
+    // ── code fields: small Monaco editors (editor.js mini) ─────────────
+    // codeEds are the inspector's live ones, {name: the field, h: the
+    // mini}. They belong to one drawing of the inspector: dropCode
+    // disposes them before the next (the selection moved, a check came
+    // in while nothing in the pane had focus), so at most one node's
+    // editors exist at a time, and the canvas's own JSON editor is never
+    // one of them.
+    let codeEds = [];
+    function dropCode() {
+      for (const c of codeEds) c.h.dispose();
+      codeEds = [];
+    }
+
+    // fieldMarks picks out of a node's diags the ones about field name, as
+    // marks on the field's own text (the mini's setMarkers: line, col,
+    // severity, msg). The check says where in three ways:
+    //
+    //	where "clean/tidy",   msg "code:3:9: undefined: x"   a Go field's
+    //	                          (script's checkSnippet: snippet lines,
+    //	                          the wrapper's imports already taken off)
+    //	where "clean/tidy",   msg "code: no func Apply: …"   the field, no place
+    //	where "load/src.query", msg "${days} is not a …"     a field's own diag
+    //
+    // A diag with no place goes on line 1 as a whole-line mark (col 0),
+    // or on the ${…} it names when the text has it, so the editor shows
+    // it without a hover; the list under the inspector has them all.
+    const POS = /^([A-Za-z_]\w*):(\d+):(\d+): (?:warning: )?([\s\S]*)$/;
+    const AT_FIELD = /^([A-Za-z_]\w*): (?:warning: )?([\s\S]*)$/;
+    //
+    // where is the field's own place ("load/src.query"), matched whole:
+    // a node id may hold dots, so the field is not "what follows a dot".
+    function fieldMarks(ds, where, name, text) {
+      const out = [];
+      const placed = (msg) => {
+        const ref = /\$\{[^}]+\}/.exec(msg);
+        const i = ref ? text.indexOf(ref[0]) : -1;
+        if (i < 0) return { line: 1, col: 0 };
+        const before = text.slice(0, i);
+        return { line: before.split("\n").length, col: i - before.lastIndexOf("\n") };
+      };
+      for (const d of ds || []) {
+        const own = d.where === where;
+        let m;
+        if (!own && (m = POS.exec(d.msg)) && m[1] === name) {
+          out.push({ line: Number(m[2]), col: Number(m[3]), severity: d.severity, msg: m[4] });
+        } else if (!own && (m = AT_FIELD.exec(d.msg)) && m[1] === name) {
+          out.push({ ...placed(m[2]), severity: d.severity, msg: m[2] });
+        } else if (own) {
+          out.push({ ...placed(d.msg), severity: d.severity, msg: d.msg });
+        }
+      }
+      return out;
+    }
+
+    // sqlLang is the SQL colouring for node n's sql fields: the dialect
+    // of the connection its conn field names, read from the sidebar (the
+    // one place the page keeps each connection's driver). A ${…} conn, or
+    // one not configured here, is generic SQL.
+    function sqlLang(n) {
+      const p = reg && reg.byName.get(n.plugin);
+      const cf = p && p.fields.find((x) => x.type === "conn");
+      const conn = cf ? String(n.cfg[cf.name] || cf.default || "").trim() : "";
+      const b = conn && [...document.querySelectorAll("#conns .conn-item")].find((x) => x.dataset.conn === conn);
+      return dbc.editor.langOf(b ? b.dataset.driver : "");
     }
 
     function row(label, input, doc, type) {
@@ -1046,7 +1124,8 @@
     //   enum                   a picker        text  a few lines
     //   conn                   a line offering the connections
     //   columns                a line offering the columns previews saw
-    //   sql, go                a code box (Tab indents)
+    //   sql, go                a small Monaco editor (codeField); a code
+    //                          box (Tab indents) until Monaco has loaded
     // Every value stays a string, as the spec holds it; ${…} works anywhere.
     function field(e, f, n, fd) {
       const cur = n.cfg[fd.name];
@@ -1057,6 +1136,10 @@
       };
       const label = fd.name + (fd.required ? " *" : "");
       const doc = fd.doc + (fd.default ? " (default " + fd.default + ")" : "");
+      if (fd.type === "sql" || fd.type === "go") {
+        const c = codeField(n, fd, cur, set, label, doc);
+        if (c) return c;
+      }
       let input;
       switch (fd.type) {
         case "bool": {
@@ -1107,6 +1190,30 @@
         }
       }
       return row(label, input, doc, fd.type);
+    }
+
+    // codeField is a sql or go field as a small Monaco editor — the Go one
+    // with the script tab's sdb completion and hover (scripts.js register,
+    // which is per language) and the check's marks on its lines
+    // (drawDiags → fieldMarks). null while Monaco has not loaded: field
+    // then draws the plain code box, and the inspector is drawn again
+    // once it has (see show).
+    //
+    // A <div>, not row's <label>: a click in a label is passed on to the
+    // label's control, Monaco's hidden textarea, which fights the editor's
+    // own mouse handling (a drag to select, a double click on a word).
+    function codeField(n, fd, cur, set, label, doc) {
+      const host = el("div", "icode");
+      const go = fd.type === "go";
+      const h = dbc.editor.mini(host, {
+        text: cur || "", language: go ? "go" : sqlLang(n),
+        minLines: go ? 8 : 3, maxLines: go ? 30 : 14,
+        onChange: (v) => set(v),
+      });
+      if (!h) return null;
+      codeEds.push({ name: fd.name, h });
+      return el("div", { class: "ifield", "data-field": fd.name },
+        el("span", "iname", label, el("span", "itype", fd.type)), host, el("span", "idoc", doc));
     }
 
     // useConn is a click on a connection in the sidebar while a pipeline

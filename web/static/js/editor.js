@@ -78,6 +78,11 @@
   let scriptCtx = null; // the dbcScript context key, once Monaco is up
   let warmed = "";   // the connection completions were last warmed for
   let lastNote = ""; // the last completion note logged, so it is logged once
+  // minis: the models of the small editors mini() makes (a pipeline
+  // inspector's code fields). The workspace's SQL providers skip them:
+  // they complete and resolve against the tab's connection, and a
+  // pipeline tab has none — its nodes name their own (see mini).
+  const minis = new WeakSet();
 
   // ── the API the rest of the page uses ─────────────────────────────────
   const api = {
@@ -140,9 +145,12 @@
     // setDriver picks the SQL dialect Monaco colors: pgsql and mysql know
     // their own keywords and quoting; everything else is generic sql.
     setDriver(driver) {
-      lang = /postgres|pgx|cockroach/.test(driver || "") ? "pgsql" : /mysql|maria/.test(driver || "") ? "mysql" : "sql";
+      lang = api.langOf(driver);
       if (ed && !fixed.has(docKey)) monaco.editor.setModelLanguage(ed.getModel(), lang);
     },
+    // langOf is the Monaco SQL language for a driver: setDriver's, and a
+    // pipeline node's sql field's (by the driver of the conn it names)
+    langOf: (driver) => (/postgres|pgx|cockroach/.test(driver || "") ? "pgsql" : /mysql|maria/.test(driver || "") ? "mysql" : "sql"),
     setHeight(px) {
       wrap.style.height = px + "px";
     },
@@ -268,6 +276,106 @@
       if (!conn || conn === warmed || !dbc.state.ws) return;
       warmed = conn;
       dbc.api("POST", dbc.wsPath("/complete"), { buffer: "", caret: 0 }).then(noteOnce, () => {});
+    },
+    // mini makes a small editor of its own in box, for one code field (the
+    // pipeline inspector's sql and go fields, pipelines.js field). It is
+    // Monaco on a model of its own: the language's colouring, and for Go
+    // everything registered for "go" — scripts.js's sdb completion, hover,
+    // F12 — since Monaco's providers are per language, not per editor.
+    // null until Monaco has loaded; the caller keeps its textarea then.
+    //
+    //	opts  text, language ("go", "sql", "pgsql", "mysql"),
+    //	      onChange(text), minLines, maxLines
+    //	→     { editor, setMarkers(diags), focus(), dispose() }
+    //
+    // HEIGHT follows the text, between minLines and maxLines: a field is
+    // one of several in a scrolling pane, so it grows with what is typed
+    // rather than scrolling inside a fixed box, and past maxLines it does
+    // scroll, while the wheel at its top or bottom still moves the pane
+    // (alwaysConsumeMouseWheel off).
+    //
+    // CHORDS. The workbench's (bindKeys) are addCommand bindings, and a
+    // standalone Monaco keeps ONE keybinding service for every editor on
+    // the page: they fire in this editor too, so Ctrl+S saves and
+    // Ctrl+Enter runs as they do from the canvas. Their when-clauses read
+    // context keys, though, and a key the main editor set is unset here:
+    // "!dbcScript" would let Ctrl+X explain the tab's query instead of
+    // cutting the line. So dbcScript is set true in every mini — read it
+    // as "not the SQL tab's statement editor".
+    //
+    // The caller disposes it (the inspector does, before each redraw);
+    // its model goes with it.
+    mini(box, opts) {
+      if (!ed) return null;
+      const go = opts.language === "go";
+      const m = monaco.editor.createModel(opts.text || "", opts.language || "sql");
+      // a Go field indents with tabs, as gofmt and newModel do
+      m.updateOptions(go ? { insertSpaces: false, tabSize: 4 } : { insertSpaces: true, tabSize: 4 });
+      minis.add(m);
+      const me = monaco.editor.create(box, {
+        model: m,
+        theme: "dbc",
+        automaticLayout: true, // the inspector's width; the height is fit() below
+        minimap: { enabled: false },
+        fontSize: 12,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+        lineNumbersMinChars: 2,
+        // room for diagDecos' gutter dot, which rides the line decorations
+        lineDecorationsWidth: 8,
+        glyphMargin: false,
+        folding: false,
+        scrollBeyondLastLine: false,
+        renderLineHighlight: "none",
+        overviewRulerLanes: 0,
+        hideCursorInOverviewRuler: true,
+        wordWrap: "off",
+        // the suggest box and hovers escape the inspector's overflow clip
+        fixedOverflowWidgets: true,
+        padding: { top: 4, bottom: 4 },
+        scrollbar: { alwaysConsumeMouseWheel: false, verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
+        // as the main editor's (see start): no word-based noise
+        quickSuggestions: { other: true, comments: false, strings: false },
+        suggestOnTriggerCharacters: true,
+        wordBasedSuggestions: "off",
+        acceptSuggestionOnEnter: "smart",
+        suggest: { showWords: false, showStatusBar: false, preview: false },
+        occurrencesHighlight: "off",
+        contextmenu: true,
+      });
+      me.createContextKey("dbcScript", true);
+      const lh = me.getOption(monaco.editor.EditorOption.lineHeight);
+      const lo = (opts.minLines || 3) * lh + 8, hi = (opts.maxLines || 20) * lh + 8;
+      const fit = () => {
+        const h = Math.min(hi, Math.max(lo, me.getContentHeight()));
+        if (box.style.height !== h + "px") box.style.height = h + "px";
+      };
+      fit();
+      me.onDidContentSizeChange(fit);
+      // onChange runs after Monaco's change event is over, not inside it:
+      // what it starts may redraw the inspector, disposing this editor,
+      // and an editor disposed in its own event leaves Monaco mid-loop
+      me.onDidChangeModelContent(() => queueMicrotask(() => { if (!m.isDisposed()) opts.onChange(m.getValue()); }));
+      let ids = [];
+      return {
+        editor: me,
+        // setMarkers is the main editor's setMarkers for this model: the
+        // squiggles, plus the gutter dot, box and end-of-line note
+        setMarkers(diags) {
+          if (m.isDisposed()) return;
+          const S = monaco.MarkerSeverity;
+          const at = (diags || []).map((x) => ({ x, r: diagRange(m, x) }));
+          monaco.editor.setModelMarkers(m, "dbc", at.map(({ x, r }) => ({
+            severity: x.severity === "error" ? S.Error : S.Warning, message: x.msg, ...r,
+          })));
+          ids = m.deltaDecorations(ids, diagDecos(m, at));
+        },
+        focus: () => me.focus(),
+        hasFocus: () => me.hasTextFocus() || me.hasWidgetFocus(),
+        dispose() {
+          me.dispose();
+          m.dispose();
+        },
+      };
     },
     // retheme re-reads the palette after the page's light/dark switch.
     retheme() {
@@ -437,7 +545,7 @@
     const provider = {
       triggerCharacters: [".", ":"],
       async provideCompletionItems(model, position, _ctx, token) {
-        if (!dbc.state.ws) return { suggestions: [] };
+        if (!dbc.state.ws || minis.has(model)) return { suggestions: [] };
         let r;
         try {
           r = await dbc.api("POST", dbc.wsPath("/complete"), {
@@ -488,7 +596,7 @@
   // finding it), and any other catalog column is not resolved at all; the
   // rename box says so rather than opening.
   async function symbolAt(model, position) {
-    if (!dbc.state.ws) return null;
+    if (!dbc.state.ws || minis.has(model)) return null;
     try {
       const s = await dbc.api("POST", dbc.wsPath("/symbol"), {
         buffer: model.getValue(), caret: model.getOffsetAt(position),

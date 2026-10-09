@@ -43,6 +43,7 @@ import (
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/explain"
+	"github.com/rohanthewiz/dbc/jobs"
 	"github.com/rohanthewiz/dbc/theme"
 	"github.com/rohanthewiz/dbc/userdata"
 	"github.com/rohanthewiz/dbc/web/pages"
@@ -128,6 +129,11 @@ type Server struct {
 
 	// dumps is the one "Dump database…" running, across windows (dump.go).
 	dumps dumps
+
+	// jobs runs pipelines — previews and runs from pipeline tabs — outside
+	// any query tab's run slot, several at once (pipelines.go). It is the
+	// server's for its whole life; Shutdown stops what it runs.
+	jobs *jobs.Engine
 }
 
 //go:embed all:static
@@ -177,6 +183,7 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) (*Server, error) {
 		return workspace.New(cfg, mgr, opt.History, workspace.Options{Sink: sink})
 	}, cfg.ConnIdleTimeout)
 	s.hub.newChat = func(w *window) *assistant { return newAssistant(s, w) }
+	s.jobs = jobs.New(cfg, mgr, jobs.Options{Sink: s.onJob})
 	s.rw = rweb.NewServer(rweb.ServerOptions{Address: addr, ReadyChan: s.ready})
 	s.rw.Use(s.guard)
 	s.routes()
@@ -268,6 +275,23 @@ func (s *Server) routes() {
 	r.Delete("/api/v1/scripts/:name", s.handleScriptTrash)
 	r.Post("/api/v1/scripts/:name/rename", s.handleScriptRename)
 
+	// pipelines and their runs (pipelines.go)
+	r.Get("/api/v1/pipelines", s.handlePipelines)
+	r.Get("/api/v1/plugins", s.handlePlugins)
+	r.Post("/api/v1/pipeline-check", s.handlePipelineCheck)
+	r.Post("/api/v1/pipeline-preview", s.handlePipelinePreview)
+	r.Post("/api/v1/pipeline-run", s.handlePipelineRun)
+	r.Get("/api/v1/pipeline-export/:name", s.handlePipelineExport)
+	r.Get("/api/v1/pipeline-examples/:name", s.handlePipelineExample)
+	r.Post("/api/v1/pipeline-trash/:id/restore", s.handlePipelineRestore)
+	r.Get("/api/v1/pipelines/:name", s.handlePipelineRead)
+	r.Put("/api/v1/pipelines/:name", s.handlePipelineSave)
+	r.Delete("/api/v1/pipelines/:name", s.handlePipelineTrash)
+	r.Post("/api/v1/pipelines/:name/rename", s.handlePipelineRename)
+	r.Get("/api/v1/runs", s.handleRuns)
+	r.Get("/api/v1/runs/:id", s.handleRunRecord)
+	r.Post("/api/v1/runs/:id/cancel", s.handleRunCancel)
+
 	r.Get("/api/v1/win/:id", s.handleWindow)
 	r.Get("/api/v1/win/:id/events", s.handleWindowEvents)
 	r.Post("/api/v1/win/:id/tabs", s.handleClaim)
@@ -358,6 +382,11 @@ const shutdownGrace = 5 * time.Second
 func (s *Server) Shutdown() {
 	s.opt.Logf("stopping: canceling runs and releasing sessions…")
 	s.stopDump(shutdownGrace) // pg_dump is a child process: it must not outlive dbc
+	// a pipeline run holds Readers and Writers on pooled connections:
+	// canceled, each rolls its fragment back before the pools close
+	if s.jobs.Close(shutdownGrace) {
+		s.opt.Logf("some pipeline runs did not stop within %s — exiting anyway", shutdownGrace)
+	}
 	if s.hub.closeAll(shutdownGrace) {
 		s.opt.Logf("some sessions did not close within %s — exiting anyway", shutdownGrace)
 	}

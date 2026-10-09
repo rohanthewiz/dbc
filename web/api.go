@@ -70,7 +70,7 @@ func (s *Server) savedTabs(saved []Tab) []savedTab {
 	tabs := make([]savedTab, 0, len(saved))
 	for _, t := range saved {
 		st := savedTab{Tab: t}
-		if t.Conn != "" && t.Script == "" { // a script tab shows no console
+		if t.Conn != "" && t.Script == "" && t.Pipeline == "" { // a script or pipeline tab shows no console
 			st.ConsoleDB = s.consoleFor(t.Conn)
 		}
 		tabs = append(tabs, st)
@@ -118,6 +118,13 @@ func (s *Server) saveTab(winID string, t Tab) error {
 	// saved tab can never point outside scripts_dir
 	if t.Script != "" && !userdata.ValidScriptName(t.Script) {
 		return badRequest("not a script name: %q", t.Script)
+	}
+	// a pipeline tab likewise names its pipeline (pipelines.go)
+	if t.Pipeline != "" && !userdata.ValidPipelineName(t.Pipeline) {
+		return badRequest("not a pipeline name: %q", t.Pipeline)
+	}
+	if t.Script != "" && t.Pipeline != "" {
+		return badRequest("a tab edits a script or a pipeline, not both")
 	}
 	if err := s.hub.claimOne(winID, t.ID); err != nil {
 		return err

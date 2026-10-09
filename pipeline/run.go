@@ -22,9 +22,14 @@ type Options struct {
 	// Log receives each line of the run's log: the fragments starting and
 	// ending, every node's Logf. Nil means the host's Print.
 	Log func(line string)
-	// Progress, when set, is called after every batch of a running
-	// fragment with its counters so far — a snapshot, safe to keep. A host
-	// that draws it coalesces; the runner does not throttle.
+	// Progress, when set, is called with a fragment's counters so far — a
+	// snapshot, safe to keep — when the fragment starts (status running,
+	// its nodes listed with zero counts), after every batch, and once more
+	// when it ends, with its final status (succeeded, failed, canceled, or
+	// skipped: not run, by Fragment or in a preview). So a host sees every
+	// fragment's state change through this one callback, and its counters
+	// in between. A host that draws it coalesces the batches; the runner
+	// does not throttle.
 	Progress func(f FragmentStats)
 	// Fragment, when set, runs only the fragment of that name; the others
 	// are skipped. A value an earlier fragment would have published is
@@ -80,7 +85,9 @@ func Run(ctx context.Context, h Host, spec *Spec, opt Options) (*RunStats, error
 	for i := range spec.Fragments {
 		f := &spec.Fragments[i]
 		if opt.Fragment != "" && f.Name != opt.Fragment {
-			st.Fragments = append(st.Fragments, FragmentStats{Name: f.Name, Status: Skipped})
+			fs := FragmentStats{Name: f.Name, Status: Skipped}
+			st.Fragments = append(st.Fragments, fs)
+			r.report(fs)
 			continue
 		}
 		fs, err := r.runFragment(f)
@@ -134,6 +141,17 @@ func (r *runner) resolveParams() error {
 		}
 	}
 	return nil
+}
+
+// report hands a fragment's stats to the host's Progress, as a snapshot:
+// the node slice is copied, so the runner's later counting does not move
+// what the host kept.
+func (r *runner) report(fs FragmentStats) {
+	if r.opt.Progress == nil {
+		return
+	}
+	fs.Nodes = slices.Clone(fs.Nodes)
+	r.opt.Progress(fs)
 }
 
 // lookup resolves a ${…} reference: a param, then a published value.
@@ -200,6 +218,7 @@ func (r *runner) runFragment(f *Fragment) (FragmentStats, error) {
 			fs.Status = Failed
 			fs.Error = err.Error()
 		}
+		r.report(fs) // the end, with its final status (see Options.Progress)
 		return fs, err
 	}
 	for _, n := range f.Nodes {
@@ -215,6 +234,7 @@ func (r *runner) runFragment(f *Fragment) (FragmentStats, error) {
 		fr.nodes[fs.Nodes[i].ID].stats = &fs.Nodes[i]
 	}
 	r.log(fmt.Sprintf("fragment %s: %s", f.Name, fr.describe()))
+	r.report(fs) // the start: running, every node listed with nothing counted yet
 
 	// an action
 	if len(f.Nodes) == 1 && fr.nodes[f.Nodes[0].ID].kind == KindAction {
@@ -223,6 +243,7 @@ func (r *runner) runFragment(f *Fragment) (FragmentStats, error) {
 			fs.Status = Skipped
 			fs.Ended = time.Now()
 			r.log(fmt.Sprintf("fragment %s: an action; skipped in a preview", f.Name))
+			r.report(fs)
 			return fs, nil
 		}
 		t0 := time.Now()
@@ -545,14 +566,7 @@ func (fr *fragRun) sourceColsFor(src, sink *nodeInst) []Col {
 }
 
 // progress reports the fragment's counters so far.
-func (fr *fragRun) progress() {
-	if fr.r.opt.Progress == nil {
-		return
-	}
-	snap := *fr.stats
-	snap.Nodes = slices.Clone(fr.stats.Nodes)
-	fr.r.opt.Progress(snap)
-}
+func (fr *fragRun) progress() { fr.r.report(*fr.stats) }
 
 // direct runs the fragment as one etl.Copy when it has the shape — a
 // Postgres sql.read or sql.table straight into a Postgres sql.write — and

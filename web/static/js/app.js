@@ -54,6 +54,9 @@
   // script: set, it is a SCRIPT TAB — it edits that Go script (scripts.js)
   // rather than SQL, its title is the script's name, and it never connects:
   // a script names its own connections (see "script tabs" below).
+  // pipeline: set, it is a PIPELINE TAB — the canvas (pipelines.js) edits
+  // that pipeline file in place of the editor; like a script tab it never
+  // connects, and its runs are the server's engine's (see "pipeline tabs").
   let tabs = [];
   const tabOf = (ws) => tabs.find((t) => t.ws && t.ws === ws);
 
@@ -1130,6 +1133,12 @@
         onConsolesChanged(d);
       } else if (ev.type === "scripts") {
         scriptKit.onEvent(d);
+      } else if (ev.type === "pipelines" || ev.type.startsWith("job.")) {
+        // a pipeline saved, renamed, trashed (any window); a run's
+        // progress, lines and end (any window's runs: the canvas of the
+        // pipeline shows them, and the tab that started one is busy)
+        if (ev.type === "pipelines") scriptKit.refreshBrowser();
+        pipeKit.onEvent(ev.type, d);
       } else if (ev.type === "dump") {
         dbc.conns.onDump(d); // a running dump's lines and state (conns.js)
       } else if (ev.type.startsWith("chat.")) dbc.chat.onEvent(ev.type, d);
@@ -1249,7 +1258,7 @@
 
   // sameConn says whether event d (a "run", a "result") landed in the
   // result set tab t has on screen — its connection's.
-  const sameConn = (t, d) => !!t.script || !d.conn || d.conn === t.conn;
+  const sameConn = (t, d) => !!t.script || !!t.pipeline || !d.conn || d.conn === t.conn;
 
   // trackTab keeps a tab's strip marks in step with its events: busy while
   // it runs, the session-state mark after each run.
@@ -1314,6 +1323,9 @@
       }, () => {});
       if (!state.attached) {
         state.attached = true;
+        // the runs going now, from before this page: once the stream is on,
+        // so nothing that happens next is missed between the two
+        pipeKit.sync();
         activate(activeAtBoot);
       } else {
         resync(); // back after a drop: catch up on anything missed
@@ -1360,8 +1372,9 @@
   async function activate(t) {
     const prev = state.tab;
     if (prev && prev !== t) {
-      prev.buffer = dbc.editor.text();
+      if (!prev.pipeline) prev.buffer = dbc.editor.text(); // a pipeline tab's text is its file's
       if (prev.script) scriptKit.flush(); // its draft, now rather than in 400 ms
+      if (prev.pipeline) pipeKit.hide();
       const pc = cons.get(docOf(prev));
       if (pc) pc.text = prev.buffer; // what a textarea editor reopens it with
       prev.grid = dbc.grid.snapshot();
@@ -1385,6 +1398,11 @@
       }
       dbc.editor.useDoc(docOf(t), e ? e.text : "", "go");
       scriptKit.check(t.script, false); // its markers, at once
+    } else if (t.pipeline) {
+      // the canvas, over the editor (which holds the pipeline's JSON for
+      // the JSON view); a file that cannot be read says so and stays empty
+      try { await pipeKit.show(t.pipeline); } catch (err) { log("err", "could not read " + t.pipeline + ": " + err.message); }
+      if (state.tab !== t) return;
     } else {
       const c = cons.get(docOf(t));
       dbc.editor.useDoc(docOf(t), c ? c.text : t.buffer || "");
@@ -1397,7 +1415,7 @@
     drawSets(null);
     setBusy(false);
     els.stateful.hidden = true;
-    dbc.editor.focus();
+    focusWork(t);
 
     let st = null;
     if (t.ws) {
@@ -1423,7 +1441,7 @@
     if (state.tab !== t) return;
     state.ws = t.ws;
     // a script tab is never connected: it is drawn as it is
-    if (st.connected || st.connecting || disconnected || t.script) {
+    if (st.connected || st.connecting || disconnected || t.script || t.pipeline) {
       applyState(st, true);
       return;
     }
@@ -1434,6 +1452,7 @@
 
   async function resync() {
     reclaim(); // a long drop may have let another browser tab take ours
+    pipeKit.sync(); // runs that started, moved or ended while the stream was down
     // a connection added or removed while the stream was down sent its
     // "conns" event to nobody here
     api("GET", "/api/v1/conns").then((r) => { dbc.conns.draw(r.conns); markInUse(); }, () => {});
@@ -1460,7 +1479,7 @@
   // is kept (a reattach after a dropped stream).
   function applyState(st, fresh) {
     const t = state.tab;
-    if (t.script) { applyScriptState(st, fresh); return; }
+    if (t.script || t.pipeline) { applyScriptState(st, fresh); return; }
     state.active = st.active;
     t.conn = st.active;
     showLogOf(t);
@@ -1494,11 +1513,15 @@
     markActive("", "");
     showSide({ tables: [] });
     drawScriptHead();
-    setBusy(st.busy);
-    t.busy = st.busy;
+    // a pipeline tab is busy while a run it started is going: the
+    // engine's, not its workspace's (which never runs anything)
+    const busy = st.busy || (t.pipeline && !!pipeKit.liveOf(t.ws));
+    setBusy(busy);
+    t.busy = busy;
     els.stateful.hidden = true;
-    if (st.busy) setStatus(st.status, "warn");
+    if (busy) setStatus(st.status || t.status, "warn");
     else if (fresh && t.status) setStatus(t.status, t.level);
+    else if (t.pipeline) setStatus(t.pipeline + " — drag plugins onto a lane, ◎ previews, Ctrl+Enter saves and runs, Ctrl+S saves", "");
     else setStatus(t.script + " — Ctrl+Enter saves and runs it, Ctrl+S saves", "");
     if (st.hasResult) {
       if (fresh) dbc.grid.restore(viewFor(t, st) || t.grid); else dbc.grid.load();
@@ -1520,6 +1543,11 @@
     if (state.tab && state.tab.script) {
       log("info", "a script tab is not on a connection — its script names the ones it uses; " +
         "a query tab (Alt+T) connects to " + name + ", and a click on it here puts its name in the script");
+      return;
+    }
+    if (state.tab && state.tab.pipeline) {
+      log("info", "a pipeline tab is not on a connection — each node names its own; " +
+        "a query tab (Alt+T) connects to " + name + ", and a click on it here puts it in the selected node");
       return;
     }
     try {
@@ -1578,6 +1606,7 @@
 
   async function run(all) {
     if (state.tab && state.tab.script) { runScriptTab(state.tab); return; }
+    if (state.tab && state.tab.pipeline) { pipeKit.run(state.tab.pipeline, ""); return; }
     try {
       await api("POST", dbc.wsPath("/run"), Object.assign(editorState(), { all }));
     } catch (e) {
@@ -1605,6 +1634,7 @@
   }
 
   async function stop() {
+    if (state.tab && state.tab.pipeline) { pipeKit.stop(state.tab); return; }
     try {
       await api("POST", dbc.wsPath("/cancel"));
     } catch (e) {
@@ -1847,7 +1877,7 @@
     } else if (k === "x" && (e.shiftKey || !dbc.editor.selection())) {
       // explain; with a selection and no Shift it is cut, as ever (the
       // plain editor's path — Monaco binds these itself, see editor.js)
-      if (!dbc.editor.hasFocus() || (state.tab && state.tab.script)) return;
+      if (!dbc.editor.hasFocus() || (state.tab && (state.tab.script || state.tab.pipeline))) return;
       e.preventDefault();
       dbc.cmd.explain(e.shiftKey);
     }
@@ -1872,6 +1902,13 @@
     const b = e.target.closest(".conn-item");
     if (!b) return;
     if (state.tab && state.tab.script) { dbc.editor.insert(JSON.stringify(b.dataset.conn)); return; }
+    // a pipeline tab: the selected node's connection field (in the JSON
+    // view, at the caret, as a script tab types it)
+    if (state.tab && state.tab.pipeline) {
+      if (pipeKit.json(state.tab.pipeline)) dbc.editor.insert(JSON.stringify(b.dataset.conn));
+      else pipeKit.useConn(b.dataset.conn);
+      return;
+    }
     connect(b.dataset.conn);
   });
 
@@ -2145,7 +2182,8 @@
   const sameDB = (a, b) => !!a && !!b && a.host === b.host && a.database === b.database;
   // docOf is the editor document a tab shows: its script's, its console's,
   // else its own
-  const docOf = (t) => (t.script ? "s:" + t.script : t.console && t.cdb ? ckey(t.cdb, t.console) : t.key);
+  const docOf = (t) => (t.script ? "s:" + t.script : t.pipeline ? "p:" + t.pipeline :
+    t.console && t.cdb ? ckey(t.cdb, t.console) : t.key);
 
   // textOf is a tab's text: its document's, wherever that is
   function textOf(t) {
@@ -2245,7 +2283,7 @@
   // the console it has). Chained per tab, so two connects in a row swap in
   // order.
   function followConsole(t, ref) {
-    if (!ref || t.script) return; // a script tab shows its script, never a console
+    if (!ref || t.script || t.pipeline) return; // a script or pipeline tab shows its file, never a console
     if (t.console && sameDB(t.cdb, ref)) {
       t.cdb.names = ref.names; // the freshest list
       return;
@@ -2444,10 +2482,13 @@
     win: () => state.win,
     winQuery: () => winQuery(),
     conn: () => state.active,
-    focus: () => dbc.editor.focus(),
+    focus: () => focusWork(state.tab),
     open: (name) => openScript(name),
     run: (name) => runScriptIn(state.tab, name),
     connNames: () => [...els.conns.querySelectorAll(".conn-item")].map((b) => b.dataset.conn),
+    // the browser's Pipelines section acts through the pipeline kit, made
+    // just below (read when the browser opens, by then long made)
+    pipes: () => pipeKit,
     // the unsaved mark flipped, or a check landed: the strip and the
     // header redraw
     changed: (name) => {
@@ -2484,27 +2525,127 @@
   });
   dbc.editor.ready((monaco) => scriptKit.register(monaco));
 
-  // setMode puts the workbench in a script tab's shape, or a query tab's:
-  // the CSS hides what does not apply (.script-mode), and Run says what it
-  // will do.
-  function setMode(t) {
-    const on = !!(t && t.script);
-    els.app.classList.toggle("script-mode", on);
-    els.run.title = on ? "Save the script, then run it (Ctrl+Enter)" : "Run the statement under the caret (Ctrl+Enter)";
+  // ── pipeline tabs ──────────────────────────────────────────────────────
+  // A pipeline tab edits one pipeline of pipelines_dir (t.pipeline) on a
+  // canvas laid over the editor. What it edits and draws — the file, the
+  // canvas, the inspector, the check, its runs — is pipelines.js's; what is
+  // here is how it sits in the strip and the workbench:
+  //
+  //   topbar   ▶ Run (Ctrl+Enter: save, then run)  ✓ Check  ⤓ Save  ■ Stop
+  //            — as a script tab's (.script-mode), plus .pipe-mode for the canvas
+  //   editor   the canvas; { } JSON swaps the editor back in (.pipe-json),
+  //            on the pipeline's JSON
+  //   results  the grid, for a preview's rows ("Result 1 · 2" for two
+  //            branches); the log, for the run's lines — the pipeline's own
+  //   sidebar  no connection: a click on one sets the selected node's
+  //
+  // It is still a workspace (/api/v1/ws/:id) — the grid's results live in
+  // one — but its runs are the server's engine's (web/pipelines.go): the
+  // tab is busy while one it started runs, and its Stop stops that run.
+  const pipeKit = dbc.pipelines.create({
+    win: () => state.win,
+    winQuery: () => winQuery(),
+    conn: () => state.active,
+    open: (name) => openPipeline(name),
+    tabOf: (name) => tabs.find((t) => t.pipeline === name) || null,
+    scripts: () => scriptKit,
+    changed: (name) => {
+      renderTabs();
+      if (state.tab && state.tab.pipeline === name) drawScriptHead();
+    },
+    // the status bar: the tab on screen's, which is the one acting
+    status: (text, level) => setStatus(text, level),
+    setJSON: (on) => {
+      els.app.classList.toggle("pipe-json", on);
+      if (!on) document.querySelector("#pipe .pcanvas").focus({ preventScroll: true });
+    },
+    // a pipeline was renamed (here or in another window): its tabs follow
+    // (its log and run marks were moved by the kit)
+    renamed: (from, to) => {
+      let moved = false;
+      for (const t of tabs) {
+        if (t.pipeline !== from) continue;
+        t.pipeline = to;
+        t.title = to;
+        saveTab(t);
+        moved = true;
+      }
+      if (moved) {
+        renderTabs();
+        if (state.tab && state.tab.pipeline === to) { drawScriptHead(); showLogOf(state.tab); }
+      }
+    },
+    // a run started or ended: the tab that started it (by its workspace)
+    // is busy, then done — its status the run's summary
+    runState: (r, running, line) => {
+      const t = tabOf(r.origin);
+      if (!t) return;
+      t.busy = running;
+      if (!running) {
+        t.failed = r.status === "failed";
+        t.done = t !== state.tab;
+        t.status = line;
+        t.level = r.status === "succeeded" ? "" : r.status === "canceled" ? "warn" : "err";
+      }
+      if (t === state.tab) {
+        setBusy(running);
+        if (running) setStatus((r.preview ? "previewing " : "running ") + r.name + "…", "warn");
+        else setStatus(line, t.level);
+      }
+      renderTabs();
+    },
+    progress: (r, f) => {
+      const t = tabOf(r.origin);
+      if (!t || t !== state.tab || f.status === "queued") return;
+      setStatus((r.preview ? "preview of " : "") + r.name + " · " + f.name + " " + f.status + " · " +
+        (f.rows || (f.nodes || []).reduce((n, x) => Math.max(n, x.out || 0), 0)) + " rows", f.status === "failed" ? "err" : "warn");
+    },
+  });
+
+  // focusWork puts the keyboard where tab t is edited: the editor, or a
+  // pipeline tab's canvas — whose hidden editor must not take keys meant
+  // for the canvas (it holds the pipeline's JSON).
+  function focusWork(t) {
+    if (t && t.pipeline && !pipeKit.json(t.pipeline)) {
+      const c = document.querySelector("#pipe .pcanvas");
+      if (c) c.focus({ preventScroll: true });
+      return;
+    }
+    dbc.editor.focus();
   }
 
-  // drawScriptHead is the header for a script tab: the script's name, ●
-  // while it has unsaved changes, and a count of the check's findings.
+  // setMode puts the workbench in a script or pipeline tab's shape, or a
+  // query tab's: the CSS hides what does not apply (.script-mode; and
+  // .pipe-mode lays the canvas over the editor), and Run says what it will
+  // do.
+  function setMode(t) {
+    const on = !!(t && (t.script || t.pipeline));
+    const pipe = !!(t && t.pipeline);
+    els.app.classList.toggle("script-mode", on);
+    els.app.classList.toggle("pipe-mode", pipe);
+    els.app.classList.toggle("pipe-json", pipe && pipeKit.json(t.pipeline));
+    els.run.title = pipe ? "Save the pipeline, then run it (Ctrl+Enter)" :
+      on ? "Save the script, then run it (Ctrl+Enter)" : "Run the statement under the caret (Ctrl+Enter)";
+    els.check.title = pipe ? "Check the pipeline without running it, and list what is wrong (marked on the canvas as you edit)" :
+      "Compile the script without running it, and list what is wrong (errors are also marked as you type)";
+    els.save.title = pipe ? "Save the pipeline (Ctrl+S) — Run saves first too" : "Save the script (Ctrl+S) — Run saves first too";
+  }
+
+  // drawScriptHead is the header for a script or pipeline tab: its name,
+  // ● while it has unsaved changes, and a count of the check's findings.
   function drawScriptHead() {
     const t = state.tab;
-    if (!t || !t.script) return;
-    const dirty = scriptKit.dirty(t.script), diags = scriptKit.diags(t.script);
+    if (!t || !(t.script || t.pipeline)) return;
+    const name = t.script || t.pipeline;
+    const kit = t.script ? scriptKit : pipeKit;
+    const dirty = kit.dirty(name), diags = kit.diags(name);
     const errs = diags.filter((d) => d.severity === "error").length, warns = diags.length - errs;
     els.active.classList.remove("none");
-    els.active.textContent = "▷ " + t.script + (dirty ? " ●" : "") +
+    els.active.textContent = (t.script ? "▷ " : "⛓ ") + name + (dirty ? " ●" : "") +
       (errs ? " · " + dbc.plural(errs, "error") : "") + (warns ? " · " + dbc.plural(warns, "warning") : "");
-    els.active.title = (dirty ? "unsaved changes — Ctrl+S saves. " : "") +
-      (diags.length ? "The check's findings are marked in the editor (F8 walks them; ✓ Check lists them)." : "");
+    els.active.title = (dirty ? "unsaved changes — Ctrl+S saves. " : "") + (!diags.length ? "" : t.script ?
+      "The check's findings are marked in the editor (F8 walks them; ✓ Check lists them)." :
+      "The check's findings are marked ⚠ on the canvas and listed in the inspector (✓ Check logs them).");
   }
 
   // drawSets is the results bar's switcher between the results a script
@@ -2870,18 +3011,21 @@
   // still the page's: a reload starts every log empty.
   const SCRIPT_LOG = "\u0001script:"; // cannot be a connection name's start
   const scriptLogKey = (name) => SCRIPT_LOG + name;
-  const logKeyOf = (t) => (!t ? "" : t.script ? scriptLogKey(t.script) : t.conn || "");
+  // A pipeline tab's log is keyed by its pipeline the same way
+  // ("\x01pipeline:<name>", pipelines.js logKey): its runs' lines — from
+  // the engine, to every window — land there whichever tab started them.
+  const logKeyOf = (t) => (!t ? "" : t.script ? scriptLogKey(t.script) : t.pipeline ? pipeKit.logKey(t.pipeline) : t.conn || "");
   dbc.logKey = () => logKeyOf(state.tab);
 
   // logRoute is the log a line of tab t's event goes to: the connection
   // the server stamped on it, else the tab's — except in a script tab,
   // whose own log takes every line.
-  const logRoute = (t, d) => (t.script ? logKeyOf(t) : d.conn || t.conn || "");
+  const logRoute = (t, d) => (t.script || t.pipeline ? logKeyOf(t) : d.conn || t.conn || "");
 
   // showLogOf puts tab t's log on screen, its header naming whose it is.
   function showLogOf(t) {
     if (t !== state.tab) return;
-    dbc.showLog(logKeyOf(t), !t ? "" : t.script ? t.title : t.conn || "");
+    dbc.showLog(logKeyOf(t), !t ? "" : t.script || t.pipeline ? t.title : t.conn || "");
   }
 
   $("log-copy").addEventListener("click", () => dbc.clip.copyText(dbc.logText(), "the log"));
@@ -2913,6 +3057,10 @@
   // written now rather than after the autosave's pause.
   async function saveNow(t) {
     if (!t) return;
+    if (t.pipeline) {
+      if (await pipeKit.save(t.pipeline)) { if (t === state.tab) setStatus("saved " + t.pipeline, ""); }
+      return;
+    }
     if (!t.script) { saveTab(t); saveConsole(docOf(t)); return; }
     if (await scriptKit.save(t.script)) {
       if (t === state.tab) setStatus("saved " + t.script, "");
@@ -2921,7 +3069,8 @@
 
   // checkNow is ✓ Check: the check at once, its findings listed in the log.
   function checkNow(t) {
-    if (!t || !t.script) { log("info", "✓ Check is for script tabs — Ctrl+O opens one"); return; }
+    if (t && t.pipeline) { pipeKit.check(t.pipeline, true); return; }
+    if (!t || !t.script) { log("info", "✓ Check is for script and pipeline tabs — Ctrl+O opens one"); return; }
     scriptKit.check(t.script, true);
   }
 
@@ -2941,6 +3090,44 @@
     saveOrder();
     saveTab(t);
     activate(t);
+  }
+
+  // openPipeline shows the pipeline in a tab: the one already on it, or a
+  // new one beside the tab on screen — one tab per pipeline, as per script.
+  function openPipeline(name) {
+    const have = tabs.find((t) => t.pipeline === name);
+    if (have) {
+      if (have !== state.tab) activate(have);
+      return;
+    }
+    const t = { key: newKey(), title: name, conn: "", buffer: "", ws: "", pipeline: name };
+    tabs.splice(tabs.indexOf(state.tab) + 1, 0, t);
+    saveOrder();
+    saveTab(t);
+    activate(t);
+  }
+
+  // pipelineTabItems is a pipeline tab's right-click menu.
+  function pipelineTabItems(t, x, y) {
+    const name = t.pipeline;
+    return [
+      { head: name },
+      { label: "Save", key: "Ctrl+S", act: () => saveNow(t) },
+      { label: "Save and run", key: "Ctrl+Enter", act: () => pipeKit.run(name, "") },
+      { label: "Run with parameters…", act: () => pipeKit.run(name, "", true) },
+      { label: "Preview", act: () => pipeKit.preview(name, "") },
+      { label: "Check", act: () => checkNow(t) },
+      { label: pipeKit.json(name) ? "Back to the canvas" : "Edit as JSON", act: () => pipeKit.toggleJSON(name) },
+      { label: "Export as Go…", act: () => pipeKit.exportGo(name) },
+      { label: "Rename…", act: () => pipeKit.rename(name) },
+      { label: "Duplicate…", act: () => pipeKit.duplicate(name) },
+      { label: "Move to the trash", act: () => pipeKit.trash(name) },
+      { label: "Copy path", act: () => pipeKit.copyPath(name) },
+      { head: "" },
+      { label: "Close tab", key: "Alt+W", why: tabs.length > 1 ? "" : "the last tab stays", act: () => closeTab(t) },
+      { label: "New query tab", key: "Alt+T", act: newTab },
+      { label: "Scripts and pipelines…", key: "Ctrl+O", act: scripts },
+    ].concat(groups.tabItems(t, x, y));
   }
 
   // scriptTabItems is a script tab's right-click menu.
@@ -2968,15 +3155,16 @@
     const save = el("button", { type: "button", class: "primary" }, "Save and close");
     const drop = el("button", { type: "button" }, "Discard changes");
     const keep = el("button", { type: "button" }, "Keep it open");
+    const name = t.script || t.pipeline;
     save.addEventListener("click", async () => {
       dbc.modal.close();
-      if (await scriptKit.save(t.script)) reallyClose(t);
+      if (await (t.script ? scriptKit : pipeKit).save(name)) reallyClose(t);
     });
     drop.addEventListener("click", () => { dbc.modal.close(); t.discard = true; reallyClose(t); });
     keep.addEventListener("click", () => dbc.modal.close());
     dbc.modal.open({
-      title: "Close " + t.script + "?", focus: keep,
-      body: el("div", "confirm", el("p", null, t.script + " has changes that are not saved to the file. " +
+      title: "Close " + name + "?", focus: keep,
+      body: el("div", "confirm", el("p", null, name + " has changes that are not saved to the file. " +
         "Discarding them leaves the file as it was last saved.")),
       foot: el("div", "mfoot", save, drop, keep),
     });
@@ -2989,6 +3177,8 @@
     // a script tab saves only when asked; an edit keeps its draft and
     // re-checks it (scripts.js edited)
     if (state.tab && state.tab.script) { scriptKit.edited(state.tab.script); return; }
+    // a pipeline tab's editor is its JSON view: the kit takes the text
+    if (state.tab && state.tab.pipeline) { pipeKit.edited(state.tab.pipeline); return; }
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => { saveTab(state.tab); saveConsole(docOf(state.tab)); }, 600);
   }
@@ -3010,6 +3200,7 @@
     // a script tab's text is its file (and its draft): the saved tab only
     // names the script
     if (t.script) return { title: t.title, conn: "", buffer: "", console: "", script: t.script };
+    if (t.pipeline) return { title: t.title, conn: "", buffer: "", console: "", pipeline: t.pipeline };
     const active = t === state.tab;
     return { title: t.title, conn: t.conn || "",
       buffer: active ? dbc.editor.text() : textOf(t), console: t.console || "" };
@@ -3140,7 +3331,7 @@
   };
 
   dbc.editor.onChange(scheduleSave);
-  window.addEventListener("pagehide", () => { scriptKit.flush(); release(); });
+  window.addEventListener("pagehide", () => { scriptKit.flush(); pipeKit.flush(); release(); });
   window.addEventListener("pageshow", (e) => { if (e.persisted) reclaim(); });
 
   // ── the query tab strip ────────────────────────────────────────────────
@@ -3206,7 +3397,7 @@
       if (groups.hidden(t)) return; // folded into its chip
       const g = groups.groupOf(t);
       const marks = el("span", "qmark");
-      if (t.script && scriptKit.dirty(t.script)) {
+      if ((t.script && scriptKit.dirty(t.script)) || (t.pipeline && pipeKit.dirty(t.pipeline))) {
         marks.append(el("span", { class: "qdirty", title: "unsaved changes — Ctrl+S saves (Run saves first)" }, "●"));
       }
       if (t.busy) marks.append(el("span", { class: "qbusy", title: "running" }, "●"));
@@ -3214,12 +3405,12 @@
       if (t.stateful) marks.append(el("span", { class: "qstate", title: "its session may hold a transaction, SET values or temp tables" }, "◆"));
       if (t.lost) marks.append(el("span", { class: "qlost", title: "open in another browser tab of dbc web — not saved here" }, "⊘"));
       const b = el("div", { class: "qtab" + (t === state.tab ? " on" : "") + (t.lost ? " lost" : "") +
-          (t.script ? " script" : "") + (g ? " grp g" + groups.color(g) : ""), role: "tab", tabindex: "-1",
+          (t.script ? " script" : "") + (t.pipeline ? " pipeline" : "") + (g ? " grp g" + groups.color(g) : ""), role: "tab", tabindex: "-1",
         "aria-selected": t === state.tab ? "true" : "false", "data-key": t.key,
-        title: (t.script ? "script " : "") + t.title + (i < 9 ? " (Alt+" + (i + 1) + ")" : "") +
+        title: (t.script ? "script " : t.pipeline ? "pipeline " : "") + t.title + (i < 9 ? " (Alt+" + (i + 1) + ")" : "") +
           (t.console ? " — console " + t.cdb.label + " · " + t.console : "") + (g ? " — group " + g.name : "") +
-          (t.script ? " — double-click renames the script" : " — double-click renames") },
-      t.script ? el("span", "qgo", "▷") : null,
+          (t.script ? " — double-click renames the script" : t.pipeline ? " — double-click renames the pipeline" : " — double-click renames") },
+      t.script ? el("span", "qgo", "▷") : t.pipeline ? el("span", "qgo", "⛓") : null,
       el("span", "qt", t.title), t.console ? el("span", "qcon", t.console) : null, marks,
       tabs.length > 1 ? el("button", { type: "button", class: "qx", title: "Close (Alt+W)", "data-close": t.key }, "×") : null);
       els.qtabs.append(b);
@@ -3289,6 +3480,7 @@
     const t = tabs.find((x) => x.key === b.dataset.key);
     const x = e.clientX, y = e.clientY;
     if (t.script) { dbc.menu.open(x, y, scriptTabItems(t, x, y)); return; }
+    if (t.pipeline) { dbc.menu.open(x, y, pipelineTabItems(t, x, y)); return; }
     const items = () => [
       { head: t.title },
       { label: "Rename…", act: () => rename(t) },
@@ -3335,7 +3527,7 @@
     // tab switch state.active is still the previous tab's until the new
     // one's state lands (see tabBody). A script tab has none, so it, and a
     // tab not yet connected, fall back to state.active as before.
-    const here = (state.tab && !state.tab.script && state.tab.conn) || state.active;
+    const here = (state.tab && !state.tab.script && !state.tab.pipeline && state.tab.conn) || state.active;
     const t = { key: newKey(), title: "Query " + n, conn: g ? groups.connFor(g, here) : here, buffer: "", ws: "" };
     // Beside the tab on screen; into a group, after its last tab — where
     // the redraw's arrange would gather it anyway, and a connection group
@@ -3362,6 +3554,7 @@
     if (!t) return;
     if (tabs.length === 1) { log("warn", "the last tab stays — clear its editor instead"); return; }
     if (t.script && scriptKit.dirty(t.script)) { closeDirtyScript(t); return; }
+    if (t.pipeline && pipeKit.dirty(t.pipeline)) { closeDirtyScript(t); return; }
     if (!t.stateful) { reallyClose(t); return; }
     const yes = el("button", { type: "button", class: "primary" }, "Close and release");
     const no = el("button", { type: "button" }, "Keep it");
@@ -3388,6 +3581,7 @@
     const k = docOf(t);
     if (!tabs.some((o) => docOf(o) === k)) leaveDoc(k);
     if (t.script) scriptKit.forget(t.script, t.discard);
+    if (t.pipeline) pipeKit.forget(t.pipeline, t.discard);
     if (t.ws) api("DELETE", "/api/v1/ws/" + t.ws).catch(() => { /* already gone */ });
     // a lost tab's saved copy is the other window's: closing it here
     // leaves that alone
@@ -3398,6 +3592,7 @@
   function rename(t) {
     if (!t) return;
     if (t.script) { scriptKit.rename(t.script); return; } // its title is its file's name
+    if (t.pipeline) { pipeKit.rename(t.pipeline); return; }
     const b = els.qtabs.querySelector('.qtab[data-key="' + t.key + '"]');
     if (!b) return;
     const input = el("input", { class: "qrename", value: t.title, maxlength: "40", "aria-label": "Tab name", spellcheck: "false" });
@@ -3459,7 +3654,7 @@
       ["Ctrl+K", "stop the run or the connect"],
       ["Ctrl+P", "history of the tab's database (Tab: every database) — insert a past statement"],
       ["Ctrl+E", "export the result"],
-      ["Ctrl+O", "scripts — run, edit or start a Go script (see Script tabs)"],
+      ["Ctrl+O", "scripts and pipelines — run, edit or start one (see Script tabs, Pipeline tabs)"],
       ["Ctrl+I", "the assistant — and back"],
       ["Ctrl+B", "hide the sidebar — and back"],
       ["Ctrl+Space", "suggestions from the schema (also as you type, and after “.”)"],
@@ -3486,6 +3681,18 @@
       ["Ctrl+Space · s. · sdb.", "the sdb API: methods, fields and their docs; connection names inside a connection argument"],
       ["click a connection", "put its name in at the caret"],
       ["Result 1 · 2 · 3", "on the results bar: each result the script showed"],
+    ]],
+    ["Pipeline tabs", [
+      ["Ctrl+O → Pipelines", "open one, copy an example, or start a new one (the browser's + New)"],
+      ["drag a plugin", "from the palette onto a lane: a node there · onto empty canvas: a new fragment · a click adds it after the selected node"],
+      ["drag an output ● to a card", "wire them: rows flow from one into the other (a node takes one input; a new wire replaces it)"],
+      ["click · Delete · Ctrl+D", "select a card, wire or lane · remove it · duplicate the node"],
+      ["drag the background · wheel · Ctrl+wheel · f", "pan · pan · zoom · fit"],
+      ["◎ Preview", "run it on real data, writing nothing: every sink's rows land in the grid (a lane's ◎: that fragment alone)"],
+      ["Ctrl+Enter · ▶ Run · ■ Stop", "save, then run it in the server's engine — the cards count rows as it goes · stop it"],
+      ["Ctrl+S · ✓ Check", "save it · list what the check finds (also marked ⚠ as you edit)"],
+      ["{ } JSON · ⇪ Go", "edit the same pipeline as JSON · export it as a dbc script in a script tab"],
+      ["click a connection", "set it on the selected node"],
     ]],
     ["Results grid", [
       ["arrows · Shift+arrows", "move · extend the range"], ["g · G", "first · last row"],
@@ -3610,9 +3817,9 @@
       const plans = new Set((layout.plans || "").split(","));
       tabs = order.map((k) => {
         const t = byKey.get(k);
-        return { key: t.id, title: t.script || t.title || "Query", conn: t.conn, buffer: t.buffer, ws: "", planOpen: plans.has(t.id),
+        return { key: t.id, title: t.script || t.pipeline || t.title || "Query", conn: t.conn, buffer: t.buffer, ws: "", planOpen: plans.has(t.id),
           cdb: t.console && t.consoleDb ? t.consoleDb : null, console: t.console && t.consoleDb ? t.console : "",
-          script: t.script || "" };
+          script: t.script || "", pipeline: t.pipeline || "" };
       });
       // each tab's console, read before any is shown; one that cannot be
       // read leaves its tab on the buffer saved with it, and the tab's
@@ -3623,6 +3830,10 @@
       // cannot be read is tried again when its tab is shown
       await Promise.all(tabs.filter((t) => t.script).map((t) => scriptKit.load(t.script)
         .catch((e) => log("err", "could not read " + t.script + ": " + e.message))));
+      // each pipeline tab's file likewise, and the runs going now — a
+      // pipeline tab whose run is still going comes back busy
+      await Promise.all(tabs.filter((t) => t.pipeline).map((t) => pipeKit.load(t.pipeline)
+        .catch((e) => log("err", "could not read " + t.pipeline + ": " + e.message))));
       // no tab to show: the first boot, or every saved tab is open in
       // another browser tab of dbc web — this one starts a fresh tab of
       // its own. Its key is new, never "1": a key another window holds

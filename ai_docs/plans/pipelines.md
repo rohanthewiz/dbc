@@ -11,8 +11,8 @@ pipelines inside a job; and a monitoring view for jobs, pipelines and
 fragments, with drilldown.
 
 This is a plan. The decisions table was accepted as recommended
-(2026-10-09). **Phase 1 is done** (2026-10-09): see its outcome under
-*Phases*. The decisions table is the part to read first; everything after
+(2026-10-09). **Phases 1 and 2 are done** (2026-10-09): see their outcomes
+under *Phases*. The decisions table is the part to read first; everything after
 it follows the recommended column.
 
 ## The one-paragraph version
@@ -873,6 +873,55 @@ plugin descriptors are rich enough.
   sees rows in the grid; a JS error fails it.
 - Outcome: a pipeline can be built, previewed and run without writing
   JSON or Go.
+
+  ✅ **Done 2026-10-09.** What landed, and where it differs from the sketch:
+  - Package `jobs` holds the engine's first half: `Engine.StartPipeline`
+    (a `Request`: spec, params, fragment, preview rows, trigger, and the
+    host's `Origin` and `Source`), `Cancel`, `Get`, `Running`, `Recent`,
+    `Wait`, `Close`. Each run gets its own `sdb.S` (DDL log on, `Release`
+    at the end) and a `Run` record shaped for Phase 3 (`Pipelines
+    []PipelineRun`, the log capped at 2000 lines), kept in memory (the
+    last 50). Refused: a spec Check rejects, a second real run of a
+    running pipeline, a second run from the same origin (`ErrBusy`).
+    Events: `RunStarted`, `Progress` (a state change at once, batch
+    counters coalesced to 250 ms), `Logged`, `Preview`, `RunDone`, one run's
+    in order. An error is logged with its serr context ("unknown
+    connection — conn demo-sqlite · fragment clean · node src").
+  - `pipeline.Options.Progress` now also reports each fragment's start
+    and end (final status, skipped included), so a host draws states from
+    the one callback.
+  - dbc web: `Server.jobs`; routes for the store (the scripts protocol),
+    `pipeline-check` (diags placed by line for the JSON view),
+    `pipeline-preview` (the editor's text, unsaved), `pipeline-run` (the
+    saved file or an example), `pipeline-export/:name`, `plugins`, `runs`,
+    `runs/:id`, `runs/:id/cancel`; window events `pipelines`, `job.run`,
+    `job.progress`, `job.line`, `job.preview`, `job.done`. A preview's rows
+    land in the asking tab's grid through `workspace.ShowResult` (a
+    script's s.Show path, keyed by the run). Saved tabs gained a
+    `pipeline` column.
+  - The page: `pipelines.js` (the tab's model, canvas, inspector, runs,
+    JSON view), `stage.js` (pan and zoom), the tab kind (`t.pipeline`,
+    `.pipe-mode` over `.script-mode`), the scripts browser's Pipelines
+    section, pipeline examples and New pipeline. Previews and runs show
+    on the canvas: counters on the cards, a state per lane, the busy mark
+    on the tab that started the run, its ■ Stop. Saving and drafts follow
+    the script tab; a save over a file changed elsewhere asks (keep this
+    tab's, or load the file's), since a canvas has no undo to hand the
+    other version to. ⇪ Go exports into a script tab.
+  - Not as sketched: **no `pipeline-schema` route** — the vendored Monaco
+    has no JSON language service to consume one (its bundle registers a
+    `json` language whose module is not shipped), so the JSON view uses a
+    Monarch grammar of its own (`dbcjson`, editor.js) and the check's
+    markers. **`plan.js` was not refactored** onto `stage.js`: it is
+    inlined alone into the standalone plan page under a CSP hash, and the
+    shared part is a dozen lines. SQL and Go fields are code boxes, not
+    Monaco mini-editors; a `table` field is a plain line (a pipeline tab
+    is not connected, so there is no catalog to pick from); fragments are
+    reordered from a lane's ⋯ menu rather than by dragging the lane.
+  - Found on the way: the web e2e step "script tabs" had failed since
+    Phase 1 (the suggest widget draws only the rows in view, and the new
+    `S` methods pushed `Query` and `Show` out of it); it now narrows by
+    prefix.
 
 ### Phase 3 — jobs, the scheduler, run records
 

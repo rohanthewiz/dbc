@@ -188,10 +188,23 @@ run|check|export NAME` (`-p k=v`, `--preview N`, `--fragment F`, `-t json`),
   `run.*`), connection names when given, and the fragment's shape.
 - The direct shape — `sql.read`/`sql.table` on Postgres straight into
   `sql.write` on Postgres — runs as `etl.Copy` and reports `Direct`.
-- After changing `sdb` or `pipeline` exports: add the symbol to
-  `script/engine.go`'s export map and run `go generate ./sdb/sdbapi`.
-- The plan for the rest (web editor, jobs, scheduler, monitoring, TUI,
-  plugin files) is `ai_docs/plans/pipelines.md`.
+- After changing `sdb` or `pipeline` exports — or the doc comment of a
+  field scripts see (`pipeline.Options` is `sdb.PipelineOpts`): add the
+  symbol to `script/engine.go`'s export map and run `go generate
+  ./sdb/sdbapi` (`TestAPIUpToDate` fails on a stale `api.json`).
+- `Options.Progress` reports each fragment's start, every batch and its end
+  (final status, skipped included): a host draws states from it alone.
+- Runs outside a script go through package `jobs` (`jobs.Engine`): one per
+  process, several runs at once, a `Run` record per run (fragments, node
+  counters, the log, `Origin` and `Source` for the host), events
+  (`RunStarted`, `Progress` coalesced to 250 ms, `Logged`, `Preview`,
+  `RunDone`). dbc web's `Server.jobs` is one; its pipeline tab
+  (`web/pipelines.go`, `web/static/js/pipelines.js`) previews and runs
+  through it, and the preview rows land in the asking tab's grid via
+  `workspace.ShowResult`. In the browser: the web e2e step "pipeline tabs"
+  (`web/e2e/pipelines_test.go`; `DBC_E2E_SHOTS=dir` keeps its screenshots).
+- The plan for the rest (jobs, scheduler, monitoring, TUI, plugin files)
+  is `ai_docs/plans/pipelines.md`.
 
 ## yaegi pitfalls
 

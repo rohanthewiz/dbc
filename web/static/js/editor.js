@@ -586,6 +586,34 @@
   const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue("--" + n).trim();
   const hex = (n) => cssVar(n).replace("#", "");
 
+  // defineJSON gives Monaco a JSON colouring for a pipeline tab's JSON
+  // view (pipelines.js), as the language "dbcjson". The vendored Monaco
+  // carries only the Go and SQL grammars: its bundle still registers a
+  // "json" language, but one whose module — the JSON language service — is
+  // not shipped, so a model in "json" fails loading it. Hence a language of
+  // our own: a Monarch grammar of five rules (keys, strings, numbers, the
+  // three words, punctuation); what is wrong with the text comes from the
+  // pipeline check, as markers. Defined before the first model is made, so
+  // a pipeline tab on screen at boot is coloured too.
+  function defineJSON() {
+    monaco.languages.register({ id: "dbcjson" });
+    monaco.languages.setMonarchTokensProvider("dbcjson", {
+      tokenizer: {
+        root: [
+          [/"(?:[^"\\]|\\.)*"(?=\s*:)/, "predefined"],
+          [/"(?:[^"\\]|\\.)*"/, "string"],
+          [/-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/, "number"],
+          [/\b(?:true|false|null)\b/, "keyword"],
+          [/[{}[\],:]/, "delimiter"],
+        ],
+      },
+    });
+    monaco.languages.setLanguageConfiguration("dbcjson", {
+      brackets: [["{", "}"], ["[", "]"]],
+      autoClosingPairs: [{ open: "{", close: "}" }, { open: "[", close: "]" }, { open: '"', close: '"' }],
+    });
+  }
+
   function defineTheme() {
     // the base follows the page's light/dark, so Monaco's own widgets
     // (the find box, hovers) match the palette laid over them
@@ -703,6 +731,7 @@
 
   function start() {
     defineTheme();
+    defineJSON();
     registerCompletion();
     registerSymbols();
     ed = monaco.editor.create(host, {

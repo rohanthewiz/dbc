@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-175
+**Next ID:** N-181
 
 ## Open
 
@@ -57,16 +57,42 @@ ten session docs in `ai_docs/claude_sessions/`
   A dump for MySQL connections with mysqldump, behind the same menu row and
   dialog (the row is dimmed on MySQL today). No one has asked; worth it only
   if a MySQL user does.
-- **N-173** · raised `2026-1009-1004-phase-1-pipelines` · value high
-  Pipelines Phase 2: the pipeline tab in dbc web (`ai_docs/plans/
-  pipelines.md`, §6 and Phase 2) — the routes (pipelines store, check,
-  preview, run, export, plugins, schema), a minimal server-wide engine
-  running single pipelines with `job.*` events, `stage.js` factored out of
-  `plan.js`, `pipelines.js` (palette, lane canvas with ports and
-  drag-to-connect, inspector generated from `Field`s, run panel), the
-  scripts browser's Pipelines section, previews into the grid, an e2e
-  step. Phase 1 (the `pipeline` package, the Go plugins, the builder,
-  `dbc pipeline run|check|export`) is done.
+- **N-175** · raised `2026-1009-1122-phase-2-pipeline-tab` · value medium
+  The pipeline inspector's SQL and Go fields are plain code boxes
+  (`pipelines.js` field(): a textarea, Tab indents). A `go.transform`'s
+  `Apply` is written there without colouring, `sdb` completion or the
+  check's marks on its lines (its errors are listed under the inspector,
+  as text). Use small Monaco editors for `sql` and `go` fields — the
+  script tab's Go completion (`scripts.js` register) and its markers —
+  disposed when the selection moves.
+- **N-176** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
+  A node's `table` field is a plain line. A pipeline tab is on no
+  connection, so there is no catalog to pick from; a route listing a
+  connection's tables without a workspace (the Manager's catalog read, as
+  the sidebar does it) would let the field offer them, for the node's own
+  `conn`.
+- **N-177** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
+  Pipeline drafts are one localStorage key per pipeline
+  (`dbc.pipe.draft.<name>`), so two windows with one pipeline open share
+  it and the last to type wins, as script drafts did before N-135. Port the
+  script drafts' owner and heartbeat scheme (`scripts.js` DRAFTS), or share
+  it between the two kits.
+- **N-178** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
+  The assistant in a pipeline tab is handed the pipeline's JSON as "the
+  query": the editor under the canvas holds it, and `ChatContext` reads the
+  editor's text as SQL. Give it the pipeline as a pipeline (the spec, the
+  plugins' summary from `pipeline.Plugins()`, the last run's error or
+  preview), as N-134 did for script tabs, or leave the editor out there.
+- **N-179** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
+  Fragments are reordered from a lane's ⋯ menu (Move up / Move down). The
+  plan sketched dragging a lane by its header; add it if the menu turns
+  out slow for pipelines with many fragments.
+- **N-180** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
+  A canvas edit writes the spec again from what the canvas knows
+  (`specText`), so a key the spec has no field for — a typo such as
+  `"on_eror"` — is dropped by the first edit, silently. The check flags it
+  first ("unknown field"), but the drop is not said. Keep unknown keys
+  through the round trip, or refuse canvas edits while the text has any.
 
 ## Validate
 
@@ -96,6 +122,10 @@ and `raised`.
   letter on a table row starts a find there (the page puts the character in
   by hand, since WKWebView may not deliver a keypress to the box focus moved
   to), and that ↑↓ and Enter in the box act on the list.
+  Updated `2026-1009-1122-phase-2-pipeline-tab`: add pipeline tabs in WKWebView: the palette drag (pointer
+  capture across the page), a wire dragged port to card, trackpad pinch to
+  zoom (sent as Ctrl+wheel), and ⌘S / ⌘↩ from the canvas. Chrome is covered
+  by the web e2e step "pipeline tabs".
 - **N-087** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
   Drive the TUI's new navigator by hand in a real terminal on a big
   Postgres: the picker rows, `d`/`s`, typing into a 150-schema list, the
@@ -283,6 +313,9 @@ call.
   safaridriver --enable`), one real ⌘B in a normal Firefox window (WebDriver
   keys never reach Firefox's own menus), and the assistant pane's
   `#chat-split`.
+  Updated `2026-1009-1122-phase-2-pipeline-tab`: add the pipeline canvas — the palette drag, wiring,
+  panning, and the wheel (a plain wheel pans, Ctrl+wheel zooms; Firefox's
+  line-mode wheel is scaled in `stage.js` but has not been seen).
 
 - **N-098** · raised `2026-1002-1239-web-conn-marks` · value medium
   Close a configured connection's pool when a tab switches away from it and
@@ -394,6 +427,10 @@ call.
   `~/.config/dbc/plugins`, `go.sink`, `text.clean`, `lookup`, `cols.cast`,
   `cols.add`, `rows.dedupe`, `csv.*`/`jsonl.*`, `pipeline.check`,
   `sql.write` upsert). Each phase's scope is in the plan.
+  Updated `2026-1009-1122-phase-2-pipeline-tab`: Phase 2 is in (N-173), so Phase 3 is next. Its engine
+  half exists: `jobs.Engine` runs single pipelines with a `Run` record and
+  events shaped for jobs; Phase 3 adds the DAG, the scheduler, the records
+  on disk and the CLI.
 
 ## Non-goals
 
@@ -427,6 +464,18 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-173** · raised `2026-1009-1004-phase-1-pipelines` · value high
+  Pipelines Phase 2: the pipeline tab in dbc web (`ai_docs/plans/
+  pipelines.md`, §6 and Phase 2) — the routes (pipelines store, check,
+  preview, run, export, plugins, schema), a minimal server-wide engine
+  running single pipelines with `job.*` events, `stage.js` factored out of
+  `plan.js`, `pipelines.js` (palette, lane canvas with ports and
+  drag-to-connect, inspector generated from `Field`s, run panel), the
+  scripts browser's Pipelines section, previews into the grid, an e2e
+  step. Phase 1 (the `pipeline` package, the Go plugins, the builder,
+  `dbc pipeline run|check|export`) is done.
+  closed 2026-10-09, `2026-1009-1122-phase-2-pipeline-tab`: Phase 2 is in. Package `jobs` (the engine: single pipelines, several at once, a run record and events per run) owned by dbc web's `Server`; routes for the pipelines store (the scripts protocol), check (diags placed by line), preview (unsaved text), run, export, plugins and runs; `job.*` window events; a preview's rows land in the asking tab's grid (`workspace.ShowResult`); `pipeline.Options.Progress` also reports each fragment's start and end. The page: pipeline tabs (`pipelines.js`, `stage.js`) — palette, lanes of cards wired port to port by pointer drags, an inspector drawn from the plugins' fields, ⚠ from the check, ◎ Preview into the grid, ▶ Run and ■ Stop with counters on the cards, a JSON view, ⇪ Go into a script tab, drafts and a conflict dialog — and the scripts browser's Pipelines section. Not as sketched: no `pipeline-schema` route (the vendored Monaco has no JSON language service; a Monarch grammar and the check's markers instead), `plan.js` not moved onto `stage.js`, code boxes for SQL/Go fields (N-175), a plain `table` field (N-176). Route tests in `web/pipelines_test.go`, engine tests in `jobs`, and the web e2e step "pipeline tabs" (a pipeline built, previewed, saved, run, reloaded, edited as JSON, stopped and exported, in Chrome).
 
 - **N-116** · raised `2026-1005-1450-tui-web-parity` · value low
   Tab groups in the TUI. dbc web has them (`tabgroups.js`: ad-hoc and

@@ -633,14 +633,24 @@
     // thing: copy it, start from it, restore it.
     let browser = null;
 
+    // listAll is the browser's data: the scripts list, and the pipelines
+    // list beside it (got.p; empty when it cannot be read — the scripts
+    // still show).
+    async function listAll() {
+      const pipes = host.pipes ? host.pipes() : null;
+      const [got, p] = await Promise.all([list(), pipes ? pipes.list().catch(() => null) : null]);
+      got.p = p || { pipelines: [], examples: [], trash: [] };
+      return got;
+    }
+
     async function browse() {
       let got;
-      try { got = await list(); } catch (err) { log("err", "scripts: " + err.message); return; }
+      try { got = await listAll(); } catch (err) { log("err", "scripts: " + err.message); return; }
       let rows = [], cur = 0, showTrash = false, seq = 0;
-      const input = el("input", { type: "search", class: "hfilter", placeholder: "filter scripts and examples…",
+      const input = el("input", { type: "search", class: "hfilter", placeholder: "filter scripts, pipelines and examples…",
         "aria-label": "Filter scripts", spellcheck: "false", autocomplete: "off" });
       const ul = el("ul", { class: "hlist slist", role: "listbox" });
-      const newBtn = el("button", { type: "button", class: "primary", title: "A new script from a template (Alt+N)" }, "+ New ▾");
+      const newBtn = el("button", { type: "button", class: "primary", title: "A new pipeline, or a script from a template (Alt+N)" }, "+ New ▾");
       const dirBtn = el("button", { type: "button", class: "linkish", title: "Copy the scripts directory's path" });
       const hint = el("span", "hint", "Enter run · ⇧Enter edit · F2 rename · Ctrl+Del trash · Esc close");
 
@@ -663,12 +673,29 @@
           rows.push({ head: "Examples · read-only — Enter makes your own copy" });
           for (const x of ex) rows.push({ kind: "example", name: x.name, desc: x.desc });
         }
-        if (got.trash.length) {
-          rows.push({ head: "Trash (" + got.trash.length + ") " + (showTrash ? "▾" : "▸"), toggle: true });
+        // pipelines (pipelines.js): the user's, then the built-in ones
+        rows.push({ head: "Pipelines · " + (got.p.short || got.p.dir || "pipelines_dir") });
+        const pl = got.p.pipelines.filter((x) => hit(x.name, x.desc));
+        for (const x of pl) {
+          rows.push({ kind: "pipeline", name: x.name, when: ago(x.mod),
+            desc: x.desc || (x.fragments ? dbc.plural(x.fragments, "fragment") : "does not parse") });
+        }
+        if (!got.p.pipelines.length) rows.push({ note: "none yet — copy an example below, or + New ▾ → Pipeline" });
+        else if (!pl.length) rows.push({ note: "no pipeline matches" });
+        const pex = got.p.examples.filter((x) => hit(x.name, x.desc));
+        if (pex.length) {
+          rows.push({ head: "Pipeline examples · Enter makes your own copy" });
+          for (const x of pex) rows.push({ kind: "pexample", name: x.name, desc: x.desc });
+        }
+        const trashed = got.trash.map((t) => ({ kind: "trash", t, name: t.name, at: t.trashed }))
+          .concat(got.p.trash.map((t) => ({ kind: "ptrash", t, name: t.name, at: t.trashed })))
+          .sort((a, b) => String(b.at).localeCompare(String(a.at)));
+        if (trashed.length) {
+          rows.push({ head: "Trash (" + trashed.length + ") " + (showTrash ? "▾" : "▸"), toggle: true });
           if (showTrash) {
-            for (const t of got.trash.filter((t) => hit(t.name, ""))) {
-              const at = ago(t.trashed);
-              rows.push({ kind: "trash", t, name: t.name, desc: at === "now" ? "trashed just now" : "trashed " + at + " ago", when: "" });
+            for (const r of trashed.filter((r) => hit(r.name, ""))) {
+              const at = ago(r.at);
+              rows.push(Object.assign(r, { desc: at === "now" ? "trashed just now" : "trashed " + at + " ago", when: "" }));
             }
           }
         }
@@ -692,6 +719,14 @@
               dbc.menu.open(at.left, at.bottom + 2, scriptItems(r.name).map((it) => ({ ...it, act: () => { dbc.modal.close(); it.act(); } })));
             })];
         }
+        if (r.kind === "pipeline") {
+          return [b("▶", "Open it and run it (Enter)", () => go(r, "run")), b("✎", "Open it on the canvas (Shift+Enter)", () => go(r, "edit")),
+            b("⋯", "More: preview, export as Go, duplicate, rename, trash, copy path", (ev) => {
+              const at = ev.currentTarget.getBoundingClientRect();
+              dbc.menu.open(at.left, at.bottom + 2, host.pipes().items(r.name).map((it) => ({ ...it, act: () => { dbc.modal.close(); it.act(); } })));
+            })];
+        }
+        if (r.kind === "pexample") return [b("⧉ Copy", "Make an editable copy in your pipelines (Enter)", () => go(r, "run"))];
         if (r.kind === "example") return [b("⧉ Copy", "Make an editable copy in your scripts (Enter)", () => go(r, "run"))];
         if (r.kind === "template") return [b("+ New", "A new script from this template (Enter)", () => go(r, "run"))];
         return [b("↺ Restore", "Put it back in the scripts directory (Enter)", () => go(r, "run"))];
@@ -732,11 +767,22 @@
           await newFrom(r.tpl);
         } else if (r.kind === "trash") {
           await restore(r.t);
+        } else if (r.kind === "pipeline") {
+          const pipes = host.pipes();
+          await pipes.edit(r.name);
+          if (what !== "edit") pipes.run(r.name, "");
+        } else if (r.kind === "pexample") {
+          await host.pipes().copyExample(r.name);
+        } else if (r.kind === "ptrash") {
+          await host.pipes().restore(r.t);
         }
       }
 
       function newMenu(x, y) {
-        dbc.menu.open(x, y, [{ head: "new script from" }].concat(got.templates.map((t) => ({
+        const pipes = host.pipes ? host.pipes() : null;
+        const head = pipes ? [{ head: "new pipeline" },
+          { label: "Pipeline — a source into a preview, on the canvas", act: () => { dbc.modal.close(); pipes.newPipeline(); } }] : [];
+        dbc.menu.open(x, y, head.concat([{ head: "new script from" }], got.templates.map((t) => ({
           label: t.title, act: () => { dbc.modal.close(); newFrom(t); },
         }))));
       }
@@ -775,8 +821,13 @@
           if (e.key === "Enter") { go(current(), e.shiftKey ? "edit" : "run"); return true; }
           const r = current();
           if (e.key === "F2" && r && r.kind === "script") { dbc.modal.close(); rename(r.name); return true; }
+          if (e.key === "F2" && r && r.kind === "pipeline") { dbc.modal.close(); host.pipes().rename(r.name); return true; }
           if ((e.key === "Delete" || e.key === "Backspace") && (e.ctrlKey || e.metaKey) && r && r.kind === "script") {
             trash(r.name);
+            return true;
+          }
+          if ((e.key === "Delete" || e.key === "Backspace") && (e.ctrlKey || e.metaKey) && r && r.kind === "pipeline") {
+            host.pipes().trash(r.name);
             return true;
           }
           if (e.altKey && e.code === "KeyN") {
@@ -794,7 +845,7 @@
         async refresh() {
           const n = ++seq;
           let next;
-          try { next = await list(); } catch (_) { return; }
+          try { next = await listAll(); } catch (_) { return; }
           if (n !== seq || !browser) return;
           const was = current();
           got = next;
@@ -993,6 +1044,12 @@
       dirty: (name) => isDirty(files.get(name)),
       diags: (name) => (files.get(name) || {}).diags || [],
       items: scriptItems,
+      // make writes text as a new script (asking its name) and opens it in
+      // a tab: a pipeline's "Export as Go" (pipelines.js) lands this way
+      make: makeScript,
+      // refreshBrowser re-lists the open browser (a "pipelines" event: its
+      // Pipelines section is drawn from the same list)
+      refreshBrowser: () => { if (browser) browser.refresh(); },
     };
   }
 
@@ -1057,5 +1114,5 @@
     return /^[A-Za-z_]\w*$/.test(rest) ? rest : "";
   }
 
-  dbc.scripts = { create, newOwner, firstResult, varType, receiver, inString };
+  dbc.scripts = { create, newOwner, firstResult, varType, receiver, inString, ask, ago };
 })();

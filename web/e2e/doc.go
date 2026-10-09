@@ -19,6 +19,8 @@
 //	DBC_E2E_STEPS       only the steps whose names contain one of these
 //	                    comma-separated words (sign-in and boot always run),
 //	                    e.g. DBC_E2E_STEPS=script
+//	DBC_E2E_SHOTS       a directory: steps that take screenshots (shot)
+//	                    write them there as PNGs, for a person to look at
 //
 // Everything else is self-contained: the test builds dbc, writes a config
 // with two file-backed SQLite connections under a temporary HOME, seeds them

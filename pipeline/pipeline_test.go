@@ -516,3 +516,60 @@ func TestPluginsDescribed(t *testing.T) {
 		}
 	}
 }
+
+// Progress tells a host every fragment's life: its start (running, the
+// nodes listed with nothing counted), a snapshot per batch, and its end
+// with the final status — skipped included, for a fragment Options.Fragment
+// leaves out — so a host can draw states from the one callback.
+func TestRunProgressStartBatchesEnd(t *testing.T) {
+	h := newTestHost(t)
+	spec := mustParse(t, `{
+	  "name": "prog",
+	  "fragments": [
+	    {"name": "one", "batch": 10, "nodes": [
+	      {"id": "src", "plugin": "sql.read", "cfg": {"conn": "a", "query": "SELECT id FROM cats ORDER BY id"}},
+	      {"id": "dst", "plugin": "sql.write", "cfg": {"conn": "b", "table": "o", "create": "true"}}
+	    ], "edges": [["src", "dst"]]},
+	    {"name": "two", "nodes": [{"id": "x", "plugin": "sql.exec", "cfg": {"conn": "b", "sql": "SELECT 1"}}]}
+	  ]}`)
+	var seen []FragmentStats
+	_, err := Run(context.Background(), h, spec, Options{Progress: func(f FragmentStats) { seen = append(seen, f) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var one []FragmentStats
+	for _, f := range seen {
+		if f.Name == "one" {
+			one = append(one, f)
+		}
+	}
+	// 25 rows in batches of 10: a start, three batches, the stream's own
+	// last report, the end
+	if len(one) < 3 {
+		t.Fatalf("one: %d reports", len(one))
+	}
+	first, last := one[0], one[len(one)-1]
+	if first.Status != Running || len(first.Nodes) != 2 || first.Nodes[0].Out != 0 {
+		t.Errorf("start = %+v", first)
+	}
+	if last.Status != Succeeded || last.Rows != 25 || last.Ended.IsZero() {
+		t.Errorf("end = %+v", last)
+	}
+	// a snapshot is the host's: the runner counting on does not move it
+	if first.Nodes[0].Out != 0 {
+		t.Errorf("start snapshot moved: %+v", first.Nodes[0])
+	}
+	if end := seen[len(seen)-1]; end.Name != "two" || end.Status != Succeeded {
+		t.Errorf("last report = %+v", end)
+	}
+
+	// a fragment left out is reported skipped
+	seen = nil
+	if _, err = Run(context.Background(), h, spec, Options{Fragment: "two",
+		Progress: func(f FragmentStats) { seen = append(seen, f) }}); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) == 0 || seen[0].Name != "one" || seen[0].Status != Skipped {
+		t.Errorf("skipped report = %+v", seen)
+	}
+}

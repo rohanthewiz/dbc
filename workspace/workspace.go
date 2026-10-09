@@ -146,6 +146,12 @@ type Workspace struct {
 	// it started (targetLocked); nil for a new tab. showTab is the tab a
 	// script run's s.Show results are going to, once its first has landed.
 	runTarget, showTab *resultTab
+	// outKey and outTab are ShowResult's: the key of the outside work
+	// (a pipeline run's id) whose results are landing, and the tab they go
+	// to once its first has landed — showTab's twin for work that is not
+	// the run slot's
+	outKey string
+	outTab *resultTab
 	// runAgain is the tab the run in flight is a rerun of
 	// (RerunResultTab): it refills that tab even when it is kept — pinned
 	// or shared — which no other run may. runTitle, when set, is the title

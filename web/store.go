@@ -66,6 +66,10 @@ type Tab struct {
 	// saved only when asked (Ctrl+S, or Run); Buffer stays "" and Conn is
 	// only where the tab was when it opened. "" for a query tab.
 	Script string `json:"script"`
+	// Pipeline makes it a pipeline tab: the name of the pipeline in
+	// pipelines_dir it edits (pipelines.go), saved only when asked, as a
+	// script tab's file is. "" for any other tab; never set with Script.
+	Pipeline string `json:"pipeline"`
 }
 
 // SavedConn is a row of the conns table, where dbc web kept connections
@@ -118,6 +122,8 @@ var storeSchema = []string{
 	`ALTER TABLE tabs ADD COLUMN IF NOT EXISTS console TEXT NOT NULL DEFAULT ''`,
 	// a script tab's script name (Tab.Script), added the same way
 	`ALTER TABLE tabs ADD COLUMN IF NOT EXISTS script TEXT NOT NULL DEFAULT ''`,
+	// a pipeline tab's pipeline name (Tab.Pipeline), likewise
+	`ALTER TABLE tabs ADD COLUMN IF NOT EXISTS pipeline TEXT NOT NULL DEFAULT ''`,
 	`CREATE TABLE IF NOT EXISTS conns (
 		name    TEXT PRIMARY KEY,
 		driver  TEXT NOT NULL,
@@ -269,7 +275,7 @@ func (s *Store) Tabs() ([]Tab, error) {
 	ctx, cancel := opCtx()
 	defer cancel()
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, title, conn, buffer, updated, console, script FROM tabs ORDER BY id`)
+		`SELECT id, title, conn, buffer, updated, console, script, pipeline FROM tabs ORDER BY id`)
 	if err != nil {
 		return nil, serr.Wrap(err, "op", "list tabs")
 	}
@@ -277,7 +283,7 @@ func (s *Store) Tabs() ([]Tab, error) {
 	var out []Tab
 	for rows.Next() {
 		var t Tab
-		if err = rows.Scan(&t.ID, &t.Title, &t.Conn, &t.Buffer, &t.Updated, &t.Console, &t.Script); err != nil {
+		if err = rows.Scan(&t.ID, &t.Title, &t.Conn, &t.Buffer, &t.Updated, &t.Console, &t.Script, &t.Pipeline); err != nil {
 			return nil, serr.Wrap(err, "op", "scan tab")
 		}
 		out = append(out, t)
@@ -301,12 +307,12 @@ func (s *Store) SaveTab(t Tab) error {
 	// one row now (see storeSchema), so one statement: the transaction the
 	// two-table write needed is gone with tab_consoles
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO tabs (id, title, conn, buffer, updated, console, script) VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO tabs (id, title, conn, buffer, updated, console, script, pipeline) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (id) DO UPDATE SET
 			title = EXCLUDED.title, conn = EXCLUDED.conn,
 			buffer = EXCLUDED.buffer, updated = EXCLUDED.updated,
-			console = EXCLUDED.console, script = EXCLUDED.script`,
-		t.ID, t.Title, t.Conn, t.Buffer, t.Updated, t.Console, t.Script)
+			console = EXCLUDED.console, script = EXCLUDED.script, pipeline = EXCLUDED.pipeline`,
+		t.ID, t.Title, t.Conn, t.Buffer, t.Updated, t.Console, t.Script, t.Pipeline)
 	return wrap(err, "op", "save tab", "tab", t.ID)
 }
 

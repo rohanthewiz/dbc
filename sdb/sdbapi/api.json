@@ -807,7 +807,7 @@
         {
           "name": "Progress",
           "type": "func(f FragmentStats)",
-          "doc": "Progress, when set, is called after every batch of a running\nfragment with its counters so far — a snapshot, safe to keep. A host\nthat draws it coalesces; the runner does not throttle."
+          "doc": "Progress, when set, is called with a fragment's counters so far — a\nsnapshot, safe to keep — when the fragment starts (status running,\nits nodes listed with zero counts), after every batch, and once more\nwhen it ends, with its final status (succeeded, failed, canceled, or\nskipped: not run, by Fragment or in a preview). So a host sees every\nfragment's state change through this one callback, and its counters\nin between. A host that draws it coalesces the batches; the runner\ndoes not throttle."
         },
         {
           "name": "Fragment",

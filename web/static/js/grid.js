@@ -249,10 +249,14 @@
   function clear() {
     Object.assign(g, { seq: 0, cols: [], vis: [], total: 0, rows: 0, pages: new Map() });
     viewChanged();
-    // the hint follows the tab: a script tab's editor holds Go, not SQL
-    showMsg(dbc.editor.isScript()
-      ? "Ctrl+Enter saves the script and runs it: its s.Show results land here, its s.Print lines in the log."
-      : "Ctrl+Enter runs the statement under the caret; Ctrl+Shift+Enter runs them all.", "");
+    // the hint follows the tab: a script tab's editor holds Go, not SQL,
+    // and a pipeline tab's is the canvas
+    const t = dbc.state.tab;
+    showMsg(t && t.pipeline
+      ? "◎ Preview shows here what each branch of the pipeline produces — nothing is written; Ctrl+Enter saves and runs it."
+      : dbc.editor.isScript()
+        ? "Ctrl+Enter saves the script and runs it: its s.Show results land here, its s.Print lines in the log."
+        : "Ctrl+Enter runs the statement under the caret; Ctrl+Shift+Enter runs them all.", "");
     info.textContent = "";
   }
 

@@ -371,13 +371,20 @@ func (w *Workspace) makeRoomLocked(s *resultSet, ours []*resultTab) int {
 // tab); later ones join the tab the first went to, as long as it is still
 // in the set — closed meanwhile, the next show starts over in a new tab.
 func (w *Workspace) showLocked(conn string, target *resultTab, title string, r *model.Result) {
+	w.showIntoLocked(conn, target, title, r, &w.showTab)
+}
+
+// showIntoLocked is showLocked with the tab the shows are going to kept in
+// *into: w.showTab for the run slot's script, w.outTab for ShowResult's
+// outside work, so the two never join each other's tab.
+func (w *Workspace) showIntoLocked(conn string, target *resultTab, title string, r *model.Result, into **resultTab) {
 	s := w.setLocked(conn)
-	t := w.showTab
+	t := *into
 	i := slices.Index(s.tabs, t)
 	if t == nil || i < 0 {
 		t = w.placeLocked(conn, target, title, "", r)
 		t.shows = []shown{{res: r, seq: t.seq}}
-		w.showTab = t
+		*into = t
 		return
 	}
 	w.resSeq++
@@ -390,6 +397,42 @@ func (w *Workspace) showLocked(conn string, target *resultTab, title string, r *
 	}
 	t.res, t.seq, t.rerunOf = r, w.resSeq, 0
 	s.cur = i // a show moves the grid to it, as a landed run does
+}
+
+// ShowResult lands a result that work outside the run slot produced — a
+// pipeline preview the server's engine ran for this tab — in the active
+// connection's result set, the way a script's s.Show lands: the first
+// result of a key (the engine's run id) is placed as a run's result would
+// be, in the result tab on screen unless it is pinned (else a new tab);
+// later results of the same key join that tab, behind the results bar's
+// "Result 1 · 2 · 3" (ScriptResults, ShowScriptResult). A new key starts
+// over, so each preview replaces the last one's tab rather than piling
+// onto it.
+//
+// Refused while the tab's own run is in flight, whose results would fight
+// it for the grid, and when every result tab is pinned at the cap.
+func (w *Workspace) ShowResult(key, title string, r *model.Result) error {
+	if r == nil {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.busy {
+		return refuse(Busy, Warn, "busy — %s is still running; the preview's rows were not shown", w.runTag)
+	}
+	if key != w.outKey {
+		w.outKey, w.outTab = key, nil
+	}
+	if w.outTab == nil {
+		target, err := w.targetLocked(w.active)
+		if err != nil {
+			return err
+		}
+		w.showIntoLocked(w.active, target, title, r, &w.outTab)
+		return nil
+	}
+	w.showIntoLocked(w.active, nil, title, r, &w.outTab)
+	return nil
 }
 
 // ---------------------------------------------------------------------------

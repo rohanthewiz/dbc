@@ -988,3 +988,150 @@ a.btnlink:hover { border-color: var(--accent); }
 .slist .sact { display: flex; gap: 4px; flex: none; visibility: hidden; }
 .slist li.cur .sact, .slist li:hover .sact { visibility: visible; }
 .slist .sact button { font-size: 11px; padding: 0 6px; line-height: 1.5; }
+.slist .srow.pipeline .sname { color: var(--accent); }
+
+/* ── pipeline tabs ─────────────────────────────────────────────────────────
+   A pipeline tab lays its canvas (#pipe, pipelines.js) over the editor, in
+   the editor pane the splitter sizes: a bar, then palette | canvas |
+   inspector. Its JSON view (.pipe-json) shrinks #pipe to the bar and puts
+   the editor back beneath it, on the pipeline's text. The topbar is a
+   script tab's (.script-mode: Run, Check, Save, Stop). */
+.app.pipe-mode .editor-wrap { min-height: 200px; }
+.pipe { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; background: var(--bg); }
+/* under the canvas the editor holds the pipeline's JSON, hidden — and
+   visibility (not display, which would stop Monaco's layout) keeps it from
+   taking focus, so no key meant for the canvas edits the file unseen */
+.app.pipe-mode:not(.pipe-json) .editor-wrap .monaco, .app.pipe-mode:not(.pipe-json) #editor { visibility: hidden; }
+.app.pipe-json .pipe { bottom: auto; height: 31px; }
+.app.pipe-json .pipe .pbody { display: none; }
+.app.pipe-json .editor-wrap .monaco { top: 31px; }
+.app.pipe-json #editor { margin-top: 31px; height: calc(100% - 31px); }
+
+.pbar { flex: none; display: flex; align-items: center; gap: 6px; height: 31px; padding: 0 8px;
+  border-bottom: 1px solid var(--line); background: var(--panel); white-space: nowrap; overflow: hidden; }
+.pbar .pname { font-weight: 600; color: var(--accent); }
+.pbar .pmeta { display: flex; gap: 6px; min-width: 0; overflow: hidden; color: var(--muted); font-size: 12px; }
+.pbar .pdesc { overflow: hidden; text-overflow: ellipsis; }
+.pbar .perr { color: var(--err); }
+.pbar .pwarn { color: var(--warn); }
+.pbar .spacer { flex: 1 1 auto; }
+.pbar button { font-size: 12px; padding: 1px 8px; }
+.pbar button.on { border-color: var(--accent); color: var(--accent); }
+.prowsl { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; }
+.prows { width: 56px; font: inherit; font-size: 12px; color: var(--fg); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 3px; padding: 1px 4px; }
+
+.pbody { flex: 1 1 auto; display: flex; min-height: 0; }
+
+/* the palette: plugins by kind, a press drags one out */
+.ppal { flex: 0 0 190px; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--panel); }
+.pfilter { margin: 6px; font: inherit; font-size: 12px; color: var(--fg); background: var(--bg); border: 1px solid var(--line);
+  border-radius: 3px; padding: 3px 6px; }
+.pfilter:focus { outline: 1px solid var(--accent); }
+.plist { flex: 1 1 auto; overflow: auto; padding: 0 4px 8px; }
+.phead { color: var(--muted); font: 600 10px/2.2 system-ui, sans-serif; text-transform: uppercase; letter-spacing: .05em; padding: 0 4px; }
+.pitem { display: flex; align-items: baseline; gap: 6px; padding: 2px 6px; border-radius: 3px; cursor: grab; user-select: none;
+  touch-action: none; }
+.pitem:hover { background: var(--panel2); }
+.pitem .pg { width: 12px; text-align: center; }
+.pitem .pn { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.pitem .pl { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pnote { color: var(--muted); font-style: italic; padding: 6px; }
+.pghost { position: fixed; z-index: 50; pointer-events: none; padding: 4px 10px; border-radius: 4px; background: var(--panel2);
+  border: 1px solid var(--accent); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
+
+/* the canvas: a stage of lanes, panned and zoomed (stage.js) */
+.pcanvas { flex: 1 1 auto; position: relative; overflow: hidden; min-width: 0; cursor: default; touch-action: none;
+  background-color: var(--bg);
+  background-image: radial-gradient(color-mix(in srgb, var(--line) 70%, transparent) 1px, transparent 1px);
+  background-size: 20px 20px; }
+.pcanvas:focus { outline: none; }
+.pcanvas.panning { cursor: grabbing; }
+.pstage { position: absolute; left: 0; top: 0; }
+.pempty { padding: 24px; color: var(--err); max-width: 640px; }
+
+.plane { position: absolute; left: 0; border: 1px solid var(--line); border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 82%, transparent); }
+.plane.sel { border-color: var(--accent); }
+.plane.drop { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+.lhead { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border-bottom: 1px solid var(--line);
+  cursor: pointer; user-select: none; }
+.lhead .lname { color: var(--fg); }
+.lhead .lmeta { color: var(--muted); font-size: 12px; }
+.lhead .ldiag { color: var(--warn); font-size: 12px; }
+.lhead .spacer { flex: 1 1 auto; }
+.lhead button { border: 0; background: none; padding: 0 5px; color: var(--muted); }
+.lhead button:hover { color: var(--accent); }
+.lstate { width: 14px; text-align: center; color: var(--muted); }
+.lstate.s-running { color: var(--warn); }
+.lstate.s-succeeded { color: var(--accent); }
+.lstate.s-failed { color: var(--err); }
+.lstate.s-canceled, .lstate.s-skipped { color: var(--muted); }
+.lbody { position: relative; }
+.lhint { position: absolute; left: 24px; top: 24px; color: var(--muted); font-style: italic; pointer-events: none; }
+.ledges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.ledges .edge { fill: none; stroke: var(--muted); stroke-width: 1.6; }
+.ledges .edge.sel { stroke: var(--accent); stroke-width: 2.4; }
+.ledges .edge.live { stroke: var(--accent); stroke-dasharray: 5 4; }
+.ledges .ehit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }
+
+.pcard { position: absolute; width: 172px; height: 66px; padding: 4px 8px 4px 10px; border: 1px solid var(--line);
+  border-left: 3px solid var(--muted); border-radius: 5px; background: var(--panel2); cursor: grab; user-select: none;
+  font-size: 12px; line-height: 1.35; overflow: visible; }
+.pcard.k-source { border-left-color: var(--accent); }
+.pcard.k-transform { border-left-color: color-mix(in srgb, var(--accent) 45%, var(--muted)); }
+.pcard.k-sink { border-left-color: var(--warn); }
+.pcard.k-action { border-left-color: var(--fg); }
+.pcard.k-none { border-left-color: var(--err); }
+.pcard.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.pcard.drop { box-shadow: 0 0 0 2px var(--accent); }
+.pcard.bad { border-color: var(--err); }
+.pcard.warn { border-color: var(--warn); }
+.pcard.failed { background: color-mix(in srgb, var(--err) 14%, var(--panel2)); }
+.pcard .ctop { display: flex; gap: 5px; align-items: baseline; }
+.pcard .cg { color: var(--muted); }
+.pcard .cp { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+.pcard .cd { margin-left: auto; color: var(--warn); }
+.pcard.bad .cd { color: var(--err); }
+.pcard .cid { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcard .csum, .pcard .cnum { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcard .cnum { color: var(--accent); }
+.pport { position: absolute; top: 26px; width: 12px; height: 12px; border-radius: 50%; background: var(--bg);
+  border: 2px solid var(--muted); }
+.pport.in { left: -7px; }
+.pport.out { right: -7px; cursor: crosshair; }
+.pport.out:hover, .pcard.drop .pport.in { border-color: var(--accent); background: var(--accent); }
+.padd { position: absolute; left: 0; height: 30px; display: flex; align-items: center; justify-content: center;
+  border: 1px dashed var(--line); border-radius: 6px; color: var(--muted); cursor: pointer; font-size: 12px; }
+.padd:hover { border-color: var(--accent); color: var(--accent); }
+
+/* the inspector: the selection's form, drawn from its plugin's fields */
+.pinsp { flex: 0 0 280px; overflow: auto; border-left: 1px solid var(--line); background: var(--panel); padding: 8px 10px 16px; }
+.ihead { display: flex; align-items: baseline; gap: 6px; margin-bottom: 6px; }
+.ihead .ig { color: var(--accent); }
+.ihead b { font: 600 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.ihead .ik { margin-left: auto; color: var(--muted); font-size: 11px; }
+.idocs { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
+.idocs summary { cursor: pointer; color: var(--fg); }
+.idocs p { margin: 4px 0 0; }
+.ifield { display: flex; flex-direction: column; gap: 2px; margin: 0 0 9px; }
+.ifield .iname { font-size: 12px; color: var(--fg); }
+.ifield .itype { margin-left: 6px; color: var(--muted); font-size: 10px; }
+.ifield .idoc, p.idoc, .isub .idoc { color: var(--muted); font-size: 11px; }
+.ifield input, .ifield textarea, .ifield select, .iparam input {
+  font: inherit; font-size: 12px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 3px;
+  padding: 3px 5px; width: 100%; }
+.ifield textarea { resize: vertical; }
+.ifield textarea.code { font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; tab-size: 4; white-space: pre; }
+.ifield input:focus, .ifield textarea:focus, .ifield select:focus, .iparam input:focus { outline: 1px solid var(--accent); }
+.ifield.check { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ifield.check .idoc { flex-basis: 100%; }
+.isub { margin: 10px 0 4px; font-size: 12px; color: var(--fg); }
+.iparam { display: grid; grid-template-columns: 1fr 1fr 1.4fr auto; gap: 4px; margin-bottom: 4px; }
+.iacts { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.iacts button { font-size: 12px; }
+.idiags { margin-top: 8px; }
+.idiag { font-size: 12px; padding: 3px 6px; margin-bottom: 4px; border-radius: 3px; border-left: 3px solid var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.idiag.error { border-left-color: var(--err); background: color-mix(in srgb, var(--err) 10%, transparent); }
+.pparams .ifield { min-width: 360px; }

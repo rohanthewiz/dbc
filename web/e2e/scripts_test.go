@@ -188,10 +188,19 @@ func scriptTabs(t *testing.T, e *env, p *rod.Page) {
 	p.Keyboard.MustType(input.KeyD, input.KeyB, input.Period)
 	suggest := `() => [...document.querySelectorAll(".suggest-widget.visible .monaco-list-row")]
 	  .map((r) => r.getAttribute("aria-label") || r.textContent).join("|")`
-	waitFor(t, p, "S's methods after db. (Run's own name for it)", `() => {
-	  const r = (`+suggest+`)();
-	  return ["Query", "Copy", "Show", "Print"].every((m) => r.includes(m));
-	}`)
+	// The widget draws only the rows in view, and S has more methods than
+	// fit (the pipeline ones pushed Query and Show out of view), so each is
+	// looked for by narrowing, as a person would: the first letters typed,
+	// then taken back.
+	waitFor(t, p, "S's methods after db. (Run's own name for it)", `() => (`+suggest+`)().includes("Copy")`)
+	for _, m := range []struct {
+		keys []input.Key
+		want string
+	}{{[]input.Key{input.KeyQ, input.KeyU}, "Query"}, {[]input.Key{input.KeyS, input.KeyH}, "Show"}, {[]input.Key{input.KeyP, input.KeyR}, "Print"}} {
+		p.Keyboard.MustType(m.keys...)
+		waitFor(t, p, "db."+m.want+" offered", `(w) => (`+suggest+`)().includes(w)`, m.want)
+		p.Keyboard.MustType(input.Backspace, input.Backspace)
+	}
 	p.Keyboard.MustType(input.Escape)
 	eval(t, p, `() => { const ed = monaco.editor.getEditors()[0];
 	  ed.executeEdits("e2e", [{ range: new monaco.Range(6, 1, 6, 100), text: "\tdb.Query(\"" }]);

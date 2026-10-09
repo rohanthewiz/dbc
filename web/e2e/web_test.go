@@ -62,6 +62,7 @@ func TestWeb(t *testing.T) {
 		{"tab groups", tabGroups},
 		{"fold the recent conversations", foldRecentChats},
 		{"script tabs", scriptTabs},
+		{"pipeline tabs", pipelineTabs},
 	}
 	// DBC_E2E_STEPS narrows a run to the steps whose names contain one of
 	// its comma-separated words (plus the sign-in and boot every step

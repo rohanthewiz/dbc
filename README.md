@@ -32,10 +32,13 @@ the GitHub Releases page. `dbc version` (or `dbc --version`) prints the version.
   It builds dbc, serves `dbc web` from a temporary HOME on two SQLite files,
   and drives a headless Chrome through it: sign-in, a run, the Tables list,
   Show columns, copies, switching, Disconnect, Refresh, the connection form,
-  the Postgres in Docker dialog (opened, never started) and tabs across a
-  reload. A JavaScript error on the page fails it. `DBC_E2E_CHROME`
-  names the browser, `DBC_E2E_HEADFUL=1` shows it, and `DBC_LIVE_PG_DSN`
-  adds the Postgres schema picker.
+  the Postgres in Docker dialog (opened, never started), tabs across a
+  reload, script tabs, and a pipeline built on the canvas by hand
+  (dragged, wired, previewed, saved, run, stopped). A JavaScript error on
+  the page fails it. `DBC_E2E_CHROME` names the browser,
+  `DBC_E2E_HEADFUL=1` shows it, `DBC_E2E_SHOTS=dir` keeps the screenshots
+  the pipeline step takes, and `DBC_LIVE_PG_DSN` adds the Postgres schema
+  picker.
 - **Postgres in Docker** (`pgdocker`): `DBC_LIVE_DOCKER=1 go test -run
   LiveDocker -v ./pgdocker`, with Docker running, starts a real container,
   connects through the connection it registers, restarts it, then removes
@@ -1324,7 +1327,10 @@ dbc web --listen 127.0.0.1:9000
 the left, a Monaco SQL editor, the results grid, the plan view, the log, and
 the AI assistant. It runs statements through the same code the TUI does, so
 the run slot, pinned sessions, cancel, history, explain and the assistant's
-data rules behave the same in both.
+data rules behave the same in both. Beside query tabs it has
+[script tabs](#script-tabs-in-dbc-web), which edit and run Go scripts, and
+[pipeline tabs](#pipeline-tabs-in-dbc-web), which draw pipelines on a
+canvas and preview and run them.
 
 **Layout.** A draggable bar separates every pair of neighbouring sections:
 the sidebar and the work column, Connections and Tables, the editor and the
@@ -1980,9 +1986,74 @@ The stats name every fragment and node with rows in and out, batches and
 time, and `dbc pipeline export NAME` writes any pipeline file as the
 script above, to run or edit as one. Three examples are built in
 (`dbc pipelines` lists them): `copy-cats`, `clean-and-load` and
-`cats-report`, all on the demo connections. A visual editor and jobs
+`cats-report`, all on the demo connections. `dbc web` draws and edits
+pipelines on a canvas ([below](#pipeline-tabs-in-dbc-web)). Jobs
 (pipelines in a dependency graph, on a schedule) are planned in
 [`ai_docs/plans/pipelines.md`](ai_docs/plans/pipelines.md).
+
+### Pipeline tabs in dbc web
+
+`Ctrl+O` (▷ Scripts) lists your pipelines and the examples beside the
+scripts. Copy an example, or **+ New ▾ → Pipeline**, and it opens in a
+**pipeline tab**: a canvas in the editor's place, the grid and the log
+below it as for a query.
+
+```
+┌ ⛓ clean-and-load.json ●   rows [50] ◎ Preview ⊡ Fit { } JSON ⇪ Go ⋯ ┐
+├ palette ──┬ canvas ──────────────────────────────────────┬ inspector ┤
+│ SOURCES   │ ✓ clean · batch 500 · 5 rows        ◎ ▶ ⋯   │ sql.write │
+│ ⇥ sql.read│ ┌─────┐   ┌──────┐   ┌──────┐   ┌──────┐     │ dst       │
+│ TRANSFORMS│ │ src ●──►● tidy ●──►● keep ●┬─►● dst  │     │ conn  […] │
+│ ƒ go.trans│ └─────┘   └──────┘   └──────┘│  └──────┘     │ table […] │
+│ SINKS     │                              └─►● peek │     │ create[x] │
+│ ⇤ preview │ ✓ stamp                                     │           │
+└───────────┴──────────────────────────────────────────────┴───────────┘
+```
+
+- **Build it by dragging.** Drag a plugin from the palette onto a lane to
+  add a node there (onto the empty canvas: a new fragment holding it); a
+  click adds it after the selected node, wired. Drag a card's output ● to
+  another card to wire them — rows flow from one into the other; a node
+  takes one input, so a new wire replaces the old one, and a loop is
+  refused. Click a card, a wire or a lane to select it; `Delete` removes
+  it, `Ctrl+D` duplicates a node. Drag the background (or use the wheel)
+  to pan, `Ctrl`+wheel (or pinch) to zoom, `f` or ⊡ Fit to fit. A lane's
+  ⋯ moves, adds or deletes fragments.
+- **The inspector** is drawn from the plugin's own fields: a connection
+  field offers the configured connections (a click on one in the sidebar
+  sets it on the selected node), a columns field the columns a preview
+  saw, SQL and Go fields are code boxes. With nothing selected it edits
+  the pipeline's name, description and parameters.
+- **Checked as you edit.** Half a second after a change the canvas is
+  checked as `dbc pipeline check` would: what is wrong is marked ⚠ on the
+  card, the lane or the header (`· 1 error`) and listed in the inspector;
+  ✓ Check logs every finding.
+- **◎ Preview** runs the canvas as it is — unsaved edits too — on real
+  data, writing nothing: every sink becomes a preview, the source stops
+  after `rows`, actions are skipped. Each branch's rows land in the grid
+  ("Result 1 · 2" for two). A lane's ◎ previews that fragment alone.
+- **▶ Run** (`Ctrl+Enter`) saves, then runs the file — what `dbc pipeline
+  run` would run. Runs belong to dbc web, not to the tab: the tab is
+  marked busy while one it started runs, and its ■ Stop rolls the
+  fragment in flight back, but the tab is never blocked, and two
+  pipelines run at once (one run of a pipeline at a time). Each card
+  counts rows in → out as it goes, each lane shows its state (○ queued,
+  ● running, ✓, ✗, ↷ skipped, ■ stopped), and the run's lines — fragments
+  starting and ending, `e.S.Print` in a Go node, the DDL log — go to the
+  pipeline's log. A parameter without a default is asked for; "Run with
+  parameters…" (the tab's menu) asks for all of them.
+- **Saving** is the script tab's: explicit (`Ctrl+S`, ⤓ Save, or Run),
+  `⛓ name.json ●` while unsaved, the unsaved text kept in the browser
+  across a reload, and a file changed on disk meanwhile is not written
+  over — you choose to keep yours or load the file's. A canvas edit writes
+  the file the way `dbc` does (two-space indent, keys sorted, edges on one
+  line), so it diffs well in git.
+- **{ } JSON** shows the same pipeline as JSON in the editor (with the
+  check's findings marked on their lines), to edit by hand; ⊞ Canvas goes
+  back once it parses. **⇪ Go** exports it as a dbc script in a script
+  tab — the builder form `dbc pipeline export` writes.
+
+Double-click the tab to rename the pipeline. One pipeline has one tab.
 
 ## Headless mode
 

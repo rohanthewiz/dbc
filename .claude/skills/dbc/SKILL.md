@@ -155,7 +155,9 @@ Opt-in suites (README "Tests"):
 - **Live DBs** — `db/live_*`: set `DBC_LIVE_PG_DSN` / `DBC_LIVE_MYSQL_DSN` to
   throwaway servers, e.g. `docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=pw postgres`.
 - **Web e2e** — `cd web/e2e && DBC_E2E=1 go test -count=1 -v .` (go-rod,
-  headless Chrome; its own module). `DBC_E2E_HEADFUL=1` to watch.
+  headless Chrome; its own module). `DBC_E2E_HEADFUL=1` to watch,
+  `DBC_E2E_STEPS=pipeline` for one step, `DBC_E2E_SHOTS=dir` for the
+  screenshots a step takes (the pipeline canvas's).
 - **TUI e2e** — `cd tui/e2e && DBC_TUI_E2E=1 go test -count=1 -v .`
   (pseudo-terminal + VT emulator; its own module). It points `EDITOR` at a
   shell stand-in, so the scripts browser's `e` runs without a real editor.

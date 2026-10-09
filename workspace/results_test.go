@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/rohanthewiz/dbc/config"
+	"github.com/rohanthewiz/dbc/model"
 )
 
 // These pin down results.go's rules: a result set per connection, a run
@@ -380,6 +381,44 @@ func Run(s *sdb.S) error {
 	run(t, w, "SELECT 5")
 	if n, _, _ := w.ScriptResults(); n != 0 || got(w) != script {
 		t.Errorf("after a run: %d shows, cur %d", n, got(w))
+	}
+}
+
+// Results from outside the run slot (a pipeline preview the server's
+// engine ran) land as a script's shows do: one key's results share one
+// tab, behind the switcher; a new key replaces that tab rather than
+// joining it; a pinned tab is left alone; a run in flight refuses them.
+func TestShowResultFromOutside(t *testing.T) {
+	w := newTestWorkspace(t)
+	run(t, w, "SELECT 1 AS a")
+	_ = w.PinResultTab(got(w), true)
+	pinned := got(w)
+	res := func(v string) *model.Result {
+		return &model.Result{Columns: []string{"v"}, Rows: [][]string{{v}}}
+	}
+	if err := w.ShowResult("run1", "preview dst", res("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.ShowResult("run1", "preview peek", res("y")); err != nil {
+		t.Fatal(err)
+	}
+	tabs, cur := w.ResultTabs()
+	if len(tabs) != 2 || tabs[cur].ID == pinned || tabs[cur].Shows != 2 || tabs[cur].Title != "preview dst" {
+		t.Fatalf("tabs = %+v, cur %d", tabs, cur)
+	}
+	if n, at, _ := w.ScriptResults(); n != 2 || at != 1 || w.LastResult().Rows[0][0] != "y" {
+		t.Errorf("ScriptResults = %d, %d", n, at)
+	}
+	first := tabs[cur].ID
+	// the next preview: the same (unpinned) tab, its shows replaced
+	if err := w.ShowResult("run2", "preview dst", res("z")); err != nil {
+		t.Fatal(err)
+	}
+	if tabs, cur = w.ResultTabs(); len(tabs) != 2 || tabs[cur].ID != first || tabs[cur].Shows != 1 || w.LastResult().Rows[0][0] != "z" {
+		t.Errorf("second preview: tabs = %+v, cur %d", tabs, cur)
+	}
+	if err := w.ShowResult("run2", "", nil); err != nil {
+		t.Errorf("a nil result: %v", err)
 	}
 }
 

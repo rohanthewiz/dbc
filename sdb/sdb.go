@@ -54,6 +54,9 @@ type S struct {
 	catalog map[string]bool
 	// paths is where script and pipeline names resolve (WithPaths).
 	paths Paths
+	// jobs runs s.RunJob (WithJobs): the host's engine, or nil for
+	// DefaultJobRunner.
+	jobs JobRunner
 }
 
 // New builds a script session. show receives results pushed via Show;

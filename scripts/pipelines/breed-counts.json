@@ -1,0 +1,16 @@
+{
+  "name": "breed-counts",
+  "desc": "Count the cats per breed in the bytdb demo's copy (copy-cats makes it) into a table beside it.",
+  "fragments": [
+    {
+      "name": "counts",
+      "nodes": [
+        { "id": "src", "plugin": "sql.read", "cfg": {
+            "conn": "demo-bytdb",
+            "query": "SELECT breed, count(*) AS cats FROM cats_copy GROUP BY breed ORDER BY breed" } },
+        { "id": "dst", "plugin": "sql.write", "cfg": { "conn": "demo-bytdb", "table": "breed_counts", "create": "true", "truncate": "true", "key": "breed" } }
+      ],
+      "edges": [ ["src", "dst"] ]
+    }
+  ]
+}

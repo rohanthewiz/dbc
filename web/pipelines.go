@@ -62,6 +62,8 @@ import (
 //	Preview             job.preview  ┐    a note; the rows themselves land in the
 //	                    + "result" ──┘    origin tab's workspace (ShowResult) and its
 //	                      (to that tab)   grid fetches them as after a script's s.Show
+//	State               job.state         a job's step started, ended, was skipped
+//	Notice              job.notice        a line in the log on screen (the scheduler)
 //	RunDone             job.done          the outcome, the status bar
 //
 // A preview runs the editor's text — it writes nothing, so an unsaved
@@ -538,16 +540,34 @@ func (s *Server) handlePipelineExport(ctx rweb.Context) error {
 }
 
 // handleRuns is GET /api/v1/runs: the runs going now and the ones that
-// ended lately, newest first, without their logs — what a page that just
-// loaded needs to draw a running pipeline's state and its tab's busy mark.
+// ended lately in this process, newest first, without their logs — what a
+// page that just loaded needs to draw a running pipeline's state and its
+// tab's busy mark. With a filter (kind, name, status, since, limit, or
+// history=1) it adds "runs": the history from the records in runs_dir —
+// every process's, a cron's `dbc job run` included — previews left out.
 func (s *Server) handleRuns(ctx rweb.Context) error {
-	return ok(ctx, map[string]any{"running": nonNil(s.jobs.Running()), "recent": nonNil(s.jobs.Recent())})
+	f, history, err := runsFilter(ctx)
+	if err != nil {
+		return fail(ctx, err)
+	}
+	out := map[string]any{"running": nonNil(s.jobs.Running()), "recent": nonNil(s.jobs.Recent())}
+	if history {
+		runs, err := s.jobs.History(f)
+		if err != nil {
+			return fail(ctx, err)
+		}
+		out["runs"] = nonNil(runs)
+	}
+	return ok(ctx, out)
 }
 
+// handleRunRecord is one run's record with its log: live, kept in memory,
+// or read back from runs_dir.
 func (s *Server) handleRunRecord(ctx rweb.Context) error {
-	r, found := s.jobs.Get(ctx.Request().PathParam("id"))
+	id := ctx.Request().PathParam("id")
+	r, found := s.jobs.Get(id)
 	if !found {
-		return fail(ctx, notFound("no run %q (dbc web keeps the last %d in memory)", ctx.Request().PathParam("id"), 50))
+		return fail(ctx, notFound("no run %q (not running, and no record of it in %s)", id, config.TildePath(s.cfg.RunsDir)))
 	}
 	return ok(ctx, r)
 }
@@ -598,6 +618,15 @@ func (s *Server) onJob(ev jobs.Event) {
 		s.hub.broadcast("job.line", jobLine{Run: e.Run, Name: e.Pipeline, Level: e.Line.Level, Text: e.Line.Text})
 	case *jobs.Preview:
 		s.landPreview(e)
+	case *jobs.State:
+		// a job's step started, ended or was skipped; a queued run began
+		s.hub.broadcast("job.state", e)
+	case *jobs.Notice:
+		// the scheduler's word — a fire skipped, missed, a job that does
+		// not parse — or a record that could not be written; also said
+		// where dbc web was started, since no page may be open at 02:00
+		s.opt.Logf("%s", e.Text)
+		s.hub.broadcast("job.notice", e)
 	case *jobs.RunDone:
 		s.hub.broadcast("job.done", map[string]any{"run": e.Run})
 	}

@@ -1,6 +1,6 @@
 ---
 name: dbc
-description: "Drive dbc — this repo's TUI database client for Postgres, MySQL, SQLite and bytdb — from the shell: run SQL headless with machine-readable output, run Go scripts (sdb.S), copy tables between connections, explain plans, draw ERDs, and apply goose-format migrations. Also how to build dbc, run its unit and opt-in test suites, and check a change in the real binary. Use when asked to query a database with dbc, write or run a dbc script, copy/ETL a table, explain a slow query, produce a schema diagram, run migrations, or verify a dbc change end to end."
+description: "Drive dbc — this repo's TUI database client for Postgres, MySQL, SQLite and bytdb — from the shell: run SQL headless with machine-readable output, run Go scripts (sdb.S), run pipelines and jobs (DAGs of pipelines) and read their run records, copy tables between connections, explain plans, draw ERDs, and apply goose-format migrations. Also how to build dbc, run its unit and opt-in test suites, and check a change in the real binary. Use when asked to query a database with dbc, write or run a dbc script, run a pipeline or job, copy/ETL a table, explain a slow query, produce a schema diagram, run migrations, or verify a dbc change end to end."
 ---
 
 # dbc
@@ -109,6 +109,10 @@ Exit codes: `0` ok, `1` failure, `2` bad usage (incl. unknown connection),
 | `dbc pipeline run [-p K=V]… [--preview N] [--fragment F] NAME\|FILE.json` | run a pipeline (fragments of source → transforms → sinks, in batches; `-t json` prints the run stats); a bare NAME is looked up in `pipelines_dir`, then the examples | Pipelines headless |
 | `dbc pipeline check NAME…` / `dbc pipeline export NAME [-o f.go]` | validate without running (exit 1 on an error) / write the pipeline as a dbc script | Pipelines headless |
 | `dbc pipelines [-t json]` / `dbc plugins [-t json]` | list `pipelines_dir` and the examples / list the node kinds and their fields | Pipelines headless |
+| `dbc job run [-p K=V]… NAME\|FILE.json` | run a job (a DAG of pipelines: fan-out, fan-in, failure policy) here and wait; lines carry their step, text ends with the run's tree, `-t json` prints the whole run record; exit 0/1/130 | Jobs headless |
+| `dbc job check NAME…` / `dbc jobs [-t json]` | validate a job and every pipeline it runs (exit 1 on an error) / list `jobs_dir` and the examples with schedule, next fire, last run | Jobs headless |
+| `dbc runs [--job N\|--pipeline N] [--status S] [--since 7d] [--limit N]` | the run records in `runs_dir` (every process's: dbc web's schedule, cron, headless), newest first; a dead process's `running` reads `interrupted` | Jobs headless |
+| `dbc runs --sql "SELECT …"` / `dbc run show ID [-t json]` | query the records as tables `runs`, `pipelines`, `fragments`, `nodes` (a throwaway bytdb) / one run as a tree, or its record | Jobs headless |
 | `dbc copy --from A --to B [--create] [--truncate] [--where C] SRC [DST]` | copy a table across connections/engines in one transaction | Copy headless |
 | `dbc explain [-a] [-t text\|json\|markdown\|html\|pdf\|png\|jpeg\|mermaid] [--fail-on warn\|crit] "SQL"` | plan + findings; one statement | Explain headless |
 | `dbc erd [-t mermaid\|markdown\|png\|jpeg] [--table T] [--depth N] [--views]` | schema diagram | Diagrams headless |

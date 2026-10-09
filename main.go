@@ -202,6 +202,10 @@ func newCLI() *cli.Command {
 			pipelineCommand(),
 			pipelinesCommand(),
 			pluginsCommand(),
+			jobCommand(),
+			jobsCommand(),
+			runsCommand(),
+			runCommand(),
 			copyCommand(),
 			explainCommand(),
 			erdCommand(),
@@ -997,7 +1001,8 @@ func runScriptHeadless(cfg *config.Config, mgr *db.Manager, ref config.ScriptRef
 
 	s := sdb.New(mgr, show,
 		func(msg string) { fmt.Fprintln(logOut, msg) },
-	).WithContext(ctx).WithPaths(sdb.Paths{ScriptsDir: cfg.ScriptsDir, PipelinesDir: cfg.PipelinesDir})
+	).WithContext(ctx).WithPaths(sdb.Paths{ScriptsDir: cfg.ScriptsDir, PipelinesDir: cfg.PipelinesDir,
+		JobsDir: cfg.JobsDir, RunsDir: cfg.RunsDir})
 
 	var err error
 	if ref.Example != nil {

@@ -16,10 +16,10 @@ import (
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/export"
+	"github.com/rohanthewiz/dbc/jobs"
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/pipeline"
 	"github.com/rohanthewiz/dbc/scripts"
-	"github.com/rohanthewiz/dbc/sdb"
 	"github.com/rohanthewiz/dbc/userdata"
 )
 
@@ -237,16 +237,40 @@ func pipelineRunAction(ctx context.Context, cmd *cli.Command) error {
 // results as a script's results go (streamed or collected by format), the
 // log as a script's Print lines go, and the stats as the final document
 // (-t json) or a summary (text). It exits as runScriptHeadless does.
+//
+// The run goes through a jobs engine of this process's own, as dbc web's
+// runs do, so it leaves a record in runs_dir (a preview does not): `dbc
+// runs --pipeline NAME` lists it beside the runs dbc web made.
 func runPipelineHeadless(cfg *config.Config, mgr *db.Manager, spec *pipeline.Spec, opt pipeline.Options, f export.Format) {
 	ctx, stop := interruptible()
 	defer stop()
 	out := newHeadlessOutput(f)
-	s := sdb.New(mgr, out.show, func(msg string) { fmt.Fprintln(out.log, msg) }).
-		WithContext(ctx).WithPaths(sdb.Paths{ScriptsDir: cfg.ScriptsDir, PipelinesDir: cfg.PipelinesDir})
-	s.LogDDL()
-	st, err := s.RunPipelineSpec(spec, opt)
-	s.Release()
+	e := newHeadlessEngine(cfg, mgr, func(ev jobs.Event) {
+		switch ev := ev.(type) {
+		case *jobs.Logged:
+			fmt.Fprintln(out.log, ev.Line.Text)
+		case *jobs.Preview:
+			out.show(ev.Result)
+		case *jobs.Notice:
+			fmt.Fprintln(os.Stderr, ev.Text)
+		}
+	})
+	head, err := e.StartPipeline(jobs.Request{Spec: spec, Params: opt.Params, Fragment: opt.Fragment,
+		PreviewRows: opt.PreviewRows, Trigger: jobs.TriggerCLI})
+	if err != nil {
+		fail(err, "the pipeline did not start")
+	}
+	go func() {
+		<-ctx.Done()
+		_ = e.Cancel(head.ID)
+	}()
+	fin, err := e.Wait(context.Background(), head.ID)
+	e.Close(30 * time.Second)
 	out.finish()
+	if err != nil {
+		fail(err, "lost the run")
+	}
+	st := &fin.Pipelines[0].RunStats
 	if f == export.JSON {
 		// the stats are the document: results a preview showed were
 		// collected and are not repeated here (they went out as the
@@ -256,15 +280,18 @@ func runPipelineHeadless(cfg *config.Config, mgr *db.Manager, spec *pipeline.Spe
 		if encErr := enc.Encode(st); encErr != nil {
 			fail(encErr, "could not write the stats")
 		}
-	} else if st != nil {
+	} else {
 		fmt.Fprint(out.log, runText(st))
 	}
-	if err != nil {
-		if sdb.IsCanceled(err) {
-			canceled("pipeline")
-		}
-		fail(err, "pipeline failed")
+	switch fin.Status {
+	case pipeline.Succeeded:
+		return
+	case pipeline.Canceled:
+		canceled("pipeline")
 	}
+	// the run's log said why, with where; one closing line for the shell
+	logToStderr(fmt.Sprintf("pipeline %s %s (run %s)", fin.Name, fin.Status, fin.ID))
+	os.Exit(1)
 }
 
 // runText is the stats as text: one line per fragment (the summary line

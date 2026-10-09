@@ -6,6 +6,16 @@
 # are expanded.
 # scripts_dir = "scripts"
 
+# Pipelines, jobs (DAGs of pipelines with a schedule) and the record each run
+# of either leaves behind. Each defaults to its own directory beside the
+# scripts (~/.config/dbc/pipelines, …/jobs, …/runs) and is resolved like
+# scripts_dir. runs_keep is how many records of each job and pipeline are
+# kept, the oldest pruned after a run.
+# pipelines_dir = "pipelines"
+# jobs_dir      = "jobs"
+# runs_dir      = "runs"
+# runs_keep     = 200
+
 # Directory holding PostgreSQL's client tools, pg_dump and pg_restore, for
 # `dbc dump` and "Dump database…" in the TUI and dbc web. Leave it out and dbc
 # looks on PATH and in the usual install places (Homebrew's keg-only libpq and

@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-181
+**Next ID:** N-183
 
 ## Open
 
@@ -93,6 +93,20 @@ ten session docs in `ai_docs/claude_sessions/`
   `"on_eror"` — is dropped by the first edit, silently. The check flags it
   first ("unknown field"), but the drop is not said. Keep unknown keys
   through the round trip, or refuse canvas edits while the text has any.
+- **N-181** · raised `2026-1009-1254-phase-3-jobs-scheduler-runs` · value low
+  `dbc job run --wait=false` (plan §4/§5): return the run id as soon as it
+  has started, for an external trigger that polls `dbc run show ID`. The
+  run lives in the command's own engine, so it needs a detached child
+  (re-exec with `Setsid`, the parent picking the run id and passing it
+  down; Windows needs its own `SysProcAttr`) that outlives the command and
+  writes the record. Left out of Phase 3; cron and the webhook cover the
+  triggers meanwhile.
+- **N-182** · raised `2026-1009-1254-phase-3-jobs-scheduler-runs` · value low
+  `dbc pipeline run NAME --preview N -t json` writes two JSON documents to
+  stdout: the preview sinks' results (collected, as a script's) and then
+  the run's stats. `jq` reads both; a single `json.load` refuses them.
+  Older than Phase 3 (seen while checking it). Put the results inside the
+  stats document, or send them to stderr under `-t json`.
 
 ## Validate
 
@@ -431,6 +445,13 @@ call.
   half exists: `jobs.Engine` runs single pipelines with a `Run` record and
   events shaped for jobs; Phase 3 adds the DAG, the scheduler, the records
   on disk and the CLI.
+  Updated `2026-1009-1254-phase-3-jobs-scheduler-runs`: Phase 3 is in — job specs and `CheckJob`, the
+  in-house cron parser, the DAG walk with the failure, parallel, overlap
+  and timeout policies, `s.RunJob`, run records in `runs_dir` (interrupted
+  by heartbeat age), the scheduler in `dbc web` (claims per fire across
+  processes), the webhook, `dbc jobs`, `dbc job run|check`, `dbc runs
+  [--sql]`, `dbc run show`. Phase 4 is next: the `dag` layout package,
+  the jobs tab, the Runs view with drilldown, and `dbc run cancel`.
 
 ## Non-goals
 

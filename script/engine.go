@@ -55,6 +55,9 @@ func newInterp() (*interp.Interpreter, error) {
 			"ParsePipeline": reflect.ValueOf(sdb.ParsePipeline),
 			"NewBatch":      reflect.ValueOf(sdb.NewBatch),
 			"ColsOf":        reflect.ValueOf(sdb.ColsOf),
+			// Jobs (sdb/jobs.go)
+			"JobRun":      reflect.ValueOf((*sdb.JobRun)(nil)),
+			"JobPipeline": reflect.ValueOf((*sdb.JobPipeline)(nil)),
 		},
 	}); err != nil {
 		return nil, serr.Wrap(err, "phase", "load sdb symbols")

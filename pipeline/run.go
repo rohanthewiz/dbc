@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -40,6 +41,24 @@ type Options struct {
 	// go to the results view, nothing is written), and actions are
 	// skipped. The way to try a transform on real data.
 	PreviewRows int
+	// Run is the run's own values, ${run.<name>} in any node's config:
+	// the host's run id, what triggered it, the job it is a step of (see
+	// RunVars). "date" and "started" default to the run's start when the
+	// host does not set them, so ${run.date} works in a script's
+	// s.RunPipeline as it does under the jobs engine.
+	Run map[string]string
+}
+
+// RunVars are the names ${run.<name>} may use, and what each holds. Check
+// refuses any other, so a typo is caught before the run rather than as an
+// "unknown reference" mid-way.
+var RunVars = map[string]string{
+	"id":      "the run's id (20261009-020000-7f3a); empty outside the jobs engine",
+	"date":    "the day the run started, YYYY-MM-DD in local time",
+	"time":    "the time the run started, HH:MM:SS in local time",
+	"started": "the instant the run started, RFC 3339",
+	"trigger": "what started it: manual, schedule, webhook, script, cli",
+	"job":     "the job this pipeline runs in; empty for a pipeline run on its own",
 }
 
 // Run runs a pipeline on h: each fragment in order, stopping at the first
@@ -58,6 +77,7 @@ func Run(ctx context.Context, h Host, spec *Spec, opt Options) (*RunStats, error
 	}
 	st := &RunStats{Pipeline: spec.Name, Status: Running, Started: time.Now(), Preview: opt.PreviewRows > 0}
 	r.stats = st
+	r.run = runValues(opt.Run, st.Started)
 	fail := func(err error) (*RunStats, error) {
 		st.Ended = time.Now()
 		st.Status = Failed
@@ -116,8 +136,31 @@ type runner struct {
 	opt    Options
 	params map[string]string
 	vars   map[string]string
+	run    map[string]string // ${run.…}: Options.Run over the defaults, keyed "run.<name>"
 	stats  *RunStats
 	log    func(string)
+}
+
+// runValues is the run's ${run.…} values, keyed as they are referenced:
+// every name in RunVars present (empty when neither the host nor a
+// default gives one, so a spec that names ${run.id} still runs from a
+// script), the clock ones from the run's start.
+func runValues(given map[string]string, started time.Time) map[string]string {
+	t := started.Local()
+	out := map[string]string{
+		"run.date":    t.Format("2006-01-02"),
+		"run.time":    t.Format("15:04:05"),
+		"run.started": t.Format(time.RFC3339),
+	}
+	for name := range RunVars {
+		if _, ok := out["run."+name]; !ok {
+			out["run."+name] = ""
+		}
+	}
+	for k, v := range given {
+		out["run."+k] = v
+	}
+	return out
 }
 
 // resolveParams settles the run's parameters: the spec's defaults, then
@@ -144,22 +187,29 @@ func (r *runner) resolveParams() error {
 }
 
 // report hands a fragment's stats to the host's Progress, as a snapshot:
-// the node slice is copied, so the runner's later counting does not move
-// what the host kept.
+// the node slice and the published values are copied, so the runner's
+// later counting — and its writes into Vars as the fragment ends — do not
+// move what the host kept, nor race the host reading it on another
+// goroutine (the jobs engine copies its records while a run goes).
 func (r *runner) report(fs FragmentStats) {
 	if r.opt.Progress == nil {
 		return
 	}
 	fs.Nodes = slices.Clone(fs.Nodes)
+	fs.Vars = maps.Clone(fs.Vars)
 	r.opt.Progress(fs)
 }
 
-// lookup resolves a ${…} reference: a param, then a published value.
+// lookup resolves a ${…} reference: a param, then a published value,
+// then a run value.
 func (r *runner) lookup(name string) (string, bool) {
 	if v, ok := r.params[name]; ok {
 		return v, true
 	}
-	v, ok := r.vars[name]
+	if v, ok := r.vars[name]; ok {
+		return v, true
+	}
+	v, ok := r.run[name]
 	return v, ok
 }
 

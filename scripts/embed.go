@@ -45,6 +45,7 @@ import (
 //go:embed copy_table.go export_report.go loop_params.go plan_check.go sweep_conns.go
 //go:embed templates/*.go
 //go:embed pipelines/*.json
+//go:embed jobs/*.json
 var files embed.FS
 
 // Example is one built-in sample script.
@@ -210,4 +211,46 @@ func PipelineByName(name string) (Pipeline, bool) {
 		}
 	}
 	return Pipeline{}, false
+}
+
+// Job is one built-in sample job (jobs/*.json): a DAG of the sample
+// pipelines, read-only and runnable by name like the pipelines. Examples
+// are never scheduled — only a job in jobs_dir is — so the sample's cron
+// line is there to copy, not to fire on every machine that runs dbc web.
+type Job struct {
+	Name string `json:"name"` // file name, with .json
+	Desc string `json:"desc"`
+	Text string `json:"-"`
+}
+
+// Jobs lists the built-in sample jobs by name.
+func Jobs() []Job {
+	ents, _ := fs.ReadDir(files, "jobs")
+	var out []Job
+	for _, e := range ents {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		bs, err := files.ReadFile("jobs/" + e.Name())
+		if err != nil {
+			continue
+		}
+		var head struct {
+			Desc string `json:"desc"`
+		}
+		_ = json.Unmarshal(bs, &head)
+		out = append(out, Job{Name: e.Name(), Desc: head.Desc, Text: string(bs)})
+	}
+	slices.SortFunc(out, func(a, b Job) int { return strings.Compare(a.Name, b.Name) })
+	return out
+}
+
+// JobByName is the sample job called name, with its text.
+func JobByName(name string) (Job, bool) {
+	for _, j := range Jobs() {
+		if j.Name == name {
+			return j, true
+		}
+	}
+	return Job{}, false
 }

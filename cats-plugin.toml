@@ -96,7 +96,8 @@ command = ["./bin/dbc", "web"]
 # dropped in Go fails the tests until it is changed here too.
 [[completions]]
 binary = "dbc"
-subcommands = ["script", "scripts", "pipeline", "pipelines", "plugins", "copy", "migrate", "explain", "erd", "dump", "web", "version"]
+subcommands = ["script", "scripts", "pipeline", "pipelines", "plugins", "job", "jobs", "runs", "run", "copy", "migrate",
+               "explain", "erd", "dump", "web", "version"]
 flags = ["--config", "-c", "--conn", "-f", "--file", "-t", "--format", "-o", "--out",
          "--tx", "-k", "--keep-going",
          "--demo", "--driver", "--dsn", "--tls", "--tls-ca", "--tls-cert", "--tls-key",
@@ -108,4 +109,5 @@ flags = ["--config", "-c", "--conn", "-f", "--file", "-t", "--format", "-o", "--
          "--exclude-table", "--exclude-table-data", "--clean", "--if-exists", "--no-owner",
          "--no-privileges", "--inserts", "--column-inserts", "--compress", "--encoding",
          "--keep-archive", "--pg-bin", "--dry-run",
+         "--job", "--pipeline", "--status", "--since", "--limit", "--sql",
          "--listen", "--no-open", "--secret", "--help", "-v", "--version"]

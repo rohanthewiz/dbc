@@ -202,7 +202,16 @@ type Config struct {
 	// PipelinesDir is where pipelines live (pipelines.go): absolute after
 	// Load, ~/.config/dbc/pipelines when the file does not say.
 	PipelinesDir string `toml:"pipelines_dir"`
-	MaxRows      int    `toml:"max_rows"` // rows fetched from the server
+	// JobsDir is where jobs live (jobs.go: DAGs of pipelines with
+	// triggers), RunsDir where each run of a job or a pipeline leaves its
+	// record; both absolute after Load, beside the scripts when the file
+	// does not say.
+	JobsDir string `toml:"jobs_dir"`
+	RunsDir string `toml:"runs_dir"`
+	// RunsKeep is how many records of each job and of each pipeline are
+	// kept, the oldest pruned after a run ends; 0 means DefaultRunsKeep.
+	RunsKeep int `toml:"runs_keep"`
+	MaxRows  int `toml:"max_rows"` // rows fetched from the server
 
 	// PGBin is the directory holding PostgreSQL's client tools (pg_dump,
 	// pg_restore) for dumps — `dbc dump` and both UIs' "Dump database…".
@@ -382,6 +391,13 @@ func (c *Config) resolveScripts(cfgDir string) {
 	var pw []string
 	c.PipelinesDir, pw = ResolvePipelinesDir(c.PipelinesDir, cfgDir)
 	warns = append(warns, pw...)
+	c.JobsDir, pw = ResolveJobsDir(c.JobsDir, cfgDir)
+	warns = append(warns, pw...)
+	c.RunsDir, pw = ResolveRunsDir(c.RunsDir, cfgDir)
+	warns = append(warns, pw...)
+	if c.RunsKeep <= 0 {
+		c.RunsKeep = DefaultRunsKeep
+	}
 	c.Warnings = append(c.Warnings, warns...)
 	if strings.TrimSpace(c.PGBin) != "" {
 		c.PGBin, warns = resolvePath("pg_bin", c.PGBin, cfgDir)

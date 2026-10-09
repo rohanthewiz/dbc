@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -150,6 +151,10 @@ func (c *checker) fragment(f *Fragment, where string, known map[string]bool) {
 		for k, v := range n.Cfg {
 			for _, ref := range Refs(v) {
 				if !refKnown(ref, known) {
+					if strings.HasPrefix(ref, "run.") {
+						c.errorf(nw+"."+k, "${%s} is not a run value (%s)", ref, runVarNames())
+						continue
+					}
 					c.errorf(nw+"."+k, "${%s} is not a parameter or an earlier fragment's value", ref)
 				}
 			}
@@ -234,11 +239,15 @@ func (c *checker) fragment(f *Fragment, where string, known map[string]bool) {
 	}
 }
 
-// refKnown reports whether ${ref} may be resolved: a param, "run.…", or
-// "frag.<earlier fragment>.<anything>".
+// refKnown reports whether ${ref} may be resolved: a param, one of the
+// RunVars as "run.<name>", or "frag.<earlier fragment>.<anything>".
 func refKnown(ref string, known map[string]bool) bool {
-	if known[ref] || strings.HasPrefix(ref, "run.") {
+	if known[ref] {
 		return true
+	}
+	if name, ok := strings.CutPrefix(ref, "run."); ok {
+		_, ok = RunVars[name]
+		return ok
 	}
 	if strings.HasPrefix(ref, "frag.") {
 		rest := strings.TrimPrefix(ref, "frag.")
@@ -247,6 +256,15 @@ func refKnown(ref string, known map[string]bool) bool {
 		}
 	}
 	return false
+}
+
+// runVarNames lists the run values for a message: "run.date, run.id, …".
+func runVarNames() string {
+	var names []string
+	for _, n := range slices.Sorted(maps.Keys(RunVars)) {
+		names = append(names, "run."+n)
+	}
+	return strings.Join(names, ", ")
 }
 
 // nodeKind is what a node builds: by its plugin, or for a Builder's Go

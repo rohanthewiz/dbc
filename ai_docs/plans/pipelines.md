@@ -11,8 +11,8 @@ pipelines inside a job; and a monitoring view for jobs, pipelines and
 fragments, with drilldown.
 
 This is a plan. The decisions table was accepted as recommended
-(2026-10-09). **Phases 1 and 2 are done** (2026-10-09): see their outcomes
-under *Phases*. The decisions table is the part to read first; everything after
+(2026-10-09). **Phases 1, 2 and 3 are done** (2026-10-09): see their
+outcomes under *Phases*. The decisions table is the part to read first; everything after
 it follows the recommended column.
 
 ## The one-paragraph version
@@ -942,6 +942,69 @@ plugin descriptors are rich enough.
   and without the secret.
 - Outcome: `nightly` runs at 02:00 while `dbc web` is up, and
   `dbc job run nightly` runs it from cron.
+
+  ✅ **Done 2026-10-09.** What landed, and where it differs from the sketch:
+  - `jobs/spec.go`: `Spec` as sketched plus job-level `params` (a step's
+    param values substitute `${param}` and `${run.…}` when it starts);
+    `root` may be left out when one step has no `after`. `CheckJob` checks
+    the DAG (Kahn), every step against its pipeline (found through
+    `CheckOptions.Find`: `pipelines_dir`, then the examples), params both
+    ways, cron lines (parse, and fire at all), the
+    zone, the policy. **No `"manual"` trigger key**: by hand (UI, CLI,
+    script) is always allowed; `webhook` is opt-in per job.
+  - `jobs/cron.go`: five fields, names, steps, macros, Vixie's
+    either-day rule. DST: a wall time the clocks skip fires at the jump, a
+    repeated one once (the search walks wall time and maps each match to
+    the earliest instant showing it).
+  - The engine (`jobs/engine.go`, `job.go`): `StartJob` beside
+    `StartPipeline` on one `Run` record shape (`Kind`, `By`,
+    `PipelineRun.After`/`Params`, `Line.Pipeline`). The readiness walk with
+    `max_parallel`, `finish_branches` / `stop`, `timeout` (a cause on the
+    walk's context), `overlap: skip | queue` (one waits at most; a queued
+    run's header says `queued`). One real run of a *pipeline* at a time
+    engine-wide, a job's steps included. New events `State` (a step's or a
+    queued run's state) and `Notice` (the scheduler's words). The sketch's
+    `StartJob(name, …)` takes a parsed spec (`JobRequest`) like
+    `StartPipeline`; `LoadJob` resolves names.
+  - `${run.id|date|time|started|trigger|job}` (`pipeline.RunVars`) work in
+    any node: `pipeline.Options.Run`, with the clock ones defaulted, and
+    `Check` now refuses an unknown `run.` name.
+  - Records (`jobs/records.go`, `userdata/runs.go`): written at the start,
+    every 2 s, when a job step starts or ends, and at the end; never for a
+    preview. **Interrupted is judged by the file's age** (a live record is
+    rewritten every 2 s; one silent for 30 s has lost its writer), not a
+    PID, so a `dbc web` starting while a cron `dbc job run` runs does not
+    mark that run dead. Listings settle such records; `Recover` (called by
+    dbc web and `dbc job run` at start) rewrites them. `runs_keep` prunes,
+    never a record another process is still writing.
+  - The scheduler (`jobs/scheduler.go`) is dbc web's only, for `jobs_dir`
+    only (never the examples), rescans the directory each minute and on a
+    save; a fire later than a minute is a miss (told, not run) unless
+    `catch_up`, which also runs the latest fire missed while dbc web was
+    down, judged by the job's newest record. Two dbc web processes on one
+    machine claim each fire with an O_EXCL file in `runs_dir/.fires`, so
+    it runs once.
+  - `s.RunJob` (`sdb/jobs.go`): sdb cannot import jobs, so the runner is a
+    hook — dbc web's workspaces get `Engine.ScriptRunner()`, any other
+    host `sdb.DefaultJobRunner`, a private engine whose lines are the
+    script's Print lines.
+  - CLI (`jobscmd.go`): `dbc jobs`, `dbc job run|check`, `dbc runs` (with
+    `--job`, `--pipeline`, `--status`, `--since`, `--limit`), `dbc runs
+    --sql` (tables `runs`, `pipelines`, `fragments`, `nodes` in a
+    throwaway bytdb file), `dbc run show` (`Run.Tree`). `dbc pipeline run`
+    now goes through an engine too, so it leaves a record. **Not done**:
+    `dbc job run --wait=false` (it needs a detached process to outlive the
+    command; raised in the next-list).
+  - dbc web (`web/jobs.go`): the store, `job-check` (with each cron line's
+    next five fires), `POST /api/v1/jobs/:name/run` (manual with the
+    session cookie, the webhook with the Bearer secret — 403 unless the
+    job sets `webhook`), `GET /api/v1/runs` filters adding the history,
+    `GET /api/v1/runs/:id` reading back from disk, window events `jobs`,
+    `job.state`, `job.notice`. The page has no jobs tab yet (Phase 4):
+    `pipelines.js` keeps job runs apart from pipeline runs and logs their
+    start and end.
+  - The example job `nightly` needed a fourth example pipeline,
+    `breed-counts`, for its fan-out.
 
 ### Phase 4 — the jobs tab and the Runs view
 

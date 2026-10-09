@@ -74,10 +74,13 @@ type FragmentStats = pipeline.FragmentStats
 type NodeStats = pipeline.NodeStats
 
 // Paths are the directories a session resolves names in: a script's
-// (script.run) and a pipeline's (RunPipelineNamed). The host sets them.
+// (script.run), a pipeline's (RunPipelineNamed), a job's (RunJob) — and
+// where a job run there leaves its record. The host sets them.
 type Paths struct {
 	ScriptsDir   string
 	PipelinesDir string
+	JobsDir      string
+	RunsDir      string
 }
 
 // NewBatch makes a batch of cols with rows; ColsOf pairs names with the

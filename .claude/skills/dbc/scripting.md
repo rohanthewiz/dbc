@@ -197,14 +197,51 @@ run|check|export NAME` (`-p k=v`, `--preview N`, `--fragment F`, `-t json`),
 - Runs outside a script go through package `jobs` (`jobs.Engine`): one per
   process, several runs at once, a `Run` record per run (fragments, node
   counters, the log, `Origin` and `Source` for the host), events
-  (`RunStarted`, `Progress` coalesced to 250 ms, `Logged`, `Preview`,
-  `RunDone`). dbc web's `Server.jobs` is one; its pipeline tab
+  (`RunStarted`, `State`, `Progress` coalesced to 250 ms, `Logged`,
+  `Preview`, `Notice`, `RunDone`). dbc web's `Server.jobs` is one; its pipeline tab
   (`web/pipelines.go`, `web/static/js/pipelines.js`) previews and runs
   through it, and the preview rows land in the asking tab's grid via
   `workspace.ShowResult`. In the browser: the web e2e step "pipeline tabs"
   (`web/e2e/pipelines_test.go`; `DBC_E2E_SHOTS=dir` keeps its screenshots).
-- The plan for the rest (jobs, scheduler, monitoring, TUI, plugin files)
-  is `ai_docs/plans/pipelines.md`.
+- **Jobs** (`jobs/spec.go`: `Spec` with `Pipelines []Step{ID, Pipeline,
+  After, Params}`, `Triggers{Schedule, TZ, CatchUp, Webhook}`,
+  `Policy{OnFailure, MaxParallel, Overlap, Timeout}`) live in
+  `~/.config/dbc/jobs/*.json` (`config.JobsDir`); one example,
+  `scripts/jobs/nightly.json`. `jobs.CheckJob` checks the DAG (Kahn: one
+  root, no cycle, all reachable), each step against its pipeline
+  (`CheckOptions.Find`, normally `jobs.PipelineFinder(dir)`: the dir, then
+  the examples), params and `${…}` (job params, `run.*` =
+  `pipeline.RunVars`), cron lines and policy. `Engine.StartJob` runs the
+  readiness walk (`jobs/job.go`); `${run.date}` etc. come from
+  `pipeline.Options.Run`. One real run of a pipeline at a time
+  engine-wide (`Engine.pipes`), one run of a job unless `overlap: queue`.
+- **Cron** (`jobs/cron.go`): five fields, Vixie's either-day rule, wall
+  clock in the job's `tz`; a skipped DST time fires at the jump, a repeated
+  one once. `Schedule.Next`/`NextN`. The scheduler (`jobs/scheduler.go`)
+  runs only in dbc web (`Server.sched`), only for `jobs_dir` (never an
+  example), rescans every minute and on `Reload`; a fire later than a
+  minute is a miss unless `catch_up`; a fire is claimed with an O_EXCL
+  file in `runs_dir/.fires`, so two dbc web processes run it once.
+  `Scheduler.Step` drives it in tests with a fake clock.
+- **Records** (`jobs/records.go`, `userdata/runs.go`): one JSON per run in
+  `runs_dir/<kind>/<name>/<id>.json`, written at start, every
+  `FlushEvery` (2s) and at the end; a `running` record not rewritten for
+  `StaleAfter` (30s) is `interrupted` (`settle` on read, `Recover`
+  rewrites; hosts call it at start); `runs_keep` prunes. Previews are never
+  recorded. `Engine.History(filter)`, `Get` falls back to disk,
+  `Run.Tree()` is the text drilldown.
+- **s.RunJob** (`sdb/jobs.go`): runs on the session's `WithJobs` runner
+  (dbc web hands `Engine.ScriptRunner()` to every workspace), else
+  `sdb.DefaultJobRunner`, which package jobs sets to a private engine.
+  `sdb` cannot import `jobs`; that is why it is a hook.
+- dbc web: `web/jobs.go` (store, `job-check` with each cron line's next five
+  fires, `POST /api/v1/jobs/:name/run` = manual with the cookie, webhook
+  with the Bearer secret and only for `triggers.webhook`),
+  `GET /api/v1/runs?kind=&name=&status=&since=&limit=` adds the history;
+  window events `jobs`, `job.state`, `job.notice`. The page has no jobs tab
+  yet: `pipelines.js` keeps job runs apart and logs their start and end.
+- The plan for the rest (the jobs tab and Runs view, the TUI, plugin
+  files) is `ai_docs/plans/pipelines.md`.
 
 ## yaegi pitfalls
 

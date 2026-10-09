@@ -1,27 +1,39 @@
-// Package jobs runs pipelines outside any workspace: one engine per
-// process, which several runs share at once, with a record of each run
-// (its fragments, their node counters, its log) and a stream of events a
-// host turns into its own messages.
+// Package jobs runs pipelines and jobs outside any workspace: one engine
+// per process, which several runs share at once, with a record of each run
+// (its pipelines, their fragments' node counters, its log) kept in memory
+// and on disk, and a stream of events a host turns into its own messages.
 //
 // WHY NOT A WORKSPACE'S RUN SLOT. A query tab runs one thing at a time and
 // is busy while it does; a pipeline can run for an hour, and a load that
 // ties up the tab it was started from — or that dies with it — is the
 // wrong shape. So a run belongs to the engine, which the host owns for its
-// whole life (dbc web's Server), and the tab that started it is only an
-// Origin: where its preview results are shown, and what its Stop stops.
+// whole life (dbc web's Server, `dbc job run`), and the tab that started it
+// is only an Origin: where its preview results are shown, and what its
+// Stop stops.
 //
-//	host ──StartPipeline(Request)──► Engine ──go──► pipeline.Run on its own sdb.S
-//	  ▲                                │                 │
-//	  │                                │ Progress (per batch, coalesced)
-//	  │                                │ Line     (the run's log, s.Print)
-//	  └───────────── Sink(Event) ◄─────┤ Preview  (a preview sink's rows)
-//	                                   │ RunStarted / RunDone
-//	host ──Cancel(id)──► the run's context ──► the runner stops, every sink rolls back
+//	host ──StartPipeline / StartJob──► Engine ──go──► pipeline.Run, each on its own sdb.S
+//	  ▲                                  │                    │
+//	  │                                  │ State    (a run's or a job step's state)
+//	  │                                  │ Progress (per batch, coalesced)
+//	  │                                  │ Logged   (the run's log, s.Print)
+//	  └──────────── Sink(Event) ◄────────┤ Preview  (a preview sink's rows)
+//	                                     │ RunStarted / RunDone
+//	host ──Cancel(id)──► the run's context ──► the runners stop, every sink rolls back
 //
-// This is the engine's first half (Phase 2 of ai_docs/plans/pipelines.md):
-// single pipelines, run by hand or as a preview, their records kept in
-// memory. Jobs — DAGs of pipelines, schedules, run records on disk — are
-// Phase 3, and build on the Run record and events here.
+// A run is one of two kinds:
+//
+//	pipeline   one pipeline (StartPipeline): the pipeline tab's Run and
+//	           Preview, `dbc pipeline run` through a host's engine
+//	job        a DAG of pipelines (StartJob, job.go): one root, fan-out
+//	           and fan-in, a failure policy, run by hand, on a schedule
+//	           (scheduler.go), from a webhook or from a script
+//
+// Either way the Run record has one PipelineRun per pipeline, so a host
+// draws both from the same shape. Records go to disk (records.go) when the
+// engine has a runs directory — at the start, every few seconds while
+// running, and at the end — so another process can list them and a crash
+// leaves a partial record, which the next engine marks interrupted.
+// Previews are never written: they change nothing and come by the dozen.
 package jobs
 
 import (
@@ -49,13 +61,20 @@ import (
 	"github.com/rohanthewiz/dbc/sdb"
 )
 
-// Kinds of run. Phase 3 adds "job".
-const KindPipeline = "pipeline"
+// Kinds of run.
+const (
+	KindPipeline = "pipeline"
+	KindJob      = "job"
+)
 
 // Triggers: what started a run.
 const (
-	TriggerManual  = "manual"  // a person: the pipeline tab's Run
-	TriggerPreview = "preview" // the Preview button: nothing is written
+	TriggerManual   = "manual"   // a person: a tab's Run, the jobs API from the page
+	TriggerPreview  = "preview"  // the Preview button: nothing is written
+	TriggerSchedule = "schedule" // a cron line, fired by dbc web's scheduler
+	TriggerWebhook  = "webhook"  // POST /api/v1/jobs/:name/run with the Bearer secret
+	TriggerScript   = "script"   // a script's s.RunJob
+	TriggerCLI      = "cli"      // dbc job run, from a shell or cron
 )
 
 // Run is one run's record: what was run, by what, and how it went, down to
@@ -65,12 +84,15 @@ const (
 type Run struct {
 	ID   string `json:"id"` // 20261009-020000-7f3a: sorts by start, unique enough per machine
 	Kind string `json:"kind"`
-	Name string `json:"name"` // the pipeline's
-	// Source is where the spec came from, as the host names it — dbc web's
-	// pipeline file name ("orders.json") — so a host can tie the run to
-	// what edits that file; "" when it was not given.
-	Source   string            `json:"source,omitempty"`
-	Trigger  string            `json:"trigger"`
+	Name string `json:"name"` // the pipeline's, or the job's
+	// Source is where the spec came from, as the host names it — the
+	// pipeline or job file's name ("orders.json") — so a host can tie the
+	// run to what edits that file; "" when it was not given.
+	Source  string `json:"source,omitempty"`
+	Trigger string `json:"trigger"`
+	// By says more about the trigger: the cron line that fired, the
+	// script that called s.RunJob, the webhook's caller.
+	By       string            `json:"by,omitempty"`
 	Params   map[string]string `json:"params,omitempty"`
 	Fragment string            `json:"fragment,omitempty"` // only this fragment ran
 	Preview  int               `json:"preview,omitempty"`  // rows per preview; 0 for a real run
@@ -82,26 +104,31 @@ type Run struct {
 	Ended   time.Time       `json:"ended"`
 	Status  pipeline.Status `json:"status"`
 	Error   string          `json:"error,omitempty"`
-	// Pipelines is the run's pipelines: one for a pipeline run; a job's,
-	// in its order, once jobs exist.
+	// Pipelines is the run's pipelines: one for a pipeline run; a job's
+	// steps in its spec's order, each queued from the start.
 	Pipelines []PipelineRun `json:"pipelines"`
 	// Log is the run's log, oldest first, the newest MaxLogLines kept.
 	// Left out of the events (a host already has the lines one by one).
 	Log []Line `json:"log,omitempty"`
 }
 
-// PipelineRun is one pipeline's part of a run. ID is its node id in a job,
-// and the pipeline's name for a bare pipeline run.
+// PipelineRun is one pipeline's part of a run. ID is its step id in a job,
+// and the pipeline's name for a bare pipeline run; After and Params are a
+// job step's (the params as substituted when it started).
 type PipelineRun struct {
-	ID string `json:"id"`
+	ID     string            `json:"id"`
+	After  []string          `json:"after,omitempty"`
+	Params map[string]string `json:"params,omitempty"`
 	pipeline.RunStats
 }
 
-// Line is one line of a run's log.
+// Line is one line of a run's log. Pipeline is the PipelineRun it came
+// from — a job's step — or "" for the run's own lines.
 type Line struct {
-	At    time.Time `json:"at"`
-	Level string    `json:"level"` // "info", "err"
-	Text  string    `json:"text"`
+	At       time.Time `json:"at"`
+	Level    string    `json:"level"` // "info", "err"
+	Pipeline string    `json:"pipeline,omitempty"`
+	Text     string    `json:"text"`
 }
 
 // MaxLogLines bounds a run's kept log; the host saw every line as it came.
@@ -114,19 +141,31 @@ type Request struct {
 	Fragment    string // only this fragment; "" for all
 	PreviewRows int    // > 0: a preview of that many rows (pipeline.Options.PreviewRows)
 	Trigger     string // TriggerManual when ""
+	By          string // see Run.By
 	Origin      string // see Run.Origin
 	Source      string // see Run.Source
 }
 
 // Events. Every event names its run; the engine sends one run's events in
 // the order they happened (one lock per run orders them), from the run's
-// goroutine or its progress ticker — never while holding the engine's own
+// goroutines or its progress ticker — never while holding the engine's own
 // lock, so a Sink may call back into the engine (Get, Running).
 type Event interface{ RunID() string }
 
-// RunStarted: a run was accepted and is starting. Run is its header, its
-// fragments queued.
+// RunStarted: a run was accepted. Run is its header, every pipeline and
+// fragment listed queued — and for a job queued behind another run of it
+// (overlap: queue), its own status queued too.
 type RunStarted struct{ Run Run }
+
+// State: a run, or one of its pipelines, changed state. Pipeline "" is the
+// run itself (a queued job run starting); otherwise the PipelineRun's ID —
+// a job step starting, ending, or skipped because one before it failed.
+type State struct {
+	Run      string          `json:"run"`
+	Pipeline string          `json:"pipeline,omitempty"`
+	Status   pipeline.Status `json:"status"`
+	Error    string          `json:"error,omitempty"`
+}
 
 // Progress: a fragment's counters, or its state, moved. A state change
 // (running, succeeded, …) is sent at once; batch counters at most every
@@ -138,7 +177,7 @@ type Progress struct {
 }
 
 // Logged: a line of the run's log — the runner's own, a node's Logf, a Go
-// node's s.Print, the DDL log.
+// node's s.Print, the DDL log, a job's step starting.
 type Logged struct {
 	Run      string `json:"run"`
 	Pipeline string `json:"pipeline"`
@@ -154,30 +193,61 @@ type Preview struct {
 	Result   *model.Result
 }
 
+// Notice: something the engine has to say that belongs to no run — a
+// scheduled start skipped because the last one still runs, a job file that
+// no longer parses, a record that could not be written. RunID is "" (or
+// the run's, for a record).
+type Notice struct {
+	Run   string `json:"run,omitempty"`
+	Job   string `json:"job,omitempty"`
+	Level string `json:"level"` // "info", "warn", "err"
+	Text  string `json:"text"`
+}
+
 // RunDone: the run ended; Run is its final record, without the log.
 type RunDone struct{ Run Run }
 
 func (e *RunStarted) RunID() string { return e.Run.ID }
+func (e *State) RunID() string      { return e.Run }
 func (e *Progress) RunID() string   { return e.Run }
 func (e *Logged) RunID() string     { return e.Run }
 func (e *Preview) RunID() string    { return e.Run }
+func (e *Notice) RunID() string     { return e.Run }
 func (e *RunDone) RunID() string    { return e.Run.ID }
 
 // Options configure an Engine.
 type Options struct {
 	// Sink receives every event; nil drops them.
 	Sink func(Event)
-	// Keep is how many finished runs stay in memory for Get and Runs;
-	// 0 means 50. (Phase 3 keeps records on disk as well.)
+	// Keep is how many finished runs stay in memory for Get and Recent;
+	// 0 means 50. (Older ones are read back from RunsDir.)
 	Keep int
 	// ProgressEvery is the coalescing period for batch counters; 0 means
 	// 250ms, the hosts' tick.
 	ProgressEvery time.Duration
+	// RunsDir, when set, is where each run's record is written
+	// (userdata.SaveRun); "" keeps records in memory only. RunsKeep is how
+	// many records of each job and pipeline stay there; 0 means
+	// config.DefaultRunsKeep.
+	RunsDir  string
+	RunsKeep int
+	// FlushEvery is how often a live run's record is rewritten; 0 means
+	// 2s. It is also the heartbeat by which another process tells a live
+	// record from a dead one: see StaleAfter.
+	FlushEvery time.Duration
+	// StaleAfter is how long a "running" record may go unwritten before it
+	// is taken for one whose process is gone (Recover, listings); 0 means
+	// 30s, fifteen missed flushes.
+	StaleAfter time.Duration
+	// Find resolves a job step's pipeline by name; nil is
+	// PipelineFinder(cfg.PipelinesDir): the user's file, then an example.
+	Find func(name string) (*pipeline.Spec, error)
 }
 
 // ErrBusy is a start refused because what it would run is running: the
-// same pipeline, or another run from the same origin. ErrClosed is a start
-// after Close. Hosts map ErrBusy to "conflict".
+// same pipeline, the same job (overlap: skip), or another run from the
+// same origin. ErrClosed is a start after Close. Hosts map ErrBusy to
+// "conflict".
 var (
 	ErrBusy   = errors.New("already running")
 	ErrClosed = errors.New("the engine is shutting down")
@@ -199,7 +269,7 @@ func BusyRun(err error) string {
 	return ""
 }
 
-// Engine runs pipelines, several at once, outside any workspace.
+// Engine runs pipelines and jobs, several at once, outside any workspace.
 type Engine struct {
 	cfg *config.Config
 	mgr *db.Manager
@@ -210,27 +280,47 @@ type Engine struct {
 	done   []*Run // finished, oldest first, at most opt.Keep
 	closed bool
 	wg     sync.WaitGroup
+	// pipes is the pipelines a real run holds now, by spec name, to the
+	// run (and step) holding it: one load of a pipeline at a time,
+	// whether it was started alone or as a job's step
+	pipes map[string]holder
+	// jobLast is each job's latest accepted live run — running, or queued
+	// behind the one before (overlap: queue)
+	jobLast map[string]*liveRun
 }
+
+// holder is who holds a pipeline: a run, and in a job the step.
+type holder struct{ run, step, job string }
 
 // liveRun is a run in flight.
 type liveRun struct {
+	id     string // the record's ID, fixed at the start
 	cancel context.CancelFunc
 	done   chan struct{} // closed once the run has ended and its record is final
 
-	// mu guards rec, which the run's goroutine fills and Get copies
+	// mu guards rec, which the run's goroutines fill and Get copies
 	mu  sync.Mutex
 	rec Run
 
 	// emitMu orders the run's events, and guards the progress coalescing:
-	// pending is the latest snapshot per fragment not sent yet, sent the
-	// state last sent per fragment
+	// pending is the latest snapshot per pipeline and fragment not sent
+	// yet, sent the state last sent for each
 	emitMu  sync.Mutex
-	pending map[string]pipeline.FragmentStats
+	pending map[string]*Progress
 	sent    map[string]pipeline.Status
+	// saveFailed is set (under mu) after a record write failed and was
+	// reported, so a run on a full disk says so once, not every flush
+	saveFailed bool
+}
+
+func newLive(id string, cancel context.CancelFunc) *liveRun {
+	return &liveRun{id: id, cancel: cancel, done: make(chan struct{}),
+		pending: map[string]*Progress{}, sent: map[string]pipeline.Status{}}
 }
 
 // New makes an engine over the host's config and connections. It starts
-// nothing.
+// nothing; a host with a runs directory calls Recover once to settle the
+// records a crash left behind.
 func New(cfg *config.Config, mgr *db.Manager, opt Options) *Engine {
 	if opt.Keep <= 0 {
 		opt.Keep = 50
@@ -238,29 +328,36 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Engine {
 	if opt.ProgressEvery <= 0 {
 		opt.ProgressEvery = 250 * time.Millisecond
 	}
-	return &Engine{cfg: cfg, mgr: mgr, opt: opt, live: map[string]*liveRun{}}
+	if opt.RunsKeep <= 0 {
+		opt.RunsKeep = config.DefaultRunsKeep
+	}
+	if opt.FlushEvery <= 0 {
+		opt.FlushEvery = 2 * time.Second
+	}
+	if opt.StaleAfter <= 0 {
+		opt.StaleAfter = 30 * time.Second
+	}
+	if opt.Find == nil {
+		opt.Find = PipelineFinder(cfg.PipelinesDir)
+	}
+	return &Engine{cfg: cfg, mgr: mgr, opt: opt, live: map[string]*liveRun{},
+		pipes: map[string]holder{}, jobLast: map[string]*liveRun{}}
 }
 
 // StartPipeline starts a run of req.Spec and returns its header at once;
 // the run goes on in the background and reports through the Sink.
 //
 // Refused, with nothing started: a spec Check finds errors in (the error
-// lists them), a second real run of a pipeline already running — two loads
-// into the same table — and a second run from an origin that has one
-// going (a tab's grid and Stop belong to one run at a time). Previews of a
-// running pipeline are allowed: they write nothing.
+// lists them), a second real run of a pipeline already running — alone or
+// as a job's step: two loads into the same table — and a second run from
+// an origin that has one going (a tab's grid and Stop belong to one run at
+// a time). Previews of a running pipeline are allowed: they write nothing.
 func (e *Engine) StartPipeline(req Request) (Run, error) {
 	if req.Spec == nil {
 		return Run{}, serr.New("no pipeline to run")
 	}
 	if diags := pipeline.Check(req.Spec, pipeline.CheckOptions{}); pipeline.HasError(diags) {
-		var msgs []string
-		for _, d := range diags {
-			if d.Severity == pipeline.SevError {
-				msgs = append(msgs, d.String())
-			}
-		}
-		return Run{}, serr.New("the pipeline does not check out: "+strings.Join(msgs, "; "), "pipeline", req.Spec.Name)
+		return Run{}, serr.New("the pipeline does not check out: "+errorDiags(diags), "pipeline", req.Spec.Name)
 	}
 	if req.Trigger == "" {
 		req.Trigger = TriggerManual
@@ -273,36 +370,28 @@ func (e *Engine) StartPipeline(req Request) (Run, error) {
 	spec := req.Spec.Clone()
 	ctx, cancel := context.WithCancel(context.Background())
 	now := time.Now()
-	lr := &liveRun{cancel: cancel, done: make(chan struct{}),
-		pending: map[string]pipeline.FragmentStats{}, sent: map[string]pipeline.Status{}}
+	lr := newLive(newID(now), cancel)
 	lr.rec = Run{
-		ID: newID(now), Kind: KindPipeline, Name: spec.Name, Source: req.Source, Trigger: req.Trigger,
+		ID: lr.id, Kind: KindPipeline, Name: spec.Name, Source: req.Source, Trigger: req.Trigger, By: req.By,
 		Params: maps.Clone(req.Params), Fragment: req.Fragment, Preview: req.PreviewRows,
 		Origin: req.Origin, Started: now, Status: pipeline.Running,
 		Pipelines: []PipelineRun{{ID: spec.Name, RunStats: queued(spec, now, req.PreviewRows > 0)}},
 	}
 
 	e.mu.Lock()
-	if e.closed {
+	if err := e.admitLocked(req.Origin); err != nil {
 		e.mu.Unlock()
 		cancel()
-		return Run{}, ErrClosed
+		return Run{}, err
 	}
-	for _, other := range e.live {
-		o := other.header()
-		switch {
-		case req.Origin != "" && o.Origin == req.Origin:
+	if req.PreviewRows == 0 {
+		if err := e.holdLocked(spec.Name, holder{run: lr.id}); err != nil {
 			e.mu.Unlock()
 			cancel()
-			return Run{}, &busyError{msg: fmt.Sprintf("this tab is still running %s %s — stop it first", what(o), o.Name), run: o.ID}
-		case req.PreviewRows == 0 && o.Preview == 0 && o.Name == spec.Name:
-			e.mu.Unlock()
-			cancel()
-			return Run{}, &busyError{msg: fmt.Sprintf("%s is already running (since %s) — one run of a pipeline at a time",
-				o.Name, o.Started.Format("15:04:05")), run: o.ID}
+			return Run{}, err
 		}
 	}
-	e.live[lr.rec.ID] = lr
+	e.live[lr.id] = lr
 	e.wg.Add(1)
 	e.mu.Unlock()
 
@@ -312,10 +401,69 @@ func (e *Engine) StartPipeline(req Request) (Run, error) {
 	return head, nil
 }
 
+// admitLocked refuses a start the engine cannot take: after Close, or from
+// an origin with a run going. Under e.mu.
+func (e *Engine) admitLocked(origin string) error {
+	if e.closed {
+		return ErrClosed
+	}
+	if origin == "" {
+		return nil
+	}
+	for _, other := range e.live {
+		if o := other.header(); o.Origin == origin {
+			return &busyError{msg: fmt.Sprintf("this tab is still running %s %s — stop it first", what(o), o.Name), run: o.ID}
+		}
+	}
+	return nil
+}
+
+// holdLocked takes pipeline name for h, or refuses: one real run of a
+// pipeline at a time. Under e.mu.
+func (e *Engine) holdLocked(name string, h holder) error {
+	cur, held := e.pipes[name]
+	if !held {
+		e.pipes[name] = h
+		return nil
+	}
+	since := ""
+	if lr := e.live[cur.run]; lr != nil {
+		since = " (since " + lr.header().Started.Format("15:04:05") + ")"
+	}
+	if cur.job != "" {
+		return &busyError{msg: fmt.Sprintf("%s is already running as step %s of job %s%s — one run of a pipeline at a time",
+			name, cur.step, cur.job, since), run: cur.run}
+	}
+	return &busyError{msg: fmt.Sprintf("%s is already running%s — one run of a pipeline at a time", name, since), run: cur.run}
+}
+
+// release lets go of pipeline name if h holds it.
+func (e *Engine) release(name string, h holder) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.pipes[name] == h {
+		delete(e.pipes, name)
+	}
+}
+
+// errorDiags joins a check's errors for a refusal's message.
+func errorDiags(diags []pipeline.Diag) string {
+	var msgs []string
+	for _, d := range diags {
+		if d.Severity == pipeline.SevError {
+			msgs = append(msgs, d.String())
+		}
+	}
+	return strings.Join(msgs, "; ")
+}
+
 // what names a run's kind for a message.
 func what(r Run) string {
-	if r.Preview > 0 {
+	switch {
+	case r.Preview > 0:
 		return "a preview of"
+	case r.Kind == KindJob:
+		return "the job"
 	}
 	return "the pipeline"
 }
@@ -335,43 +483,65 @@ func queued(spec *pipeline.Spec, now time.Time, preview bool) pipeline.RunStats 
 	return st
 }
 
-// execute is a run's goroutine: its own session over the shared
-// connections, the runner, then the record made final.
+// execute is a pipeline run's goroutine: the pipeline on its own session,
+// then the record made final.
 func (e *Engine) execute(ctx context.Context, lr *liveRun, spec *pipeline.Spec, req Request) {
 	defer e.wg.Done()
-	id, pid := lr.rec.ID, lr.rec.Pipelines[0].ID
-	line := func(level, text string) {
-		l := Line{At: time.Now(), Level: level, Text: text}
-		lr.mu.Lock()
-		lr.rec.Log = append(lr.rec.Log, l)
-		if over := len(lr.rec.Log) - MaxLogLines; over > 0 {
-			lr.rec.Log = slices.Delete(lr.rec.Log, 0, over)
-		}
-		lr.mu.Unlock()
-		e.emit(lr, &Logged{Run: id, Pipeline: pid, Line: l})
+	stop := e.background(lr)
+	st, err := e.runOne(ctx, lr, 0, spec, pipeline.Options{
+		Params: req.Params, Fragment: req.Fragment, PreviewRows: req.PreviewRows,
+		Run: e.runVars(lr, ""),
+	}, req.Origin)
+	stop()
+	status := pipeline.Failed
+	if st != nil && st.Status != "" && st.Status != pipeline.Running {
+		status = st.Status
 	}
-	// The session a script gets: Query, Print and Show for Go nodes, the
-	// DDL log on (as script.Run turns it on for every script), and Release
-	// at the end, so a node that failed mid-load never leaves a Writer's
-	// transaction open on a pooled connection.
+	msg := ""
+	if err != nil {
+		msg = errText(err)
+	}
+	e.finish(lr, status, msg)
+}
+
+// runVars is the ${run.…} values of a run's pipelines: its id and trigger,
+// its start's date and time (the run's, not each step's, so every step of
+// a job sees the same day), and the job's name when it is one.
+func (e *Engine) runVars(lr *liveRun, job string) map[string]string {
+	h := lr.header()
+	t := h.Started.Local()
+	return map[string]string{
+		"id": h.ID, "trigger": h.Trigger, "job": job,
+		"date": t.Format("2006-01-02"), "time": t.Format("15:04:05"), "started": t.Format(time.RFC3339),
+	}
+}
+
+// runOne runs one pipeline of a run — the run's only one, or a job's step
+// at index idx — on its own session over the shared connections, and puts
+// its outcome into the record. The session is a script's: Query, Print
+// and Show for Go nodes, the DDL log on (as script.Run turns it on for
+// every script), and Release at the end, so a node that failed mid-load
+// never leaves a Writer's transaction open on a pooled connection.
+func (e *Engine) runOne(ctx context.Context, lr *liveRun, idx int, spec *pipeline.Spec, opt pipeline.Options, origin string) (*pipeline.RunStats, error) {
+	lr.mu.Lock()
+	pid := lr.rec.Pipelines[idx].ID
+	preview := lr.rec.Preview > 0
+	lr.mu.Unlock()
+	line := func(level, text string) { e.line(lr, pid, level, text) }
 	s := sdb.New(e.mgr,
 		func(r *model.Result) {
 			if r != nil {
-				e.emit(lr, &Preview{Run: id, Origin: req.Origin, Pipeline: pid, Result: r})
+				e.emit(lr, &Preview{Run: lr.id, Origin: origin, Pipeline: pid, Result: r})
 			}
 		},
 		func(msg string) { line("info", msg) },
-	).WithContext(ctx).WithPaths(sdb.Paths{ScriptsDir: e.cfg.ScriptsDir, PipelinesDir: e.cfg.PipelinesDir})
+	).WithContext(ctx).WithPaths(e.paths())
 	s.LogDDL()
 
-	stopTick := e.tick(lr, id, pid)
-	st, err := pipeline.Run(ctx, s, spec, pipeline.Options{
-		Params: req.Params, Fragment: req.Fragment, PreviewRows: req.PreviewRows,
-		Log:      func(text string) { line("info", text) },
-		Progress: func(f pipeline.FragmentStats) { e.progress(lr, id, pid, f) },
-	})
+	opt.Log = func(text string) { line("info", text) }
+	opt.Progress = func(f pipeline.FragmentStats) { e.progress(lr, idx, pid, f) }
+	st, err := pipeline.Run(ctx, s, spec, opt)
 	s.Release()
-	stopTick()
 	if err != nil {
 		// the runner logs a success's summary itself; a failure's is ours
 		level, verb := "err", "failed"
@@ -379,32 +549,82 @@ func (e *Engine) execute(ctx context.Context, lr *liveRun, spec *pipeline.Spec, 
 			level, verb = "info", "stopped"
 		}
 		kind := "pipeline"
-		if req.PreviewRows > 0 {
+		if preview {
 			kind = "preview of"
 		}
 		line(level, fmt.Sprintf("%s %s %s: %s", kind, spec.Name, verb, errText(err)))
 	}
 
 	lr.mu.Lock()
-	p := &lr.rec.Pipelines[0]
+	p := &lr.rec.Pipelines[idx]
 	if st != nil {
 		final := *st
 		final.Fragments = mergeFragments(p.Fragments, st.Fragments)
 		p.RunStats = final
+	} else {
+		p.Status = pipeline.Failed
 	}
+	if p.Status == "" || p.Status == pipeline.Running {
+		p.Status = pipeline.Failed
+	}
+	if err != nil && p.Error == "" {
+		p.Error = errText(err)
+	}
+	if p.Ended.IsZero() {
+		p.Ended = time.Now()
+	}
+	lr.mu.Unlock()
+	return st, err
+}
+
+// paths is where a run's sessions resolve names, and where a script run by
+// a script.run node would find its jobs (s.RunJob inside a node).
+func (e *Engine) paths() sdb.Paths {
+	return sdb.Paths{ScriptsDir: e.cfg.ScriptsDir, PipelinesDir: e.cfg.PipelinesDir,
+		JobsDir: e.cfg.JobsDir, RunsDir: e.opt.RunsDir}
+}
+
+// line appends a line to the run's log and sends it.
+func (e *Engine) line(lr *liveRun, pid, level, text string) {
+	l := Line{At: time.Now(), Level: level, Pipeline: pid, Text: text}
+	lr.mu.Lock()
+	lr.rec.Log = append(lr.rec.Log, l)
+	if over := len(lr.rec.Log) - MaxLogLines; over > 0 {
+		lr.rec.Log = slices.Delete(lr.rec.Log, 0, over)
+	}
+	lr.mu.Unlock()
+	e.emit(lr, &Logged{Run: lr.id, Pipeline: pid, Line: l})
+}
+
+// finish makes a run's record final: its status and error, the record
+// written (and the older ones of its name pruned), its place in memory
+// moved from live to done, what it held let go, RunDone sent — and only
+// then done closed, so whoever Waits sees the event has gone out. A Sink
+// calling Wait from RunDone does not block, as the run has left e.live.
+func (e *Engine) finish(lr *liveRun, status pipeline.Status, msg string) {
+	lr.mu.Lock()
 	lr.rec.Ended = time.Now()
-	lr.rec.Status = p.Status
-	if lr.rec.Status == "" || lr.rec.Status == pipeline.Running {
-		lr.rec.Status = pipeline.Failed
-	}
-	if err != nil {
-		lr.rec.Error = errText(err)
+	lr.rec.Status = status
+	if msg != "" {
+		lr.rec.Error = msg
 	}
 	final := lr.rec.clone()
 	lr.mu.Unlock()
+	if e.recording(&final) {
+		e.save(lr, &final)
+		e.prune(final.Kind, final.Name)
+	}
 
 	e.mu.Lock()
-	delete(e.live, id)
+	delete(e.live, lr.id)
+	for name, h := range e.pipes {
+		if h.run == lr.id {
+			delete(e.pipes, name)
+		}
+	}
+	if e.jobLast[final.Name] == lr {
+		delete(e.jobLast, final.Name)
+	}
 	e.done = append(e.done, &final)
 	if over := len(e.done) - e.opt.Keep; over > 0 {
 		e.done = slices.Delete(e.done, 0, over)
@@ -412,9 +632,6 @@ func (e *Engine) execute(ctx context.Context, lr *liveRun, spec *pipeline.Spec, 
 	e.mu.Unlock()
 	lr.cancel()
 
-	// RunDone before done is closed, so whoever Waits sees the event has
-	// gone out; a Sink calling Wait from RunDone does not block, as the run
-	// has left e.live by now
 	out := final.clone()
 	out.Log = nil
 	e.emit(lr, &RunDone{Run: out})
@@ -434,50 +651,68 @@ func mergeFragments(queued, ran []pipeline.FragmentStats) []pipeline.FragmentSta
 	return out
 }
 
-// progress takes one fragment snapshot from the runner: into the record,
-// and out as an event — at once when the fragment's state changed, else
-// left for the ticker, which sends the latest.
-func (e *Engine) progress(lr *liveRun, id, pid string, f pipeline.FragmentStats) {
+// progress takes one fragment snapshot from a runner: into the record, and
+// out as an event — at once when the fragment's state changed, else left
+// for the ticker, which sends the latest.
+func (e *Engine) progress(lr *liveRun, idx int, pid string, f pipeline.FragmentStats) {
 	lr.mu.Lock()
-	frags := lr.rec.Pipelines[0].Fragments
+	frags := lr.rec.Pipelines[idx].Fragments
 	if i := slices.IndexFunc(frags, func(x pipeline.FragmentStats) bool { return x.Name == f.Name }); i >= 0 {
 		frags[i] = f
 	}
 	lr.mu.Unlock()
 
+	key := pid + "\x00" + f.Name
+	ev := &Progress{Run: lr.id, Pipeline: pid, Fragment: f}
 	lr.emitMu.Lock()
 	defer lr.emitMu.Unlock()
-	if lr.sent[f.Name] != f.Status {
+	if lr.sent[key] != f.Status {
 		// a newer snapshot than anything pending for it: that goes stale
-		delete(lr.pending, f.Name)
-		lr.sent[f.Name] = f.Status
-		e.send(&Progress{Run: id, Pipeline: pid, Fragment: f})
+		delete(lr.pending, key)
+		lr.sent[key] = f.Status
+		e.send(ev)
 		return
 	}
-	lr.pending[f.Name] = f
+	lr.pending[key] = ev
 }
 
-// tick sends a run's pending progress every ProgressEvery until stopped.
-// The returned func stops it and waits for it to be gone, so nothing it
-// sends can follow the run's RunDone.
-func (e *Engine) tick(lr *liveRun, id, pid string) func() {
+// background starts a run's helpers — the progress ticker, and the record
+// flusher when the run is recorded — and returns the func that stops them
+// and waits for them to be gone, so nothing they send or write can follow
+// the run's final record.
+func (e *Engine) background(lr *liveRun) func() {
 	stop, gone := make(chan struct{}), make(chan struct{})
+	head := lr.header()
+	rec := e.recording(&head)
+	if rec {
+		e.save(lr, &head) // at once: a queued or brand-new run is listed by others
+	}
 	go func() {
 		defer close(gone)
 		t := time.NewTicker(e.opt.ProgressEvery)
 		defer t.Stop()
+		var flush <-chan time.Time
+		if rec {
+			ft := time.NewTicker(e.opt.FlushEvery)
+			defer ft.Stop()
+			flush = ft.C
+		}
 		for {
 			select {
 			case <-stop:
 				return
 			case <-t.C:
 				lr.emitMu.Lock()
-				names := slices.Sorted(maps.Keys(lr.pending))
-				for _, n := range names {
-					e.send(&Progress{Run: id, Pipeline: pid, Fragment: lr.pending[n]})
+				for _, k := range slices.Sorted(maps.Keys(lr.pending)) {
+					e.send(lr.pending[k])
 				}
 				clear(lr.pending)
 				lr.emitMu.Unlock()
+			case <-flush:
+				lr.mu.Lock()
+				snap := lr.rec.clone()
+				lr.mu.Unlock()
+				e.save(lr, &snap)
 			}
 		}
 	}()
@@ -514,6 +749,8 @@ func (r *Run) clone() Run {
 	c.Pipelines = make([]PipelineRun, len(r.Pipelines))
 	for i, p := range r.Pipelines {
 		cp := p
+		cp.After = slices.Clone(p.After)
+		cp.Params = maps.Clone(p.Params)
 		cp.Fragments = make([]pipeline.FragmentStats, len(p.Fragments))
 		for j, f := range p.Fragments {
 			cf := f
@@ -527,17 +764,20 @@ func (r *Run) clone() Run {
 	return c
 }
 
-// Cancel stops a running run: its context is canceled, the fragment in
-// flight rolls every sink back, and RunDone follows with status canceled.
-// A run already finished is not an error (it lost the race); an unknown id
-// is.
+// Cancel stops a run: its context is canceled, every fragment in flight
+// rolls its sinks back, a job's steps not started yet are skipped, and
+// RunDone follows with status canceled. A run already finished is not an
+// error (it lost the race); an unknown id is.
 func (e *Engine) Cancel(id string) error {
 	e.mu.Lock()
 	lr, live := e.live[id]
 	known := live || slices.ContainsFunc(e.done, func(r *Run) bool { return r.ID == id })
 	e.mu.Unlock()
 	if !known {
-		return serr.New("no such run", "run", id)
+		if _, ok := e.fromDisk(id); !ok {
+			return serr.New("no such run", "run", id)
+		}
+		return nil
 	}
 	if live {
 		lr.cancel()
@@ -545,8 +785,8 @@ func (e *Engine) Cancel(id string) error {
 	return nil
 }
 
-// Get is a run's record — live or among the finished ones kept — with its
-// log.
+// Get is a run's record — live, among the finished ones kept, or read back
+// from the runs directory — with its log.
 func (e *Engine) Get(id string) (Run, bool) {
 	e.mu.Lock()
 	lr, live := e.live[id]
@@ -567,7 +807,7 @@ func (e *Engine) Get(id string) (Run, bool) {
 	case fin != nil:
 		return fin.clone(), true
 	}
-	return Run{}, false
+	return e.fromDisk(id)
 }
 
 // Running is the live runs, newest first, without their logs.
@@ -587,7 +827,8 @@ func (e *Engine) Running() []Run {
 	return out
 }
 
-// Recent is the finished runs kept, newest first, without their logs.
+// Recent is the finished runs kept in memory, newest first, without their
+// logs.
 func (e *Engine) Recent() []Run {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -601,7 +842,7 @@ func (e *Engine) Recent() []Run {
 }
 
 // Wait blocks until run id has ended (or ctx is done) and returns its final
-// record. For tests and for a host that runs one pipeline and exits.
+// record. For tests, and for a host that runs one thing and exits.
 func (e *Engine) Wait(ctx context.Context, id string) (Run, error) {
 	e.mu.Lock()
 	lr, live := e.live[id]
@@ -620,9 +861,9 @@ func (e *Engine) Wait(ctx context.Context, id string) (Run, error) {
 	return r, nil
 }
 
-// Close cancels every live run and waits up to grace for them to roll back
-// and end; it reports whether some were still going when it gave up. No run
-// starts after it.
+// Close cancels every live run and waits up to grace for them to roll back,
+// end and write their records; it reports whether some were still going
+// when it gave up. No run starts after it.
 func (e *Engine) Close(grace time.Duration) (late bool) {
 	e.mu.Lock()
 	e.closed = true

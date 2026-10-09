@@ -669,6 +669,65 @@
       ]
     },
     {
+      "name": "JobPipeline",
+      "kind": "struct",
+      "doc": "JobPipeline is one pipeline of a job's run: its step id in the job and\nits stats (Status, Fragments, Rows(), …). A step skipped because one\nbefore it failed has status skipped.",
+      "fields": [
+        {
+          "name": "ID",
+          "type": "string",
+          "doc": ""
+        }
+      ]
+    },
+    {
+      "name": "JobRun",
+      "kind": "struct",
+      "doc": "JobRun is a job's run as s.RunJob returns it: its id, its outcome, and\neach pipeline's stats in the job's order.",
+      "fields": [
+        {
+          "name": "ID",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "Job",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "Status",
+          "type": "string",
+          "doc": "succeeded, failed, canceled"
+        },
+        {
+          "name": "Error",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "Started",
+          "type": "time.Time",
+          "doc": ""
+        },
+        {
+          "name": "Ended",
+          "type": "time.Time",
+          "doc": ""
+        },
+        {
+          "name": "Pipelines",
+          "type": "[]JobPipeline",
+          "doc": ""
+        }
+      ]
+    },
+    {
+      "name": "JobRunner",
+      "kind": "other",
+      "doc": "JobRunner runs a job for RunJob and waits for it. The host provides it."
+    },
+    {
       "name": "NodeStats",
       "of": "pipeline.NodeStats",
       "kind": "struct",
@@ -719,7 +778,7 @@
     {
       "name": "Paths",
       "kind": "struct",
-      "doc": "Paths are the directories a session resolves names in: a script's\n(script.run) and a pipeline's (RunPipelineNamed). The host sets them.",
+      "doc": "Paths are the directories a session resolves names in: a script's\n(script.run), a pipeline's (RunPipelineNamed), a job's (RunJob) — and\nwhere a job run there leaves its record. The host sets them.",
       "fields": [
         {
           "name": "ScriptsDir",
@@ -728,6 +787,16 @@
         },
         {
           "name": "PipelinesDir",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "JobsDir",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "RunsDir",
           "type": "string",
           "doc": ""
         }
@@ -818,6 +887,11 @@
           "name": "PreviewRows",
           "type": "int",
           "doc": "PreviewRows \u003e 0 makes the run a preview: the source stops after\nthat many rows, every sink is replaced by a preview sink (the rows\ngo to the results view, nothing is written), and actions are\nskipped. The way to try a transform on real data."
+        },
+        {
+          "name": "Run",
+          "type": "map[string]string",
+          "doc": "Run is the run's own values, ${run.\u003cname\u003e} in any node's config:\nthe host's run id, what triggered it, the job it is a step of (see\nRunVars). \"date\" and \"started\" default to the run's start when the\nhost does not set them, so ${run.date} works in a script's\ns.RunPipeline as it does under the jobs engine."
         }
       ]
     },
@@ -1543,6 +1617,21 @@
           ],
           "connArgs": [
             0
+          ]
+        },
+        {
+          "name": "RunJob",
+          "sig": "func (s *S) RunJob(name string, params Params) (*JobRun, error)",
+          "doc": "RunJob runs the job called name — a file in the jobs directory (.json\nmay be left off) or a built-in example — with params overriding its\nown, and waits for it to end. Stop (Ctrl+K) cancels it as it does a\nquery. The run comes back however it ended; the error is non-nil when\nit did not succeed.",
+          "params": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "params",
+              "type": "Params"
+            }
           ]
         },
         {

@@ -63,6 +63,7 @@ import (
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/explain"
 	"github.com/rohanthewiz/dbc/model"
+	"github.com/rohanthewiz/dbc/sdb"
 	"github.com/rohanthewiz/dbc/userdata"
 )
 
@@ -81,6 +82,11 @@ type Options struct {
 	// schema all the same, with a note: listing a huge catalog is the cost
 	// the per-schema load exists to avoid.
 	WholeCatalog bool
+
+	// Jobs runs a script's s.RunJob: the host's jobs engine (dbc web's).
+	// Nil leaves it to sdb.DefaultJobRunner, an engine of the script's own
+	// for the length of the call.
+	Jobs sdb.JobRunner
 }
 
 // Workspace is one person's working state. Its methods are safe for
@@ -90,6 +96,7 @@ type Workspace struct {
 	mgr  *db.Manager
 	hist *userdata.History
 	sink func(Event)
+	jobs sdb.JobRunner // s.RunJob in a script; see Options.Jobs
 
 	mu sync.Mutex // guards everything below down to sessMu
 
@@ -215,7 +222,7 @@ func New(cfg *config.Config, mgr *db.Manager, hist *userdata.History, opt Option
 	if hist == nil {
 		hist = userdata.LoadHistory("")
 	}
-	w := &Workspace{cfg: cfg, mgr: mgr, hist: hist, sink: opt.Sink, wholeCatalog: opt.WholeCatalog}
+	w := &Workspace{cfg: cfg, mgr: mgr, hist: hist, sink: opt.Sink, wholeCatalog: opt.WholeCatalog, jobs: opt.Jobs}
 	if _, ok := cfg.ConnByName(cfg.DefaultConnection); ok {
 		w.active = cfg.DefaultConnection
 	} else if conns := cfg.Conns(); len(conns) > 0 {

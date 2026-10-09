@@ -67,6 +67,8 @@ Copy `dbc.example.toml` to `./dbc.toml` (or `~/.config/dbc/config.toml`):
 
 ```toml
 # scripts_dir      = "scripts"   # default ~/.config/dbc/scripts; relative = beside this file
+# jobs_dir         = "jobs"      # pipelines_dir, jobs_dir, runs_dir likewise (see Jobs)
+# runs_keep        = 200         # run records kept per job and per pipeline
 max_rows           = 1000   # rows fetched from the server
 max_display_rows   = 2000   # rows the results table draws (0 = all)
 result_tabs        = 10     # result tabs per connection, per query tab (1–50; see Result tabs)
@@ -1986,10 +1988,10 @@ The stats name every fragment and node with rows in and out, batches and
 time, and `dbc pipeline export NAME` writes any pipeline file as the
 script above, to run or edit as one. Three examples are built in
 (`dbc pipelines` lists them): `copy-cats`, `clean-and-load` and
-`cats-report`, all on the demo connections. `dbc web` draws and edits
-pipelines on a canvas ([below](#pipeline-tabs-in-dbc-web)). Jobs
-(pipelines in a dependency graph, on a schedule) are planned in
-[`ai_docs/plans/pipelines.md`](ai_docs/plans/pipelines.md).
+`cats-report`, all on the demo connections, and a fourth, `breed-counts`,
+for the example job. `dbc web` draws and edits pipelines on a canvas
+([below](#pipeline-tabs-in-dbc-web)); [jobs](#jobs) put pipelines in a
+dependency graph, on a schedule.
 
 ### Pipeline tabs in dbc web
 
@@ -2054,6 +2056,88 @@ below it as for a query.
   tab — the builder form `dbc pipeline export` writes.
 
 Double-click the tab to rename the pipeline. One pipeline has one tab.
+
+### Jobs
+
+A **job** is pipelines in a dependency graph with one root: a pipeline
+starts when every pipeline it waits for (`after`) has succeeded, so one
+root fans out to several pipelines at once and several fan back in to
+one. It runs by hand, on a **schedule** while `dbc web` is up, from a
+**webhook**, from cron through `dbc job run`, or from a script. Jobs live
+in `~/.config/dbc/jobs/<name>.json` (`jobs_dir`):
+
+```json
+{
+  "name": "nightly",
+  "root": "copy",
+  "params": { "min_age": { "default": "2" } },
+  "pipelines": [
+    { "id": "copy",   "pipeline": "copy-cats" },
+    { "id": "clean",  "pipeline": "clean-and-load", "after": ["copy"], "params": { "min_age": "${min_age}" } },
+    { "id": "breeds", "pipeline": "breed-counts",   "after": ["copy"] },
+    { "id": "report", "pipeline": "cats-report",    "after": ["clean", "breeds"] }
+  ],
+  "triggers": { "schedule": ["0 2 * * *"], "tz": "Europe/Paris", "catch_up": false, "webhook": true },
+  "policy": { "on_failure": "finish_branches", "max_parallel": 2, "overlap": "skip", "timeout": "2h" }
+}
+```
+
+```
+        copy                 copy runs first; clean and breeds side by side
+       ╱    ╲                (max_parallel 2); report when both succeeded
+   clean    breeds
+       ╲    ╱
+       report
+```
+
+- **Steps** name a pipeline (`pipelines_dir`, then the examples; `.json`
+  optional) and may set its params. A step's param values may use the
+  job's own params (`${min_age}`) and the run's values: `${run.date}`
+  (`YYYY-MM-DD`), `${run.time}`, `${run.started}`, `${run.id}`,
+  `${run.trigger}`, `${run.job}` — which any pipeline node may use too.
+- **policy.on_failure**: `finish_branches` (the default) skips everything
+  downstream of a failed pipeline and lets the other branches finish; the
+  job ends failed. `stop` cancels the run at once.
+- **policy.max_parallel** (default 2): how many pipelines run at once. A
+  running fragment holds a reader and a writer connection, so a fan-out
+  wider than the pool waits rather than fails.
+- **policy.overlap**: a start while the job is running is `skip`ped (the
+  default; a scheduled one is logged as skipped) or `queue`d to run when
+  that one ends (one waits at most). One run of a *pipeline* at a time
+  holds everywhere: a job step whose pipeline is already running fails,
+  and a pipeline tab's ▶ Run is refused while a job's step runs it.
+- **policy.timeout** cancels the run after so long; the job ends failed.
+- **triggers.schedule** is cron lines — `minute hour day-of-month month
+  day-of-week`, with `*`, lists, ranges, `*/15`, `jan`–`dec`, `sun`–`sat`
+  and `@daily`, `@hourly`, `@weekly`, `@monthly`, `@yearly` — in `tz` (the
+  machine's zone when left out). When both day fields are set, either
+  matches, as in crontab. On a daylight-saving day a time the clocks skip
+  fires as they jump (`30 2 * * *` at 03:00) and a time they repeat fires
+  once. Only a running `dbc web` fires schedules, and only for the jobs
+  in `jobs_dir` (never an example); two of them on one machine (dbc.app
+  and a terminal's) fire each time once between them. A fire it was down or asleep for is
+  not run late unless `catch_up` is on; then it runs once, as soon as dbc
+  web sees it.
+- **triggers.webhook** opens `POST /api/v1/jobs/<name>.json/run` to a
+  caller with the launch secret (`dbc web --secret …`):
+  `curl -X POST -H "Authorization: Bearer $SECRET" -d '{"params":{"min_age":"3"}}' http://127.0.0.1:7777/api/v1/jobs/nightly.json/run`.
+  A job that does not set it answers 403; the page's own Run needs nothing.
+- **From a script**, `run, err := s.RunJob("nightly", sdb.Params{"min_age": "3"})`
+  runs the job and waits for it; `run.Pipelines` has each step's stats. In
+  `dbc web` it runs on the server's engine, beside its other runs.
+
+**Run records.** Every run of a job or a pipeline (not a preview) leaves
+`~/.config/dbc/runs/<job|pipeline>/<name>/<run id>.json` (`runs_dir`):
+who started it, every step's, fragment's and node's state and counters,
+and its log. It is rewritten every two seconds while the run goes, so a
+crash leaves a record the next dbc reads as **interrupted**, and the
+newest `runs_keep` (200) per name are kept. Any process reads them —
+`dbc runs` from a shell sees what `dbc web`'s schedule ran, and the
+other way round. The jobs canvas and the Runs view in dbc web are next
+on the plan ([`ai_docs/plans/pipelines.md`](ai_docs/plans/pipelines.md),
+Phase 4); in dbc web for now a job run's start and end are a line each
+in the log, its scheduler's notes too (a skipped or missed fire, a job
+file that does not parse), and the API above runs and lists them.
 
 ## Headless mode
 
@@ -2341,7 +2425,32 @@ as a script's `s.Print` does; what a `preview` sink shows goes out as a
 script's `s.Show` results do; in `text`, one line per fragment follows,
 with every node's rows in and out. Names resolve as scripts do: a file
 here, then `pipelines_dir`, then an example. Exit 0, 1 on failure, 130
-when interrupted — a stop during a load rolls it back first.
+when interrupted — a stop during a load rolls it back first. The run
+leaves a record in `runs_dir`, as every run does ([Jobs](#jobs)).
+
+### Jobs headless
+
+```sh
+./dbc jobs                                        # jobs_dir and the examples: schedule, next fire, last run
+./dbc job run nightly -p min_age=3                # run it here and wait; a path, a name, or an example
+./dbc job run nightly -t json | jq .status        # the whole run record as the document
+./dbc job check nightly                           # the job and every pipeline it runs; exit 1 on an error
+./dbc runs                                        # the run records, newest first (any process's)
+./dbc runs --job nightly --status failed --since 7d
+./dbc run show 20261009-020000-7f3a               # one run as a tree: job → pipelines → fragments → nodes
+./dbc runs --sql "SELECT step, avg(seconds) FROM pipelines GROUP BY step ORDER BY 2 DESC"
+```
+
+`dbc job run` runs the job in its own process: lines stream with their
+step (`[clean] fragment clean done: 7 rows in 3ms`), preview sinks' rows
+go out as a script's do, and the run's tree follows. Exit 0 when the job
+succeeded, 1 when not, 130 when interrupted (the run is stopped and every
+load in flight rolled back first). It is how a crontab drives a job
+without `dbc web`: `0 2 * * * /usr/local/bin/dbc job run nightly`.
+`--sql` loads the records as four tables — `runs`, `pipelines`
+(`run_id`, `step`, …), `fragments` and `nodes`, each with its status,
+times, `seconds` and rows — into a throwaway bytdb and runs the query in
+any `-t` format.
 
 ### Multi-statement runs
 

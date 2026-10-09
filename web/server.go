@@ -130,10 +130,15 @@ type Server struct {
 	// dumps is the one "Dump database…" running, across windows (dump.go).
 	dumps dumps
 
-	// jobs runs pipelines — previews and runs from pipeline tabs — outside
-	// any query tab's run slot, several at once (pipelines.go). It is the
-	// server's for its whole life; Shutdown stops what it runs.
+	// jobs runs pipelines — previews and runs from pipeline tabs — and
+	// jobs, outside any query tab's run slot, several at once
+	// (pipelines.go, jobs.go). It is the server's for its whole life;
+	// Shutdown stops what it runs. Each real run leaves its record in
+	// runs_dir.
 	jobs *jobs.Engine
+	// sched fires the cron lines of the jobs in jobs_dir while the server
+	// serves: made in New, started by Run, stopped by Shutdown.
+	sched *jobs.Scheduler
 }
 
 //go:embed all:static
@@ -179,11 +184,22 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) (*Server, error) {
 
 	s := &Server{cfg: cfg, mgr: mgr, opt: opt, store: opt.Store, saved: opt.Conns, auth: a,
 		ready: make(chan struct{}, 1), ver: assetVersion()}
+	s.jobs = jobs.New(cfg, mgr, jobs.Options{Sink: s.onJob, RunsDir: cfg.RunsDir, RunsKeep: cfg.RunsKeep})
+	// a script tab's s.RunJob runs on the server's engine: beside its other
+	// runs, under one job's overlap rule, its lines where every run's go
+	scriptJobs := s.jobs.ScriptRunner()
 	s.hub = newHub(func(sink func(workspace.Event)) *workspace.Workspace {
-		return workspace.New(cfg, mgr, opt.History, workspace.Options{Sink: sink})
+		return workspace.New(cfg, mgr, opt.History, workspace.Options{Sink: sink, Jobs: scriptJobs})
 	}, cfg.ConnIdleTimeout)
 	s.hub.newChat = func(w *window) *assistant { return newAssistant(s, w) }
-	s.jobs = jobs.New(cfg, mgr, jobs.Options{Sink: s.onJob})
+	s.sched = s.jobs.NewScheduler(jobs.SchedOptions{Dir: cfg.JobsDir})
+	// a run a crash (or a kill -9) left "running" is said to be interrupted
+	// before any page lists it
+	if n, err := s.jobs.Recover(); err != nil {
+		opt.Logf("warning: could not settle old run records in %s: %v", cfg.RunsDir, err)
+	} else if n > 0 {
+		opt.Logf("%d run record(s) left running by a process that is gone were marked interrupted", n)
+	}
 	s.rw = rweb.NewServer(rweb.ServerOptions{Address: addr, ReadyChan: s.ready})
 	s.rw.Use(s.guard)
 	s.routes()
@@ -288,6 +304,16 @@ func (s *Server) routes() {
 	r.Put("/api/v1/pipelines/:name", s.handlePipelineSave)
 	r.Delete("/api/v1/pipelines/:name", s.handlePipelineTrash)
 	r.Post("/api/v1/pipelines/:name/rename", s.handlePipelineRename)
+	// jobs and the webhook (jobs.go)
+	r.Get("/api/v1/jobs", s.handleJobs)
+	r.Post("/api/v1/job-check", s.handleJobCheck)
+	r.Get("/api/v1/job-examples/:name", s.handleJobExample)
+	r.Post("/api/v1/job-trash/:id/restore", s.handleJobRestore)
+	r.Get("/api/v1/jobs/:name", s.handleJobRead)
+	r.Put("/api/v1/jobs/:name", s.handleJobSave)
+	r.Delete("/api/v1/jobs/:name", s.handleJobTrash)
+	r.Post("/api/v1/jobs/:name/rename", s.handleJobRename)
+	r.Post("/api/v1/jobs/:name/run", s.handleJobRun)
 	r.Get("/api/v1/runs", s.handleRuns)
 	r.Get("/api/v1/runs/:id", s.handleRunRecord)
 	r.Post("/api/v1/runs/:id/cancel", s.handleRunCancel)
@@ -365,6 +391,9 @@ func (s *Server) Run() error {
 	reapCtx, stopReap := context.WithCancel(context.Background())
 	defer stopReap()
 	go s.reapLoop(reapCtx)
+	// the scheduler only while serving: a Server a test builds and never
+	// runs fires nothing
+	s.sched.Start()
 	if s.opt.Ready != nil {
 		s.opt.Ready(s.LoginURL())
 	}
@@ -382,8 +411,11 @@ const shutdownGrace = 5 * time.Second
 func (s *Server) Shutdown() {
 	s.opt.Logf("stopping: canceling runs and releasing sessions…")
 	s.stopDump(shutdownGrace) // pg_dump is a child process: it must not outlive dbc
+	// no new scheduled run, then the running ones stopped
+	s.sched.Stop()
 	// a pipeline run holds Readers and Writers on pooled connections:
-	// canceled, each rolls its fragment back before the pools close
+	// canceled, each rolls its fragment back (and writes its record)
+	// before the pools close
 	if s.jobs.Close(shutdownGrace) {
 		s.opt.Logf("some pipeline runs did not stop within %s — exiting anyway", shutdownGrace)
 	}

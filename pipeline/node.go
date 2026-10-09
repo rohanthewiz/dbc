@@ -170,6 +170,11 @@ const (
 	Failed    Status = "failed"
 	Canceled  Status = "canceled"
 	Skipped   Status = "skipped"
+	// Interrupted is a run's record found "running" by a process that
+	// started later, with nothing writing it any more: the process that ran
+	// it died (a crash, a kill, a power cut) before it could say how it
+	// ended. Only package jobs sets it, on records it reads back from disk.
+	Interrupted Status = "interrupted"
 )
 
 // NodeStats counts what went through one node.

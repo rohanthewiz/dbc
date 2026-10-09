@@ -1,0 +1,16 @@
+{
+  "name": "nightly",
+  "desc": "The demo pipelines as a DAG: copy the cats into bytdb, then clean them and count the breeds side by side, then report.",
+  "root": "copy",
+  "params": {
+    "min_age": { "default": "2", "doc": "The youngest cat clean-and-load takes, in years" }
+  },
+  "pipelines": [
+    { "id": "copy",   "pipeline": "copy-cats" },
+    { "id": "clean",  "pipeline": "clean-and-load", "after": ["copy"], "params": { "min_age": "${min_age}" } },
+    { "id": "breeds", "pipeline": "breed-counts",   "after": ["copy"] },
+    { "id": "report", "pipeline": "cats-report",    "after": ["clean", "breeds"] }
+  ],
+  "triggers": { "schedule": ["0 2 * * *"] },
+  "policy": { "on_failure": "finish_branches", "max_parallel": 2, "overlap": "skip", "timeout": "10m" }
+}

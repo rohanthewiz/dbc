@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	bytdbdrv "github.com/rohanthewiz/bytdb/stdlib"
 	_ "modernc.org/sqlite"
@@ -571,5 +572,47 @@ func TestRunProgressStartBatchesEnd(t *testing.T) {
 	}
 	if len(seen) == 0 || seen[0].Name != "one" || seen[0].Status != Skipped {
 		t.Errorf("skipped report = %+v", seen)
+	}
+}
+
+// ${run.…} values: the clock ones default from the run's start, the host's
+// override them, and a name that is not a run value is a check error
+// rather than a failure mid-run.
+func TestRunValues(t *testing.T) {
+	started := time.Date(2026, 10, 9, 2, 0, 0, 0, time.Local)
+	v := runValues(map[string]string{"id": "20261009-020000-7f3a", "trigger": "schedule"}, started)
+	for k, want := range map[string]string{
+		"run.date": "2026-10-09", "run.time": "02:00:00", "run.id": "20261009-020000-7f3a",
+		"run.trigger": "schedule", "run.job": "",
+	} {
+		if got, ok := v[k]; !ok || got != want {
+			t.Errorf("%s = %q (%v), want %q", k, got, ok, want)
+		}
+	}
+	spec := &Spec{Name: "p", Fragments: []Fragment{{Name: "f", Nodes: []Node{
+		{ID: "x", Plugin: "sql.exec", Cfg: Config{"conn": "a", "sql": "SELECT '${run.date}', '${run.dat}'"}},
+	}}}}
+	diags := Check(spec, CheckOptions{})
+	if len(diags) != 1 || !strings.Contains(diags[0].Msg, "${run.dat} is not a run value") {
+		t.Fatalf("diags = %v", diags)
+	}
+}
+
+// A Progress snapshot is the host's to keep: neither its nodes nor its
+// published values are the runner's own, which it goes on writing.
+func TestProgressSnapshotsAreCopies(t *testing.T) {
+	h := newTestHost(t)
+	var snaps []FragmentStats
+	spec := &Spec{Name: "p", Fragments: []Fragment{{Name: "f", Nodes: []Node{
+		{ID: "x", Plugin: "sql.exec", Cfg: Config{"conn": "a", "sql": "SELECT 1"}}}}}}
+	st, err := Run(context.Background(), h, spec, Options{Progress: func(f FragmentStats) { snaps = append(snaps, f) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := st.Fragments[0]
+	for _, s := range snaps {
+		if s.Vars != nil && final.Vars != nil && fmt.Sprintf("%p", s.Vars) == fmt.Sprintf("%p", final.Vars) {
+			t.Fatal("a snapshot shares the runner's Vars map")
+		}
 	}
 }

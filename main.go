@@ -986,6 +986,8 @@ func noteTruncated(w io.Writer, r *model.Result, what string) {
 func runScriptHeadless(cfg *config.Config, mgr *db.Manager, ref config.ScriptRef, f export.Format) {
 	ctx, stop := interruptible()
 	defer stop()
+	// a script may build or run a pipeline placing the user's plugins
+	loadPlugins(cfg)
 
 	var results []*model.Result
 	show := func(r *model.Result) { results = append(results, r) }

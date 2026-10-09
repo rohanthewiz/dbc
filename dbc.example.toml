@@ -15,6 +15,9 @@
 # jobs_dir      = "jobs"
 # runs_dir      = "runs"
 # runs_keep     = 200
+# Your own pipeline plugins: Go files, each one kind of node (README:
+# "Plugins of your own"), default ~/.config/dbc/plugins.
+# plugins_dir   = "plugins"
 
 # Directory holding PostgreSQL's client tools, pg_dump and pg_restore, for
 # `dbc dump` and "Dump database…" in the TUI and dbc web. Leave it out and dbc

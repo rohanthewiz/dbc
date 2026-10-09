@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -165,7 +166,11 @@ func (c *checker) fragment(f *Fragment, where string, known map[string]bool) {
 		}
 		if p.Check != nil {
 			for _, msg := range p.Check(p.Defaults(n.Cfg)) {
-				c.errorf(nw, "%s", msg)
+				if checkWarning(msg) {
+					c.warnf(nw, "%s", msg)
+				} else {
+					c.errorf(nw, "%s", msg)
+				}
 			}
 		}
 	}
@@ -239,6 +244,16 @@ func (c *checker) fragment(f *Fragment, where string, known map[string]bool) {
 	}
 }
 
+// warningRe is a plugin Check message that is a warning: "warning: …",
+// or the same after the place it points at ("code:3:1: warning: …", as
+// script's checks of a Go field write them).
+var warningRe = regexp.MustCompile(`^(?:[\w.]+(?::\d+){0,2}: )?warning: `)
+
+// checkWarning reports whether a plugin Check message is a warning — legal
+// but probably not what was meant — rather than an error, which would
+// keep the pipeline from running.
+func checkWarning(msg string) bool { return warningRe.MatchString(msg) }
+
 // refKnown reports whether ${ref} may be resolved: a param, one of the
 // RunVars as "run.<name>", or "frag.<earlier fragment>.<anything>".
 func refKnown(ref string, known map[string]bool) bool {
@@ -276,6 +291,11 @@ func nodeKind(n Node) (Kind, Plugin, error) {
 		if !ok {
 			if n.Plugin == "" {
 				return "", Plugin{}, fmt.Errorf("no plugin named")
+			}
+			// a user plugin whose file is broken says so, and why — "no
+			// plugin" would send the user looking for a typo instead
+			if pr, broken := problemFor(n.Plugin); broken {
+				return "", Plugin{}, fmt.Errorf("plugin %q did not load from %s: %s", n.Plugin, pr.File, pr.Err)
 			}
 			return "", Plugin{}, fmt.Errorf("no plugin %q (dbc plugins lists them)", n.Plugin)
 		}

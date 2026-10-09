@@ -166,12 +166,16 @@
   const fmtDur = (ms) => (ms < 1000 ? Math.round(ms) + "ms" : ms < 60e3 ? (ms / 1000).toFixed(1) + "s" :
     Math.floor(ms / 60e3) + "m" + String(Math.round((ms % 60e3) / 1000)).padStart(2, "0") + "s");
 
-  // ── the plugin registry, once per page ─────────────────────────────────
+  // ── the plugin registry, once per page — and again after a "plugins"
+  // event, when the server reloaded the user's plugin files ────────────
+  //   list      every plugin, the user's (p.file set) among them
+  //   problems  plugin files that did not load: {file, name?, error}
+  //   dir       plugins_dir, ~-form, for the palette's notes
   let regP = null;
   function registry() {
     if (!regP) {
       regP = api("GET", "/api/v1/plugins").then((r) => ({
-        list: r.plugins, conns: r.conns || [],
+        list: r.plugins, conns: r.conns || [], problems: r.problems || [], dir: r.dir || "plugins_dir",
         byName: new Map(r.plugins.map((p) => [p.name, p])),
       })).catch((err) => { regP = null; throw err; });
     }
@@ -718,15 +722,29 @@
       if (!reg) { dom.palList.append(el("div", "pnote", "loading plugins…")); return; }
       const hit = (p) => !paletteQ || p.name.includes(paletteQ) || (p.label || "").toLowerCase().includes(paletteQ) ||
         (p.doc || "").toLowerCase().includes(paletteQ);
+      const item = (p) => el("div", { class: "pitem k-" + p.kind, "data-plugin": p.name, title: p.doc,
+        role: "button", tabindex: "-1" },
+      el("span", "pg", GLYPH[p.kind]), el("span", "pn", p.name), el("span", "pl", p.label || ""));
+      // Yours: the plugin files in plugins_dir, every kind together (their
+      // kind shows in the glyph), first — they are what this user reaches
+      // for. A file that did not load is listed too, dimmed, with why: it
+      // cannot be dragged (no data-plugin), and the scripts browser opens it.
+      const mine = reg.list.filter((p) => p.file && hit(p));
+      const broken = reg.problems.filter((x) => !paletteQ || (x.name || x.file).toLowerCase().includes(paletteQ));
+      if (mine.length || broken.length) {
+        dom.palList.append(el("div", { class: "phead", title: "Your plugin files, in " + reg.dir }, "Yours"));
+        for (const p of mine) dom.palList.append(item(p));
+        for (const x of broken) {
+          const file = x.file.split("/").pop();
+          dom.palList.append(el("div", { class: "pitem broken", title: file + " did not load: " + x.error +
+            " — Ctrl+O → Plugins opens it" }, el("span", "pg", "⚠"), el("span", "pn", x.name || file), el("span", "pl", "did not load")));
+        }
+      }
       for (const [kind, title] of KINDS) {
-        const ps = reg.list.filter((p) => p.kind === kind && hit(p));
+        const ps = reg.list.filter((p) => !p.file && p.kind === kind && hit(p));
         if (!ps.length) continue;
         dom.palList.append(el("div", "phead", title));
-        for (const p of ps) {
-          dom.palList.append(el("div", { class: "pitem k-" + kind, "data-plugin": p.name, title: p.doc,
-            role: "button", tabindex: "-1" },
-          el("span", "pg", GLYPH[kind]), el("span", "pn", p.name), el("span", "pl", p.label || "")));
-        }
+        for (const p of ps) dom.palList.append(item(p));
       }
       if (!dom.palList.children.length) dom.palList.append(el("div", "pnote", "no plugin matches"));
     }
@@ -1001,7 +1019,11 @@
       });
       id.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); id.blur(); } });
       box.append(row("id", id, "Its name in the fragment: wires, the log and the record use it"));
-      if (!p) {
+      const broke = !p && reg && reg.problems.find((x) => x.name === n.plugin);
+      if (broke) {
+        box.append(el("p", "idiag error", n.plugin + " did not load from " + broke.file.split("/").pop() + ": " + broke.error +
+          " — Ctrl+O → Plugins opens the file."));
+      } else if (!p) {
         box.append(el("p", "idiag error", "No plugin " + n.plugin + " — `dbc plugins` lists them."));
       } else {
         for (const fd of p.fields) box.append(field(e, f, n, fd));
@@ -1279,7 +1301,7 @@
 
       // the palette: press, drag onto the canvas, release
       dom.palList.addEventListener("pointerdown", (ev) => {
-        const item = ev.target.closest(".pitem");
+        const item = ev.target.closest(".pitem[data-plugin]");
         if (!item || ev.button !== 0 || !shown || !shown.spec || !reg) return;
         ev.preventDefault();
         const p = reg.byName.get(item.dataset.plugin);
@@ -1521,6 +1543,19 @@
       return true;
     }
 
+    // pluginsChanged is the "plugins" event: the server reloaded the
+    // user's plugin files. The registry is read again, and what was drawn
+    // from it — the palette, the cards, the inspector's form, the check's
+    // marks — follows.
+    async function pluginsChanged() {
+      regP = null;
+      try { reg = await registry(); } catch (err) { log("err", "plugins: " + err.message); return; }
+      if (!dom || !shown) return;
+      renderPalette();
+      render();
+      check(shown.name, false);
+    }
+
     // onEvent is a window-level "pipelines" or "job.*" event.
     async function onEvent(type, d) {
       if (type === "pipelines") { onStore(d); return; }
@@ -1749,7 +1784,7 @@
     }
 
     return {
-      load, show, hide, save, edited, check, flush, forget, onEvent, sync, preview, run, stop, liveOf,
+      load, show, hide, save, edited, check, flush, forget, onEvent, pluginsChanged, sync, preview, run, stop, liveOf,
       rename, duplicate, trash, restore, copyPath, exportGo, items, list, edit, newPipeline, copyExample, useConn,
       toggleJSON, logKey,
       entry: (name) => files.get(name) || null,

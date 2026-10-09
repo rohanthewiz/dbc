@@ -15,6 +15,7 @@ import (
 	"github.com/rohanthewiz/dbc/ai"
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/export"
+	"github.com/rohanthewiz/dbc/pipeline"
 	"github.com/rohanthewiz/dbc/sdb/sdbapi"
 	"github.com/rohanthewiz/dbc/userdata"
 	"github.com/rohanthewiz/dbc/workspace"
@@ -444,7 +445,10 @@ func (a *assistant) finishLocked(q string, ctx ai.Context) {
 // chip says "sdb API" exactly when the question would carry it.
 func (a *assistant) withAPILocked(ctx ai.Context) ai.Context {
 	if ctx.Script != "" && !a.apiSent {
-		ctx.ScriptAPI = sdbapi.Summary()
+		// the pipeline plugins ride along: a script builds pipelines from
+		// them, and a plugin file (a script tab too) is written against
+		// their shape — the user's own plugins included
+		ctx.ScriptAPI = sdbapi.Summary() + "\n" + pipeline.Summary()
 	}
 	return ctx
 }

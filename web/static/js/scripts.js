@@ -208,7 +208,19 @@
     }
   })();
 
-  const path = (name) => "/api/v1/scripts/" + encodeURIComponent(name);
+  // PLUGIN FILES. A pipeline plugin file of plugins_dir (web/plugins.go)
+  // is a .go file edited exactly as a script is, so it opens as a script
+  // tab — one editor, one draft scheme, one conflict protocol — under the
+  // name "plugin:<file>", which no script can have (":" is not in a
+  // script name). Only the routes differ: its file, its check (the
+  // plugin's shape, not Run's) and what Run does (save, then say what the
+  // loader made of it: the plugin is in the pipeline palette, or why not).
+  const PLUG = "plugin:";
+  const isPlug = (name) => typeof name === "string" && name.startsWith(PLUG);
+  const fileOf = (name) => (isPlug(name) ? name.slice(PLUG.length) : name);
+  const path = (name) => (isPlug(name) ? "/api/v1/plugin-files/" + encodeURIComponent(fileOf(name)) :
+    "/api/v1/scripts/" + encodeURIComponent(name));
+  const KIND_GLYPH = { source: "⇥", transform: "ƒ", sink: "⇤", action: "▸" }; // as the palette draws them
 
   // ago is a short age for the browser's list: "now", "5m", "3h", "2d".
   function ago(iso) {
@@ -370,7 +382,32 @@
       Object.assign(e, { rev: r.rev, saved: text, text, missing: false });
       storeDraft(e);
       changed(e, true);
+      if (isPlug(e.name) && r.load) sayLoad(e.name, r.load);
       return true;
+    }
+
+    // sayLoad logs what the loader made of a plugin file just saved: its
+    // plugin, now in the pipeline palette, or why it is not.
+    function sayLoad(name, l) {
+      if (l.error) log("err", fileOf(name) + " did not load" + (l.plugin ? " as " + l.plugin : "") + ": " + l.error);
+      else log("ok", fileOf(name) + " loaded: " + (KIND_GLYPH[l.kind] || "") + " " + l.plugin + " (" + l.kind +
+        ") — in the pipeline palette under Yours");
+    }
+
+    // applyPlugin is Run (Ctrl+Enter) in a plugin file's tab: there is
+    // nothing to run, so it saves, checks out loud and says what the
+    // loader made of the file — also when nothing needed saving.
+    async function applyPlugin(name) {
+      const e = files.get(name);
+      if (!e) return;
+      const was = e.rev;
+      if (!(await save(name))) return;
+      await check(name, true);
+      if (e.rev !== was) return; // the save's answer said it already
+      let got;
+      try { got = await api("GET", "/api/v1/plugin-files"); } catch (err) { log("err", err.message); return; }
+      const f = got.plugins.find((x) => x.name === fileOf(name));
+      if (f) sayLoad(name, { plugin: f.plugin, kind: f.kind, error: f.error });
     }
 
     // edited is the host's call on every change to a script's document:
@@ -424,7 +461,7 @@
       const text = textOf(e), seq = (e.checkSeq = (e.checkSeq || 0) + 1);
       let r;
       try {
-        r = await api("POST", "/api/v1/script-check", { name, text });
+        r = await api("POST", isPlug(name) ? "/api/v1/plugin-check" : "/api/v1/script-check", { name, text });
       } catch (err) {
         if (loud) log("err", "check " + name + ": " + err.message);
         return null;
@@ -434,7 +471,10 @@
       dbc.editor.setMarkers(key(name), e.diags);
       host.checked(name, e.diags);
       if (loud) {
-        if (!e.diags.length) log("ok", name + ": no problems — it compiles, and Run has the right signature");
+        if (!e.diags.length) {
+          log("ok", isPlug(name) ? fileOf(name) + ": no problems — it compiles, and its funcs fit its kind" :
+            name + ": no problems — it compiles, and Run has the right signature");
+        }
         for (const d of e.diags) log(d.severity === "error" ? "err" : "warn", name + ":" + d.line + ":" + d.col + ": " + d.msg);
       }
       return e.diags;
@@ -526,6 +566,34 @@
       await edit(name);
     }
 
+    // makePlugin is makeScript for a plugin file: written to plugins_dir
+    // (where the server loads it at once), then opened in a tab.
+    async function makePlugin(suggest, text, what) {
+      let taken = [];
+      try { taken = (await api("GET", "/api/v1/plugin-files")).plugins.map((s) => s.name); } catch (_) { /* the server will say */ }
+      let name = freeName(fileOf(suggest), taken), hint = "A file in plugins_dir: letters, digits, '.', '-' and '_', ending in .go. " +
+        "Two files may not declare one plugin name, so change Name in the copy before using both.";
+      for (;;) {
+        name = goName(await ask({ title: what, hint, value: name, ok: "Create" }));
+        if (!name) return;
+        try {
+          await api("PUT", path(PLUG + name) + host.winQuery(), { text, base: "" });
+          break;
+        } catch (err) {
+          if (err.status !== 409 && err.status !== 400) { log("err", what + ": " + err.message); return; }
+          hint = err.message;
+        }
+      }
+      log("ok", "created " + name + " in plugins_dir — Ctrl+S saves and loads it; its plugin is in the pipeline palette under Yours");
+      await edit(PLUG + name);
+    }
+
+    async function copyPluginExample(name) {
+      let r;
+      try { r = await api("GET", "/api/v1/plugin-examples/" + encodeURIComponent(name)); } catch (err) { log("err", err.message); return; }
+      await makePlugin(name, r.text, "Copy the example plugin " + name);
+    }
+
     async function newFrom(tpl) {
       let r;
       try {
@@ -548,7 +616,8 @@
       else {
         try { text = (await api("GET", path(name))).text; } catch (err) { log("err", err.message); return; }
       }
-      await makeScript(name, text, "Duplicate " + name);
+      if (isPlug(name)) await makePlugin(name, text, "Duplicate " + fileOf(name));
+      else await makeScript(name, text, "Duplicate " + name);
     }
 
     async function edit(name) {
@@ -557,14 +626,15 @@
     }
 
     async function rename(name) {
-      const to = goName(await ask({ title: "Rename " + name, value: name, ok: "Rename",
+      const file = fileOf(name);
+      const to = goName(await ask({ title: "Rename " + file, value: file, ok: "Rename",
         hint: "Letters, digits, '.', '-' and '_', ending in .go. An open tab follows it." }));
-      if (!to || to === name) return;
+      if (!to || to === file) return;
       try {
         await api("POST", path(name) + "/rename" + host.winQuery(), { to });
-      } catch (err) { log("err", "rename " + name + ": " + err.message); return; }
-      renamed(name, to);
-      log("ok", "renamed " + name + " to " + to);
+      } catch (err) { log("err", "rename " + file + ": " + err.message); return; }
+      renamed(name, isPlug(name) ? PLUG + to : to);
+      log("ok", "renamed " + file + " to " + to);
     }
 
     // trash moves a script into .trash (restorable from the browser), no
@@ -573,7 +643,24 @@
       try {
         await api("DELETE", path(name) + host.winQuery());
       } catch (err) { log("err", "trash " + name + ": " + err.message); return; }
-      log("info", "moved " + name + " to the trash — Ctrl+O → Trash restores it");
+      log("info", "moved " + fileOf(name) + " to the trash — Ctrl+O → Trash restores it");
+    }
+
+    // restorePlugin is restore for a trashed plugin file.
+    async function restorePlugin(t) {
+      let to = "";
+      for (;;) {
+        try {
+          const r = await api("POST", "/api/v1/plugin-trash/" + encodeURIComponent(t.id) + "/restore" + host.winQuery(), { to });
+          log("ok", "restored " + fileOf(r.name) + " to plugins_dir");
+          return;
+        } catch (err) {
+          if (err.status !== 409) { log("err", "restore " + t.name + ": " + err.message); return; }
+          to = goName(await ask({ title: "Restore " + t.name + " as…", value: freeName(t.name, [t.name]), ok: "Restore",
+            hint: "A plugin file named " + (to || t.name) + " exists — restore this one under another name." }));
+          if (!to) return;
+        }
+      }
     }
 
     async function restore(t) {
@@ -594,13 +681,23 @@
 
     async function copyPath(name) {
       let dir = "";
-      try { dir = (await list()).dir; } catch (err) { log("err", err.message); return; }
-      dbc.clip.copyText(dir.replace(/\/$/, "") + "/" + name, "the script's path");
+      try { dir = (isPlug(name) ? await api("GET", "/api/v1/plugin-files") : await list()).dir; } catch (err) { log("err", err.message); return; }
+      dbc.clip.copyText(dir.replace(/\/$/, "") + "/" + fileOf(name), isPlug(name) ? "the plugin file's path" : "the script's path");
     }
 
     // scriptItems is the menu of things to do with a script (a tab's
     // right-click, the browser's ⋯).
     function scriptItems(name) {
+      if (isPlug(name)) {
+        return [
+          { label: "Open in a tab", act: () => edit(name) },
+          { label: "Save and load (Ctrl+Enter)", act: async () => { await edit(name); applyPlugin(name); } },
+          { label: "Duplicate…", act: () => duplicate(name) },
+          { label: "Rename…", key: "F2", act: () => rename(name) },
+          { label: "Move to the trash", act: () => trash(name) },
+          { label: "Copy path", act: () => copyPath(name) },
+        ];
+      }
       return [
         { label: "Open in a tab", act: () => edit(name) },
         { label: "Run", act: () => host.run(name) },
@@ -639,10 +736,11 @@
     async function listAll() {
       const pipes = host.pipes ? host.pipes() : null;
       const jobs = host.jobs ? host.jobs() : null;
-      const [got, p, j] = await Promise.all([list(), pipes ? pipes.list().catch(() => null) : null,
-        jobs ? jobs.list().catch(() => null) : null]);
+      const [got, p, j, pl] = await Promise.all([list(), pipes ? pipes.list().catch(() => null) : null,
+        jobs ? jobs.list().catch(() => null) : null, api("GET", "/api/v1/plugin-files").catch(() => null)]);
       got.p = p || { pipelines: [], examples: [], trash: [] };
       got.j = j || { jobs: [], examples: [], trash: [] };
+      got.pl = pl || { plugins: [], examples: [], trash: [] };
       return got;
     }
 
@@ -650,12 +748,12 @@
       let got;
       try { got = await listAll(); } catch (err) { log("err", "scripts: " + err.message); return; }
       let rows = [], cur = 0, showTrash = false, seq = 0;
-      const input = el("input", { type: "search", class: "hfilter", placeholder: "filter scripts, pipelines, jobs and examples…",
+      const input = el("input", { type: "search", class: "hfilter", placeholder: "filter scripts, pipelines, jobs, plugins and examples…",
         "aria-label": "Filter scripts", spellcheck: "false", autocomplete: "off" });
       const ul = el("ul", { class: "hlist slist", role: "listbox" });
       const newBtn = el("button", { type: "button", class: "primary", title: "A new job or pipeline, or a script from a template (Alt+N)" }, "+ New ▾");
       const dirBtn = el("button", { type: "button", class: "linkish", title: "Copy the scripts directory's path" });
-      const hint = el("span", "hint", "Enter run · ⇧Enter edit · F2 rename · Ctrl+Del trash · Esc close");
+      const hint = el("span", "hint", "Enter run (a plugin: edit) · ⇧Enter edit · F2 rename · Ctrl+Del trash · Esc close");
 
       // build lays out the rows for the filter; a row with a kind can be
       // picked, the rest are section heads
@@ -707,9 +805,25 @@
           rows.push({ head: "Job examples · Enter makes your own copy" });
           for (const x of jex) rows.push({ kind: "jexample", name: x.name, desc: x.desc });
         }
+        // plugin files (web/plugins.go): each one kind of pipeline node,
+        // with what the loader made of it — its plugin, or why not
+        rows.push({ head: "Plugins · " + (got.pl.short || got.pl.dir || "plugins_dir") });
+        const pll = got.pl.plugins.filter((x) => hit(x.name, (x.plugin || "") + " " + (x.desc || "") + " " + (x.error || "")));
+        for (const x of pll) {
+          rows.push({ kind: "plugin", name: x.name, when: ago(x.mod), bad: !!x.error,
+            desc: x.error ? "⚠ did not load: " + x.error : (KIND_GLYPH[x.kind] || "") + " " + x.plugin + (x.desc ? " — " + x.desc : "") });
+        }
+        if (!got.pl.plugins.length) rows.push({ note: "none yet — copy an example below, or + New ▾ → Plugin" });
+        else if (!pll.length) rows.push({ note: "no plugin matches" });
+        const plex = got.pl.examples.filter((x) => hit(x.name, x.desc));
+        if (plex.length) {
+          rows.push({ head: "Plugin examples · Enter makes your own copy" });
+          for (const x of plex) rows.push({ kind: "plexample", name: x.name, desc: x.desc });
+        }
         const trashed = got.trash.map((t) => ({ kind: "trash", t, name: t.name, at: t.trashed }))
           .concat(got.p.trash.map((t) => ({ kind: "ptrash", t, name: t.name, at: t.trashed })))
           .concat(got.j.trash.map((t) => ({ kind: "jtrash", t, name: t.name, at: t.trashed })))
+          .concat(got.pl.trash.map((t) => ({ kind: "pltrash", t, name: t.name, at: t.trashed })))
           .sort((a, b) => String(b.at).localeCompare(String(a.at)));
         if (trashed.length) {
           rows.push({ head: "Trash (" + trashed.length + ") " + (showTrash ? "▾" : "▸"), toggle: true });
@@ -754,6 +868,14 @@
               dbc.menu.open(at.left, at.bottom + 2, host.jobs().items(r.name).map((it) => ({ ...it, act: () => { dbc.modal.close(); it.act(); } })));
             })];
         }
+        if (r.kind === "plugin") {
+          return [b("✎", "Edit it in a tab (Enter)", () => go(r, "edit")),
+            b("⋯", "More: save and load, duplicate, rename, trash, copy path", (ev) => {
+              const at = ev.currentTarget.getBoundingClientRect();
+              dbc.menu.open(at.left, at.bottom + 2, scriptItems(PLUG + r.name).map((it) => ({ ...it, act: () => { dbc.modal.close(); it.act(); } })));
+            })];
+        }
+        if (r.kind === "plexample") return [b("⧉ Copy", "Make an editable copy in plugins_dir, where it is loaded (Enter)", () => go(r, "run"))];
         if (r.kind === "pexample") return [b("⧉ Copy", "Make an editable copy in your pipelines (Enter)", () => go(r, "run"))];
         if (r.kind === "jexample") return [b("⧉ Copy", "Make an editable copy in your jobs (Enter)", () => go(r, "run"))];
         if (r.kind === "example") return [b("⧉ Copy", "Make an editable copy in your scripts (Enter)", () => go(r, "run"))];
@@ -773,7 +895,7 @@
           }
           if (r.note) { ul.append(el("li", "snote", r.note)); continue; }
           const n = i++;
-          const li = el("li", { class: "srow " + r.kind + (n === cur ? " cur" : ""), role: "option", "data-i": String(n),
+          const li = el("li", { class: "srow " + r.kind + (r.bad ? " bad" : "") + (n === cur ? " cur" : ""), role: "option", "data-i": String(n),
             "data-name": r.name, title: r.desc || "" },
           el("span", "sname", r.name), el("span", "sdesc", r.desc || ""), el("span", "swhen", r.when || ""),
           el("span", "sact", ...actions(r)));
@@ -812,6 +934,12 @@
           await host.jobs().copyExample(r.name);
         } else if (r.kind === "jtrash") {
           await host.jobs().restore(r.t);
+        } else if (r.kind === "plugin") {
+          await edit(PLUG + r.name); // a plugin file has nothing to run: Enter edits it
+        } else if (r.kind === "plexample") {
+          await copyPluginExample(r.name);
+        } else if (r.kind === "pltrash") {
+          await restorePlugin(r.t);
         }
       }
 
@@ -821,7 +949,11 @@
           { label: "Job — pipelines in a DAG, run on a schedule or by hand", act: () => { dbc.modal.close(); jobs.newJob(); } }] : [])
           .concat(pipes ? [{ head: "new pipeline" },
             { label: "Pipeline — a source into a preview, on the canvas", act: () => { dbc.modal.close(); pipes.newPipeline(); } }] : []);
-        dbc.menu.open(x, y, head.concat([{ head: "new script from" }], got.templates.map((t) => ({
+        // a new plugin starts as a copy of the example of its kind
+        const plugs = [{ head: "new plugin (a pipeline node in Go) from" }].concat(got.pl.examples.map((x) => ({
+          label: "Plugin · " + x.name + " — " + x.desc, act: () => { dbc.modal.close(); copyPluginExample(x.name); },
+        })));
+        dbc.menu.open(x, y, head.concat(got.pl.examples.length ? plugs : [], [{ head: "new script from" }], got.templates.map((t) => ({
           label: t.title, act: () => { dbc.modal.close(); newFrom(t); },
         }))));
       }
@@ -862,6 +994,7 @@
           if (e.key === "F2" && r && r.kind === "script") { dbc.modal.close(); rename(r.name); return true; }
           if (e.key === "F2" && r && r.kind === "pipeline") { dbc.modal.close(); host.pipes().rename(r.name); return true; }
           if (e.key === "F2" && r && r.kind === "job") { dbc.modal.close(); host.jobs().rename(r.name); return true; }
+          if (e.key === "F2" && r && r.kind === "plugin") { dbc.modal.close(); rename(PLUG + r.name); return true; }
           if ((e.key === "Delete" || e.key === "Backspace") && (e.ctrlKey || e.metaKey) && r && r.kind === "script") {
             trash(r.name);
             return true;
@@ -872,6 +1005,10 @@
           }
           if ((e.key === "Delete" || e.key === "Backspace") && (e.ctrlKey || e.metaKey) && r && r.kind === "job") {
             host.jobs().trash(r.name);
+            return true;
+          }
+          if ((e.key === "Delete" || e.key === "Backspace") && (e.ctrlKey || e.metaKey) && r && r.kind === "plugin") {
+            trash(PLUG + r.name);
             return true;
           }
           if (e.altKey && e.code === "KeyN") {
@@ -1091,9 +1228,12 @@
       // make writes text as a new script (asking its name) and opens it in
       // a tab: a pipeline's "Export as Go" (pipelines.js) lands this way
       make: makeScript,
-      // refreshBrowser re-lists the open browser (a "pipelines" event: its
-      // Pipelines section is drawn from the same list)
+      // refreshBrowser re-lists the open browser (a "pipelines" or
+      // "plugins" event: its Pipelines and Plugins sections are drawn from
+      // the same list)
       refreshBrowser: () => { if (browser) browser.refresh(); },
+      // a plugin file's tab ("plugin:<file>"): what it is, and its Run
+      isPlugin: isPlug, applyPlugin,
     };
   }
 

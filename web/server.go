@@ -139,6 +139,12 @@ type Server struct {
 	// sched fires the cron lines of the jobs in jobs_dir while the server
 	// serves: made in New, started by Run, stopped by Shutdown.
 	sched *jobs.Scheduler
+	// watchCtx bounds pluginWatch (plugins.go): made in New, so Shutdown
+	// can end it without racing Run — the plugin registry is the
+	// process's, and a stopped server must not keep reloading it from
+	// its own plugins_dir (in tests, many servers share a process).
+	watchCtx  context.Context
+	stopWatch context.CancelFunc
 }
 
 //go:embed all:static
@@ -193,6 +199,10 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) (*Server, error) {
 	}, cfg.ConnIdleTimeout)
 	s.hub.newChat = func(w *window) *assistant { return newAssistant(s, w) }
 	s.sched = s.jobs.NewScheduler(jobs.SchedOptions{Dir: cfg.JobsDir})
+	s.watchCtx, s.stopWatch = context.WithCancel(context.Background())
+	// the user's plugin files, before any page asks for the registry
+	// (plugins.go; pluginWatch keeps it current while serving)
+	s.syncPlugins()
 	// a run a crash (or a kill -9) left "running" is said to be interrupted
 	// before any page lists it
 	if n, err := s.jobs.Recover(); err != nil {
@@ -294,6 +304,15 @@ func (s *Server) routes() {
 	// pipelines and their runs (pipelines.go)
 	r.Get("/api/v1/pipelines", s.handlePipelines)
 	r.Get("/api/v1/plugins", s.handlePlugins)
+	// the user's plugin files (plugins.go)
+	r.Get("/api/v1/plugin-files", s.handlePluginFiles)
+	r.Post("/api/v1/plugin-check", s.handlePluginCheck)
+	r.Get("/api/v1/plugin-examples/:name", s.handlePluginExample)
+	r.Post("/api/v1/plugin-trash/:id/restore", s.handlePluginRestore)
+	r.Get("/api/v1/plugin-files/:name", s.handlePluginRead)
+	r.Put("/api/v1/plugin-files/:name", s.handlePluginSave)
+	r.Delete("/api/v1/plugin-files/:name", s.handlePluginTrash)
+	r.Post("/api/v1/plugin-files/:name/rename", s.handlePluginRename)
 	r.Post("/api/v1/pipeline-check", s.handlePipelineCheck)
 	r.Post("/api/v1/pipeline-preview", s.handlePipelinePreview)
 	r.Post("/api/v1/pipeline-run", s.handlePipelineRun)
@@ -392,6 +411,7 @@ func (s *Server) Run() error {
 	reapCtx, stopReap := context.WithCancel(context.Background())
 	defer stopReap()
 	go s.reapLoop(reapCtx)
+	go s.pluginWatch(s.watchCtx)
 	// the scheduler only while serving: a Server a test builds and never
 	// runs fires nothing
 	s.sched.Start()
@@ -414,6 +434,7 @@ func (s *Server) Shutdown() {
 	s.stopDump(shutdownGrace) // pg_dump is a child process: it must not outlive dbc
 	// no new scheduled run, then the running ones stopped
 	s.sched.Stop()
+	s.stopWatch()
 	// a pipeline run holds Readers and Writers on pooled connections:
 	// canceled, each rolls its fragment back (and writes its record)
 	// before the pools close

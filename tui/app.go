@@ -132,6 +132,9 @@ type Model struct {
 	jobTickSeq int
 	jobTicks   int
 	jobsNote   string
+	// pluginsNote is what loading the user's plugin files at start had to
+	// say (a line per file that did not load), logged with jobsNote
+	pluginsNote string
 	// runsDir is where the engine writes its records ("" in memory only,
 	// under Options.NoPersist)
 	runsDir string
@@ -334,6 +337,9 @@ func (m *Model) startupLog() {
 		"drag borders to resize · hold Shift (⌥ on macOS) to select terminal text")
 	for _, w := range m.cfg.Warnings {
 		m.log(logWarn, w)
+	}
+	if m.pluginsNote != "" {
+		m.log(logWarn, m.pluginsNote)
 	}
 	if m.jobsNote != "" {
 		m.log(logMuted, m.jobsNote)

@@ -134,6 +134,7 @@ type pipesModal struct {
 
 // openPipes opens the browser, its cursor on sel when that is listed.
 func (m *Model) openPipes(sel pipeSel) {
+	m.syncPlugins()
 	pm := &pipesModal{filter: newEditor(true), lst: newList(), now: time.Now,
 		pipesDir: m.cfg.PipelinesDir, jobsDir: m.cfg.JobsDir}
 	pm.filter.placeholder = "/ filters by name and description"
@@ -1009,6 +1010,7 @@ type placedDiag struct {
 // check` / `dbc job check` do: a parse error placed at its offset, else
 // the kind's check, each finding placed by its where.
 func (m *Model) checkSpec(k specKind, text string) []placedDiag {
+	m.syncPlugins() // a node may place a plugin file edited since
 	parseErr := func(err error) []placedDiag {
 		line, col := pipeline.ParseErrorAt(text, err)
 		return []placedDiag{{Diag: pipeline.Diag{Severity: pipeline.SevError, Msg: strings.TrimPrefix(err.Error(), "json: ")}, line: line, col: col}}

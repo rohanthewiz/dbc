@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/rohanthewiz/dbc/jobs"
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/pipeline"
+	"github.com/rohanthewiz/dbc/script"
 	"github.com/rohanthewiz/dbc/scripts"
 	"github.com/rohanthewiz/dbc/userdata"
 )
@@ -32,7 +34,8 @@ import (
 //	    [--preview N] [--fragment F]           preview N rows, nothing written; or one fragment
 //	dbc pipeline check NAME…                   diagnostics, as dbc script --check; exit 1 on an error
 //	dbc pipeline export NAME [-o f.go]         the pipeline as a dbc script (the Builder form)
-//	dbc plugins                                the node kinds and their fields
+//	dbc plugins                                the node kinds and their fields, yours marked
+//	dbc plugins --check [FILE…]                check plugin files (all of plugins_dir by default)
 //
 // A run's log lines (fragments starting and ending, DDL, a node's Logf)
 // stream as a script's s.Print lines do: stdout in text, stderr when a
@@ -91,11 +94,30 @@ func pipelineCommand() *cli.Command {
 	}
 }
 
+var flagPluginsCheck bool
+
 func pluginsCommand() *cli.Command {
 	return &cli.Command{
-		Name:   "plugins",
-		Usage:  "list the pipeline node kinds (plugins) and their fields",
+		Name:      "plugins",
+		Usage:     "list the pipeline node kinds (plugins) and their fields, or check plugin files (--check)",
+		ArgsUsage: "[--check [file.go|NAME]...]",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "check", Usage: "check plugin files without running them (every file in plugins_dir, or those named); exit 1 on an error",
+				Destination: &flagPluginsCheck},
+		},
 		Action: pluginsAction,
+	}
+}
+
+// loadPlugins loads the user's plugin files (plugins_dir) into the
+// registry, for a command that checks or runs pipelines, so their names
+// are known to Check and the runner. A file that did not load is said on
+// stderr — a spec placing its plugin would otherwise fail on "no plugin"
+// with no hint why — and the others work.
+func loadPlugins(cfg *config.Config) {
+	script.SyncPlugins(cfg.PluginsDir)
+	for _, p := range pipeline.PluginProblems() {
+		fmt.Fprintf(os.Stderr, "dbc: plugin file %s did not load: %s\n", config.TildePath(p.File), p.Err)
 	}
 }
 
@@ -151,14 +173,26 @@ func pipelinesAction(ctx context.Context, cmd *cli.Command) error {
 
 func pluginsAction(ctx context.Context, cmd *cli.Command) error {
 	refuseQueryFlags("plugins")
+	cfg := loadConfigOnly()
+	if flagPluginsCheck {
+		return pluginsCheck(cfg, cmd.Args().Slice())
+	}
+	if cmd.Args().Present() {
+		usage("usage: dbc plugins [--check [file.go|NAME]...]")
+	}
+	loadPlugins(cfg)
 	f := outFormat()
 	if f == export.JSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(pipeline.Plugins())
 	}
-	r := &model.Result{Query: "dbc plugins", Columns: []string{"plugin", "kind", "label", "fields", "description"}}
+	r := &model.Result{Query: "dbc plugins", Columns: []string{"plugin", "kind", "label", "fields", "description", "from"}}
 	for _, p := range pipeline.Plugins() {
+		from := "built-in"
+		if p.File != "" {
+			from = config.TildePath(p.File)
+		}
 		var fields []string
 		for _, fd := range p.Fields {
 			s := fd.Name
@@ -167,10 +201,76 @@ func pluginsAction(ctx context.Context, cmd *cli.Command) error {
 			}
 			fields = append(fields, s)
 		}
-		r.Rows = append(r.Rows, []string{p.Name, string(p.Kind), p.Label, strings.Join(fields, " "), p.Doc})
-		r.Raw = append(r.Raw, []any{p.Name, string(p.Kind), p.Label, strings.Join(fields, " "), p.Doc})
+		r.Rows = append(r.Rows, []string{p.Name, string(p.Kind), p.Label, strings.Join(fields, " "), p.Doc, from})
+		r.Raw = append(r.Raw, []any{p.Name, string(p.Kind), p.Label, strings.Join(fields, " "), p.Doc, from})
 	}
 	emit([]*model.Result{r}, f)
+	return nil
+}
+
+// pluginsCheck is `dbc plugins --check`: each plugin file — those named
+// (a path, or a name in plugins_dir with .go optional), else every one in
+// plugins_dir — through script.CheckPlugin, and then, when that is clean,
+// through the loader, which runs the file's var Plugin and binds its
+// funcs (what the check cannot see without running it: a computed name,
+// a name another file has). Findings print as `dbc script --check` prints
+// them, path:line:col: message; exit 1 on an error, for CI.
+func pluginsCheck(cfg *config.Config, args []string) error {
+	var paths []string
+	for _, a := range args {
+		p := a
+		if _, err := os.Stat(p); err != nil && !strings.ContainsAny(a, `/\`) {
+			p = filepath.Join(cfg.PluginsDir, strings.TrimSuffix(a, ".go")+".go")
+		}
+		if _, err := os.Stat(p); err != nil {
+			usage(fmt.Sprintf("no plugin file %s (not a path, nor in %s)", a, config.TildePath(cfg.PluginsDir)))
+		}
+		paths = append(paths, p)
+	}
+	if len(args) == 0 {
+		infos, _ := userdata.ListPlugins(cfg.PluginsDir)
+		for _, in := range infos {
+			paths = append(paths, filepath.Join(cfg.PluginsDir, in.Name))
+		}
+		fmt.Fprintf(os.Stderr, "%d plugin file(s) in %s\n", len(paths), config.TildePath(cfg.PluginsDir))
+	}
+	type fileDiag struct {
+		File string `json:"file"`
+		script.Diag
+	}
+	all := []fileDiag{}
+	bad := false
+	for _, p := range paths {
+		bs, err := os.ReadFile(p)
+		if err != nil {
+			fail(err, "could not read the plugin file")
+		}
+		diags := script.CheckPlugin(filepath.Base(p), string(bs))
+		if !script.HasError(diags) {
+			// the loader's verdict, on this file alone
+			if prob := script.LoadPluginFile(p); prob != nil {
+				diags = append(diags, script.Diag{Line: 1, Severity: script.SevError, Msg: prob.Err})
+			}
+		}
+		bad = bad || script.HasError(diags)
+		for _, d := range diags {
+			if flagFormat == "json" {
+				all = append(all, fileDiag{File: p, Diag: d})
+			} else {
+				fmt.Printf("%s:%s\n", config.TildePath(p), d)
+			}
+		}
+	}
+	if flagFormat == "json" {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(all); err != nil {
+			fail(err, "could not write the diagnostics")
+		}
+	}
+	if bad {
+		os.Exit(1)
+	}
 	return nil
 }
 
@@ -210,6 +310,7 @@ func pipelineRunAction(ctx context.Context, cmd *cli.Command) error {
 		usage(err.Error())
 	}
 	cfg, mgr := setup(demoLazy)
+	loadPlugins(cfg)
 	defer mgr.Close()
 	warnConfig(cfg)
 	ref, err := cfg.FindPipeline(cmd.Args().First())
@@ -368,6 +469,7 @@ func pipelineCheckAction(ctx context.Context, cmd *cli.Command) error {
 		usage("usage: dbc pipeline check <file.json|NAME>...")
 	}
 	cfg := loadConfigOnly()
+	loadPlugins(cfg)
 	refs := findPipelines(cfg, cmd.Args().Slice())
 	var conns []string
 	for _, c := range cfg.Conns() {

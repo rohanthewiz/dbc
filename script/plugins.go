@@ -26,8 +26,12 @@ import (
 //
 //	go.transform   func Apply(b *sdb.Batch) (*sdb.Batch, error)   per batch
 //	go.source      func Next(e *sdb.Env) (*sdb.Batch, error)       until it returns nil
+//	go.sink        func Write(e *sdb.Env, b *sdb.Batch) error      per batch
 //	go.action      func Run(s *sdb.S) error                        a script's own shape
 //	script.run     a saved script by name                          a script as a fragment
+//
+// A user plugin file (userplugins.go) is the same machinery with a
+// descriptor: its funcs are bound into these node types.
 //
 // The code is compiled once per run — a fresh interpreter, the snippet
 // evaluated, the entry points looked up by name and kept as func values
@@ -60,14 +64,10 @@ func init() {
 			if err != nil {
 				return nil, err
 			}
-			t := &goTransform{node: n}
-			if err := n.entry("Apply", true, &t.apply1, &t.apply2); err != nil {
-				return nil, err
-			}
-			_ = n.entry("Open", false, &t.open)
-			_ = n.entry("Flush", false, &t.flush)
-			_ = n.entry("Close", false, &t.close)
-			return t, nil
+			// bindPlugin binds exactly go.transform's entry points; an
+			// optional one with the wrong signature is an error there,
+			// rather than a func silently never called
+			return bindPlugin(n, pipeline.KindTransform)
 		},
 		Check: func(cfg pipeline.Config) []string { return checkSnippet(cfg["code"], "Apply") },
 	})
@@ -85,15 +85,28 @@ func init() {
 			if err != nil {
 				return nil, err
 			}
-			s := &goSource{node: n}
-			if err := n.entry("Next", true, &s.next); err != nil {
-				return nil, err
-			}
-			_ = n.entry("Open", false, &s.open)
-			_ = n.entry("Close", false, &s.close)
-			return s, nil
+			return bindPlugin(n, pipeline.KindSource)
 		},
 		Check: func(cfg pipeline.Config) []string { return checkSnippet(cfg["code"], "Next") },
+	})
+	pipeline.Register(pipeline.Plugin{
+		Name: "go.sink", Kind: pipeline.KindSink, Label: "Go sink",
+		Doc: "Loads the rows with Go: func Write(e *sdb.Env, b *sdb.Batch) error, called per batch — post them to an API, " +
+			"write a file of your own format, call a stored procedure per row. Optional: func Open(e *sdb.Env, cols []sdb.Col) error " +
+			"before the first batch, func Commit(e *sdb.Env) (sdb.Stats, error) at the end (without it the stats are the rows " +
+			"written), func Abort() error when the fragment fails. A sink should make nothing visible before Commit, so a failed " +
+			"fragment leaves no trace: buffer, or write somewhere temporary, and publish in Commit.",
+		Fields: []pipeline.Field{
+			{Name: "code", Type: pipeline.FieldGo, Required: true, Doc: "The Go code, with func Write."},
+		},
+		New: func(cfg pipeline.Config) (any, error) {
+			n, err := newGoNode(cfg["code"])
+			if err != nil {
+				return nil, err
+			}
+			return bindPlugin(n, pipeline.KindSink)
+		},
+		Check: func(cfg pipeline.Config) []string { return checkSnippet(cfg["code"], "Write") },
 	})
 	pipeline.Register(pipeline.Plugin{
 		Name: "go.action", Kind: pipeline.KindAction, Label: "Go action",
@@ -210,7 +223,7 @@ func checkSnippet(code, entry string) []string {
 	if !found {
 		out = append(out, fmt.Sprintf("code: no func %s: it is what the node calls", entry))
 	}
-	for _, d := range lintMapCommaOk(fset, f) {
+	for _, d := range append(lintMapCommaOk(fset, f), lintStoreComputed(fset, f)...) {
 		out = append(out, "code:"+shiftDiag(d, header).String())
 	}
 	for _, d := range compileDiags(src) {
@@ -229,9 +242,20 @@ func shiftDiag(d Diag, header int) Diag {
 	return d
 }
 
-// goNode is a compiled snippet: its interpreter, kept for the run.
+// goNode is a compiled snippet or plugin file: its interpreter, kept for
+// the run, and how its entry points' signatures are spelled in messages
+// (want; nil means wantSig, a snippet's).
 type goNode struct {
-	i *interp.Interpreter
+	i    *interp.Interpreter
+	want func(name string) string
+}
+
+// wantOf spells entry point name's signature for a message.
+func (n *goNode) wantOf(name string) string {
+	if n.want != nil {
+		return n.want(name)
+	}
+	return wantSig(name)
 }
 
 // newGoNode compiles code in a fresh interpreter.
@@ -255,7 +279,7 @@ func (n *goNode) entry(name string, required bool, dsts ...any) error {
 	v, err := n.i.Eval("main." + name)
 	if err != nil {
 		if required {
-			return serr.New("the Go code has no func "+name, "want", wantSig(name))
+			return serr.New("the Go code has no func "+name, "want", n.wantOf(name))
 		}
 		return nil
 	}
@@ -266,7 +290,7 @@ func (n *goNode) entry(name string, required bool, dsts ...any) error {
 			return nil
 		}
 	}
-	return serr.New("func "+name+" has the wrong signature", "want", wantSig(name), "got", v.Type().String())
+	return serr.New("func "+name+" has the wrong signature", "want", n.wantOf(name), "got", v.Type().String())
 }
 
 // wantSig spells the entry points as the docs do.
@@ -282,6 +306,12 @@ func wantSig(name string) string {
 		return "func Flush(e *sdb.Env) (*sdb.Batch, error)"
 	case "Close":
 		return "func Close() error"
+	case "Write":
+		return "func Write(e *sdb.Env, b *sdb.Batch) error"
+	case "Commit":
+		return "func Commit(e *sdb.Env) (sdb.Stats, error)"
+	case "Abort":
+		return "func Abort() error"
 	}
 	return wantRun
 }
@@ -344,6 +374,10 @@ type goSource struct {
 	next  func(*pipeline.Env) (*pipeline.Batch, error)
 	open  func(*pipeline.Env) error
 	close func() error
+	// closeOK is Close(ok bool): told whether the fragment succeeded, as a
+	// built-in source is — a source holding a transaction commits or rolls
+	// back by it
+	closeOK func(bool) error
 }
 
 func (s *goSource) Open(e *pipeline.Env) error {
@@ -358,11 +392,14 @@ func (s *goSource) Next(e *pipeline.Env) (out *pipeline.Batch, err error) {
 	return out, err
 }
 
-func (s *goSource) Close(bool) error {
-	if s.close == nil {
-		return nil
+func (s *goSource) Close(ok bool) error {
+	switch {
+	case s.closeOK != nil:
+		return call("Close", func() error { return s.closeOK(ok) })
+	case s.close != nil:
+		return call("Close", s.close)
 	}
-	return call("Close", s.close)
+	return nil
 }
 
 // goAction runs its code as a script would run: through RunSource, with

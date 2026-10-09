@@ -234,8 +234,11 @@ func (s *Server) handlePipelineExample(ctx rweb.Context) error {
 // handlePlugins is GET /api/v1/plugins: every plugin with its fields —
 // the palette lists them by kind, and the inspector draws a node's form
 // from its plugin's fields, so no plugin needs page code of its own. The
-// connections ride along for the conn fields' pickers.
+// connections ride along for the conn fields' pickers. A user plugin
+// carries its file (the palette's Yours section); problems are the plugin
+// files that did not load, listed there too but not placeable.
 func (s *Server) handlePlugins(ctx rweb.Context) error {
+	s.syncPlugins()
 	ps := pipeline.Plugins()
 	for i := range ps {
 		ps[i].Fields = nonNil(ps[i].Fields)
@@ -244,7 +247,8 @@ func (s *Server) handlePlugins(ctx rweb.Context) error {
 	for _, c := range s.cfg.Conns() {
 		conns = append(conns, c.Name)
 	}
-	return ok(ctx, map[string]any{"plugins": ps, "conns": conns})
+	return ok(ctx, map[string]any{"plugins": ps, "conns": conns, "problems": nonNil(pipeline.PluginProblems()),
+		"dir": config.TildePath(s.cfg.PluginsDir)})
 }
 
 // ---------------------------------------------------------------------------

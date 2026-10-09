@@ -13,6 +13,7 @@ import (
 	"github.com/rohanthewiz/dbc/ai"
 	"github.com/rohanthewiz/dbc/codehl"
 	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/pipeline"
 	"github.com/rohanthewiz/dbc/sdb/sdbapi"
 	"github.com/rohanthewiz/dbc/userdata"
 	"github.com/rohanthewiz/dbc/workspace"
@@ -499,7 +500,10 @@ func (m *Model) chatContext(question string) (ctx ai.Context, refs []db.TableRef
 // question would carry it — dbc web's rule (web assistant.withAPILocked).
 func (p *chatPane) withAPI(ctx ai.Context) ai.Context {
 	if ctx.Script != "" && !p.apiSent {
-		ctx.ScriptAPI = sdbapi.Summary()
+		// the pipeline plugins ride along: a script builds pipelines from
+		// them, and a plugin file (a script tab too) is written against
+		// their shape — the user's own plugins included
+		ctx.ScriptAPI = sdbapi.Summary() + "\n" + pipeline.Summary()
 	}
 	return ctx
 }

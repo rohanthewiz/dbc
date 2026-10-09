@@ -983,6 +983,8 @@ a.btnlink:hover { border-color: var(--accent); }
 .slist li.snote:hover { background: none; }
 .slist .sname { flex: none; }
 .slist .srow.script .sname { color: var(--accent); }
+.slist .srow.plugin .sname { color: var(--accent); }
+.slist .srow.plugin.bad .sdesc { color: var(--warn); }
 .slist .sdesc { color: var(--muted); overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
 .slist .swhen { color: var(--muted); flex: none; }
 .slist .sact { display: flex; gap: 4px; flex: none; visibility: hidden; }
@@ -1036,6 +1038,9 @@ a.btnlink:hover { border-color: var(--accent); }
 .pitem .pg { width: 12px; text-align: center; }
 .pitem .pn { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .pitem .pl { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* a plugin file that did not load: listed in Yours with why (its title), not draggable */
+.pitem.broken { cursor: default; opacity: .7; }
+.pitem.broken .pg { color: var(--warn); }
 .pnote { color: var(--muted); font-style: italic; padding: 6px; }
 .pghost { position: fixed; z-index: 50; pointer-events: none; padding: 4px 10px; border-radius: 4px; background: var(--panel2);
   border: 1px solid var(--accent); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; box-shadow: 0 4px 14px rgba(0,0,0,.35); }

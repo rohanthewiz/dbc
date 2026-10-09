@@ -224,6 +224,7 @@ func jobRunAction(ctx context.Context, cmd *cli.Command) error {
 		usage(err.Error())
 	}
 	cfg, mgr := setup(demoLazy)
+	loadPlugins(cfg)
 	defer mgr.Close()
 	warnConfig(cfg)
 	ref, err := cfg.FindJob(cmd.Args().First())
@@ -308,6 +309,7 @@ func jobCheckAction(ctx context.Context, cmd *cli.Command) error {
 		usage("usage: dbc job check <file.json|NAME>...")
 	}
 	cfg := loadConfigOnly()
+	loadPlugins(cfg)
 	var refs []config.JobRef
 	for _, a := range cmd.Args().Slice() {
 		refs = append(refs, findJob(cfg, a))

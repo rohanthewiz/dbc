@@ -54,6 +54,7 @@ func Check(name, src string) []Diag {
 	var out []Diag
 	out = append(out, checkSignature(fset, f)...)
 	out = append(out, lintMapCommaOk(fset, f)...)
+	out = append(out, lintStoreComputed(fset, f)...)
 	out = append(out, compileDiags(src)...)
 	slices.SortStableFunc(out, func(a, b Diag) int {
 		if a.Line != b.Line {
@@ -206,6 +207,73 @@ func lintMapCommaOk(fset *token.FileSet, f *ast.File) []Diag {
 		return true
 	})
 	return out
+}
+
+// lintStoreComputed flags an operator's result stored straight into an
+// element of a two-level index or a selector's index — the shape of a
+// batch's or a result's rows:
+//
+//	b.Rows[i][c] = s + "!"      rows[i][j] = n * 2      b.Rows[i][c] = -n
+//
+// yaegi v0.16.1 writes the result of a binary (+ - * / …, not a
+// comparison) or unary operator stored into an element of a []any it was
+// handed by compiled code into the wrong frame slot: the element keeps
+// its old value, and a local — often the batch itself — is overwritten,
+// so a transform's `return b, nil` returns nil and its rows are silently
+// dropped. Through a call's result, a variable, or a conversion the
+// value lands where it should. Without types the lint cannot tell such a
+// slice from one the code made itself (which works), so it looks only at
+// the two shapes rows come in and says what to do either way. A row
+// taken into a variable first (row := b.Rows[i]; row[c] = x + 1) is
+// affected too, and not caught.
+func lintStoreComputed(fset *token.FileSet, f *ast.File) []Diag {
+	var out []Diag
+	ast.Inspect(f, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.ASSIGN || len(as.Lhs) != len(as.Rhs) {
+			return true
+		}
+		for i, l := range as.Lhs {
+			ix, ok := l.(*ast.IndexExpr)
+			if !ok || !rowShaped(ix.X) || !computed(as.Rhs[i]) {
+				continue
+			}
+			p := fset.Position(l.Pos())
+			out = append(out, Diag{Line: p.Line, Col: p.Column, Severity: SevWarning,
+				Msg: "the script interpreter mis-stores an operator's result put straight into a row's element: " +
+					"the row keeps its old value and a local (often the batch) is overwritten. " +
+					"Put it in a variable first (v := …; then assign v) or wrap it in any(…)."})
+		}
+		return true
+	})
+	return out
+}
+
+// rowShaped reports whether x, the indexed part of an element store, is
+// rows[i] or a.B (b.Rows, r.Raw): what an element of a row is reached
+// through.
+func rowShaped(x ast.Expr) bool {
+	switch ast.Unparen(x).(type) {
+	case *ast.IndexExpr, *ast.SelectorExpr:
+		return true
+	}
+	return false
+}
+
+// computed reports whether e is an operator's result: a binary
+// expression other than a comparison, or a unary one other than & and <-.
+func computed(e ast.Expr) bool {
+	switch e := ast.Unparen(e).(type) {
+	case *ast.BinaryExpr:
+		switch e.Op {
+		case token.EQL, token.NEQ, token.LSS, token.LEQ, token.GTR, token.GEQ, token.LAND, token.LOR:
+			return false
+		}
+		return true
+	case *ast.UnaryExpr:
+		return e.Op != token.AND && e.Op != token.ARROW && e.Op != token.NOT
+	}
+	return false
 }
 
 // yaegiPosRe finds the position yaegi puts at the front of an error:

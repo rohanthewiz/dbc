@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-188
+**Next ID:** N-192
 
 ## Open
 
@@ -154,6 +154,39 @@ ten session docs in `ai_docs/claude_sessions/`
   With `runs_keep` 200 per name and many names this grows; reading only a
   record's leading bytes (the header fields come first) or a per-name
   index would bound it. Contingent on a `runs_dir` big enough to notice.
+- **N-188** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value medium
+  Report the yaegi mis-store upstream (traefik/yaegi, v0.16.1): a binary or
+  unary operator's result assigned straight into an element of a `[]any`
+  that compiled code handed in (`b.Rows[i][c] = s + "!"`, also via
+  `row := b.Rows[i]`) lands in the wrong frame slot — the element keeps its
+  value and a local (the batch) is overwritten, so `Apply` returns nil and
+  the rows are dropped. Calls, comparisons, variables and `any(…)` are
+  fine; a slice the code made itself is fine. dbc routes around it
+  (`script.lintStoreComputed` warns, the runner logs a transform's first
+  dropped batch); `script.TestYaegiStoreComputedBug` is the minimal repro
+  and fails once an upgrade fixes it — then drop the lint and the README's
+  workaround paragraph.
+- **N-189** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value low
+  `sql.write mode: upsert` on MySQL. It refuses today: MySQL's
+  `ON DUPLICATE KEY UPDATE` matches any unique key, not the `key` columns
+  named, so the semantics differ from Postgres and SQLite. Worth it only
+  if a MySQL user asks (as N-172); then say the difference in the field's
+  doc, or require that `key` be the table's only unique key.
+- **N-190** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value medium
+  A relative `path` in `csv.read`, `jsonl.read`, `csv.write` and
+  `jsonl.write` is resolved against the process's working directory. For
+  `dbc pipeline run` that is the shell's, as expected; for dbc web, the
+  scheduler and dbc.app it is wherever the process was started (dbc.app's
+  may be `/`), so a pipeline that works from a shell writes elsewhere, or
+  fails, when scheduled. Resolve a relative path against one place (a
+  `files_dir`, or the pipeline file's own directory), or have the check
+  warn on a relative path in a scheduled job's pipelines.
+- **N-191** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value low
+  Copying an example plugin twice (or duplicating a plugin file) gives two
+  files declaring one `Name`; the second does not load ("… is already the
+  plugin of …", said in the log and the list). The copy flows (both UIs)
+  could offer to rename `Plugin.Name` in the new file to match its file
+  name, when the name is a plain string literal.
 
 ## Validate
 
@@ -191,6 +224,7 @@ and `raised`.
   onto a card, a wire to a card, ⌥R for the Runs dialog (Option may type a
   character first), Backspace back from a run page, and the ⧉ curl copy.
   Chrome is covered by the web e2e step "job tabs and the runs view".
+  Updated `2026-1009-1546-phase-6-plugin-sdk-builtins`: add plugin files in WKWebView: a plugin tab (◈) — ⌘S saves and loads it (the log line), the plugin check's markers — and the pipeline palette's Yours section (a drag of a user plugin, a broken file's ⚠ title). Chrome is covered by the web e2e step "plugin files and the palette".
 - **N-087** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
   Drive the TUI's new navigator by hand in a real terminal on a big
   Postgres: the picker rows, `d`/`s`, typing into a 150-schema list, the
@@ -256,6 +290,7 @@ and `raised`.
   monitor's `▾ ▸` render; a real mouse on the status bar's `● name 3m12s`;
   and `e` with a real editor on a JSON spec. The e2e step "Ctrl+J: …"
   covers the rest through the stand-in editor.
+  Updated `2026-1009-1546-phase-6-plugin-sdk-builtins`: add the scripts browser's Plugins section: how the kind glyphs `⇥ ƒ ⇤ ▸` and `⚠` render, `Enter` on a plugin row opening a real editor, and the log's "loaded: …" line on return. The TUI e2e step "Ctrl+O plugins: …" covers the flow through the stand-in editor.
 - **N-145** · raised `2026-1007-1245-result-tabs-per-connection` · value low
   Drive a real share with the assistant end to end. Neither e2e harness has
   a connection with `ai_rows = true`, so `S` / "✦ Share with the assistant"
@@ -490,6 +525,40 @@ call.
   `postgres:19` is published, with its EOL from
   postgresql.org/support/versioning. Check `dataDir` too, in case the
   image moves its data again, as 18 did.
+
+## Non-goals
+
+- **N-012** · declined `2026-0728-2000-stmt-under-cursor-and-query-cancel` —
+  Highlighting the statement under the cursor in the editor: tview's `Select`
+  would leave a destructive selection behind.
+- **N-013** · declined `2026-0728-2022-multi-statement-headless` — modernc
+  SQLite reports a stale `changes()` as `RowsAffected` for `BEGIN` (showed as
+  "8 rows affected"). Pre-existing driver behavior, left alone.
+- **N-014** · declined `2026-0913-2158-dbc-migrate-replaces-goose` — Running
+  church's `db/migrate` on bytdb through `dbc migrate`: the files are
+  Postgres-specific (`OWNER TO`, `BIGSERIAL`) and church's bytdb backend boots
+  from `db/bytdb_schema.go`. Recorded so it is not attempted by accident.
+- **N-015** · declined `2026-0913-2158-dbc-migrate-replaces-goose` — After
+  `down-to 0`, a church migration's Down apparently leaves one table behind.
+  A church concern, not a dbc one.
+- **N-099** · declined 2026-10-03 (raised `2026-1002-1239-web-conn-marks`) —
+  Neither UI notices a connection the server dropped (a restart, a network
+  cut): the active mark — the web's bar, the TUI's `●` — stays until the
+  next statement fails. A cheap check (the session guard's ping, or a
+  periodic one while idle) could clear or warn on the mark. Declined by the
+  user; the next statement's failure stays what reports the drop.
+
+- **N-160** · declined 2026-10-08 (raised `2026-1008-1331-postgres-in-docker`) —
+  **Stop container** disconnecting for the user instead of refusing while
+  dbc is on the Docker connection. Declined by the user: it stays refused
+  ("disconnect first", the same rule as **Remove…**), so a stop never
+  silently rolls back an open transaction.
+
+## Closed
+
+Newest first. Everything closed before the list existed (2026-09-24) is
+written up in the session docs themselves.
+
 - **N-174** · raised `2026-1009-1004-phase-1-pipelines` · value medium
   Pipelines Phases 3–6, in order once Phase 2 is in: jobs (a DAG of
   pipelines, the in-house cron scheduler in `dbc web`, the webhook, run
@@ -524,39 +593,7 @@ call.
   the `Alt+J` Runs list, run lines in the log and `● name 3m12s` on the
   status bar. Phase 6, the plugin SDK and the rest of the built-ins, is
   next.
-
-## Non-goals
-
-- **N-012** · declined `2026-0728-2000-stmt-under-cursor-and-query-cancel` —
-  Highlighting the statement under the cursor in the editor: tview's `Select`
-  would leave a destructive selection behind.
-- **N-013** · declined `2026-0728-2022-multi-statement-headless` — modernc
-  SQLite reports a stale `changes()` as `RowsAffected` for `BEGIN` (showed as
-  "8 rows affected"). Pre-existing driver behavior, left alone.
-- **N-014** · declined `2026-0913-2158-dbc-migrate-replaces-goose` — Running
-  church's `db/migrate` on bytdb through `dbc migrate`: the files are
-  Postgres-specific (`OWNER TO`, `BIGSERIAL`) and church's bytdb backend boots
-  from `db/bytdb_schema.go`. Recorded so it is not attempted by accident.
-- **N-015** · declined `2026-0913-2158-dbc-migrate-replaces-goose` — After
-  `down-to 0`, a church migration's Down apparently leaves one table behind.
-  A church concern, not a dbc one.
-- **N-099** · declined 2026-10-03 (raised `2026-1002-1239-web-conn-marks`) —
-  Neither UI notices a connection the server dropped (a restart, a network
-  cut): the active mark — the web's bar, the TUI's `●` — stays until the
-  next statement fails. A cheap check (the session guard's ping, or a
-  periodic one while idle) could clear or warn on the mark. Declined by the
-  user; the next statement's failure stays what reports the drop.
-
-- **N-160** · declined 2026-10-08 (raised `2026-1008-1331-postgres-in-docker`) —
-  **Stop container** disconnecting for the user instead of refusing while
-  dbc is on the Docker connection. Declined by the user: it stays refused
-  ("disconnect first", the same rule as **Remove…**), so a stop never
-  silently rolls back an open transaction.
-
-## Closed
-
-Newest first. Everything closed before the list existed (2026-09-24) is
-written up in the session docs themselves.
+  closed 2026-10-09, `2026-1009-1546-phase-6-plugin-sdk-builtins`: Phase 6 is in, so all of Phases 3–6 are. The plugin SDK — `.go` files in the new `plugins_dir`, `var Plugin = sdb.Plugin{…}` plus the kind's funcs reading `e.Cfg` (new `pipeline.Env.Cfg`), loaded by `script.LoadPlugins`/`SyncPlugins` (in `script`, as it needs the interpreter; one interpreter per node, not per process; the user set swapped whole by `pipeline.SetUserPlugins`, broken files listed by `pipeline.PluginProblems` and named in a check), `script.CheckPlugin`, `userdata/plugins.go`, `dbc plugins` (yours with their file) and `dbc plugins --check`; dbc web's plugin files (`web/plugins.go`: the Ctrl+O Plugins section, script tabs named `plugin:<file>`, load on save and a 2 s watch, the palette's Yours section with broken files ⚠), the TUI's Ctrl+O Plugins section (Enter edits, check and load on return), `pipeline.Summary()` for the assistant; the built-ins `csv.read`, `jsonl.read`, `csv.write`, `jsonl.write`, `cols.cast`, `cols.add`, `text.clean`, `lookup`, `rows.dedupe`, `discard`, `pipeline.check`, `go.sink`, and `sql.write mode: upsert` (Postgres: a temp table merged `DISTINCT ON … ctid DESC`; SQLite: `ON CONFLICT`); four example plugins (`scripts/plugins/`); README *Plugins of your own*, the dbc skill, the plan's outcome. Also found: yaegi mis-stores an operator's result put into a row (`b.Rows[i][c] = s + "!"`) and drops the batch — `lintStoreComputed`, a log line on a transform's first dropped batch, and a plugin Check's `warning:` now a warning (N-188). Tests in pipeline, etl (live Postgres run), script, web, tui; e2e steps "plugin files and the palette" and "Ctrl+O plugins: …".
 
 - **N-173** · raised `2026-1009-1004-phase-1-pipelines` · value high
   Pipelines Phase 2: the pipeline tab in dbc web (`ai_docs/plans/

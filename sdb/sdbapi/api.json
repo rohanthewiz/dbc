@@ -435,6 +435,11 @@
           "doc": ""
         },
         {
+          "name": "Cfg",
+          "type": "Config",
+          "doc": "Cfg is the node's own settings, after ${…} substitution and with\nits plugin's defaults filled in — what New was given. A built-in\nreads its config once, in New; a user plugin file's funcs have no\nNew of their own, so they read it here (e.Cfg.Str(\"column\", \"\"))."
+        },
+        {
           "name": "Batch",
           "type": "int",
           "doc": "Batch is the fragment's batch size: how many rows a source yields\nper Next, and so how many a transform sees per Apply."
@@ -479,6 +484,50 @@
           "params": []
         }
       ]
+    },
+    {
+      "name": "Field",
+      "of": "pipeline.Field",
+      "kind": "struct",
+      "doc": "Field is one setting of a plugin. It has a Name, a Type (what the\ninspector draws), Doc, Default, Required and, for an enum, its values.",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "Type",
+          "type": "FieldType",
+          "doc": ""
+        },
+        {
+          "name": "Doc",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "Default",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "Required",
+          "type": "bool",
+          "doc": ""
+        },
+        {
+          "name": "Enum",
+          "type": "[]string",
+          "doc": "the values a FieldEnum takes"
+        }
+      ]
+    },
+    {
+      "name": "FieldType",
+      "of": "pipeline.FieldType",
+      "kind": "other",
+      "doc": "FieldType is what a Field holds. It decides what the inspector draws."
     },
     {
       "name": "Fragment",
@@ -726,6 +775,12 @@
       "name": "JobRunner",
       "kind": "other",
       "doc": "JobRunner runs a job for RunJob and waits for it. The host provides it."
+    },
+    {
+      "name": "Kind",
+      "of": "pipeline.Kind",
+      "kind": "other",
+      "doc": "Kind is what a plugin builds. It is one of KindSource, KindTransform,\nKindSink or KindAction."
     },
     {
       "name": "NodeStats",
@@ -1238,6 +1293,89 @@
       ]
     },
     {
+      "name": "Plugin",
+      "of": "pipeline.Plugin",
+      "kind": "struct",
+      "doc": "Plugin describes a kind of node. A plugin file in plugins_dir declares\none as var Plugin = sdb.Plugin{…} — Name (\"mask.email\"), Kind, Label,\nDoc and Fields — beside plain funcs the Kind calls for (Apply for a\ntransform, Next for a source, Write for a sink, Run for an action); the\nloader leaves New and Check to itself. Fields are the node's settings,\ndrawn as the inspector's form and read in the funcs as e.Cfg.",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "string",
+          "doc": "\"sql.read\": a family, a dot, a verb"
+        },
+        {
+          "name": "Kind",
+          "type": "Kind",
+          "doc": "what New returns"
+        },
+        {
+          "name": "Label",
+          "type": "string",
+          "doc": "a few words for the palette: \"SQL query\""
+        },
+        {
+          "name": "Doc",
+          "type": "string",
+          "doc": "a paragraph: what it does, what its fields mean"
+        },
+        {
+          "name": "Fields",
+          "type": "[]Field",
+          "doc": ""
+        },
+        {
+          "name": "New",
+          "type": "func(cfg Config) (any, error)",
+          "doc": "New builds a node from a config already validated and filled with\ndefaults. It returns a Source, Transform, Sink or Action by Kind."
+        },
+        {
+          "name": "Check",
+          "type": "func(cfg Config) []string",
+          "doc": "Check, when set, looks deeper at a config than Validate's field\nrules can — a Go field compiled, a cron line parsed — and returns\nproblems as messages. It must not touch a database. A message that\nstarts \"warning: \" (or has it after its place: \"code:3:1: warning:\n…\") is a warning; any other is an error, which keeps a run from\nstarting."
+        },
+        {
+          "name": "File",
+          "type": "string",
+          "doc": "File is the plugin file a user plugin was loaded from (absolute);\n\"\" for one compiled into dbc. It is what tells the palette's Yours\nsection, `dbc plugins` and SetUserPlugins the two apart."
+        }
+      ],
+      "methods": [
+        {
+          "name": "Defaults",
+          "sig": "func (p Plugin) Defaults(cfg Config) Config",
+          "doc": "Defaults is cfg with every unset field's Default put in. The result is\nwhat New receives, so a plugin reads its defaults from one place.",
+          "params": [
+            {
+              "name": "cfg",
+              "type": "Config"
+            }
+          ]
+        },
+        {
+          "name": "Field",
+          "sig": "func (p Plugin) Field(name string) (Field, bool)",
+          "doc": "Field is the plugin's field called name.",
+          "params": [
+            {
+              "name": "name",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "Validate",
+          "sig": "func (p Plugin) Validate(cfg Config) []string",
+          "doc": "Validate is what is wrong with cfg by the field declarations alone: a\nrequired field blank, an int or bool that does not parse, an enum value\nnot offered, a key no field has. Each problem is one message naming the\nfield; none means New may be called (after Defaults).",
+          "params": [
+            {
+              "name": "cfg",
+              "type": "Config"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Reader",
       "of": "etl.Reader",
       "kind": "struct",
@@ -1719,6 +1857,44 @@
       ]
     },
     {
+      "name": "Stats",
+      "of": "pipeline.Stats",
+      "kind": "struct",
+      "doc": "Stats is a sink's or an action's report. It holds the rows loaded (or\naffected), a note, and Vars for later fragments\n(${frag.\u003cfragment\u003e.\u003cname\u003e}); a go.sink's Commit or a plugin's Run\nreturns one.",
+      "fields": [
+        {
+          "name": "Rows",
+          "type": "int64",
+          "doc": "rows loaded, or rows affected"
+        },
+        {
+          "name": "Skipped",
+          "type": "int64",
+          "doc": "rows dropped along the way, when the node counts them"
+        },
+        {
+          "name": "Direct",
+          "type": "bool",
+          "doc": "the fragment ran as a direct Postgres COPY (see run.go)"
+        },
+        {
+          "name": "Shown",
+          "type": "bool",
+          "doc": "Shown marks a sink that showed its rows rather than wrote them (a\npreview): its Rows count toward the fragment's only when no sink\nwrote any, so a preview beside a load does not double the total."
+        },
+        {
+          "name": "Note",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "Vars",
+          "type": "map[string]string",
+          "doc": "Vars are values for later fragments: a sink publishes \"rows\"; an\nsql.exec publishes \"affected\". They are read as\n${frag.\u003cfragment\u003e.\u003cname\u003e}."
+        }
+      ]
+    },
+    {
       "name": "WriteOpts",
       "of": "etl.WriteOptions",
       "kind": "struct",
@@ -1738,6 +1914,11 @@
           "name": "BatchSize",
           "type": "int",
           "doc": "BatchSize is rows per INSERT statement on engines loaded by INSERT\n(everything but Postgres). 0 means 500. It is lowered automatically so\none statement stays under the engines' bind-parameter limits."
+        },
+        {
+          "name": "Upsert",
+          "type": "[]string",
+          "doc": "Upsert, when set, names the columns a row is matched on: a row whose\nvalues in them match an existing row's replaces that row's other\ncolumns, any other row is inserted, and when one load carries a key\ntwice the last row wins. The columns must be among the Writer's and\ncarry a unique constraint (a primary key, a unique index) on the\ntable; without one the server's own error says so. Postgres and\nSQLite only — see upsertEngine."
         }
       ]
     },

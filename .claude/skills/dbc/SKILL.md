@@ -108,7 +108,8 @@ Exit codes: `0` ok, `1` failure, `2` bad usage (incl. unknown connection),
 | `dbc scripts [-t json]` | list `scripts_dir` (default `~/.config/dbc/scripts`); the directory goes to stderr | Scripts headless |
 | `dbc pipeline run [-p K=V]… [--preview N] [--fragment F] NAME\|FILE.json` | run a pipeline (fragments of source → transforms → sinks, in batches; `-t json` prints the run stats); a bare NAME is looked up in `pipelines_dir`, then the examples | Pipelines headless |
 | `dbc pipeline check NAME…` / `dbc pipeline export NAME [-o f.go]` | validate without running (exit 1 on an error) / write the pipeline as a dbc script | Pipelines headless |
-| `dbc pipelines [-t json]` / `dbc plugins [-t json]` | list `pipelines_dir` and the examples / list the node kinds and their fields | Pipelines headless |
+| `dbc pipelines [-t json]` / `dbc plugins [-t json]` | list `pipelines_dir` and the examples / list the node kinds and their fields (user plugins from `plugins_dir` say their file) | Pipelines headless |
+| `dbc plugins --check [FILE…]` | check plugin files (all of `plugins_dir` by default): `path:line:col: msg`, exit 1 on an error | Plugins of your own |
 | `dbc job run [-p K=V]… NAME\|FILE.json` | run a job (a DAG of pipelines: fan-out, fan-in, failure policy) here and wait; lines carry their step, text ends with the run's tree, `-t json` prints the whole run record; exit 0/1/130 | Jobs headless |
 | `dbc job check NAME…` / `dbc jobs [-t json]` | validate a job and every pipeline it runs (exit 1 on an error) / list `jobs_dir` and the examples with schedule, next fire, last run | Jobs headless |
 | `dbc runs [--job N\|--pipeline N] [--status S] [--since 7d] [--limit N]` | the run records in `runs_dir` (every process's: dbc web's schedule, cron, headless), newest first; a dead process's `running` reads `interrupted` | Jobs headless |

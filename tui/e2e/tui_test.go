@@ -222,6 +222,10 @@ func TestTUI(t *testing.T) {
 		pipelinesAndJobs(t, e, u)
 	})
 
+	step(t, "Ctrl+O plugins: an example copied, $EDITOR, the check and the load, a pipeline placing it", func() {
+		userPlugins(t, e, u)
+	})
+
 	step(t, "Ctrl+Q quits", func() {
 		u.quit()
 	})

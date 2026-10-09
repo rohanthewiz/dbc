@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +31,14 @@ type WriteOptions struct {
 	// (everything but Postgres). 0 means 500. It is lowered automatically so
 	// one statement stays under the engines' bind-parameter limits.
 	BatchSize int
+	// Upsert, when set, names the columns a row is matched on: a row whose
+	// values in them match an existing row's replaces that row's other
+	// columns, any other row is inserted, and when one load carries a key
+	// twice the last row wins. The columns must be among the Writer's and
+	// carry a unique constraint (a primary key, a unique index) on the
+	// table; without one the server's own error says so. Postgres and
+	// SQLite only — see upsertEngine.
+	Upsert []string
 }
 
 const (
@@ -84,6 +93,17 @@ func NewWriter(ctx context.Context, c Conn, table string, cols []string, opt Wri
 	if len(cols) == 0 {
 		return nil, serr.New("etl: a Writer needs at least one column", "table", table)
 	}
+	if len(opt.Upsert) > 0 {
+		if err := upsertEngine(c.Engine); err != nil {
+			return nil, serr.Wrap(err, "conn", c.Name, "table", table)
+		}
+		for _, k := range opt.Upsert {
+			if !slices.Contains(cols, k) {
+				return nil, serr.New("etl: an upsert key column is not among the columns", "table", table,
+					"column", k, "columns", strings.Join(cols, ", "))
+			}
+		}
+	}
 	setup := opt.Setup
 	if opt.Truncate {
 		setup = append(append([]string(nil), setup...), c.Engine.truncateStmt(table))
@@ -93,9 +113,9 @@ func NewWriter(ctx context.Context, c Conn, table string, cols []string, opt Wri
 		err  error
 	)
 	if c.Engine == Postgres {
-		impl, err = newPGCopy(ctx, c, table, cols, setup)
+		impl, err = newPGCopy(ctx, c, table, cols, setup, opt.Upsert)
 	} else {
-		impl, err = newInserter(ctx, c, table, cols, setup, opt.BatchSize)
+		impl, err = newInserter(ctx, c, table, cols, setup, opt.BatchSize, opt.Upsert)
 	}
 	if err != nil {
 		return nil, serr.Wrap(canceled(ctx, err), "conn", c.Name, "table", table)
@@ -189,12 +209,17 @@ func (w *Writer) fail(err error) error {
 // not offer.
 
 type pgCopy struct {
+	ctx   context.Context
 	conn  *sql.Conn
 	pw    *io.PipeWriter
 	buf   []byte
 	bytea []bool
 	done  chan copyResult
 	res   *copyResult
+	// merge is an upsert's last step, run after the COPY into the staging
+	// table and before COMMIT (see pgUpsert); "" for a plain load
+	merge string
+	trace func(string)
 }
 
 type copyResult struct {
@@ -202,7 +227,7 @@ type copyResult struct {
 	err error
 }
 
-func newPGCopy(ctx context.Context, c Conn, table string, cols []string, setup []string) (*pgCopy, error) {
+func newPGCopy(ctx context.Context, c Conn, table string, cols []string, setup []string, upsert []string) (*pgCopy, error) {
 	conn, err := c.DB.Conn(ctx)
 	if err != nil {
 		return nil, serr.Wrap(err, "op", "checkout")
@@ -218,16 +243,28 @@ func newPGCopy(ctx context.Context, c Conn, table string, cols []string, setup [
 			return nil, serr.Wrap(err, "op", "setup", "stmt", clip(s))
 		}
 	}
+	// bytea is read off the target even for an upsert: the staging table
+	// is made from it, with the same column types
 	bytea, err := pgByteaCols(ctx, conn, Postgres.QuoteTable(table), cols)
 	if err != nil {
 		endTx(conn, "ROLLBACK")
 		return nil, err
 	}
+	into, merge := Postgres.QuoteTable(table), ""
+	if len(upsert) > 0 {
+		stage, m := pgUpsert(table, cols, upsert)
+		c.trace(stage)
+		if _, err = conn.ExecContext(ctx, stage); err != nil {
+			endTx(conn, "ROLLBACK")
+			return nil, serr.Wrap(err, "op", "upsert staging table", "stmt", clip(stage))
+		}
+		into, merge = pgUpsertStage, m
+	}
 
 	pr, pw := io.Pipe()
-	w := &pgCopy{conn: conn, pw: pw, bytea: bytea, done: make(chan copyResult, 1),
-		buf: make([]byte, 0, pgFlushAt+4096)}
-	stmt := "COPY " + Postgres.QuoteTable(table) + " (" + Postgres.quoteCols(cols) + ") FROM STDIN"
+	w := &pgCopy{ctx: ctx, conn: conn, pw: pw, bytea: bytea, done: make(chan copyResult, 1),
+		buf: make([]byte, 0, pgFlushAt+4096), merge: merge, trace: c.trace}
+	stmt := "COPY " + into + " (" + Postgres.quoteCols(cols) + ") FROM STDIN"
 	go func() {
 		var n int64
 		err := conn.Raw(func(dc any) error {
@@ -314,10 +351,97 @@ func (w *pgCopy) commit() (int64, error) {
 		endTx(w.conn, "ROLLBACK")
 		return 0, r.err
 	}
+	if w.merge != "" {
+		// the rows are all in the staging table; the merge moves them into
+		// the target in one statement, inside the load's transaction, so a
+		// failure here (no unique constraint on the key, a NOT NULL column
+		// the rows leave out) rolls the whole load back
+		w.trace(w.merge)
+		if _, err := w.conn.ExecContext(w.ctx, w.merge); err != nil {
+			endTx(w.conn, "ROLLBACK")
+			return 0, serr.Wrap(canceled(w.ctx, err), "op", "upsert", "stmt", clip(w.merge))
+		}
+	}
 	if err := endTx(w.conn, "COMMIT"); err != nil {
 		return 0, err
 	}
 	return r.n, nil
+}
+
+// ─── upsert ─────────────────────────────────────────────────────────────────
+//
+// An upsert matches rows on the key columns the caller names, updating
+// the other columns of a row that is there and inserting one that is not.
+// Each engine says it its own way:
+//
+//	Postgres  COPY ─► a staging table (a temp copy of the target's columns,
+//	          no constraints) ─► at commit, one INSERT … SELECT … ON CONFLICT
+//	          (key) DO UPDATE into the target, then COMMIT
+//	SQLite    every batched INSERT … VALUES ends ON CONFLICT (key) DO UPDATE
+//
+// Why Postgres stages: COPY has no ON CONFLICT, and giving up COPY for
+// batched INSERTs would give up the speed a load into Postgres is for.
+// The staging table keeps COPY's throughput; the merge is one set-based
+// statement on the server.
+
+// pgUpsertStage is the staging table's name. There is one per load's
+// connection at a time, and it lives only as long as the load's
+// transaction (ON COMMIT DROP; a ROLLBACK undoes its CREATE), so a fixed
+// name is safe even on a pooled connection the next load reuses.
+const pgUpsertStage = `"_dbc_upsert"`
+
+// pgUpsert is the staging table's CREATE and the merge that moves its
+// rows into table at commit.
+//
+// The merge takes ONE row per key, the last to arrive: DISTINCT ON (key)
+// keeps the first row of each key group in the ORDER BY, and ordering by
+// ctid DESC puts the last-arrived first — a fresh table filled by one
+// COPY, with no updates or deletes, stores its rows in arrival order, so
+// a later row has a greater ctid. That does two things: the last row for
+// a key wins, as it does on SQLite (whose INSERT applies rows in order),
+// and the INSERT never meets one key twice, which Postgres refuses ("ON
+// CONFLICT DO UPDATE command cannot affect row a second time").
+func pgUpsert(table string, cols, key []string) (stage, merge string) {
+	qt, qc, qk := Postgres.QuoteTable(table), Postgres.quoteCols(cols), Postgres.quoteCols(key)
+	// AS SELECT … WITH NO DATA copies the columns' exact types and nothing
+	// else — no NOT NULL, no unique index, no default — so the staging
+	// table takes duplicate keys, and the target's own constraints judge
+	// the rows at the merge
+	stage = "CREATE TEMP TABLE " + pgUpsertStage + " ON COMMIT DROP AS SELECT " + qc + " FROM " + qt + " WITH NO DATA"
+	merge = "INSERT INTO " + qt + " (" + qc + ") SELECT DISTINCT ON (" + qk + ") " + qc +
+		" FROM " + pgUpsertStage + " ORDER BY " + qk + ", ctid DESC " + upsertClause(Postgres, cols, key)
+	return stage, merge
+}
+
+// upsertClause is the ON CONFLICT tail of an upsert's INSERT: every
+// column that is not a key set from the incoming row (excluded.c), or DO
+// NOTHING when every column is a key — there is nothing to update, and an
+// existing row is left as it is. Postgres and SQLite spell it alike.
+func upsertClause(e Engine, cols, key []string) string {
+	var set []string
+	for _, c := range cols {
+		if !slices.Contains(key, c) {
+			q := e.QuoteIdent(c)
+			set = append(set, q+" = excluded."+q)
+		}
+	}
+	out := "ON CONFLICT (" + e.quoteCols(key) + ") "
+	if len(set) == 0 {
+		return out + "DO NOTHING"
+	}
+	return out + "DO UPDATE SET " + strings.Join(set, ", ")
+}
+
+// upsertEngine refuses an upsert where the Writer has no way to say one.
+// MySQL's INSERT … ON DUPLICATE KEY UPDATE is left out on purpose: it
+// fires on a clash with ANY unique key of the table, not the columns
+// named, so a load "matched on email" could silently update the row whose
+// id clashed instead. bytdb has no conflict clause.
+func upsertEngine(e Engine) error {
+	if e == Postgres || e == SQLite {
+		return nil
+	}
+	return serr.New("etl: upsert is for Postgres and SQLite", "engine", e.String())
 }
 
 func (w *pgCopy) abort() {
@@ -390,6 +514,7 @@ type inserter struct {
 	tx      *sql.Tx
 	e       Engine
 	prefix  string // INSERT INTO t (cols) VALUES
+	suffix  string // " ON CONFLICT …" for an upsert; "" for a plain load
 	ncols   int
 	batch   int
 	args    []any
@@ -398,7 +523,7 @@ type inserter struct {
 	n       int64
 }
 
-func newInserter(ctx context.Context, c Conn, table string, cols []string, setup []string, batch int) (*inserter, error) {
+func newInserter(ctx context.Context, c Conn, table string, cols []string, setup []string, batch int, upsert []string) (*inserter, error) {
 	if batch <= 0 {
 		batch = defaultBatchSize
 	}
@@ -416,16 +541,24 @@ func newInserter(ctx context.Context, c Conn, table string, cols []string, setup
 			return nil, serr.Wrap(err, "op", "setup", "stmt", clip(s))
 		}
 	}
-	return &inserter{ctx: ctx, tx: tx, e: c.Engine, ncols: len(cols), batch: batch,
+	w := &inserter{ctx: ctx, tx: tx, e: c.Engine, ncols: len(cols), batch: batch,
 		prefix: "INSERT INTO " + c.Engine.QuoteTable(table) + " (" + c.Engine.quoteCols(cols) + ") VALUES ",
-		args:   make([]any, 0, batch*len(cols))}, nil
+		args:   make([]any, 0, batch*len(cols))}
+	if len(upsert) > 0 {
+		// the rows of one INSERT are applied in order, and batches go in
+		// order, so a key repeated within a batch or across batches ends
+		// with its last row's values — what Postgres's merge does too
+		w.suffix = " " + upsertClause(c.Engine, cols, upsert)
+	}
+	return w, nil
 }
 
 // insertSQL is the statement for a batch of rows: one (?, ?, …) group per row,
-// numbered $1… on the engines that number their parameters.
+// numbered $1… on the engines that number their parameters, and an
+// upsert's ON CONFLICT clause after them.
 func (w *inserter) insertSQL(rows int) string {
 	var b strings.Builder
-	b.Grow(len(w.prefix) + rows*w.ncols*5)
+	b.Grow(len(w.prefix) + rows*w.ncols*5 + len(w.suffix))
 	b.WriteString(w.prefix)
 	p := 1
 	for r := range rows {
@@ -442,6 +575,7 @@ func (w *inserter) insertSQL(rows int) string {
 		}
 		b.WriteByte(')')
 	}
+	b.WriteString(w.suffix)
 	return b.String()
 }
 

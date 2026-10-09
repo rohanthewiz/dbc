@@ -116,7 +116,8 @@ func (s *Server) saveTab(winID string, t Tab) error {
 	// a script tab names its script, which the page later reads and saves
 	// by that name: one the store would refuse is refused here too, so a
 	// saved tab can never point outside scripts_dir
-	if t.Script != "" && !userdata.ValidScriptName(t.Script) {
+	// (a plugin file's tab is a script tab named "plugin:<file>", plugins.go)
+	if t.Script != "" && !userdata.ValidScriptName(t.Script) && !validPluginTab(t.Script) {
 		return badRequest("not a script name: %q", t.Script)
 	}
 	// a pipeline tab likewise names its pipeline (pipelines.go)

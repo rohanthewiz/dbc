@@ -23,7 +23,9 @@ import (
 //	       ──► the docs listing (dbc plugins, the assistant's summary)
 //
 // Built-ins register in this package's init; the Go-code plugins in
-// package script's; user plugins (Phase 6) through the loader.
+// package script's; user plugins — Go files in plugins_dir — through
+// package script's loader, which swaps the whole user set at once
+// (SetUserPlugins) whenever a file changes.
 type Plugin struct {
 	Name   string  `json:"name"`  // "sql.read": a family, a dot, a verb
 	Kind   Kind    `json:"kind"`  // what New returns
@@ -35,8 +37,15 @@ type Plugin struct {
 	New func(cfg Config) (any, error) `json:"-"`
 	// Check, when set, looks deeper at a config than Validate's field
 	// rules can — a Go field compiled, a cron line parsed — and returns
-	// problems as messages. It must not touch a database.
+	// problems as messages. It must not touch a database. A message that
+	// starts "warning: " (or has it after its place: "code:3:1: warning:
+	// …") is a warning; any other is an error, which keeps a run from
+	// starting.
 	Check func(cfg Config) []string `json:"-"`
+	// File is the plugin file a user plugin was loaded from (absolute);
+	// "" for one compiled into dbc. It is what tells the palette's Yours
+	// section, `dbc plugins` and SetUserPlugins the two apart.
+	File string `json:"file,omitempty"`
 }
 
 // Kind is what a plugin builds.
@@ -167,12 +176,80 @@ func (c Config) Clone() Config {
 }
 
 // The registry: every plugin by name. Registration happens at init, from
-// this package and from package script; a user plugin file registers
-// when it is loaded. The lock covers that later case.
+// this package and from package script; user plugin files are swapped in
+// as a set by SetUserPlugins, at a host's start and again whenever the
+// plugins directory changes — the lock covers that later case, which
+// runs while checks and runs read the registry from other goroutines.
 var (
 	regMu   sync.RWMutex
 	regByNm = map[string]Plugin{}
+	// problems are the user plugin files the last load could not use,
+	// kept beside the registry so a node naming one is told why it is
+	// missing rather than just that it is
+	problems []PluginProblem
 )
+
+// PluginProblem is a user plugin file that did not load: it does not
+// compile, its var Plugin is malformed, an entry point its kind needs is
+// missing or has the wrong signature, or its name is taken. Such a file
+// is listed (with Err) but cannot be placed.
+type PluginProblem struct {
+	File string `json:"file"`           // the file's absolute path
+	Name string `json:"name,omitempty"` // the plugin's name, when the file got as far as saying it
+	Err  string `json:"error"`
+}
+
+// SetUserPlugins replaces every user plugin (File != "") with ps, and the
+// problems list with probs, under one lock: a check or a run reading the
+// registry meanwhile sees the old set or the new one, never a registry
+// with the user plugins half gone. A plugin in ps whose name a built-in
+// (or an earlier one in ps) already has is refused, and joins the
+// problems. What comes back is the problems list as stored.
+func SetUserPlugins(ps []Plugin, probs []PluginProblem) []PluginProblem {
+	regMu.Lock()
+	defer regMu.Unlock()
+	for name, p := range regByNm {
+		if p.File != "" {
+			delete(regByNm, name)
+		}
+	}
+	out := slices.Clone(probs)
+	for _, p := range ps {
+		if have, dup := regByNm[p.Name]; dup {
+			why := "a plugin built into dbc is called " + p.Name
+			if have.File != "" {
+				why = p.Name + " is already the plugin of " + have.File
+			}
+			out = append(out, PluginProblem{File: p.File, Name: p.Name, Err: why})
+			continue
+		}
+		regByNm[p.Name] = p
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].File < out[j].File })
+	problems = out
+	return slices.Clone(out)
+}
+
+// PluginProblems lists the user plugin files the last load could not use,
+// by file.
+func PluginProblems() []PluginProblem {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	return slices.Clone(problems)
+}
+
+// problemFor is the load problem of the plugin called name, if its file
+// failed after naming it.
+func problemFor(name string) (PluginProblem, bool) {
+	regMu.RLock()
+	defer regMu.RUnlock()
+	for _, p := range problems {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return PluginProblem{}, false
+}
 
 // Register adds a plugin. A name registered twice, a plugin without New,
 // or an unknown Kind is a programming error and panics, at init, where it
@@ -299,4 +376,52 @@ func (p Plugin) Validate(cfg Config) []string {
 		}
 	}
 	return out
+}
+
+// Summary is the registry as plain text for the assistant, sent beside the
+// sdb API summary (sdbapi.Summary) with a script question: every plugin as
+// one line — kind, name, the first sentence of its doc, its fields (* for
+// required) — so "add a node that …" and "write a plugin that …" are
+// answered with names that exist. The user's own plugins are listed too,
+// marked, and the plugin file's shape is spelled out once at the end.
+//
+//	source     sql.read — Runs a query on a connection … [conn*, query*, args]
+//	transform  mask.email (yours) — Mask the e-mail column … [column*]
+//
+// One sentence per plugin keeps it to a size worth sending every
+// conversation; the full docs are `dbc plugins`.
+func Summary() string {
+	var sb strings.Builder
+	sb.WriteString("Pipeline plugins (node kinds). A pipeline spec's node names one in \"plugin\" and sets its fields " +
+		"in \"cfg\", every value a string (* = required); a script uses the same names with sdb.Cfg.\n")
+	for _, p := range Plugins() {
+		var fields []string
+		for _, f := range p.Fields {
+			n := f.Name
+			if f.Required {
+				n += "*"
+			}
+			fields = append(fields, n)
+		}
+		mine := ""
+		if p.File != "" {
+			mine = " (yours)"
+		}
+		fmt.Fprintf(&sb, "%-9s  %s%s — %s [%s]\n", p.Kind, p.Name, mine, firstSentence(p.Doc), strings.Join(fields, ", "))
+	}
+	sb.WriteString("A user plugin is a Go file in plugins_dir (package main): var Plugin = sdb.Plugin{Name, Kind (sdb.KindSource, " +
+		"KindTransform, KindSink, KindAction), Label, Doc, Fields: []sdb.Field{{Name, Type (sdb.FieldString, FieldColumns, …), Doc, " +
+		"Default, Required}}} and plain funcs by kind — source: Next(e *sdb.Env) (*sdb.Batch, error); transform: " +
+		"Apply(e *sdb.Env, b *sdb.Batch) (*sdb.Batch, error); sink: Write(e *sdb.Env, b *sdb.Batch) error; action: " +
+		"Run(e *sdb.Env) error — plus optional Open/Flush/Commit/Close. A node's settings are e.Cfg (e.Cfg.Str(\"column\", \"\")).\n")
+	return sb.String()
+}
+
+// firstSentence is doc up to the end of its first sentence.
+func firstSentence(doc string) string {
+	doc = strings.Join(strings.Fields(doc), " ")
+	if i := strings.Index(doc, ". "); i >= 0 {
+		return doc[:i+1]
+	}
+	return doc
 }

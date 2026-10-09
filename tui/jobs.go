@@ -12,8 +12,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/rohanthewiz/serr"
 
+	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/jobs"
 	"github.com/rohanthewiz/dbc/pipeline"
+	"github.com/rohanthewiz/dbc/script"
 )
 
 // The jobs engine in the TUI. The Model owns one engine (package jobs) for
@@ -150,6 +152,48 @@ func (m *Model) initJobs(noPersist bool) {
 				plural(n, "run record"))
 		}
 	}
+	// the user's plugin files, so the first check or run knows their
+	// names; said in the startup log with the note above
+	script.SyncPlugins(m.cfg.PluginsDir)
+	m.pluginsNote = pluginProblemsNote()
+}
+
+// syncPlugins reloads the user's plugin files when plugins_dir changed
+// (script.SyncPlugins: a stat when nothing did) and says in the log what
+// did not load. The TUI is not a server that must notice an edit made
+// elsewhere at once, so it syncs where the registry is about to be used —
+// the browsers opening, a spec checked, a run started — rather than on a
+// timer.
+func (m *Model) syncPlugins() {
+	if !script.SyncPlugins(m.cfg.PluginsDir) {
+		return
+	}
+	if note := pluginProblemsNote(); note != "" {
+		m.log(logWarn, note)
+	} else if n := userPluginCount(); n > 0 {
+		m.logf(logMuted, "plugins reloaded from %s: %s", config.TildePath(m.cfg.PluginsDir), plural(n, "plugin"))
+	}
+}
+
+// pluginProblemsNote is a line per plugin file that did not load, or "".
+func pluginProblemsNote() string {
+	var lines []string
+	for _, p := range pipeline.PluginProblems() {
+		lines = append(lines, fmt.Sprintf("plugin file %s did not load: %s (Ctrl+O → Plugins, e edits it)",
+			config.TildePath(p.File), p.Err))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// userPluginCount is how many plugins came from plugin files.
+func userPluginCount() int {
+	n := 0
+	for _, p := range pipeline.Plugins() {
+		if p.File != "" {
+			n++
+		}
+	}
+	return n
 }
 
 // ---------------------------------------------------------------------------
@@ -434,6 +478,7 @@ func (m *Model) jobTick(msg jobTickMsg) tea.Cmd {
 // monitor opens on it; refused (a check error, the pipeline already
 // running), the log says why and the browser stays.
 func (m *Model) startPipeline(file, text string, params map[string]string) tea.Cmd {
+	m.syncPlugins()
 	spec, err := pipeline.Parse(text)
 	if err != nil {
 		m.logf(logErr, "%s does not parse: %s — e edits it", file, strings.TrimPrefix(err.Error(), "json: "))
@@ -446,6 +491,7 @@ func (m *Model) startPipeline(file, text string, params map[string]string) tea.C
 
 // startJob runs a job of the browser's, as startPipeline does a pipeline.
 func (m *Model) startJob(file, text string, params map[string]string) tea.Cmd {
+	m.syncPlugins()
 	spec, err := jobs.ParseJob(text)
 	if err != nil {
 		m.logf(logErr, "%s does not parse: %s — e edits it", file, strings.TrimPrefix(err.Error(), "json: "))

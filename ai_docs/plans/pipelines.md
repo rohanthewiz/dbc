@@ -11,7 +11,7 @@ pipelines inside a job; and a monitoring view for jobs, pipelines and
 fragments, with drilldown.
 
 This is a plan. The decisions table was accepted as recommended
-(2026-10-09). **Phases 1 to 5 are done** (2026-10-09): see their
+(2026-10-09). **All six phases are done** (2026-10-09): see their
 outcomes under *Phases*. The decisions table is the part to read first; everything after
 it follows the recommended column.
 
@@ -1150,6 +1150,51 @@ plugin descriptors are rich enough.
 - Docs: a README chapter (*Pipelines and jobs*), the dbc skill's
   `scripting.md` extended, a `plugins/` example file embedded.
 - Outcome: the plugin story is complete and documented.
+
+  ✅ **Done 2026-10-09.** What landed, and where it differs from the sketch:
+  - The loader is `script.LoadPlugins` / `script.SyncPlugins`, not
+    `pipeline.LoadPlugins`: it needs the interpreter, which `pipeline`
+    cannot import (the same reason the `go.*` plugins live in `script`).
+    `SyncPlugins` reloads only when `plugins_dir`'s files changed and swaps
+    the whole user set at once (`pipeline.SetUserPlugins`); files that did
+    not load are `pipeline.PluginProblems()` — listed with why, never
+    placeable, and named in a check of a spec that uses one.
+  - **One interpreter per node**, not one compile per process: the file is
+    compiled once per load to read `var Plugin` and bind its funcs, then
+    each node compiles its own copy, so a plugin's globals are per node and
+    no interpreter is called from two goroutines (two nodes of one plugin,
+    two runs at once). Milliseconds per node per run, as a `go.transform`.
+  - Entry points take the node's settings from `e.Cfg` (new
+    `pipeline.Env.Cfg`) rather than a `cfg` parameter, so they have the
+    `go.*` signatures; an action's is `Run(e *sdb.Env)`. Optional
+    `Check(cfg sdb.Cfg) []string`. `go.sink` (left from Phase 1) is in.
+  - `plugins_dir` in the config; `userdata/plugins.go` is the scripts
+    store under plugin names. `script.CheckPlugin` is the editor's check
+    (the kind read off the descriptor's literal, its funcs' signatures,
+    the lints, a compile — never a run); `dbc plugins --check` adds the
+    loader's verdict for CI. `dbc plugins` marks yours with their file.
+  - dbc web: plugin files in the scripts browser and in script tabs named
+    `plugin:<file>` (`web/plugins.go`), loaded on save and by a 2 s watch,
+    a `plugins` event refetching the palette, whose *Yours* section comes
+    first (broken files ⚠, not draggable). The TUI: a Plugins section in
+    the `Ctrl+O` browser (`Enter` edits; check and load on return).
+  - The built-ins as planned; `sql.write mode: upsert` stages Postgres rows
+    in a temp table and merges with `DISTINCT ON … ctid DESC` so the last
+    row of a key wins, as SQLite's `ON CONFLICT` clause does; MySQL and
+    bytdb refuse it. Four example plugins, one per kind
+    (`scripts/plugins/`).
+  - Found on the way: yaegi mis-stores an operator's result put straight
+    into a row it was handed (`b.Rows[i][c] = s + "!"`) — the batch
+    variable is overwritten and the rows silently dropped. The checks warn
+    (`lintStoreComputed`), the runner logs a transform's first dropped
+    batch, and a plugin `Check` message marked `warning:` is now a warning
+    in `pipeline.Check` (it was an error, which made a lint block a run).
+  - Throughput (README): `text.clean` ~37 µs per 1000-row batch (~27M
+    rows/s) against ~490 µs for the same in a `go.transform`.
+  - Tests: `pipeline/builtin_more_test.go`, `pipeline/upsert_test.go`,
+    `etl/upsert_test.go` (with a live Postgres run), `script/userplugins_test.go`,
+    `web/plugins_test.go`, the TUI browser's; e2e steps "plugin files and
+    the palette" (web) and "Ctrl+O plugins: …" (TUI).
 
 ## Testing
 

@@ -53,7 +53,7 @@ var keyGroups = []keyGroup{
 	{"Anywhere", [][2]string{
 		{"^P", "history — insert a past statement (never runs it)"},
 		{"^E", "export the result (file or clipboard)"},
-		{"^O", "scripts — run, edit ($EDITOR), make from a template, examples, trash"},
+		{"^O", "scripts and plugin files — run, edit ($EDITOR), make from a template, examples, trash"},
 		{"^J", "pipelines & jobs — run, edit the JSON ($EDITOR), new, examples, trash"},
 		{"⌥J", "the runs: every pipeline and job run, live and recorded; Enter opens one"},
 		{"^T", "list the tables and views"},
@@ -83,6 +83,7 @@ var keyGroups = []keyGroup{
 		{"y · t", "copy its path · show or hide the Trash"},
 		{"/ · Esc", "filter by name and description · back to the list, then close"},
 		{"right-click", "everything above for the row"},
+		{"Plugins section", "your pipeline plugins (plugins_dir): Enter edits one; on return it is checked and loaded (n: new from an example)"},
 	}},
 	{"Pipelines & jobs (^J)", [][2]string{
 		{"Enter · p", "run it (asks for a parameter with no default) · run it, asking for every parameter"},

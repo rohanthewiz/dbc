@@ -49,6 +49,11 @@ type Env struct {
 	// in a node's config was substituted from; a Go node reads them here.
 	Params map[string]string
 	Vars   map[string]string
+	// Cfg is the node's own settings, after ${…} substitution and with
+	// its plugin's defaults filled in — what New was given. A built-in
+	// reads its config once, in New; a user plugin file's funcs have no
+	// New of their own, so they read it here (e.Cfg.Str("column", "")).
+	Cfg Config
 	// Batch is the fragment's batch size: how many rows a source yields
 	// per Next, and so how many a transform sees per Apply.
 	Batch int

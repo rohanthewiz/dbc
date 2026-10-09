@@ -56,13 +56,18 @@ func init() {
 		Doc: "Loads the rows into a table, in one transaction: on Postgres by COPY, elsewhere by batched INSERT. " +
 			"Nothing is visible until the fragment ends, and a failed fragment leaves the table as it was. " +
 			"Create makes the table from the rows' columns when it is missing; truncate empties it first, " +
-			"in the same transaction. The rows' columns must match the table's by name.",
+			"in the same transaction. The rows' columns must match the table's by name. " +
+			"Mode upsert (Postgres and SQLite) matches rows on key: a row whose key is in the table updates it, " +
+			"any other is inserted, and when a key comes twice the last row wins. The key needs a unique " +
+			"constraint on the table (a created table gets it as its primary key).",
 		Fields: []Field{
 			{Name: "conn", Type: FieldConn, Required: true, Doc: "The connection to load into."},
 			{Name: "table", Type: FieldTable, Required: true, Doc: "The destination table."},
 			{Name: "create", Type: FieldBool, Default: "false", Doc: "Create the table if it does not exist, from the incoming columns."},
 			{Name: "truncate", Type: FieldBool, Default: "false", Doc: "Empty the table before the first row, in the load's transaction."},
-			{Name: "key", Type: FieldColumns, Doc: "Primary key columns for a created table (bytdb needs one)."},
+			{Name: "mode", Type: FieldEnum, Default: "insert", Enum: []string{"insert", "upsert"},
+				Doc: "insert adds every row; upsert updates the rows whose key is already there and inserts the rest (Postgres and SQLite)."},
+			{Name: "key", Type: FieldColumns, Doc: "Primary key columns for a created table (bytdb needs one); with mode upsert, the columns a row is matched on."},
 			{Name: "setup", Type: FieldSQL, Doc: "Statements to run before the first row, in the load's transaction (an index, a DELETE of the slice being reloaded)."},
 			{Name: "batch", Type: FieldInt, Default: "500", Doc: "Rows per INSERT on engines loaded by INSERT (not Postgres)."},
 		},
@@ -70,8 +75,19 @@ func init() {
 			create, _ := cfg.Bool("create")
 			truncate, _ := cfg.Bool("truncate")
 			batch, _ := cfg.Int("batch", 500)
-			return &sqlWrite{conn: cfg.Str("conn", ""), table: strings.TrimSpace(cfg["table"]), create: create,
-				truncate: truncate, key: cfg.List("key"), setup: strings.TrimSpace(cfg["setup"]), batch: batch}, nil
+			w := &sqlWrite{conn: cfg.Str("conn", ""), table: strings.TrimSpace(cfg["table"]), create: create,
+				truncate: truncate, key: cfg.List("key"), setup: strings.TrimSpace(cfg["setup"]), batch: batch,
+				upsert: strings.TrimSpace(cfg["mode"]) == "upsert"}
+			if w.upsert && len(w.key) == 0 {
+				return nil, serr.New("mode upsert needs key: the columns a row is matched on", "table", w.table)
+			}
+			return w, nil
+		},
+		Check: func(cfg Config) []string {
+			if strings.TrimSpace(cfg["mode"]) == "upsert" && len(cfg.List("key")) == 0 {
+				return []string{"key: mode upsert needs key, the columns a row is matched on"}
+			}
+			return nil
 		},
 	})
 	Register(Plugin{
@@ -210,6 +226,9 @@ type sqlWrite struct {
 	key              []string
 	setup            string
 	batch            int
+	// upsert is mode upsert: rows matched on key update the table's row
+	// (etl.WriteOptions.Upsert), the rest are inserted
+	upsert bool
 
 	w     *etl.Writer
 	ncols int
@@ -248,7 +267,11 @@ func (s *sqlWrite) Open(e *Env, cols []Col) error {
 			}
 		}
 	}
-	w, err := etl.NewWriter(e.Ctx, c, s.table, names, etl.WriteOptions{Setup: setup, Truncate: s.truncate, BatchSize: s.batch})
+	opt := etl.WriteOptions{Setup: setup, Truncate: s.truncate, BatchSize: s.batch}
+	if s.upsert {
+		opt.Upsert = s.key
+	}
+	w, err := etl.NewWriter(e.Ctx, c, s.table, names, opt)
 	if err != nil {
 		return err
 	}
@@ -284,8 +307,12 @@ func (s *sqlWrite) Abort() error {
 	return s.w.Abort()
 }
 
+// directSink is what the direct COPY path needs of the sink, and whether
+// the sink allows it at all: a COPY straight into the table cannot run
+// setup statements, declare a key, or upsert (its rows must land in the
+// staging table and be merged — etl.Writer's work, on the row path).
 func (s *sqlWrite) directSink() (string, string, bool, bool, int, bool) {
-	return s.conn, s.table, s.create, s.truncate, s.batch, s.setup == "" && len(s.key) == 0
+	return s.conn, s.table, s.create, s.truncate, s.batch, s.setup == "" && len(s.key) == 0 && !s.upsert
 }
 
 // sqlExec is sql.exec.

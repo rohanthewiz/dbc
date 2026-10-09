@@ -14,6 +14,7 @@ import (
 	"github.com/rohanthewiz/serr"
 
 	"github.com/rohanthewiz/dbc/config"
+	"github.com/rohanthewiz/dbc/pipeline"
 	"github.com/rohanthewiz/dbc/script"
 	"github.com/rohanthewiz/dbc/scripts"
 	"github.com/rohanthewiz/dbc/userdata"
@@ -51,6 +52,17 @@ import (
 // an example into your scripts, start a script from a template (offered
 // where the scripts would be when there are none), restore a trashed one.
 //
+// PLUGIN FILES live here too — the user's pipeline plugins, Go files in
+// plugins_dir (package script's loader), with their examples and trash —
+// as on the web, where they sit in the same browser: they are .go files
+// kept by the same store (userdata/plugins.go) and edited the same way.
+// Two differences: Enter on one edits it (a plugin has nothing to run on
+// its own; a pipeline places it), and the check on the editor's return is
+// script.CheckPlugin, followed by a reload whose verdict — the plugin, now
+// placeable in pipelines, or why the file did not load — goes to the log.
+// The browser's cursor names a plugin file "plugin:<file>" (openScripts),
+// dbc web's tab name for one.
+//
 // EDITING SUSPENDS THE TUI for $VISUAL, else $EDITOR, else vi
 // (tea.ExecProcess hands the terminal over and takes it back). On return
 // the script is checked (script.Check: parse, Run's signature, the yaegi
@@ -64,12 +76,18 @@ import (
 type scriptRowKind int
 
 const (
-	rowScript    scriptRowKind = iota + 1 // a script in the scripts dir
-	rowTemplate                           // a template, offered while there are no scripts
-	rowExample                            // a built-in example (read-only)
-	rowTrash                              // a trashed script
-	rowTrashHead                          // the Trash heading: a click folds it
+	rowScript        scriptRowKind = iota + 1 // a script in the scripts dir
+	rowTemplate                               // a template, offered while there are no scripts
+	rowExample                                // a built-in example (read-only)
+	rowTrash                                  // a trashed script
+	rowTrashHead                              // the Trash heading: a click folds it
+	rowPlugin                                 // a plugin file in plugins_dir
+	rowPluginExample                          // a built-in example plugin (read-only)
+	rowPluginTrash                            // a trashed plugin file
 )
+
+// pluginSel is the cursor's name for a plugin file in openScripts' sel.
+const pluginSel = "plugin:"
 
 // scriptRow is a row's listItem.data: what picking it acts on.
 type scriptRow struct {
@@ -93,6 +111,14 @@ type scriptsModal struct {
 	trash     []userdata.TrashInfo
 	showTrash bool // the Trash section is unfolded
 
+	// the plugin files: their directory, the files with what the loader
+	// made of each (pluginStatus), the examples and the trash
+	pdir, pshort   string
+	plugins        []userdata.PluginInfo
+	pluginExamples []scripts.PluginExample
+	ptrash         []userdata.PluginTrashInfo
+	warn           *Style // a file that did not load: its ⚠
+
 	filter    *editor
 	filtering bool // the keyboard is in the filter, not on the list
 	lst       *list
@@ -109,7 +135,9 @@ type scriptsModal struct {
 // openScripts opens the browser, with the cursor on the script called sel
 // when there is one (after an edit, a rename, a restore).
 func (m *Model) openScripts(sel string) {
+	m.syncPlugins()
 	md := &scriptsModal{dir: m.cfg.ScriptsDir, short: config.TildePath(m.cfg.ScriptsDir),
+		pdir: m.cfg.PluginsDir, pshort: config.TildePath(m.cfg.PluginsDir), warn: &m.st.warn,
 		filter: newEditor(true), lst: newList(), now: time.Now}
 	md.filter.placeholder = "/ filters by name and description"
 	if err := md.load(); err != nil {
@@ -131,6 +159,10 @@ func (sm *scriptsModal) load() error {
 	sm.trash = userdata.ListTrash(sm.dir)
 	sm.examples = scripts.Examples()
 	sm.templates = scripts.Templates()
+	// a plugins dir that cannot be read lists none; the scripts still show
+	sm.plugins, _ = userdata.ListPlugins(sm.pdir)
+	sm.ptrash = userdata.ListPluginTrash(sm.pdir)
+	sm.pluginExamples = scripts.PluginExamples()
 	return nil
 }
 
@@ -148,13 +180,18 @@ func (sm *scriptsModal) reload(m *Model, sel string) {
 	sm.selectName(sel)
 }
 
-// selectName puts the cursor on the script row called name, if listed.
+// selectName puts the cursor on the script row called name, if listed —
+// or, for "plugin:<file>", on that plugin file's row.
 func (sm *scriptsModal) selectName(name string) {
 	if name == "" {
 		return
 	}
+	kind := rowScript
+	if file, ok := strings.CutPrefix(name, pluginSel); ok {
+		kind, name = rowPlugin, file
+	}
 	for i, it := range sm.lst.items {
-		if r, ok := it.data.(scriptRow); ok && r.kind == rowScript && r.name == name {
+		if r, ok := it.data.(scriptRow); ok && r.kind == kind && r.name == name {
 			sm.lst.cur = i
 			sm.lst.ensureVisible()
 			return
@@ -209,17 +246,57 @@ func (sm *scriptsModal) build() {
 		items = append(items, ex...)
 	}
 
-	if len(sm.trash) > 0 {
+	// plugin files: each one kind of pipeline node, said with what the
+	// loader made of it
+	head("Plugins · "+sm.pshort, nil)
+	pshown := 0
+	for _, p := range sm.plugins {
+		desc, broken := pluginStatus(filepath.Join(sm.pdir, p.Name), p.Desc)
+		if !hit(p.Name, desc) {
+			continue
+		}
+		it := listItem{label: p.Name, desc: desc, sub: ago(p.Mod, now), data: scriptRow{kind: rowPlugin, name: p.Name}}
+		if broken {
+			it.mark, it.markSt = "⚠", sm.warn
+		}
+		items = append(items, it)
+		pshown++
+	}
+	switch {
+	case len(sm.plugins) == 0:
+		head("  none yet — copy an example below (Enter), or n → a new plugin", nil)
+	case pshown == 0:
+		head("  no plugin matches", nil)
+	}
+	var pex []listItem
+	for _, x := range sm.pluginExamples {
+		if hit(x.Name, x.Desc) {
+			pex = append(pex, listItem{label: x.Name, desc: x.Desc, sub: "plugin example",
+				data: scriptRow{kind: rowPluginExample, name: x.Name}})
+		}
+	}
+	if len(pex) > 0 {
+		head("Plugin examples · Enter makes your own copy in plugins_dir", nil)
+		items = append(items, pex...)
+	}
+
+	if n := len(sm.trash) + len(sm.ptrash); n > 0 {
 		fold := "▸ t shows it"
 		if sm.showTrash {
 			fold = "▾"
 		}
-		head(fmt.Sprintf("Trash (%d) %s", len(sm.trash), fold), scriptRow{kind: rowTrashHead})
+		head(fmt.Sprintf("Trash (%d) %s", n, fold), scriptRow{kind: rowTrashHead})
 		if sm.showTrash {
 			for _, t := range sm.trash {
 				if hit(t.Name, "") {
 					items = append(items, listItem{label: t.Name, desc: "trashed " + agoWords(t.Trashed, now),
 						sub: "Enter restores", muted: true, data: scriptRow{kind: rowTrash, name: t.Name, trash: t}})
+				}
+			}
+			for _, t := range sm.ptrash {
+				if hit(t.Name, "") {
+					items = append(items, listItem{label: t.Name, desc: "a plugin file, trashed " + agoWords(t.Trashed, now),
+						sub: "Enter restores", muted: true, data: scriptRow{kind: rowPluginTrash, name: t.Name, trash: t}})
 				}
 			}
 		}
@@ -259,7 +336,44 @@ func (sm *scriptsModal) footer() string {
 	if sm.filtering {
 		return "typing filters · ↑↓ move · Enter: the row's action · Esc/Tab: back to the list"
 	}
+	if r, ok := sm.row(); ok && r.kind == rowPlugin {
+		return "Enter/e edit · n new · d duplicate · r rename · Del trash · y path · t trash · / filter · Esc close"
+	}
 	return "Enter run · e edit · n new · d duplicate · r rename · Del trash · y path · t trash · / filter · Esc close"
+}
+
+// pluginStatus is a plugin file's description in the list: what the
+// loader made of the file at path — its plugin and kind, then the file's
+// own first sentence — or why it did not load (broken).
+func pluginStatus(path, desc string) (string, bool) {
+	for _, p := range pipeline.PluginProblems() {
+		if p.File == path {
+			return "did not load: " + p.Err, true
+		}
+	}
+	for _, p := range pipeline.Plugins() {
+		if p.File == path {
+			out := pluginKindGlyph(p.Kind) + " " + p.Name
+			if desc != "" {
+				out += " — " + desc
+			}
+			return out, false
+		}
+	}
+	return desc, false
+}
+
+// pluginKindGlyph is the kind's glyph, as dbc web's palette draws them.
+func pluginKindGlyph(k pipeline.Kind) string {
+	switch k {
+	case pipeline.KindSource:
+		return "⇥"
+	case pipeline.KindTransform:
+		return "ƒ"
+	case pipeline.KindSink:
+		return "⇤"
+	}
+	return "▸"
 }
 
 func (sm *scriptsModal) draw(m *Model, s Surface) *caret {
@@ -412,9 +526,21 @@ func (sm *scriptsModal) rightClick(m *Model, x, y int) tea.Cmd {
 	case rowTemplate:
 		items = []menuItem{heading(r.tpl.Title),
 			{label: "+ New script from it…", key: "Enter", act: func(m *Model) tea.Cmd { cmd, _ := sm.act(m, false); return cmd }}}
-	case rowTrash:
+	case rowTrash, rowPluginTrash:
 		items = []menuItem{heading(r.name),
 			{label: "↺ Restore", key: "Enter", act: func(m *Model) tea.Cmd { cmd, _ := sm.act(m, false); return cmd }}}
+	case rowPlugin:
+		items = []menuItem{
+			heading(r.name),
+			{label: "✎ Edit in " + editorName(), key: "Enter", act: func(m *Model) tea.Cmd { return sm.closeThen(m, m.editPlugin(sm.pdir, r.name)) }},
+			{label: "Duplicate…", key: "d", act: func(m *Model) tea.Cmd { cmd, _ := sm.duplicate(m); return cmd }},
+			{label: "Rename…", key: "r", act: func(m *Model) tea.Cmd { cmd, _ := sm.rename(m); return cmd }},
+			{label: "Move to the trash", key: "Del", act: func(m *Model) tea.Cmd { sm.trashIt(m); return nil }},
+			{label: "Copy path", key: "y", act: func(m *Model) tea.Cmd { return sm.copyPath(m) }},
+		}
+	case rowPluginExample:
+		items = []menuItem{heading(r.name),
+			{label: "⧉ Copy into plugins_dir…", key: "Enter", act: func(m *Model) tea.Cmd { cmd, _ := sm.act(m, false); return cmd }}}
 	default:
 		return nil
 	}
@@ -444,7 +570,7 @@ func (sm *scriptsModal) wheel(m *Model, x, y, dy int) { sm.lst.scroll(dy) }
 
 // toggleTrash folds or unfolds the Trash section.
 func (sm *scriptsModal) toggleTrash(m *Model) {
-	if len(sm.trash) == 0 {
+	if len(sm.trash)+len(sm.ptrash) == 0 {
 		m.log(logMuted, "the trash is empty")
 		return
 	}
@@ -479,11 +605,25 @@ func (sm *scriptsModal) act(m *Model, edit bool) (tea.Cmd, bool) {
 	case rowTrash:
 		m.restoreScript(sm.dir, r.trash)
 		return nil, true
+	case rowPlugin:
+		// nothing to run: a pipeline places a plugin; Enter edits it
+		return m.editPlugin(sm.pdir, r.name), true
+	case rowPluginExample:
+		ex, found := scripts.PluginExampleByName(r.name)
+		if !found {
+			return nil, false
+		}
+		m.makePlugin(sm.pdir, r.name, ex.Text, "Copy the example plugin "+r.name)
+		return nil, true
+	case rowPluginTrash:
+		m.restorePlugin(sm.pdir, r.trash)
+		return nil, true
 	}
 	return nil, false
 }
 
-// newMenu offers the templates, as the web's "+ New ▾" does.
+// newMenu offers the templates, and a plugin from each example plugin,
+// as the web's "+ New ▾" does.
 func (sm *scriptsModal) newMenu(m *Model, x, y int) {
 	items := []menuItem{heading("new script from")}
 	for _, t := range sm.templates {
@@ -491,6 +631,15 @@ func (sm *scriptsModal) newMenu(m *Model, x, y int) {
 			m.newFromTemplate(sm.dir, t)
 			return nil
 		}})
+	}
+	if len(sm.pluginExamples) > 0 {
+		items = append(items, heading("new plugin (a pipeline node in Go) from"))
+		for _, x := range sm.pluginExamples {
+			items = append(items, menuItem{label: "Plugin · " + x.Name + " — " + x.Desc, act: func(m *Model) tea.Cmd {
+				m.makePlugin(sm.pdir, x.Name, x.Text, "New plugin from "+x.Name)
+				return nil
+			}})
+		}
 	}
 	m.openMenu(x, y, items)
 }
@@ -503,6 +652,9 @@ func (sm *scriptsModal) scriptOnly(m *Model, verb string) (string, bool) {
 		return "", false
 	}
 	if r.kind == rowExample && verb == "duplicate" {
+		return r.name, true
+	}
+	if r.kind == rowPlugin {
 		return r.name, true
 	}
 	if r.kind != rowScript {
@@ -532,8 +684,10 @@ func rowKindWords(k scriptRowKind) string {
 		return "a built-in example (Enter makes your own copy)"
 	case rowTemplate:
 		return "a template (Enter starts a script from it)"
-	case rowTrash:
+	case rowTrash, rowPluginTrash:
 		return "in the trash (Enter restores it)"
+	case rowPluginExample:
+		return "a built-in example plugin (Enter makes your own copy)"
 	}
 	return "not a script"
 }
@@ -545,8 +699,18 @@ func (sm *scriptsModal) duplicate(m *Model) (tea.Cmd, bool) {
 	if !ok {
 		return nil, false
 	}
-	if r, _ := sm.row(); r.kind == rowExample {
+	r, _ := sm.row()
+	if r.kind == rowExample {
 		return sm.act(m, false)
+	}
+	if r.kind == rowPlugin {
+		text, _, err := userdata.ReadPlugin(sm.pdir, name)
+		if err != nil {
+			m.logf(logErr, "could not read %s: %s", name, serr.StringFromErr(err))
+			return nil, false
+		}
+		m.makePlugin(sm.pdir, name, text, "Duplicate "+name)
+		return nil, false
 	}
 	text, _, err := userdata.ReadScript(sm.dir, name)
 	if err != nil {
@@ -563,21 +727,27 @@ func (sm *scriptsModal) rename(m *Model) (tea.Cmd, bool) {
 	if !ok {
 		return nil, false
 	}
+	// a plugin file renames in plugins_dir, and the cursor finds it there
+	r, _ := sm.row()
+	dir, sel, renameFile := sm.dir, "", userdata.RenameScript
+	if r.kind == rowPlugin {
+		dir, sel, renameFile = sm.pdir, pluginSel, userdata.RenamePlugin
+	}
 	p := m.openPromptCmd("Rename "+name, scriptNameHint, "Rename", name, func(m *Model, typed string) (tea.Cmd, error) {
 		to := goName(typed)
 		if to == name {
-			m.openScripts(name)
+			m.openScripts(sel + name)
 			return nil, nil
 		}
-		if err := userdata.RenameScript(sm.dir, name, to); err != nil {
+		if err := renameFile(dir, name, to); err != nil {
 			return nil, scriptNameErr(err, to)
 		}
 		m.logf(logOk, "renamed %s to %s", name, to)
-		m.openScripts(to)
+		m.openScripts(sel + to)
 		return nil, nil
 	})
 	selectStem(p.field)
-	p.cancel = func(m *Model) { m.openScripts(name) }
+	p.cancel = func(m *Model) { m.openScripts(sel + name) }
 	return nil, false
 }
 
@@ -588,11 +758,19 @@ func (sm *scriptsModal) trashIt(m *Model) {
 	if !ok {
 		return
 	}
-	if _, err := userdata.TrashScript(sm.dir, name); err != nil {
+	trash, dir := userdata.TrashScript, sm.dir
+	if r, _ := sm.row(); r.kind == rowPlugin {
+		// out of plugins_dir, so out of the registry: its plugin leaves
+		// the palette, and a pipeline placing it fails its check until
+		// it is restored
+		trash, dir = userdata.TrashPlugin, sm.pdir
+	}
+	if _, err := trash(dir, name); err != nil {
 		m.logf(logErr, "could not trash %s: %s", name, serr.StringFromErr(err))
 		return
 	}
 	m.logf(logInfo, "moved %s to the trash — Ctrl+O, t shows the Trash, Enter there restores it", name)
+	m.syncPlugins()
 	sm.reload(m, "")
 }
 
@@ -601,6 +779,9 @@ func (sm *scriptsModal) copyPath(m *Model) tea.Cmd {
 	name, ok := sm.scriptOnly(m, "copy")
 	if !ok {
 		return nil
+	}
+	if r, _ := sm.row(); r.kind == rowPlugin {
+		return m.copyString(filepath.Join(sm.pdir, name), "the plugin file's path")
 	}
 	return m.copyString(filepath.Join(sm.dir, name), "the script's path")
 }
@@ -728,6 +909,66 @@ func (m *Model) restoreScript(dir string, t userdata.TrashInfo) {
 	p.cancel = func(m *Model) { m.openScripts("") }
 }
 
+// makePlugin is makeScript for a plugin file: written to plugins_dir —
+// where the loader finds it when the editor returns — then edited.
+func (m *Model) makePlugin(dir, suggest, text, title string) {
+	var taken []string
+	if infos, err := userdata.ListPlugins(dir); err == nil {
+		for _, in := range infos {
+			taken = append(taken, in.Name)
+		}
+	}
+	p := m.openPromptCmd(title, scriptNameHint+"; two files may not declare one plugin Name", "Create", freeName(suggest, taken),
+		func(m *Model, typed string) (tea.Cmd, error) {
+			name := goName(typed)
+			if !userdata.ValidPluginName(name) {
+				return nil, scriptNameErr(userdata.ErrBadScriptName, name)
+			}
+			if _, _, err := userdata.SavePlugin(dir, name, text, ""); err != nil {
+				return nil, scriptNameErr(err, name)
+			}
+			m.logf(logOk, "created %s in %s", name, config.TildePath(dir))
+			return m.editPlugin(dir, name), nil
+		})
+	selectStem(p.field)
+	p.cancel = func(m *Model) { m.openScripts("") }
+}
+
+// restorePlugin is restoreScript for a trashed plugin file.
+func (m *Model) restorePlugin(dir string, t userdata.PluginTrashInfo) {
+	name, err := userdata.RestorePlugin(dir, t.ID, "")
+	if err == nil {
+		m.logf(logOk, "restored %s", name)
+		m.pluginLoaded(filepath.Join(dir, name))
+		m.openScripts(pluginSel + name)
+		return
+	}
+	if !errors.Is(err, userdata.ErrScriptExists) {
+		m.logf(logErr, "could not restore %s: %s", t.Name, serr.StringFromErr(err))
+		return
+	}
+	var taken []string
+	if infos, lerr := userdata.ListPlugins(dir); lerr == nil {
+		for _, in := range infos {
+			taken = append(taken, in.Name)
+		}
+	}
+	p := m.openPromptCmd("Restore "+t.Name+" as…", "a plugin file named "+t.Name+" exists — restore this one under another name",
+		"Restore", freeName(t.Name, taken), func(m *Model, typed string) (tea.Cmd, error) {
+			to := goName(typed)
+			got, err := userdata.RestorePlugin(dir, t.ID, to)
+			if err != nil {
+				return nil, scriptNameErr(err, to)
+			}
+			m.logf(logOk, "restored %s as %s", t.Name, got)
+			m.pluginLoaded(filepath.Join(dir, got))
+			m.openScripts(pluginSel + got)
+			return nil, nil
+		})
+	selectStem(p.field)
+	p.cancel = func(m *Model) { m.openScripts("") }
+}
+
 // execEditor is tea.ExecProcess, as a var so tests edit the file in place of
 // a real editor (the harness has no terminal to hand over).
 var execEditor = tea.ExecProcess
@@ -737,6 +978,7 @@ type scriptEditedMsg struct {
 	dir, name string
 	before    string // the script's revision when the editor started
 	err       error  // the editor's own failure (it could not start, or exited non-zero)
+	plugin    bool   // a plugin file (pluginEdited checks and loads it)
 }
 
 // editorLine is the user's editor command: $VISUAL, else $EDITOR, else vi.
@@ -757,7 +999,12 @@ func editorName() string { return filepath.Base(editorLine()[0]) }
 // editScript suspends the TUI and opens the script in the user's editor.
 // On return scriptEdited checks it. An editor that is not installed is
 // said in the log without suspending anything.
-func (m *Model) editScript(dir, name string) tea.Cmd {
+func (m *Model) editScript(dir, name string) tea.Cmd { return m.editFile(dir, name, false) }
+
+// editPlugin is editScript for a plugin file of plugins_dir.
+func (m *Model) editPlugin(dir, name string) tea.Cmd { return m.editFile(dir, name, true) }
+
+func (m *Model) editFile(dir, name string, plugin bool) tea.Cmd {
 	path := filepath.Join(dir, name)
 	_, before, err := userdata.ReadScript(dir, name)
 	if err != nil {
@@ -773,7 +1020,7 @@ func (m *Model) editScript(dir, name string) tea.Cmd {
 	m.logf(logMuted, "editing %s in %s — dbc comes back when it exits", config.TildePath(path), filepath.Base(line[0]))
 	cmd := exec.Command(bin, append(line[1:], path)...)
 	return execEditor(cmd, func(err error) tea.Msg {
-		return scriptEditedMsg{dir: dir, name: name, before: before, err: err}
+		return scriptEditedMsg{dir: dir, name: name, before: before, err: err, plugin: plugin}
 	})
 }
 
@@ -795,14 +1042,18 @@ func (m *Model) scriptEdited(msg scriptEditedMsg) tea.Cmd {
 		m.openScripts("")
 		return nil
 	}
-	diags := script.Check(msg.name, text)
+	check, sel, clean := script.Check, "", "checked, no problems (Enter runs it)"
+	if msg.plugin {
+		check, sel, clean = script.CheckPlugin, pluginSel, "checked, no problems"
+	}
+	diags := check(msg.name, text)
 	changed := "saved"
 	if rev == msg.before {
 		changed = "unchanged"
 	}
 	switch {
 	case len(diags) == 0:
-		m.logf(logOk, "%s %s — checked, no problems (Enter runs it)", msg.name, changed)
+		m.logf(logOk, "%s %s — %s", msg.name, changed, clean)
 	default:
 		errs := 0
 		for _, d := range diags {
@@ -828,8 +1079,31 @@ func (m *Model) scriptEdited(msg scriptEditedMsg) tea.Cmd {
 			m.logf(k, "%s:%s", shown, d.String())
 		}
 	}
-	m.openScripts(msg.name)
+	if msg.plugin {
+		m.pluginLoaded(path)
+	}
+	m.openScripts(sel + msg.name)
 	return nil
+}
+
+// pluginLoaded reloads the plugin files after one was edited or made, and
+// says what the loader made of the file at path: its plugin, now
+// placeable in a pipeline, or why it did not load.
+func (m *Model) pluginLoaded(path string) {
+	script.SyncPlugins(m.cfg.PluginsDir)
+	for _, p := range pipeline.PluginProblems() {
+		if p.File == path {
+			m.logf(logErr, "%s did not load: %s", filepath.Base(path), p.Err)
+			return
+		}
+	}
+	for _, p := range pipeline.Plugins() {
+		if p.File == path {
+			m.logf(logOk, "%s loaded: %s %s (%s) — a pipeline places it by that name; dbc web's palette lists it under Yours",
+				filepath.Base(path), pluginKindGlyph(p.Kind), p.Name, p.Kind)
+			return
+		}
+	}
 }
 
 // ago is a short age for a list's right column: now, 5m, 3h, 2d, then a

@@ -222,6 +222,10 @@ type nodeInst struct {
 	env    *Env
 	stats  *NodeStats
 	opened bool // a sink's Open was called
+	// dropNoted: this transform's first dropped batch has been logged
+	// (feed). Said once per node so a transform that drops on purpose
+	// costs one line, not one per batch.
+	dropNoted bool
 }
 
 // fragRun is one fragment's run in progress.
@@ -373,6 +377,7 @@ func (fr *fragRun) build(n Node) (*nodeInst, error) {
 	if msgs := p.Validate(cfg); len(msgs) > 0 {
 		return nil, serr.New("bad node config", "fragment", frag, "node", node, "problems", strings.Join(msgs, "; "))
 	}
+	inst.env.Cfg = cfg
 	inst.impl, err = p.New(cfg)
 	if err != nil {
 		return nil, serr.Wrap(err, "fragment", frag, "node", node, "plugin", p.Name)
@@ -574,6 +579,17 @@ func (fr *fragRun) feed(n *nodeInst, b *Batch) error {
 		n.stats.Elapsed += time.Since(t0)
 		if err != nil {
 			return fr.nodeErr(n, err)
+		}
+		// A nil batch is a transform dropping the rows — legitimate, but
+		// also what interpreted Go returns when the interpreter has
+		// clobbered the batch variable (see script/check.go,
+		// lintStoreComputed), which would otherwise load nothing without a
+		// word. So the first drop is said. A node that asked the source to
+		// stop (rows.limit) is ending on purpose and stays quiet.
+		if out == nil && b.Len() > 0 && !n.dropNoted && !fr.stop {
+			n.dropNoted = true
+			fr.r.log(fmt.Sprintf("[%s/%s] Apply returned no batch for %d rows, so they were dropped "+
+				"(said once per node; returning nil is how a transform drops a batch)", fr.f.Name, n.id, b.Len()))
 		}
 		if out == nil || out.Len() == 0 {
 			return nil

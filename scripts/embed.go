@@ -18,6 +18,10 @@
 //	        blank.go        ◄─ a Template: what New starts from
 //	        copy.go
 //	        …
+//	    pipelines/, jobs/   ◄─ sample specs (JSON), runnable by name
+//	    plugins/            ◄─ sample pipeline plugins, one per kind:
+//	        mask_email.go      copied into plugins_dir to be loaded
+//	        …
 //
 // Examples are listed after the user's own scripts and never written to
 // (the scripts store, userdata/scripts.go, only touches scripts_dir).
@@ -46,6 +50,7 @@ import (
 //go:embed templates/*.go
 //go:embed pipelines/*.json
 //go:embed jobs/*.json
+//go:embed plugins/*.go
 var files embed.FS
 
 // Example is one built-in sample script.
@@ -253,4 +258,47 @@ func JobByName(name string) (Job, bool) {
 		}
 	}
 	return Job{}, false
+}
+
+// PluginExample is one built-in sample pipeline plugin (plugins/*.go): a
+// working plugin file of each kind, to copy into plugins_dir — where it is
+// loaded — and change. Unlike the sample pipelines an example plugin is
+// not loaded from the binary: a plugin in the palette is a file the user
+// has, so what they place is what they can open and edit.
+type PluginExample struct {
+	Name string `json:"name"` // file name, with .go
+	Desc string `json:"desc"` // the header comment's first sentence (userdata.DescOf)
+	Text string `json:"-"`
+}
+
+// PluginExamples lists the sample plugins by name.
+func PluginExamples() []PluginExample {
+	ents, _ := fs.ReadDir(files, "plugins")
+	var out []PluginExample
+	for _, e := range ents {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
+			continue
+		}
+		bs, err := files.ReadFile("plugins/" + e.Name())
+		if err != nil {
+			continue
+		}
+		out = append(out, PluginExample{Name: e.Name(), Desc: userdata.DescOf(bs), Text: string(bs)})
+	}
+	slices.SortFunc(out, func(a, b PluginExample) int { return strings.Compare(a.Name, b.Name) })
+	return out
+}
+
+// PluginExampleByName is the sample plugin called name (.go optional),
+// with its text.
+func PluginExampleByName(name string) (PluginExample, bool) {
+	if !strings.HasSuffix(name, ".go") {
+		name += ".go"
+	}
+	for _, p := range PluginExamples() {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return PluginExample{}, false
 }

@@ -511,7 +511,9 @@ func TestPluginsDescribed(t *testing.T) {
 		}
 		seen[p.Name] = true
 	}
-	for _, want := range []string{"sql.read", "sql.table", "sql.write", "sql.exec", "cols.select", "rows.filter", "rows.limit", "preview"} {
+	for _, want := range []string{"sql.read", "sql.table", "sql.write", "sql.exec", "cols.select", "rows.filter", "rows.limit", "preview",
+		"csv.read", "jsonl.read", "csv.write", "jsonl.write", "cols.cast", "cols.add", "text.clean", "rows.dedupe",
+		"discard", "lookup", "pipeline.check"} {
 		if !seen[want] {
 			t.Errorf("no plugin %s", want)
 		}

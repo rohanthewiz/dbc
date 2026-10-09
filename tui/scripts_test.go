@@ -11,6 +11,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/rohanthewiz/dbc/pipeline"
+	"github.com/rohanthewiz/dbc/script"
 	"github.com/rohanthewiz/dbc/scripts"
 	"github.com/rohanthewiz/dbc/userdata"
 )
@@ -26,6 +28,9 @@ func scriptsModel(t *testing.T, edit func(path string)) (*Model, string, *[]stri
 	m := newTestModel(t)
 	dir := filepath.Join(t.TempDir(), "scripts")
 	m.cfg.ScriptsDir = dir
+	m.cfg.PluginsDir = filepath.Join(filepath.Dir(dir), "plugins")
+	// the plugin registry is the process's: unload this test's plugin files
+	t.Cleanup(func() { script.LoadPlugins("") })
 	t.Setenv("VISUAL", "")
 	t.Setenv("EDITOR", "true") // on PATH everywhere, so LookPath passes
 	var edits []string
@@ -71,7 +76,8 @@ func rowLabels(sm *scriptsModal) []string {
 	for _, it := range sm.lst.items {
 		kind := "head"
 		if r, ok := it.data.(scriptRow); ok && !it.head {
-			kind = map[scriptRowKind]string{rowScript: "script", rowTemplate: "template", rowExample: "example", rowTrash: "trash"}[r.kind]
+			kind = map[scriptRowKind]string{rowScript: "script", rowTemplate: "template", rowExample: "example", rowTrash: "trash",
+				rowPlugin: "plugin", rowPluginExample: "pexample", rowPluginTrash: "ptrash"}[r.kind]
 		}
 		out = append(out, kind+":"+strings.TrimSpace(it.label))
 	}
@@ -118,7 +124,8 @@ func TestScriptsBrowserEmptyDir(t *testing.T) {
 	if got[0] != "head:Scripts" || !strings.HasPrefix(got[1], "head:none yet in") || got[2] != "template:Blank script" {
 		t.Errorf("rows start %v", got[:3])
 	}
-	if n := len(scripts.Templates()) + len(scripts.Examples()) + 3; len(got) != n {
+	// + the Plugins heading, its "none yet" note and the plugin examples' heading
+	if n := len(scripts.Templates()) + len(scripts.Examples()) + len(scripts.PluginExamples()) + 6; len(got) != n {
 		t.Errorf("%d rows, want %d: %v", len(got), n, got)
 	}
 	if r, _ := sm.row(); r.kind != rowTemplate {
@@ -472,5 +479,76 @@ func TestListSkipsHeadings(t *testing.T) {
 	l.move(-1)
 	if l.cur != 1 {
 		t.Errorf("up at the top: cur %d", l.cur)
+	}
+}
+
+// Plugin files in the browser: an example copied into plugins_dir (Enter,
+// then the name), edited, checked and loaded — the log says as what, and
+// the row says it too; a broken edit is said, marked ⚠, and kept out of the
+// registry; Del trashes the file, and its plugin leaves the registry.
+func TestScriptsBrowserPlugins(t *testing.T) {
+	var write string // what the stand-in editor writes; "" leaves the file
+	m, _, edits := scriptsModel(t, func(path string) {
+		if write != "" {
+			if err := os.WriteFile(path, []byte(write), 0o600); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	pdir := m.cfg.PluginsDir
+	key(t, m, "ctrl+o")
+	if labels := rowLabels(browser(t, m)); !slices.Contains(labels, "pexample:mask_email.go") {
+		t.Fatalf("rows %v", labels)
+	}
+	cursorTo(t, browser(t, m), "mask_email.go")
+	key(t, m, "enter")
+	key(t, m, "enter") // accept the offered name
+	if len(*edits) != 1 || (*edits)[0] != filepath.Join(pdir, "mask_email.go") {
+		t.Fatalf("edits = %v", *edits)
+	}
+	log := logText(m)
+	if !strings.Contains(log, "mask_email.go unchanged — checked, no problems") ||
+		!strings.Contains(log, "mask_email.go loaded: ƒ mask.email (transform)") {
+		t.Errorf("log:\n%s", log)
+	}
+	sm := browser(t, m)
+	if r, _ := sm.row(); r.kind != rowPlugin || r.name != "mask_email.go" {
+		t.Fatalf("browser back on %+v", r)
+	}
+	if it, _ := sm.lst.current(); !strings.HasPrefix(it.desc, "ƒ mask.email — Masks an e-mail column") || it.mark != "" {
+		t.Errorf("row: %q %q", it.desc, it.mark)
+	}
+	if p, ok := pipeline.Lookup("mask.email"); !ok || p.File != filepath.Join(pdir, "mask_email.go") {
+		t.Errorf("registry: %+v %v", p, ok)
+	}
+
+	// Enter on a plugin edits it (there is nothing to run); a broken save
+	// is checked, said, marked, and unloaded
+	write = "package main\n\nimport \"github.com/rohanthewiz/dbc/sdb\"\n\nvar Plugin = sdb.Plugin{Name: \"mask.email\", Kind: sdb.KindTransform}\n"
+	key(t, m, "enter")
+	if len(*edits) != 2 {
+		t.Fatalf("edits = %v", *edits)
+	}
+	log = logText(m)
+	if !strings.Contains(log, "mask_email.go:5:5: no func Apply") || !strings.Contains(log, "mask_email.go did not load: ") {
+		t.Errorf("log:\n%s", log)
+	}
+	sm = browser(t, m)
+	if it, _ := sm.lst.current(); it.mark != "⚠" || !strings.HasPrefix(it.desc, "did not load: ") {
+		t.Errorf("broken row: %q %q", it.desc, it.mark)
+	}
+	if _, ok := pipeline.Lookup("mask.email"); ok {
+		t.Error("a broken file's plugin is still registered")
+	}
+
+	// trash: gone from the dir, listed in the Trash
+	write = ""
+	key(t, m, "delete")
+	if _, err := os.Stat(filepath.Join(pdir, "mask_email.go")); !os.IsNotExist(err) {
+		t.Errorf("not trashed: %v", err)
+	}
+	key(t, m, "t")
+	if labels := rowLabels(browser(t, m)); !slices.Contains(labels, "ptrash:mask_email.go") {
+		t.Errorf("rows %v", labels)
 	}
 }

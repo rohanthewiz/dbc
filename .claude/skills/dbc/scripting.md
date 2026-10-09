@@ -169,13 +169,55 @@ the end. Specs are JSON in `~/.config/dbc/pipelines/*.json`
 run|check|export NAME` (`-p k=v`, `--preview N`, `--fragment F`, `-t json`),
 `dbc plugins`.
 
-- Plugins (`pipeline.Plugin`: name, kind, `Fields`, `New`, optional `Check`)
-  register at init: the SQL and row ones in `pipeline/builtin_*.go`, the
-  Go-code ones (`go.transform`, `go.source`, `go.action`, `script.run`) in
-  `script/plugins.go` because they need the interpreter. A `go.*` snippet
-  without a package clause is wrapped (`script.WrapSnippet`): standard
-  packages it names are imported for it. Entry points are plain funcs
-  looked up by name, called once per batch, panics recovered.
+- Plugins (`pipeline.Plugin`: name, kind, `Fields`, `New`, optional `Check`,
+  `File` for a user plugin) register at init: the SQL ones in
+  `pipeline/builtin_sql.go` (`sql.write` has `mode: upsert` on Postgres and
+  SQLite, over `etl.WriteOptions.Upsert`: a temp table merged with
+  `INSERT … ON CONFLICT` / an `ON CONFLICT` clause, last row of a key
+  wins), row and column ones in `builtin_rows.go` / `builtin_cols.go`
+  (`cols.cast`, `cols.add`, `text.clean`, `rows.dedupe`, `discard`), files
+  in `builtin_files.go` (`csv.*`, `jsonl.*`; writers rename a temp file in
+  at Commit), `lookup` and `pipeline.check` in `builtin_check.go`; the
+  Go-code ones (`go.transform`, `go.source`, `go.sink`, `go.action`,
+  `script.run`) in `script/plugins.go` because they need the interpreter.
+  A `go.*` snippet without a package clause is wrapped
+  (`script.WrapSnippet`): standard packages it names are imported for it.
+  Entry points are plain funcs looked up by name (`goNode.entry`; a
+  present one of the wrong shape is an error), bound by `bindPlugin`,
+  called once per batch, panics recovered. A plugin `Check` message
+  starting `warning: ` (or `code:L:C: warning: `) is a warning in
+  `pipeline.Check`, anything else an error.
+- **User plugins** (`script/userplugins.go`): each `.go` file in
+  `plugins_dir` (`config.PluginsDir`, default `~/.config/dbc/plugins`) is
+  `var Plugin = sdb.Plugin{Name, Kind, Label, Doc, Fields}` plus the kind's
+  funcs (`Next`; `Apply`; `Write`; `Run(e *sdb.Env)`; optional
+  `Open`/`Flush`/`Commit`/`Abort`/`Close`/`Check(cfg)`), reading its
+  settings from `e.Cfg` (`pipeline.Env.Cfg`, set by the runner). The file
+  is compiled once per load to read `Plugin` and bind the funcs; every
+  node then compiles its own interpreter (`compilePluginSource` in `New`),
+  so globals are per node and no interpreter is shared across goroutines.
+  `script.SyncPlugins(dir)` reloads only when the dir's stamp (names,
+  sizes, mtimes) changed and swaps the whole user set
+  (`pipeline.SetUserPlugins`, which refuses a built-in's or another file's
+  name); `pipeline.PluginProblems()` lists files that did not load (a node
+  naming one gets "did not load from FILE: why"). `script.CheckPlugin`
+  is the editor's check (AST shape by kind + lints + compile, never runs
+  the file); `script.LoadPluginFile` loads one file alone (`dbc plugins
+  --check`). Hosts: the CLI loads in `loadPlugins` (pipeline/job run and
+  check, scripts, `dbc plugins`); dbc web at `New`, after its own saves and
+  every 2 s (`pluginWatch`, stopped by `Shutdown`), broadcasting
+  `plugins`; the TUI at start and where it checks or runs (`m.syncPlugins`).
+  Examples (one per kind) are embedded from `scripts/plugins/`
+  (`scripts.PluginExamples`). dbc web serves the files at
+  `/api/v1/plugin-files[/:name]`, `plugin-check`, `plugin-examples`,
+  `plugin-trash` (`web/plugins.go`) and edits one in a script tab named
+  `plugin:<file>` (`scripts.js` `isPlug`), its store events sent as
+  `scripts` under that name; the palette's *Yours* section draws
+  `p.file` and the problems. The TUI lists them in the `Ctrl+O` browser
+  (`rowPlugin`, `Enter` edits, `pluginLoaded` reports). The assistant gets
+  `pipeline.Summary()` beside `sdbapi.Summary()`. e2e: web "plugin files
+  and the palette" (`web/e2e/plugins_test.go`), TUI "Ctrl+O plugins: …"
+  (`tui/e2e/plugins_test.go`).
 - `pipeline.Host` is what a node sees as `e.S`; `*sdb.S` satisfies it, so
   `sdb` aliases the types (`sdb.Batch`, `sdb.Env`, `sdb.Cfg`,
   `sdb.NewPipeline`, `s.RunPipeline`, `s.RunPipelineNamed`,
@@ -255,7 +297,7 @@ run|check|export NAME` (`-p k=v`, `--preview N`, `--fragment F`, `-t json`),
   step "job tabs and the runs view" (`web/e2e/jobs_test.go`) drives both.
 - `dbc run cancel ID [--url U] [--secret S]` (`$DBC_WEB_URL`,
   `$DBC_WEB_SECRET`) stops a run of a running dbc web through that API.
-- The plan for the rest (the TUI, plugin files) is
+- The plan, with each phase's outcome (all six are in), is
   `ai_docs/plans/pipelines.md`.
 
 ## yaegi pitfalls
@@ -268,6 +310,21 @@ run|check|export NAME` (`-p k=v`, `--preview N`, `--fragment F`, `-t json`),
   ```go
   v, _ := x.(string)
   m[k] = v
+  ```
+
+- **An operator's result stored straight into a row is mis-stored.**
+  `b.Rows[i][c] = s + "!"`, `b.Rows[i][c] = n * 2`, `row[c] = -n` (a
+  `[]any` handed in by compiled code: a batch's rows, a result's `Raw`)
+  writes into the wrong frame slot — the row keeps its value and a local,
+  often the batch, is overwritten, so a transform's `return b, nil`
+  returns nil and its rows vanish. Comparisons, calls
+  (`strings.ToLower(s)`), variables and `any(…)` are fine. The checks warn
+  (`lintStoreComputed`), the runner logs a transform's first dropped
+  batch, and `TestYaegiStoreComputedBug` pins it:
+
+  ```go
+  v := s + "!"
+  b.Rows[i][c] = v
   ```
 
 - A script is interpreted: keep it to stdlib + `sdb`. Third-party imports

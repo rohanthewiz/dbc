@@ -1145,6 +1145,11 @@
         if (ev.type !== "jobs") pipeKit.onEvent(ev.type, d);
         if (ev.type.startsWith("job.")) runsKit.onEvent(ev.type, d);
         if (ev.type !== "pipelines") jobKit.onEvent(ev.type, d);
+      } else if (ev.type === "plugins") {
+        // the server reloaded the user's plugin files (web/plugins.go):
+        // the palette and the browser's Plugins section redraw
+        pipeKit.pluginsChanged();
+        scriptKit.refreshBrowser();
       } else if (ev.type === "dump") {
         dbc.conns.onDump(d); // a running dump's lines and state (conns.js)
       } else if (ev.type.startsWith("chat.")) dbc.chat.onEvent(ev.type, d);
@@ -1538,6 +1543,7 @@
     else if (fresh && t.status) setStatus(t.status, t.level);
     else if (t.pipeline) setStatus(t.pipeline + " — drag plugins onto a lane, ◎ previews, Ctrl+Enter saves and runs, Ctrl+S saves", "");
     else if (t.job) setStatus(t.job + " — drag pipelines onto the canvas, wire a card's ● to another, Ctrl+Enter saves and runs, Alt+R every run", "");
+    else if (scriptKit.isPlugin(t.script)) setStatus(plugTitle(t.script) + " — a pipeline plugin: Ctrl+S saves and loads it (into the palette's Yours), Ctrl+Enter also checks it", "");
     else setStatus(t.script + " — Ctrl+Enter saves and runs it, Ctrl+S saves", "");
     if (st.hasResult) {
       if (fresh) dbc.grid.restore(viewFor(t, st) || t.grid); else dbc.grid.load();
@@ -2542,7 +2548,7 @@
       for (const t of tabs) {
         if (t.script !== from) continue;
         t.script = to;
-        t.title = to;
+        t.title = plugTitle(to);
         saveTab(t);
         moved = true;
       }
@@ -2757,7 +2763,8 @@
     const dirty = kit.dirty(name), diags = kit.diags(name);
     const errs = diags.filter((d) => d.severity === "error").length, warns = diags.length - errs;
     els.active.classList.remove("none");
-    els.active.textContent = (t.script ? "▷ " : t.job ? "⧉ " : "⛓ ") + name + (dirty ? " ●" : "") +
+    els.active.textContent = (t.script ? (scriptKit.isPlugin(t.script) ? "◈ " : "▷ ") : t.job ? "⧉ " : "⛓ ") +
+      (t.script ? plugTitle(name) : name) + (dirty ? " ●" : "") +
       (errs ? " · " + dbc.plural(errs, "error") : "") + (warns ? " · " + dbc.plural(warns, "warning") : "");
     els.active.title = (dirty ? "unsaved changes — Ctrl+S saves. " : "") + (!diags.length ? "" : t.script ?
       "The check's findings are marked in the editor (F8 walks them; ✓ Check lists them)." :
@@ -3148,8 +3155,15 @@
   $("log-copy").addEventListener("click", () => dbc.clip.copyText(dbc.logText(), "the log"));
   $("log-clear").addEventListener("click", () => dbc.clearLog());
 
-  // runScriptTab is Run in a script tab: save, then run the saved file.
+  // plugTitle is a script tab's title: its script's name, or — a plugin
+  // file's tab, "plugin:<file>" (scripts.js) — the file's.
+  const plugTitle = (name) => (scriptKit.isPlugin(name) ? name.slice("plugin:".length) : name);
+
+  // runScriptTab is Run in a script tab: save, then run the saved file. A
+  // plugin file has nothing to run: Run saves it, checks it and says what
+  // the loader made of it (scripts.js applyPlugin).
   async function runScriptTab(t) {
+    if (scriptKit.isPlugin(t.script)) { await scriptKit.applyPlugin(t.script); if (state.tab === t) drawScriptHead(); return; }
     if (!(await scriptKit.save(t.script))) {
       setStatus(t.script + " was not run — it is not saved (see the log)", "warn");
       return;
@@ -3207,7 +3221,7 @@
       else dbc.editor.focus();
       return;
     }
-    const t = { key: newKey(), title: name, conn: "", buffer: "", ws: "", script: name };
+    const t = { key: newKey(), title: plugTitle(name), conn: "", buffer: "", ws: "", script: name };
     tabs.splice(tabs.indexOf(state.tab) + 1, 0, t);
     saveOrder();
     saveTab(t);
@@ -3569,11 +3583,11 @@
       const b = el("div", { class: "qtab" + (t === state.tab ? " on" : "") + (t.lost ? " lost" : "") +
           (t.script ? " script" : "") + (t.pipeline ? " pipeline" : "") + (t.job ? " job" : "") + (g ? " grp g" + groups.color(g) : ""), role: "tab", tabindex: "-1",
         "aria-selected": t === state.tab ? "true" : "false", "data-key": t.key,
-        title: (t.script ? "script " : t.pipeline ? "pipeline " : t.job ? "job " : "") + t.title + (i < 9 ? " (Alt+" + (i + 1) + ")" : "") +
+        title: (t.script ? (scriptKit.isPlugin(t.script) ? "plugin file " : "script ") : t.pipeline ? "pipeline " : t.job ? "job " : "") + t.title + (i < 9 ? " (Alt+" + (i + 1) + ")" : "") +
           (t.console ? " — console " + t.cdb.label + " · " + t.console : "") + (g ? " — group " + g.name : "") +
           (t.script ? " — double-click renames the script" : t.pipeline ? " — double-click renames the pipeline" :
             t.job ? " — double-click renames the job" : " — double-click renames") },
-      t.script ? el("span", "qgo", "▷") : t.pipeline ? el("span", "qgo", "⛓") : t.job ? el("span", "qgo", "⧉") : null,
+      t.script ? el("span", "qgo", scriptKit.isPlugin(t.script) ? "◈" : "▷") : t.pipeline ? el("span", "qgo", "⛓") : t.job ? el("span", "qgo", "⧉") : null,
       el("span", "qt", t.title), t.console ? el("span", "qcon", t.console) : null, marks,
       tabs.length > 1 ? el("button", { type: "button", class: "qx", title: "Close (Alt+W)", "data-close": t.key }, "×") : null);
       els.qtabs.append(b);
@@ -4003,7 +4017,7 @@
       const plans = new Set((layout.plans || "").split(","));
       tabs = order.map((k) => {
         const t = byKey.get(k);
-        return { key: t.id, title: t.script || t.pipeline || t.job || t.title || "Query", conn: t.conn, buffer: t.buffer, ws: "", planOpen: plans.has(t.id),
+        return { key: t.id, title: (t.script && plugTitle(t.script)) || t.pipeline || t.job || t.title || "Query", conn: t.conn, buffer: t.buffer, ws: "", planOpen: plans.has(t.id),
           cdb: t.console && t.consoleDb ? t.consoleDb : null, console: t.console && t.consoleDb ? t.console : "",
           script: t.script || "", pipeline: t.pipeline || "", job: t.job || "" };
       });

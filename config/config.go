@@ -208,6 +208,10 @@ type Config struct {
 	// does not say.
 	JobsDir string `toml:"jobs_dir"`
 	RunsDir string `toml:"runs_dir"`
+	// PluginsDir is where the user's pipeline plugins live (plugins.go:
+	// Go files, each one kind of node), absolute after Load, beside the
+	// scripts when the file does not say.
+	PluginsDir string `toml:"plugins_dir"`
 	// RunsKeep is how many records of each job and of each pipeline are
 	// kept, the oldest pruned after a run ends; 0 means DefaultRunsKeep.
 	RunsKeep int `toml:"runs_keep"`
@@ -394,6 +398,8 @@ func (c *Config) resolveScripts(cfgDir string) {
 	c.JobsDir, pw = ResolveJobsDir(c.JobsDir, cfgDir)
 	warns = append(warns, pw...)
 	c.RunsDir, pw = ResolveRunsDir(c.RunsDir, cfgDir)
+	warns = append(warns, pw...)
+	c.PluginsDir, pw = ResolvePluginsDir(c.PluginsDir, cfgDir)
 	warns = append(warns, pw...)
 	if c.RunsKeep <= 0 {
 		c.RunsKeep = DefaultRunsKeep

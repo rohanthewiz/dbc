@@ -73,6 +73,52 @@ type RunStats = pipeline.RunStats
 type FragmentStats = pipeline.FragmentStats
 type NodeStats = pipeline.NodeStats
 
+// Stats is a sink's or an action's report. It holds the rows loaded (or
+// affected), a note, and Vars for later fragments
+// (${frag.<fragment>.<name>}); a go.sink's Commit or a plugin's Run
+// returns one.
+type Stats = pipeline.Stats
+
+// Plugin describes a kind of node. A plugin file in plugins_dir declares
+// one as var Plugin = sdb.Plugin{…} — Name ("mask.email"), Kind, Label,
+// Doc and Fields — beside plain funcs the Kind calls for (Apply for a
+// transform, Next for a source, Write for a sink, Run for an action); the
+// loader leaves New and Check to itself. Fields are the node's settings,
+// drawn as the inspector's form and read in the funcs as e.Cfg.
+type Plugin = pipeline.Plugin
+
+// Field is one setting of a plugin. It has a Name, a Type (what the
+// inspector draws), Doc, Default, Required and, for an enum, its values.
+type Field = pipeline.Field
+
+// Kind is what a plugin builds. It is one of KindSource, KindTransform,
+// KindSink or KindAction.
+type Kind = pipeline.Kind
+
+// FieldType is what a Field holds. It decides what the inspector draws.
+type FieldType = pipeline.FieldType
+
+// The four kinds of plugin, and the field types, for a plugin file's
+// descriptor.
+const (
+	KindSource    = pipeline.KindSource
+	KindTransform = pipeline.KindTransform
+	KindSink      = pipeline.KindSink
+	KindAction    = pipeline.KindAction
+
+	FieldString   = pipeline.FieldString   // one line
+	FieldText     = pipeline.FieldText     // several lines
+	FieldInt      = pipeline.FieldInt      // an integer
+	FieldBool     = pipeline.FieldBool     // true/false
+	FieldDuration = pipeline.FieldDuration // "30s", "5m"
+	FieldEnum     = pipeline.FieldEnum     // one of Field.Enum
+	FieldConn     = pipeline.FieldConn     // a connection name: the picker
+	FieldTable    = pipeline.FieldTable    // a table on the node's conn
+	FieldColumns  = pipeline.FieldColumns  // column names, comma- or line-separated
+	FieldSQL      = pipeline.FieldSQL      // SQL, in a SQL editor
+	FieldGo       = pipeline.FieldGo       // Go, in a Go editor
+)
+
 // Paths are the directories a session resolves names in: a script's
 // (script.run), a pipeline's (RunPipelineNamed), a job's (RunJob) — and
 // where a job run there leaves its record. The host sets them.

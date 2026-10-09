@@ -67,7 +67,7 @@ Copy `dbc.example.toml` to `./dbc.toml` (or `~/.config/dbc/config.toml`):
 
 ```toml
 # scripts_dir      = "scripts"   # default ~/.config/dbc/scripts; relative = beside this file
-# jobs_dir         = "jobs"      # pipelines_dir, jobs_dir, runs_dir likewise (see Jobs)
+# jobs_dir         = "jobs"      # pipelines_dir, jobs_dir, runs_dir, plugins_dir likewise (see Jobs)
 # runs_keep        = 200         # run records kept per job and per pipeline
 max_rows           = 1000   # rows fetched from the server
 max_display_rows   = 2000   # rows the results table draws (0 = all)
@@ -1944,23 +1944,44 @@ plugins, and the fields each takes, are listed by `dbc plugins`:
 | --- | --- | --- |
 | `sql.read` | source | A query on a connection, streamed and uncapped; `args` bind its placeholders |
 | `sql.table` | source | A table, with `columns`, `where` and `order` |
+| `csv.read` · `jsonl.read` | source | A file: CSV (`delimiter`, `header`, `columns`, `empty_null`) or one JSON object per line (keys in the order written; nested values as JSON text). Every CSV value is text until `cols.cast` types it |
 | `go.source` | source | `func Next(e *sdb.Env) (*sdb.Batch, error)` until it returns nil |
 | `cols.select` | transform | `keep`, `drop`, `rename` (one `old=new` per line) |
+| `cols.cast` | transform | One `column type [layout]` per line — `int`, `float`, `bool`, `text`, `time`, `date` (a Go layout: `born date 02/01/2006`); a value that will not cast fails the fragment, or becomes NULL (`on_error: null`) |
+| `cols.add` | transform | One `name = value` per line: `now()` (one instant per run), `uuid()`, `row()`, `null`, a number, `true`, `'text'`; `${param}` and `${run.id}` work |
+| `text.clean` | transform | `trim`, `collapse` spaces, `case` lower/upper, `empty_null`, on the `columns` named (or every text column) |
 | `rows.filter` | transform | Rules, one per line: `age >= 3`, `breed in Tabby,Siamese`, `name like %kit%`, `x notnull` |
+| `rows.dedupe` | transform | The first row of each `key` (or whole row) across the fragment; the keys are held in memory |
 | `rows.limit` | transform | The first N rows, then the source stops |
+| `lookup` | transform | A side query on any connection, read once and held in memory (`max_rows`): rows matched on `key` = `match` (compared as text) get its `add` columns; no match is NULL, dropped or a failure (`missing`) |
 | `go.transform` | transform | `func Apply(b *sdb.Batch) (*sdb.Batch, error)`, per batch |
-| `sql.write` | sink | A table, by COPY on Postgres and batched INSERT elsewhere, in one transaction; `create`, `truncate`, `key`, `setup` |
+| `sql.write` | sink | A table, by COPY on Postgres and batched INSERT elsewhere, in one transaction; `create`, `truncate`, `key`, `setup`, and `mode: upsert` (Postgres and SQLite: a row whose `key` is there updates it, the last of a repeated key wins) |
+| `csv.write` · `jsonl.write` | sink | A file, written beside its path and renamed into place when the fragment commits — a failed run leaves the old file alone; publishes `rows` and `path` |
 | `preview` | sink | The first N rows to the results view; nothing written |
+| `discard` | sink | Counts the rows and writes nothing: for timing a source or a transform |
+| `go.sink` | sink | `func Write(e *sdb.Env, b *sdb.Batch) error` per batch; optional `Open`, `Commit`, `Abort` |
 | `sql.exec` | action | Statements on a connection; publishes `affected` |
+| `pipeline.check` | action | A gate: a query's first value against a rule (`>= 1000`, `= 0`, `notnull`) — a failure stops the pipeline before the fragments after it; publishes `value` |
 | `go.action` | action | `func Run(s *sdb.S) error` — a script, inline |
 | `script.run` | action | A saved script by name: every script written so far is a valid fragment |
+
+Plugins of your own — Go files in `plugins_dir` — join this list, the
+canvas's palette and the check: [Plugins of your own](#plugins-of-your-own).
 
 A `go.*` node's code is interpreted by the same engine scripts are, with
 the standard packages it uses by name imported for it, and called once
 per **batch**: the row loop inside `Apply` runs at the interpreter's
 speed (about 15× slower than compiled Go for a lower-case-and-trim of one
 column — half a millisecond per thousand rows, or some two million rows a
-second), but nothing crosses the interpreter boundary per row. A fragment
+second, where the built-in `text.clean` does the same at some 27 million),
+but nothing crosses the interpreter boundary per row. One interpreter quirk
+to know: an operator's result stored straight into a row —
+`b.Rows[i][c] = s + "!"`, `b.Rows[i][c] = n * 2` — is mis-stored (the row
+keeps its value and the batch variable is overwritten, so `Apply` returns
+nil and the rows are dropped). Put it in a variable first
+(`v := s + "!"; b.Rows[i][c] = v`); a call's result (`strings.ToLower(s)`)
+is fine. The check warns at such a line, and a run says once when a
+transform hands back no batch. A fragment
 that is exactly `sql.read` or `sql.table` on Postgres into `sql.write` on
 Postgres, nothing between, runs as `s.Copy`'s direct COPY and says so.
 
@@ -2268,6 +2289,105 @@ comes back. A run another process runs is read again while it goes, but
 stopped where it runs. The TUI does not schedule: a job's cron lines fire
 while [`dbc web`](#jobs) runs.
 
+### Plugins of your own
+
+A plugin is a kind of node. Beside the built-ins, every Go file in
+`~/.config/dbc/plugins/` (`plugins_dir`) is one: a descriptor and plain
+funcs, interpreted by the engine scripts use — no interface to implement,
+no build step:
+
+```go
+//go:build ignore
+
+// Masks an e-mail column: the part before the @ becomes a short hash.
+package main
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"strings"
+
+	"github.com/rohanthewiz/dbc/sdb"
+)
+
+var Plugin = sdb.Plugin{
+	Name: "mask.email", Kind: sdb.KindTransform, Label: "Mask e-mail",
+	Fields: []sdb.Field{
+		{Name: "column", Type: sdb.FieldString, Required: true, Doc: "The column holding the addresses."},
+	},
+}
+
+func Apply(e *sdb.Env, b *sdb.Batch) (*sdb.Batch, error) {
+	c := b.Col(e.Cfg.Str("column", ""))
+	for i := range b.Rows {
+		if s, ok := b.Rows[i][c].(string); ok {
+			local, domain, _ := strings.Cut(s, "@")
+			sum := sha256.Sum256([]byte(local))
+			masked := hex.EncodeToString(sum[:5]) + "@" + domain
+			b.Rows[i][c] = masked
+		}
+	}
+	return b, nil
+}
+```
+
+`Plugin` names the node (`mask.email`, as a spec's `"plugin"` writes it),
+its kind, and its **fields**: what the canvas's inspector draws as a form,
+what `"cfg"` sets, and what the check validates (`Required`, an `int` that
+parses, an `enum`'s values). The doc comment above `package` is the
+plugin's description when `Plugin.Doc` is empty. The funcs a kind calls,
+by name (optional in brackets):
+
+| Kind | Funcs |
+| --- | --- |
+| `sdb.KindSource` | `Next(e) (*sdb.Batch, error)` until nil · [`Open(e) error`, `Close() error` or `Close(ok bool) error`] |
+| `sdb.KindTransform` | `Apply(e, b) (*sdb.Batch, error)` (or `Apply(b)`) · [`Open(e)`, `Flush(e) (*sdb.Batch, error)`, `Close()`] |
+| `sdb.KindSink` | `Write(e, b) error` · [`Open(e, cols []sdb.Col) error`, `Commit(e) (sdb.Stats, error)`, `Abort() error`] |
+| `sdb.KindAction` | `Run(e) error` or `Run(e) (sdb.Stats, error)` — `Stats.Vars` become `${frag.<fragment>.<name>}` |
+| any | [`Check(cfg sdb.Cfg) []string`: what is wrong with a node's settings, for the check — no database here] |
+
+`e.Cfg` is the node's settings (`e.Cfg.Str`, `Int`, `Bool`, `Duration`,
+`List`, `Lines`), with `${…}` substituted and the fields' defaults filled
+in; `e.S` is the session (`e.S.Query`, `e.S.Print`), `e.Params` the
+pipeline's parameters, `e.Logf` a line in the run's log. Package-level
+vars are a plugin's state: **every node gets an interpreter of its own**,
+so two nodes of one plugin — in one fragment, or in two runs at once —
+never share them (and never share an interpreter across goroutines). A
+file is compiled once when it is loaded, to read `Plugin` and check its
+funcs against its kind; each node then compiles its own copy, which costs
+milliseconds per node per run, as a `go.transform` does.
+
+A file that does not compile, lacks its kind's func, or claims a name a
+built-in or another file has, is **listed with why and cannot be placed**:
+`dbc plugins` says so on stderr, the palette shows it under *Yours* with
+⚠, and a spec naming its plugin fails its check with the file and the
+reason rather than "no plugin". Files load when dbc starts and whenever
+`plugins_dir` changes — dbc web looks every two seconds, so an edit in
+your own editor reaches the palette by itself; the TUI and the CLI look
+when they are about to check or run.
+
+Four examples ship in the binary, one per kind — `mask_email.go`
+(transform), `gen_series.go` (source), `webhook_post.go` (a sink that
+posts the rows as JSON when the fragment commits) and `wait_file.go` (an
+action that waits for a file) — copied into `plugins_dir` from the
+browser to load and change:
+
+- **dbc web**: `Ctrl+O` lists your plugin files under *Plugins* (each with
+  what it loaded as, or ⚠ and why), the examples to copy, and the trash; +
+  New ▾ starts one from an example. A plugin file opens in a script tab
+  (◈): Monaco with the sdb completion, the plugin check as you type (the
+  descriptor, its kind's funcs and their signatures, a compile), and
+  `Ctrl+S` saves and loads it — the log says as what — after which the
+  pipeline palette lists it under *Yours* at the top.
+- **The TUI**: the same section in the `Ctrl+O` browser; `Enter` edits a
+  plugin file in `$EDITOR`, and when the editor exits it is checked
+  (`path:line:col` findings), loaded, and the log says what it became.
+- **Headless**: `dbc plugins` lists yours beside the built-ins with the
+  file each came from; `dbc plugins --check [FILE…]` checks them for CI.
+- **The assistant** is sent the plugins with a script question — names,
+  kinds, fields, yours included — and the plugin file's shape, so "write a
+  plugin that …" gets this form.
+
 ## Headless mode
 
 Everything works without the TUI, for cron jobs and shell pipelines:
@@ -2546,7 +2666,8 @@ has stdout to itself, so `./dbc -t json script … | jq` parses.
 ./dbc pipeline run nightly -t json | jq .status   # the run's stats as the document
 ./dbc pipeline check nightly.json other.json      # diagnostics; exit 1 on an error
 ./dbc pipeline export nightly -o nightly.go       # the pipeline as a dbc script
-./dbc plugins                                     # the node kinds and their fields
+./dbc plugins                                     # the node kinds and their fields; yours say their file
+./dbc plugins --check                             # check every file in plugins_dir (or those named); exit 1 on an error
 ```
 
 The log (fragments starting and ending, DDL, a node's own lines) streams

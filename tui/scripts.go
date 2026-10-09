@@ -99,7 +99,11 @@ type scriptsModal struct {
 
 	filterRect, newBtn Rect
 	hoverNew           bool
-	now                func() time.Time // for "2h" ages; a var for tests
+	// jobsBtn is "⇉ Pipelines & jobs ^J", the way over to the twin browser
+	// (pipes.go) for a mouse: the toolbar has no room for a button of its own
+	jobsBtn   Rect
+	hoverJobs bool
+	now       func() time.Time // for "2h" ages; a var for tests
 }
 
 // openScripts opens the browser, with the cursor on the script called sel
@@ -263,7 +267,9 @@ func (sm *scriptsModal) draw(m *Model, s Surface) *caret {
 	s.Put(1, 0, "⌕", onBg(m.st.accent, bg))
 	label := " + New "
 	sm.newBtn = chip(s, s.W()-1-width(label), 0, label, pick(sm.hoverNew, m.st.buttonHover, m.st.button))
-	field := s.Sub(Rect{3, 0, max(s.W()-width(label)-6, 10), 1})
+	jobs := " ⇉ Pipelines & jobs ^J "
+	sm.jobsBtn = chip(s, sm.newBtn.X-s.Rect().X-1-width(jobs), 0, jobs, pick(sm.hoverJobs, m.st.buttonHover, m.st.button))
+	field := s.Sub(Rect{3, 0, max(sm.jobsBtn.X-s.Rect().X-5, 10), 1})
 	sm.filterRect = field.Rect()
 	fieldBg := bg
 	if sm.filtering {
@@ -308,6 +314,9 @@ func (sm *scriptsModal) key(m *Model, k tea.KeyPressMsg) (tea.Cmd, bool) {
 	case "t":
 		sm.toggleTrash(m)
 		return nil, false
+	case "ctrl+j":
+		m.openPipes(pipeSel{}) // the twin browser takes the dialog's place
+		return nil, false
 	}
 	sm.lst.key(k)
 	return nil, false
@@ -348,6 +357,9 @@ func (sm *scriptsModal) click(m *Model, x, y, clicks int, shift bool) (tea.Cmd, 
 		return nil, true
 	case sm.newBtn.Contains(x, y):
 		sm.newMenu(m, sm.newBtn.X, sm.newBtn.Y+1)
+		return nil, false
+	case sm.jobsBtn.Contains(x, y):
+		m.openPipes(pipeSel{})
 		return nil, false
 	case sm.filterRect.Contains(x, y):
 		sm.filtering = true
@@ -426,6 +438,7 @@ func (sm *scriptsModal) hover(m *Model, x, y int) {
 		sm.lst.hover = -1
 	}
 	sm.hoverNew = sm.newBtn.Contains(x, y)
+	sm.hoverJobs = sm.jobsBtn.Contains(x, y)
 }
 func (sm *scriptsModal) wheel(m *Model, x, y, dy int) { sm.lst.scroll(dy) }
 

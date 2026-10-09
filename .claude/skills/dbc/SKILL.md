@@ -122,6 +122,12 @@ Exit codes: `0` ok, `1` failure, `2` bad usage (incl. unknown connection),
 | `dbc web [--no-open] [--listen ADDR]` | browser workbench on 127.0.0.1:8450 | The browser workbench |
 | `dbc version` | version | Build |
 
+A pipeline or job written to `pipelines_dir` / `jobs_dir` is what the user
+sees in both UIs: dbc web draws it on a canvas (`Ctrl+O`, then a pipeline
+or job tab), the TUI lists, runs and checks it in its pipelines & jobs
+browser (`Ctrl+J`, editing the JSON in `$EDITOR`). Every run, whichever
+process ran it, is in dbc web's Runs view (`Alt+R`) and the TUI's (`Alt+J`).
+
 Binary outputs (`pdf`, `png`, `jpeg`) need `-o` or a pipe — dbc refuses to
 print them on a terminal. `explain -t json | jq .insights` is the
 tool-friendly form. `copy` refuses `-c`, `-f`, `--tx`, `-k`, `-t`, `-o`.

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -267,128 +266,26 @@ type pipeDiag struct {
 func (s *Server) checkText(text string) []pipeDiag {
 	spec, err := pipeline.Parse(text)
 	if err != nil {
-		line, col := 1, 1
-		var se *json.SyntaxError
-		var te *json.UnmarshalTypeError
-		switch {
-		case errors.As(err, &se):
-			line, col = lineCol(text, int(se.Offset))
-		case errors.As(err, &te):
-			line, col = lineCol(text, int(te.Offset))
-		default:
-			// an unknown key names itself: find it
-			if m := unknownFieldRe.FindStringSubmatch(err.Error()); m != nil {
-				if i := strings.Index(text, `"`+m[1]+`"`); i >= 0 {
-					line, col = lineCol(text, i)
-				}
-			}
-		}
+		// a syntax or type error at its offset, an unknown key where it
+		// is written (pipeline.ParseErrorAt, shared with the TUI)
+		line, col := pipeline.ParseErrorAt(text, err)
 		return []pipeDiag{{Diag: pipeline.Diag{Severity: pipeline.SevError, Msg: strings.TrimPrefix(err.Error(), "json: ")}, Line: line, Col: col}}
 	}
 	diags := pipeline.Check(spec, pipeline.CheckOptions{Conns: s.checkConns(spec)})
 	out := make([]pipeDiag, len(diags))
 	for i, d := range diags {
 		out[i] = pipeDiag{Diag: d}
-		out[i].Line, out[i].Col = locate(text, d.Where)
+		out[i].Line, out[i].Col = pipeline.Locate(text, d.Where)
 	}
 	return out
 }
 
-var unknownFieldRe = regexp.MustCompile(`unknown field "([^"]+)"`)
-
-// checkConns is the connection names a spec's conn fields may use: every
-// configured one, and any the spec names that resolves another way — a
-// "<conn>/<database>" onto another database of a configured server — so the
-// check does not call a working name unknown.
+// checkConns is the connection names a spec's conn fields may use
+// (jobs.CheckConns, which the TUI's check shares): every configured one,
+// and a "<conn>/<database>" name the spec uses onto another database of a
+// configured server.
 func (s *Server) checkConns(spec *pipeline.Spec) []string {
-	var names []string
-	for _, c := range s.cfg.Conns() {
-		names = append(names, c.Name)
-	}
-	for _, f := range spec.Fragments {
-		for _, n := range f.Nodes {
-			p, ok := pipeline.Lookup(n.Plugin)
-			if !ok {
-				continue
-			}
-			for k, v := range n.Cfg {
-				fd, ok := p.Field(k)
-				v = strings.TrimSpace(v)
-				if !ok || fd.Type != pipeline.FieldConn || v == "" || slices.Contains(names, v) {
-					continue
-				}
-				if _, found := s.cfg.ConnByName(v); found {
-					names = append(names, v)
-				}
-			}
-		}
-	}
-	return names
-}
-
-// lineCol is the 1-based line and column of byte offset off in text.
-func lineCol(text string, off int) (int, int) {
-	off = min(max(off, 0), len(text))
-	before := text[:off]
-	line := strings.Count(before, "\n") + 1
-	col := off - strings.LastIndex(before, "\n")
-	return line, col
-}
-
-// locate places a diag's where in the spec's text, for the JSON view: the
-// fragment's "name", then within it the node's "id", then the field's key.
-// It is a text search, not a JSON parse with positions — good enough to put
-// a marker on the right line of a file in the shape Spec.JSON writes, and
-// harmless when it misses (0, 0: the page marks nothing).
-//
-//	where "clean/dst.table" → "name": "clean" … "id": "dst" … "table":
-func locate(text, where string) (int, int) {
-	if where == "" {
-		return 0, 0
-	}
-	at := 0
-	find := func(needle *regexp.Regexp) bool {
-		loc := needle.FindStringIndex(text[at:])
-		if loc == nil {
-			return false
-		}
-		at += loc[0]
-		return true
-	}
-	quote := func(s string) string { return regexp.QuoteMeta(strings.ReplaceAll(s, `"`, `\"`)) }
-	switch {
-	case where == "name" || where == "fragments":
-		if !find(regexp.MustCompile(`"` + where + `"\s*:`)) {
-			return 0, 0
-		}
-		return lineCol(text, at)
-	case strings.HasPrefix(where, "params."):
-		if !find(regexp.MustCompile(`"params"\s*:`)) || !find(regexp.MustCompile(`"`+quote(strings.TrimPrefix(where, "params."))+`"\s*:`)) {
-			return 0, 0
-		}
-		return lineCol(text, at)
-	}
-	frag, rest, _ := strings.Cut(where, "/")
-	frag, edge, isEdge := strings.Cut(frag, ":")
-	if !find(regexp.MustCompile(`"name"\s*:\s*"` + quote(frag) + `"`)) {
-		return 0, 0
-	}
-	switch {
-	case isEdge:
-		// "edge a→b": the fragment's edges
-		if from, to, ok := strings.Cut(strings.TrimPrefix(edge, "edge "), "→"); ok &&
-			find(regexp.MustCompile(`\[\s*"`+quote(from)+`"\s*,\s*"`+quote(to)+`"\s*\]`)) {
-			return lineCol(text, at)
-		}
-	case rest != "":
-		node, field, _ := strings.Cut(rest, ".")
-		if find(regexp.MustCompile(`"id"\s*:\s*"` + quote(node) + `"`)) {
-			if field != "" {
-				_ = find(regexp.MustCompile(`"` + quote(field) + `"\s*:`))
-			}
-		}
-	}
-	return lineCol(text, at)
+	return jobs.CheckConns(s.cfg, spec)
 }
 
 func (s *Server) handlePipelineCheck(ctx rweb.Context) error {

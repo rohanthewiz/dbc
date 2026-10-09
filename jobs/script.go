@@ -15,15 +15,15 @@ import (
 // s.RunJob's two runners (see sdb/jobs.go):
 //
 //	the host's engine   Engine.ScriptRunner, handed to a session with
-//	                    WithJobs — dbc web's script tabs: the job runs on
-//	                    the server's engine, beside its other runs, under
-//	                    its overlap rules, and its lines go where every
-//	                    run's lines go
+//	                    WithJobs — dbc web's script tabs and the TUI's
+//	                    scripts: the job runs on the process's engine,
+//	                    beside its other runs, under its overlap rules, and
+//	                    its lines go where every run's lines go
 //	a private engine    DefaultJobRunner, set here for every host that set
-//	                    none — the TUI and headless `dbc script`: an engine
-//	                    over the session's connections and paths for the
-//	                    length of the call, whose lines are the script's
-//	                    own Print lines, each with its step
+//	                    none — headless `dbc script`: an engine over the
+//	                    session's connections and paths for the length of
+//	                    the call, whose lines are the script's own Print
+//	                    lines, each with its step
 
 func init() {
 	sdb.DefaultJobRunner = runOnOwnEngine

@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-186
+**Next ID:** N-188
 
 ## Open
 
@@ -121,6 +121,9 @@ ten session docs in `ai_docs/claude_sessions/`
   would let `dbc run cancel` signal a local one (SIGINT, so it rolls back)
   when dbc web is not its owner; the record's heartbeat already says
   whether it is alive.
+  Updated `2026-1009-1449-phase-5-tui-pipelines-jobs`: the TUI's run monitor and Runs list (`^K`) refuse
+  the same way — its engine has no hold on another process's run either —
+  and say where to stop it; a PID in the record would serve all three.
 - **N-184** · raised `2026-1009-1349-phase-4-jobs-tab-runs-view` · value low
   A job tab's Runs face sits in the editor's pane, about a third of the
   work column by default: the run page's DAG fills it, and the drilldown
@@ -134,6 +137,23 @@ ten session docs in `ai_docs/claude_sessions/`
   records keep no rows, so the run page's ◎ can only preview the fragment
   again, today. Keep a capped preview (say the first 50 rows per preview
   node) in the record, for the run page to show as it was.
+- **N-186** · raised `2026-1009-1449-phase-5-tui-pipelines-jobs` · value low
+  A preview sink in a job a script starts (`s.RunJob`) shows its rows
+  nowhere. `Engine.ScriptRunner` starts the job with no origin, so dbc web
+  drops the rows (no tab to land them in), and the TUI hands them to the
+  tab on screen — usually the script's own, which refuses them while the
+  script runs ("busy"). The script's workspace could pass itself as the
+  run's origin (sdb's job runner hook would need the session's tag), so
+  the rows join the script's own `s.Show` results.
+- **N-187** · raised `2026-1009-1449-phase-5-tui-pipelines-jobs` · value low
+  Every run listing reads every record file whole
+  (`userdata.ListRuns` → `readHead` unmarshals each), whatever the
+  filter's limit: `dbc runs`, dbc web's Runs view, the TUI's Runs list.
+  The TUI's list re-reads only when `userdata.RunsStamp` moved, but that
+  is every 2s while another process runs a job (its record is rewritten).
+  With `runs_keep` 200 per name and many names this grows; reading only a
+  record's leading bytes (the header fields come first) or a per-name
+  index would bound it. Contingent on a `runs_dir` big enough to notice.
 
 ## Validate
 
@@ -230,6 +250,12 @@ and `raised`.
   pane's bottom border (how `⚑`, `✦` and `‹ ›` render; that `{` `}` `P` `S`
   and `x` reach dbc in the grid and the plan view), and the log title's
   `⧉ copy` / `✕ clear` (a click there must not start a log-splitter drag).
+  Updated `2026-1009-1449-phase-5-tui-pipelines-jobs`: add the pipelines & jobs browser and the runs. That
+  `Ctrl+J` reaches dbc (a legacy terminal sends it as LF, decoded as
+  `ctrl+j`) and `⌥J` does (Option as Meta); how `⇉ ◷ ○ ● ✓ ✗ ■ ↷ ⚠` and the
+  monitor's `▾ ▸` render; a real mouse on the status bar's `● name 3m12s`;
+  and `e` with a real editor on a JSON spec. The e2e step "Ctrl+J: …"
+  covers the rest through the stand-in editor.
 - **N-145** · raised `2026-1007-1245-result-tabs-per-connection` · value low
   Drive a real share with the assistant end to end. Neither e2e harness has
   a connection with `ai_rows = true`, so `S` / "✦ Share with the assistant"
@@ -492,6 +518,12 @@ call.
   critical path, fragments on the run's time axis, node counters, the
   filtered log, live), `dbc run cancel` through dbc web's API. Phase 5,
   the TUI (browser, Runs modal, run monitor tree), is next.
+  Updated `2026-1009-1449-phase-5-tui-pipelines-jobs`: Phase 5 is in — the TUI owns an engine (events
+  through a non-blocking pump), the `Ctrl+J` browser (run, params, `$EDITOR`
+  and the check placed by line, new, copy, trash), the run monitor tree,
+  the `Alt+J` Runs list, run lines in the log and `● name 3m12s` on the
+  status bar. Phase 6, the plugin SDK and the rest of the built-ins, is
+  next.
 
 ## Non-goals
 

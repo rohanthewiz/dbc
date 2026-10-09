@@ -61,6 +61,15 @@ func newTestModel(t *testing.T) *Model {
 // for tests that point it at a fake host first.
 func newTestModelInHost(t *testing.T) *Model {
 	t.Helper()
+	return newTestModelCfg(t, nil)
+}
+
+// newTestModelCfg is newTestModelInHost with a say in the config before
+// the model is built (tweak may be nil): the jobs tests point the
+// pipelines, jobs and runs directories at temp dirs, which the engine
+// reads when it is made.
+func newTestModelCfg(t *testing.T, tweak func(*config.Config)) *Model {
+	t.Helper()
 	// the SQLite demo's name, since TestScriptRunsFromThePicker runs a shipped
 	// script that queries that connection by name
 	name := config.DemoSQLite
@@ -70,6 +79,9 @@ func newTestModelInHost(t *testing.T) *Model {
 		AIContextRows:     config.DefaultAIContextRows,
 		DefaultConnection: name,
 		Connections:       []config.Connection{{Name: name, Driver: "sqlite", DSN: dsn}},
+	}
+	if tweak != nil {
+		tweak(cfg)
 	}
 	mgr := db.NewManager(cfg)
 	t.Cleanup(mgr.Close)
@@ -140,6 +152,9 @@ func drive(t *testing.T, m *Model, msg tea.Msg, cmds ...tea.Cmd) {
 		case tea.BatchMsg:
 			cmds = append(cmds, out...)
 		case tickMsg:
+		case jobTickMsg:
+			// the jobs' 1s refresh re-arms itself while a run or a view of
+			// runs is up; tests drive time by hand (jobs_test.go)
 		case chatEventMsg:
 			// the assistant's event pump re-arms itself forever; tests that
 			// use it drive it explicitly

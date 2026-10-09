@@ -25,8 +25,11 @@ type listItem struct {
 	label string
 	sub   string
 	mark  string
-	desc  string // muted text after the label (at list.descCol), cut before sub
-	muted bool   // drawn dim — e.g. a view among tables
+	// markSt colors the mark when set (the Runs list's ✓ ✗ ● by state);
+	// nil draws it in the accent, as the active connection's ●
+	markSt *Style
+	desc   string // muted text after the label (at list.descCol), cut before sub
+	muted  bool   // drawn dim — e.g. a view among tables
 	// head is a row that cannot be picked: a section heading or a note
 	// between the rows (the scripts browser's "Examples", "Trash (2) ▸").
 	// The cursor steps over it, and it never lights up under the mouse.
@@ -186,7 +189,11 @@ func (l *list) draw(s Surface, st styles, bg Style, focused bool, empty string) 
 		}
 		x := 1
 		if it.mark != "" {
-			x = row.Put(0, 0, it.mark, rs.WithFg(st.accent.Fg))
+			fg := st.accent.Fg
+			if it.markSt != nil {
+				fg = it.markSt.Fg
+			}
+			x = row.Put(0, 0, it.mark, rs.WithFg(fg))
 			x++
 		}
 		subW := 0

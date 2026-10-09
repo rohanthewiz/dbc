@@ -11,7 +11,7 @@ pipelines inside a job; and a monitoring view for jobs, pipelines and
 fragments, with drilldown.
 
 This is a plan. The decisions table was accepted as recommended
-(2026-10-09). **Phases 1 to 4 are done** (2026-10-09): see their
+(2026-10-09). **Phases 1 to 5 are done** (2026-10-09): see their
 outcomes under *Phases*. The decisions table is the part to read first; everything after
 it follows the recommended column.
 
@@ -1076,6 +1076,68 @@ plugin descriptors are rich enough.
 - The TUI e2e suite gets a step: open the browser, run the example
   pipeline, see its lines in the log and the monitor reach `✓`.
 - Outcome: everything but drawing works in the terminal.
+
+  ✅ **Done 2026-10-09.** What landed, and where it differs from the sketch:
+  - **The Model owns an engine** (`tui/jobs.go`), records in `runs_dir`
+    (memory under `Options.NoPersist`), `Recover` at start (its count in
+    the startup log), `Close` on quit — every run canceled and rolled
+    back, said on stderr. Its events reach Update through a **pump**: an
+    unbounded FIFO with a goroutine of its own, because Bubble Tea's
+    `Send` blocks and the engine sends `RunStarted` from inside the
+    `StartPipeline` that Update called — a sink calling `Send` directly
+    would deadlock the program. Query tabs' workspaces get
+    `Engine.ScriptRunner()`, so a TUI script's `s.RunJob` runs there too.
+    `tui.Run` raises the in-memory SQLite pool to 16, as dbc web does.
+  - **The browser** (`tui/pipes.go`): jobs, pipelines, the examples and
+    both trashes, with the scripts browser's keys — so **not** the plan's
+    `d` trash and `r` runs: `d` duplicates and `r` renames there, and the
+    two browsers sit side by side. `Enter` runs (prompting only for a
+    param with no default), `p` runs prompting for every param, `e` edits
+    the JSON in `$EDITOR` (an example: copied first), `n` makes a pipeline
+    (a source into a preview on the tab's connection) or a job (one step),
+    `d` duplicates or copies an example — the spec's own `name` set to its
+    file's, as dbc web does — `h` the row's runs. An example **runs as it
+    is** (unlike a script example, a spec example runs by name headless).
+    The check after `$EDITOR` logs each finding as `path:line:col: where:
+    msg`: the web's `locate` moved to `pipeline.Locate` / `ParseErrorAt`,
+    with a new `jobs.Locate` for a job's wheres, and the web's
+    connection list for the check to `jobs.CheckConns`.
+  - **No toolbar button**: a tenth button pushes a 120-column terminal
+    from the "▶ Run" labels down to bare glyphs. The scripts browser has a
+    `⇉ Pipelines & jobs ^J` chip instead, and the new browser `ƒ Scripts
+    ^O` back (`Ctrl+O` / `Ctrl+J` switch between them too).
+  - **The run monitor** (`tui/runs.go`): run → pipelines → fragments →
+    nodes, with `dbc run show`'s glyphs; each row's time and rows (a
+    node's in → out) in columns, then its afters, direct COPY, batches,
+    rows/s (only past 100ms) or error; `Enter`/`←`/`→` fold. The row under
+    the cursor narrows the log below it (a step's lines; a fragment's: its
+    step's logged while it ran, or naming it) and pins its error in full,
+    as the web's run page does. Live by applying the run's events to a
+    copy (a line appended, a fragment's counters replaced, a state change
+    re-read); a run another process runs is re-read every 2s. `^K` stops
+    (another process's: refused with where it runs), `y` / `Y` copy the id
+    / the run as `Run.Tree` text, `Backspace` back to the list.
+  - **The Runs list** (`Alt+J` — the plan named none; dbc web's `Alt+R` is
+    the TUI's run-all): `Engine.History`, filtered by typing, narrowed to
+    one spec from the browser's `h` (`a` widens it). It re-reads the
+    records only when `userdata.RunsStamp` (the newest record directory's
+    mtime) has moved, since every listing reads every record whole.
+  - **Logs and the status bar**: a run's lines go to the log on screen
+    tagged `[nightly › clean] …`; the status bar's right end says `●
+    nightly 3m12s` (`+N` for more), a click opens the run (or the list);
+    `Ctrl+C` does not quit over a run, `Ctrl+Q` does and stops it. A
+    preview's rows land in the grid of the tab the run was started from
+    (`Workspace.ShowResult`, as dbc web lands them), marked • when it is
+    in the background. Manual runs from the terminal are `By: terminal`.
+  - Tests: `tui/jobs_test.go` (a pipeline and a job run from the browser
+    with their lines, preview, monitor and list; params asked; a stop from
+    the monitor and the status bar; new / edit / check / copy / trash /
+    restore; quitting stops a run; the pump's order and that it never
+    blocks), `jobs.TestLocate`, `pipeline.TestLocate`,
+    `userdata.TestRunsStamp`; the TUI e2e step "Ctrl+J: …" in the real
+    binary (a pipeline, the Runs list with a headless `dbc pipeline run`'s
+    run in it, a job, a stop, `$EDITOR` and the check, and `dbc runs`
+    listing the TUI's runs).
 
 ### Phase 6 — the plugin SDK and the rest of the built-ins
 

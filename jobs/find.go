@@ -3,10 +3,12 @@ package jobs
 import (
 	"errors"
 	"io/fs"
+	"slices"
 	"strings"
 
 	"github.com/rohanthewiz/serr"
 
+	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/pipeline"
 	"github.com/rohanthewiz/dbc/scripts"
 	"github.com/rohanthewiz/dbc/userdata"
@@ -69,4 +71,36 @@ func LoadJob(dir, name string) (*Spec, string, error) {
 		return nil, file, serr.Wrap(err, "job", name)
 	}
 	return spec, file, nil
+}
+
+// CheckConns is the connection names a pipeline's conn fields may use, for
+// pipeline.CheckOptions.Conns: every configured connection, and any name
+// the spec uses that resolves another way — a "<conn>/<database>" onto
+// another database of a configured server (config.ConnByName) — so the
+// check does not call a working name unknown. dbc web's check and the
+// TUI's (after $EDITOR) share it.
+func CheckConns(cfg *config.Config, spec *pipeline.Spec) []string {
+	var names []string
+	for _, c := range cfg.Conns() {
+		names = append(names, c.Name)
+	}
+	for _, f := range spec.Fragments {
+		for _, n := range f.Nodes {
+			p, ok := pipeline.Lookup(n.Plugin)
+			if !ok {
+				continue
+			}
+			for k, v := range n.Cfg {
+				fd, ok := p.Field(k)
+				v = strings.TrimSpace(v)
+				if !ok || fd.Type != pipeline.FieldConn || v == "" || slices.Contains(names, v) {
+					continue
+				}
+				if _, found := cfg.ConnByName(v); found {
+					names = append(names, v)
+				}
+			}
+		}
+	}
+	return names
 }

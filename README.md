@@ -380,6 +380,8 @@ dragging.
 | `Ctrl+A` | Open the assistant / move between it and the editor |
 | `Ctrl+E` | Export the result (format picker; file, or clipboard) |
 | `Ctrl+O` | The scripts browser: `Enter` runs, `e` edits in `$VISUAL`/`$EDITOR` (checked when the editor exits), `n` new from a template, `d` duplicate, `r` rename, `Del` trash, `/` filter; the built-in examples and the trash are listed too (its title names the directory) |
+| `Ctrl+J` | The pipelines & jobs browser — the scripts browser's twin for pipelines and jobs: `Enter` runs (asking for a parameter with no default), `p` runs asking for every parameter, `e` edits the JSON in `$EDITOR`, `h` lists its runs (see [Pipelines and jobs in the TUI](#pipelines-and-jobs-in-the-tui)) |
+| `Alt+J` | The runs: every pipeline and job run, live ones and the records of any process's; `Enter` opens one as a tree, `Ctrl+K` stops it |
 | `Ctrl+P` | Query history of this database (`Tab`: every database) — filter, then `Enter` inserts (never runs) |
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | A new query tab · close the tab · go to tab N (see [Query tabs](#query-tabs)) |
 | `Alt+N` · `Alt+C` | A new console of the database · the database's next console (see [Consoles](#consoles-and-multi-statement-buffers)) |
@@ -1993,8 +1995,9 @@ script above, to run or edit as one. Three examples are built in
 (`dbc pipelines` lists them): `copy-cats`, `clean-and-load` and
 `cats-report`, all on the demo connections, and a fourth, `breed-counts`,
 for the example job. `dbc web` draws and edits pipelines on a canvas
-([below](#pipeline-tabs-in-dbc-web)); [jobs](#jobs) put pipelines in a
-dependency graph, on a schedule.
+([below](#pipeline-tabs-in-dbc-web)), the TUI lists, runs and watches them
+([`Ctrl+J`](#pipelines-and-jobs-in-the-tui)); [jobs](#jobs) put pipelines
+in a dependency graph, on a schedule.
 
 ### Pipeline tabs in dbc web
 
@@ -2205,6 +2208,65 @@ A running run's page moves with it (one another process runs is read
 again every two seconds); ■ Stop stops it; ↗ opens its job or pipeline;
 ◎ Open preview goes to the tab whose grid holds a preview sink's rows.
 `Backspace` goes back to the list.
+
+### Pipelines and jobs in the TUI
+
+The TUI has everything but the drawing. `Ctrl+J` opens the **pipelines &
+jobs browser** — the scripts browser's twin, with the same keys — listing
+your jobs, your pipelines, the built-in examples and the trash (the
+scripts browser's ⇉ chip goes there too, and its ƒ chip back):
+
+| Key | Does |
+|---|---|
+| `Enter` | run it — after asking for each parameter that has no default (a spec whose parameters all have defaults starts at once). An example runs as it is |
+| `p` | run it, asking for every parameter, each offered with its default |
+| `e` · double-click | edit the JSON in `$VISUAL` / `$EDITOR` (else `vi`); when the editor exits it is checked as `dbc pipeline check` / `dbc job check` would, and each finding is logged as `path:line:col: where: what`, the form an editor jumps to. On an example: make your own copy first |
+| `n` · `d` | a new pipeline (a source into a preview, on the connection you are on) or job (one step) · duplicate (an example: copy it into yours). The spec's own `name` is set to its file's |
+| `r` · `F2` · `Del` · `x` | rename · rename · move to the trash · the same (`t` shows the trash; `Enter` there restores) |
+| `h` · `Alt+J` | the row's runs · every run |
+| `y` · `/` | copy its path · filter by name and description |
+
+A run goes to the TUI's own engine, beside the query tabs — never in a
+tab's run slot, so a tab is not busy while a job loads — and opens its
+**run monitor**: the run as a tree, live —
+
+```
+╭ Run 20261009-020000-7f3a ───────────────────────────────────────── ✕ ╮
+│ job nightly · manual (terminal) · started 02:00:00     ■ Stop ^K    │
+│ ▾ ● running                      3.21s     8 rows                   │
+│   ▾ ✓ copy    copy-cats           22ms     8 rows                   │
+│     ▾ ✓ cats                      22ms     8 rows                   │
+│           src  sql.table          2ms      0 → 8  1 batch           │
+│           dst  sql.write         14ms      8 → 8  1 batch           │
+│   ▸ ● clean   clean-and-load      1.2s     5 rows  after copy       │
+│   ▸ ○ report  cats-report                          after clean      │
+│ ── log · clean ──────────────────────────────────────────────────── │
+│ 02:00:01 ▶ clean: pipeline clean-and-load                           │
+╰─────────────────────────────────────────────────────────────────────╯
+```
+
+— the job, its steps, each step's fragments, each fragment's nodes with
+rows in and out, batches and time, the state glyphs `dbc run show` prints
+(`○ ● ✓ ✗ ■ ↷ ⚠`). `↑↓` move, `Enter` folds, `←` `→` fold and unfold; the
+row under the cursor narrows the log below it (a step's lines, a
+fragment's) and pins its error above it in full. `Ctrl+K` stops the run —
+every fragment in flight rolls back — `y` copies its id, `Y` the run as
+text. `Esc` leaves it running.
+
+While a run goes, its lines go to the log too, tagged with whose they are
+(`[nightly › clean] …`), and the status bar's right end says
+**`● nightly 3m12s`** — a click opens it (`+2` when more run). A preview
+sink's rows land in the grid of the tab the run was started from. `Ctrl+C`
+does not quit over a run (it says where it is); `Ctrl+Q` does, and stops
+it, rolling back. A script's `s.RunJob` runs on the same engine, and shows
+the same way.
+
+`Alt+J` (or ◷ Runs in the browser) lists **the runs**: this TUI's, and the
+records in `runs_dir` — `dbc web`'s, a cron's `dbc job run` — newest
+first, filtered by typing; `Enter` opens one in the monitor, `Backspace`
+comes back. A run another process runs is read again while it goes, but
+stopped where it runs. The TUI does not schedule: a job's cron lines fire
+while [`dbc web`](#jobs) runs.
 
 ## Headless mode
 

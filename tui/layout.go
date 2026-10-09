@@ -74,6 +74,10 @@ type layout struct {
 	// tabChips are the query tabs' chips on the editor's top border, as
 	// drawn (none with a single tab; see drawTabs in tabs.go)
 	tabChips []tabChip
+
+	// jobInd is the status bar's "● nightly 3m12s", as drawn (zero when no
+	// run is going, or it did not fit): a click opens the run (jobs.go)
+	jobInd Rect
 }
 
 // button is one clickable toolbar chip.
@@ -567,11 +571,27 @@ func (m *Model) drawStatus(s Surface) {
 	}
 	x = s.Put(x, 0, m.status, st)
 
+	// A pipeline or job running in this process: "● nightly 3m12s" at the
+	// right end, where the key hints give way to it; a click opens its
+	// monitor (jobs.go). It is drawn only when it leaves the status text
+	// its room, as the hints are.
+	end := s.W()
+	m.lay.jobInd = Rect{}
+	if ind := m.jobIndicator(); ind != "" {
+		label := " " + ind + " "
+		if ix := s.W() - width(label); ix > x+3 {
+			s.Put(ix, 0, label, m.st.raised.WithFg(m.st.accent.Fg).Bold())
+			r := s.Rect()
+			m.lay.jobInd = Rect{r.X + ix, r.Y, width(label), 1}
+			end = ix - 1
+		}
+	}
+
 	hints := []string{"^R run", "^X explain", "^K stop", "^A ask", "^E export", "^P history", "^Q quit"}
 	for len(hints) > 0 {
 		h := strings.Join(hints, "  ") + " "
-		if s.W()-x-3 >= width(h) {
-			s.PutRight(s.W(), 0, h, bar)
+		if end-x-3 >= width(h) {
+			s.PutRight(end, 0, h, bar)
 			break
 		}
 		hints = hints[:len(hints)-1]

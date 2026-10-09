@@ -130,6 +130,22 @@ func (e *env) dbc(t *testing.T, conn, sql string) {
 	}
 }
 
+// cli runs the binary headless with args (a subcommand) in the run's HOME
+// and returns its stdout, failing the test if it fails.
+func (e *env) cli(t *testing.T, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(e.bin, args...)
+	cmd.Dir = e.home
+	cmd.Env = e.environ()
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("dbc %s: %v\n%s%s", strings.Join(args, " "), err, out, stderr.String())
+	}
+	return string(out)
+}
+
 // environ is the binary's environment: this process's, with HOME pointing
 // at the run's directory (tabs, history and schema picks land there, never
 // in the real ones), a terminal type that offers colors and the mouse, and

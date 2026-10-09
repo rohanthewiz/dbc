@@ -160,6 +160,11 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 		}
 		return nil
 	}
+	// the status bar's "● nightly 3m12s": the run's monitor, or the Runs
+	// list when several are going
+	if l.jobInd.Contains(x, y) {
+		return m.jobIndicatorClick()
+	}
 	// the fold tab sits on a pane border, so it is asked before the
 	// splitters (the ‹ shares a row with nothing draggable, the › with the
 	// editor's left border)

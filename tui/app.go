@@ -11,6 +11,7 @@ import (
 	"github.com/rohanthewiz/dbc/ai"
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/jobs"
 	"github.com/rohanthewiz/dbc/theme"
 	"github.com/rohanthewiz/dbc/userdata"
 	"github.com/rohanthewiz/dbc/workspace"
@@ -111,6 +112,29 @@ type Model struct {
 	dumpWait    chan struct{}
 	dumpSeq     int
 	dumpLastDir string
+
+	// The jobs engine (jobs.go): the session's pipeline and job runs, from
+	// the Ctrl+J browser (pipes.go) and a script's s.RunJob, beside the
+	// query tabs' runs and never in a tab's run slot. jobPump carries its
+	// events to Update without ever blocking it. liveRuns is what runs now,
+	// newest first, kept from the events so the status bar draws without
+	// asking the engine; runFrom is the query tab each run was started from
+	// (where its preview rows land), runNames each run's name (its log
+	// lines' prefix). jobTicking / jobTickSeq / jobTicks drive the 1s
+	// refresh of elapsed times; jobsNote is what settling old records at
+	// start found, for the startup log.
+	jobs       *jobs.Engine
+	jobPump    *jobPump
+	liveRuns   []jobs.Run
+	runFrom    map[string]int
+	runNames   map[string]string
+	jobTicking bool
+	jobTickSeq int
+	jobTicks   int
+	jobsNote   string
+	// runsDir is where the engine writes its records ("" in memory only,
+	// under Options.NoPersist)
+	runsDir string
 
 	resTab  resultsTab // which tab the results pane shows: the grid or the plan
 	resZoom bool       // the results pane has the whole centre column (z)
@@ -245,6 +269,9 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Model {
 		m.layoutFile = userdata.LayoutFile()
 		m.restoreLayout(userdata.LoadLayout(m.layoutFile))
 	}
+	// the jobs engine first: every tab's workspace hands it a script's
+	// s.RunJob (newWorkspace)
+	m.initJobs(opt.NoPersist)
 	// the first query tab is the workspace and widgets built here; see
 	// newWorkspace for the sink and the catalog choice
 	m.initTabs()
@@ -301,12 +328,15 @@ func (m *Model) startupLog() {
 	} else if m.cfg.Path != "" {
 		m.logf(logInfo, "loaded config from %s", m.cfg.Path)
 	}
-	m.log(logMuted, "keys: ^R run · ^⇧R/⌥R run all · ^X explain · ⌥X explain analyze · ^K stop · ^A assistant · ^E export · ^P history · ^O scripts · "+
+	m.log(logMuted, "keys: ^R run · ^⇧R/⌥R run all · ^X explain · ⌥X explain analyze · ^K stop · ^A assistant · ^E export · ^P history · ^O scripts · ^J pipelines & jobs · ⌥J runs · "+
 		"^Space suggest · F12/⇧F12/F2 definition/uses/rename · ⌥T/⌥W/⌥1…9 tabs · ⌥G tab groups · ⌥N/⌥C new/next console · ^T tables · ^L conns · ^B sidebar · F1 keys · x/r disconnect/refresh · a/e add/edit connection · d/s database/schema · Tab focus · y/Y/c copy · t transpose · Enter inspect · -/+ hide/show column · { } P S x result tabs · ^Q quit")
 	m.log(logMuted, "mouse: click to focus · drag to select · right-click for menus · "+
 		"drag borders to resize · hold Shift (⌥ on macOS) to select terminal text")
 	for _, w := range m.cfg.Warnings {
 		m.log(logWarn, w)
+	}
+	if m.jobsNote != "" {
+		m.log(logMuted, m.jobsNote)
 	}
 }
 
@@ -324,6 +354,12 @@ func (m *Model) Init() tea.Cmd {
 // Run builds the model and runs the program until the user quits.
 func Run(cfg *config.Config, mgr *db.Manager) error {
 	catsThemeAtStartup() // before New, so the first frame is already in the host's colors
+	// Query tabs each pin a session, and a pipeline run holds a reader and
+	// a writer per running fragment (three on Postgres's direct path), so
+	// the in-memory SQLite demo's default cap of 3 would make a job's
+	// fan-out on it wait on itself. dbc web raises it for its tabs the
+	// same way (web.memPoolTabs).
+	mgr.SetMemoryPool(memPool)
 	m := New(cfg, mgr, Options{})
 	if p, ok := catsStartupPalette(); ok {
 		m.st = newStyles(p)
@@ -345,6 +381,11 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 	})
 	return err
 }
+
+// memPool is the in-memory SQLite demo's connection cap in the TUI: the
+// anchor, a session per query tab (at most maxTabs), and room for a job's
+// readers and writers. See Run.
+const memPool = 16
 
 // driverLogMsg is one line a database driver logged (db.SetDriverLog).
 type driverLogMsg string
@@ -374,6 +415,7 @@ func (m *Model) shutdown() {
 	}
 	m.catsClose()
 	m.stopDumpForQuit()
+	m.stopJobsForQuit()
 	m.chatSave() // before close: quitting must not discard the conversation
 	m.chat.close()
 	for _, ws := range m.tabWorkspaces() {
@@ -499,6 +541,12 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 		return nil
 	case scriptEditedMsg:
 		return m.scriptEdited(msg)
+	case specEditedMsg:
+		return m.specEdited(msg)
+	case jobMsg:
+		return m.jobEvent(msg.ev)
+	case jobTickMsg:
+		return m.jobTick(msg)
 	}
 	return nil
 }
@@ -580,6 +628,11 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+o":
 		m.openScripts("")
 		return nil
+	case "ctrl+j":
+		m.openPipes(pipeSel{})
+		return nil
+	case "alt+j":
+		return m.openRuns("", "")
 	case "ctrl+p":
 		m.openHistory()
 		return nil
@@ -848,6 +901,12 @@ func (m *Model) interrupt() tea.Cmd {
 			m.logf(logWarn, "%s is still running a query — ⌥%d goes there; ^Q quits anyway", t.title, i+1)
 			return nil
 		}
+	}
+	// so is a pipeline or job: quitting would stop it half-way (it rolls
+	// back), which Ctrl+C, the gentle key, does not do on its own
+	if len(m.liveRuns) > 0 {
+		m.logf(logWarn, "%s still running — ⌥J shows the runs, ^K in one stops it; ^Q quits anyway (and stops it)", m.runsGoingWord())
+		return nil
 	}
 	return m.quitCmd()
 }

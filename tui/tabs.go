@@ -151,6 +151,11 @@ func (m *Model) tag(cmd tea.Cmd) tea.Cmd {
 func (m *Model) newWorkspace(key int, hist *userdata.History) *workspace.Workspace {
 	return workspace.New(m.cfg, m.mgr, hist, workspace.Options{
 		Sink: func(e workspace.Event) { m.send(tabMsg{key: key, msg: e}) },
+		// a script's s.RunJob runs on the session's engine (jobs.go), as
+		// dbc web's script tabs run on the server's: listed in the Runs,
+		// under one job's overlap rule, its lines in the log as every
+		// run's are
+		Jobs: m.jobs.ScriptRunner(),
 	})
 }
 

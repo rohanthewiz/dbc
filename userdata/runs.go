@@ -165,6 +165,34 @@ func ListRuns(dir string, f RunFilter) ([]RunHead, error) {
 	return out, nil
 }
 
+// RunsStamp is the newest modification time among the record directories
+// (<dir>/<kind>/<name>), zero when there are none. A record written,
+// rewritten or pruned moves its directory's time — an atomic write renames
+// a file into it — so a listing kept open (the TUI's Runs list) re-reads
+// the records only when the stamp has moved: two directory reads and a
+// stat per name, where a listing reads every record whole.
+func RunsStamp(dir string) time.Time {
+	var newest time.Time
+	if dir == "" {
+		return newest
+	}
+	for _, kind := range RunKinds {
+		names, err := os.ReadDir(filepath.Join(dir, kind))
+		if err != nil {
+			continue
+		}
+		for _, n := range names {
+			if !n.IsDir() {
+				continue
+			}
+			if fi, err := n.Info(); err == nil && fi.ModTime().After(newest) {
+				newest = fi.ModTime()
+			}
+		}
+	}
+	return newest
+}
+
 // readHeads reads the records of one kind/name directory that pass f.
 // The id is the start to the second, so a Since filter skips a file by its
 // name before reading it.

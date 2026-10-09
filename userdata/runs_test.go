@@ -78,3 +78,33 @@ func TestRunRecords(t *testing.T) {
 		t.Errorf("after prune: %+v", left)
 	}
 }
+
+// RunsStamp moves when a record is written and when one is rewritten in
+// place (the atomic write renames a file into the directory), and is zero
+// for a runs dir with nothing in it.
+func TestRunsStamp(t *testing.T) {
+	dir := t.TempDir()
+	if s := RunsStamp(dir); !s.IsZero() {
+		t.Fatalf("empty dir: %v", s)
+	}
+	write := func(id string) time.Time {
+		t.Helper()
+		// past the file system's clock grain, so each write is later
+		time.Sleep(20 * time.Millisecond)
+		if err := SaveRun(dir, "job", "nightly", id, []byte(`{"id": "`+id+`"}`)); err != nil {
+			t.Fatal(err)
+		}
+		return RunsStamp(dir)
+	}
+	first := write("20261009-020000-aaaa")
+	if first.IsZero() {
+		t.Fatal("no stamp after a write")
+	}
+	again := write("20261009-020000-aaaa")
+	if !again.After(first) {
+		t.Errorf("a rewrite did not move the stamp: %v then %v", first, again)
+	}
+	if s := RunsStamp(dir); !s.Equal(again) {
+		t.Errorf("an unchanged dir's stamp moved: %v then %v", again, s)
+	}
+}

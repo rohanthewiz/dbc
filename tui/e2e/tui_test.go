@@ -95,7 +95,9 @@ func TestTUI(t *testing.T) {
 
 	step(t, "F1 opens the keys dialog, Esc closes it", func() {
 		u.key(uv.KeyF1)
-		u.waitFor("Keys · F1 or ?", "Editor", "Query tabs")
+		// what the first screen of the dialog holds (Query tabs is below
+		// the fold since the Anywhere group grew ^J and ⌥J)
+		u.waitFor("Keys · F1 or ?", "Editor", "Anywhere", "pipelines & jobs — run")
 		u.key(uv.KeyEscape)
 		u.waitGone("Keys · F1 or ?")
 	})
@@ -214,6 +216,10 @@ func TestTUI(t *testing.T) {
 		u.waitFor("restored nightly.go")
 		u.key(uv.KeyEscape)
 		u.waitGone("Scripts · ~/.config/dbc/scripts")
+	})
+
+	step(t, "Ctrl+J: pipelines and jobs run, the monitor, the Runs list, a stop, $EDITOR and the check", func() {
+		pipelinesAndJobs(t, e, u)
 	})
 
 	step(t, "Ctrl+Q quits", func() {

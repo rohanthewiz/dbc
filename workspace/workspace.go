@@ -83,7 +83,8 @@ type Options struct {
 	// the per-schema load exists to avoid.
 	WholeCatalog bool
 
-	// Jobs runs a script's s.RunJob: the host's jobs engine (dbc web's).
+	// Jobs runs a script's s.RunJob: the host's jobs engine (dbc web's,
+	// the TUI's).
 	// Nil leaves it to sdb.DefaultJobRunner, an engine of the script's own
 	// for the length of the call.
 	Jobs sdb.JobRunner

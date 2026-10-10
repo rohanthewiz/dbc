@@ -21,7 +21,8 @@
 # Where a relative path in a pipeline's file nodes (csv.read, csv.write,
 # jsonl.read, jsonl.write) is: one directory for every process that runs
 # it — a shell, dbc web, its scheduler, dbc.app — so a pipeline reads and
-# writes the same files whichever ran it. Leave it out for your home
+# writes the same files whichever ran it. A script's s.Export and the files
+# it opens through s.Path follow it too. Leave it out for your home
 # directory; resolved like scripts_dir ("." here means this file's directory).
 # files_dir     = "data"
 

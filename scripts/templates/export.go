@@ -1,7 +1,9 @@
 // Run a report query and export it as CSV and as an HTML page.
 //
-// A relative path is relative to the directory dbc runs in; write an
-// absolute one to be sure where the files land.
+// A relative path is in files_dir — your home directory unless the
+// config sets it — whether a shell, dbc web or a schedule runs the
+// script; s.Path says where. A file the script opens itself goes through
+// s.Path too: os.Create(s.Path("notes.txt")).
 //
 // The ignore tag keeps `go build` off script files; dbc runs them fine.
 //go:build ignore
@@ -26,7 +28,7 @@ func Run(s *sdb.S) error {
 		if err := s.Export(r, f.format, f.path); err != nil {
 			return err
 		}
-		s.Print("wrote %s (%d rows)", f.path, len(r.Rows))
+		s.Print("wrote %s (%d rows)", s.Path(f.path), len(r.Rows))
 	}
 	s.Show(r)
 	return nil

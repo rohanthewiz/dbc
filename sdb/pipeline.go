@@ -154,6 +154,30 @@ func (s *S) WithPaths(p Paths) *S {
 // Paths is where the session resolves script and pipeline names.
 func (s *S) Paths() Paths { return s.paths }
 
+// Path is where a script's file p is, a relative p being in files_dir as
+// a file node's is: os.Create(s.Path("out.csv")). "~/…" is under the home
+// directory and an absolute path is left as written; a relative one is
+// joined to the host's files_dir (Paths.FilesDir), so "out.csv" is one
+// file whether the script runs from `dbc script` in a shell, the TUI, dbc
+// web, a schedule or dbc.app — not one in each process's working
+// directory. A script opens every file of its own through it (os.Create,
+// os.Open, os.ReadFile, …); s.Export already does.
+//
+// One result, not Env.Path's (string, error), so it goes straight into an
+// os call: the one failure, a "~" path with no home directory to find,
+// leaves p as written, and the open then fails naming it. With no
+// files_dir set (a host that sets no Paths, a test) a relative p is left
+// relative to the working directory, as before files_dir. In a go.action
+// or script.run node, s is the run's session: its files_dir is the host's,
+// which is the run's own unless a script ran the pipeline with another
+// (PipelineOpts.FilesDir).
+func (s *S) Path(p string) string {
+	if r, err := pipeline.ResolvePath(s.paths.FilesDir, p); err == nil {
+		return r
+	}
+	return p
+}
+
 // RunPipeline runs a pipeline built with NewPipeline. Every fragment runs
 // in order, each sink committing at its fragment's end; the stats come
 // back complete even on error. Stop (Ctrl+K) cancels the run as it does a

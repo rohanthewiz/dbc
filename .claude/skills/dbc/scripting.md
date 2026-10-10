@@ -74,12 +74,29 @@ dbc runs it regardless. Connection names come from config /
 | `Explain(conn, sql, analyze) (*sdb.Plan, error)` | plan: `p.Text(sdb.PlanText{Insights: true})`, `p.Insights`, `p.Root` |
 | `Show(r)` | emit a result (TUI table, or stdout headless) |
 | `Print(format, args...)` | progress log |
-| `Export(r, format, path)` | `csv`/`tsv`/`markdown`/`html`/`json`/`text`; empty path → clipboard |
+| `Export(r, format, path)` | `csv`/`tsv`/`markdown`/`html`/`json`/`text`; empty path → clipboard; relative → `files_dir` |
+| `Path(p) string` | `p` as the script should open it: relative → `files_dir`, `~/` and absolute as written |
 | `Canceled() bool`, `Ctx() context.Context` | honor Ctrl+K / Ctrl+C in long loops |
 | `sdb.IsCanceled(err) bool` | tell a stop from a real failure |
 
 `sdb.Result`: `Columns []string`, `Rows [][]string`, `Raw [][]any`,
 `Duration`, `Affected`.
+
+**Files: open every one through `s.Path`** — `os.Create(s.Path("out.csv"))`,
+`os.ReadFile(s.Path("in/ids.txt"))`. A relative path is then in `files_dir`
+(`config.FilesDir`, default `$HOME`; `sdb.Paths.FilesDir` on the session),
+the directory a pipeline's file nodes use, from `dbc script`, the TUI, dbc
+web, a schedule and dbc.app alike. A bare `os.Create("out.csv")` lands in
+the process's cwd: the shell's, or wherever dbc web was started. That is
+the same file only by luck. `s.Export` goes through `s.Path` itself, so a
+relative export path is in `files_dir` too, not the cwd: say where
+(`s.Print("wrote %s", s.Path(name))`). Inside a `go.action` or
+`script.run` node, `s` is the run's session, so the same holds. `s.Export`
+makes missing directories (as `csv.write` does); `s.Path` makes none, so
+`os.MkdirAll(filepath.Dir(p), 0o755)` before writing where a directory may
+not exist yet, `files_dir` itself included when the config names one. A
+session with no Paths (`runScript` in tests) leaves a relative path in the
+cwd.
 
 Every DDL statement a script runs is logged with the `Print` lines, just
 before it runs: `DDL <conn>: <statement as written>`. A failed `Query` or
@@ -180,7 +197,8 @@ run|check|export NAME` (`-p k=v`, `--preview N`, `--fragment F`, `-t json`),
   at Commit; every path through `Env.Path`: `~/`, absolute, or relative to
   `files_dir` — `config.FilesDir`, default `$HOME`, handed over as
   `pipeline.Options.FilesDir` by the jobs engine and `sdb.Paths.FilesDir`
-  — never the process's cwd), `lookup` and `pipeline.check` in `builtin_check.go`; the
+  — never the process's cwd; `pipeline.ResolvePath` is the rule, which
+  `s.Path` and `s.Export` share), `lookup` and `pipeline.check` in `builtin_check.go`; the
   Go-code ones (`go.transform`, `go.source`, `go.sink`, `go.action`,
   `script.run`) in `script/plugins.go` because they need the interpreter.
   A `go.*` snippet without a package clause is wrapped

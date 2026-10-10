@@ -126,7 +126,10 @@ Exit codes: `0` ok, `1` failure, `2` bad usage (incl. unknown connection),
 A relative `path` in a file node (`csv.*`, `jsonl.*`) is in `files_dir`
 (default `$HOME`), from the shell as from dbc web — never the current
 directory. Write absolute paths (or `$PWD/…` in a `-p`) for files you made
-here.
+here. A script's own files go through `s.Path` (`os.Create(s.Path("out.csv"))`)
+to land there too, and `s.Export` does that itself: a script's relative
+export from `dbc script` lands in `files_dir`, not the shell's directory
+(scripting.md).
 
 A pipeline or job written to `pipelines_dir` / `jobs_dir` is what the user
 sees in both UIs: dbc web draws it on a canvas (`Ctrl+O`, then a pipeline

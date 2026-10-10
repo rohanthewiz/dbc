@@ -7,7 +7,9 @@ import (
 
 // Where a pipeline's files are: files_dir is the directory a relative path
 // in a file node (csv.read, jsonl.read, csv.write, jsonl.write, a plugin's
-// through Env.Path) resolves against, in every process that runs one.
+// through Env.Path) resolves against, in every process that runs one. A
+// script's are there too: s.Export, and what it opens through s.Path,
+// which a go.action or script.run node's code uses as any script does.
 // Before it, each process resolved against its own working directory: the
 // shell's for `dbc pipeline run`, wherever dbc web was started, $HOME for
 // dbc.app's helper. So a pipeline that read orders.csv in a terminal

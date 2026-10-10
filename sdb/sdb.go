@@ -12,6 +12,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -275,6 +277,9 @@ func (s *S) Print(format string, args ...any) {
 
 // Export renders a result in the named format (csv|tsv|markdown|html|json|text)
 // and writes it to path — or to the system clipboard when path is empty.
+// A relative path is in files_dir, as s.Path has it: "report.csv" is one
+// file whether a shell, dbc web or a schedule runs the script. Missing
+// directories are created, as csv.write creates them.
 func (s *S) Export(r *Result, format, path string) error {
 	f, err := export.ParseFormat(format)
 	if err != nil {
@@ -282,6 +287,21 @@ func (s *S) Export(r *Result, format, path string) error {
 	}
 	if strings.TrimSpace(path) == "" {
 		return export.ToClipboard(r, f)
+	}
+	// through s.Path, as csv.write's path goes through Env.Path: dbc's own
+	// file writers follow files_dir, so an export a script names relatively
+	// lands in the same place from every host (before, it landed in the
+	// working directory of whichever process ran the script)
+	path = s.Path(path)
+	// The working directory always existed; files_dir, or a directory
+	// under it, may not yet — a config's files_dir = "data" before the
+	// first export into it. So the directories are made here, as
+	// csv.write makes its file's: an export, like a pipeline's file
+	// write, lands where it was told rather than failing on the way.
+	if dir := filepath.Dir(path); dir != "." {
+		if err = os.MkdirAll(dir, 0o755); err != nil {
+			return serr.Wrap(err, "op", "make the directory", "dir", dir)
+		}
 	}
 	if err = export.ToFile(r, f, path); err != nil {
 		return serr.Wrap(err, "format", format)

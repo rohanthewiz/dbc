@@ -111,7 +111,8 @@ func init() {
 	pipeline.Register(pipeline.Plugin{
 		Name: "go.action", Kind: pipeline.KindAction, Label: "Go action",
 		Doc: "A fragment that is a script: func Run(s *sdb.S) error, with everything a script can do " +
-			"(s.Query, s.Exec, s.Copy, s.Export, s.Print). Rows it writes it commits itself.",
+			"(s.Query, s.Exec, s.Copy, s.Export, s.Print). Rows it writes it commits itself. " +
+			"A file it opens goes through s.Path (os.Create(s.Path(\"out.csv\"))): relative, it is in files_dir.",
 		Fields: []pipeline.Field{
 			{Name: "code", Type: pipeline.FieldGo, Required: true, Doc: "The Go code, with func Run."},
 		},

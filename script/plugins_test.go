@@ -3,6 +3,7 @@ package script
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -222,6 +223,87 @@ func Run(s *sdb.S) error {
 	}
 	if got := query(t, mgr, "b", "SELECT name FROM sqlite_master WHERE name = 'made'"); len(got) != 1 {
 		t.Errorf("made: %v", got)
+	}
+}
+
+// A script's own relative paths are in files_dir, from each place a script
+// runs: the script itself through s.Path, s.Export (which goes through it),
+// a go.action node and a saved script run by a script.run node — each of
+// the last two getting the run's session, and so its Paths. Nothing lands
+// in the working directory, which is where each of them wrote before.
+// files_dir does not exist yet, as a config's "data" does not before its
+// first write: the export makes it (and exports/ under it), as csv.write
+// would, and the writes after it find it there.
+func TestScriptFilesDir(t *testing.T) {
+	files, scriptsDir := filepath.Join(t.TempDir(), "data"), t.TempDir()
+	if err := os.WriteFile(filepath.Join(scriptsDir, "saved.go"), []byte(`package main
+
+import (
+	"os"
+
+	"github.com/rohanthewiz/dbc/sdb"
+)
+
+func Run(s *sdb.S) error {
+	return os.WriteFile(s.Path("fd-saved.txt"), []byte("saved"), 0o644)
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// the go.action's code is a snippet: wrapped, os imported for it
+	_, printed, err := runScriptPaths(t, sdb.Paths{FilesDir: files, ScriptsDir: scriptsDir}, `package main
+
+import (
+	"os"
+
+	"github.com/rohanthewiz/dbc/sdb"
+)
+
+func Run(s *sdb.S) error {
+	r, err := s.Query("a", "SELECT id, name FROM cats ORDER BY id LIMIT 2")
+	if err != nil {
+		return err
+	}
+	if err = s.Export(r, "csv", "exports/fd-export.csv"); err != nil {
+		return err
+	}
+	if err := os.WriteFile(s.Path("fd-own.txt"), []byte("own"), 0o644); err != nil {
+		return err
+	}
+	p := sdb.NewPipeline("fd")
+	p.Fragment("act").Node("go.action", sdb.Cfg{"code": "func Run(s *sdb.S) error {\n" +
+		"\treturn os.WriteFile(s.Path(\"fd-action.txt\"), []byte(\"action\"), 0o644)\n}"})
+	p.Fragment("run").Node("script.run", sdb.Cfg{"name": "saved"})
+	if _, err = s.RunPipeline(p, sdb.PipelineOpts{}); err != nil {
+		return err
+	}
+	s.Print("%s", s.Path("fd-own.txt"))
+	return nil
+}
+`)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, strings.Join(printed, "\n"))
+	}
+	for name, want := range map[string]string{
+		"fd-own.txt":            "own",
+		"exports/fd-export.csv": "id,name\n1,Whiskers\n",
+		"fd-action.txt":         "action",
+		"fd-saved.txt":          "saved",
+	} {
+		got, err := os.ReadFile(filepath.Join(files, name))
+		if err != nil {
+			t.Errorf("%s not in files_dir: %v", name, err)
+		} else if !strings.HasPrefix(string(got), want) {
+			t.Errorf("%s = %q, want it to start %q", name, got, want)
+		}
+		// the old behaviour's file, in the test's working directory
+		if _, err := os.Stat(name); err == nil {
+			os.Remove(name)
+			t.Errorf("%s was written to the working directory", name)
+		}
+	}
+	if want := filepath.Join(files, "fd-own.txt"); !slices.Contains(printed, want) {
+		t.Errorf("s.Path printed %q, want %q among them", printed, want)
 	}
 }
 

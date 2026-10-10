@@ -68,7 +68,7 @@ Copy `dbc.example.toml` to `./dbc.toml` (or `~/.config/dbc/config.toml`):
 ```toml
 # scripts_dir      = "scripts"   # default ~/.config/dbc/scripts; relative = beside this file
 # jobs_dir         = "jobs"      # pipelines_dir, jobs_dir, runs_dir, plugins_dir likewise (see Jobs)
-# files_dir        = "data"      # a pipeline's relative file paths; default ~ (see Pipelines)
+# files_dir        = "data"      # pipelines' and scripts' relative file paths; default ~ (see Pipelines)
 # runs_keep        = 200         # run records kept per job and per pipeline
 max_rows           = 1000   # rows fetched from the server
 max_display_rows   = 2000   # rows the results table draws (0 = all)
@@ -1735,7 +1735,8 @@ passes. See [Scripts headless](#scripts-headless).
 | `s.Explain(conn, sql, analyze) (*sdb.Plan, error)` | The plan, as `Ctrl+X` sees it: `p.Text(sdb.PlanText{Insights: true})`, `p.Insights`, `p.Root` — see [`scripts/plan_check.go`](scripts/plan_check.go) |
 | `s.Show(r)` | Push a result to the results table (stdout when headless) |
 | `s.Print(format, args...)` | Log to the TUI log pane (stdout when headless) |
-| `s.Export(r, format, path)` | Export a result; empty path → clipboard |
+| `s.Export(r, format, path)` | Export a result; empty path → clipboard; a relative path is in `files_dir` |
+| `s.Path(p) string` | Where file `p` is: a relative path in `files_dir`, `~/` and absolute as written — open your own files through it |
 | `s.Canceled() bool` | True once the user has stopped this run |
 | `s.Ctx() context.Context` | The run's context, for `select` on `Done()` |
 | `sdb.IsCanceled(err) bool` | Tells a stop apart from a real query failure |
@@ -1743,6 +1744,30 @@ passes. See [Scripts headless](#scripts-headless).
 `sdb.Result` gives you `Columns []string`, `Rows [][]string`, `Raw [][]any`,
 `Duration`, and `Affected`. Use the placeholder style of the target driver
 (`$1` postgres/bytdb, `?` mysql/sqlite).
+
+#### Files
+
+Open every file a script reads or writes through `s.Path`:
+
+```go
+f, err := os.Create(s.Path("exports/orders.csv"))
+```
+
+A relative path is in `files_dir`: your home directory unless the config
+sets it, the same directory a pipeline's file nodes use. Whatever runs the
+script, `dbc script` in a shell, the TUI, dbc web, a schedule (a
+`go.action` or `script.run` node) or dbc.app, `"exports/orders.csv"` is the
+same file. A bare `os.Create("orders.csv")` would land in that process's
+working directory instead: the shell's, or wherever dbc web was started.
+`~/…` and absolute paths are left alone. `s.Export` already goes through
+`s.Path`, so `s.Export(r, "csv", "orders.csv")` writes to `files_dir`;
+print `s.Path("orders.csv")` to show where. `s.Export` creates missing
+directories, as `csv.write` does. `s.Path` only names the file, so before
+writing into a directory that may not exist yet, make it with
+`os.MkdirAll(filepath.Dir(p), 0o755)`. That includes `files_dir` itself
+when the config names one that hasn't been made. A host that sets no
+`files_dir` (a test's bare session) leaves relative paths relative to the
+working directory.
 
 #### The DDL log
 
@@ -1977,7 +2002,9 @@ process runs the pipeline: `dbc pipeline run` in a shell, the TUI, dbc
 web, its scheduler, dbc.app, a script's `s.RunPipeline`. So
 `"exports/${run.date}.csv"` is one file from all of them, rather than one
 under each process's working directory, and a pipeline that works from a
-shell writes the same file when scheduled. A relative path that is not
+shell writes the same file when scheduled. A `go.action` or `script.run`
+node's own files follow it through `s.Path` ([Files](#files)), a plugin's
+through `e.Path`. A relative path that is not
 there fails saying so: `… no such file or directory (a relative path is
 in files_dir, /Users/you)`. On the command line, a path given as a param
 from the current directory wants `$PWD`: `-p in=$PWD/orders.csv`.

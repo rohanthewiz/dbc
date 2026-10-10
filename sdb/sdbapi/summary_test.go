@@ -7,7 +7,8 @@ import (
 
 // The assistant's summary: every S method a script calls, by signature with
 // its first sentence; the host-only ones left out; an alias named with its
-// target; and small enough to send once per conversation.
+// target; a field group on one line; and small enough to send once per
+// conversation.
 func TestSummary(t *testing.T) {
 	s := Summary()
 	for _, want := range []string{
@@ -17,6 +18,8 @@ func TestSummary(t *testing.T) {
 		"type CopyOpts = etl.CopyOptions — ",
 		"  To string — ",
 		"  func (r *Reader) Next() bool\n", // other types' methods: signature only
+		// a field group is one line, its doc said once
+		"  Pipeline, Fragment, Node string — Pipeline, Fragment and Node name",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("summary lacks %q", want)

@@ -155,8 +155,22 @@ func checkDelim(cfg Config) []string {
 // ""))), so its paths follow files_dir as theirs do. A nil Env has no
 // files_dir.
 func (e *Env) Path(p string) (string, error) {
-	if e.inFilesDir(p) {
-		return filepath.Join(e.filesDir, p), nil
+	if e == nil {
+		return ResolvePath("", p)
+	}
+	return ResolvePath(e.filesDir, p)
+}
+
+// ResolvePath is Path's rule with the directory given: p joined to
+// filesDir when it is relative, ~ expanded, an absolute p as written. It
+// is exported for the one other place a path follows files_dir — a
+// script's s.Path and s.Export (package sdb), which hold the directory in
+// their session's Paths rather than in an Env — so a script and a file
+// node cannot come to disagree on where "exports/orders.csv" is. A node
+// calls e.Path, which knows its files_dir; it has no directory to pass.
+func ResolvePath(filesDir, p string) (string, error) {
+	if inFilesDir(filesDir, p) {
+		return filepath.Join(filesDir, p), nil
 	}
 	return expandPath(p)
 }
@@ -164,7 +178,12 @@ func (e *Env) Path(p string) (string, error) {
 // inFilesDir reports whether Path joins p to files_dir: there is one, and
 // p is neither absolute nor under ~.
 func (e *Env) inFilesDir(p string) bool {
-	return e != nil && e.filesDir != "" && p != "" && !filepath.IsAbs(p) && !isHomePath(p)
+	return e != nil && inFilesDir(e.filesDir, p)
+}
+
+// inFilesDir is the Env method's test with the directory given.
+func inFilesDir(filesDir, p string) bool {
+	return filesDir != "" && p != "" && !filepath.IsAbs(p) && !isHomePath(p)
 }
 
 // pathErr wraps err from op ("open") on the file at p, which Path made

@@ -1,5 +1,7 @@
 // Sample dbc script: loop over params and export each result to CSV,
-// plus one combined HTML report of all adopted cats.
+// plus one combined HTML report of all adopted cats. The files land in
+// files_dir (your home directory unless the config sets it), which is
+// where s.Export puts a relative path whoever runs the script.
 //go:build ignore
 
 package main
@@ -22,7 +24,7 @@ func Run(s *sdb.S) error {
 		if err = s.Export(r, "csv", file); err != nil {
 			return err
 		}
-		s.Print("wrote %s (%d rows)", file, len(r.Rows))
+		s.Print("wrote %s (%d rows)", s.Path(file), len(r.Rows))
 	}
 
 	adopted, err := s.Query("demo-sqlite",
@@ -33,7 +35,7 @@ func Run(s *sdb.S) error {
 	if err = s.Export(adopted, "html", "adopted_report.html"); err != nil {
 		return err
 	}
-	s.Print("wrote adopted_report.html (%d rows)", len(adopted.Rows))
+	s.Print("wrote %s (%d rows)", s.Path("adopted_report.html"), len(adopted.Rows))
 	s.Show(adopted)
 	return nil
 }

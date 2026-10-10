@@ -212,9 +212,10 @@ type Config struct {
 	// Go files, each one kind of node), absolute after Load, beside the
 	// scripts when the file does not say.
 	PluginsDir string `toml:"plugins_dir"`
-	// FilesDir is where a relative path in a pipeline's file node resolves
-	// (files.go), whichever process runs it: absolute after Load, the home
-	// directory when the file does not say.
+	// FilesDir is where a relative path in a pipeline's file node — and in
+	// a script's s.Export or s.Path — resolves (files.go), whichever
+	// process runs it: absolute after Load, the home directory when the
+	// file does not say.
 	FilesDir string `toml:"files_dir"`
 	// RunsKeep is how many records of each job and of each pipeline are
 	// kept, the oldest pruned after a run ends; 0 means DefaultRunsKeep.

@@ -82,8 +82,19 @@ func render(api *API) string {
 				continue
 			}
 		}
-		for _, f := range t.Fields {
-			line("  ", f.Name+" "+f.Type, f.Doc)
+		// a field group (Pipeline, Fragment, Node string) is one entry per
+		// name in api.json, each with the group's doc, for hover; here it
+		// is one line as declared, rather than the same sentence once per
+		// name. A run of fields sharing a type and a non-empty doc is such
+		// a group: two fields declared apart do not share a doc comment.
+		for i := 0; i < len(t.Fields); {
+			f, names := t.Fields[i], t.Fields[i].Name
+			i++
+			for f.Doc != "" && i < len(t.Fields) && t.Fields[i].Type == f.Type && t.Fields[i].Doc == f.Doc {
+				names += ", " + t.Fields[i].Name
+				i++
+			}
+			line("  ", names+" "+f.Type, f.Doc)
 		}
 		for _, m := range t.Methods {
 			// S's methods are the API itself and keep their sentence; the

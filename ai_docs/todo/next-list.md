@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-200
+**Next ID:** N-201
 
 ## Open
 
@@ -205,15 +205,17 @@ ten session docs in `ai_docs/claude_sessions/`
   (the longest that is the whole where or is followed by a dot; a key
   after a step holds no dot) and `pipelines[i]` against the i-th step, as
   `pipelines.js` and `pipeline.Locate` now do.
-- **N-199** · raised `2026-1010-1730-n190-files-dir` · value low
-  A script's own relative paths still resolve against the process's
-  working directory: `os.Create("out.csv")` in a script, a `go.action`
-  or a `script.run` node writes into the shell's directory from `dbc
-  script`, and into wherever dbc web was started when a schedule runs
-  it — N-190's bug, outside the file plugins. A `go.*` node can call
-  `e.Path`, but a script has only `s`. Add `s.Path(p)` (`Paths.FilesDir`,
-  as `Env.Path` does) and say in the scripting docs to open files
-  through it.
+- **N-200** · raised `2026-1010-1750-n199-script-path` · value low
+  A `go.action` or `script.run` node's `s.Path` ignores the run's own
+  files_dir. The node gets the session that ran the pipeline, and
+  `s.Path` reads that session's `Paths.FilesDir`. When a script runs a
+  pipeline with `PipelineOpts.FilesDir` set to another directory, the
+  run's file nodes use that directory but the node's `s.Path` and
+  `s.Export` still use the host's. Every host's runs agree today
+  (`jobs.Engine.runOne` sets both from the config), so only that
+  override splits them. A fix would hand the node a session (or a
+  view of one) whose files_dir is the Env's; `S` holds a mutex and the
+  open Readers/Writers, so it cannot simply be copied.
 
 ## Validate
 
@@ -592,6 +594,16 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-199** · raised `2026-1010-1730-n190-files-dir` · value low
+  A script's own relative paths still resolve against the process's
+  working directory: `os.Create("out.csv")` in a script, a `go.action`
+  or a `script.run` node writes into the shell's directory from `dbc
+  script`, and into wherever dbc web was started when a schedule runs
+  it — N-190's bug, outside the file plugins. A `go.*` node can call
+  `e.Path`, but a script has only `s`. Add `s.Path(p)` (`Paths.FilesDir`,
+  as `Env.Path` does) and say in the scripting docs to open files
+  through it.
+  closed 2026-10-10, `2026-1010-1750-n199-script-path` (from the cats-todo backlog): `s.Path(p) string` (`sdb/pipeline.go`) joins a relative path to `Paths.FilesDir`, expands `~`, and leaves an absolute path as written, through `pipeline.ResolvePath(filesDir, p)`, the rule `Env.Path` now calls too, so a script and a file node cannot disagree. It returns one value so it goes straight into `os.Create(s.Path("out.csv"))`; a `~` path with no home directory comes back as written. A `go.action` or `script.run` node gets the run's session, so the same `s.Path` works there (N-200 is the one case where it differs from the run's directory). Beyond the item, `s.Export` also goes through `s.Path`, the way `csv.write`'s path goes through `Env.Path`. That fixes the built-in `export_report` example and the `export` template for schedules. They now print where each file landed, and the template's "relative to the directory dbc runs in" caveat is gone. The cost is the shell: `dbc script` puts a relative export in files_dir, not the cwd. `s.Export` also makes missing directories, as `csv.write` does; the real-binary check found the example failing when `files_dir = "data"` did not exist yet. To fit the summary budget, the sdb API summary prints a field group (`Pipeline, Fragment, Node string`) on one line instead of repeating its doc per name: 14,293 bytes with `s.Path`, 43 under 14 KB. Docs: README "Files" under the `sdb.S` API, the API tables in the README and `scripting.md`, SKILL.md, `dbc.example.toml`, config comments, the `go.action` palette doc. Tests: `sdb.TestPath`; `script.TestScriptFilesDir` (a script's own file, `s.Export` into a missing files_dir and a new subdirectory, a `go.action`, a `script.run`, nothing in the cwd), shown to fail without the `Export` change and without its mkdir; `TestSummary` checks the one-line group. Checked in the real binary from another cwd: a script's own file and export, `export_report` by name with no `data/` yet, and `dbc pipeline run` with both node kinds, all under files_dir.
 - **N-190** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value medium
   A relative `path` in `csv.read`, `jsonl.read`, `csv.write` and
   `jsonl.write` is resolved against the process's working directory. For

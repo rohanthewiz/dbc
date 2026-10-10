@@ -1046,7 +1046,8 @@ a.btnlink:hover { border-color: var(--accent); }
   border: 1px solid var(--accent); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
 
 /* the canvas: a stage of lanes, panned and zoomed (stage.js) */
-.pcanvas { flex: 1 1 auto; position: relative; overflow: hidden; min-width: 0; cursor: default; touch-action: none;
+/* min-width: the room the inspector's edge always leaves it (.pinsp) */
+.pcanvas { flex: 1 1 auto; position: relative; overflow: hidden; min-width: 160px; cursor: default; touch-action: none;
   background-color: var(--bg);
   background-image: radial-gradient(color-mix(in srgb, var(--line) 70%, transparent) 1px, transparent 1px);
   background-size: 20px 20px; }
@@ -1110,8 +1111,23 @@ a.btnlink:hover { border-color: var(--accent); }
   border: 1px dashed var(--line); border-radius: 6px; color: var(--muted); cursor: pointer; font-size: 12px; }
 .padd:hover { border-color: var(--accent); color: var(--accent); }
 
-/* the inspector: the selection's form, drawn from its plugin's fields */
-.pinsp { flex: 0 0 280px; overflow: auto; border-left: 1px solid var(--line); background: var(--panel); padding: 8px 10px 16px; }
+/* the inspector: the selection's form, drawn from its plugin's fields. Its
+   width is --insp-w (the edge's drag, stage.js dbc.inspector). The clamp is
+   flexbox's, not the drag's, so a narrower window later is clamped the same
+   way: the canvas keeps its min-width (160px), and the inspector, which may
+   shrink, gives up what that takes, down to its own 200px. The bound is not
+   a max-width sum because the palette is wider than its 190px basis
+   whenever a plugin's name is (its min-content wins). */
+.pinsp { flex: 0 1 var(--insp-w, 280px); min-width: 200px; overflow: auto;
+  border-left: 1px solid var(--line); background: var(--panel); padding: 8px 10px 16px; }
+/* the inspector's edge: 6px straddling its border. The negative margins
+   take its width back, so canvas and inspector lie as they did without
+   it; position and z-index lift it over both. */
+.pisplit { flex: none; position: relative; z-index: 3; width: 6px; margin: 0 -3px; cursor: col-resize; touch-action: none; }
+.pisplit:hover, .pisplit.dragging { background: var(--accent); }
+/* while dragging, the canvas and the inspector's fields under the pointer
+   would otherwise hand out their own cursors and start selections */
+body.insp-dragging { cursor: col-resize; user-select: none; }
 .ihead { display: flex; align-items: baseline; gap: 6px; margin-bottom: 6px; }
 .ihead .ig { color: var(--accent); }
 .ihead b { font: 600 13px ui-monospace, SFMono-Regular, Menlo, monospace; }

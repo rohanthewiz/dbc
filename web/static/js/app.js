@@ -3969,6 +3969,7 @@
         else setConnsHeight(Number(layout.connsHeight));
       }
       dbc.chat.boot(layout);
+      dbc.inspector.boot(layout); // the canvas tabs' inspector width
       // the Tables list's schema picks, before the first list is drawn
       for (const [k, v] of Object.entries(layout)) {
         if (k.startsWith(PICK_KEY) && v) schemaPicks[k.slice(PICK_KEY.length)] = v;

@@ -195,6 +195,7 @@ func pipelineTabs(t *testing.T, e *env, p *rod.Page) {
 	pipelineCodeField(t, p, disk)
 	pipelineDottedIDs(t, p)
 	pipelineInvalidNames(t, p)
+	pipelineInspectorWidth(t, p)
 
 	// ── ⇪ Go: the same pipeline as a script, in a script tab ──────────────
 	eval(t, p, `() => document.querySelector('.pbar button[data-act="export"]').click()`)
@@ -422,6 +423,87 @@ func pipelineInvalidNames(t *testing.T, p *rod.Page) {
 	  !document.querySelector(".app").classList.contains("pipe-json") &&
 	  !!document.querySelector('.plane[data-frag="w"] .pcard[data-id="src"]') &&
 	  !document.querySelector("#qtabs .qtab.pipeline.on .qdirty")`)
+}
+
+// pipelineInspectorWidth drags the inspector's edge (N-194) with a real
+// pointer, on the waiting pipeline's go.source, whose code field is the
+// cramped thing a wider inspector is for:
+//
+//	the edge 200px left   ─► the inspector 200px wider, the go field's
+//	                         editor with it (automaticLayout), the width
+//	                         saved in the layout as "inspWidth"
+//	far left, far right   ─► stopped by the stylesheet: the canvas keeps
+//	                         160px, the inspector keeps 200px
+//	a reload              ─► the width kept
+//	a double-click        ─► the stylesheet's 280px, "inspWidth" saved ""
+func pipelineInspectorWidth(t *testing.T, p *rod.Page) {
+	clickAt(t, p, `.plane[data-frag="w"] .pcard[data-id="src"] .cid`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "src's go field", `() => !!codeEd("code")`)
+	inspW := func() float64 {
+		return evalNum(t, p, `() => document.querySelector("#pipe .pinsp").getBoundingClientRect().width`)
+	}
+	edW := func() float64 { return evalNum(t, p, `() => codeEd("code").getLayoutInfo().width`) }
+	saved := func(want string) {
+		t.Helper()
+		waitFor(t, p, "inspWidth saved as "+strconv.Quote(want), `async (want) =>
+		  ((await (await fetch("/api/v1/layout")).json()).data || {}).inspWidth === want`, want)
+	}
+	// the width the release stored: the column's own, rounded
+	rounded := func() string {
+		return evalStr(t, p, `() => String(Math.round(document.querySelector("#pipe .pinsp").getBoundingClientRect().width))`)
+	}
+	near := func(a, b float64) bool { return a-b < 1.5 && b-a < 1.5 }
+
+	w0, ed0 := inspW(), edW()
+	if !near(w0, 280) {
+		t.Fatalf("the inspector is %vpx before any drag, want the stylesheet's 280", w0)
+	}
+	x, y := handleCenter(t, p, "#pipe .pisplit")
+	drag(t, p, x, y, x-200)
+	if w := inspW(); !near(w, w0+200) {
+		t.Fatalf("dragged 200px left, the inspector is %vpx, want %v", w, w0+200)
+	}
+	waitFor(t, p, "the go field's editor wider with it", `(ed0) => codeEd("code").getLayoutInfo().width >= ed0 + 190`, ed0)
+	saved(rounded())
+	shot(t, p, "pipeline-inspector-wide")
+
+	// the bounds are the stylesheet's: .pcanvas's min-width, .pinsp's
+	x, y = handleCenter(t, p, "#pipe .pisplit")
+	drag(t, p, x, y, 5)
+	if got := evalStr(t, p, `() => {
+	  const w = (s) => Math.round(document.querySelector(s).getBoundingClientRect().width);
+	  return w("#pipe .pcanvas") + " " + (w("#pipe .pbody") - w("#pipe .ppal") - w("#pipe .pinsp"));
+	}`); got != "160 160" {
+		t.Errorf("dragged far left, the canvas and the room left of the inspector are %q, want 160 each", got)
+	}
+	saved(rounded())
+	x, y = handleCenter(t, p, "#pipe .pisplit")
+	drag(t, p, x, y, evalNum(t, p, `() => innerWidth - 2`))
+	if w := inspW(); !near(w, 200) {
+		t.Errorf("dragged far right, the inspector is %vpx, want its 200px floor", w)
+	}
+	saved("200")
+
+	// a width that survives a reload: back to 480 first
+	x, y = handleCenter(t, p, "#pipe .pisplit")
+	drag(t, p, x, y, x-280)
+	saved("480")
+	p.MustReload()
+	waitFor(t, p, "the pipeline tab back, its inspector 480px wide", `() =>
+	  !!document.querySelector("#qtabs .qtab.pipeline.on") && !document.getElementById("pipe").hidden &&
+	  Math.round(document.querySelector("#pipe .pinsp").getBoundingClientRect().width) === 480`)
+	defineCodeEd(t, p)
+
+	// a double-click hands the width back to the stylesheet
+	x, y = handleCenter(t, p, "#pipe .pisplit")
+	p.Mouse.MustMoveTo(x, y)
+	if err := p.Mouse.Click(proto.InputMouseButtonLeft, 2); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, p, "the inspector at 280px, the variable gone", `() =>
+	  Math.round(document.querySelector("#pipe .pinsp").getBoundingClientRect().width) === 280 &&
+	  document.documentElement.style.getPropertyValue("--insp-w") === ""`)
+	saved("")
 }
 
 // invalidNamesPipeline has a node id with a space and a fragment with an

@@ -491,7 +491,12 @@
       const canvas = el("div", { class: "pcanvas jcanvas", tabindex: "0", "aria-label":
         "Job canvas — drag pipelines in, wire output ● to a card, Delete removes, Ctrl+D duplicates, f fits" }, layer);
       const insp = el("aside", { class: "pinsp", "aria-label": "Inspector" });
-      const body = el("div", "pbody", palette, canvas, insp);
+      // the inspector's drag edge, as a pipeline tab's: one width for both
+      // (stage.js dbc.inspector)
+      const edge = el("div", { class: "pisplit", role: "separator", "aria-orientation": "vertical",
+        title: "Drag to resize the inspector (double-click to reset)" });
+      dbc.inspector.split(edge, insp);
+      const body = el("div", "pbody", palette, canvas, edge, insp);
       const runsBox = el("div", "jruns");
       runsBox.hidden = true;
       root.replaceChildren(bar, body, runsBox);

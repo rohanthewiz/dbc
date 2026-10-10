@@ -684,7 +684,12 @@
       const canvas = el("div", { class: "pcanvas", tabindex: "0", "aria-label":
         "Pipeline canvas — drag plugins in, wire output ● to input ●, Delete removes, Ctrl+D duplicates, f fits" }, layer);
       const insp = el("aside", { class: "pinsp", "aria-label": "Inspector" });
-      root.replaceChildren(bar, el("div", "pbody", palette, canvas, insp));
+      // the inspector's drag edge: a sibling, since renderInspector
+      // replaces the inspector's children (stage.js dbc.inspector)
+      const edge = el("div", { class: "pisplit", role: "separator", "aria-orientation": "vertical",
+        title: "Drag to resize the inspector (double-click to reset)" });
+      dbc.inspector.split(edge, insp);
+      root.replaceChildren(bar, el("div", "pbody", palette, canvas, edge, insp));
       dom = { root, name, meta, rowsIn, bar, filter, palList, layer, canvas, insp };
       stage = dbc.stage(canvas, layer, { min: 0.25, max: 2, onChange: (v) => { if (shown) shown.view = { tx: v.tx, ty: v.ty, k: v.k }; } });
 

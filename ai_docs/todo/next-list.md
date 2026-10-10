@@ -40,12 +40,16 @@ ten session docs in `ai_docs/claude_sessions/`
 
 - **N-170** · raised `2026-1009-0748-pg-dump-cli-tui-web` · value medium
   Run pg_dump from Docker when no local one is new enough. `pgdump.Locate`
-  refuses a server newer than every pg_dump it finds. (Corrected in
-  `2026-1009-1632-n175-pipeline-code-editors` by `/next-list`: this machine's pg_dump is Homebrew's keg-only
-  libpq 17.5, `/opt/homebrew/opt/libpq/bin`, the first of `probeDirs`; no
-  postgresql@16 keg is installed now. So PG17 dumps here, and the gap is
-  PG18, which `pgdocker.Versions` lists first, the newest a "Postgres in
-  Docker…" container offers.) dbc already drives the docker
+  refuses a server newer than every pg_dump it finds. (Corrected 2026-10-10
+  by `/next-list`, replacing the `2026-1009-1632-n175-pipeline-code-editors`
+  correction, which said libpq 17.5 was installed and postgresql@16 was not:
+  this machine now has the reverse. No libpq keg exists and nothing named
+  pg_dump is on PATH. The only pg_dump `Locate` can find is Homebrew's
+  keg-only postgresql@16, 16.6, in `/opt/homebrew/opt/postgresql@16/bin`
+  (installed 2024-12-05). So neither of the two newest majors a "Postgres in
+  Docker…" container offers, 18 (`pgdocker.Versions` lists it first) and
+  17, can be dumped here without installing libpq first.) dbc already drives
+  the docker
   CLI (package pgdocker): `docker run --rm postgres:<server major> pg_dump`,
   with the output directory mounted and the service file passed in, would
   always match the server. Mind the network: a dbc container's server is on
@@ -108,6 +112,10 @@ ten session docs in `ai_docs/claude_sessions/`
   the run's stats. `jq` reads both; a single `json.load` refuses them.
   Older than Phase 3 (seen while checking it). Put the results inside the
   stats document, or send them to stderr under `-t json`.
+  Updated 2026-10-10 (`/next-list`): only without `-o`. With `-o FILE`,
+  `writeOut` sends the results to the file, so stdout carries the stats
+  document alone (`pipelinecmd.go` `runPipelineHeadless`, `main.go`
+  `writeOut`).
 - **N-183** · raised `2026-1009-1349-phase-4-jobs-tab-runs-view` · value low
   A run another process runs — a cron's `dbc job run` — cannot be stopped
   from dbc web's Runs view or `dbc run cancel`: dbc web's engine has no
@@ -149,6 +157,11 @@ ten session docs in `ai_docs/claude_sessions/`
   With `runs_keep` 200 per name and many names this grows; reading only a
   record's leading bytes (the header fields come first) or a per-name
   index would bound it. Contingent on a `runs_dir` big enough to notice.
+  Updated 2026-10-10 (`/next-list`): the record's head is not all stored
+  fields. `RunHead.Rows` is summed by `readHead` from
+  `pipelines[].fragments[].rows`, so reading only the leading bytes would
+  also mean writing Rows into the header. `Log` comes last in `jobs.Run`,
+  so a read could at least stop before it.
 - **N-188** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value medium
   Report the yaegi mis-store upstream (traefik/yaegi, v0.16.1): a binary or
   unary operator's result assigned straight into an element of a `[]any`
@@ -161,6 +174,11 @@ ten session docs in `ai_docs/claude_sessions/`
   dropped batch); `script.TestYaegiStoreComputedBug` is the minimal repro
   and fails once an upgrade fixes it — then drop the lint and the README's
   workaround paragraph.
+  Updated 2026-10-10 (`/next-list`): yaegi's master still has it. The module
+  cache holds an untagged master build,
+  `v0.16.2-0.20260209085605-fcb76d1ece0c` (commit fcb76d1, 2026-02-09).
+  The repro still passes against it, run through a scratch `-modfile` with
+  the repo's go.mod unchanged. So a report upstream is still news there.
 - **N-189** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value low
   `sql.write mode: upsert` on MySQL. It refuses today: MySQL's
   `ON DUPLICATE KEY UPDATE` matches any unique key, not the `key` columns
@@ -187,12 +205,9 @@ ten session docs in `ai_docs/claude_sessions/`
   a snippet has no package clause (Monaco says "no definition found").
   Wrap it server-side as `checkSnippet` does (`script.WrapSnippet`) and
   shift the answer's offsets back by the header's length.
-- **N-194** · raised `2026-1009-1632-n175-pipeline-code-editors` · value low
-  The pipeline inspector is a fixed 280px (`.pinsp`, app.css), which is
-  tight for a Go field: a line of an `Apply` scrolls sideways, and the
-  check's end-of-line note is out of view on all but short lines (the
-  hover and the list under the inspector have it). A splitter on the
-  inspector's edge, as the sidebar has, or a "⤢ wider" on a code field.
+  Updated 2026-10-10 (`/next-list`): `WrapSnippet` returns header+code and
+  the header's line count (`script/plugins.go`), not its byte length. Shift
+  by those lines, or compute the byte shift as `len(src)-len(code)`.
 - **N-198** · raised `2026-1010-1650-n197-n196-locate-invalid-names` · value low
   N-195/N-196/N-197's bugs, in jobs. A step id may hold dots, but
   `jobs.js` `diagsAt` keys a finding by its where up to the first dot
@@ -255,6 +270,11 @@ and `raised`.
   Chrome is covered by the web e2e step "job tabs and the runs view".
   Updated `2026-1009-1546-phase-6-plugin-sdk-builtins`: add plugin files in WKWebView: a plugin tab (◈) — ⌘S saves and loads it (the log line), the plugin check's markers — and the pipeline palette's Yours section (a drag of a user plugin, a broken file's ⚠ title). Chrome is covered by the web e2e step "plugin files and the palette".
   Updated `2026-1009-1632-n175-pipeline-code-editors` (N-175): add the pipeline inspector's code editors in WKWebView — a `go` field's suggest box and hover (they are fixed-position overflow widgets, escaping the inspector's scroll), ⌘S and ⌘X from inside one, and a trackpad scroll over a field that has no more to scroll moving the inspector. Chrome is covered by the e2e step "pipeline tabs" (`pipelineCodeField`).
+  Updated 2026-10-10 (N-194): add the inspector's drag edge (`.pisplit`)
+  in a pipeline and a job tab. Check that a drag sizes it (pointer
+  capture), the width survives quitting the app, and a double-click resets
+  it. Chrome is covered by the e2e step "pipeline tabs"
+  (`pipelineInspectorWidth`).
 - **N-087** · raised `2026-1001-1741-tui-navigator-disconnect-and-release-fixes` · value low
   Drive the TUI's new navigator by hand in a real terminal on a big
   Postgres: the picker rows, `d`/`s`, typing into a 150-schema list, the
@@ -268,6 +288,12 @@ and `raised`.
   person: how `⛁ ◫ ▾` and the counts render in real emulators (iTerm2,
   Terminal.app, Ghostty, kitty, a cats pane), wheel scrolling and drags
   with real mouse hardware.
+  Updated 2026-10-10 (`/next-list`): the pane has grown since that run.
+  It gained a Routines mode (`85952ae`, 2026-10-08, a schema's routines
+  and each one's DDL) and the `/` find line (N-141,
+  `2026-1008-1844-tui-tables-find`, "not driven by hand"). Add both to the
+  hand check: the routines rows and their DDL preview, and `/` typing,
+  Enter and Esc in a real terminal.
 - **N-104** · raised `2026-1005-1035-sql-consoles-per-database` · value low
   Check consoles by hand on real data. The first `dbc web` start moves the
   real `web.bytdb`'s tab buffers into consoles (`moveTabBuffers`, once,
@@ -290,6 +316,9 @@ and `raised`.
   confirm on ProdDr: the picker shows up, a schema's tables load within
   `catalogTimeout` (that query scans pg_class too), and how big pg_class is
   (`SELECT relkind, relispartition, count(*) FROM pg_class GROUP BY 1, 2`).
+  Updated 2026-10-10 (`/next-list`): the sidebar can now also list a
+  schema's routines (`85952ae`, 2026-10-08), one more catalog read on a big
+  catalog. While on ProdDr, check that a schema's Routines list loads too.
 - **N-115** · raised `2026-1005-1450-tui-web-parity` · value low
   Drive the TUI's parity pieces by hand in real terminals (iTerm2,
   Terminal.app, Ghostty, kitty, a cats pane): whether F12 / ⇧F12 / F2 and
@@ -336,6 +365,12 @@ and `raised`.
   and e2e tests). Add a step to `TestLiveWorkspacePickSchema`: pick a
   schema, create a table in it through the pool, Refresh, and check that
   the schema stays picked and the table is listed.
+  Updated 2026-10-10 (`/next-list`): the code to check has moved on.
+  `refreshPickLocked` now returns a pick still loading (`w.schemaPick`,
+  `d20b5c4`, `2026-1007-1612-sidebar-relist-after-ddl`), and the same
+  re-read now runs by itself after a run's DDL (`kindRelist`). The step can
+  cover both on Postgres: a CREATE TABLE run through the workspace should
+  relist with the pick kept, without a Refresh.
 
 - **N-154** · raised `2026-1007-1606-run-all-tab-per-statement` · value low
   Tabs per statement (N-147) have not been watched in a browser. The
@@ -365,6 +400,9 @@ and `raised`.
   Method icon for `kind: "procedure"` (`editor.js` kindOf), or a signature
   doc in either. Add a step to the go-rod test in `web/e2e` (`CALL ▮` on a
   connection with a procedure), or check by hand.
+  Updated 2026-10-10 (`/next-list`): the e2e harness's Postgres seed has a
+  function (`e2e_b.twice`) but no procedure, so the step must seed one
+  first.
 - **N-159** · raised `2026-1008-0000-rerun-result-tab` · value low
   dbc web's confirm before rerunning a tab whose statement may write
   (`rerun` in `app.js`, the "Run this statement again?" modal) has not been
@@ -398,6 +436,11 @@ and `raised`.
   (does `--warn` read on a light background?), and with a long yaegi
   message on a narrow editor (cut at 160 characters, then scrolls
   horizontally).
+  Updated 2026-10-10 (`/next-list`): the same marks (`diagDecos`,
+  `NOTE_MAX`) are now drawn in the pipeline inspector's small editors too
+  (N-175). The inspector is 280px by default (its edge widens it since
+  N-194), so a Go field there at the default width is the natural
+  narrow-editor case for the long-message check, on both themes.
 
 - **N-168** · raised `2026-1008-1939-tui-tab-groups` · value low
   Hand-check the TUI's tab groups in a real terminal (and inside cats with a
@@ -415,6 +458,10 @@ and `raised`.
   WKWebView (the dialog, the log lines arriving, `~/Downloads`). The form and
   run path are unit-tested with a fake pg_dump, and the web dialog passed
   the e2e suite against a live Postgres 16 with Homebrew's pg_dump 16.
+  Updated 2026-10-10 (`/next-list`): this machine's only pg_dump is
+  postgresql@16's 16.6 (see N-170), so a hand check here needs a server of
+  16 or older. A "Postgres in Docker…" 17 or 18 will refuse until libpq is
+  installed or N-170 lands.
 
 ## Roadmap
 
@@ -459,6 +506,10 @@ call.
   line-mode wheel is scaled in `stage.js` but has not been seen).
   Updated `2026-1009-1349-phase-4-jobs-tab-runs-view`: add the job canvas (the same stage, drags and
   wires) and the Runs view's timeline bars (`width: max(2px, …%)`).
+  Updated 2026-10-10 (N-194): add the canvas tabs' inspector edge
+  (`.pisplit`, a 6px bar over the canvas's and the inspector's borders)
+  and its flexbox clamp (`.pinsp` `flex-shrink` against `.pcanvas`'s
+  `min-width`).
 
 - **N-098** · raised `2026-1002-1239-web-conn-marks` · value medium
   Close a configured connection's pool when a tab switches away from it and
@@ -560,6 +611,8 @@ call.
   `postgres:19` is published, with its EOL from
   postgresql.org/support/versioning. Check `dataDir` too, in case the
   image moves its data again, as 18 did.
+  Updated 2026-10-10 (`/next-list`): still not time. Docker Hub's newest
+  19 tag is `19beta4` (2026-10-07); there is no `19`.
 
 ## Non-goals
 
@@ -594,6 +647,13 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-194** · raised `2026-1009-1632-n175-pipeline-code-editors` · value low
+  The pipeline inspector is a fixed 280px (`.pinsp`, app.css), which is
+  tight for a Go field: a line of an `Apply` scrolls sideways, and the
+  check's end-of-line note is out of view on all but short lines (the
+  hover and the list under the inspector have it). A splitter on the
+  inspector's edge, as the sidebar has, or a "⤢ wider" on a code field.
+  closed 2026-10-10, `2026-1010-1837-n194-inspector-splitter`: a splitter, not a "⤢ wider" button, since a splitter also serves the other fields and job tabs. `.pisplit` is a 6px bar straddling the inspector's left border. It is a sibling of `.pinsp` in `.pbody`, because `renderInspector` replaces the inspector's children, and negative margins take back its width. Both canvas tabs make one (`pipelines.js`, `jobs.js` `mount`) and wire it through the new `dbc.inspector` in `stage.js`. A drag sets `--insp-w` on the root, a double-click removes it, and a release that moved saves the width the column actually got as the layout's `inspWidth`; `app.js` boot applies it. One width serves both tabs: the two inspectors are the same column. Monaco's small editors follow by `automaticLayout`. The clamp is flexbox's, not the drag's, so a narrower window later is clamped the same way: `.pinsp` is `flex: 0 1 var(--insp-w, 280px)` with `min-width: 200px`, and `.pcanvas`'s `min-width` went from 0 to 160px. Found on the way: a `max-width: calc(100% - 350px)` on the inspector, the first try, left the canvas 108px, not 160. The palette renders 242px, not its 190px basis, because its min-content wins. The width is floored at 0, since a negative `flex-basis` is invalid and would fall back to `auto`. README: both inspector paragraphs. e2e: "pipeline tabs" gains `pipelineInspectorWidth`, real-pointer drags with src's go field open. 200px left gives a 200px wider inspector, the field's editor follows and `inspWidth` is saved. Far left leaves the canvas exactly 160px, far right stops at 200px. A reload keeps 480px, and a double-click restores 280px and saves "". The full web e2e suite passes. Not seen: the edge in WKWebView (N-064), Safari or Firefox (N-061), or a window too narrow for palette + 160 + 200, which now overflows `.pbody` where the canvas used to shrink to 0.
 - **N-199** · raised `2026-1010-1730-n190-files-dir` · value low
   A script's own relative paths still resolve against the process's
   working directory: `os.Create("out.csv")` in a script, a `go.action`

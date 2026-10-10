@@ -2097,7 +2097,9 @@ below it as for a query.
   hover (`b.` in `func Apply(b *sdb.Batch)` lists Batch's methods) and the
   check's errors marked on their lines. Ctrl+S and Ctrl+Enter work from
   inside them as from the canvas. With nothing selected it edits the
-  pipeline's name, description and parameters.
+  pipeline's name, description and parameters. Drag its left edge to
+  widen it for a long line of Go (double-click the edge for the default
+  width); the width is kept, and job tabs share it.
 - **Checked as you edit.** Half a second after a change the canvas is
   checked as `dbc pipeline check` would: what is wrong is marked ⚠ on the
   card, the lane or the header (`· 1 error`) and listed in the inspector;
@@ -2243,6 +2245,7 @@ examples on the left, an inspector on the right.
   catch-up and **webhook** (with its URL and a ⧉ curl command); and its
   policy. A step's inspector sets its pipeline (↗ opens it), what it
   waits for, and the pipeline's params, each with its default and doc.
+  Its left edge drags to resize it, as a pipeline tab's does.
 - **Checked as you edit**, as `dbc job check` would: every step's pipeline
   is found and checked too, and what is wrong is marked ⚠ on its card.
 - **▶ Run** (`Ctrl+Enter`) saves, then runs the job in dbc web's engine.

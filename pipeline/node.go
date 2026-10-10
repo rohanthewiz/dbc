@@ -57,6 +57,12 @@ type Env struct {
 	// Batch is the fragment's batch size: how many rows a source yields
 	// per Next, and so how many a transform sees per Apply.
 	Batch int
+	// filesDir is where a relative path in the node's config is: the
+	// host's files_dir (Options.FilesDir), "" for the working directory.
+	// Unexported so a node has one way to a file — Path, which applies
+	// it — and a plugin's paths cannot come to mean other than the
+	// built-ins' do. (It also keeps sdb's API summary within its budget.)
+	filesDir string
 	// Pipeline, Fragment and Node name where the node is, for messages.
 	Pipeline, Fragment, Node string
 	// SourceEngine is the fragment's source engine ("postgres", "mysql",

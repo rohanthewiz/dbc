@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-199
+**Next ID:** N-200
 
 ## Open
 
@@ -167,15 +167,6 @@ ten session docs in `ai_docs/claude_sessions/`
   named, so the semantics differ from Postgres and SQLite. Worth it only
   if a MySQL user asks (as N-172); then say the difference in the field's
   doc, or require that `key` be the table's only unique key.
-- **N-190** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value medium
-  A relative `path` in `csv.read`, `jsonl.read`, `csv.write` and
-  `jsonl.write` is resolved against the process's working directory. For
-  `dbc pipeline run` that is the shell's, as expected; for dbc web, the
-  scheduler and dbc.app it is wherever the process was started (dbc.app's
-  may be `/`), so a pipeline that works from a shell writes elsewhere, or
-  fails, when scheduled. Resolve a relative path against one place (a
-  `files_dir`, or the pipeline file's own directory), or have the check
-  warn on a relative path in a scheduled job's pipelines.
 - **N-191** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value low
   Copying an example plugin twice (or duplicating a plugin file) gives two
   files declaring one `Name`; the second does not load ("… is already the
@@ -214,6 +205,15 @@ ten session docs in `ai_docs/claude_sessions/`
   (the longest that is the whole where or is followed by a dot; a key
   after a step holds no dot) and `pipelines[i]` against the i-th step, as
   `pipelines.js` and `pipeline.Locate` now do.
+- **N-199** · raised `2026-1010-1730-n190-files-dir` · value low
+  A script's own relative paths still resolve against the process's
+  working directory: `os.Create("out.csv")` in a script, a `go.action`
+  or a `script.run` node writes into the shell's directory from `dbc
+  script`, and into wherever dbc web was started when a schedule runs
+  it — N-190's bug, outside the file plugins. A `go.*` node can call
+  `e.Path`, but a script has only `s`. Add `s.Path(p)` (`Paths.FilesDir`,
+  as `Env.Path` does) and say in the scripting docs to open files
+  through it.
 
 ## Validate
 
@@ -592,6 +592,16 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-190** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value medium
+  A relative `path` in `csv.read`, `jsonl.read`, `csv.write` and
+  `jsonl.write` is resolved against the process's working directory. For
+  `dbc pipeline run` that is the shell's, as expected; for dbc web, the
+  scheduler and dbc.app it is wherever the process was started (dbc.app's
+  may be `/`), so a pipeline that works from a shell writes elsewhere, or
+  fails, when scheduled. Resolve a relative path against one place (a
+  `files_dir`, or the pipeline file's own directory), or have the check
+  warn on a relative path in a scheduled job's pipelines.
+  closed 2026-10-10, `2026-1010-1730-n190-files-dir` (from the cats-todo backlog): one place — a new config key `files_dir`, default the home directory, resolved like `scripts_dir` (`${VAR}`, `~`, relative to the config file, so `files_dir = "."` in a checkout's `./dbc.toml` is that checkout). `pipeline.Env.Path` puts a relative path there (`~/` and absolute as before; no files_dir, the old cwd), and all four file plugins open through it; the directory reaches the runner as `Options.FilesDir`, set by the jobs engine's `runOne` (which dbc web, its scheduler, the TUI and `dbc pipeline run` all go through) and by `sdb.RunPipelineSpec` from the new `sdb.Paths.FilesDir` (headless and workspace script sessions, a node's session). Why not the pipeline file's own directory: Builder pipelines and the examples have none, and data would land among the specs in `pipelines_dir`; why not only a check warning: it fixes nothing for dbc web's manual runs, nor for a path that comes in through `${param}`. Home rather than a dir beside the scripts: these are the user's files, and the premise's "dbc.app's may be `/`" was off — `DbcApp.swift` starts the helper in `$HOME`, so dbc.app's runs resolve where they did. The cost is the shell: `dbc pipeline run` no longer reads the current directory, so README and the skill say `-p in=$PWD/…`. A relative path that is not there fails with "(a relative path is in files_dir, …)" in the message itself, which the node's error shows (a serr field would not reach it). The `wait.file` example and the SDK doc use `e.Path`; `Env`'s copy of the directory is unexported so a plugin has that one way, which also kept sdb's API summary under its 14 KB budget (was 73 bytes under; now 46). Tests: `TestEnvPath`, `TestFilesDirRun` (all four plugins relative, the missing-file text in the node error), `TestEngineFilesDir`, config `TestFilesDir`. Checked in the real binary from another cwd: `dbc pipeline run` wrote and read back under `files_dir`, a script's `s.RunPipeline` likewise, the missing-file message, and `wait.file` copied into plugins_dir found its relative flag file. Follow-up N-199.
 - **N-196** · raised `2026-1010-1329-n195-dotted-node-diags` · value low
   An invalid name's findings reach no card or lane. The check names an
   invalid node id by index (`frag/nodes[3]`) and an invalid fragment name

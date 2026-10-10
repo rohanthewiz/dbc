@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -158,6 +159,45 @@ func TestEngineRunsAPipeline(t *testing.T) {
 	}
 	if got := te.Running(); len(got) != 0 {
 		t.Errorf("running after the end = %+v", got)
+	}
+}
+
+// A relative path in a file node is in the config's files_dir, not the
+// process's working directory: the engine is what dbc web, its scheduler,
+// the TUI and `dbc pipeline run` all run a pipeline through, so this is
+// what makes one that works from a shell write the same file when
+// scheduled. A script.run node's session gets the directory too.
+func TestEngineFilesDir(t *testing.T) {
+	te := newTestEngine(t)
+	files := t.TempDir()
+	te.cfg.FilesDir = files
+	spec, err := pipeline.Parse(`{"name": "files", "fragments": [{"name": "out", "nodes": [
+	  {"id": "src", "plugin": "sql.read", "cfg": {"conn": "a", "query": "SELECT id, name FROM cats ORDER BY id LIMIT 3"}},
+	  {"id": "dst", "plugin": "csv.write", "cfg": {"path": "engine-exports/cats.csv"}}
+	], "edges": [["src", "dst"]]}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := te.StartPipeline(Request{Spec: spec, Trigger: TriggerSchedule})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fin := te.wait(t, head.ID)
+	if fin.Status != pipeline.Succeeded {
+		t.Fatalf("final = %+v", fin)
+	}
+	want := filepath.Join(files, "engine-exports", "cats.csv")
+	if got := fin.Pipelines[0].Fragments[0].Vars["path"]; got != want {
+		t.Errorf("wrote %q, want %q", got, want)
+	}
+	if bs, err := os.ReadFile(want); err != nil || strings.Count(string(bs), "\n") != 4 {
+		t.Errorf("file: %q %v", bs, err)
+	}
+	if _, err := os.Stat("engine-exports"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the working directory got engine-exports: %v", err)
+	}
+	if got := te.paths().FilesDir; got != files {
+		t.Errorf("a node's session FilesDir = %q", got)
 	}
 }
 

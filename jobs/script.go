@@ -39,7 +39,8 @@ func (e *Engine) ScriptRunner() sdb.JobRunner {
 // runOnOwnEngine runs a job for a session with no engine of its host's.
 func runOnOwnEngine(s *sdb.S, name string, params sdb.Params) (*sdb.JobRun, error) {
 	p := s.Paths()
-	cfg := &config.Config{ScriptsDir: p.ScriptsDir, PipelinesDir: p.PipelinesDir, JobsDir: p.JobsDir, RunsDir: p.RunsDir}
+	cfg := &config.Config{ScriptsDir: p.ScriptsDir, PipelinesDir: p.PipelinesDir, JobsDir: p.JobsDir, RunsDir: p.RunsDir,
+		FilesDir: p.FilesDir}
 	e := New(cfg, s.Manager(), Options{RunsDir: p.RunsDir, Sink: func(ev Event) {
 		if l, ok := ev.(*Logged); ok {
 			s.Print("%s", scriptLine(name, l))

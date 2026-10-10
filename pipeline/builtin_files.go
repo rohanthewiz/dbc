@@ -43,8 +43,12 @@ import (
 //	Commit  ─► flush, fsync, close, chmod 0644, rename over out.csv
 //	Abort   ─► close, remove the .partial
 //
-// Paths: a leading ~/ is the home directory; a relative path is relative
-// to the directory dbc runs in (dbc web's, for a run started there).
+// Paths (Env.Path): a leading ~/ is the home directory; a relative path is
+// in files_dir — the home directory unless the config sets it — whichever
+// process runs the pipeline: `dbc pipeline run` in a shell, dbc web, its
+// scheduler, dbc.app. Each of those has a working directory of its own,
+// so resolving against it made one spec read and write different files
+// depending on who ran it.
 
 func init() {
 	Register(Plugin{
@@ -54,7 +58,7 @@ func init() {
 			"header is off; columns renames them, or names them for a file without a header (c1, c2, … otherwise). " +
 			"A record with a different number of fields than the first is an error naming its line.",
 		Fields: []Field{
-			{Name: "path", Type: FieldString, Required: true, Doc: "The file: ~/ for the home directory; a relative path is from where dbc runs."},
+			{Name: "path", Type: FieldString, Required: true, Doc: "The file: ~/ for the home directory; a relative path is in files_dir (the home directory unless the config sets it)."},
 			{Name: "delimiter", Type: FieldString, Default: ",", Doc: `The field separator, one character; \t or tab for a tab.`},
 			{Name: "header", Type: FieldBool, Default: "true", Doc: "The first record names the columns."},
 			{Name: "columns", Type: FieldColumns, Doc: "Column names, in file order: replace the header's, or name a file without one."},
@@ -79,7 +83,7 @@ func init() {
 			"is an integer and any other number a float, true/false a boolean, null NULL; a nested object or array " +
 			"is kept as its JSON text. A key a row lacks is NULL; keys outside the columns are dropped (and counted in the log).",
 		Fields: []Field{
-			{Name: "path", Type: FieldString, Required: true, Doc: "The file: ~/ for the home directory; a relative path is from where dbc runs."},
+			{Name: "path", Type: FieldString, Required: true, Doc: "The file: ~/ for the home directory; a relative path is in files_dir (the home directory unless the config sets it)."},
 			{Name: "columns", Type: FieldColumns, Doc: "The keys to read, in this order; empty means the first object's keys."},
 		},
 		New: func(cfg Config) (any, error) {
@@ -93,7 +97,7 @@ func init() {
 			"Numbers are written in full (no exponent for ordinary sizes), times in RFC 3339, bytes in hex, " +
 			"arrays and maps as JSON. Missing directories are created. Publishes rows and path.",
 		Fields: []Field{
-			{Name: "path", Type: FieldString, Required: true, Doc: "The file to write: ~/ for the home directory; a relative path is from where dbc runs."},
+			{Name: "path", Type: FieldString, Required: true, Doc: "The file to write: ~/ for the home directory; a relative path is in files_dir (the home directory unless the config sets it)."},
 			{Name: "delimiter", Type: FieldString, Default: ",", Doc: `The field separator, one character; \t or tab for a tab.`},
 			{Name: "header", Type: FieldBool, Default: "true", Doc: "Write the column names first."},
 			{Name: "null", Type: FieldString, Doc: `What a NULL is written as (default an empty field; \N for Postgres COPY).`},
@@ -116,7 +120,7 @@ func init() {
 			"times are RFC 3339 strings, bytes base64, NaN and infinities null. Missing directories are created. " +
 			"Publishes rows and path.",
 		Fields: []Field{
-			{Name: "path", Type: FieldString, Required: true, Doc: "The file to write: ~/ for the home directory; a relative path is from where dbc runs."},
+			{Name: "path", Type: FieldString, Required: true, Doc: "The file to write: ~/ for the home directory; a relative path is in files_dir (the home directory unless the config sets it)."},
 		},
 		New: func(cfg Config) (any, error) {
 			return &fileWrite{path: strings.TrimSpace(cfg["path"])}, nil
@@ -137,12 +141,56 @@ func checkDelim(cfg Config) []string {
 	return nil
 }
 
+// Path is p as a node opens it:
+//
+//	"~" or "~/…"    the home directory
+//	absolute        as written
+//	relative        joined to files_dir (Options.FilesDir), so "exports/orders.csv"
+//	                is one file whether a shell, dbc web, the scheduler or
+//	                dbc.app runs the pipeline; with no FilesDir, left
+//	                relative to the working directory
+//
+// The built-in file plugins open every path through it; a plugin of one's
+// own that reads or writes a file does the same (e.Path(e.Cfg.Str("path",
+// ""))), so its paths follow files_dir as theirs do. A nil Env has no
+// files_dir.
+func (e *Env) Path(p string) (string, error) {
+	if e.inFilesDir(p) {
+		return filepath.Join(e.filesDir, p), nil
+	}
+	return expandPath(p)
+}
+
+// inFilesDir reports whether Path joins p to files_dir: there is one, and
+// p is neither absolute nor under ~.
+func (e *Env) inFilesDir(p string) bool {
+	return e != nil && e.filesDir != "" && p != "" && !filepath.IsAbs(p) && !isHomePath(p)
+}
+
+// pathErr wraps err from op ("open") on the file at p, which Path made
+// from raw. A raw path that was relative also names files_dir: "no such
+// file" for orders.csv then says where it was looked for, and why there,
+// to a user who expected the directory they ran dbc in. In the message,
+// not a serr field: a node's error is shown by its text (NodeStats.Error,
+// the run monitor), which a field does not reach.
+func (e *Env) pathErr(err error, op, raw, p string) error {
+	if e.inFilesDir(raw) {
+		err = serr.F("%w (a relative path is in files_dir, %s)", err, e.filesDir)
+	}
+	return serr.Wrap(err, "op", op, "path", p)
+}
+
+// isHomePath reports whether p starts at the home directory: "~", "~/…",
+// or "~\…" as written on Windows.
+func isHomePath(p string) bool {
+	return p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`)
+}
+
 // expandPath resolves a leading ~ to the home directory. Anything else is
-// left as written: a relative path stays relative to the process's
-// working directory, which is what a shell user expects from `dbc
-// pipeline run`.
+// left as written; Path, which nodes call, joins a relative one to
+// files_dir first.
 func expandPath(p string) (string, error) {
-	if p != "~" && !strings.HasPrefix(p, "~/") && !strings.HasPrefix(p, `~\`) {
+	if !isHomePath(p) {
 		return p, nil
 	}
 	home, err := os.UserHomeDir()
@@ -212,13 +260,13 @@ type csvRead struct {
 // back for Next. Either way the column list is known before any batch,
 // so a sink no rows reach (a header-only file) still opens with it — the
 // runner asks through Cols.
-func (s *csvRead) Open(*Env) error {
-	p, err := expandPath(s.path)
+func (s *csvRead) Open(e *Env) error {
+	p, err := e.Path(s.path)
 	if err != nil {
 		return err
 	}
 	if s.f, err = os.Open(p); err != nil {
-		return serr.Wrap(err, "op", "open", "path", p)
+		return e.pathErr(err, "open", s.path, p)
 	}
 	s.path = p
 	s.r = csv.NewReader(bufio.NewReaderSize(s.f, 64<<10))
@@ -340,12 +388,12 @@ type jsonlRead struct {
 
 func (s *jsonlRead) Open(e *Env) error {
 	s.env = e
-	p, err := expandPath(s.path)
+	p, err := e.Path(s.path)
 	if err != nil {
 		return err
 	}
 	if s.f, err = os.Open(p); err != nil {
-		return serr.Wrap(err, "op", "open", "path", p)
+		return e.pathErr(err, "open", s.path, p)
 	}
 	s.path = p
 	// a bufio.Reader rather than a Scanner: ReadBytes grows to any line
@@ -582,17 +630,20 @@ type fileWrite struct {
 	committed bool
 }
 
-func (w *fileWrite) Open(_ *Env, cols []Col) error {
-	p, err := expandPath(w.path)
+func (w *fileWrite) Open(e *Env, cols []Col) error {
+	p, err := e.Path(w.path)
 	if err != nil {
 		return err
 	}
+	// absolute already when files_dir applied (the config's is); Abs
+	// covers a host with none, so what is published never depends on a
+	// later reader's working directory
 	if w.abs, err = filepath.Abs(p); err != nil {
 		return serr.Wrap(err, "path", p)
 	}
 	dir := filepath.Dir(w.abs)
 	if err = os.MkdirAll(dir, 0o755); err != nil {
-		return serr.F("make the directory %s: %w", dir, err)
+		return e.pathErr(serr.F("make the directory %s: %w", dir, err), "mkdir", w.path, w.abs)
 	}
 	// beside the destination, so the rename at Commit stays within one
 	// file system (and so is atomic); a dot file, so a directory listing

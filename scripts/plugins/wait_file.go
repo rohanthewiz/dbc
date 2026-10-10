@@ -22,7 +22,8 @@ var Plugin = sdb.Plugin{
 	Kind:  sdb.KindAction,
 	Label: "Wait for a file",
 	Fields: []sdb.Field{
-		{Name: "path", Type: sdb.FieldString, Required: true, Doc: "The file to wait for; ${run.date} and params work here."},
+		{Name: "path", Type: sdb.FieldString, Required: true, Doc: "The file to wait for; ${run.date} and params work here. " +
+			"A relative path is in files_dir, as the file plugins' are."},
 		{Name: "timeout", Type: sdb.FieldDuration, Default: "10m", Doc: "How long to wait before failing."},
 		{Name: "every", Type: sdb.FieldDuration, Default: "5s", Doc: "How often to look."},
 	},
@@ -31,7 +32,13 @@ var Plugin = sdb.Plugin{
 // Run is an action's one call. The Stats' Vars are read by later
 // fragments as ${frag.<this fragment>.size}.
 func Run(e *sdb.Env) (sdb.Stats, error) {
-	path := e.Cfg.Str("path", "")
+	// e.Path resolves the path as csv.read's is: ~ the home directory, a
+	// relative path in files_dir — the same file whichever process runs
+	// the pipeline, rather than each one's working directory
+	path, err := e.Path(e.Cfg.Str("path", ""))
+	if err != nil {
+		return sdb.Stats{}, err
+	}
 	timeout, err := e.Cfg.Duration("timeout", 10*time.Minute)
 	if err != nil {
 		return sdb.Stats{}, err

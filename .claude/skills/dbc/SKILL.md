@@ -123,6 +123,11 @@ Exit codes: `0` ok, `1` failure, `2` bad usage (incl. unknown connection),
 | `dbc web [--no-open] [--listen ADDR]` | browser workbench on 127.0.0.1:8450 | The browser workbench |
 | `dbc version` | version | Build |
 
+A relative `path` in a file node (`csv.*`, `jsonl.*`) is in `files_dir`
+(default `$HOME`), from the shell as from dbc web — never the current
+directory. Write absolute paths (or `$PWD/…` in a `-p`) for files you made
+here.
+
 A pipeline or job written to `pipelines_dir` / `jobs_dir` is what the user
 sees in both UIs: dbc web draws it on a canvas (`Ctrl+O`, then a pipeline
 or job tab), the TUI lists, runs and checks it in its pipelines & jobs

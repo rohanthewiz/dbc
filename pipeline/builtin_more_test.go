@@ -257,6 +257,103 @@ func TestFileWriteFailureLeavesFile(t *testing.T) {
 	}
 }
 
+// Path: ~ the home directory, an absolute path as written, a relative one
+// joined to files_dir — or, with none (a host that sets no FilesDir, a
+// nil Env), left relative to the working directory as before.
+func TestEnvPath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	files := filepath.Join(t.TempDir(), "files")
+	abs := filepath.Join(t.TempDir(), "x.csv")
+	e := &Env{filesDir: files}
+	for _, c := range []struct {
+		env      *Env
+		in, want string
+	}{
+		{e, "out.csv", filepath.Join(files, "out.csv")},
+		{e, "exports/out.csv", filepath.Join(files, "exports", "out.csv")},
+		{e, "../up.csv", filepath.Join(filepath.Dir(files), "up.csv")}, // cleaned, as Join does
+		{e, abs, abs},
+		{e, "~/x.csv", filepath.Join(home, "x.csv")},
+		{e, "~", home},
+		{e, "", ""}, // required, so refused before; not turned into files_dir itself
+		{&Env{}, "out.csv", "out.csv"},
+		{nil, "out.csv", "out.csv"},
+		{nil, "~/x.csv", filepath.Join(home, "x.csv")},
+	} {
+		if got, err := c.env.Path(c.in); err != nil || got != c.want {
+			t.Errorf("Path(%q) with files_dir %v = %q, %v; want %q", c.in, c.env != nil && c.env.filesDir != "", got, err, c.want)
+		}
+	}
+}
+
+// A run's relative paths are in Options.FilesDir, for all four file
+// plugins: csv.write's file lands there (missing directories made, the
+// path published absolute), csv.read and jsonl.read find theirs there, and
+// nothing appears in the working directory. A relative file that is not
+// there fails saying where it was looked for, and why there.
+func TestFilesDirRun(t *testing.T) {
+	h := newTestHost(t)
+	files := t.TempDir()
+	spec := mustParse(t, `{"name": "fd", "fragments": [
+	  {"name": "out", "nodes": [
+	    {"id": "src", "plugin": "sql.read", "cfg": {"conn": "a", "query": "SELECT id, name FROM cats ORDER BY id"}},
+	    {"id": "csv", "plugin": "csv.write", "cfg": {"path": "fd-exports/cats.csv"}}
+	  ], "edges": [["src", "csv"]]},
+	  {"name": "again", "nodes": [
+	    {"id": "csv", "plugin": "csv.read", "cfg": {"path": "fd-exports/cats.csv"}},
+	    {"id": "js", "plugin": "jsonl.write", "cfg": {"path": "fd-exports/cats.jsonl"}}
+	  ], "edges": [["csv", "js"]]},
+	  {"name": "back", "nodes": [
+	    {"id": "js", "plugin": "jsonl.read", "cfg": {"path": "fd-exports/cats.jsonl"}},
+	    {"id": "d", "plugin": "discard"}
+	  ], "edges": [["js", "d"]]}
+	]}`)
+	st, err := Run(context.Background(), h, spec, Options{FilesDir: files})
+	if err != nil {
+		t.Fatal(err)
+	}
+	csvPath := filepath.Join(files, "fd-exports", "cats.csv")
+	if got := st.Fragments[0].Vars["path"]; got != csvPath {
+		t.Errorf("published path %q, want %q", got, csvPath)
+	}
+	if got := st.Fragments[1].Vars["path"]; got != filepath.Join(files, "fd-exports", "cats.jsonl") {
+		t.Errorf("jsonl path %q", got)
+	}
+	if lines := strings.Count(readFile(t, csvPath), "\n"); lines != 26 {
+		t.Errorf("csv has %d lines, want a header and 25 rows", lines)
+	}
+	if st.Fragments[1].Rows != 25 || st.Fragments[2].Nodes[0].Out != 25 {
+		t.Errorf("rows: again %d, back read %d", st.Fragments[1].Rows, st.Fragments[2].Nodes[0].Out)
+	}
+	if _, err := os.Stat("fd-exports"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the working directory got fd-exports: %v", err)
+	}
+
+	missing := mustParse(t, `{"name": "m", "fragments": [{"name": "f", "nodes": [
+	  {"id": "src", "plugin": "csv.read", "cfg": {"path": "nope.csv"}}, {"id": "d", "plugin": "discard"}
+	], "edges": [["src", "d"]]}]}`)
+	st, err = Run(context.Background(), h, missing, Options{FilesDir: files})
+	want := "(a relative path is in files_dir, " + files + ")"
+	if err == nil || !strings.Contains(err.Error(), filepath.Join(files, "nope.csv")) || !strings.Contains(err.Error(), want) {
+		t.Errorf("missing: %v", err)
+	}
+	// the node's own error, which the run monitor shows, says it too
+	if got := st.Fragments[0].Nodes[0].Error; !strings.Contains(got, want) {
+		t.Errorf("node error %q", got)
+	}
+	// an absolute path that is not there is not about files_dir
+	gone := filepath.Join(files, "gone.csv")
+	spec = mustParse(t, fmt.Sprintf(`{"name": "a", "fragments": [{"name": "f", "nodes": [
+	  {"id": "src", "plugin": "csv.read", "cfg": {"path": %q}}, {"id": "d", "plugin": "discard"}
+	], "edges": [["src", "d"]]}]}`, gone))
+	if _, err = Run(context.Background(), h, spec, Options{FilesDir: files}); err == nil || strings.Contains(err.Error(), "files_dir") {
+		t.Errorf("absolute missing: %v", err)
+	}
+}
+
 func TestCSVText(t *testing.T) {
 	for v, want := range map[any]string{
 		1000000.0: "1000000", 0.5: "0.5", 1e-7: "1e-07", 1e21: "1e+21", 0.0: "0", int64(-3): "-3",

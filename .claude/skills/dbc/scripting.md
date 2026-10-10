@@ -177,7 +177,10 @@ run|check|export NAME` (`-p k=v`, `--preview N`, `--fragment F`, `-t json`),
   wins), row and column ones in `builtin_rows.go` / `builtin_cols.go`
   (`cols.cast`, `cols.add`, `text.clean`, `rows.dedupe`, `discard`), files
   in `builtin_files.go` (`csv.*`, `jsonl.*`; writers rename a temp file in
-  at Commit), `lookup` and `pipeline.check` in `builtin_check.go`; the
+  at Commit; every path through `Env.Path`: `~/`, absolute, or relative to
+  `files_dir` — `config.FilesDir`, default `$HOME`, handed over as
+  `pipeline.Options.FilesDir` by the jobs engine and `sdb.Paths.FilesDir`
+  — never the process's cwd), `lookup` and `pipeline.check` in `builtin_check.go`; the
   Go-code ones (`go.transform`, `go.source`, `go.sink`, `go.action`,
   `script.run`) in `script/plugins.go` because they need the interpreter.
   A `go.*` snippet without a package clause is wrapped

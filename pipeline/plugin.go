@@ -413,7 +413,8 @@ func Summary() string {
 		"KindTransform, KindSink, KindAction), Label, Doc, Fields: []sdb.Field{{Name, Type (sdb.FieldString, FieldColumns, …), Doc, " +
 		"Default, Required}}} and plain funcs by kind — source: Next(e *sdb.Env) (*sdb.Batch, error); transform: " +
 		"Apply(e *sdb.Env, b *sdb.Batch) (*sdb.Batch, error); sink: Write(e *sdb.Env, b *sdb.Batch) error; action: " +
-		"Run(e *sdb.Env) error — plus optional Open/Flush/Commit/Close. A node's settings are e.Cfg (e.Cfg.Str(\"column\", \"\")).\n")
+		"Run(e *sdb.Env) error — plus optional Open/Flush/Commit/Close. A node's settings are e.Cfg (e.Cfg.Str(\"column\", \"\")); " +
+		"a file path goes through e.Path, which puts a relative one in files_dir as the file plugins do.\n")
 	return sb.String()
 }
 

@@ -68,6 +68,7 @@ Copy `dbc.example.toml` to `./dbc.toml` (or `~/.config/dbc/config.toml`):
 ```toml
 # scripts_dir      = "scripts"   # default ~/.config/dbc/scripts; relative = beside this file
 # jobs_dir         = "jobs"      # pipelines_dir, jobs_dir, runs_dir, plugins_dir likewise (see Jobs)
+# files_dir        = "data"      # a pipeline's relative file paths; default ~ (see Pipelines)
 # runs_keep        = 200         # run records kept per job and per pipeline
 max_rows           = 1000   # rows fetched from the server
 max_display_rows   = 2000   # rows the results table draws (0 = all)
@@ -1944,7 +1945,7 @@ plugins, and the fields each takes, are listed by `dbc plugins`:
 | --- | --- | --- |
 | `sql.read` | source | A query on a connection, streamed and uncapped; `args` bind its placeholders |
 | `sql.table` | source | A table, with `columns`, `where` and `order` |
-| `csv.read` · `jsonl.read` | source | A file: CSV (`delimiter`, `header`, `columns`, `empty_null`) or one JSON object per line (keys in the order written; nested values as JSON text). Every CSV value is text until `cols.cast` types it |
+| `csv.read` · `jsonl.read` | source | A file (a relative `path` is in `files_dir`, below): CSV (`delimiter`, `header`, `columns`, `empty_null`) or one JSON object per line (keys in the order written; nested values as JSON text). Every CSV value is text until `cols.cast` types it |
 | `go.source` | source | `func Next(e *sdb.Env) (*sdb.Batch, error)` until it returns nil |
 | `cols.select` | transform | `keep`, `drop`, `rename` (one `old=new` per line) |
 | `cols.cast` | transform | One `column type [layout]` per line — `int`, `float`, `bool`, `text`, `time`, `date` (a Go layout: `born date 02/01/2006`); a value that will not cast fails the fragment, or becomes NULL (`on_error: null`) |
@@ -1967,6 +1968,19 @@ plugins, and the fields each takes, are listed by `dbc plugins`:
 
 Plugins of your own — Go files in `plugins_dir` — join this list, the
 canvas's palette and the check: [Plugins of your own](#plugins-of-your-own).
+
+A file node's `path` may start with `~/`, or be absolute; a **relative
+path is in `files_dir`** — your home directory unless the config sets it
+(resolved like `scripts_dir`, so `files_dir = "."` in a checkout's
+`./dbc.toml` means that checkout). It is the same directory whichever
+process runs the pipeline: `dbc pipeline run` in a shell, the TUI, dbc
+web, its scheduler, dbc.app, a script's `s.RunPipeline`. So
+`"exports/${run.date}.csv"` is one file from all of them, rather than one
+under each process's working directory, and a pipeline that works from a
+shell writes the same file when scheduled. A relative path that is not
+there fails saying so: `… no such file or directory (a relative path is
+in files_dir, /Users/you)`. On the command line, a path given as a param
+from the current directory wants `$PWD`: `-p in=$PWD/orders.csv`.
 
 A `go.*` node's code is interpreted by the same engine scripts are, with
 the standard packages it uses by name imported for it, and called once
@@ -2353,7 +2367,9 @@ by name (optional in brackets):
 `e.Cfg` is the node's settings (`e.Cfg.Str`, `Int`, `Bool`, `Duration`,
 `List`, `Lines`), with `${…}` substituted and the fields' defaults filled
 in; `e.S` is the session (`e.S.Query`, `e.S.Print`), `e.Params` the
-pipeline's parameters, `e.Logf` a line in the run's log. Package-level
+pipeline's parameters, `e.Logf` a line in the run's log, and
+`e.Path(p)` a file path as the built-ins take theirs (`~/`, and a relative
+one in `files_dir`). Package-level
 vars are a plugin's state: **every node gets an interpreter of its own**,
 so two nodes of one plugin — in one fragment, or in two runs at once —
 never share them (and never share an interpreter across goroutines). A
@@ -2680,7 +2696,9 @@ script's `s.Show` results do; in `text`, one line per fragment follows,
 with every node's rows in and out. Names resolve as scripts do: a file
 here, then `pipelines_dir`, then an example. Exit 0, 1 on failure, 130
 when interrupted — a stop during a load rolls it back first. The run
-leaves a record in `runs_dir`, as every run does ([Jobs](#jobs)).
+leaves a record in `runs_dir`, as every run does ([Jobs](#jobs)). A file
+node's relative path is in `files_dir`, as from dbc web — not the shell's
+current directory: `-p in=$PWD/orders.csv` for a file there.
 
 ### Jobs headless
 

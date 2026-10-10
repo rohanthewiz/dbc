@@ -119,14 +119,17 @@ const (
 	FieldGo       = pipeline.FieldGo       // Go, in a Go editor
 )
 
-// Paths are the directories a session resolves names in: a script's
-// (script.run), a pipeline's (RunPipelineNamed), a job's (RunJob) — and
-// where a job run there leaves its record. The host sets them.
+// Paths are where a session finds scripts, pipelines and jobs by name, puts
+// a job run's record, and resolves a pipeline's relative file paths. The
+// host sets them: script.run, RunPipelineNamed and RunJob read the first
+// three, RunsDir is where a job run there leaves its record, and FilesDir
+// (the config's files_dir) is PipelineOpts.FilesDir's default.
 type Paths struct {
 	ScriptsDir   string
 	PipelinesDir string
 	JobsDir      string
 	RunsDir      string
+	FilesDir     string
 }
 
 // NewBatch makes a batch of cols with rows; ColsOf pairs names with the
@@ -160,8 +163,13 @@ func (s *S) RunPipeline(p *Pipeline, opt PipelineOpts) (*RunStats, error) {
 }
 
 // RunPipelineSpec runs a pipeline given as data (ParsePipeline, or a
-// literal).
+// literal). A relative path in its file nodes is in the host's files_dir
+// (Paths.FilesDir) unless opt.FilesDir names another directory, so a
+// pipeline run from a script finds the files it finds when scheduled.
 func (s *S) RunPipelineSpec(spec *PipelineSpec, opt PipelineOpts) (*RunStats, error) {
+	if opt.FilesDir == "" {
+		opt.FilesDir = s.paths.FilesDir
+	}
 	return pipeline.Run(s.Ctx(), s, spec, opt)
 }
 

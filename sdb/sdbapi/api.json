@@ -472,6 +472,17 @@
       ],
       "methods": [
         {
+          "name": "Path",
+          "sig": "func (e *Env) Path(p string) (string, error)",
+          "doc": "Path is p as a node opens it:\n\n\t\"~\" or \"~/…\"    the home directory\n\tabsolute        as written\n\trelative        joined to files_dir (Options.FilesDir), so \"exports/orders.csv\"\n\t                is one file whether a shell, dbc web, the scheduler or\n\t                dbc.app runs the pipeline; with no FilesDir, left\n\t                relative to the working directory\n\nThe built-in file plugins open every path through it; a plugin of one's\nown that reads or writes a file does the same (e.Path(e.Cfg.Str(\"path\",\n\"\"))), so its paths follow files_dir as theirs do. A nil Env has no\nfiles_dir.",
+          "params": [
+            {
+              "name": "p",
+              "type": "string"
+            }
+          ]
+        },
+        {
           "name": "Stop",
           "sig": "func (e *Env) Stop()",
           "doc": "Stop asks the fragment to stop pulling batches from the source once the\ncurrent batch has gone through — what rows.limit does on reaching its\ncount. The sinks still commit what they have: a stop is an early end,\nnot a failure.",
@@ -833,7 +844,7 @@
     {
       "name": "Paths",
       "kind": "struct",
-      "doc": "Paths are the directories a session resolves names in: a script's\n(script.run), a pipeline's (RunPipelineNamed), a job's (RunJob) — and\nwhere a job run there leaves its record. The host sets them.",
+      "doc": "Paths are where a session finds scripts, pipelines and jobs by name, puts\na job run's record, and resolves a pipeline's relative file paths. The\nhost sets them: script.run, RunPipelineNamed and RunJob read the first\nthree, RunsDir is where a job run there leaves its record, and FilesDir\n(the config's files_dir) is PipelineOpts.FilesDir's default.",
       "fields": [
         {
           "name": "ScriptsDir",
@@ -852,6 +863,11 @@
         },
         {
           "name": "RunsDir",
+          "type": "string",
+          "doc": ""
+        },
+        {
+          "name": "FilesDir",
           "type": "string",
           "doc": ""
         }
@@ -947,6 +963,11 @@
           "name": "Run",
           "type": "map[string]string",
           "doc": "Run is the run's own values, ${run.\u003cname\u003e} in any node's config:\nthe host's run id, what triggered it, the job it is a step of (see\nRunVars). \"date\" and \"started\" default to the run's start when the\nhost does not set them, so ${run.date} works in a script's\ns.RunPipeline as it does under the jobs engine."
+        },
+        {
+          "name": "FilesDir",
+          "type": "string",
+          "doc": "FilesDir is the directory a relative path in a node's config is in\n(csv.read's path, say; see Env.Path): the config's files_dir. Every\nhost sets it, so a spec reads and writes the same files whichever\nprocess runs it, not each one's working directory. \"\" leaves a\nrelative path relative to the working directory."
         }
       ]
     },
@@ -1805,7 +1826,7 @@
         {
           "name": "RunPipelineSpec",
           "sig": "func (s *S) RunPipelineSpec(spec *PipelineSpec, opt PipelineOpts) (*RunStats, error)",
-          "doc": "RunPipelineSpec runs a pipeline given as data (ParsePipeline, or a\nliteral).",
+          "doc": "RunPipelineSpec runs a pipeline given as data (ParsePipeline, or a\nliteral). A relative path in its file nodes is in the host's files_dir\n(Paths.FilesDir) unless opt.FilesDir names another directory, so a\npipeline run from a script finds the files it finds when scheduled.",
           "params": [
             {
               "name": "spec",

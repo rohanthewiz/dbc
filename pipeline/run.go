@@ -47,6 +47,12 @@ type Options struct {
 	// host does not set them, so ${run.date} works in a script's
 	// s.RunPipeline as it does under the jobs engine.
 	Run map[string]string
+	// FilesDir is the directory a relative path in a node's config is in
+	// (csv.read's path, say; see Env.Path): the config's files_dir. Every
+	// host sets it, so a spec reads and writes the same files whichever
+	// process runs it, not each one's working directory. "" leaves a
+	// relative path relative to the working directory.
+	FilesDir string
 }
 
 // RunVars are the names ${run.<name>} may use, and what each holds. Check
@@ -360,6 +366,7 @@ func (fr *fragRun) build(n Node) (*nodeInst, error) {
 	frag, node := fr.f.Name, n.ID
 	inst.env = &Env{
 		Ctx: fr.r.ctx, S: fr.r.h, Params: fr.r.params, Vars: fr.r.vars, Batch: fr.f.BatchSize(),
+		filesDir: fr.r.opt.FilesDir,
 		Pipeline: fr.r.spec.Name, Fragment: frag, Node: node, stop: &fr.stop,
 		Logf: func(format string, args ...any) {
 			fr.r.log(fmt.Sprintf("[%s/%s] %s", frag, node, fmt.Sprintf(format, args...)))

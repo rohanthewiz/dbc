@@ -18,6 +18,12 @@
 # Your own pipeline plugins: Go files, each one kind of node (README:
 # "Plugins of your own"), default ~/.config/dbc/plugins.
 # plugins_dir   = "plugins"
+# Where a relative path in a pipeline's file nodes (csv.read, csv.write,
+# jsonl.read, jsonl.write) is: one directory for every process that runs
+# it — a shell, dbc web, its scheduler, dbc.app — so a pipeline reads and
+# writes the same files whichever ran it. Leave it out for your home
+# directory; resolved like scripts_dir ("." here means this file's directory).
+# files_dir     = "data"
 
 # Directory holding PostgreSQL's client tools, pg_dump and pg_restore, for
 # `dbc dump` and "Dump database…" in the TUI and dbc web. Leave it out and dbc

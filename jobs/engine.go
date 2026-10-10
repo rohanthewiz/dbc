@@ -542,6 +542,12 @@ func (e *Engine) runOne(ctx context.Context, lr *liveRun, idx int, spec *pipelin
 
 	opt.Log = func(text string) { line("info", text) }
 	opt.Progress = func(f pipeline.FragmentStats) { e.progress(lr, idx, pid, f) }
+	// one files_dir for every run, so a relative path means the same file
+	// for a run started from a shell, dbc web, the scheduler or dbc.app —
+	// not each process's working directory
+	if opt.FilesDir == "" {
+		opt.FilesDir = e.cfg.FilesDir
+	}
 	st, err := pipeline.Run(ctx, s, spec, opt)
 	s.Release()
 	if err != nil {
@@ -583,7 +589,7 @@ func (e *Engine) runOne(ctx context.Context, lr *liveRun, idx int, spec *pipelin
 // a script.run node would find its jobs (s.RunJob inside a node).
 func (e *Engine) paths() sdb.Paths {
 	return sdb.Paths{ScriptsDir: e.cfg.ScriptsDir, PipelinesDir: e.cfg.PipelinesDir,
-		JobsDir: e.cfg.JobsDir, RunsDir: e.opt.RunsDir}
+		JobsDir: e.cfg.JobsDir, RunsDir: e.opt.RunsDir, FilesDir: e.cfg.FilesDir}
 }
 
 // line appends a line to the run's log and sends it.

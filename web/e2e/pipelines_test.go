@@ -194,6 +194,7 @@ func pipelineTabs(t *testing.T, e *env, p *rod.Page) {
 
 	pipelineCodeField(t, p, disk)
 	pipelineDottedIDs(t, p)
+	pipelineInvalidNames(t, p)
 
 	// ── ⇪ Go: the same pipeline as a script, in a script tab ──────────────
 	eval(t, p, `() => document.querySelector('.pbar button[data-act="export"]').click()`)
@@ -360,6 +361,85 @@ const dottedPipeline = `{
         {"id": "my", "plugin": "preview", "cfg": {}}
       ],
       "edges": [["my.src", "my"]]
+    }
+  ]
+}
+`
+
+// pipelineInvalidNames puts a check's findings on a node and a fragment
+// whose names are invalid (N-196). Check names them by their place
+// ("w/nodes[0]", "fragments[1]"), which no card or lane is keyed by; the
+// canvas maps the index to the spec's i-th, and pipeline.Locate does the
+// same for the JSON view's marks.
+//
+//	the JSON view       ─► node "a b" (a ${nope} in its query) and a
+//	                       fragment named ""
+//	the canvas          ─► ⚠2 on a b's card, ⚠ 1 on each lane
+//	select a b          ─► its two findings under the inspector, "query: …"
+//	                       marked on the ${nope} in the query's editor
+//	the JSON's marks    ─► on a b's line (its id, its query) and the
+//	                       fragment's "name": "" — not the fragment w's
+//	                       name, and not missing
+//	the text put back   ─► the tab as it was, unsaved changes none
+func pipelineInvalidNames(t *testing.T, p *rod.Page) {
+	eval(t, p, `() => document.querySelector('.pbar button[data-act="json"]').click()`)
+	waitFor(t, p, "the JSON view", `() => document.querySelector(".app").classList.contains("pipe-json")`)
+	eval(t, p, `(text) => { const ed = monaco.editor.getEditors()[0]; window.__kept = ed.getValue(); ed.setValue(text); }`, invalidNamesPipeline)
+	eval(t, p, `() => document.querySelector('.pbar button[data-act="json"]').click()`)
+	waitFor(t, p, "the ⚠ on a b's card and on both lanes", `() => {
+	  const card = document.querySelector('.plane[data-frag="w"] .pcard[data-id="a b"]');
+	  const lane = (name) => (document.querySelector('.plane[data-frag="' + name + '"] .ldiag') || {}).textContent || "";
+	  return !document.querySelector(".app").classList.contains("pipe-json") && !!card &&
+	    card.classList.contains("bad") && /⚠2/.test((card.querySelector(".cd") || {}).textContent || "") &&
+	    lane("w") === "⚠ 1" && lane("") === "⚠ 1";
+	}`)
+
+	clickAt(t, p, `.plane[data-frag="w"] .pcard[data-id="a b"] .cid`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "a b's findings listed, the query's marked on its ${…}", `() => {
+	  const ed = codeEd("query");
+	  if (!ed) return false;
+	  const ms = monaco.editor.getModelMarkers({ resource: ed.getModel().uri, owner: "dbc" });
+	  const ds = [...document.querySelectorAll(".pinsp .idiags .idiag")].map((d) => d.textContent);
+	  return ds.length === 2 && ds.some((d) => /^✗ not a node id/.test(d)) &&
+	    ds.some((d) => /^✗ query: \$\{nope\} is not a parameter/.test(d)) &&
+	    ms.length === 1 && ms[0].startLineNumber === 1 && ms[0].startColumn === 8;
+	}`)
+	// the JSON view's marks, by the where each message starts with: the
+	// line the text has the node's id (7) and the fragment's name (13) on
+	got := evalStr(t, p, `() => monaco.editor.getModelMarkers({ resource: monaco.editor.getEditors()[0].getModel().uri, owner: "dbc" })
+	  .map((m) => m.message.split(":")[0] + "@" + m.startLineNumber).sort().join(" ")`)
+	if want := "fragments[1]@13 w/nodes[0].query@7 w/nodes[0]@7"; got != want {
+		t.Errorf("the JSON view's marks = %q, want %q", got, want)
+	}
+	shot(t, p, "pipeline-invalid-names")
+
+	// the tab as it was: the same text is no unsaved change
+	eval(t, p, `() => document.querySelector('.pbar button[data-act="json"]').click()`)
+	waitFor(t, p, "the JSON view", `() => document.querySelector(".app").classList.contains("pipe-json")`)
+	eval(t, p, `() => monaco.editor.getEditors()[0].setValue(window.__kept)`)
+	eval(t, p, `() => document.querySelector('.pbar button[data-act="json"]').click()`)
+	waitFor(t, p, "the waiting pipeline back, nothing unsaved", `() =>
+	  !document.querySelector(".app").classList.contains("pipe-json") &&
+	  !!document.querySelector('.plane[data-frag="w"] .pcard[data-id="src"]') &&
+	  !document.querySelector("#qtabs .qtab.pipeline.on .qdirty")`)
+}
+
+// invalidNamesPipeline has a node id with a space and a fragment with an
+// empty name: both drawn, both named by index in the check.
+const invalidNamesPipeline = `{
+  "name": "e2e_pipe",
+  "fragments": [
+    {
+      "name": "w",
+      "nodes": [
+        {"id": "a b", "plugin": "sql.read", "cfg": {"conn": "lite", "query": "select ${nope}"}},
+        {"id": "show", "plugin": "preview", "cfg": {}}
+      ],
+      "edges": [["a b", "show"]]
+    },
+    {
+      "name": "",
+      "nodes": [{"id": "up", "plugin": "sql.exec", "cfg": {"conn": "lite", "sql": "select 1"}}]
     }
   ]
 }

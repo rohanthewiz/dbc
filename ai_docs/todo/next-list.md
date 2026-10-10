@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-198
+**Next ID:** N-199
 
 ## Open
 
@@ -202,24 +202,18 @@ ten session docs in `ai_docs/claude_sessions/`
   check's end-of-line note is out of view on all but short lines (the
   hover and the list under the inspector have it). A splitter on the
   inspector's edge, as the sidebar has, or a "⤢ wider" on a code field.
-- **N-196** · raised `2026-1010-1329-n195-dotted-node-diags` · value low
-  An invalid name's findings reach no card or lane. The check names an
-  invalid node id by index (`frag/nodes[3]`) and an invalid fragment name
-  likewise (`fragments[2]`, its nodes' `fragments[2]/…`), but `parseSpec`
-  keeps both on the canvas under the names they have, so `diagsAt` keys
-  them where nothing looks: no ⚠ on the card or lane, nothing in the
-  inspector (a node's gets a JSON-view mark on its fragment's name, a
-  fragment's none: `pipeline.Locate` finds neither). Map `nodes[i]` to
-  the fragment's i-th node and `fragments[i]` to the spec's i-th
-  fragment (the tab's spec keeps the file's order).
-- **N-197** · raised `2026-1010-1329-n195-dotted-node-diags` · value low
-  N-195's bug, server side: `pipeline.Locate` cuts a node's where at its
-  first dot (`strings.Cut(rest, ".")`), so "w/my.src.query" looks for
-  `"id": "my"`. Alone, my.src's finding is placed on the fragment's
-  `"name"` line; beside a node `my`, on my's `"id"` line. That is the
-  JSON view's mark and the TUI's `file:line:col` after $EDITOR. Try the
-  longest prefix first: each cut from the last dot back, the first whose
-  `"id"` is found after the fragment's name.
+- **N-198** · raised `2026-1010-1650-n197-n196-locate-invalid-names` · value low
+  N-195/N-196/N-197's bugs, in jobs. A step id may hold dots, but
+  `jobs.js` `diagsAt` keys a finding by its where up to the first dot
+  ("nightly.copy.after" → step "nightly", which is none, so the finding
+  goes to the job's list), the inspector labels it by what follows the
+  first dot, `lineOf` (the job JSON view's marks) looks for `"id":
+  "nightly"`, and `jobs.Locate` (the TUI's `file:line:col`) splits on
+  every dot. An invalid step id's `pipelines[2]` lands in the job's list
+  and on the `"pipelines"` key. Match a where against the spec's step ids
+  (the longest that is the whole where or is followed by a dot; a key
+  after a step holds no dot) and `pipelines[i]` against the i-th step, as
+  `pipelines.js` and `pipeline.Locate` now do.
 
 ## Validate
 
@@ -598,6 +592,26 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-196** · raised `2026-1010-1329-n195-dotted-node-diags` · value low
+  An invalid name's findings reach no card or lane. The check names an
+  invalid node id by index (`frag/nodes[3]`) and an invalid fragment name
+  likewise (`fragments[2]`, its nodes' `fragments[2]/…`), but `parseSpec`
+  keeps both on the canvas under the names they have, so `diagsAt` keys
+  them where nothing looks: no ⚠ on the card or lane, nothing in the
+  inspector (a node's gets a JSON-view mark on its fragment's name, a
+  fragment's none: `pipeline.Locate` finds neither). Map `nodes[i]` to
+  the fragment's i-th node and `fragments[i]` to the spec's i-th
+  fragment (the tab's spec keeps the file's order).
+  closed 2026-10-10, `2026-1010-1650-n197-n196-locate-invalid-names`: `diagsAt` maps an index where to the spec's own list — `fragments[i]` to the i-th fragment, `nodes[i]` (and `nodes[i].field`) to the fragment's i-th node — and keys the finding as the lane and card key themselves (`f.name`, `f.name + "/" + n.id`, whether that is "", "a b" or no name at all), so the ⚠ reaches the card and lane, the inspector lists them, and the label is the field. `fieldMarks` takes a field's own finding by its `label` rather than the whole `frag/id.field`, which an indexed node's where never equals, so its code fields are marked too. The JSON view's marks come from N-197's `Locate`. Found on the way: N-195's loop read `n.id.length` for every node of the fragment, so a node with no `"id"` threw in `diagsAt` and broke the canvas whenever that fragment had a node finding (an id-less node always has one); ids are now read only when they are strings. Checked with a Node harness over the extracted `diagsAt`/`fieldMarks` (20 wheres; the old code throws, and without the id-less node keys `w/nodes[2]`, `fragments[1]`). e2e: "pipeline tabs" gains `pipelineInvalidNames` (node `a b` with a `${nope}`, a fragment named ""): ⚠2 on the card, ⚠ 1 on both lanes, both findings listed, the query's mark on its `${…}`, and the JSON view's marks on lines 7, 7 and 13; shown to fail on the old `pipelines.js` (no ⚠) and, separately, on the old `Locate` (marks on line 5, the fragment's missing).
+- **N-197** · raised `2026-1010-1329-n195-dotted-node-diags` · value low
+  N-195's bug, server side: `pipeline.Locate` cuts a node's where at its
+  first dot (`strings.Cut(rest, ".")`), so "w/my.src.query" looks for
+  `"id": "my"`. Alone, my.src's finding is placed on the fragment's
+  `"name"` line; beside a node `my`, on my's `"id"` line. That is the
+  JSON view's mark and the TUI's `file:line:col` after $EDITOR. Try the
+  longest prefix first: each cut from the last dot back, the first whose
+  `"id"` is found after the fragment's name.
+  closed 2026-10-10, `2026-1010-1650-n197-n196-locate-invalid-names`: `Locate` parses the text and matches the where's names against those it declares (`fragmentAt`, `nodeAt`): the fragment by `fragments[i]` or its name, the node by `nodes[i]` or the longest of the fragment's ids that is the whole rest or is followed by a dot. Matching against the spec rather than trying cuts in the text, as the item proposed, keeps a later fragment's node with the longer id from being taken. Names are compared decoded (`""`, escapes), and a duplicate is found as itself by skipping its earlier namesakes. A where naming nothing the text has, or text that does not parse, falls back to the first-dot cut. Found on the way: a fragment's `"name"` was searched from the top, so in a pipeline named like its fragment ("orders"/"orders") the fragment's findings were marked on the pipeline's name; it is now looked for inside `"fragments": [`. `TestLocateNames` (13 wheres, 2 with no place) fails on the old `Locate` in 10.
 - **N-195** · raised `2026-1009-1632-n175-pipeline-code-editors` · value low
   A node id may hold dots (`pipeline.ValidName`), but `diagsAt` in
   `pipelines.js` keys a node's diags by the `where` up to its first dot

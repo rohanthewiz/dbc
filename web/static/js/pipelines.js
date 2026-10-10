@@ -447,32 +447,49 @@
     //	"params.days"         —                   the pipeline    days
     //
     // Longest wins because a field name holds no dot: "my.src.query" is
-    // never my's field "src.query". A where naming no node the spec has
-    // (an invalid id's "frag/nodes[3]", a check older than a rename) is cut
-    // at the first dot as before; no card has that key, so neither a card
-    // nor the inspector shows it. A fragment of the spec's is
-    // matched before the pipeline's own places, so one called "params.v2"
-    // keeps its findings.
+    // never my's field "src.query". A fragment of the spec's is matched
+    // before the pipeline's own places, so one called "params.v2" keeps
+    // its findings.
+    //
+    // An invalid name is named by its place instead (Check): the
+    // fragment's "fragments[2]", the node's "frag/nodes[3]", and what is
+    // under them ("fragments[2]/src.query", "frag/nodes[3].query",
+    // "fragments[2]:edge a→b"). parseSpec keeps both on the canvas under
+    // the names they have ("", "a b", none at all), and the spec keeps the
+    // file's order, so the i-th of the spec's list is the one meant; the
+    // finding is keyed by its name as the lane and card key themselves
+    // (f.name, f.name + "/" + n.id, whatever those are). A where shaped
+    // like an index is always one: no valid name holds "[".
+    //
+    // A where naming nothing the spec has (a check older than a rename or
+    // a delete) is cut at the first dot; no card or lane has that key, so
+    // only the JSON view's mark (pipeline.Locate) and the log show it.
     function diagsAt(e) {
       const out = { node: new Map(), frag: new Map(), top: [] };
       const add = (m, k, d, label) => { if (!m.has(k)) m.set(k, []); m.get(k).push({ ...d, label }); };
+      const nth = (s, list) => { const m = /^(\w+)\[(\d+)\]$/.exec(s); return m && m[1] === list ? Number(m[2]) : -1; };
       // no spec while the JSON does not parse; renderInspector's
       // under-the-caret path redraws the list before it looks
-      const frag = (name) => (e.spec ? fragOf(e, name) : null);
+      const frag = (part) => (e.spec ? e.spec.fragments[nth(part, "fragments")] || fragOf(e, part) : null);
       for (const d of e.diags || []) {
         const w = d.where || "";
         const slash = w.indexOf("/"), colon = w.indexOf(":");
         if (slash > 0) {
           const fname = w.slice(0, slash), rest = w.slice(slash + 1), f = frag(fname);
-          let id = "";
-          for (const n of f ? f.nodes : []) {
-            if (n.id.length > id.length && (rest === n.id || rest.startsWith(n.id + "."))) id = n.id;
+          // len is how much of rest names the node; the label is the rest
+          const head = rest.split(".")[0];
+          let n = f ? f.nodes[nth(head, "nodes")] : null, len = head.length;
+          // an id is a string when the file has one; a node without one
+          // ("id" left out) is only ever named by its index
+          if (!n) for (const x of f ? f.nodes : []) {
+            if (typeof x.id === "string" && x.id && (!n || x.id.length > len) &&
+                (rest === x.id || rest.startsWith(x.id + "."))) { n = x; len = x.id.length; }
           }
-          if (!id) id = rest.split(".")[0];
-          add(out.node, fname + "/" + id, d, rest.slice(id.length + 1));
+          add(out.node, (f ? f.name : fname) + "/" + (n ? n.id : head), d, rest.slice(len + 1));
         } else if (frag(colon < 0 ? w : w.slice(0, colon)) ||
             (w && w !== "name" && w !== "fragments" && !w.startsWith("params."))) {
-          add(out.frag, colon < 0 ? w : w.slice(0, colon), d, colon < 0 ? "" : w.slice(colon + 1));
+          const part = colon < 0 ? w : w.slice(0, colon), f = frag(part);
+          add(out.frag, f ? f.name : part, d, colon < 0 ? "" : w.slice(colon + 1));
         } else {
           const dot = w.indexOf(".");
           out.top.push({ ...d, label: dot < 0 ? "" : w.slice(dot + 1) });
@@ -963,8 +980,7 @@
       else if (s && s.kind !== "node") ds = da.frag.get(s.frag) || [];
       box.replaceChildren(...ds.map((d) => el("div", "idiag " + d.severity, (d.severity === "error" ? "✗ " : "⚠ ") +
         (d.label ? d.label + ": " : "") + d.msg)));
-      const at = s && s.kind === "node" ? s.frag + "/" + s.id + "." : "";
-      for (const c of codeEds) c.h.setMarkers(fieldMarks(ds, at + c.name, c.name, c.h.editor.getValue()));
+      for (const c of codeEds) c.h.setMarkers(fieldMarks(ds, c.name, c.h.editor.getValue()));
     }
 
     // ── code fields: small Monaco editors (editor.js mini) ─────────────
@@ -996,9 +1012,11 @@
     const POS = /^([A-Za-z_]\w*):(\d+):(\d+): (?:warning: )?([\s\S]*)$/;
     const AT_FIELD = /^([A-Za-z_]\w*): (?:warning: )?([\s\S]*)$/;
     //
-    // where is the field's own place ("load/src.query"), matched whole:
-    // a node id may hold dots, so the field is not "what follows a dot".
-    function fieldMarks(ds, where, name, text) {
+    // A diag is the field's own when its label is the field: diagsAt has
+    // already matched the node (a dotted id whole, an invalid one by its
+    // "nodes[3]"), so the label is what follows the node, never a cut of
+    // where at a dot.
+    function fieldMarks(ds, name, text) {
       const out = [];
       const placed = (msg) => {
         const ref = /\$\{[^}]+\}/.exec(msg);
@@ -1008,7 +1026,7 @@
         return { line: before.split("\n").length, col: i - before.lastIndexOf("\n") };
       };
       for (const d of ds || []) {
-        const own = d.where === where;
+        const own = d.label === name;
         let m;
         if (!own && (m = POS.exec(d.msg)) && m[1] === name) {
           out.push({ line: Number(m[2]), col: Number(m[3]), severity: d.severity, msg: m[4] });

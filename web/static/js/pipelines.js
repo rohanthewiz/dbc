@@ -429,19 +429,54 @@
 
     // diagsAt splits a check's findings by what they are about: a node
     // ("frag/node", "frag/node.field"), a fragment ("frag", "frag:edge a→b",
-    // "fragments[2]"), or the pipeline (the rest).
+    // "fragments[2]"), or the pipeline (the rest). Each comes back as a
+    // copy with label: what in its node, fragment or pipeline it is about
+    // (the field, the edge, the parameter; "" for the thing itself), which
+    // the inspector's list puts before the message.
+    //
+    // A name may hold dots (pipeline.ValidName) but never "/" or ":", so
+    // the fragment is what precedes the first of those, and the node is
+    // matched against the fragment's own ids, the longest that is the
+    // whole rest or is followed by a dot — not cut at the first dot:
+    //
+    //	where                 the spec has        about           label
+    //	"load/my.src.query"   nodes my, my.src    node my.src     query
+    //	"load/my.src"         nodes my, my.src    node my.src     —
+    //	"load/my.query"       nodes my, my.src    node my         query
+    //	"my.load:edge a→b"    fragment my.load    fragment        edge a→b
+    //	"params.days"         —                   the pipeline    days
+    //
+    // Longest wins because a field name holds no dot: "my.src.query" is
+    // never my's field "src.query". A where naming no node the spec has
+    // (an invalid id's "frag/nodes[3]", a check older than a rename) is cut
+    // at the first dot as before; no card has that key, so neither a card
+    // nor the inspector shows it. A fragment of the spec's is
+    // matched before the pipeline's own places, so one called "params.v2"
+    // keeps its findings.
     function diagsAt(e) {
       const out = { node: new Map(), frag: new Map(), top: [] };
-      const add = (m, k, d) => { if (!m.has(k)) m.set(k, []); m.get(k).push(d); };
+      const add = (m, k, d, label) => { if (!m.has(k)) m.set(k, []); m.get(k).push({ ...d, label }); };
+      // no spec while the JSON does not parse; renderInspector's
+      // under-the-caret path redraws the list before it looks
+      const frag = (name) => (e.spec ? fragOf(e, name) : null);
       for (const d of e.diags || []) {
         const w = d.where || "";
-        const slash = w.indexOf("/");
+        const slash = w.indexOf("/"), colon = w.indexOf(":");
         if (slash > 0) {
-          const frag = w.slice(0, slash), node = w.slice(slash + 1).split(".")[0];
-          add(out.node, frag + "/" + node, d);
-        } else if (w && w !== "name" && w !== "fragments" && !w.startsWith("params.")) {
-          add(out.frag, w.split(":")[0], d);
-        } else out.top.push(d);
+          const fname = w.slice(0, slash), rest = w.slice(slash + 1), f = frag(fname);
+          let id = "";
+          for (const n of f ? f.nodes : []) {
+            if (n.id.length > id.length && (rest === n.id || rest.startsWith(n.id + "."))) id = n.id;
+          }
+          if (!id) id = rest.split(".")[0];
+          add(out.node, fname + "/" + id, d, rest.slice(id.length + 1));
+        } else if (frag(colon < 0 ? w : w.slice(0, colon)) ||
+            (w && w !== "name" && w !== "fragments" && !w.startsWith("params."))) {
+          add(out.frag, colon < 0 ? w : w.slice(0, colon), d, colon < 0 ? "" : w.slice(colon + 1));
+        } else {
+          const dot = w.indexOf(".");
+          out.top.push({ ...d, label: dot < 0 ? "" : w.slice(dot + 1) });
+        }
       }
       return out;
     }
@@ -927,7 +962,7 @@
       if (s && s.kind === "node") ds = da.node.get(s.frag + "/" + s.id) || [];
       else if (s && s.kind !== "node") ds = da.frag.get(s.frag) || [];
       box.replaceChildren(...ds.map((d) => el("div", "idiag " + d.severity, (d.severity === "error" ? "✗ " : "⚠ ") +
-        (d.where && d.where.includes(".") ? d.where.split(".").slice(1).join(".") + ": " : "") + d.msg)));
+        (d.label ? d.label + ": " : "") + d.msg)));
       const at = s && s.kind === "node" ? s.frag + "/" + s.id + "." : "";
       for (const c of codeEds) c.h.setMarkers(fieldMarks(ds, at + c.name, c.name, c.h.editor.getValue()));
     }

@@ -193,6 +193,7 @@ func pipelineTabs(t *testing.T, e *env, p *rod.Page) {
 	}
 
 	pipelineCodeField(t, p, disk)
+	pipelineDottedIDs(t, p)
 
 	// ── ⇪ Go: the same pipeline as a script, in a script tab ──────────────
 	eval(t, p, `() => document.querySelector('.pbar button[data-act="export"]').click()`)
@@ -302,6 +303,67 @@ func pipelineCodeField(t *testing.T, p *rod.Page, disk func(string) string) {
 	  /preview/.test(document.querySelector(".pinsp .ihead").textContent) && !codeEd("code") &&
 	  monaco.editor.getEditors().length === `+strconv.Itoa(int(base)))
 }
+
+// pipelineDottedIDs puts a check's findings on a node whose id holds a dot
+// (N-195): diagsAt splits "w/my.src.query" against the fragment's ids, so
+// it is my.src's query, not node my's "src.query" — the cut at the first
+// dot it replaced gave my the ⚠ and my.src nothing.
+//
+//	the JSON view       ─► nodes my.src (a ${nope} in its query) and my
+//	the canvas          ─► the ⚠ on my.src's card, none on my's
+//	select my.src       ─► "query: ${nope} …" under the inspector, and the
+//	                       mark on the ${nope} in the query's editor
+//	the text put back   ─► the tab as it was, unsaved changes none
+func pipelineDottedIDs(t *testing.T, p *rod.Page) {
+	eval(t, p, `() => document.querySelector('.pbar button[data-act="json"]').click()`)
+	waitFor(t, p, "the JSON view", `() => document.querySelector(".app").classList.contains("pipe-json")`)
+	eval(t, p, `(text) => { const ed = monaco.editor.getEditors()[0]; window.__kept = ed.getValue(); ed.setValue(text); }`, dottedPipeline)
+	eval(t, p, `() => document.querySelector('.pbar button[data-act="json"]').click()`)
+	waitFor(t, p, "the ⚠ on my.src's card, not on my's", `() => {
+	  const at = (id) => document.querySelector('.plane[data-frag="w"] .pcard[data-id="' + id + '"]');
+	  const src = at("my.src"), my = at("my");
+	  return !document.querySelector(".app").classList.contains("pipe-json") && !!src && !!my &&
+	    src.classList.contains("bad") && /⚠1/.test((src.querySelector(".cd") || {}).textContent || "") &&
+	    !my.querySelector(".cd") && !my.classList.contains("bad");
+	}`)
+
+	clickAt(t, p, `.plane[data-frag="w"] .pcard[data-id="my.src"] .cid`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "the finding listed by its field, marked on its ${…}", `() => {
+	  const ed = codeEd("query");
+	  if (!ed) return false;
+	  const ms = monaco.editor.getModelMarkers({ resource: ed.getModel().uri, owner: "dbc" });
+	  const ds = [...document.querySelectorAll(".pinsp .idiags .idiag")].map((d) => d.textContent);
+	  return ds.length === 1 && /^✗ query: \$\{nope\} is not a parameter/.test(ds[0]) &&
+	    ms.length === 1 && ms[0].startLineNumber === 1 && ms[0].startColumn === 8;
+	}`)
+
+	// the tab as it was: the same text is no unsaved change
+	eval(t, p, `() => document.querySelector('.pbar button[data-act="json"]').click()`)
+	waitFor(t, p, "the JSON view", `() => document.querySelector(".app").classList.contains("pipe-json")`)
+	eval(t, p, `() => monaco.editor.getEditors()[0].setValue(window.__kept)`)
+	eval(t, p, `() => document.querySelector('.pbar button[data-act="json"]').click()`)
+	waitFor(t, p, "the waiting pipeline back, nothing unsaved", `() =>
+	  !document.querySelector(".app").classList.contains("pipe-json") &&
+	  !!document.querySelector('.plane[data-frag="w"] .pcard[data-id="src"]') &&
+	  !document.querySelector("#qtabs .qtab.pipeline.on .qdirty")`)
+}
+
+// dottedPipeline has a node id with a dot beside the id before it: what
+// the check says about my.src's query must not land on my.
+const dottedPipeline = `{
+  "name": "e2e_pipe",
+  "fragments": [
+    {
+      "name": "w",
+      "nodes": [
+        {"id": "my.src", "plugin": "sql.read", "cfg": {"conn": "lite", "query": "select ${nope}"}},
+        {"id": "my", "plugin": "preview", "cfg": {}}
+      ],
+      "edges": [["my.src", "my"]]
+    }
+  ]
+}
+`
 
 // defineCodeEd puts codeEd(name) on the page: the Monaco editor of the
 // inspector's code field name, or null. Again after a reload.

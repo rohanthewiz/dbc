@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-196
+**Next ID:** N-198
 
 ## Open
 
@@ -202,15 +202,24 @@ ten session docs in `ai_docs/claude_sessions/`
   check's end-of-line note is out of view on all but short lines (the
   hover and the list under the inspector have it). A splitter on the
   inspector's edge, as the sidebar has, or a "⤢ wider" on a code field.
-- **N-195** · raised `2026-1009-1632-n175-pipeline-code-editors` · value low
-  A node id may hold dots (`pipeline.ValidName`), but `diagsAt` in
-  `pipelines.js` keys a node's diags by the `where` up to its first dot
-  ("load/my.src.query" → node "my"), and `drawDiags` labels a field diag
-  by what follows the first dot. So a node called `my.src` gets no ⚠ on
-  its card, no list in its inspector and no marks in its code fields.
-  Split `where` against the fragment's node ids instead (the longest id
-  that prefixes it). Seen while writing `fieldMarks`, which matches the
-  whole `frag/id.field` for this reason.
+- **N-196** · raised `2026-1010-1329-n195-dotted-node-diags` · value low
+  An invalid name's findings reach no card or lane. The check names an
+  invalid node id by index (`frag/nodes[3]`) and an invalid fragment name
+  likewise (`fragments[2]`, its nodes' `fragments[2]/…`), but `parseSpec`
+  keeps both on the canvas under the names they have, so `diagsAt` keys
+  them where nothing looks: no ⚠ on the card or lane, nothing in the
+  inspector (a node's gets a JSON-view mark on its fragment's name, a
+  fragment's none: `pipeline.Locate` finds neither). Map `nodes[i]` to
+  the fragment's i-th node and `fragments[i]` to the spec's i-th
+  fragment (the tab's spec keeps the file's order).
+- **N-197** · raised `2026-1010-1329-n195-dotted-node-diags` · value low
+  N-195's bug, server side: `pipeline.Locate` cuts a node's where at its
+  first dot (`strings.Cut(rest, ".")`), so "w/my.src.query" looks for
+  `"id": "my"`. Alone, my.src's finding is placed on the fragment's
+  `"name"` line; beside a node `my`, on my's `"id"` line. That is the
+  JSON view's mark and the TUI's `file:line:col` after $EDITOR. Try the
+  longest prefix first: each cut from the last dot back, the first whose
+  `"id"` is found after the fragment's name.
 
 ## Validate
 
@@ -589,6 +598,16 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-195** · raised `2026-1009-1632-n175-pipeline-code-editors` · value low
+  A node id may hold dots (`pipeline.ValidName`), but `diagsAt` in
+  `pipelines.js` keys a node's diags by the `where` up to its first dot
+  ("load/my.src.query" → node "my"), and `drawDiags` labels a field diag
+  by what follows the first dot. So a node called `my.src` gets no ⚠ on
+  its card, no list in its inspector and no marks in its code fields.
+  Split `where` against the fragment's node ids instead (the longest id
+  that prefixes it). Seen while writing `fieldMarks`, which matches the
+  whole `frag/id.field` for this reason.
+  closed 2026-10-10, `2026-1010-1329-n195-dotted-node-diags` (from the cats-todo backlog): `diagsAt` matches a `frag/…` where against the fragment's own node ids, the longest that is the whole rest or is followed by a dot (a field name holds none, so `my.src.query` is my.src's query even beside a node `my`); a where naming no node the spec has keeps the old first-dot cut. Each diag comes back with a `label` — the field, the edge (`frag:edge a→b` → "edge a→b", which the list had shown with no label at all), the parameter — and `drawDiags` prints that instead of what follows the first dot, which also mislabelled a dotted fragment's findings ("my.load" → "load: …"). A fragment of the spec's is matched before the pipeline's own places, so one called `params.v2` keeps its findings on its lane. e2e: "pipeline tabs" gains `pipelineDottedIDs` (nodes `my.src` and `my`, a `${nope}` in my.src's query: the ⚠ on my.src's card and not my's, "query: ${nope} …" in the inspector, the mark on the `${…}` in the query's editor; the tab put back clean) — shown to fail on the old `pipelines.js`.
 - **N-175** · raised `2026-1009-1122-phase-2-pipeline-tab` · value medium
   The pipeline inspector's SQL and Go fields are plain code boxes
   (`pipelines.js` field(): a textarea, Tab indents). A `go.transform`'s

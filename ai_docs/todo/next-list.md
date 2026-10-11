@@ -42,10 +42,6 @@ ten session docs in `ai_docs/claude_sessions/`
   A dump for MySQL connections with mysqldump, behind the same menu row and
   dialog (the row is dimmed on MySQL today). No one has asked; worth it only
   if a MySQL user does.
-- **N-179** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
-  Fragments are reordered from a lane's ⋯ menu (Move up / Move down). The
-  plan sketched dragging a lane by its header; add it if the menu turns
-  out slow for pipelines with many fragments.
 - **N-187** · raised `2026-1009-1449-phase-5-tui-pipelines-jobs` · value low
   Every run listing reads every record file whole
   (`userdata.ListRuns` → `readHead` unmarshals each), whatever the
@@ -493,6 +489,11 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-179** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
+  Fragments are reordered from a lane's ⋯ menu (Move up / Move down). The
+  plan sketched dragging a lane by its header; add it if the menu turns
+  out slow for pipelines with many fragments.
+  closed 2026-10-11, `2026-1011-0040-n179-n203-n208`: a lane is dragged by its header (`pipelines.js` drag type `lane`, `laneDragMove`). The press still selects the lane; past 3 px the lane lifts and follows the pointer, and a bar marks the gap it would land in, counted by midpoints among the other lanes. The drop is `moveFragment` by the difference, so the JSON, the draft and the check follow as for the ⋯ menu; a drag that ends where it began, or a pointercancel, redraws the lane in place. Only with two lanes or more; the header says "drag to move" in its tooltip, `cursor: grab`. No auto-scroll when the pointer nears the canvas edge: zoom out or ⊡ Fit first for a long pipeline. README's canvas paragraph. e2e `pipelineLaneDrag` (in "pipeline tabs"): three lanes a b c; b dragged below c shows the bar under c while held and lands a c b, on the canvas and in the JSON view; b dragged to the top gives b a c; a click on a header moves nothing.
 - **N-145** · raised `2026-1007-1245-result-tabs-per-connection` · value low
   Drive a real share with the assistant end to end. Neither e2e harness has
   a connection with `ai_rows = true`, so `S` / "✦ Share with the assistant"

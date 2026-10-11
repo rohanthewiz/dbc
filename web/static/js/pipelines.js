@@ -870,7 +870,7 @@
         const fd = da.frag.get(f.name) || [];
         const nodesWithDiags = f.nodes.filter((n) => da.node.has(f.name + "/" + n.id)).length;
         const selLane = e.sel && e.sel.kind === "frag" && e.sel.frag === f.name;
-        const head = el("div", "lhead",
+        const head = el("div", { class: "lhead", title: e.spec.fragments.length > 1 ? "drag to move this fragment up or down" : "" },
           el("span", { class: "lstate s-" + (fr ? fr.status : "none"), title: fr ? fr.status + (fr.error ? ": " + fr.error : "") : "not run here yet" },
             fr ? STATE[fr.status] || "○" : "○"),
           el("b", "lname", f.name),
@@ -1362,6 +1362,42 @@
       return { lane, frag: lane.dataset.frag, x: (cx - r.left) / k, y: (cy - r.top) / k, inBody: cy >= r.top };
     }
 
+    // laneDragMove follows a lane dragged by its header dy stage pixels
+    // from where it was pressed: the lane rides with the pointer (lifted
+    // above the others) and a bar marks the gap it would drop into.
+    //
+    // The landing index is counted among the other lanes, by midpoints:
+    // the dragged lane goes after every lane whose middle is above its own
+    // middle. With lanes A B C and B dragged below C's middle, two lanes
+    // (A, C) are above it, so it lands at index 2: A C B.
+    //
+    //   ┌ A ┐  mid ─┐
+    //   └───┘       │ above B's middle → counted
+    //   ┌ C ┐  mid ─┘
+    //   └───┘
+    //   ═════  ← the mark: the gap below the last counted lane
+    //   ┌ B ┐  (lifted, following the pointer)
+    function laneDragMove(d, dy) {
+      if (!d.moved && Math.abs(dy) <= 3) return;
+      if (!d.moved) {
+        d.moved = true;
+        d.el.classList.add("lifted");
+        d.mark = el("div", { class: "plmark", style: "width:" + dom.geo.w + "px" });
+        dom.layer.append(d.mark);
+      }
+      const top = d.top + dy;
+      d.el.style.top = top + "px";
+      const mid = top + (HEAD_H + d.h) / 2;
+      const others = dom.geo.lanes.filter((l) => l.f !== d.f);
+      const to = others.filter((l) => l.top + (HEAD_H + l.h) / 2 < mid).length;
+      d.to = to;
+      // the bar sits in the gap above the lane it would push down, or
+      // below the last lane when it would go last
+      const y = to < others.length ? others[to].top - LANE_GAP / 2
+        : others[others.length - 1].top + HEAD_H + others[others.length - 1].h + LANE_GAP / 2;
+      d.mark.style.top = y - 2 + "px";
+    }
+
     function bindPointer() {
       const cv = dom.canvas;
       cv.addEventListener("pointerdown", (ev) => {
@@ -1402,9 +1438,22 @@
           return;
         }
         if (ev.target.closest(".lhead") && laneEl) {
+          // a press on a lane's header selects the lane, and a drag from
+          // there moves the fragment up or down the pipeline (N-179), the
+          // ⋯ menu's Move up / Move down in one gesture. The redraw for the
+          // selection replaces the lane's element, so the drag holds the
+          // new one.
+          const f = fragOf(e, laneEl.dataset.frag);
           e.sel = { kind: "frag", frag: laneEl.dataset.frag };
           renderCanvas();
           renderInspector();
+          const L = f && dom.geo.lanes.find((l) => l.f === f);
+          const el2 = f && [...dom.layer.querySelectorAll(".plane")].find((x) => x.dataset.frag === f.name);
+          if (L && el2 && e.spec.fragments.length > 1) {
+            drag = { type: "lane", f, el: el2, top: L.top, h: L.h, cy: ev.clientY, moved: false,
+              from: e.spec.fragments.indexOf(f), to: e.spec.fragments.indexOf(f), mark: null };
+            cv.setPointerCapture(ev.pointerId);
+          }
           cv.focus({ preventScroll: true });
           return;
         }
@@ -1431,6 +1480,8 @@
           drag.at = [x, y];
           const L = dom.geo.lanes.find((l) => l.f === drag.f);
           if (L) { L.pos[drag.id] = [x, y]; drawEdges(shown, drag.f, drag.svg, L.pos); }
+        } else if (drag.type === "lane") {
+          laneDragMove(drag, (ev.clientY - drag.cy) / k);
         } else if (drag.type === "wire") {
           const r = drag.body.getBoundingClientRect();
           const x = (ev.clientX - r.left) / k, y = (ev.clientY - r.top) / k;
@@ -1467,6 +1518,13 @@
           d.f.ui[d.id] = [snap(d.at[0]), snap(d.at[1])];
           e.sel = { kind: "node", frag: d.f.name, id: d.id };
           changed(e);
+        } else if (d.type === "lane") {
+          if (d.mark) d.mark.remove();
+          // the move happens only when the lane would land elsewhere; a
+          // drag that ends where it began, or a plain click, puts the lane
+          // back where it is drawn
+          if (d.moved && d.to !== d.from) moveFragment(e, d.f, d.to - d.from);
+          else renderCanvas();
         } else if (d.type === "wire") {
           d.wire.remove();
           dom.layer.querySelectorAll(".pcard.drop").forEach((c) => c.classList.remove("drop"));
@@ -1483,7 +1541,14 @@
         }
       };
       cv.addEventListener("pointerup", end);
-      cv.addEventListener("pointercancel", () => { if (drag && drag.wire) drag.wire.remove(); drag = null; cv.classList.remove("panning"); });
+      cv.addEventListener("pointercancel", () => {
+        if (drag && drag.wire) drag.wire.remove();
+        const wasLane = drag && drag.type === "lane";
+        if (wasLane && drag.mark) drag.mark.remove();
+        drag = null;
+        cv.classList.remove("panning");
+        if (wasLane) renderCanvas(); // the lifted lane back in its place
+      });
       cv.addEventListener("dblclick", (ev) => {
         // a double-click on a card puts the caret in its first field after
         // the id — what the node is for, usually its connection or query

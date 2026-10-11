@@ -2102,8 +2102,9 @@ below it as for a query.
   takes one input, so a new wire replaces the old one, and a loop is
   refused. Click a card, a wire or a lane to select it; `Delete` removes
   it, `Ctrl+D` duplicates a node. Drag the background (or use the wheel)
-  to pan, `Ctrl`+wheel (or pinch) to zoom, `f` or ⊡ Fit to fit. A lane's
-  ⋯ moves, adds or deletes fragments.
+  to pan, `Ctrl`+wheel (or pinch) to zoom, `f` or ⊡ Fit to fit. Drag a
+  lane by its header to move the fragment up or down (a bar marks where it
+  lands); a lane's ⋯ also moves, adds or deletes fragments.
 - **The inspector** is drawn from the plugin's own fields: a connection
   field offers the configured connections (a click on one in the sidebar
   sets it on the selected node), a columns field the columns a preview

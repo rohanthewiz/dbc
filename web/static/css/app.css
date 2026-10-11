@@ -1061,7 +1061,10 @@ a.btnlink:hover { border-color: var(--accent); }
 .plane.sel { border-color: var(--accent); }
 .plane.drop { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
 .lhead { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border-bottom: 1px solid var(--line);
-  cursor: pointer; user-select: none; }
+  cursor: grab; user-select: none; }
+.plane.lifted { z-index: 2; opacity: .92; box-shadow: 0 6px 18px color-mix(in srgb, #000 30%, transparent); }
+.plane.lifted .lhead { cursor: grabbing; }
+.plmark { position: absolute; left: 0; height: 4px; border-radius: 2px; background: var(--accent); z-index: 3; pointer-events: none; }
 .lhead .lname { color: var(--fg); }
 .lhead .lmeta { color: var(--muted); font-size: 12px; }
 .lhead .ldiag { color: var(--warn); font-size: 12px; }

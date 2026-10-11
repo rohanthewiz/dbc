@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/input"
@@ -213,6 +214,7 @@ func pipelineTabs(t *testing.T, e *env, p *rod.Page) {
 	pipelineUnknownKeys(t, p)
 	pipelineConnFields(t, p)
 	pipelineInspectorWidth(t, p)
+	pipelineLaneDrag(t, p)
 
 	// ── ⇪ Go: the same pipeline as a script, in a script tab ──────────────
 	eval(t, p, `() => document.querySelector('.pbar button[data-act="export"]').click()`)
@@ -651,6 +653,115 @@ func pipelineInspectorWidth(t *testing.T, p *rod.Page) {
 	  document.documentElement.style.getPropertyValue("--insp-w") === ""`)
 	saved("")
 }
+
+// pipelineLaneDrag moves fragments by dragging their lanes' headers
+// (N-179), on a pipeline of three, a b c, typed into the JSON view:
+//
+//	b's header dragged below c's middle ─► a bar in the gap below c while
+//	                                       held; dropped: a c b, on the
+//	                                       canvas and in the JSON
+//	b's header dragged to the top        ─► b a c
+//	a's header clicked, no move          ─► a selected, the order kept
+//
+// The waiting pipeline goes back in the JSON view at the end, for the
+// steps after.
+func pipelineLaneDrag(t *testing.T, p *rod.Page) {
+	setJSON := func(text string) {
+		t.Helper()
+		eval(t, p, `() => document.querySelector('.pbar button[data-act="json"]').click()`)
+		waitFor(t, p, "the JSON view", `() => document.querySelector(".app").classList.contains("pipe-json")`)
+		eval(t, p, `(text) => monaco.editor.getEditors()[0].setValue(text)`, text)
+		eval(t, p, `() => document.querySelector('.pbar button[data-act="json"]').click()`)
+		waitFor(t, p, "the canvas back", `() => !document.querySelector(".app").classList.contains("pipe-json")`)
+	}
+	order := func() string {
+		return evalStr(t, p, `() => [...document.querySelectorAll("#pipe .plane")]
+		  .sort((x, y) => x.getBoundingClientRect().top - y.getBoundingClientRect().top).map((x) => x.dataset.frag).join(" ")`)
+	}
+	// jsonOrder is the fragments' order in the JSON the canvas keeps (the
+	// one Ctrl+S writes), read through the JSON view and back
+	jsonOrder := func() string {
+		t.Helper()
+		eval(t, p, `() => document.querySelector('.pbar button[data-act="json"]').click()`)
+		waitFor(t, p, "the JSON view", `() => document.querySelector(".app").classList.contains("pipe-json")`)
+		got := evalStr(t, p, `() => JSON.parse(monaco.editor.getEditors()[0].getValue()).fragments.map((f) => f.name).join(" ")`)
+		eval(t, p, `() => document.querySelector('.pbar button[data-act="json"]').click()`)
+		waitFor(t, p, "the canvas back", `() => !document.querySelector(".app").classList.contains("pipe-json")`)
+		return got
+	}
+	head := func(frag string) (float64, float64) {
+		return handleCenter(t, p, `#pipe .plane[data-frag="`+frag+`"] .lname`)
+	}
+	// dragLane presses frag's header and moves to y in steps; check runs
+	// while the button is still down
+	dragLane := func(frag string, y float64, check func()) {
+		t.Helper()
+		x, y0 := head(frag)
+		p.Mouse.MustMoveTo(x, y0)
+		p.Mouse.MustDown(proto.InputMouseButtonLeft)
+		if err := p.Mouse.MoveLinear(proto.Point{X: x, Y: y}, 10); err != nil {
+			t.Fatal(err)
+		}
+		if check != nil {
+			check()
+		}
+		p.Mouse.MustUp(proto.InputMouseButtonLeft)
+		time.Sleep(450 * time.Millisecond) // past the double-click window
+	}
+
+	setJSON(threeLanesPipeline)
+	waitFor(t, p, "three lanes", `() => document.querySelectorAll("#pipe .plane").length === 3`)
+	if got := order(); got != "a b c" {
+		t.Fatalf("lanes drawn %q, want a b c", got)
+	}
+
+	// b below c's middle: the bar in the gap under c while held
+	cBottom := evalNum(t, p, `() => document.querySelector('#pipe .plane[data-frag="c"]').getBoundingClientRect().bottom`)
+	dragLane("b", cBottom-5, func() {
+		waitFor(t, p, "b lifted, the bar below c", `() => {
+		  const b = document.querySelector('#pipe .plane[data-frag="b"]'), m = document.querySelector("#pipe .plmark");
+		  const c = document.querySelector('#pipe .plane[data-frag="c"]').getBoundingClientRect();
+		  return b.classList.contains("lifted") && !!m && m.getBoundingClientRect().top >= c.bottom - 1;
+		}`)
+		shot(t, p, "pipeline-lane-drag")
+	})
+	waitFor(t, p, "the bar gone, unsaved", `() => !document.querySelector("#pipe .plmark") &&
+	  !document.querySelector("#pipe .plane.lifted") && !!document.querySelector("#qtabs .qtab.pipeline.on .qdirty")`)
+	if got := order(); got != "a c b" {
+		t.Fatalf("after dragging b below c, lanes drawn %q, want a c b", got)
+	}
+	if got := jsonOrder(); got != "a c b" {
+		t.Fatalf("after dragging b below c, the JSON's fragments are %q, want a c b", got)
+	}
+
+	// b to the top
+	aTop := evalNum(t, p, `() => document.querySelector('#pipe .plane[data-frag="a"]').getBoundingClientRect().top`)
+	dragLane("b", aTop-40, nil)
+	if got := order(); got != "b a c" {
+		t.Fatalf("after dragging b to the top, lanes drawn %q, want b a c", got)
+	}
+
+	// a click on a header selects the lane and moves nothing
+	clickAt(t, p, `#pipe .plane[data-frag="a"] .lname`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "a selected", `() => document.querySelector('#pipe .plane[data-frag="a"]').classList.contains("sel")`)
+	if got := order(); got != "b a c" {
+		t.Fatalf("a click on a's header moved lanes: %q, want b a c", got)
+	}
+
+	setJSON(waitingPipeline)
+	waitFor(t, p, "the waiting pipeline back", `() => !!document.querySelector('.plane[data-frag="w"] .pcard[data-id="src"]')`)
+}
+
+// threeLanesPipeline is three one-node fragments, a b c, for the lane drags.
+const threeLanesPipeline = `{
+  "name": "e2e_pipe",
+  "fragments": [
+    {"name": "a", "nodes": [{"id": "x", "plugin": "sql.exec", "cfg": {"conn": "lite", "sql": "select 1"}}]},
+    {"name": "b", "nodes": [{"id": "x", "plugin": "sql.exec", "cfg": {"conn": "lite", "sql": "select 2"}}]},
+    {"name": "c", "nodes": [{"id": "x", "plugin": "sql.exec", "cfg": {"conn": "lite", "sql": "select 3"}}]}
+  ]
+}
+`
 
 // invalidNamesPipeline has a node id with a space and a fragment with an
 // empty name: both drawn, both named by index in the check.

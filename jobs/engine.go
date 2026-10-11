@@ -99,7 +99,15 @@ type Run struct {
 	// Origin is the host's own tag for where the run was asked from — in
 	// dbc web the query tab — so its preview results land there and its
 	// Stop finds it. The engine only compares it.
-	Origin  string          `json:"origin,omitempty"`
+	Origin string `json:"origin,omitempty"`
+	// PID and Host name the process running the run, when that process's
+	// interrupt stops it and nothing else — a headless `dbc job run` or
+	// `dbc pipeline run` (Options.Signalable). Another process can then
+	// stop the run though it has no hold on it (Cancel, `dbc run cancel`).
+	// 0 and "" for dbc web's and the TUI's runs: their interrupt would
+	// stop far more than one run.
+	PID     int             `json:"pid,omitempty"`
+	Host    string          `json:"host,omitempty"`
 	Started time.Time       `json:"started"`
 	Ended   time.Time       `json:"ended"`
 	Status  pipeline.Status `json:"status"`
@@ -242,6 +250,12 @@ type Options struct {
 	// Find resolves a job step's pipeline by name; nil is
 	// PipelineFinder(cfg.PipelinesDir): the user's file, then an example.
 	Find func(name string) (*pipeline.Spec, error)
+	// Signalable says the process exists to run this engine's runs and an
+	// interrupt (Ctrl+C, SIGINT) stops them, rolling back: a headless
+	// `dbc job run` or `dbc pipeline run`. Each record then names the
+	// process (Run.PID, Run.Host), so another process's Cancel can stop
+	// the run by interrupting it (signal.go).
+	Signalable bool
 }
 
 // ErrBusy is a start refused because what it would run is running: the
@@ -379,6 +393,7 @@ func (e *Engine) StartPipeline(req Request) (Run, error) {
 		Origin: req.Origin, Started: now, Status: pipeline.Running,
 		Pipelines: []PipelineRun{{ID: spec.Name, RunStats: queued(spec, now, req.PreviewRows > 0)}},
 	}
+	e.stampProc(&lr.rec)
 
 	e.mu.Lock()
 	if err := e.admitLocked(req.Origin); err != nil {
@@ -775,10 +790,11 @@ func (r *Run) clone() Run {
 // Cancel stops a run: its context is canceled, every fragment in flight
 // rolls its sinks back, a job's steps not started yet are skipped, and
 // RunDone follows with status canceled. A run already finished is not an
-// error (it lost the race); an unknown id is, and so is a run whose record
-// says another process is running it right now (ErrElsewhere) — a cron's
-// `dbc job run`, another dbc web: this engine has no hold on it, and
-// saying nothing would read as stopped.
+// error (it lost the race); an unknown id is. A run another process is
+// running right now is stopped by interrupting that process when its
+// record names it on this machine (Run.PID: a cron's `dbc job run`), and
+// is refused otherwise (ErrElsewhere) — another dbc web: this engine has
+// no hold on it, and saying nothing would read as stopped.
 func (e *Engine) Cancel(id string) error {
 	e.mu.Lock()
 	lr, live := e.live[id]
@@ -790,10 +806,16 @@ func (e *Engine) Cancel(id string) error {
 			return serr.New("no such run", "run", id)
 		}
 		// fromDisk settles a record: one whose writer died reads
-		// interrupted, so running or queued here has a live writer
+		// interrupted, so running or queued here has a live writer. One
+		// that names its process on this machine (a `dbc job run` from a
+		// shell or cron) is stopped by interrupting it: its own Ctrl+C
+		// cancels the run, which rolls back and ends canceled.
 		if r.Status == pipeline.Running || r.Status == pipeline.Queued {
-			return fmt.Errorf("%w: run %s (%s %s) is running in another process — a `dbc job run` from a shell "+
-				"or cron, or another dbc web; stop it there (Ctrl+C)", ErrElsewhere, id, r.Kind, r.Name)
+			if signalRun(r) == nil {
+				return nil
+			}
+			return fmt.Errorf("%w: run %s (%s %s) is running in another process — another dbc web, or a "+
+				"`dbc job run` elsewhere; stop it there (Ctrl+C)", ErrElsewhere, id, r.Kind, r.Name)
 		}
 		return nil
 	}

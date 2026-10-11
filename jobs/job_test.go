@@ -518,3 +518,19 @@ func Run(s *sdb.S) error {
 		t.Errorf("own engine's record = %+v", hs)
 	}
 }
+
+// A Signalable engine names its process in each record; another does not.
+func TestRecordsNameASignalableProcess(t *testing.T) {
+	for _, signalable := range []bool{true, false} {
+		je := newJobEngine(t, func(o *Options) { o.Signalable = signalable })
+		je.act("pa", func(*pipeline.Env) error { return nil })
+		head, err := je.StartJob(JobRequest{Spec: job(t, `{"name": "me", "pipelines": [{"id": "a", "pipeline": "pa"}]}`)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fin := je.wait(t, head.ID)
+		if got := fin.PID == os.Getpid() && fin.Host == hostname() && fin.Host != ""; got != signalable {
+			t.Errorf("signalable %v: pid %d host %q", signalable, fin.PID, fin.Host)
+		}
+	}
+}

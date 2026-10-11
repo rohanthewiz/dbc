@@ -76,17 +76,6 @@ ten session docs in `ai_docs/claude_sessions/`
   down; Windows needs its own `SysProcAttr`) that outlives the command and
   writes the record. Left out of Phase 3; cron and the webhook cover the
   triggers meanwhile.
-- **N-183** · raised `2026-1009-1349-phase-4-jobs-tab-runs-view` · value low
-  A run another process runs — a cron's `dbc job run` — cannot be stopped
-  from dbc web's Runs view or `dbc run cancel`: dbc web's engine has no
-  hold on it, so cancel answers 409 (`jobs.ErrElsewhere`) and points at
-  Ctrl+C there. Writing the process's PID (and host) into the run record
-  would let `dbc run cancel` signal a local one (SIGINT, so it rolls back)
-  when dbc web is not its owner; the record's heartbeat already says
-  whether it is alive.
-  Updated `2026-1009-1449-phase-5-tui-pipelines-jobs`: the TUI's run monitor and Runs list (`^K`) refuse
-  the same way — its engine has no hold on another process's run either —
-  and say where to stop it; a PID in the record would serve all three.
 - **N-184** · raised `2026-1009-1349-phase-4-jobs-tab-runs-view` · value low
   A job tab's Runs face sits in the editor's pane, about a third of the
   work column by default: the run page's DAG fills it, and the drilldown
@@ -515,6 +504,18 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-183** · raised `2026-1009-1349-phase-4-jobs-tab-runs-view` · value low
+  A run another process runs — a cron's `dbc job run` — cannot be stopped
+  from dbc web's Runs view or `dbc run cancel`: dbc web's engine has no
+  hold on it, so cancel answers 409 (`jobs.ErrElsewhere`) and points at
+  Ctrl+C there. Writing the process's PID (and host) into the run record
+  would let `dbc run cancel` signal a local one (SIGINT, so it rolls back)
+  when dbc web is not its owner; the record's heartbeat already says
+  whether it is alive.
+  Updated `2026-1009-1449-phase-5-tui-pipelines-jobs`: the TUI's run monitor and Runs list (`^K`) refuse
+  the same way — its engine has no hold on another process's run either —
+  and say where to stop it; a PID in the record would serve all three.
+  closed 2026-10-10, `2026-1010-2012-n183-n181-n186` (from the cats-todo backlog): as proposed, with one narrowing. A record names its process (`jobs.Run.PID`, `Host`) only when the engine is `Signalable`: a headless `dbc job run` or `dbc pipeline run` (`newHeadlessEngine`), whose interrupt stops exactly its runs. dbc web's and the TUI's records name none, because their interrupt would stop far more than one run (and a script's `s.RunJob` has the script's process). `Engine.Cancel`, which serves dbc web's Runs view and ■ Stop and the TUI's run monitor and Runs list, now sends SIGINT to a run another process is running when its record names a process on this machine other than itself (`signalRun`, `jobs/signal.go`). That process's own Ctrl+C handling cancels the run, which rolls back and ends canceled; anything else is `ErrElsewhere` as before. A stale heartbeat makes the record read interrupted before any signal, so a PID since reused is not signalled. Windows has no SIGINT to send, so there it refuses as before (cross-compiles). `dbc run cancel` tries this first (`cancelLocal`, no dbc web or secret needed), then dbc web's API; the follow-to-the-end loop is shared (`followCancel`). README ("Jobs headless", the TUI's runs) and SKILL.md say so. Tests: `jobs.TestCancelSignalsTheRunsProcess` (unix: a child `sleep` named in a planted record is interrupted, and records naming no PID, another host or this process are refused, the child untouched), `TestRecordsNameASignalableProcess`. Real binary: a waiting `dbc pipeline run` in the background, `dbc run cancel ID` with no dbc web running prints "stopped run …"; the run's process exited 130 and its record reads canceled.
 - **N-178** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
   The assistant in a pipeline tab is handed the pipeline's JSON as "the
   query": the editor under the canvas holds it, and `ChatContext` reads the

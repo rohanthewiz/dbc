@@ -2349,8 +2349,10 @@ the same way.
 `Alt+J` (or ◷ Runs in the browser) lists **the runs**: this TUI's, and the
 records in `runs_dir` — `dbc web`'s, a cron's `dbc job run` — newest
 first, filtered by typing; `Enter` opens one in the monitor, `Backspace`
-comes back. A run another process runs is read again while it goes, but
-stopped where it runs. The TUI does not schedule: a job's cron lines fire
+comes back. A run another process runs is read again while it goes; a
+`dbc job run`'s on this machine can be stopped from here too (it is
+interrupted, as Ctrl+C there would), another dbc web's only there. The
+TUI does not schedule: a job's cron lines fire
 while [`dbc web`](#jobs) runs.
 
 ### Plugins of your own
@@ -2784,9 +2786,12 @@ any `-t` format.
 `--url` (default `http://127.0.0.1:8450`, or `$DBC_WEB_URL`) and the
 secret dbc web was started with (`--secret`, or `$DBC_WEB_SECRET` for
 both — dbc web keeps a fresh one in memory only otherwise). It waits for
-the run to roll back and says how it ended. A run a `dbc job run` is
-running belongs to that process: dbc web refuses it, and Ctrl+C there
-stops it.
+the run to roll back and says how it ended. A run a `dbc job run` or
+`dbc pipeline run` is running on this machine (from a shell or cron) needs
+no dbc web: its record names its process, and `dbc run cancel` — as dbc
+web's ■ Stop and the TUI's do — interrupts it, as Ctrl+C there would, so
+it rolls back and ends canceled. A run another dbc web is running is
+stopped there.
 
 ### Multi-statement runs
 

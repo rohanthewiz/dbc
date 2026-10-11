@@ -144,7 +144,10 @@ func runCommand() *cli.Command {
 // newHeadlessEngine is an engine over cfg's runs dir, with the records a
 // dead process left behind settled first. sink may be nil.
 func newHeadlessEngine(cfg *config.Config, mgr *db.Manager, sink func(jobs.Event)) *jobs.Engine {
-	e := jobs.New(cfg, mgr, jobs.Options{RunsDir: cfg.RunsDir, RunsKeep: cfg.RunsKeep, Sink: sink})
+	// Signalable: this process runs the one run and Ctrl+C stops it, so
+	// the record names the process for `dbc run cancel` and dbc web's
+	// Runs view to interrupt (jobs signal.go)
+	e := jobs.New(cfg, mgr, jobs.Options{RunsDir: cfg.RunsDir, RunsKeep: cfg.RunsKeep, Sink: sink, Signalable: true})
 	if _, err := e.Recover(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not settle old run records: %v\n", err)
 	}
@@ -471,11 +474,15 @@ func runShowAction(ctx context.Context, cmd *cli.Command) error {
 var flagCancelURL, flagCancelSecret string
 
 // runCancelAction is `dbc run cancel ID`: a run belongs to the process
-// whose engine runs it, and for a scheduled job or a run started in the
-// browser that is dbc web — so this command asks dbc web, over its API,
-// as curl would:
+// whose engine runs it. A `dbc job run` or `dbc pipeline run` on this
+// machine names itself in the record, and is stopped here by interrupting
+// it (cancelLocal: no dbc web, no secret). For a scheduled job or a run
+// started in the browser that process is dbc web — so this command asks
+// dbc web, over its API, as curl would:
 //
-//	dbc run cancel ──POST /api/v1/runs/ID/cancel──► dbc web ──► its engine cancels the run
+//	dbc run cancel ──record names a local process──► SIGINT ──► it cancels the run
+//	               │ else
+//	               ──POST /api/v1/runs/ID/cancel──► dbc web ──► its engine cancels the run
 //	               ◄──── 200 | 404 no such run | 409 another process runs it
 //	               ──GET /api/v1/runs/ID (until it has ended, ≤ 15s)──► how it ended
 //
@@ -493,6 +500,9 @@ func runCancelAction(ctx context.Context, cmd *cli.Command) error {
 	id := cmd.Args().First()
 	if !userdata.ValidRunID(id) {
 		usage(fmt.Sprintf("%q is not a run id (20261009-020000-7f3a; dbc runs lists them)", id))
+	}
+	if cancelLocal(ctx, id) {
+		return nil
 	}
 	if flagCancelSecret == "" {
 		fmt.Fprintln(os.Stderr, "dbc run cancel needs dbc web's secret: start dbc web with --secret S (or $DBC_WEB_SECRET), "+
@@ -530,28 +540,56 @@ func runCancelAction(ctx context.Context, cmd *cli.Command) error {
 		}
 		os.Exit(1)
 	}
-	// the cancel is asked; the run rolls its sinks back and ends on its
-	// own goroutine, so follow it to the end it reaches
+	followCancel(ctx, id, func() (jobs.Run, bool) {
+		r, _, err := read()
+		return r, err == nil
+	})
+	return nil
+}
+
+// cancelLocal stops run id when its record names a process on this
+// machine that an interrupt stops (a `dbc job run` or `dbc pipeline run`:
+// jobs.Run.PID), and follows it to its end; false when the record names
+// none — the run is dbc web's, or ended, or unknown here — and the caller
+// asks dbc web instead.
+func cancelLocal(ctx context.Context, id string) bool {
+	cfg := loadConfigOnly()
+	e := jobs.New(cfg, nil, jobs.Options{RunsDir: cfg.RunsDir})
+	r, ok := e.Get(id)
+	if !ok || r.PID == 0 || (r.Status != pipeline.Running && r.Status != pipeline.Queued) {
+		return false
+	}
+	if err := e.Cancel(id); err != nil {
+		return false // another machine's, or no signal here (Windows): dbc web's path says why
+	}
+	followCancel(ctx, id, func() (jobs.Run, bool) { return e.Get(id) })
+	return true
+}
+
+// followCancel follows a run asked to stop to the end it reaches — it
+// rolls its sinks back and ends on its own goroutine, in its own process —
+// and says how it ended, waiting at most 15 s.
+func followCancel(ctx context.Context, id string, read func() (jobs.Run, bool)) {
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		if r, _, err := read(); err == nil {
+		if r, ok := read(); ok {
 			switch r.Status {
 			case pipeline.Running, pipeline.Queued:
 			case pipeline.Canceled:
 				fmt.Printf("stopped run %s (%s %s) — dbc run show %s\n", id, r.Kind, r.Name, id)
-				return nil
+				return
 			default:
 				fmt.Printf("run %s (%s %s) had already ended: %s\n", id, r.Kind, r.Name, r.Status)
-				return nil
+				return
 			}
 		}
 		if time.Now().After(deadline) {
 			fmt.Printf("asked run %s to stop; it is still rolling back — dbc run show %s says when it has\n", id, id)
-			return nil
+			return
 		}
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case <-time.After(250 * time.Millisecond):
 		}
 	}

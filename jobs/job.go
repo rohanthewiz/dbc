@@ -66,6 +66,7 @@ func (e *Engine) StartJob(req JobRequest) (Run, error) {
 		ID: lr.id, Kind: KindJob, Name: spec.Name, Source: req.Source, Trigger: req.Trigger, By: req.By,
 		Params: params, Origin: req.Origin, Started: now, Status: pipeline.Running,
 	}
+	e.stampProc(&lr.rec)
 	for _, st := range spec.Pipelines {
 		rs := queued(pipes[st.ID], now, false)
 		rs.Status, rs.Started = pipeline.Queued, time.Time{}

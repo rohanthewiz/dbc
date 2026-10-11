@@ -106,16 +106,6 @@ ten session docs in `ai_docs/claude_sessions/`
   down; Windows needs its own `SysProcAttr`) that outlives the command and
   writes the record. Left out of Phase 3; cron and the webhook cover the
   triggers meanwhile.
-- **N-182** · raised `2026-1009-1254-phase-3-jobs-scheduler-runs` · value low
-  `dbc pipeline run NAME --preview N -t json` writes two JSON documents to
-  stdout: the preview sinks' results (collected, as a script's) and then
-  the run's stats. `jq` reads both; a single `json.load` refuses them.
-  Older than Phase 3 (seen while checking it). Put the results inside the
-  stats document, or send them to stderr under `-t json`.
-  Updated 2026-10-10 (`/next-list`): only without `-o`. With `-o FILE`,
-  `writeOut` sends the results to the file, so stdout carries the stats
-  document alone (`pipelinecmd.go` `runPipelineHeadless`, `main.go`
-  `writeOut`).
 - **N-183** · raised `2026-1009-1349-phase-4-jobs-tab-runs-view` · value low
   A run another process runs — a cron's `dbc job run` — cannot be stopped
   from dbc web's Runs view or `dbc run cancel`: dbc web's engine has no
@@ -626,6 +616,17 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-182** · raised `2026-1009-1254-phase-3-jobs-scheduler-runs` · value low
+  `dbc pipeline run NAME --preview N -t json` writes two JSON documents to
+  stdout: the preview sinks' results (collected, as a script's) and then
+  the run's stats. `jq` reads both; a single `json.load` refuses them.
+  Older than Phase 3 (seen while checking it). Put the results inside the
+  stats document, or send them to stderr under `-t json`.
+  Updated 2026-10-10 (`/next-list`): only without `-o`. With `-o FILE`,
+  `writeOut` sends the results to the file, so stdout carries the stats
+  document alone (`pipelinecmd.go` `runPipelineHeadless`, `main.go`
+  `writeOut`).
+  closed 2026-10-10, `2026-1010-1903-n198-n193-n182` (from the cats-todo backlog): the results go inside the stats document, under `"results"`, rather than to stderr, where they would be mixed with the log. They keep the shape `dbc script -t json` writes (one result's rows as an array of objects, several as envelopes), the same as the `-o` file. The top-level stats keys are unchanged, so `jq .status` still works. The premise was narrower than the bug. It is not only `--preview`: a real run whose pipeline ends in a preview sink (`cats-report`) did the same. And the earlier update's "with `-o FILE` stdout carries the stats alone" was wrong: with `-o`, `scriptLog` sends the log to stdout and `writeOut` prints "wrote N rows to F" there, both before the stats. Now, under `-t json`, `newRunOutput` sends the log to stderr even with `-o`, and `runJSONResults` writes the `-o` file with the note on stderr (`writeOutTo`, a `writeOut` with its note writer). `dbc job run -t json` had the same two-document bug with the record, and gets the same fix (both pipelines' previews of the nightly example land in its `results`). README "Pipelines headless" and "Jobs headless" and SKILL.md say so. Test: `TestPipelineRunJSONOneDocument` decodes stdout as exactly one JSON value, with and without `-o` (fails on the old code). Checked in the real binary: `cats-report --preview 3 -t json` and `job run nightly -t json` each `json.load` whole, and with `-o` stdout is the stats alone and stderr has the log and the "wrote" note.
 - **N-193** · raised `2026-1009-1632-n175-pipeline-code-editors` · value low
   F12 / Shift+F12 / F2 in a pipeline `go` field find nothing: the Go
   providers ask `/api/v1/script-symbol`, which resolves a whole file, and

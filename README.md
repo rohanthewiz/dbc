@@ -2725,7 +2725,11 @@ has stdout to itself, so `./dbc -t json script … | jq` parses.
 The log (fragments starting and ending, DDL, a node's own lines) streams
 as a script's `s.Print` does; what a `preview` sink shows goes out as a
 script's `s.Show` results do; in `text`, one line per fragment follows,
-with every node's rows in and out. Names resolve as scripts do: a file
+with every node's rows in and out. In `json`, stdout is one document, the
+run's stats: what the preview sinks showed is inside it under `results`
+(the rows of one as an array of objects, several as an array of
+envelopes, as `-t json script` writes them), or in the `-o` file, and the
+log goes to stderr either way — so `json.load` reads stdout whole. Names resolve as scripts do: a file
 here, then `pipelines_dir`, then an example. Exit 0, 1 on failure, 130
 when interrupted — a stop during a load rolls it back first. The run
 leaves a record in `runs_dir`, as every run does ([Jobs](#jobs)). A file
@@ -2748,7 +2752,9 @@ current directory: `-p in=$PWD/orders.csv` for a file there.
 
 `dbc job run` runs the job in its own process: lines stream with their
 step (`[clean] fragment clean done: 7 rows in 3ms`), preview sinks' rows
-go out as a script's do, and the run's tree follows. Exit 0 when the job
+go out as a script's do, and the run's tree follows. In `json` the record
+is stdout's one document, preview rows inside it under `results` (or in
+the `-o` file), as a pipeline run's. Exit 0 when the job
 succeeded, 1 when not, 130 when interrupted (the run is stopped and every
 load in flight rolled back first). It is how a crontab drives a job
 without `dbc web`: `0 2 * * * /usr/local/bin/dbc job run nightly`.

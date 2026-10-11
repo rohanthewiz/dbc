@@ -920,7 +920,12 @@ func emitRun(results []*model.Result, at []int, total int, f export.Format) {
 // writeOut sends a rendered document to stdout, or to the --out file with a
 // line saying how much went there. results are what out was rendered from,
 // for that count.
-func writeOut(out string, results []*model.Result) {
+func writeOut(out string, results []*model.Result) { writeOutTo(os.Stdout, out, results) }
+
+// writeOutTo is writeOut with the "wrote …" line on note: a pipeline or
+// job run under -t json keeps stdout for its own document
+// (runJSONResults).
+func writeOutTo(note io.Writer, out string, results []*model.Result) {
 	if flagOut == "" {
 		fmt.Print(out)
 		return
@@ -933,10 +938,10 @@ func writeOut(out string, results []*model.Result) {
 		rows += len(r.Rows)
 	}
 	if len(results) > 1 {
-		fmt.Printf("wrote %d results (%d rows) to %s\n", len(results), rows, flagOut)
+		fmt.Fprintf(note, "wrote %d results (%d rows) to %s\n", len(results), rows, flagOut)
 		return
 	}
-	fmt.Printf("wrote %d rows to %s\n", rows, flagOut)
+	fmt.Fprintf(note, "wrote %d rows to %s\n", rows, flagOut)
 }
 
 // warnTruncated notes on w (stderr) every result that hit the max_rows cap.

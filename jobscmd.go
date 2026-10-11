@@ -244,7 +244,7 @@ func jobRunAction(ctx context.Context, cmd *cli.Command) error {
 		fail(err, "not a job")
 	}
 	f := outFormat()
-	out := newHeadlessOutput(f)
+	out := newRunOutput(f)
 	// a fan-out holds a reader and a writer per running fragment: the
 	// in-memory SQLite demo's pool (3 by default) would make max_parallel
 	// fragments on it wait for each other, so it gets room for them
@@ -275,16 +275,20 @@ func jobRunAction(ctx context.Context, cmd *cli.Command) error {
 	}()
 	fin, err := e.Wait(context.Background(), head.ID)
 	e.Close(30 * time.Second)
-	out.finish()
+	if f != export.JSON {
+		out.finish()
+	}
 	if err != nil {
 		fail(err, "lost the run")
 	}
 	if f == export.JSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(fin); err != nil {
-			fail(err, "could not write the run")
-		}
+		// the record is the document, the results a preview showed
+		// inside it (runJSONResults)
+		doc := struct {
+			*jobs.Run
+			Results json.RawMessage `json:"results,omitempty"`
+		}{&fin, runJSONResults(out.results)}
+		writeRunJSON(doc, "the run")
 	} else {
 		fmt.Fprint(out.log, fin.Tree())
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/export"
 	"github.com/rohanthewiz/dbc/jobs"
 	"github.com/rohanthewiz/dbc/pipeline"
 	"github.com/rohanthewiz/dbc/sqlsplit"
@@ -119,5 +121,53 @@ func TestWebClient(t *testing.T) {
 	srv.Close()
 	if _, status, err = c.call(context.Background(), http.MethodGet, "/"); status != 0 || err == nil {
 		t.Errorf("nothing there = %d %v", status, err)
+	}
+}
+
+// `dbc pipeline run -t json` writes one document on stdout, so a single
+// json.load reads it (N-182): the stats, with the rows a preview sink
+// showed under "results". With -o FILE the rows go to the file, and stdout
+// is still the stats alone — the log and the "wrote …" note on stderr.
+func TestPipelineRunJSONOneDocument(t *testing.T) {
+	mgr := newTestManager(t)
+	spec, err := pipeline.Parse(`{"name": "peek", "fragments": [{"name": "f", "nodes": [
+	  {"id": "src", "plugin": "sql.read", "cfg": {"conn": "` + config.DemoSQLite + `", "query": "SELECT name FROM cats ORDER BY id LIMIT 2"}},
+	  {"id": "show", "plugin": "preview", "cfg": {"rows": "10"}}], "edges": [["src", "show"]]}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{RunsDir: t.TempDir()}
+	// one reads stdout as exactly one JSON value, nothing after it
+	one := func(out string) map[string]any {
+		t.Helper()
+		dec := json.NewDecoder(strings.NewReader(out))
+		var doc map[string]any
+		if err := dec.Decode(&doc); err != nil {
+			t.Fatalf("stdout is not a JSON document: %v\n%s", err, out)
+		}
+		if dec.More() {
+			t.Fatalf("stdout holds more than one document:\n%s", out)
+		}
+		return doc
+	}
+
+	doc := one(captureStdout(t, func() { runPipelineHeadless(cfg, mgr, spec, pipeline.Options{}, export.JSON) }))
+	rows, _ := doc["results"].([]any)
+	if doc["status"] != "succeeded" || doc["fragments"] == nil || len(rows) != 2 {
+		t.Fatalf("the document: %v", doc)
+	}
+	if r, _ := rows[0].(map[string]any); r["name"] != "Whiskers" {
+		t.Errorf("the first result row: %v", rows[0])
+	}
+
+	file := filepath.Join(t.TempDir(), "rows.json")
+	setFlag(t, &flagOut, file)
+	doc = one(captureStdout(t, func() { runPipelineHeadless(cfg, mgr, spec, pipeline.Options{}, export.JSON) }))
+	if _, has := doc["results"]; has || doc["status"] != "succeeded" {
+		t.Errorf("with -o, the document: %v", doc)
+	}
+	bs, err := os.ReadFile(file)
+	if err != nil || !strings.Contains(string(bs), `"Whiskers"`) {
+		t.Errorf("the -o file: %s %v", bs, err)
 	}
 }

@@ -345,7 +345,7 @@ func pipelineRunAction(ctx context.Context, cmd *cli.Command) error {
 func runPipelineHeadless(cfg *config.Config, mgr *db.Manager, spec *pipeline.Spec, opt pipeline.Options, f export.Format) {
 	ctx, stop := interruptible()
 	defer stop()
-	out := newHeadlessOutput(f)
+	out := newRunOutput(f)
 	e := newHeadlessEngine(cfg, mgr, func(ev jobs.Event) {
 		switch ev := ev.(type) {
 		case *jobs.Logged:
@@ -367,20 +367,21 @@ func runPipelineHeadless(cfg *config.Config, mgr *db.Manager, spec *pipeline.Spe
 	}()
 	fin, err := e.Wait(context.Background(), head.ID)
 	e.Close(30 * time.Second)
-	out.finish()
+	if f != export.JSON {
+		out.finish()
+	}
 	if err != nil {
 		fail(err, "lost the run")
 	}
 	st := &fin.Pipelines[0].RunStats
 	if f == export.JSON {
-		// the stats are the document: results a preview showed were
-		// collected and are not repeated here (they went out as the
-		// script path writes them, before this)
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if encErr := enc.Encode(st); encErr != nil {
-			fail(encErr, "could not write the stats")
-		}
+		// the stats are the document, the results a preview showed
+		// inside them (runJSONResults)
+		doc := struct {
+			*pipeline.RunStats
+			Results json.RawMessage `json:"results,omitempty"`
+		}{st, runJSONResults(out.results)}
+		writeRunJSON(doc, "the stats")
 	} else {
 		fmt.Fprint(out.log, runText(st))
 	}
@@ -435,6 +436,52 @@ func newHeadlessOutput(f export.Format) *headlessOutput {
 		o.stream = &blockStream{out: os.Stdout, notes: os.Stderr, f: f}
 	}
 	return o
+}
+
+// newRunOutput is a pipeline or job run's output (`dbc pipeline run`,
+// `dbc job run`): a script's rules, but under -t json stdout is one
+// document — the run's stats or record, with the preview results inside
+// (runJSONResults) — so the log is progress on stderr even with -o, which
+// a script sends to stdout beside the results' file.
+func newRunOutput(f export.Format) *headlessOutput {
+	o := newHeadlessOutput(f)
+	if f == export.JSON {
+		o.log = os.Stderr
+	}
+	return o
+}
+
+// runJSONResults is what goes under "results" in a run's JSON document:
+// the results its preview sinks showed (--preview, or a preview node of
+// the run's own), in the shape `dbc script -t json` writes them — one
+// result's rows as an array of objects, several as an array of envelopes.
+// With -o FILE they are written to the file instead, the "wrote …" note
+// goes to stderr, and the document has none (nil): stdout holds the
+// document alone either way, so one json.load reads it.
+func runJSONResults(results []*model.Result) json.RawMessage {
+	if len(results) == 0 {
+		return nil
+	}
+	rendered, err := export.RenderAll(results, export.JSON)
+	if err != nil {
+		fail(err, "render failed")
+	}
+	warnTruncated(os.Stderr, results, export.Seq(len(results)), len(results))
+	if flagOut != "" {
+		writeOutTo(os.Stderr, rendered, results)
+		return nil
+	}
+	return json.RawMessage(rendered)
+}
+
+// writeRunJSON writes a run's document on stdout, indented as every
+// headless JSON document is; what names it for an error.
+func writeRunJSON(doc any, what string) {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(doc); err != nil {
+		fail(err, "could not write "+what)
+	}
 }
 
 // show takes one result: written at once when streaming, else kept.

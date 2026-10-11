@@ -201,6 +201,7 @@ and `raised`.
   and `e` with a real editor on a JSON spec. The e2e step "Ctrl+J: …"
   covers the rest through the stand-in editor.
   Updated `2026-1009-1546-phase-6-plugin-sdk-builtins`: add the scripts browser's Plugins section: how the kind glyphs `⇥ ƒ ⇤ ▸` and `⚠` render, `Enter` on a plugin row opening a real editor, and the log's "loaded: …" line on return. The TUI e2e step "Ctrl+O plugins: …" covers the flow through the stand-in editor.
+  Updated `2026-1010-2032-n171-n157-n145` (from N-157): add the completion popup's routine glyphs, `λ` for a procedure and `ƒ` for a function, on a real Postgres (`CALL ▮`); `tui.TestCompletionRoutineGlyphs` checks them in a rendered frame.
 - **N-145** · raised `2026-1007-1245-result-tabs-per-connection` · value low
   Drive a real share with the assistant end to end. Neither e2e harness has
   a connection with `ai_rows = true`, so `S` / "✦ Share with the assistant"
@@ -209,16 +210,6 @@ and `raised`.
   mark, the chip's "shared result N: …" note, and that a column hidden in
   the shared tab stays out of the prompt while another tab is on screen.
 
-- **N-157** · raised `2026-1007-2355-routine-completion` · value low
-  Routine completion has not been watched in either UI. The workspace's
-  live tests cover the cache and the suggestions on postgres:17 and
-  mysql:8.4. Not seen: the TUI popup's `λ` glyph for a procedure, Monaco's
-  Method icon for `kind: "procedure"` (`editor.js` kindOf), or a signature
-  doc in either. Add a step to the go-rod test in `web/e2e` (`CALL ▮` on a
-  connection with a procedure), or check by hand.
-  Updated 2026-10-10 (`/next-list`): the e2e harness's Postgres seed has a
-  function (`e2e_b.twice`) but no procedure, so the step must seed one
-  first.
 - **N-162** · raised `2026-1008-1331-postgres-in-docker` · value low
   Postgres in Docker is covered by unit tests over a fake docker CLI, a
   live test (`DBC_LIVE_DOCKER=1`, passed on 17 and 18), and a web e2e step
@@ -458,6 +449,17 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-157** · raised `2026-1007-2355-routine-completion` · value low
+  Routine completion has not been watched in either UI. The workspace's
+  live tests cover the cache and the suggestions on postgres:17 and
+  mysql:8.4. Not seen: the TUI popup's `λ` glyph for a procedure, Monaco's
+  Method icon for `kind: "procedure"` (`editor.js` kindOf), or a signature
+  doc in either. Add a step to the go-rod test in `web/e2e` (`CALL ▮` on a
+  connection with a procedure), or check by hand.
+  Updated 2026-10-10 (`/next-list`): the e2e harness's Postgres seed has a
+  function (`e2e_b.twice`) but no procedure, so the step must seed one
+  first.
+  closed 2026-10-10, `2026-1010-2032-n171-n157-n145` (from the cats-todo backlog): both halves checked. Web: the go-rod step "routine completion" (`routineCompletion`, after "postgres routines", with `DBC_LIVE_PG_DSN`), on postgres:17. It creates `e2e_bump` through the page, so the DDL run drops the completion cache, and drops it in cleanup. `CALL e2e_bu` then offers e2e_bump with Monaco's method icon (`codicon-symbol-method`, from `kindOf`'s "procedure") and its signature in the detail, "public · e2e_bump(IN n integer)" (Postgres writes the argument's mode). The seed was left alone, so "postgres routines" still lists only e2e_b.twice. TUI: there is no Postgres in the TUI e2e harness, so `tui.TestCompletionRoutineGlyphs` gives the popup a procedure and a function and finds "λ archive", "ƒ arity" and the procedure's signature in the rendered frame. How λ looks in real terminals moved to N-115's glyph hand check. No defect found.
 - **N-171** · raised `2026-1009-0748-pg-dump-cli-tui-web` · value low
   dbc web: download a single-file dump (plain, custom, tar) in the browser.
   Today the dialog writes on the machine dbc web runs on, which is right for

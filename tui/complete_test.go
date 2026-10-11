@@ -3,6 +3,8 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	"github.com/rohanthewiz/dbc/sqlcomplete"
 )
 
 // popupLabels is the open popup's items, or nil when it is closed.
@@ -119,5 +121,25 @@ func TestCompletionFunctionCaret(t *testing.T) {
 	}
 	if m.editor.cur != (pos{0, len("SELECT coalesce(")}) {
 		t.Errorf("caret at %v", m.editor.cur)
+	}
+}
+
+// A stored procedure is marked λ in the popup, a function ƒ, each with its
+// signature (N-157: the glyph had been seen only in code; the e2e harness
+// has no Postgres to complete one from, so the popup is given the items).
+func TestCompletionRoutineGlyphs(t *testing.T) {
+	m := newTestModel(t)
+	m.focus = focusEditor
+	m.editor.SetText("CALL ar")
+	m.editor.cur = pos{0, len("CALL ar")}
+	m.compl = &complPopup{ver: m.editor.version, res: sqlcomplete.Result{From: 5, To: 7, Items: []sqlcomplete.Item{
+		{Label: "archive", Kind: sqlcomplete.KindProcedure, Insert: "archive()", Detail: "public · archive(IN before date)", Cursor: -1},
+		{Label: "arity", Kind: sqlcomplete.KindFunction, Insert: "arity()", Detail: "public · arity(n integer) → integer", Cursor: -1},
+	}}}
+	f := frame(m).Text()
+	for _, want := range []string{"λ archive", "ƒ arity", "archive(IN before date)"} {
+		if !strings.Contains(f, want) {
+			t.Errorf("the popup lacks %q:\n%s", want, f)
+		}
 	}
 }

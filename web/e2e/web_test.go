@@ -56,6 +56,7 @@ func TestWeb(t *testing.T) {
 		{"dump database dialog", dumpDialog},
 		{"postgres schema picker", pgSchemaPicker},
 		{"postgres routines", pgRoutines},
+		{"routine completion", routineCompletion},
 		{"tabs survive a reload", tabsSurviveReload},
 		{"sidebar fold keys", sidebarFoldKeys},
 		{"other tabs' connections", otherTabsConns},
@@ -1171,6 +1172,38 @@ func pgRoutines(t *testing.T, e *env, p *rod.Page) {
 	  [...document.querySelectorAll("#tables li[data-name]")].map((l) => l.dataset.name).join() === "e2e_b.beta" &&
 	  !document.getElementById("row-counts-box").hidden`)
 
+	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
+	waitConnected(t, p, "lite")
+}
+
+// routineCompletion (N-157): a stored procedure is completed after CALL,
+// in the browser as the workspace's live tests check it headless: offered
+// with Monaco's method icon (editor.js kindOf: "procedure") and its
+// signature in the detail. The e2e seed has a function and no procedure,
+// so the step makes one — through the page, whose DDL run drops the
+// completion cache — and drops it after.
+func routineCompletion(t *testing.T, e *env, p *rod.Page) {
+	if e.pgDSN == "" {
+		t.Skip("set DBC_LIVE_PG_DSN to check routine completion")
+	}
+	clickAt(t, p, `#conns .conn-item[data-conn="pg"]`, proto.InputMouseButtonLeft)
+	waitConnected(t, p, "pg")
+	t.Cleanup(func() { e.dbc(t, "pg", `DROP PROCEDURE IF EXISTS e2e_bump(integer)`) })
+	eval(t, p, `() => dbc.editor.setText("CREATE OR REPLACE PROCEDURE e2e_bump(n integer) LANGUAGE sql AS 'SELECT 1'")`)
+	p.MustElement("#run").MustClick()
+	waitFor(t, p, "the procedure made", `() => /CREATE OR REPLACE PROCEDURE e2e_bump[\s\S]*completed on pg/.test(document.getElementById("log").textContent)`)
+
+	eval(t, p, `() => { dbc.editor.setText("CALL e2e_bu"); const ed = monaco.editor.getEditors()[0];
+	  ed.setPosition({ lineNumber: 1, column: 12 }); ed.focus(); ed.trigger("e2e", "editor.action.triggerSuggest", {}); }`)
+	waitFor(t, p, "e2e_bump offered, as a procedure, with its signature", `() => {
+	  const row = [...document.querySelectorAll(".suggest-widget.visible .monaco-list-row")]
+	    .find((r) => /^e2e_bump\b/.test(r.getAttribute("aria-label") || r.textContent));
+	  // Postgres writes a procedure's argument with its mode: (IN n integer)
+	  return !!row && !!row.querySelector(".codicon-symbol-method") && /e2e_bump\((IN )?n integer\)/.test(row.textContent);
+	}`)
+	shot(t, p, "routine-completion")
+	p.Keyboard.MustType(input.Escape)
+	eval(t, p, `() => dbc.editor.setText("")`)
 	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite")
 }

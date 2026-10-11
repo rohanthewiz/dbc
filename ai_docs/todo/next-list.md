@@ -208,18 +208,6 @@ ten session docs in `ai_docs/claude_sessions/`
   Updated 2026-10-10 (`/next-list`): `WrapSnippet` returns header+code and
   the header's line count (`script/plugins.go`), not its byte length. Shift
   by those lines, or compute the byte shift as `len(src)-len(code)`.
-- **N-198** · raised `2026-1010-1650-n197-n196-locate-invalid-names` · value low
-  N-195/N-196/N-197's bugs, in jobs. A step id may hold dots, but
-  `jobs.js` `diagsAt` keys a finding by its where up to the first dot
-  ("nightly.copy.after" → step "nightly", which is none, so the finding
-  goes to the job's list), the inspector labels it by what follows the
-  first dot, `lineOf` (the job JSON view's marks) looks for `"id":
-  "nightly"`, and `jobs.Locate` (the TUI's `file:line:col`) splits on
-  every dot. An invalid step id's `pipelines[2]` lands in the job's list
-  and on the `"pipelines"` key. Match a where against the spec's step ids
-  (the longest that is the whole where or is followed by a dot; a key
-  after a step holds no dot) and `pipelines[i]` against the i-th step, as
-  `pipelines.js` and `pipeline.Locate` now do.
 - **N-200** · raised `2026-1010-1750-n199-script-path` · value low
   A `go.action` or `script.run` node's `s.Path` ignores the run's own
   files_dir. The node gets the session that ran the pipeline, and
@@ -647,6 +635,19 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-198** · raised `2026-1010-1650-n197-n196-locate-invalid-names` · value low
+  N-195/N-196/N-197's bugs, in jobs. A step id may hold dots, but
+  `jobs.js` `diagsAt` keys a finding by its where up to the first dot
+  ("nightly.copy.after" → step "nightly", which is none, so the finding
+  goes to the job's list), the inspector labels it by what follows the
+  first dot, `lineOf` (the job JSON view's marks) looks for `"id":
+  "nightly"`, and `jobs.Locate` (the TUI's `file:line:col`) splits on
+  every dot. An invalid step id's `pipelines[2]` lands in the job's list
+  and on the `"pipelines"` key. Match a where against the spec's step ids
+  (the longest that is the whole where or is followed by a dot; a key
+  after a step holds no dot) and `pipelines[i]` against the i-th step, as
+  `pipelines.js` and `pipeline.Locate` now do.
+  closed 2026-10-10, `2026-1010-1903-n198-n193-n182` (from the cats-todo backlog): as the item proposed, on all four places. `jobs.Locate` matches a where against the step ids the text declares (`stepAt`): `pipelines[i]` is the i-th step, else the longest id that is the whole where or is followed by a dot and a step key (`after`, `params`, `params.<p>`), so "triggers.tz" stays the job's even beside a step called triggers. The step's `"id"` is looked for inside `"pipelines": [` (a job named like a step no longer takes its findings) and decoded, through `pipeline.FindName`, the helper `pipeline.Locate` used as a closure, now exported with `IndexIn` for jobs to share. A param name may hold dots, so `params.a.b` is two keys, not three. `CheckJob` now names every finding about a step with an invalid id by its place (`pipelines[i]`, `pipelines[i].after`, `pipelines[i].params.x`), as `pipeline.Check` names a node, not only the id's own finding. dbc web's `job-check` returns each finding's line and column (`jobs.Locate`; a parse error by `ParseErrorAt`), as `pipeline-check` does, so `jobs.js` drops its `lineOf` guesswork; `diagsAt` matches as `stepAt` does and gives each finding a label (what follows the step), which `drawDiags` shows. Tests: `TestLocateSteps` (14 wheres; 7 fail on the old `Locate`), four `TestCheckJob` cases; e2e "job tabs" gains `jobDottedIDs` (steps copy, copy.x and "a b": ⚠1 on copy.x, none on copy, ⚠2 on "a b", the inspector's labels, the JSON view's marks on lines 5, 6, 6), shown to fail on the old `jobs.js`. `dbc job check` prints no line:col, so only the TUI's `file:line:col` and the web view use the placement.
 - **N-194** · raised `2026-1009-1632-n175-pipeline-code-editors` · value low
   The pipeline inspector is a fixed 280px (`.pinsp`, app.css), which is
   tight for a Go field: a line of an `Apply` scrolls sideways, and the

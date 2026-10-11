@@ -35,8 +35,9 @@ import (
 //	DELETE /api/v1/jobs/:name?win=          to .trash → {id}
 //	POST   /api/v1/job-trash/:id/restore    {to?} → {name}
 //	GET    /api/v1/job-examples/:name       a built-in example's text
-//	POST   /api/v1/job-check                {text} → {diags, fires, layout}  (the next five fires
-//	                                        per cron line; where the jobs tab draws each step)
+//	POST   /api/v1/job-check                {text} → {diags, fires, layout}  (each diag's line and
+//	                                        col in the text; the next five fires per cron line;
+//	                                        where the jobs tab draws each step)
 //	GET    /api/v1/jobs/:name/layout        the saved job's (or the example's) layout
 //
 // Every change to a job tells every window ("jobs") and the scheduler,
@@ -290,15 +291,25 @@ func (s *Server) handleJobCheck(ctx rweb.Context) error {
 	spec, err := jobs.ParseJob(req.Text)
 	if err != nil {
 		// no layout: the page keeps the last one it had while the text
-		// is half-typed (the JSON view)
-		return ok(ctx, map[string]any{"diags": []pipeline.Diag{{Severity: pipeline.SevError,
-			Msg: strings.TrimPrefix(err.Error(), "json: ")}}, "fires": []cronFires{}})
+		// is half-typed (the JSON view). The error is placed as a
+		// pipeline's is: a syntax error at its offset, an unknown key
+		// where it is written.
+		line, col := pipeline.ParseErrorAt(req.Text, err)
+		return ok(ctx, map[string]any{"diags": []pipeDiag{{Diag: pipeline.Diag{Severity: pipeline.SevError,
+			Msg: strings.TrimPrefix(err.Error(), "json: ")}, Line: line, Col: col}}, "fires": []cronFires{}})
 	}
 	var conns []string
 	for _, c := range s.cfg.Conns() {
 		conns = append(conns, c.Name)
 	}
-	diags := jobs.CheckJob(spec, jobs.CheckOptions{Find: jobs.PipelineFinder(s.cfg.PipelinesDir), Conns: conns})
+	// each finding placed in the text (jobs.Locate, which the TUI's
+	// file:line:col shares), for the JSON view's markers
+	found := jobs.CheckJob(spec, jobs.CheckOptions{Find: jobs.PipelineFinder(s.cfg.PipelinesDir), Conns: conns})
+	diags := make([]pipeDiag, len(found))
+	for i, d := range found {
+		diags[i] = pipeDiag{Diag: d}
+		diags[i].Line, diags[i].Col = jobs.Locate(req.Text, d.Where)
+	}
 	fires := []cronFires{}
 	loc, lerr := spec.Location()
 	for _, expr := range spec.Triggers.Schedule {
@@ -313,7 +324,7 @@ func (s *Server) handleJobCheck(ctx rweb.Context) error {
 		}
 		fires = append(fires, cf)
 	}
-	return ok(ctx, map[string]any{"diags": nonNil(diags), "fires": fires, "layout": spec.Layout()})
+	return ok(ctx, map[string]any{"diags": diags, "fires": fires, "layout": spec.Layout()})
 }
 
 // handleJobLayout is GET /api/v1/jobs/:name/layout: where the jobs tab

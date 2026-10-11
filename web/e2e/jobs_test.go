@@ -145,6 +145,7 @@ func jobTabs(t *testing.T, e *env, p *rod.Page) {
 	  return !!c && c.value === "0 2 * * *" && !!f && /^next: /.test(f.textContent) && (f.textContent.match(/02:00/g) || []).length === 5;
 	}`)
 	shot(t, p, "job-tab")
+	jobDottedIDs(t, p)
 
 	// ── a palette drag onto a card, then Delete ──────────────────────────
 	dragTo(t, p, `#jobp .pitem[data-pipe="cats-report"]`, `#jobp .jcard[data-step="report"]`, 0, 0)
@@ -262,4 +263,68 @@ func jobTabs(t *testing.T, e *env, p *rod.Page) {
 	  const h = document.querySelector("#jobp .rvhead .rvst");
 	  return !!h && /canceled/.test(h.textContent) && !document.querySelector("#qtabs .qtab.job.on .qbusy");
 	}`)
+}
+
+// dottedIDsJob has a step whose id holds a dot, beside the step its id
+// starts with, and a step whose id is invalid (N-198):
+//
+//	copy.x.after   no step called "nope"    → copy.x, not copy
+//	pipelines[2]   not a step id; no zz     → "a b", by its place
+const dottedIDsJob = `{
+  "name": "e2e_nightly",
+  "pipelines": [
+    { "id": "copy", "pipeline": "copy-cats" },
+    { "id": "copy.x", "pipeline": "breed-counts", "after": ["copy", "nope"] },
+    { "id": "a b", "pipeline": "zz", "after": ["copy"] }
+  ]
+}
+`
+
+// jobDottedIDs puts dottedIDsJob in the open job tab through its JSON view
+// and checks that each finding reaches its own card, the inspector's list
+// (labelled by what follows the step) and its line in the JSON view; then
+// puts the tab's text back.
+func jobDottedIDs(t *testing.T, p *rod.Page) {
+	toggleJSON := func() {
+		eval(t, p, `() => document.querySelector('#jobp .pbar button[data-act="json"]').click()`)
+	}
+	toggleJSON()
+	waitFor(t, p, "the job's JSON view", `() => document.querySelector(".app").classList.contains("pipe-json")`)
+	eval(t, p, `(text) => { const ed = monaco.editor.getEditors()[0]; window.__keptJob = ed.getValue(); ed.setValue(text); }`, dottedIDsJob)
+	toggleJSON()
+	waitFor(t, p, "copy.x's ⚠ and a b's, none on copy", `() => {
+	  const card = (id) => document.querySelector('#jobp .jcard[data-step="' + id + '"]');
+	  const n = (id) => ((card(id) || {}).querySelector && card(id).querySelector(".cd") || {}).textContent || "";
+	  return !document.querySelector(".app").classList.contains("pipe-json") && !!card("copy") && !!card("copy.x") && !!card("a b") &&
+	    n("copy") === "" && !card("copy").classList.contains("bad") &&
+	    n("copy.x") === "⚠1" && card("copy.x").classList.contains("bad") && n("a b") === "⚠2";
+	}`)
+	clickAt(t, p, `#jobp .jcard[data-step="copy.x"] .cid`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "copy.x's finding in the inspector, labelled after", `() => {
+	  const ds = [...document.querySelectorAll("#jobp .pinsp [data-diags] .idiag")].map((d) => d.textContent);
+	  return ds.length === 1 && /^✗ after: no step called "nope"/.test(ds[0]);
+	}`)
+	clickAt(t, p, `#jobp .jcard[data-step="a b"] .cid`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "a b's two findings in the inspector", `() => {
+	  const ds = [...document.querySelectorAll("#jobp .pinsp [data-diags] .idiag")].map((d) => d.textContent);
+	  return ds.length === 2 && ds.some((d) => /^✗ not a step id/.test(d)) && ds.some((d) => /^✗ pipeline zz/.test(d));
+	}`)
+	// the JSON view's marks, by the where each message starts with: the
+	// line each step is written on (5, 6), the after's on copy.x's own
+	got := evalStr(t, p, `() => monaco.editor.getModelMarkers({ resource: monaco.editor.getEditors()[0].getModel().uri, owner: "dbc" })
+	  .map((m) => m.message.split(":")[0] + "@" + m.startLineNumber).sort().join(" ")`)
+	if want := "copy.x.after@5 pipelines[2]@6 pipelines[2]@6"; got != want {
+		t.Errorf("the job JSON view's marks = %q, want %q", got, want)
+	}
+	shot(t, p, "job-dotted-ids")
+
+	// the tab as it was: the same text is no unsaved change
+	toggleJSON()
+	waitFor(t, p, "the job's JSON view", `() => document.querySelector(".app").classList.contains("pipe-json")`)
+	eval(t, p, `() => monaco.editor.getEditors()[0].setValue(window.__keptJob)`)
+	toggleJSON()
+	waitFor(t, p, "the job back, nothing unsaved", `() =>
+	  !document.querySelector(".app").classList.contains("pipe-json") &&
+	  document.querySelectorAll("#jobp .jcard").length === 4 &&
+	  !document.querySelector("#qtabs .qtab.job.on .qdirty")`)
 }

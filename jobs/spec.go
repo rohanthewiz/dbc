@@ -256,7 +256,8 @@ type CheckOptions struct {
 // CheckJob finds what is wrong with a job without running it. Diags use
 // pipeline.Diag, with where "name", "root", "params.<p>", "<step>",
 // "<step>.after", "<step>.params.<p>", "triggers.schedule[i]",
-// "triggers.tz" or "policy.<field>":
+// "triggers.tz" or "policy.<field>" — <step> being the step's id, or
+// "pipelines[i]" when the id is invalid:
 //
 //	names      the job, its params and steps are valid names; steps unique
 //	graph      every after names another step; no cycles (Kahn); exactly
@@ -281,19 +282,26 @@ func CheckJob(s *Spec, opt CheckOptions) []pipeline.Diag {
 	if len(s.Pipelines) == 0 {
 		c.errorf("pipelines", "a job needs at least one pipeline")
 	}
+	// wheres[i] is how every finding about the i-th step names it: its id,
+	// or "pipelines[i]" when the id is invalid ("", "a b"), as
+	// pipeline.Check names a node. An index always reaches the step's card
+	// and its place in the text (Locate), whatever the id holds.
 	ids := map[string]bool{}
+	wheres := make([]string, len(s.Pipelines))
 	for i, st := range s.Pipelines {
+		wheres[i] = st.ID
 		switch {
 		case !pipeline.ValidName(st.ID):
-			c.errorf(fmt.Sprintf("pipelines[%d]", i), "not a step id: letters, digits, . _ - (got %q)", st.ID)
+			wheres[i] = fmt.Sprintf("pipelines[%d]", i)
+			c.errorf(wheres[i], "not a step id: letters, digits, . _ - (got %q)", st.ID)
 		case ids[st.ID]:
 			c.errorf(st.ID, "two steps are called %q", st.ID)
 		}
 		ids[st.ID] = true
 	}
-	c.graph(s, ids)
-	for _, st := range s.Pipelines {
-		c.step(s, st, opt)
+	c.graph(s, ids, wheres)
+	for i, st := range s.Pipelines {
+		c.step(s, st, wheres[i], opt)
 	}
 	c.triggers(s)
 	c.policy(s.Policy)
@@ -314,17 +322,17 @@ func (c *jobChecker) warnf(where, format string, args ...any) {
 //
 // Kahn's algorithm: repeatedly take a step none of whose afters is left;
 // what can never be taken sits on a cycle (or behind one).
-func (c *jobChecker) graph(s *Spec, ids map[string]bool) {
-	for _, st := range s.Pipelines {
+func (c *jobChecker) graph(s *Spec, ids map[string]bool, wheres []string) {
+	for i, st := range s.Pipelines {
 		seen := map[string]bool{}
 		for _, a := range st.After {
 			switch {
 			case a == st.ID:
-				c.errorf(st.ID+".after", "a step cannot wait for itself")
+				c.errorf(wheres[i]+".after", "a step cannot wait for itself")
 			case !ids[a]:
-				c.errorf(st.ID+".after", "no step called %q", a)
+				c.errorf(wheres[i]+".after", "no step called %q", a)
 			case seen[a]:
-				c.errorf(st.ID+".after", "%q is listed twice", a)
+				c.errorf(wheres[i]+".after", "%q is listed twice", a)
 			}
 			seen[a] = true
 		}
@@ -396,17 +404,16 @@ func (c *jobChecker) graph(s *Spec, ids map[string]bool) {
 				}
 			}
 		}
-		for _, st := range s.Pipelines {
+		for i, st := range s.Pipelines {
 			if !reach[st.ID] && len(st.After) > 0 {
-				c.errorf(st.ID, "not reachable from the root %s", root)
+				c.errorf(wheres[i], "not reachable from the root %s", root)
 			}
 		}
 	}
 }
 
-// step checks one step against its pipeline.
-func (c *jobChecker) step(s *Spec, st Step, opt CheckOptions) {
-	where := st.ID
+// step checks one step against its pipeline; where names the step.
+func (c *jobChecker) step(s *Spec, st Step, where string, opt CheckOptions) {
 	if strings.TrimSpace(st.Pipeline) == "" {
 		c.errorf(where, "no pipeline named")
 		return

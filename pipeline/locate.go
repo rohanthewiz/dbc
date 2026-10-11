@@ -63,24 +63,12 @@ func Locate(text, where string) (int, int) {
 		at += loc[0]
 		return true
 	}
-	// findName moves to the nth `"key": "…"` from at on whose string,
-	// decoded, is s. Decoding, rather than searching for s as written,
-	// finds an invalid name however the file spells it: "" as `""`, a
-	// quote or backslash escaped. nth counts the elements before this one
-	// that share its name, so a duplicate is found as itself.
 	findName := func(key, s string, nth int) bool {
-		re := regexp.MustCompile(`"` + regexp.QuoteMeta(key) + `"\s*:\s*("(?:[^"\\]|\\.)*")`)
-		for _, m := range re.FindAllStringSubmatchIndex(text[at:], -1) {
-			var v string
-			if json.Unmarshal([]byte(text[at+m[2]:at+m[3]]), &v) != nil || v != s {
-				continue
-			}
-			if nth--; nth < 0 {
-				at += m[0]
-				return true
-			}
+		i := FindName(text, at, key, s, nth)
+		if i >= 0 {
+			at = i
 		}
-		return false
+		return i >= 0
 	}
 	quote := func(s string) string { return regexp.QuoteMeta(strings.ReplaceAll(s, `"`, `\"`)) }
 	switch {
@@ -135,7 +123,7 @@ func fragmentAt(spec *Spec, part string) (*Fragment, string, int) {
 	if spec == nil {
 		return nil, part, 0
 	}
-	i := indexIn(part, "fragments", len(spec.Fragments))
+	i := IndexIn(part, "fragments", len(spec.Fragments))
 	if i < 0 {
 		i = slices.IndexFunc(spec.Fragments, func(f Fragment) bool { return f.Name == part })
 	}
@@ -171,7 +159,7 @@ func nodeAt(f *Fragment, rest string) (id string, nth int, field string) {
 	i := -1
 	if f != nil {
 		head, tail, _ := strings.Cut(rest, ".")
-		if i = indexIn(head, "nodes", len(f.Nodes)); i >= 0 {
+		if i = IndexIn(head, "nodes", len(f.Nodes)); i >= 0 {
 			field = tail
 		} else {
 			for j, n := range f.Nodes {
@@ -198,10 +186,31 @@ func nodeAt(f *Fragment, rest string) (id string, nth int, field string) {
 	return id, nth, field
 }
 
-// indexIn reads "<list>[i]" — Check's name for the i-th element of a list
+// FindName is the offset of the nth `"key": "…"` at or after from whose
+// string, decoded, is s; -1 when there is none. Decoding, rather than
+// searching for s as written, finds an invalid name however the file
+// spells it: "" as `""`, a quote or backslash escaped. nth counts the
+// elements before the wanted one that share its name, so a duplicate is
+// found as itself. jobs.Locate finds a step's "id" the same way.
+func FindName(text string, from int, key, s string, nth int) int {
+	re := regexp.MustCompile(`"` + regexp.QuoteMeta(key) + `"\s*:\s*("(?:[^"\\]|\\.)*")`)
+	for _, m := range re.FindAllStringSubmatchIndex(text[from:], -1) {
+		var v string
+		if json.Unmarshal([]byte(text[from+m[2]:from+m[3]]), &v) != nil || v != s {
+			continue
+		}
+		if nth--; nth < 0 {
+			return from + m[0]
+		}
+	}
+	return -1
+}
+
+// IndexIn reads "<list>[i]" — Check's name for the i-th element of a list
 // when the element's own name is invalid — as i, when the list has more
-// than i elements; -1 for anything else.
-func indexIn(s, list string, n int) int {
+// than i elements; -1 for anything else. CheckJob names a step the same
+// way ("pipelines[i]").
+func IndexIn(s, list string, n int) int {
 	if !strings.HasPrefix(s, list+"[") || !strings.HasSuffix(s, "]") {
 		return -1
 	}

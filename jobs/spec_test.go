@@ -49,6 +49,12 @@ func TestCheckJob(t *testing.T) {
 		{`{"name": "j", "pipelines": [{"id": "a", "pipeline": "p"}], "policy": {"overlap": "both"}}`, "policy.overlap", `"skip" or "queue"`},
 		{`{"name": "j", "pipelines": [{"id": "a", "pipeline": "p"}], "policy": {"max_parallel": -1}}`, "policy.max_parallel", "at least 1"},
 		{`{"name": "j", "pipelines": [{"id": "a", "pipeline": "p"}], "policy": {"timeout": "soon"}}`, "policy.timeout", "positive duration"},
+		// a step whose id is invalid is named by its place in every
+		// finding about it, not only the id's own
+		{`{"name": "j", "pipelines": [{"id": "a", "pipeline": "p"}, {"id": "b c", "pipeline": "p", "after": ["a"]}]}`, "pipelines[1]", "not a step id"},
+		{`{"name": "j", "pipelines": [{"id": "a", "pipeline": "p"}, {"id": "", "pipeline": "p", "after": ["x"]}]}`, "pipelines[1].after", `no step called "x"`},
+		{`{"name": "j", "pipelines": [{"id": "a", "pipeline": "p"}, {"id": "b c", "pipeline": "p", "after": ["a"], "params": {"x": "1"}}]}`, "pipelines[1].params.x", `has no parameter "x"`},
+		{`{"name": "j", "pipelines": [{"id": "a", "pipeline": "p"}, {"pipeline": "zz", "after": ["a"]}]}`, "pipelines[1]", "pipeline zz"},
 	}
 	for _, c := range cases {
 		diags := CheckJob(job(t, c.text), CheckOptions{Find: find})

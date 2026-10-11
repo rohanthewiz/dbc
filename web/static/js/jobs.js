@@ -349,10 +349,11 @@
       e.fires = r.fires || [];
       if (r.layout) e.layout = r.layout;
       // the JSON view's markers: a diag names where it is ("clean.after"),
-      // not a line, so it is placed on the line where that step (or key)
-      // is written
-      dbc.editor.setMarkers(docKey(name), e.diags.map((d) => Object.assign({ severity: d.severity, msg: (d.where ? d.where + ": " : "") + d.msg },
-        lineOf(e.text, d.where))));
+      // and the server places that on the text (jobs.Locate, which matches
+      // it against the step ids the text declares); one it could not place
+      // (line 0) is in the inspector's list only
+      dbc.editor.setMarkers(docKey(name), e.diags.filter((d) => d.line > 0).map((d) => ({
+        line: d.line, col: d.col, severity: d.severity, msg: (d.where ? d.where + ": " : "") + d.msg })));
       if (loud) {
         if (!e.diags.length) log("ok", "✓ " + name + " checks out", logKey(name));
         for (const d of e.diags) log(d.severity === "error" ? "err" : "warn", (d.where ? d.where + ": " : "") + d.msg, logKey(name));
@@ -362,31 +363,41 @@
       return e.diags;
     }
 
-    // lineOf places a diag's where on the text: a step's "id": "…" line,
-    // a key's line, else the first line.
-    function lineOf(text, where) {
-      const lines = text.split("\n");
-      const w = String(where || "");
-      const step = w.split(".")[0];
-      const find = (re) => { const i = lines.findIndex((l) => re.test(l)); return i >= 0 ? { line: i + 1, col: 1 } : null; };
-      const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      return (step && find(new RegExp('"id":\\s*"' + esc(step) + '"'))) ||
-        (w.startsWith("triggers") && find(/"(schedule|tz|catch_up|webhook)"/)) ||
-        (w.startsWith("policy.") && find(new RegExp('"' + esc(w.slice(7)) + '"'))) ||
-        (w && find(new RegExp('"' + esc(w.split(".")[0].replace(/\[\d+\]$/, "")) + '"'))) || { line: 1, col: 1 };
-    }
-
-    // diagsAt: a step's findings ("clean", "clean.after", "clean.params.x"),
-    // and the job's (the rest).
+    // diagsAt sorts the check's findings: a step's — CheckJob names it by
+    // its id, or "pipelines[i]" when the id is invalid, then "after",
+    // "params" or "params.<p>" — keyed by the step's id with what follows
+    // as the label, and the job's own (the rest). An id may hold dots, so
+    // the step is the longest id that is the whole where or is followed by
+    // a step's key, as jobs.Locate (stepAt) matches it: "nightly.copy.after"
+    // is nightly.copy's even beside a step nightly, and "triggers.tz" is
+    // the job's even beside a step called triggers.
     function diagsAt(e) {
-      const ids = new Set(((e.spec && e.spec.pipelines) || []).map((s) => s.id));
+      const steps = (e.spec && e.spec.pipelines) || [];
       const out = { step: new Map(), top: [] };
+      const stepKey = (r) => r === "after" || r === "params" || r.startsWith("params.");
       for (const d of e.diags || []) {
-        const head = String(d.where || "").split(".")[0];
-        if (ids.has(head)) {
-          if (!out.step.has(head)) out.step.set(head, []);
-          out.step.get(head).push(d);
-        } else out.top.push(d);
+        const w = String(d.where || "");
+        let st = null, rest = "";
+        const m = /^pipelines\[(\d+)\](?:\.(.*))?$/.exec(w);
+        if (m && steps[Number(m[1])]) {
+          st = steps[Number(m[1])];
+          rest = m[2] || "";
+        } else {
+          // an id is a string when the file has one; a step without one is
+          // only ever named by its index
+          for (const x of steps) {
+            if (typeof x.id !== "string" || !x.id || (st && x.id.length <= st.id.length) || !w.startsWith(x.id)) continue;
+            const r = w.slice(x.id.length);
+            if (r === "" || (r[0] === "." && stepKey(r.slice(1)))) { st = x; rest = r.slice(1); }
+          }
+        }
+        if (st) {
+          if (!out.step.has(st.id)) out.step.set(st.id, []);
+          out.step.get(st.id).push({ ...d, label: rest });
+        } else {
+          const dot = w.indexOf(".");
+          out.top.push({ ...d, label: dot < 0 ? "" : w.slice(dot + 1) });
+        }
       }
       return out;
     }
@@ -722,7 +733,7 @@
       const da = diagsAt(e), s = e.sel;
       const ds = s && s.kind === "step" ? da.step.get(s.id) || [] : s && s.kind === "edge" ? da.step.get(s.to) || [] : da.top;
       box.replaceChildren(...ds.map((d) => el("div", "idiag " + d.severity, (d.severity === "error" ? "✗ " : "⚠ ") +
-        (d.where && d.where.includes(".") ? d.where.split(".").slice(1).join(".") + ": " : "") + d.msg)));
+        (d.label ? d.label + ": " : "") + d.msg)));
     }
 
     // drawFires writes each cron line's next fires under it (from the

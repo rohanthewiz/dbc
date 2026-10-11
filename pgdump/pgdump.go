@@ -238,6 +238,12 @@ type Tools struct {
 	Restore string // pg_restore's, beside it; "" if not there
 	Version string // "17.2", as pg_dump reports it
 	Major   int
+	// Image, when set, is the PostgreSQL image the tools run in, through
+	// Docker (docker.go): no local pg_dump was new enough for the server.
+	// Dump and Restore are then the tools' names in it, Docker the docker
+	// binary.
+	Image  string
+	Docker string
 }
 
 // probeDirs are where PostgreSQL's client tools are commonly installed but
@@ -397,8 +403,9 @@ type Run struct {
 	// Progress, if set, is told what is happening, a line at a time.
 	Progress func(string)
 
-	env  []string  // the tools' environment, set by Do
-	errw io.Writer // Stderr, made safe for split's concurrent pg_restores
+	env    []string  // the tools' environment, set by Do
+	errw   io.Writer // Stderr, made safe for split's concurrent pg_restores
+	svcDir string    // the service file's directory, which a container mounts
 }
 
 // lockedWriter serializes writes to w.
@@ -426,15 +433,23 @@ func (r *Run) say(format string, args ...any) {
 // that is the archive's pg_dump and a description of the conversions, whose
 // list of tables is only known once the archive exists.
 func (r *Run) Commands() []string {
+	// line is a tool's command line as run: in Docker, the docker run
+	// that runs it (its service file's directory is only made by Do)
+	line := func(tool string, args []string) string {
+		if r.Tools.Image != "" {
+			return shellJoin(append([]string{r.Tools.Docker}, r.dockerArgs(tool, args, "")...))
+		}
+		return shellJoin(append([]string{tool}, args...))
+	}
 	switch r.Opts.Format {
 	case Split:
 		return []string{
-			shellJoin(append([]string{r.Tools.Dump}, r.splitDumpArgs(r.archiveDir())...)),
+			line(r.Tools.Dump, r.splitDumpArgs(r.archiveDir())),
 			"# then pg_restore writes each part of the archive as SQL into " + r.Opts.Out +
 				" (pre-data, one file per table, post-data) and dbc writes restore.sql",
 		}
 	default:
-		return []string{shellJoin(append([]string{r.Tools.Dump}, r.Opts.dumpArgs(r.Opts.Format, r.Opts.Out, conninfo, r.Opts.Jobs)...))}
+		return []string{line(r.Tools.Dump, r.Opts.dumpArgs(r.Opts.Format, r.Opts.Out, conninfo, r.Opts.Jobs))}
 	}
 }
 
@@ -452,7 +467,19 @@ func (r *Run) Do(ctx context.Context) (err error) {
 	}
 	defer os.RemoveAll(tmp)
 	svc := filepath.Join(tmp, "pg_service.conf")
-	if err = os.WriteFile(svc, r.Conn.ServiceFile(serviceName), 0o600); err != nil {
+	conn := r.Conn
+	if r.Tools.Image != "" {
+		// the tools run in a container (docker.go): the connection as it
+		// sees the server, and the image there before the first run
+		if conn, err = dockerConn(r.Conn); err != nil {
+			return err
+		}
+		r.svcDir = tmp
+		if err = r.pullImage(ctx); err != nil {
+			return err
+		}
+	}
+	if err = os.WriteFile(svc, conn.ServiceFile(serviceName), 0o600); err != nil {
 		return serr.Wrap(err)
 	}
 	r.env = append(os.Environ(), "PGSERVICEFILE="+svc)
@@ -505,7 +532,7 @@ func (r *Run) Do(ctx context.Context) (err error) {
 // Its stderr goes to r.Stderr and is also kept, so a failure can be told
 // apart (a version mismatch gets a hint).
 func (r *Run) run(ctx context.Context, tool string, args []string, out io.Writer) error {
-	cmd := exec.CommandContext(ctx, tool, args...)
+	cmd := r.command(ctx, tool, args) // the tool, or docker running it (docker.go)
 	cmd.Env = r.env
 	cmd.Stdout = out
 	var errBuf bytes.Buffer

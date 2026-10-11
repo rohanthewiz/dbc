@@ -86,7 +86,8 @@ func BinDir(flag string, cfg *config.Config) string {
 }
 
 // Prepare readies a dump of conn: the options checked, the connection
-// restated, the server asked its version, a pg_dump new enough found. The
+// restated, the server asked its version, a pg_dump new enough found — or
+// the server's image in Docker when none is (LocateOrDocker). The
 // UIs call it as the dialog's Dump is pressed, so whatever is wrong is
 // said in the dialog rather than later, in a log.
 func Prepare(ctx context.Context, cfg *config.Config, mgr *db.Manager, conn string, opts Options) (*Run, error) {
@@ -106,7 +107,7 @@ func Prepare(ctx context.Context, cfg *config.Config, mgr *db.Manager, conn stri
 	if err != nil {
 		return nil, err
 	}
-	tools, err := Locate(ctx, BinDir("", cfg), major, opts.Format == Split)
+	tools, err := LocateOrDocker(ctx, BinDir("", cfg), major, opts.Format == Split)
 	if err != nil {
 		return nil, err
 	}
@@ -261,6 +262,17 @@ func RestoreHint(f Format, out string) string {
 	return "pg_restore -d TARGET " + shellJoin([]string{out})
 }
 
+// RestoreNote is what the restore hint should add for a dump pg_dump ran
+// in Docker: an archive (custom, tar, directory) is in the server's
+// version's format, which an older pg_restore — this machine's, or it
+// would have dumped — cannot read. "" otherwise.
+func (r *Run) RestoreNote() string {
+	if r.Tools.Image == "" || !r.Opts.Format.Archive() {
+		return ""
+	}
+	return fmt.Sprintf(" (pg_restore %d or newer: this machine's is older; %s has one)", r.Tools.Major, r.Tools.Image)
+}
+
 // Size is the bytes at p, a file or a directory's files; 0 if unreadable.
 func Size(p string) int64 {
 	var n int64
@@ -295,8 +307,12 @@ func (r *Run) Report(ctx context.Context, say func(level, text string)) error {
 	r.Progress = func(s string) { say("info", s) }
 	lines := Lines(func(l string) { say(toolLevel(l), l) })
 	r.Stderr = lines
-	say("info", fmt.Sprintf("dumping %s (PostgreSQL %d) as %s to %s, with pg_dump %s from %s",
-		r.Name, r.ServerMajor, r.Opts.Format, r.Opts.Out, r.Tools.Version, filepath.Dir(r.Tools.Dump)))
+	from := " from " + filepath.Dir(r.Tools.Dump)
+	if r.Tools.Image != "" {
+		from = " — no pg_dump here is new enough for the server" // Version says where (in Docker)
+	}
+	say("info", fmt.Sprintf("dumping %s (PostgreSQL %d) as %s to %s, with pg_dump %s%s",
+		r.Name, r.ServerMajor, r.Opts.Format, r.Opts.Out, r.Tools.Version, from))
 	for _, k := range r.Conn.Dropped {
 		say("info", "pg_dump connects without the DSN's "+k+" (a session setting libpq does not take)")
 	}
@@ -310,7 +326,7 @@ func (r *Run) Report(ctx context.Context, say func(level, text string)) error {
 		say("err", "dump of "+r.Name+" failed: "+serr.UserMsgFromErr(err, err.Error()))
 	default:
 		say("ok", fmt.Sprintf("dumped %s to %s (%s, %s) — restore with %s", r.Name, r.Opts.Out,
-			HumanSize(Size(r.Opts.Out)), time.Since(start).Round(time.Second), RestoreHint(r.Opts.Format, r.Opts.Out)))
+			HumanSize(Size(r.Opts.Out)), time.Since(start).Round(time.Second), RestoreHint(r.Opts.Format, r.Opts.Out)+r.RestoreNote()))
 	}
 	return err
 }

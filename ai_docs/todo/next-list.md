@@ -38,22 +38,6 @@ ten session docs in `ai_docs/claude_sessions/`
 
 ## Open
 
-- **N-170** · raised `2026-1009-0748-pg-dump-cli-tui-web` · value medium
-  Run pg_dump from Docker when no local one is new enough. `pgdump.Locate`
-  refuses a server newer than every pg_dump it finds. (Corrected 2026-10-10
-  by `/next-list`, replacing the `2026-1009-1632-n175-pipeline-code-editors`
-  correction, which said libpq 17.5 was installed and postgresql@16 was not:
-  this machine now has the reverse. No libpq keg exists and nothing named
-  pg_dump is on PATH. The only pg_dump `Locate` can find is Homebrew's
-  keg-only postgresql@16, 16.6, in `/opt/homebrew/opt/postgresql@16/bin`
-  (installed 2024-12-05). So neither of the two newest majors a "Postgres in
-  Docker…" container offers, 18 (`pgdocker.Versions` lists it first) and
-  17, can be dumped here without installing libpq first.) dbc already drives
-  the docker
-  CLI (package pgdocker): `docker run --rm postgres:<server major> pg_dump`,
-  with the output directory mounted and the service file passed in, would
-  always match the server. Mind the network: a dbc container's server is on
-  127.0.0.1 of the host, not of the pg_dump container.
 - **N-171** · raised `2026-1009-0748-pg-dump-cli-tui-web` · value low
   dbc web: download a single-file dump (plain, custom, tar) in the browser.
   Today the dialog writes on the machine dbc web runs on, which is right for
@@ -290,6 +274,11 @@ and `raised`.
   postgresql@16's 16.6 (see N-170), so a hand check here needs a server of
   16 or older. A "Postgres in Docker…" 17 or 18 will refuse until libpq is
   installed or N-170 lands.
+  Updated `2026-1010-2022-n184-n185-n170`: N-170 landed. A 17 or 18 server
+  is now dumped with the server's own pg_dump in Docker (the web dialog's
+  e2e step passed against postgres:17 that way). The hand check can use
+  one, and should look at the log's "with pg_dump 17 (in Docker,
+  postgres:17)" line and the restore hint's version note.
 
 ## Roadmap
 
@@ -475,6 +464,23 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-170** · raised `2026-1009-0748-pg-dump-cli-tui-web` · value medium
+  Run pg_dump from Docker when no local one is new enough. `pgdump.Locate`
+  refuses a server newer than every pg_dump it finds. (Corrected 2026-10-10
+  by `/next-list`, replacing the `2026-1009-1632-n175-pipeline-code-editors`
+  correction, which said libpq 17.5 was installed and postgresql@16 was not:
+  this machine now has the reverse. No libpq keg exists and nothing named
+  pg_dump is on PATH. The only pg_dump `Locate` can find is Homebrew's
+  keg-only postgresql@16, 16.6, in `/opt/homebrew/opt/postgresql@16/bin`
+  (installed 2024-12-05). So neither of the two newest majors a "Postgres in
+  Docker…" container offers, 18 (`pgdocker.Versions` lists it first) and
+  17, can be dumped here without installing libpq first.) dbc already drives
+  the docker
+  CLI (package pgdocker): `docker run --rm postgres:<server major> pg_dump`,
+  with the output directory mounted and the service file passed in, would
+  always match the server. Mind the network: a dbc container's server is on
+  127.0.0.1 of the host, not of the pg_dump container.
+  closed 2026-10-10, `2026-1010-2022-n184-n185-n170` (from the cats-todo backlog): as proposed, as a fallback (`pgdump/docker.go`). `LocateOrDocker` is `Locate`, and when that finds nothing new enough, with no tools directory named, the server's major known and Docker answering (`pgdocker.FindBin` plus `Check`), the tools are `postgres:<major>`'s: `Tools.Image` and `Docker`. Both the UIs' `Prepare` and `dbc dump` use it. `Run.run` builds its command through `command`, so pg_dump and, for split, every pg_restore run as `docker run --rm -i --user UID:GID … postgres:N TOOL <the same args>`. The output's directory (split: the output itself), the service file's temp dir and the TLS files the connection names are mounted at their own paths, so the args mean the same inside. PGSERVICEFILE and PGPASSWORD go as `-e NAME`, the values from the CLI's environment, not argv. The image is pulled first, said in the progress lines. THE NETWORK, the item's caveat: `dockerConn` rewrites a loopback host to `host.docker.internal` and drops a loopback hostaddr, except on Linux, which gets `--network host` instead. A Unix-socket connection (a path host, or no host) is refused with a hint; Windows is left out. Two touch-ups: the progress line no longer says "from ." for a Docker run, and the closing line adds a version note for an archive (`RestoreNote`), since this machine's pg_restore 16 cannot read a 17 custom archive ("unsupported version (1.16) in file header", seen). README "Which pg_dump" and the dialog paragraph, SKILL.md. Tests: `pgdump.TestDockerConn`, `TestDockerArgs` (mounts, `-e` by name, no secret in argv, the dry-run command), `TestLocateOrDocker` (Docker stubbed). Real binary against postgres:17 on 127.0.0.1:55432 with only pg_dump 16.6 installed: plain ("Dumped by pg_dump version 17.11 (Debian …)", file owned by the user), custom, directory, split (its pg_restores in Docker too) and stdout all dumped. The web e2e dump step took its success path against the same server. `--dry-run` still shows the local pg_dump: it never asks the server its version, as before.
 - **N-185** · raised `2026-1009-1349-phase-4-jobs-tab-runs-view` · value low
   A preview sink's rows from a real run land in the grid of the tab that
   started it; a scheduled, webhook or CLI run has no such tab, and run

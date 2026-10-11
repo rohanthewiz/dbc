@@ -35,7 +35,9 @@ import (
 // its version and picks the first pg_dump new enough: --pg-bin (or
 // $DBC_PG_BIN, or the config's pg_bin) if given, else PATH, else Homebrew's,
 // Postgres.app's, Debian's and RHEL's usual install directories
-// (pgdump.Locate).
+// (pgdump.Locate) — and when none of those is new enough (and no directory
+// was named), the server's own image in Docker, postgres:<major>, when
+// Docker answers (pgdump.LocateOrDocker).
 //
 // Messages: pg_dump's own on stderr as they come; dbc's progress on stderr
 // when it is a terminal; with -o, a summary line on stdout.
@@ -196,7 +198,9 @@ func dumpAction(ctx context.Context, cmd *cli.Command) error {
 			fail(err, "could not reach the server")
 		}
 	}
-	tools, err := pgdump.Locate(c, pgdump.BinDir(flagDumpPGBin, cfg), major, format == pgdump.Split)
+	// no local pg_dump new enough for the server: the server's image in
+	// Docker, when Docker answers (pgdump/docker.go)
+	tools, err := pgdump.LocateOrDocker(c, pgdump.BinDir(flagDumpPGBin, cfg), major, format == pgdump.Split)
 	if err != nil {
 		if flagDumpDryRun {
 			// still worth showing the command: the binary is a detail
@@ -241,7 +245,7 @@ func dumpAction(ctx context.Context, cmd *cli.Command) error {
 		fail(err, "dump failed")
 	}
 	if flagOut != "" {
-		fmt.Printf("dumped %s (%s) to %s — restore with %s\n", conn, format, flagOut, pgdump.RestoreHint(format, flagOut))
+		fmt.Printf("dumped %s (%s) to %s — restore with %s%s\n", conn, format, flagOut, pgdump.RestoreHint(format, flagOut), run.RestoreNote())
 	}
 	return nil
 }

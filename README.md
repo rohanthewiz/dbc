@@ -517,7 +517,9 @@ The archive formats hide the owner, create and drop boxes: those are
 by commas or spaces.
 
 **Dump** first checks the form, asks the server its version and finds a
-`pg_dump` new enough. Anything wrong is said in the form, which stays open.
+`pg_dump` new enough (or the server's image in Docker, as for
+[`dbc dump`](#dumps-headless-postgres)). Anything wrong is said in the form,
+which stays open.
 Then the dump runs in the background. Each step and each line `pg_dump`
 writes go to the log, and the last line says where the dump went, its size,
 and how to restore it. A dump that fails or is stopped leaves no partial
@@ -2667,8 +2669,17 @@ the server for its version and uses the first `pg_dump` that is new enough. It
 tries `--pg-bin`, `$DBC_PG_BIN` or the config's `pg_bin` if you set one, then `PATH`, then the
 usual install directories: Homebrew's keg-only `libpq` and `postgresql@N`,
 Postgres.app, Debian's `/usr/lib/postgresql/N/bin` and RHEL's
-`/usr/pgsql-N/bin`. With none installed, `brew install libpq` (macOS) or
-`apt install postgresql-client` provides them.
+`/usr/pgsql-N/bin`. When none of those is new enough (or there is none) and
+you named no directory, dbc runs the server's own `pg_dump` in Docker,
+when Docker is running: `postgres:N` for a PostgreSQL N server (pulled the
+first time, about 150 MB), one container per tool run, removed after. The
+output's directory, the service file and any TLS files are mounted at their
+own paths, and a server on this machine's loopback is reached through
+`host.docker.internal` (on Linux, the host's network). A Unix-socket
+connection is refused there, and Windows is left out. Otherwise
+`brew install libpq` (macOS) or `apt install postgresql-client` provides
+the tools. An archive (custom, tar, directory) dumped that way needs a
+`pg_restore` as new as the server, which the closing line says.
 
 **The connection.** dbc passes the connection to `pg_dump` the way dbc would
 open it: the DSN (URL or `key=value`), the connection's [TLS](#tls) keys, and a

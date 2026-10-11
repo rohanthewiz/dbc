@@ -118,7 +118,7 @@ Exit codes: `0` ok, `1` failure, `2` bad usage (incl. unknown connection),
 | `dbc copy --from A --to B [--create] [--truncate] [--where C] SRC [DST]` | copy a table across connections/engines in one transaction | Copy headless |
 | `dbc explain [-a] [-t text\|json\|markdown\|html\|pdf\|png\|jpeg\|mermaid] [--fail-on warn\|crit] "SQL"` | plan + findings; one statement | Explain headless |
 | `dbc erd [-t mermaid\|markdown\|png\|jpeg] [--table T] [--depth N] [--views]` | schema diagram | Diagrams headless |
-| `dbc dump [-t plain\|custom\|directory\|tar\|split] [-j N] [-o PATH] [--schema-only] [--table P] [--dry-run] [-- pg_dump opts]` | Postgres only: runs pg_dump (found on PATH, Homebrew kegs, or `--pg-bin`) on the connection; `split` = SQL file per table + `restore.sql`; config `pg_bin` names the tools' dir. Also "Dump database…" in the TUI/web connections menu | Dumps headless (Postgres) |
+| `dbc dump [-t plain\|custom\|directory\|tar\|split] [-j N] [-o PATH] [--schema-only] [--table P] [--dry-run] [-- pg_dump opts]` | Postgres only: runs pg_dump (found on PATH, Homebrew kegs, or `--pg-bin`; when none is new enough for the server, `postgres:<major>`'s in Docker) on the connection; `split` = SQL file per table + `restore.sql`; config `pg_bin` names the tools' dir. Also "Dump database…" in the TUI/web connections menu | Dumps headless (Postgres) |
 | `dbc migrate status\|version\|up\|up-by-one\|up-to V\|down\|down-to V\|redo\|create NAME` | goose-compatible migrations; `--dir`, `--allow-missing` | Migrations |
 | `dbc web [--no-open] [--listen ADDR]` | browser workbench on 127.0.0.1:8450 | The browser workbench |
 | `dbc version` | version | Build |

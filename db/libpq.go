@@ -192,6 +192,10 @@ func LibpqFor(cc config.Connection) (LibpqConn, error) {
 	return lc, nil
 }
 
+// Get looks up a setting, for a caller that restates the connection (a
+// dump run in a container rewrites its host: pgdump/docker.go).
+func (lc LibpqConn) Get(k string) (string, bool) { return lc.get(k) }
+
 // get looks up a setting.
 func (lc LibpqConn) get(k string) (string, bool) {
 	for _, kv := range lc.Settings {

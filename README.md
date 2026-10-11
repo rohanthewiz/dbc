@@ -2094,7 +2094,9 @@ below it as for a query.
   sets it on the selected node), a columns field the columns a preview
   saw. SQL and Go fields are small editors: SQL coloured in the dialect
   of the node's connection, Go with the script tab's `sdb` completion and
-  hover (`b.` in `func Apply(b *sdb.Batch)` lists Batch's methods) and the
+  hover (`b.` in `func Apply(b *sdb.Batch)` lists Batch's methods), its
+  `F12` / `Shift+F12` / `F2` within the field (the node's entry points,
+  `Apply` and the like, are not renamed: dbc calls them by name) and the
   check's errors marked on their lines. Ctrl+S and Ctrl+Enter work from
   inside them as from the canvas. With nothing selected it edits the
   pipeline's name, description and parameters. Drag its left edge to

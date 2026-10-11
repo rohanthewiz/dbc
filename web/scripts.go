@@ -316,7 +316,9 @@ type scriptSymbolReq struct {
 // script tab's caret is, where the script declares it and where it uses it
 // (script.Resolve, go/types over the text alone — nothing is compiled by
 // yaegi, nothing runs). Like script-check it belongs to no workspace: a
-// script is not tied to a tab's connection.
+// script is not tied to a tab's connection. A pipeline inspector's Go
+// field asks here too, with a snippet: script.Resolve wraps it as its node
+// runs it and answers in the snippet's own offsets.
 //
 // Offsets go in and come back in UTF-16 units, the SQL editor's symbol
 // rule (symbol.go): converted to bytes for the resolver and back for

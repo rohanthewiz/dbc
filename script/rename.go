@@ -40,7 +40,9 @@ import (
 // WHAT IS REFUSED UP FRONT (Symbol.Fixed, so the rename box does not open):
 // a member of an imported package (s.Query — its declaration is not in the
 // script), a builtin (len, error), the script's Run (dbc calls it by that
-// name), and an embedded field or a type something embeds (the field is
+// name), a snippet's entry points and implied imports (symbol.go, A
+// SNIPPET), a plugin file's entry points and its Plugin var, and an
+// embedded field or a type something embeds (the field is
 // named after the type, so one would have to follow the other, and its
 // selectors with it; renaming them by hand is clearer than a rename that
 // quietly reaches into other structs). Also a concrete type's method that
@@ -64,17 +66,21 @@ const NotOnSymbol = "rename works on a name the script declares: a variable, con
 // to name. The error is a sentence for the user: nothing renamable there,
 // the symbol cannot be renamed (Symbol.Fixed), the name is not a Go name,
 // or the renamed script would mean something else.
-func Rename(src string, caret int, name string) (edits []Edit, err error) {
+//
+// A snippet (a pipeline's go field) is renamed in as its node runs it,
+// with WrapSnippet's header before it (symbol.go, A SNIPPET); the edits
+// come back in the snippet's own offsets.
+func Rename(text string, caret int, name string) (edits []Edit, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			edits, err = nil, errors.New("the script could not be read well enough to rename in")
 		}
 	}()
-	c := checkSrc(src)
+	c, src := checkText(text)
 	var sym Symbol
 	var obj types.Object
 	if c != nil {
-		sym, obj = c.resolve(caret)
+		sym, obj = c.resolve(caret + c.hdr)
 	}
 	switch {
 	case sym.Kind == "" || obj == nil && sym.Fixed == "":
@@ -119,6 +125,12 @@ func Rename(src string, caret int, name string) (edits []Edit, err error) {
 	if msg := c.recheck(src, edits, sym.Name, name); msg != "" {
 		return nil, errors.New(msg)
 	}
+	// back to the editor's offsets; every use of what a snippet declares
+	// is in the snippet (an implied import was refused as Fixed)
+	for i := range edits {
+		edits[i].From -= c.hdr
+		edits[i].To -= c.hdr
+	}
 	return edits, nil
 }
 
@@ -133,13 +145,26 @@ func (c *checked) fixed(obj types.Object, sym Symbol) string {
 	}
 	switch o := obj.(type) {
 	case *types.Func:
-		if o.Name() == "Run" && c.pkg != nil && o.Parent() == c.pkg.Scope() {
+		top := c.pkg != nil && o.Parent() == c.pkg.Scope()
+		switch {
+		case top && c.hdr > 0 && snippetEntries[o.Name()]:
+			return o.Name() + " is an entry point of the go node: dbc calls it by that name"
+		case top && c.isPlugin() && snippetEntries[o.Name()]:
+			return o.Name() + " is an entry point of the plugin: dbc calls it by that name"
+		case top && o.Name() == "Run":
 			return "Run is the script's entry point: dbc calls it by that name"
 		}
 		if msg := c.keptMethod(o, o.Name()); msg != "" {
 			return msg // String() for fmt.Stringer and the like (rename_iface.go)
 		}
+	case *types.PkgName:
+		if sym.Def != nil && sym.Def.From < c.hdr {
+			return sym.Name + " is imported for the snippet by dbc: there is no import line to rename"
+		}
 	case *types.Var:
+		if c.isPlugin() && o == c.pkg.Scope().Lookup("Plugin") {
+			return "Plugin is the plugin's descriptor: dbc looks it up by that name"
+		}
 		if o.Embedded() {
 			return sym.Name + " is an embedded field, named after its type: rename the type and the field by hand"
 		}
@@ -156,6 +181,17 @@ func (c *checked) fixed(obj types.Object, sym Symbol) string {
 	return ""
 }
 
+// isPlugin says whether the checked file is a pipeline plugin (a ◈ tab,
+// plugins_dir): one that declares a package-level var Plugin, the
+// descriptor dbc looks up by name (userplugins.go).
+func (c *checked) isPlugin() bool {
+	if c.pkg == nil {
+		return false
+	}
+	_, ok := c.pkg.Scope().Lookup("Plugin").(*types.Var)
+	return ok
+}
+
 // declScope is the scope obj is declared in, nil for a field or method
 // (go/types gives them none; the recheck covers their collisions).
 //
@@ -170,13 +206,14 @@ func (c *checked) declScope(obj types.Object) *types.Scope {
 	return s
 }
 
-// objLine is the line obj is declared on, 0 when not in the script.
+// objLine is the line obj is declared on, 0 when not in the script (nor
+// in a snippet: an import its header holds).
 func (c *checked) objLine(o types.Object) int {
 	p := o.Pos()
 	if !p.IsValid() || int(p) < c.tf.Base() || int(p) > c.tf.Base()+c.tf.Size() {
 		return 0
 	}
-	return c.tf.Line(p)
+	return max(c.tf.Line(p)-c.hdrLines, 0)
 }
 
 // taken is the scope check (see WHY BOTH): "" when name is free for obj,
@@ -208,6 +245,9 @@ func (c *checked) taken(obj types.Object, sym Symbol, name string) string {
 	switch scope {
 	case c.pkg.Scope():
 		if o := fileScope.Lookup(name); o != nil {
+			if c.objLine(o) == 0 {
+				return fmt.Sprintf("%s is already the name of a package the snippet uses", name)
+			}
 			return fmt.Sprintf("%s is already the name of an import, on line %d", name, c.objLine(o))
 		}
 	case fileScope:

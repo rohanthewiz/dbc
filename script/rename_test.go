@@ -134,6 +134,12 @@ func TestRenameRefused(t *testing.T) {
 		{"an imported member", runBody("\ts.▮Query(\"dev\", \"x\")\n"), "Ask", "Query belongs to an imported package"},
 		{"a builtin", runBody("\ts.Print(▮len(\"x\"))\n"), "size", "len is predeclared by Go"},
 		{"Run", header + "func ▮Run(s *sdb.S) error {\n\treturn nil\n}\n", "Main", "Run is the script's entry point"},
+		{"a plugin's entry point",
+			header + "var Plugin = sdb.Plugin{Name: \"x.y\"}\n\nfunc ▮Apply(b *sdb.Batch) (*sdb.Batch, error) { return b, nil }\n",
+			"Do", "Apply is an entry point of the plugin"},
+		{"a plugin's descriptor",
+			header + "var ▮Plugin = sdb.Plugin{Name: \"x.y\"}\n\nfunc Apply(b *sdb.Batch) (*sdb.Batch, error) { return b, nil }\n",
+			"P", "Plugin is the plugin's descriptor"},
 		{"an embedded field",
 			header + "type base struct{ N int }\ntype t struct{ ▮base }\n\nfunc Run(s *sdb.S) error {\n\treturn nil\n}\n",
 			"core", "base is an embedded field"},
@@ -237,6 +243,80 @@ func TestBackMapper(t *testing.T) {
 	for newOff, want := range map[int]int{0: 0, 3: 3, 6: 3, 7: 5, 8: 6, 9: 6, 10: 6, 11: 7} {
 		if got := back(newOff); got != want {
 			t.Errorf("back(%d) = %d, want %d", newOff, got, want)
+		}
+	}
+}
+
+// snippetSrc is a go.transform field's code: no package clause, its
+// imports implied (WrapSnippet), as the pipeline inspector's editor holds
+// it. Its lines are the editor's: Apply is on line 1.
+const snippetSrc = "func Apply(b *sdb.Batch) (*sdb.Batch, error) {\n" +
+	"\tn := 0\n" +
+	"\tfor _, r := range b.Rows {\n" +
+	"\t\tn += len(r)\n" +
+	"\t}\n" +
+	"\tb.Rows = append(b.Rows, []any{strings.ToUpper(\"x\"), n})\n" +
+	"\treturn b, nil\n" +
+	"}\n"
+
+// A snippet resolves as its node runs it, with WrapSnippet's header in
+// front, and the answer is in the snippet's own offsets: F12 on n goes to
+// its := in the snippet, Shift+F12 lists only the snippet's uses, and an
+// implied import has no declaration to go to and cannot be renamed.
+func TestResolveSnippet(t *testing.T) {
+	at := strings.Index(snippetSrc, "n += ")
+	sym := Resolve(snippetSrc, at)
+	def := strings.Index(snippetSrc, "n := 0")
+	if sym.Kind != "var" || sym.Name != "n" || sym.Def == nil || sym.Def.From != def || sym.At.From != at {
+		t.Fatalf("n: %+v (def want %d, at want %d)", sym, def, at)
+	}
+	if len(sym.Uses) != 3 || sym.Uses[2].From != strings.Index(snippetSrc, "n})") {
+		t.Errorf("n's uses = %v", sym.Uses)
+	}
+	for _, u := range sym.Uses {
+		if snippetSrc[u.From:u.To] != "n" {
+			t.Errorf("a use of n spans %q", snippetSrc[u.From:u.To])
+		}
+	}
+	pkg := Resolve(snippetSrc, strings.Index(snippetSrc, "strings."))
+	if pkg.Kind != "package" || pkg.Def != nil || len(pkg.Uses) != 1 || !strings.Contains(pkg.Fixed, "imported for the snippet") {
+		t.Errorf("strings: %+v", pkg)
+	}
+	if e := Resolve(snippetSrc, strings.Index(snippetSrc, "Apply")); !strings.Contains(e.Fixed, "entry point of the go node") {
+		t.Errorf("Apply: fixed = %q", e.Fixed)
+	}
+	// a script keeps its own offsets: nothing is put before it
+	if sym := Resolve(symbolSrc, caretAt(t, symbolSrc, "add(&t", 1, 0)); sym.Def == nil || symbolSrc[sym.Def.From:sym.Def.To] != "add" {
+		t.Errorf("a script's func: %+v", sym)
+	}
+}
+
+// F2 in a snippet: the edits are the snippet's own, and a refusal's line
+// is the editor's.
+func TestRenameSnippet(t *testing.T) {
+	edits, err := Rename(snippetSrc, strings.Index(snippetSrc, "n := 0"), "count")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "func Apply(b *sdb.Batch) (*sdb.Batch, error) {\n" +
+		"\tcount := 0\n" +
+		"\tfor _, r := range b.Rows {\n" +
+		"\t\tcount += len(r)\n" +
+		"\t}\n" +
+		"\tb.Rows = append(b.Rows, []any{strings.ToUpper(\"x\"), count})\n" +
+		"\treturn b, nil\n" +
+		"}\n"
+	if got := applyEdits(snippetSrc, edits); got != want {
+		t.Errorf("renamed:\n%s", got)
+	}
+	for _, c := range []struct{ mark, to, want string }{
+		{"Apply", "Do", "Apply is an entry point of the go node"},
+		{"strings.", "str", "strings is imported for the snippet"},
+		{"n := 0", "r", "the n on line 4 would then mean the r declared on line 3"},
+		{"n := 0", "b", "b is already declared in this scope, on line 1"},
+	} {
+		if _, err := Rename(snippetSrc, strings.Index(snippetSrc, c.mark), c.to); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s → %s: err = %v, want %q", c.mark, c.to, err, c.want)
 		}
 	}
 }

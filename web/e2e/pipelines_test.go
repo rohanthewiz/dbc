@@ -279,6 +279,28 @@ func pipelineCodeField(t *testing.T, p *rod.Page, disk func(string) string) {
 	}`)
 	shot(t, p, "pipeline-code-field")
 
+	// F12 and F2 in the field (N-193): the server wraps the snippet as the
+	// node runs it (no package clause) and answers in the field's own
+	// offsets, so F12 on n's use goes to its :=, and F2 renames both
+	eval(t, p, `() => {
+	  const ed = codeEd("code");
+	  ed.executeEdits("e2e", [{ range: ed.getModel().getFullModelRange(),
+	    text: "func Next(e *sdb.Env) (*sdb.Batch, error) {\n\tn := 1\n\treturn nil, fmt.Errorf(\"%d\", n)\n}\n" }]);
+	  ed.setPosition(ed.getModel().getPositionAt(ed.getValue().lastIndexOf("n)")));
+	  ed.focus();
+	}`)
+	if got := evalStr(t, p, `() => { const ed = codeEd("code"); return ed.getModel().getWordAtPosition(ed.getPosition()).word; }`); got != "n" {
+		t.Fatalf("the caret is on %q, want n's use", got)
+	}
+	chord(t, p, 0, "F12", "F12", 123)
+	waitFor(t, p, "F12: the caret on n's :=", `() => { const at = codeEd("code").getPosition(); return at.lineNumber === 2 && at.column === 2; }`)
+	chord(t, p, 0, "F2", "F2", 113)
+	waitFor(t, p, "the rename box, holding n", `() => { const i = document.querySelector(".rename-box input"); return !!i && i.value === "n"; }`)
+	eval(t, p, `() => { const i = document.querySelector(".rename-box input"); i.select(); }`)
+	p.MustInsertText("count")
+	p.Keyboard.MustType(input.Enter)
+	waitFor(t, p, "F2: both renamed", `() => /\tcount := 1\n\treturn nil, fmt\.Errorf\("%d", count\)/.test(codeEd("code").getValue())`)
+
 	// Ctrl+X with nothing selected is not the SQL tab's explain here
 	eval(t, p, `() => { window.__explained = 0; window.__explain = dbc.cmd.explain; dbc.cmd.explain = () => { window.__explained++; }; }`)
 	chord(t, p, modCtrl, "x", "KeyX", 88)

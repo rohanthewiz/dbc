@@ -199,15 +199,6 @@ ten session docs in `ai_docs/claude_sessions/`
   `minis`). Complete against the node's own `conn` instead: a completion
   route keyed by a connection name rather than a workspace — the same
   catalog read N-176 wants for the `table` field, so the two land together.
-- **N-193** · raised `2026-1009-1632-n175-pipeline-code-editors` · value low
-  F12 / Shift+F12 / F2 in a pipeline `go` field find nothing: the Go
-  providers ask `/api/v1/script-symbol`, which resolves a whole file, and
-  a snippet has no package clause (Monaco says "no definition found").
-  Wrap it server-side as `checkSnippet` does (`script.WrapSnippet`) and
-  shift the answer's offsets back by the header's length.
-  Updated 2026-10-10 (`/next-list`): `WrapSnippet` returns header+code and
-  the header's line count (`script/plugins.go`), not its byte length. Shift
-  by those lines, or compute the byte shift as `len(src)-len(code)`.
 - **N-200** · raised `2026-1010-1750-n199-script-path` · value low
   A `go.action` or `script.run` node's `s.Path` ignores the run's own
   files_dir. The node gets the session that ran the pipeline, and
@@ -635,6 +626,16 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-193** · raised `2026-1009-1632-n175-pipeline-code-editors` · value low
+  F12 / Shift+F12 / F2 in a pipeline `go` field find nothing: the Go
+  providers ask `/api/v1/script-symbol`, which resolves a whole file, and
+  a snippet has no package clause (Monaco says "no definition found").
+  Wrap it server-side as `checkSnippet` does (`script.WrapSnippet`) and
+  shift the answer's offsets back by the header's length.
+  Updated 2026-10-10 (`/next-list`): `WrapSnippet` returns header+code and
+  the header's line count (`script/plugins.go`), not its byte length. Shift
+  by those lines, or compute the byte shift as `len(src)-len(code)`.
+  closed 2026-10-10, `2026-1010-1903-n198-n193-n182` (from the cats-todo backlog): in the script package rather than the handlers, so `script.Resolve` and `script.Rename` take a snippet as they take a script and every caller gets it. `checkText` wraps text with no package clause through `WrapSnippet` (as the node runs it) and keeps the header's byte length (`len(src)-len(code)`, the item's second suggestion) and line count on `checked`. The caret goes in moved by the bytes; spans, Def and Rename's edits come back moved, and what lies in the header (an implied import's declaration) is dropped from the answer, as a builtin has no Def. The lines Rename's sentences name subtract the header's lines ("on line 1" is the field's line 1), and an import the header holds reads "the name of a package the snippet uses". Two refusals are new: a snippet's top-level funcs that a go.* node calls by name (`snippetEntries`: Next, Open, Close, Apply, Flush, Write, Commit, Abort, Run, defined beside `bindPlugin`) and its implied imports. Found on the way: a plugin file (◈ tab) has a package clause, so F2 renamed its `Apply` or its `Plugin` var and broke the plugin, since dbc looks both up by name; a file declaring a package-level `var Plugin` now refuses both. The web handlers are unchanged (offsets stay UTF-16 there); README's inspector paragraph says F12/Shift+F12/F2 work in a Go field. Tests: `TestResolveSnippet`, `TestRenameSnippet` (both fail on the old code), two `TestRenameRefused` cases for plugin files; e2e "pipeline tabs" `pipelineCodeField` presses F12 on a use in src's go field (the caret lands on its `:=`) and F2 renames both, shown to fail on the old script package.
 - **N-198** · raised `2026-1010-1650-n197-n196-locate-invalid-names` · value low
   N-195/N-196/N-197's bugs, in jobs. A step id may hold dots, but
   `jobs.js` `diagsAt` keys a finding by its where up to the first dot

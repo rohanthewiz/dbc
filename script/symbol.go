@@ -49,6 +49,23 @@ import (
 // The checker is the same code `go vet` trusts, run over a file of a few
 // hundred lines: well under a millisecond, so the editor asks on every
 // F12 rather than keeping an index that would go stale as the user types.
+//
+// A SNIPPET. A pipeline's go field (go.transform, go.source, go.sink,
+// go.action) holds a snippet: no package clause, its imports implied. The
+// editor asks about it through the same route as a script, so checkText
+// checks it the way the node runs it — WrapSnippet's header (package main
+// and the imports it names) in front — and moves every offset by the
+// header's length, in (the caret) and out (the spans, Rename's edits and
+// the lines its sentences name):
+//
+//	text      Apply(b) … strings.ToUpper(…)
+//	checked   package main\n\nimport (\n\t"strings"\n)\n\n│Apply(b) …
+//	          └────────────── c.hdr bytes ───────────┘
+//
+// What the header declares is not in the editor: an import's Def is
+// dropped from the answer (as a builtin has none) and it cannot be
+// renamed, and the functions a go.* node calls by name are its entry
+// points, as Run is a script's.
 
 // Span is a byte range of the script, [From, To).
 type Span struct {
@@ -84,12 +101,12 @@ func Resolve(src string, caret int) (sym Symbol) {
 			sym = Symbol{Uses: []Span{}}
 		}
 	}()
-	c := checkSrc(src)
+	c, _ := checkText(src)
 	if c == nil {
 		return Symbol{Uses: []Span{}}
 	}
-	sym, _ = c.resolve(caret)
-	return sym
+	sym, _ = c.resolve(caret + c.hdr)
+	return c.local(sym)
 }
 
 // checked is a script parsed and type-checked once, for Resolve and for
@@ -105,6 +122,49 @@ type checked struct {
 	// a type switch's per-clause objects folded onto one; see key
 	alias    map[types.Object]types.Object
 	tsIdents map[*ast.Ident]types.Object
+
+	// hdr is how many bytes WrapSnippet put before a snippet (0 for a
+	// script), hdrLines how many lines (see A SNIPPET)
+	hdr, hdrLines int
+}
+
+// checkText checks what an editor holds: a script as it is, a snippet with
+// WrapSnippet's header before it (A SNIPPET). src is what was checked,
+// which Rename's recheck edits; nil when the parser could build nothing.
+func checkText(text string) (c *checked, src string) {
+	src, lines := WrapSnippet(text)
+	c = checkSrc(src)
+	if c != nil && lines > 0 {
+		c.hdr, c.hdrLines = len(src)-len(text), lines
+	}
+	return c, src
+}
+
+// local moves a symbol of the checked source to the editor's text: each
+// span back by the header, a span in the header (an import WrapSnippet
+// added) dropped. A no-op for a script.
+func (c *checked) local(sym Symbol) Symbol {
+	if c.hdr == 0 {
+		return sym
+	}
+	back := func(sp Span) Span { return Span{sp.From - c.hdr, sp.To - c.hdr} }
+	sym.At = back(sym.At)
+	if sym.Def != nil {
+		if sym.Def.From < c.hdr {
+			sym.Def = nil
+		} else {
+			d := back(*sym.Def)
+			sym.Def = &d
+		}
+	}
+	uses := make([]Span, 0, len(sym.Uses))
+	for _, u := range sym.Uses {
+		if u.From >= c.hdr {
+			uses = append(uses, back(u))
+		}
+	}
+	sym.Uses = uses
+	return sym
 }
 
 // checkSrc parses and checks src; nil when the parser could build nothing.
@@ -141,8 +201,9 @@ func checkSrc(src string) *checked {
 // off is p as a byte offset of the script.
 func (c *checked) off(p token.Pos) int { return c.tf.Offset(p) }
 
-// line is the 1-based line of byte offset off, for messages.
-func (c *checked) line(off int) int { return c.tf.Line(c.tf.Pos(off)) }
+// line is the 1-based line of byte offset off, for messages: the
+// editor's line, a snippet's header not counted.
+func (c *checked) line(off int) int { return c.tf.Line(c.tf.Pos(off)) - c.hdrLines }
 
 // key is the object ident i means, nil for none.
 //

@@ -350,6 +350,14 @@ var fieldTypes = []pipeline.FieldType{pipeline.FieldString, pipeline.FieldText, 
 	pipeline.FieldDuration, pipeline.FieldEnum, pipeline.FieldConn, pipeline.FieldTable, pipeline.FieldColumns,
 	pipeline.FieldSQL, pipeline.FieldGo}
 
+// snippetEntries is every name bindPlugin binds, over all four kinds: a
+// go field's top-level func of such a name is called by dbc, so F2 does
+// not rename it (rename.go fixed), as it does not rename a script's Run.
+var snippetEntries = map[string]bool{
+	"Next": true, "Open": true, "Close": true, "Apply": true, "Flush": true,
+	"Write": true, "Commit": true, "Abort": true, "Run": true,
+}
+
 // bindPlugin looks up the entry points kind calls in n and returns the
 // node: a Source, Transform, Sink or Action. A required func missing, or
 // any of them with the wrong signature, is an error naming what was

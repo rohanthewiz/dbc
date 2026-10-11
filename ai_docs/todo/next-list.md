@@ -78,13 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   named, so the semantics differ from Postgres and SQLite. Worth it only
   if a MySQL user asks (as N-172); then say the difference in the field's
   doc, or require that `key` be the table's only unique key.
-- **N-210** · raised `2026-1011-0054-n179-n203-n208` · value low
-  The pipeline canvas's lane drag (N-179) does not scroll the canvas when
-  the pointer nears its top or bottom edge, so a lane can only be dragged
-  as far as the visible part of the stage; a long pipeline needs zooming
-  out or ⊡ Fit first. Add edge auto-pan (the stage's `tx/ty`, as a pan
-  drag sets them) if someone drags lanes across a pipeline taller than
-  the canvas.
 ## Validate
 
 Items whose remaining work is purely testing: hand checks in a real terminal
@@ -450,6 +443,14 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-210** · raised `2026-1011-0054-n179-n203-n208` · value low
+  The pipeline canvas's lane drag (N-179) does not scroll the canvas when
+  the pointer nears its top or bottom edge, so a lane can only be dragged
+  as far as the visible part of the stage; a long pipeline needs zooming
+  out or ⊡ Fit first. Add edge auto-pan (the stage's `tx/ty`, as a pan
+  drag sets them) if someone drags lanes across a pipeline taller than
+  the canvas.
+  closed 2026-10-11, `2026-1011-1400-n210-lane-autopan`: a lane held within 40px of the canvas's top or bottom edge (or past it, since the pointer is captured) pans the stage's `ty` on animation frames, up to 900 px/s and linear in the depth into the zone. It keeps panning while the pointer is still and stops when the pipeline's end is 12px inside the canvas (fit's margin). A view already panned past that bound is not snapped back. The lane now follows the pointer in stage coordinates (`stage.toStage` at press and now, `laneFollow`) instead of by screen distance, so it stays under the pointer through an auto-pan and through a wheel pan or zoom mid-drag (a canvas wheel listener re-follows). Found while testing: a pipeline check landing mid-drag (500ms after an edit) redrew the canvas and dropped the lifted lane and its bar. `check` now skips the canvas redraw while a lane is held; the drag's end redraws. Test: the e2e `pipelineLaneDrag` holds a lane at each edge of a twelve-lane pipeline, checks the pan stops at the bound and that the lane lands last, then first; it fails on the old JS.
 - **N-187** · raised `2026-1009-1449-phase-5-tui-pipelines-jobs` · value low
   Every run listing reads every record file whole
   (`userdata.ListRuns` → `readHead` unmarshals each), whatever the

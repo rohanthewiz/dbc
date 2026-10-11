@@ -439,7 +439,15 @@
         for (const d of e.diags) log(d.severity === "error" ? "err" : "warn", (d.where ? d.where + ": " : "") + d.msg, logKey(name));
       }
       host.changed(name);
-      if (shown === e) { renderBar(); renderCanvas(); renderInspector(); }
+      // a lane held mid-drag keeps its canvas: a redraw would replace the
+      // lifted lane and its drop bar, and holding a lane at an edge while
+      // the stage auto-pans (N-210) leaves plenty of time for a check to
+      // land. The drag's end redraws anyway, findings included.
+      if (shown === e) {
+        renderBar();
+        if (!drag || drag.type !== "lane") renderCanvas();
+        renderInspector();
+      }
       return e.diags;
     }
 
@@ -1398,6 +1406,91 @@
       d.mark.style.top = y - 2 + "px";
     }
 
+    // ── a lane drag's edge auto-pan (N-210) ──────────────────────────────
+    // A lane dragged near the canvas's top or bottom edge pans the stage
+    // (its ty, as a pan drag sets it), so a lane can be carried across a
+    // pipeline taller than the canvas without zooming out or ⊡ Fit first.
+    //
+    //	┌ canvas ────────────────────┐
+    //	│ ░░░░ EDGE: pans down ░░░░░ │ ← speed grows toward the edge, full
+    //	│                            │   at it and past it (the pointer is
+    //	│   (no pan in the middle)   │   captured, so it keeps reporting
+    //	│                            │   from outside the canvas)
+    //	│ ░░░░ EDGE: pans up ░░░░░░░ │
+    //	└────────────────────────────┘
+    //
+    // The pan runs on animation frames while the pointer is held in a
+    // zone, with no pointer moves needed: holding still at the edge keeps
+    // scrolling, which is what a drag past the visible part expects. It
+    // stops once the end of the pipeline is in view (ty bounds, below),
+    // so the stage never scrolls into empty space.
+    //
+    // Since the view moves under a still pointer, the lane follows the
+    // pointer in STAGE coordinates — where the pointer is on the stage now
+    // versus where it was pressed (laneFollow) — rather than by the screen
+    // distance moved, which a pan would leave stale.
+    const EDGE = 40;      // the zones' depth, screen px
+    const PAN_MAX = 900;  // the speed at the edge, screen px a second
+    const VIEW_PAD = 12;  // the margin kept at the pipeline's ends, as fit leaves
+
+    // laneFollow puts the dragged lane d at the pointer's last client y
+    // through the view as it is now: after a pointer move, an auto-pan
+    // frame or a wheel pan or zoom alike.
+    function laneFollow(d) {
+      laneDragMove(d, stage.toStage(0, d.py).y - d.sy);
+    }
+
+    // edgeSpeed is the auto-pan's velocity for a pointer at client y py,
+    // in screen px a second: positive pans the stage down (showing what is
+    // above), negative up, 0 outside the zones. Linear in the depth into a
+    // zone, so a pointer just inside it creeps and one at the edge runs.
+    function edgeSpeed(py) {
+      const r = dom.canvas.getBoundingClientRect();
+      const top = r.top + EDGE - py, bottom = py - (r.bottom - EDGE);
+      if (top > 0) return PAN_MAX * Math.min(top / EDGE, 1);
+      if (bottom > 0) return -PAN_MAX * Math.min(bottom / EDGE, 1);
+      return 0;
+    }
+
+    // autoPan starts d's auto-pan loop when the pointer is in a zone and
+    // none runs yet; the loop ends by itself when the pointer leaves the
+    // zones or the drag ends (drag no longer d), and the drag's end also
+    // cancels a pending frame.
+    function autoPan(d) {
+      if (d.raf || !d.moved || !edgeSpeed(d.py)) return;
+      let last = performance.now();
+      const tick = (now) => {
+        d.raf = 0;
+        if (drag !== d || !dom.geo) return;
+        const v = edgeSpeed(d.py);
+        if (!v) return;
+        // time-based, so the speed does not depend on the frame rate; a
+        // long gap (a background tab) counts as one frame's worth at most
+        const dt = Math.min(now - last, 50) / 1000;
+        last = now;
+        // ty's bounds: no further down than the pipeline's top VIEW_PAD
+        // below the canvas's, no further up than its bottom VIEW_PAD above
+        // the canvas's. Each bound holds the current ty in, so a view
+        // already past one (panned out by hand) is not snapped back — it
+        // only stops moving that way.
+        //
+        //	ty ≤ hi = max(ty, VIEW_PAD)
+        //	ty ≥ lo = min(ty, H − h·k − VIEW_PAD)
+        const H = dom.canvas.clientHeight, k = stage.view.k, ty = stage.view.ty;
+        const hi = Math.max(ty, VIEW_PAD), lo = Math.min(ty, H - dom.geo.h * k - VIEW_PAD);
+        const nty = Math.min(Math.max(ty + v * dt, lo), hi);
+        if (nty !== ty) {
+          stage.set({ ty: nty });
+          laneFollow(d);
+        }
+        // at a bound the loop idles until the pointer leaves the zone or
+        // the drag ends: a frame that changes nothing is cheap, and a
+        // view zoomed or resized meanwhile may open room again
+        d.raf = requestAnimationFrame(tick);
+      };
+      d.raf = requestAnimationFrame(tick);
+    }
+
     function bindPointer() {
       const cv = dom.canvas;
       cv.addEventListener("pointerdown", (ev) => {
@@ -1450,7 +1543,11 @@
           const L = f && dom.geo.lanes.find((l) => l.f === f);
           const el2 = f && [...dom.layer.querySelectorAll(".plane")].find((x) => x.dataset.frag === f.name);
           if (L && el2 && e.spec.fragments.length > 1) {
+            // sy is the press's stage y and py the pointer's latest client
+            // y: laneFollow measures the drag between them through the
+            // view of the moment (N-210); raf is the auto-pan's frame
             drag = { type: "lane", f, el: el2, top: L.top, h: L.h, cy: ev.clientY, moved: false,
+              sy: stage.toStage(ev.clientX, ev.clientY).y, py: ev.clientY, raf: 0,
               from: e.spec.fragments.indexOf(f), to: e.spec.fragments.indexOf(f), mark: null };
             cv.setPointerCapture(ev.pointerId);
           }
@@ -1481,7 +1578,9 @@
           const L = dom.geo.lanes.find((l) => l.f === drag.f);
           if (L) { L.pos[drag.id] = [x, y]; drawEdges(shown, drag.f, drag.svg, L.pos); }
         } else if (drag.type === "lane") {
-          laneDragMove(drag, (ev.clientY - drag.cy) / k);
+          drag.py = ev.clientY;
+          laneFollow(drag);
+          autoPan(drag);
         } else if (drag.type === "wire") {
           const r = drag.body.getBoundingClientRect();
           const x = (ev.clientX - r.left) / k, y = (ev.clientY - r.top) / k;
@@ -1519,6 +1618,7 @@
           e.sel = { kind: "node", frag: d.f.name, id: d.id };
           changed(e);
         } else if (d.type === "lane") {
+          if (d.raf) cancelAnimationFrame(d.raf);
           if (d.mark) d.mark.remove();
           // the move happens only when the lane would land elsewhere; a
           // drag that ends where it began, or a plain click, puts the lane
@@ -1544,10 +1644,18 @@
       cv.addEventListener("pointercancel", () => {
         if (drag && drag.wire) drag.wire.remove();
         const wasLane = drag && drag.type === "lane";
+        if (wasLane && drag.raf) cancelAnimationFrame(drag.raf);
         if (wasLane && drag.mark) drag.mark.remove();
         drag = null;
         cv.classList.remove("panning");
         if (wasLane) renderCanvas(); // the lifted lane back in its place
+      });
+      // a wheel pan or zoom during a lane drag moves the stage under a
+      // still pointer; the lane follows it as after an auto-pan frame. The
+      // stage's own wheel listener was added first (mount), so the view
+      // has already moved when this one runs.
+      cv.addEventListener("wheel", () => {
+        if (drag && drag.type === "lane" && drag.moved) laneFollow(drag);
       });
       cv.addEventListener("dblclick", (ev) => {
         // a double-click on a card puts the caret in its first field after

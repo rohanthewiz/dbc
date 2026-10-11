@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -748,6 +749,52 @@ func pipelineLaneDrag(t *testing.T, p *rod.Page) {
 		t.Fatalf("a click on a's header moved lanes: %q, want b a c", got)
 	}
 
+	// ── edge auto-pan (N-210) ─────────────────────────────────────────────
+	// Twelve lanes, taller than the canvas at any zoom the tab keeps. l00
+	// held at the canvas's bottom edge pans the stage on its own, no
+	// pointer moves, until the pipeline's end is VIEW_PAD (12px) above the
+	// canvas's — and no further; released there, l00 goes last. Then the
+	// same at the top edge carries it back first.
+	setJSON(manyLanesPipeline(12))
+	waitFor(t, p, "twelve lanes", `() => document.querySelectorAll("#pipe .plane").length === 12`)
+	if evalNum(t, p, `() => document.querySelector('#pipe .plane[data-frag="l11"]').getBoundingClientRect().bottom -
+	  document.querySelector("#pipe .pcanvas").getBoundingClientRect().bottom`) <= 0 {
+		t.Fatal("the last lane is already in view: the pipeline does not overflow the canvas, so nothing tests the auto-pan")
+	}
+	ascending := func(from, to int) []string {
+		var s []string
+		for i := from; i <= to; i++ {
+			s = append(s, fmt.Sprintf("l%02d", i))
+		}
+		return s
+	}
+	cv := `document.querySelector("#pipe .pcanvas").getBoundingClientRect()`
+	cvTop, cvBottom := evalNum(t, p, `() => `+cv+`.top`), evalNum(t, p, `() => `+cv+`.bottom`)
+
+	dragLane("l00", cvBottom-4, func() {
+		waitFor(t, p, "the stage panned to the pipeline's end, 12px above the canvas's", `() => {
+		  const l = document.querySelector("#pipe .pstage").getBoundingClientRect(), c = `+cv+`;
+		  return Math.abs(l.bottom - (c.bottom - 12)) < 1.5;
+		}`)
+		time.Sleep(200 * time.Millisecond) // held at the bound: no further
+		if got := evalNum(t, p, `() => { const l = document.querySelector("#pipe .pstage").getBoundingClientRect();
+		  return l.bottom - (`+cv+`.bottom - 12); }`); got < -1.5 || got > 1.5 {
+			t.Fatalf("the auto-pan went past the pipeline's end: its bottom is %.1fpx off the bound", got)
+		}
+		shot(t, p, "pipeline-lane-autopan")
+	})
+	if got, want := order(), strings.Join(append(ascending(1, 11), "l00"), " "); got != want {
+		t.Fatalf("after holding l00 at the bottom edge, lanes drawn %q, want %q", got, want)
+	}
+
+	dragLane("l00", cvTop+4, func() {
+		waitFor(t, p, "the stage panned back to the pipeline's top, 12px below the canvas's", `() =>
+		  Math.abs(document.querySelector("#pipe .pstage").getBoundingClientRect().top - (`+cv+`.top + 12)) < 1.5`)
+	})
+	if got, want := order(), strings.Join(append([]string{"l00"}, ascending(1, 11)...), " "); got != want {
+		t.Fatalf("after holding l00 at the top edge, lanes drawn %q, want %q", got, want)
+	}
+
 	setJSON(waitingPipeline)
 	waitFor(t, p, "the waiting pipeline back", `() => !!document.querySelector('.plane[data-frag="w"] .pcard[data-id="src"]')`)
 }
@@ -762,6 +809,16 @@ const threeLanesPipeline = `{
   ]
 }
 `
+
+// manyLanesPipeline is n one-node fragments, l00 l01 …, for the lane
+// drag's edge auto-pan: enough of them overflow the canvas.
+func manyLanesPipeline(n int) string {
+	frags := make([]string, n)
+	for i := range frags {
+		frags[i] = fmt.Sprintf(`    {"name": "l%02d", "nodes": [{"id": "x", "plugin": "sql.exec", "cfg": {"conn": "lite", "sql": "select %d"}}]}`, i, i)
+	}
+	return "{\n  \"name\": \"e2e_pipe\",\n  \"fragments\": [\n" + strings.Join(frags, ",\n") + "\n  ]\n}\n"
+}
 
 // invalidNamesPipeline has a node id with a space and a fragment with an
 // empty name: both drawn, both named by index in the check.

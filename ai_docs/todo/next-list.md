@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-202
+**Next ID:** N-203
 
 ## Open
 
@@ -77,6 +77,12 @@ ten session docs in `ai_docs/claude_sessions/`
   `v0.16.2-0.20260209085605-fcb76d1ece0c` (commit fcb76d1, 2026-02-09).
   The repro still passes against it, run through a scratch `-modfile` with
   the repo's go.mod unchanged. So a report upstream is still news there.
+  Updated `2026-1010-2032-n171-n157-n145`: the report is drafted, ready to
+  post, at `ai_docs/todo/yaegi-upstream-issue.md`, with a repro that has
+  no dbc in it (yaegi alone, a compiled `*Batch` handed to an interpreted
+  `Apply`). It reproduces on v0.16.1: Apply returns nil and the rows are
+  unchanged, while a control storing through a variable works. Posting it
+  is the user's: it goes out under their GitHub account.
 - **N-189** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value low
   `sql.write mode: upsert` on MySQL. It refuses today: MySQL's
   `ON DUPLICATE KEY UPDATE` matches any unique key, not the `key` columns
@@ -202,14 +208,6 @@ and `raised`.
   covers the rest through the stand-in editor.
   Updated `2026-1009-1546-phase-6-plugin-sdk-builtins`: add the scripts browser's Plugins section: how the kind glyphs `⇥ ƒ ⇤ ▸` and `⚠` render, `Enter` on a plugin row opening a real editor, and the log's "loaded: …" line on return. The TUI e2e step "Ctrl+O plugins: …" covers the flow through the stand-in editor.
   Updated `2026-1010-2032-n171-n157-n145` (from N-157): add the completion popup's routine glyphs, `λ` for a procedure and `ƒ` for a function, on a real Postgres (`CALL ▮`); `tui.TestCompletionRoutineGlyphs` checks them in a rendered frame.
-- **N-145** · raised `2026-1007-1245-result-tabs-per-connection` · value low
-  Drive a real share with the assistant end to end. Neither e2e harness has
-  a connection with `ai_rows = true`, so `S` / "✦ Share with the assistant"
-  is only checked as refused (web e2e) and through unit tests (workspace,
-  tui, web). Add an `ai_rows` connection to the harnesses and check the ✦
-  mark, the chip's "shared result N: …" note, and that a column hidden in
-  the shared tab stays out of the prompt while another tab is on screen.
-
 - **N-162** · raised `2026-1008-1331-postgres-in-docker` · value low
   Postgres in Docker is covered by unit tests over a fake docker CLI, a
   live test (`DBC_LIVE_DOCKER=1`, passed on 17 and 18), and a web e2e step
@@ -449,6 +447,23 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-145** · raised `2026-1007-1245-result-tabs-per-connection` · value low
+  Drive a real share with the assistant end to end. Neither e2e harness has
+  a connection with `ai_rows = true`, so `S` / "✦ Share with the assistant"
+  is only checked as refused (web e2e) and through unit tests (workspace,
+  tui, web). Add an `ai_rows` connection to the harnesses and check the ✦
+  mark, the chip's "shared result N: …" note, and that a column hidden in
+  the shared tab stays out of the prompt while another tab is on screen.
+  closed 2026-10-10, `2026-1010-2032-n171-n157-n145` (from the cats-todo backlog): the web harness gains `liteai`, lite's file again with `ai_rows = true` (lite keeps refusing, as "result tabs" checks). New step "share a result with the assistant" (`shareWithAssistant`): run a query on liteai, hide breed (`-`), `S` marks the tab ✦, `P` pins it, then another query's tab comes on screen with the shared one ✦ beside it. The forecast a question would carry is asked as the chip asks it, `POST …/chat/context` with the page's grid view and its kept view of the off-screen shared tab (`dbc.cmd.sharedView`). It says "shared result 1: 3 of 3 rows (1 column hidden)": the column hidden in the shared tab stays hidden while another tab is on screen. The assistant pane is not opened, since that would start a real agent process in the run's HOME, and the forecast is the same code as the prompt (`chatContext` → `ai.Build`'s note). The TUI harness got no `ai_rows` connection: its share and chip are covered by the TUI's unit tests, and a TUI chip check would also need an agent. Full suite green with and without Postgres (twice each, after N-202).
+- **N-202** · raised `2026-1010-2032-n171-n157-n145` · value medium
+  The web e2e suite with `DBC_LIVE_PG_DSN` hangs until go test's timeout:
+  "postgres schema picker" tabs between the DSN's database and one called
+  `dbc`, so on a throwaway server (`docker run … postgres`, one database)
+  the database box is hidden and rod's `MustClick` waits for it forever.
+  Already so at `d9e99c3`; the step had last passed against a server
+  with a `dbc` database. Also, now and then, a killed Chrome never
+  reports its exit and the harness's teardown waits on it.
+  closed 2026-10-10, `2026-1010-2032-n171-n157-n145`: the step moves between the DSN's own database (`pgDatabase`: a URL's path or key=value's dbname) and another (`env.pgHome`, `pgOther`). That is `postgres` when the DSN names a different database; when it names `postgres`, the seed makes `e2e_other` (`seedOtherDatabase`) and drops it `WITH (FORCE)` at the end. The browser teardown waits at most 15 s for `Launcher.Cleanup`. Found on the way, in N-171's own new check: its "first dump over" wait read a menu that was closed, so it was true at once, and the download's POST could meet "still running" and wait forever on `MustWaitDownload`. It now asks `GET /api/v1/dump` for no running dump, and the download wait gives up after 60 s. Full suite with Postgres: 2 of 2 green, every step run.
 - **N-157** · raised `2026-1007-2355-routine-completion` · value low
   Routine completion has not been watched in either UI. The workspace's
   live tests cover the cache and the suggestions on postgres:17 and

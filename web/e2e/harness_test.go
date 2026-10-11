@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,6 +45,10 @@ type env struct {
 	server          *exec.Cmd
 	serverLog       *lockedBuffer
 	pgDSN           string // DBC_LIVE_PG_DSN, when the Postgres checks run
+	// pgHome is the DSN's own database, pgOther another on the same
+	// server, for the database picker to move between (seed: made when
+	// the server has only the one)
+	pgHome, pgOther string
 }
 
 // lockedBuffer collects the server's stderr from its own goroutine (exec's
@@ -123,9 +128,9 @@ func build(t *testing.T, out string) {
 
 // writeConfig writes HOME/.config/dbc/config.toml. A config file replaces
 // dbc's built-in demos, so the connections are exactly these: two SQLite
-// files (two, so switching has somewhere to go) and, when a DSN is given,
-// a Postgres for the schema picker, which SQLite's single schema never
-// shows.
+// files (two, so switching has somewhere to go), the first again with
+// ai_rows on (liteai), and, when a DSN is given, a Postgres for the schema
+// picker, which SQLite's single schema never shows.
 func (e *env) writeConfig(t *testing.T) {
 	t.Helper()
 	dir := filepath.Join(e.home, ".config", "dbc")
@@ -139,6 +144,10 @@ func (e *env) writeConfig(t *testing.T) {
 	}
 	conn("lite", "sqlite", "file:"+filepath.Join(e.home, "lite.db"))
 	conn("lite2", "sqlite", "file:"+filepath.Join(e.home, "lite2.db"))
+	// lite's file again, its rows allowed to go to the assistant: what a
+	// share (S, "✦ Share with the assistant") needs, refused on lite
+	conn("liteai", "sqlite", "file:"+filepath.Join(e.home, "lite.db"))
+	b.WriteString("ai_rows = true\n")
 	if e.pgDSN != "" {
 		conn("pg", "postgres", e.pgDSN)
 	}
@@ -162,8 +171,43 @@ INSERT INTO cats (name, breed, age) VALUES ('Tom', 'tabby', 3), ('Mia', 'siamese
 CREATE TABLE e2e_a.alpha (id int); CREATE TABLE e2e_b.beta (id int, label text);
 CREATE FUNCTION e2e_b.twice(n int) RETURNS int LANGUAGE sql AS 'SELECT n * 2'`)
 		t.Cleanup(func() { e.dbc(t, "pg", drop) })
+		e.seedOtherDatabase(t)
 	}
 	e.seedChats(t)
+}
+
+// seedOtherDatabase sets pgHome and pgOther: the database picker needs two
+// databases to move between (one alone is not offered), and a throwaway
+// server — `docker run … postgres` — has only "postgres". That is the
+// other database when the DSN names another; else e2e_other is made, and
+// dropped again when the test ends (WITH (FORCE): the page's sessions on it
+// may outlive the server's shutdown by a moment).
+func (e *env) seedOtherDatabase(t *testing.T) {
+	t.Helper()
+	e.pgHome, e.pgOther = pgDatabase(e.pgDSN), "postgres"
+	if e.pgHome != "postgres" {
+		return
+	}
+	e.pgOther = "e2e_other"
+	e.dbc(t, "pg", "DROP DATABASE IF EXISTS e2e_other")
+	e.dbc(t, "pg", "CREATE DATABASE e2e_other")
+	t.Cleanup(func() { e.dbc(t, "pg", "DROP DATABASE IF EXISTS e2e_other WITH (FORCE)") })
+}
+
+// pgDatabase is the database a DSN names — a URL's path or key=value's
+// dbname — "postgres" when it names none (libpq's default is the user's
+// name, which on a throwaway server is postgres too).
+func pgDatabase(dsn string) string {
+	if u, err := url.Parse(dsn); err == nil && (u.Scheme == "postgres" || u.Scheme == "postgresql") {
+		if db := strings.TrimPrefix(u.Path, "/"); db != "" {
+			return db
+		}
+		return "postgres"
+	}
+	if m := regexp.MustCompile(`(?:^|\s)dbname=(\S+)`).FindStringSubmatch(dsn); m != nil {
+		return strings.Trim(m[1], "'")
+	}
+	return "postgres"
 }
 
 // seedChats writes saved assistant conversations into HOME's archive
@@ -334,7 +378,17 @@ func (e *env) launchBrowser(t *testing.T, chrome string) {
 	t.Cleanup(func() {
 		_ = e.browser.Close()
 		l.Kill()
-		l.Cleanup() // the profile directory
+		// the profile directory: Cleanup first waits for Chrome to exit,
+		// which a killed Chrome now and then never reports (seen once in
+		// a run whose steps had all passed, the suite then timed out). A
+		// profile left in the temp dir costs nothing; a hung run costs it.
+		done := make(chan struct{})
+		go func() { l.Cleanup(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			t.Log("Chrome did not exit within 15s of its kill; its profile directory is left in the temp dir")
+		}
 	})
 	err = proto.BrowserGrantPermissions{
 		Origin: e.base,

@@ -48,6 +48,7 @@ func TestWeb(t *testing.T) {
 		{"result tabs and logs per connection", resultTabsPerConn},
 		{"run all: a tab per statement", runAllTabs},
 		{"rerun a write asks first", rerunWriteConfirm},
+		{"share a result with the assistant", shareWithAssistant},
 		{"history scoped to the database", historyScope},
 		{"disconnect and reconnect", disconnect},
 		{"refresh a connection", refreshConn},
@@ -850,6 +851,63 @@ func rerunWriteConfirm(t *testing.T, _ *env, p *rod.Page) {
 	}
 }
 
+// shareWithAssistant (N-145): a real share, on liteai (ai_rows on). S
+// marks the tab ✦; with another tab on screen, what a question would carry
+// — the forecast the assistant's chip shows, asked as the chip asks it —
+// names the shared result, and the column hidden in the shared tab counts
+// as hidden there (the page keeps that tab's view: app.js sharedView).
+// The assistant itself is not started: the forecast is the same code as
+// the prompt (web chatContext → ai.Build's note).
+func shareWithAssistant(t *testing.T, _ *env, p *rod.Page) {
+	clickAt(t, p, `#conns .conn-item[data-conn="liteai"]`, proto.InputMouseButtonLeft)
+	waitConnected(t, p, "liteai")
+	before := gridSeq(t, p)
+	eval(t, p, `() => dbc.editor.setText("SELECT id, name, breed FROM cats ORDER BY id")`)
+	p.MustElement("#run").MustClick()
+	waitResult(t, p, before, "id", "name", "breed")
+	key := func(k string) {
+		eval(t, p, `(k) => { dbc.grid.focus();
+		  document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })); }`, k)
+	}
+	// breed hidden: the cursor to its column, then -
+	key("ArrowRight")
+	key("ArrowRight")
+	key("-")
+	waitFor(t, p, "breed hidden", `() => dbc.grid.view().hidden.length === 1 &&
+	  ![...document.querySelectorAll("#grid .gh .hc")].some((h) => h.textContent.includes("breed"))`)
+	key("S")
+	waitFor(t, p, "the tab marked ✦", `() => !!document.querySelector("#rstrip .rt.on .shr")`)
+	key("P") // pinned: the next run opens a tab of its own
+	waitFor(t, p, "the tab pinned", `() => !!document.querySelector("#rstrip .rt.on .pin")`)
+	before = gridSeq(t, p)
+	eval(t, p, `() => dbc.editor.setText("SELECT 1 AS one")`)
+	p.MustElement("#run").MustClick()
+	waitResult(t, p, before, "one")
+	waitFor(t, p, "another tab on screen, the shared one ✦ beside it", `() =>
+	  !document.querySelector("#rstrip .rt.on .shr") && document.querySelectorAll("#rstrip .rt .shr").length === 1`)
+
+	note := evalStr(t, p, `async () => {
+	  const v = dbc.grid.view();
+	  const d = await dbc.api("POST", dbc.wsPath("/chat/context"), { question: "", attach: true,
+	    editor: dbc.cmd.editorState(), view: { seq: v.seq, sort: v.sort, desc: v.desc, hidden: v.hidden },
+	    shared: dbc.cmd.sharedView(), script: "" });
+	  return d.note;
+	}`)
+	if !strings.Contains(note, "shared result 1: 3 of 3 rows (1 column hidden)") {
+		t.Errorf("the forecast = %q, want the shared result with its hidden column", note)
+	}
+
+	// the tabs as they were: unshared, unpinned, closed; back on lite
+	eval(t, p, `() => document.querySelector("#rstrip .rt:nth-child(1) .tt").click()`)
+	waitFor(t, p, "the shared tab on screen", `() => !!document.querySelector("#rstrip .rt.on .shr")`)
+	key("S")
+	waitFor(t, p, "unshared", `() => !document.querySelector("#rstrip .shr")`)
+	key("P")
+	waitFor(t, p, "unpinned", `() => !document.querySelector("#rstrip .pin")`)
+	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
+	waitConnected(t, p, "lite")
+}
+
 // historyScope: the history opens on the tab's database when it has
 // statements there (N-101), and the scope button shows every database's.
 // lite has the earlier steps' queries; one run on lite2 makes it a
@@ -1105,7 +1163,9 @@ func dumpDialog(t *testing.T, e *env, p *rod.Page) {
 	// ⤓ Download (N-171): a custom archive, saved by this browser rather
 	// than written on the server (it arrives through a navigation to a
 	// one-use URL once the dump is done)
-	waitFor(t, p, "the first dump over", `() => ![...document.querySelectorAll(".menu .mitem")].some((b) => /Stop dump/.test(b.textContent))`)
+	// the first dump's end, as the server has it: its last log line comes
+	// a moment before it lets go of the one-at-a-time slot
+	waitFor(t, p, "the first dump over", `async () => !(await dbc.api("GET", "/api/v1/dump")).running`)
 	clickAt(t, p, `#conns .conn-item[data-conn="pg"]`, proto.InputMouseButtonRight)
 	waitFor(t, p, "the menu", `() => !!document.querySelector(".menu")`)
 	menuPick(t, p, "Dump database…")
@@ -1113,8 +1173,15 @@ func dumpDialog(t *testing.T, e *env, p *rod.Page) {
 	eval(t, p, `() => { const f = document.getElementById("dp-format"); f.value = "custom"; f.dispatchEvent(new Event("change")); }`)
 	wait := p.Browser().MustWaitDownload() // the bytes the browser saved
 	p.MustElementR(".modal button", "Download").MustClick()
-	if file := wait(); !strings.HasPrefix(string(file), "PGDMP") {
-		t.Fatalf("the download is not a custom archive: %q", file[:min(len(file), 16)])
+	saved := make(chan []byte, 1)
+	go func() { saved <- wait() }()
+	select {
+	case file := <-saved:
+		if !strings.HasPrefix(string(file), "PGDMP") {
+			t.Fatalf("the download is not a custom archive: %q", file[:min(len(file), 16)])
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatalf("no download within a minute\n%s", pageState(p))
 	}
 	waitFor(t, p, "the log's download line", `() => [...document.querySelectorAll("#log > div")].some((d) => /⤓ downloading pg-\d{8}-\d{4}\.dump/.test(d.textContent))`)
 }
@@ -1300,12 +1367,14 @@ func pgSchemaPicker(t *testing.T, e *env, p *rod.Page) {
 		}`, name)
 		p.Keyboard.MustType(input.Tab)
 	}
-	tabToDatabase("postgres")
-	waitFor(t, p, "on pg/postgres, the keyboard in the table box", `() =>
-	  dbc.state.active === "pg/postgres" && !document.querySelector("#conns .conn-item.connecting") &&
+	// the DSN's own database and another (the harness made one if the
+	// server had only one: seedOtherDatabase), each with the one schema
+	tabToDatabase(e.pgOther)
+	waitFor(t, p, "on pg/"+e.pgOther+", the keyboard in the table box", `(other) =>
+	  dbc.state.active === "pg/" + other && !document.querySelector("#conns .conn-item.connecting") &&
 	  document.getElementById("table-filter").hidden &&
-	  document.activeElement === document.getElementById("table-find")`)
-	tabToDatabase("dbc")
+	  document.activeElement === document.getElementById("table-find")`, e.pgOther)
+	tabToDatabase(e.pgHome)
 	waitFor(t, p, "back on pg, the keyboard in the schema box", `() =>
 	  dbc.state.active === "pg" && !document.querySelector("#conns .conn-item.connecting") &&
 	  document.activeElement === document.getElementById("table-schema") &&

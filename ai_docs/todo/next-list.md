@@ -189,17 +189,6 @@ ten session docs in `ai_docs/claude_sessions/`
   `minis`). Complete against the node's own `conn` instead: a completion
   route keyed by a connection name rather than a workspace — the same
   catalog read N-176 wants for the `table` field, so the two land together.
-- **N-200** · raised `2026-1010-1750-n199-script-path` · value low
-  A `go.action` or `script.run` node's `s.Path` ignores the run's own
-  files_dir. The node gets the session that ran the pipeline, and
-  `s.Path` reads that session's `Paths.FilesDir`. When a script runs a
-  pipeline with `PipelineOpts.FilesDir` set to another directory, the
-  run's file nodes use that directory but the node's `s.Path` and
-  `s.Export` still use the host's. Every host's runs agree today
-  (`jobs.Engine.runOne` sets both from the config), so only that
-  override splits them. A fix would hand the node a session (or a
-  view of one) whose files_dir is the Env's; `S` holds a mutex and the
-  open Readers/Writers, so it cannot simply be copied.
 
 ## Validate
 
@@ -603,6 +592,18 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-200** · raised `2026-1010-1750-n199-script-path` · value low
+  A `go.action` or `script.run` node's `s.Path` ignores the run's own
+  files_dir. The node gets the session that ran the pipeline, and
+  `s.Path` reads that session's `Paths.FilesDir`. When a script runs a
+  pipeline with `PipelineOpts.FilesDir` set to another directory, the
+  run's file nodes use that directory but the node's `s.Path` and
+  `s.Export` still use the host's. Every host's runs agree today
+  (`jobs.Engine.runOne` sets both from the config), so only that
+  override splits them. A fix would hand the node a session (or a
+  view of one) whose files_dir is the Env's; `S` holds a mutex and the
+  open Readers/Writers, so it cannot simply be copied.
+  closed 2026-10-10, `2026-1010-1913-n156-n200-n180` (from the cats-todo backlog): the node gets a view of the session, as the item proposed, through an optional host interface so that `pipeline` needs no `sdb`. `pipeline.FilesHost` (`Host` plus `ForFiles(dir) Host`) is asked once by `pipeline.Run`, with the run's `Options.FilesDir`, and every node's `Env.S` is the answer. `sdb.S.ForFiles(dir)` returns the session itself when dir is already its own, else a copy with `Paths.FilesDir` = dir. A copy is safe because the state a view must add to (the open Readers/Writers for `Release`, the catalog record for `CatalogChanged`) moved behind a pointer, `S.st *shared`, so `S` no longer holds a mutex and a view's DDL and forgotten Writers are the host's. `ForFiles` is host-only (`sdbapi.hostOnly`), so the assistant's API summary is unchanged; api.json regenerated (`Path`'s doc). A nested `s.RunPipeline` from inside such a node defaults to the view's files_dir, so it inherits the run's. Docs: README "Files" and scripting.md say a node's files_dir is the run's. Tests: `script.TestScriptPipelineOwnFilesDir` (a go.action, a script.run and a csv.write all land in the run's dir, none in the host's, and the node's CREATE TABLE is on the host's `CatalogChanged`; the go.action and script.run fail without the runner change), `sdb.TestForFiles`.
 - **N-156** · raised `2026-1007-2355-routine-completion` · value high
   `TestLiveWorkspaceNotices` (Postgres) fails on main since N-155's
   per-write log lines: a `DO` block now gets a "statement 1/2: 0 affected"

@@ -42,18 +42,14 @@ type S struct {
 	show  func(*model.Result)
 	print func(string)
 	ctx   context.Context
-	// open tracks the run's Readers and Writers for Release (etl.go).
-	open openSet
+	// st is what the session shares with its views (ForFiles): the open
+	// Readers and Writers and the catalog record. Behind a pointer so a
+	// view is a plain copy of S that still adds to the run's own.
+	st *shared
 	// ddl is the DDL log switch (LogDDL). It is set by the host before Run
 	// is called and never cleared, so it needs no lock: a script's own
 	// goroutines all start after the write.
 	ddl bool
-	// catalog is the connections the session ran a catalog-changing
-	// statement on (sqlsplit.ChangesCatalog), for CatalogChanged. It is
-	// kept whether or not the DDL log is on, and under its own lock: a
-	// script may run statements from goroutines of its own.
-	catMu   sync.Mutex
-	catalog map[string]bool
 	// paths is where script and pipeline names resolve (WithPaths).
 	paths Paths
 	// jobs runs s.RunJob (WithJobs): the host's engine, or nil for
@@ -61,11 +57,23 @@ type S struct {
 	jobs JobRunner
 }
 
+// shared is a session's state that its views (ForFiles) add to as well.
+type shared struct {
+	// open tracks the run's Readers and Writers for Release (etl.go).
+	open openSet
+	// catalog is the connections the session ran a catalog-changing
+	// statement on (sqlsplit.ChangesCatalog), for CatalogChanged. It is
+	// kept whether or not the DDL log is on, and under its own lock: a
+	// script may run statements from goroutines of its own.
+	catMu   sync.Mutex
+	catalog map[string]bool
+}
+
 // New builds a script session. show receives results pushed via Show;
 // print receives Print output (results table / log pane in the TUI,
 // stdout in headless mode).
 func New(mgr *db.Manager, show func(*model.Result), print func(string)) *S {
-	return &S{mgr: mgr, show: show, print: print, ctx: context.Background()}
+	return &S{mgr: mgr, show: show, print: print, ctx: context.Background(), st: &shared{}}
 }
 
 // WithContext attaches a cancellation context to the session and returns it.
@@ -136,12 +144,12 @@ func (s *S) logDDL(conn, stmt string) bool {
 // noteCatalog records that the session ran a catalog-changing statement on
 // conn.
 func (s *S) noteCatalog(conn string) {
-	s.catMu.Lock()
-	defer s.catMu.Unlock()
-	if s.catalog == nil {
-		s.catalog = map[string]bool{}
+	s.st.catMu.Lock()
+	defer s.st.catMu.Unlock()
+	if s.st.catalog == nil {
+		s.st.catalog = map[string]bool{}
 	}
-	s.catalog[conn] = true
+	s.st.catalog[conn] = true
 }
 
 // CatalogChanged reports whether the session has run a statement that may
@@ -152,9 +160,9 @@ func (s *S) noteCatalog(conn string) {
 // Statements run through DB's raw handle are out of its sight, as they are
 // out of the DDL log's.
 func (s *S) CatalogChanged(conn string) bool {
-	s.catMu.Lock()
-	defer s.catMu.Unlock()
-	return s.catalog[conn]
+	s.st.catMu.Lock()
+	defer s.st.catMu.Unlock()
+	return s.st.catalog[conn]
 }
 
 // Ctx returns the session's context. Long-running scripts can select on

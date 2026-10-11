@@ -123,7 +123,7 @@ const (
 // completion would invite a script to break its own run. TestHostOnlyExist
 // keeps the list in step with sdb.
 var hostOnly = []string{"New", "WithContext", "LogDDL", "Release", "CatalogChanged", "WithPaths", "ETLConn",
-	"WithJobs", "Manager"}
+	"WithJobs", "Manager", "ForFiles"}
 
 // connParams are the parameter names that mean "a connection name".
 var connParams = []string{"conn", "src", "dst"}

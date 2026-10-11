@@ -76,6 +76,10 @@ func Run(ctx context.Context, h Host, spec *Spec, opt Options) (*RunStats, error
 	if ctx == nil {
 		ctx = h.Ctx()
 	}
+	// the nodes' session resolves files where the run does (FilesHost)
+	if fh, ok := h.(FilesHost); ok {
+		h = fh.ForFiles(opt.FilesDir)
+	}
 	r := &runner{ctx: ctx, h: h, spec: spec, opt: opt, vars: map[string]string{}}
 	r.log = opt.Log
 	if r.log == nil {

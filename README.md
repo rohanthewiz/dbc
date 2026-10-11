@@ -1760,7 +1760,10 @@ script, `dbc script` in a shell, the TUI, dbc web, a schedule (a
 `go.action` or `script.run` node) or dbc.app, `"exports/orders.csv"` is the
 same file. A bare `os.Create("orders.csv")` would land in that process's
 working directory instead: the shell's, or wherever dbc web was started.
-`~/…` and absolute paths are left alone. `s.Export` already goes through
+`~/…` and absolute paths are left alone. In a `go.action` or `script.run`
+node, `files_dir` is the run's: a script that runs a pipeline with
+`sdb.PipelineOpts{FilesDir: …}` sends the node's own files there too,
+with the run's file nodes'. `s.Export` already goes through
 `s.Path`, so `s.Export(r, "csv", "orders.csv")` writes to `files_dir`;
 print `s.Path("orders.csv")` to show where. `s.Export` creates missing
 directories, as `csv.write` does. `s.Path` only names the file, so before

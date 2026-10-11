@@ -113,9 +113,9 @@ func (s *S) Reader(conn, query string, args ...any) (*Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.open.mu.Lock()
-	s.open.readers = append(s.open.readers, rd)
-	s.open.mu.Unlock()
+	s.st.open.mu.Lock()
+	s.st.open.readers = append(s.st.open.readers, rd)
+	s.st.open.mu.Unlock()
 	return rd, nil
 }
 
@@ -130,9 +130,9 @@ func (s *S) Writer(conn, table string, cols []string, opt WriteOpts) (*Writer, e
 	if err != nil {
 		return nil, err
 	}
-	s.open.mu.Lock()
-	s.open.writers = append(s.open.writers, w)
-	s.open.mu.Unlock()
+	s.st.open.mu.Lock()
+	s.st.open.writers = append(s.st.open.writers, w)
+	s.st.open.mu.Unlock()
 	return w, nil
 }
 
@@ -143,10 +143,10 @@ func (s *S) Writer(conn, table string, cols []string, opt WriteOpts) (*Writer, e
 // rather than commits, because only an explicit Close says the load is
 // complete. Both are no-ops on what the script already closed.
 func (s *S) Release() {
-	s.open.mu.Lock()
-	readers, writers := s.open.readers, s.open.writers
-	s.open.readers, s.open.writers = nil, nil
-	s.open.mu.Unlock()
+	s.st.open.mu.Lock()
+	readers, writers := s.st.open.readers, s.st.open.writers
+	s.st.open.readers, s.st.open.writers = nil, nil
+	s.st.open.mu.Unlock()
 	for _, w := range writers {
 		_ = w.Abort()
 	}

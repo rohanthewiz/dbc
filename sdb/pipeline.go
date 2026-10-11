@@ -168,14 +168,31 @@ func (s *S) Paths() Paths { return s.paths }
 // leaves p as written, and the open then fails naming it. With no
 // files_dir set (a host that sets no Paths, a test) a relative p is left
 // relative to the working directory, as before files_dir. In a go.action
-// or script.run node, s is the run's session: its files_dir is the host's,
-// which is the run's own unless a script ran the pipeline with another
-// (PipelineOpts.FilesDir).
+// or script.run node, s is the run's session as the run sees it
+// (ForFiles): its files_dir is the run's, so the node's own files land
+// with the run's file nodes', even when a script ran the pipeline with a
+// files_dir of its own (PipelineOpts.FilesDir).
 func (s *S) Path(p string) string {
 	if r, err := pipeline.ResolvePath(s.paths.FilesDir, p); err == nil {
 		return r
 	}
 	return p
+}
+
+// ForFiles is the session as a pipeline run whose files_dir is dir sees
+// it: the same session — its connections, context and output, and the
+// Readers, Writers and catalog changes it keeps for the host (shared) —
+// with Paths.FilesDir set to dir. pipeline.Run hands it to the run's nodes
+// (pipeline.FilesHost), so a go.action or script.run node's s.Path and
+// s.Export resolve where the run's file nodes do. The host's, not a
+// script's: the session itself is returned when dir is already its own.
+func (s *S) ForFiles(dir string) pipeline.Host {
+	if dir == s.paths.FilesDir {
+		return s
+	}
+	v := *s
+	v.paths.FilesDir = dir
+	return &v
 }
 
 // RunPipeline runs a pipeline built with NewPipeline. Every fragment runs

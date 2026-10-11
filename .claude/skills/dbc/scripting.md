@@ -91,7 +91,9 @@ the process's cwd: the shell's, or wherever dbc web was started. That is
 the same file only by luck. `s.Export` goes through `s.Path` itself, so a
 relative export path is in `files_dir` too, not the cwd: say where
 (`s.Print("wrote %s", s.Path(name))`). Inside a `go.action` or
-`script.run` node, `s` is the run's session, so the same holds. `s.Export`
+`script.run` node, `s` is the run's session with the run's `files_dir`
+(a script's `PipelineOpts.FilesDir`, if it set one), so the node's files
+land with the run's file nodes'. `s.Export`
 makes missing directories (as `csv.write` does); `s.Path` makes none, so
 `os.MkdirAll(filepath.Dir(p), 0o755)` before writing where a directory may
 not exist yet, `files_dir` itself included when the config names one. A

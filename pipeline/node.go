@@ -36,6 +36,16 @@ type Host interface {
 	ETLConn(name string) (etl.Conn, error)
 }
 
+// FilesHost is a Host that can give a run's nodes a view of itself whose
+// own files resolve in the run's files_dir (Options.FilesDir): an sdb.S
+// (sdb.S.ForFiles). Run hands that view to every node as Env.S, so a
+// go.action's s.Path agrees with the run's file nodes when the run's
+// files_dir is not the host's. A Host without it is given as it is.
+type FilesHost interface {
+	Host
+	ForFiles(dir string) Host
+}
+
 // Env is what a node runs in: the session, the pipeline's parameters and
 // the values earlier fragments published, the fragment's batch size, and
 // a logger that tags lines with the node. One Env per node, sharing the

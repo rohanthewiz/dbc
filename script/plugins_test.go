@@ -307,6 +307,67 @@ func Run(s *sdb.S) error {
 	}
 }
 
+// A script that runs a pipeline with a files_dir of its own
+// (PipelineOpts.FilesDir) gets every file of the run there: the file
+// nodes' and, through the run's view of the session (sdb.S.ForFiles), a
+// go.action's and a script.run's own s.Path (N-200). The view is still the
+// session: DDL a node runs is in the host's CatalogChanged.
+func TestScriptPipelineOwnFilesDir(t *testing.T) {
+	files, other, scriptsDir := t.TempDir(), t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(scriptsDir, "saved.go"), []byte(`package main
+
+import (
+	"os"
+
+	"github.com/rohanthewiz/dbc/sdb"
+)
+
+func Run(s *sdb.S) error {
+	return os.WriteFile(s.Path("own-saved.txt"), []byte("saved"), 0o644)
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, printed, err := runScriptPaths(t, sdb.Paths{FilesDir: files, ScriptsDir: scriptsDir}, `package main
+
+import (
+	"github.com/rohanthewiz/dbc/sdb"
+)
+
+func Run(s *sdb.S) error {
+	p := sdb.NewPipeline("own")
+	p.Fragment("act").Node("go.action", sdb.Cfg{"code": "func Run(s *sdb.S) error {\n" +
+		"\tif _, err := s.Exec(\"a\", \"CREATE TABLE own_ddl (x INT)\"); err != nil {\n\t\treturn err\n\t}\n" +
+		"\treturn os.WriteFile(s.Path(\"own-action.txt\"), []byte(\"action\"), 0o644)\n}"})
+	p.Fragment("run").Node("script.run", sdb.Cfg{"name": "saved"})
+	f := p.Fragment("rows")
+	f.Node("sql.read", sdb.Cfg{"conn": "a", "query": "SELECT id FROM cats ORDER BY id LIMIT 1"})
+	f.Then("csv.write", sdb.Cfg{"path": "own-rows.csv"})
+	if _, err := s.RunPipeline(p, sdb.PipelineOpts{FilesDir: "`+other+`"}); err != nil {
+		return err
+	}
+	s.Print("%s %v", s.Path("x"), s.CatalogChanged("a"))
+	return nil
+}
+`)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, strings.Join(printed, "\n"))
+	}
+	for _, name := range []string{"own-action.txt", "own-saved.txt", "own-rows.csv"} {
+		if _, err := os.Stat(filepath.Join(other, name)); err != nil {
+			t.Errorf("%s not in the run's files_dir: %v", name, err)
+		}
+		if _, err := os.Stat(filepath.Join(files, name)); err == nil {
+			t.Errorf("%s was written to the host's files_dir", name)
+		}
+	}
+	// the script's own session kept the host's files_dir; the node's DDL
+	// is on the host's record
+	if want := filepath.Join(files, "x") + " true"; !slices.Contains(printed, want) {
+		t.Errorf("printed %q, want %q among them", printed, want)
+	}
+}
+
 // runScriptPaths is runScript with the session's Paths set.
 func runScriptPaths(t *testing.T, paths sdb.Paths, src string) (*db.Manager, []string, error) {
 	t.Helper()

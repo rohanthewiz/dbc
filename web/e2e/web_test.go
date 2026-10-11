@@ -46,6 +46,7 @@ func TestWeb(t *testing.T) {
 		{"transpose the grid", transposeGrid},
 		{"switch connections", switchConns},
 		{"result tabs and logs per connection", resultTabsPerConn},
+		{"run all: a tab per statement", runAllTabs},
 		{"history scoped to the database", historyScope},
 		{"disconnect and reconnect", disconnect},
 		{"refresh a connection", refreshConn},
@@ -743,6 +744,51 @@ func resultTabsPerConn(t *testing.T, _ *env, p *rod.Page) {
 	waitFor(t, p, "one tab left, on screen, its result in the grid", `() => document.querySelectorAll("#rstrip .rt").length === 1 &&
 	  !!document.querySelector("#rstrip .rt.on") && !document.querySelector("#rstrip .pin") &&
 	  [...document.querySelectorAll("#grid .gh .hc")].some((h) => h.textContent.includes("one"))`)
+}
+
+// runAllTabs (N-154): Run all on two SELECTs opens a tab per statement
+// (N-147), the second on the grid, in place of the unpinned tab on screen;
+// Run all again refills those same two tabs, in order — the same tabs
+// (data-rt), each with a fresh result — rather than piling up two more.
+func runAllTabs(t *testing.T, _ *env, p *rod.Page) {
+	// the strip as "title*" (on screen) per tab, and the tabs' ids
+	strip := func() string {
+		return evalStr(t, p, `() => [...document.querySelectorAll("#rstrip .rt")]
+		  .map((r) => r.querySelector(".tt").textContent + (r.classList.contains("on") ? "*" : "")).join(" | ")`)
+	}
+	ids := func() string {
+		return evalStr(t, p, `() => [...document.querySelectorAll("#rstrip .rt")].map((r) => r.dataset.rt).join(",")`)
+	}
+	const first, second = "SELECT name FROM cats ORDER BY id", "SELECT breed, age FROM cats ORDER BY id"
+	eval(t, p, `(sql) => dbc.editor.setText(sql)`, first+";\n"+second)
+	before := gridSeq(t, p)
+	p.MustElement("#run-all").MustClick()
+	waitResult(t, p, before, "breed", "age")
+	waitFor(t, p, "two tabs, the second on screen", `(want) => [...document.querySelectorAll("#rstrip .rt")]
+	  .map((r) => r.querySelector(".tt").textContent + (r.classList.contains("on") ? "*" : "")).join(" | ") === want`,
+		first+" | "+second+"*")
+	tabs, seq2 := ids(), gridSeq(t, p)
+	// the first tab holds the first statement's result
+	clickAt(t, p, `#rstrip .rt:nth-child(1) .tt`, proto.InputMouseButtonLeft)
+	waitResult(t, p, seq2, "name")
+	seq1 := gridSeq(t, p)
+	shot(t, p, "run-all-tabs")
+
+	// Run all again, from the first tab: both refilled, the second back
+	// on screen, no tab added
+	p.MustElement("#run-all").MustClick()
+	waitResult(t, p, seq1, "breed", "age")
+	waitFor(t, p, "the same two tabs, the second on screen", `(want) => [...document.querySelectorAll("#rstrip .rt")]
+	  .map((r) => r.querySelector(".tt").textContent + (r.classList.contains("on") ? "*" : "")).join(" | ") === want`,
+		first+" | "+second+"*")
+	if got := ids(); got != tabs {
+		t.Errorf("the tabs after the rerun = %s, want the same ones, %s (strip %s)", got, tabs, strip())
+	}
+	if n := gridSeq(t, p); n == seq2 {
+		t.Error("the second tab still shows the first run's result")
+	}
+	clickAt(t, p, `#rstrip .rt:nth-child(1) .tt`, proto.InputMouseButtonLeft)
+	waitResult(t, p, seq1, "name")
 }
 
 // historyScope: the history opens on the tab's database when it has

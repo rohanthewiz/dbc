@@ -690,7 +690,7 @@ sink becomes a preview, actions are skipped, and *nothing is written*. Use
 
 ```text
 $ dbc pipeline run shop-sync --preview 2 --fragment big_orders
-fragment big_orders: sql.read → rows.filter → lookup → cols.add → preview → preview → rows.limit
+fragment big_orders: sql.read → rows.limit → rows.filter → lookup → cols.add → preview → preview
 [big_orders/who] side query: 4 rows, 4 keys
 -- #1 │ big_orders │ 2 rows in 0s
 -- preview csv

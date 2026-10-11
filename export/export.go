@@ -210,11 +210,16 @@ func RenderBlock(r *model.Result, f Format, i, n int) (string, error) {
 	return "", serr.New("format is not a block format", "format", string(f))
 }
 
-// summary describes what a statement did, for the multi-result banners. The
-// duration is rounded as the status bar rounds it — a fast statement reads as
-// 380µs rather than 0s.
+// durText is a result's duration as the banners and the JSON envelope say
+// it, rounded as the status bar rounds it — a fast statement reads as 380µs
+// rather than 0s. One rounding for both (N-208): the envelope rounded to the
+// millisecond, so `-t json` wrote "0s" for the statement a text banner said
+// took 80µs.
+func durText(d time.Duration) string { return d.Round(10 * time.Microsecond).String() }
+
+// summary describes what a statement did, for the multi-result banners.
 func summary(r *model.Result) string {
-	d := r.Duration.Round(10 * time.Microsecond)
+	d := durText(r.Duration)
 	if r.IsExec {
 		return fmt.Sprintf("%d rows affected in %s", r.Affected, d)
 	}
@@ -420,7 +425,7 @@ func jsonAll(rs []*model.Result) (string, error) {
 		m := map[string]any{
 			"statement": r.Query,
 			"conn":      r.Conn,
-			"duration":  r.Duration.Round(time.Millisecond).String(),
+			"duration":  durText(r.Duration),
 		}
 		if r.IsExec {
 			m["rows_affected"] = r.Affected

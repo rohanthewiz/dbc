@@ -85,13 +85,6 @@ ten session docs in `ai_docs/claude_sessions/`
   named, so the semantics differ from Postgres and SQLite. Worth it only
   if a MySQL user asks (as N-172); then say the difference in the field's
   doc, or require that `key` be the table's only unique key.
-- **N-208** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
-  Two small stats oddities from the tutorial runs: `dbc -t json script`
-  writes `"duration": "0s"` for each shown result while the text banner
-  has the real time (`80µs`); and a `--preview` stats line counts rows in
-  oddly, `src 0→4, paid 2→2` where `paid` received 4 (the inserted
-  `rows.limit` seems to be counted before the transforms). Check both and
-  make the numbers agree with what moved.
 ## Validate
 
 Items whose remaining work is purely testing: hand checks in a real terminal
@@ -450,6 +443,14 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-208** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
+  Two small stats oddities from the tutorial runs: `dbc -t json script`
+  writes `"duration": "0s"` for each shown result while the text banner
+  has the real time (`80µs`); and a `--preview` stats line counts rows in
+  oddly, `src 0→4, paid 2→2` where `paid` received 4 (the inserted
+  `rows.limit` seems to be counted before the transforms). Check both and
+  make the numbers agree with what moved.
+  closed 2026-10-11, `2026-1011-0040-n179-n203-n208`: both checked; both were presentation. (1) The JSON envelope (`export.jsonAll`) rounded a result's duration to the millisecond and the banners to 10 µs, so anything under half a millisecond was `"0s"` in JSON. One helper now, `export.durText`, for both: `-t json script` and multi-statement headless SQL say `"20µs"` where the banner does. (2) The counts were right; their order misled. `previewShape` appended the spliced `limit.preview` after every other node, so the stats read `src 0→4, paid 2→1, …, limit.preview 4→2`: the source read a whole batch (4) and the limit passed 2, which is exactly what `paid` took in. The item's "paid received 4" was a misreading caused by that order. The limit is now inserted right after the source in the node list, so the line reads `src 0→4, limit.preview 4→2, paid 2→1, …` and the log's shape `sql.read → rows.limit → rows.filter → …`. Node stats are matched by id everywhere (web canvas, TUI, record merge), so nothing depended on the position. The tutorial's preview log line is updated. Tests `export.TestJSONDurationMatchesBanner`; `pipeline.TestRunPreview` checks the order and that the filter's in equals the limit's out. Checked in a fresh build.
 - **N-207** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
   Headless SQL on SQLite reports a stale rows-affected for DDL: in a
   multi-statement run, a `CREATE TABLE` right after an `INSERT … 4 rows`

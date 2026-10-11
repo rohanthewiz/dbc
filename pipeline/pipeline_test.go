@@ -278,6 +278,19 @@ func TestRunPreview(t *testing.T) {
 	if lim := nodes["limit.preview"]; lim.In != 9 || lim.Out != 7 {
 		t.Errorf("limit %d→%d, want 9→7", lim.In, lim.Out)
 	}
+	// the stats list the limit where it sits, right after the source, so
+	// the counts read in the order rows flowed (N-208): what the limit
+	// let through is what the filter took in
+	var order []string
+	for _, n := range st.Fragments[0].Nodes {
+		order = append(order, n.ID)
+	}
+	if got := strings.Join(order, " "); got != "src limit.preview up dst" {
+		t.Errorf("node order %q, want src limit.preview up dst", got)
+	}
+	if up := nodes["up"]; up.In != nodes["limit.preview"].Out {
+		t.Errorf("the filter took in %d, the limit let through %d", up.In, nodes["limit.preview"].Out)
+	}
 }
 
 // A fragment Options.Fragment leaves out never starts: it is reported

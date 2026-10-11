@@ -174,6 +174,27 @@ func TestJSONKeepsDuplicateColumns(t *testing.T) {
 	}
 }
 
+// The JSON envelope's duration is the text banner's (N-208): a statement
+// of 80µs is "80µs" in both, not "0s" in the JSON.
+func TestJSONDurationMatchesBanner(t *testing.T) {
+	r := query("demo", "SELECT 1", []string{"x"}, [][]string{{"1"}})
+	r.Duration = 83 * time.Microsecond
+	env, err := RenderAll([]*model.Result{r, r}, JSON)
+	if err != nil {
+		t.Fatalf("RenderAll: %v", err)
+	}
+	var envs []map[string]any
+	if err = json.Unmarshal([]byte(env), &envs); err != nil {
+		t.Fatalf("bad JSON: %v\n%s", err, env)
+	}
+	if got := envs[0]["duration"]; got != "80µs" {
+		t.Errorf("envelope duration = %v, want 80µs", got)
+	}
+	if !strings.Contains(summary(r), "in 80µs") {
+		t.Errorf("banner summary %q, want it in 80µs too", summary(r))
+	}
+}
+
 func TestJSONKeys(t *testing.T) {
 	got := jsonKeys([]string{"a", "a", "a_2", "a"})
 	want := []string{"a", "a_2", "a_2_2", "a_3"}

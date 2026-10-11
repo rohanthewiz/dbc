@@ -819,8 +819,14 @@ func previewShape(f *Fragment, n int) *Fragment {
 			c.Nodes = append(c.Nodes, Node{ID: src + ".preview", Plugin: "preview", Cfg: Config{"rows": rows, "title": src}})
 			c.Edges = append(c.Edges, Edge{From: src, To: src + ".preview"})
 		}
+		// the limit goes in the node list right after the source, where it
+		// sits in the flow (N-208): the stats line and the log list nodes in
+		// this order, and with it last a preview read "src 0→4, paid 2→1"
+		// — the 2 rows the limit let through look lost between the source
+		// and the filter, until "limit.preview 4→2" at the end explains it
 		lim := Node{ID: "limit.preview", Plugin: "rows.limit", Cfg: Config{"rows": rows}}
-		c.Nodes = append(c.Nodes, lim)
+		at := slices.IndexFunc(c.Nodes, func(n Node) bool { return n.ID == src }) + 1
+		c.Nodes = slices.Insert(c.Nodes, at, lim)
 		for i := range c.Edges {
 			if c.Edges[i].From == src {
 				c.Edges[i].From = lim.ID

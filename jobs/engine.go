@@ -38,8 +38,6 @@ package jobs
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -1015,10 +1013,6 @@ func errText(err error) string {
 // starting it (JobRequest.ID).
 func NewRunID() string { return newID(time.Now()) }
 
-// newID is a run id: the start to the second, then four random hex digits,
-// so ids sort by start and two runs in one second still differ.
-func newID(t time.Time) string {
-	var b [2]byte
-	_, _ = rand.Read(b[:])
-	return t.Format("20060102-150405") + "-" + hex.EncodeToString(b[:])
-}
+// newID is a run id (pipeline.RunID): one format for the engine's records
+// and the ${run.id} a run outside the engine gets.
+func newID(t time.Time) string { return pipeline.RunID(t) }

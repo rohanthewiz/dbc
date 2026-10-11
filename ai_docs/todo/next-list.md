@@ -85,15 +85,6 @@ ten session docs in `ai_docs/claude_sessions/`
   named, so the semantics differ from Postgres and SQLite. Worth it only
   if a MySQL user asks (as N-172); then say the difference in the field's
   doc, or require that `key` be the table's only unique key.
-- **N-206** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
-  `${run.id}` is empty when a script runs a pipeline
-  (`s.RunPipelineNamed`/`s.RunPipeline`): documented in
-  `pipeline.RunVars`, but easy to trip on. The tutorial's audit table
-  first keyed on it and failed with a duplicate key on the second script
-  run. Either give script runs an id of their own (same format, trigger
-  `script`) or have `pipeline.Check` warn when `${run.id}` appears in a
-  `sql.exec`/`sql.write` key position. At least say it in the README's
-  run-values list.
 - **N-207** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
   Headless SQL on SQLite reports a stale rows-affected for DDL: in a
   multi-statement run, a `CREATE TABLE` right after an `INSERT … 4 rows`
@@ -464,6 +455,16 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-206** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
+  `${run.id}` is empty when a script runs a pipeline
+  (`s.RunPipelineNamed`/`s.RunPipeline`): documented in
+  `pipeline.RunVars`, but easy to trip on. The tutorial's audit table
+  first keyed on it and failed with a duplicate key on the second script
+  run. Either give script runs an id of their own (same format, trigger
+  `script`) or have `pipeline.Check` warn when `${run.id}` appears in a
+  `sql.exec`/`sql.write` key position. At least say it in the README's
+  run-values list.
+  closed 2026-10-11, `2026-1011-0040-n179-n203-n208`: script runs get an id of their own. `pipeline.runValues` defaults `run.id` to `pipeline.RunID(start)`, the jobs engine's format (`20261009-020000-7f3a`; `jobs.newID` now calls it, so there is one generator). The engine always passes its record's id, which wins. `sdb.S.RunPipelineSpec` (and so `RunPipeline`/`RunPipelineNamed`) sets `run.trigger` to `script` unless the caller's `opt.Run` names one, on a copy of the map. The id names no record, since a script's pipeline run leaves none, but it is unique per run, which a key needs. `RunVars["id"]` and README's run-values list say so; the tutorial's `run.id` note is rewritten and its pitfalls row dropped. Test `sdb.TestRunPipelineRunValues` (two runs: two distinct ids of the format, trigger script; given values kept).
 - **N-205** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
   A whole-pipeline `--preview` fails on a fresh database when a later
   fragment reads a table an earlier fragment creates (a preview writes

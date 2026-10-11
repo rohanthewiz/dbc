@@ -667,10 +667,11 @@ Notes on the nodes used:
 - **`csv.write`** with a relative path writes into `files_dir`. The file is
   renamed into place only when the fragment commits, so a failed run leaves
   the previous file alone.
-- **`run.id` is set only when the jobs engine runs the pipeline** (`dbc
-  pipeline run`, `dbc job run`, the UIs). From a script's
-  `s.RunPipelineNamed` it is empty, so don't use it as a key. That is why
-  `load_log` uses `bigserial`.
+- **`run.id` is unique per run.** When the jobs engine runs the pipeline
+  (`dbc pipeline run`, `dbc job run`, the UIs) it is the id of the run's
+  record (`dbc run show <id>`). A script's `s.RunPipelineNamed` gets a
+  fresh id of the same shape, with `run.trigger` = `script`, but leaves no
+  record to look it up in. `load_log` keys on a `bigserial` all the same.
 
 ### Check, preview, run
 
@@ -1155,7 +1156,6 @@ the tab that started the run.
 | `os.Getenv` is empty in a script run from `dbc web` | The script sees `dbc web`'s environment, from when it started, not your terminal's | Set the variable before starting `dbc web`, or use constants, a settings file via `s.Path`, or pipeline params |
 | A file isn't where you expected | Relative paths resolve to `files_dir` (default `$HOME`), not the cwd | `s.Path(...)` in scripts; `$PWD/...` in `-p` |
 | Preview fails at `lookup`/`sql.read` of a table an earlier fragment makes (the error's hint names the fragments that would have written) | Previews write nothing, earlier fragments included | Run once for real, or `--fragment` |
-| `${run.id}` is empty | It's only set by the jobs engine, not by `s.RunPipeline*` | Don't key on it: use a `bigserial` key, or `cols.add`'s `uuid()` |
 | bytdb refuses a copy | bytdb tables need a primary key | Create the destination first, with a PK |
 | A `Query` result is cut off | `s.Query` is capped at `max_rows` | `s.Reader` streams uncapped |
 | Wrong placeholder errors | `?` vs `$1` | `?` for SQLite/MySQL; `$1` for Postgres/bytdb |

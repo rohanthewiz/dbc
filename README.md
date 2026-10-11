@@ -2201,6 +2201,9 @@ in `~/.config/dbc/jobs/<name>.json` (`jobs_dir`):
   job's own params (`${min_age}`) and the run's values: `${run.date}`
   (`YYYY-MM-DD`), `${run.time}`, `${run.started}`, `${run.id}`,
   `${run.trigger}`, `${run.job}` — which any pipeline node may use too.
+  `${run.id}` is the run record's id; a pipeline a script runs
+  (`s.RunPipeline…`) gets a fresh one of its own, unique per run but in no
+  record, and `${run.trigger}` `script`.
 - **policy.on_failure**: `finish_branches` (the default) skips everything
   downstream of a failed pipeline and lets the other branches finish; the
   job ends failed. `stop` cancels the run at once.

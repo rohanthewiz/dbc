@@ -1,6 +1,7 @@
 package sdb
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -207,9 +208,22 @@ func (s *S) RunPipeline(p *Pipeline, opt PipelineOpts) (*RunStats, error) {
 // literal). A relative path in its file nodes is in the host's files_dir
 // (Paths.FilesDir) unless opt.FilesDir names another directory, so a
 // pipeline run from a script finds the files it finds when scheduled.
+//
+// ${run.trigger} is "script" unless opt.Run says otherwise, and ${run.id}
+// a fresh id of the run's own (pipeline.RunID), as the jobs engine's runs
+// have; no run record is written for it.
 func (s *S) RunPipelineSpec(spec *PipelineSpec, opt PipelineOpts) (*RunStats, error) {
 	if opt.FilesDir == "" {
 		opt.FilesDir = s.paths.FilesDir
+	}
+	if opt.Run["trigger"] == "" {
+		// a copy, so a caller's map reused across runs is not changed
+		run := maps.Clone(opt.Run)
+		if run == nil {
+			run = map[string]string{}
+		}
+		run["trigger"] = "script"
+		opt.Run = run
 	}
 	return pipeline.Run(s.Ctx(), s, spec, opt)
 }

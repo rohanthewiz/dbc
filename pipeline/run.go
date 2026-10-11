@@ -2,6 +2,8 @@ package pipeline
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -59,7 +61,7 @@ type Options struct {
 // refuses any other, so a typo is caught before the run rather than as an
 // "unknown reference" mid-way.
 var RunVars = map[string]string{
-	"id":      "the run's id (20261009-020000-7f3a); empty outside the jobs engine",
+	"id":      "the run's id (20261009-020000-7f3a): the jobs engine's, which names its record; a script's s.RunPipeline gets one of its own",
 	"date":    "the day the run started, YYYY-MM-DD in local time",
 	"time":    "the time the run started, HH:MM:SS in local time",
 	"started": "the instant the run started, RFC 3339",
@@ -162,14 +164,21 @@ type runner struct {
 
 // runValues is the run's ${run.…} values, keyed as they are referenced:
 // every name in RunVars present (empty when neither the host nor a
-// default gives one, so a spec that names ${run.id} still runs from a
-// script), the clock ones from the run's start.
+// default gives one), the clock ones from the run's start.
+//
+// "id" defaults to a fresh one in the jobs engine's format (N-206). The
+// engine always passes its own, the id of the run's record; a script's
+// s.RunPipeline does not, and an empty ${run.id} keyed on (an audit row
+// per run, a batch column) collided on the script's second run. The
+// default names no record — a script's pipeline run leaves none — but it
+// is unique per run, which is what a key needs.
 func runValues(given map[string]string, started time.Time) map[string]string {
 	t := started.Local()
 	out := map[string]string{
 		"run.date":    t.Format("2006-01-02"),
 		"run.time":    t.Format("15:04:05"),
 		"run.started": t.Format(time.RFC3339),
+		"run.id":      RunID(started),
 	}
 	for name := range RunVars {
 		if _, ok := out["run."+name]; !ok {
@@ -180,6 +189,16 @@ func runValues(given map[string]string, started time.Time) map[string]string {
 		out["run."+k] = v
 	}
 	return out
+}
+
+// RunID is a run id for a run started at t: the start to the second,
+// then four random hex digits, so ids sort by start and two runs in one
+// second still differ ("20261009-020000-7f3a"). The jobs engine names its
+// records with it; a run no engine started gets one too (runValues).
+func RunID(t time.Time) string {
+	var b [2]byte
+	_, _ = rand.Read(b[:])
+	return t.Format("20060102-150405") + "-" + hex.EncodeToString(b[:])
 }
 
 // resolveParams settles the run's parameters: the spec's defaults, then

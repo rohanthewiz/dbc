@@ -318,16 +318,6 @@ and `raised`.
   Updated 2026-10-10 (`/next-list`): the e2e harness's Postgres seed has a
   function (`e2e_b.twice`) but no procedure, so the step must seed one
   first.
-- **N-159** · raised `2026-1008-0000-rerun-result-tab` · value low
-  dbc web's confirm before rerunning a tab whose statement may write
-  (`rerun` in `app.js`, the "Run this statement again?" modal) has not been
-  seen in a browser. The wire test checks `writes` on the strip's refs and
-  the TUI test drives its confirm menu both ways. Add a step to the go-rod
-  test in `web/e2e`: run an INSERT into a scratch table, press `r`, see the
-  modal, Keep the result (nothing runs), then Run it again (a new seq).
-  Updated `2026-1008-1450-rerun-button-on-result-tab`: a click on the tab's
-  ↻ reaches the same `rerun`, so the step can click it instead of `r`.
-
 - **N-162** · raised `2026-1008-1331-postgres-in-docker` · value low
   Postgres in Docker is covered by unit tests over a fake docker CLI, a
   live test (`DBC_LIVE_DOCKER=1`, passed on 17 and 18), and a web e2e step
@@ -562,6 +552,16 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-159** · raised `2026-1008-0000-rerun-result-tab` · value low
+  dbc web's confirm before rerunning a tab whose statement may write
+  (`rerun` in `app.js`, the "Run this statement again?" modal) has not been
+  seen in a browser. The wire test checks `writes` on the strip's refs and
+  the TUI test drives its confirm menu both ways. Add a step to the go-rod
+  test in `web/e2e`: run an INSERT into a scratch table, press `r`, see the
+  modal, Keep the result (nothing runs), then Run it again (a new seq).
+  Updated `2026-1008-1450-rerun-button-on-result-tab`: a click on the tab's
+  ↻ reaches the same `rerun`, so the step can click it instead of `r`.
+  closed 2026-10-10, `2026-1010-1929-n150-n154-n159` (from the cats-todo backlog): the go-rod step is "rerun a write asks first" (`rerunWriteConfirm`), clicking the tab's ↻ as the update suggested. It creates `e2e_rerun` on lite (waiting for the DDL's relist line), runs an INSERT, and pins its tab, so the count queries open tabs beside it rather than replacing it; count 1. The ↻ opens "Run this statement again?" with the INSERT in its `<pre>`. Keep the result closes it, and no "rerun INSERT …" reaches the log. The ↻ again, then Run it again: "rerun INSERT … completed", count 2. Screenshot `rerun-write-confirm`. Passes alone and in the full suite. No defect found.
 - **N-154** · raised `2026-1007-1606-run-all-tab-per-statement` · value low
   Tabs per statement (N-147) have not been watched in a browser. The
   workspace tests cover the strip, the web wire test covers the "run" event,

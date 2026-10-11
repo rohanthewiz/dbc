@@ -47,6 +47,7 @@ func TestWeb(t *testing.T) {
 		{"switch connections", switchConns},
 		{"result tabs and logs per connection", resultTabsPerConn},
 		{"run all: a tab per statement", runAllTabs},
+		{"rerun a write asks first", rerunWriteConfirm},
 		{"history scoped to the database", historyScope},
 		{"disconnect and reconnect", disconnect},
 		{"refresh a connection", refreshConn},
@@ -789,6 +790,63 @@ func runAllTabs(t *testing.T, _ *env, p *rod.Page) {
 	}
 	clickAt(t, p, `#rstrip .rt:nth-child(1) .tt`, proto.InputMouseButtonLeft)
 	waitResult(t, p, seq1, "name")
+}
+
+// rerunWriteConfirm (N-159): a tab whose statement may write asks before
+// it runs again (app.js rerun, "Run this statement again?"): Keep the
+// result runs nothing, Run it again runs it — a second row in the table.
+func rerunWriteConfirm(t *testing.T, _ *env, p *rod.Page) {
+	logHas := func(s string) bool {
+		return evalStr(t, p, `(s) => document.getElementById("log").textContent.includes(s) ? "y" : ""`, s) == "y"
+	}
+	count := func() string {
+		before := gridSeq(t, p)
+		eval(t, p, `() => dbc.editor.setText("SELECT count(*) AS n FROM e2e_rerun")`)
+		p.MustElement("#run").MustClick()
+		waitResult(t, p, before, "n")
+		return evalStr(t, p, `() => document.querySelector("#grid .gb .gr .gc").textContent.trim()`)
+	}
+	const insert = "INSERT INTO e2e_rerun VALUES (1)"
+	eval(t, p, `() => dbc.editor.setText("CREATE TABLE IF NOT EXISTS e2e_rerun (x INT)")`)
+	p.MustElement("#run").MustClick()
+	waitFor(t, p, "the table made, the sidebar relisted", `() => document.getElementById("log").textContent.includes("relisted lite after the DDL")`)
+	eval(t, p, `(sql) => dbc.editor.setText(sql)`, insert)
+	p.MustElement("#run").MustClick()
+	waitFor(t, p, "the INSERT's tab on screen, with its ↻", `(sql) => {
+	  const on = document.querySelector("#rstrip .rt.on");
+	  return !!on && on.querySelector(".tt").textContent === sql && !!on.querySelector(".rr");
+	}`, insert)
+	// pinned, so the counts below open tabs of their own beside it
+	rightClick(t, p, `#rstrip .rt.on`)
+	menuPick(t, p, "Pin — a run opens a new tab instead")
+	waitFor(t, p, "the INSERT's tab pinned", `() => !!document.querySelector("#rstrip .rt.on .pin")`)
+	if n := count(); n != "1" {
+		t.Fatalf("rows after the INSERT = %q, want 1", n)
+	}
+
+	// back to the INSERT's tab; its ↻ asks, and Keep the result runs nothing
+	eval(t, p, `(sql) => [...document.querySelectorAll("#rstrip .rt")].find((r) => r.querySelector(".tt").textContent === sql)
+	  .querySelector(".tt").click()`, insert)
+	waitFor(t, p, "the INSERT's tab on screen", `(sql) => document.querySelector("#rstrip .rt.on .tt").textContent === sql`, insert)
+	clickAt(t, p, `#rstrip .rt.on .rr`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "the confirm", `() => { const m = document.querySelector(".modal");
+	  return !!m && /Run this statement again\?/.test(m.textContent) && /INSERT INTO e2e_rerun/.test(m.querySelector("pre").textContent); }`)
+	shot(t, p, "rerun-write-confirm")
+	eval(t, p, `() => [...document.querySelectorAll(".modal .mfoot button")].find((b) => b.textContent === "Keep the result").click()`)
+	waitFor(t, p, "the confirm closed", `() => !document.querySelector(".modal")`)
+	time.Sleep(300 * time.Millisecond)
+	if logHas("rerun " + insert) {
+		t.Fatal("Keep the result reran the INSERT")
+	}
+
+	// Run it again: the INSERT runs once more, in its tab
+	clickAt(t, p, `#rstrip .rt.on .rr`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "the confirm again", `() => !!document.querySelector(".modal")`)
+	eval(t, p, `() => [...document.querySelectorAll(".modal .mfoot button")].find((b) => b.textContent === "Run it again").click()`)
+	waitFor(t, p, "the rerun logged", `(s) => document.getElementById("log").textContent.includes(s)`, "rerun "+insert+" completed")
+	if n := count(); n != "2" {
+		t.Errorf("rows after Run it again = %q, want 2", n)
+	}
 }
 
 // historyScope: the history opens on the tab's database when it has

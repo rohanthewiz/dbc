@@ -1567,6 +1567,9 @@ leaves a server behind.
 
 ## Scripting in Go
 
+> New to scripts, pipelines and jobs? [The scripting and ETL tutorial](docs/scripting-and-etl-tutorial.md)
+> builds a small warehouse load end to end, one layer at a time.
+
 A script is a plain Go file defining one function:
 
 ```go

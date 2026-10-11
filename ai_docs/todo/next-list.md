@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-203
+**Next ID:** N-209
 
 ## Open
 
@@ -89,6 +89,52 @@ ten session docs in `ai_docs/claude_sessions/`
   named, so the semantics differ from Postgres and SQLite. Worth it only
   if a MySQL user asks (as N-172); then say the difference in the field's
   doc, or require that `key` be the table's only unique key.
+- **N-203** · raised `2026-1011-0035-scripting-etl-tutorial` · value medium
+  `os.Getenv` is always `""` inside a script, a `go.*` node and a user
+  plugin: `script/engine.go` builds the interpreter with
+  `interp.Options{}`, and yaegi then hands the interpreted `os` an empty
+  environment. Nothing says so, and a script reading a knob from the
+  environment silently takes its default (found writing the tutorial).
+  Either pass `Env: os.Environ()` (scripts get the process's env, as a
+  shell script would) or keep it empty on purpose and say so in the README
+  and the scripting reference. The tutorial currently documents the empty
+  environment; update its §2 and pitfalls row if this changes.
+- **N-204** · raised `2026-1011-0035-scripting-etl-tutorial` · value medium
+  A pipeline's stats print `2562047h47m16.854775807s` (the max
+  `time.Duration`) as the time of a skipped fragment: actions in a
+  `--preview`, and the fragments `--fragment` leaves out. Seen in `dbc
+  pipeline run … --preview` text output; check the JSON stats, the run
+  record and both UIs' run views for the same value. A skipped fragment
+  should show no time (or 0).
+- **N-205** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
+  A whole-pipeline `--preview` fails on a fresh database when a later
+  fragment reads a table an earlier fragment creates (a preview writes
+  nothing, earlier sinks included): "the side query: no such table" from
+  `lookup`. As designed, but the error does not say why; in a preview,
+  add a hint ("earlier fragments write nothing in a preview; run once, or
+  `--fragment`"), or have `pipeline.Check`/the preview warn when a node
+  reads a table a preceding `sql.write` creates.
+- **N-206** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
+  `${run.id}` is empty when a script runs a pipeline
+  (`s.RunPipelineNamed`/`s.RunPipeline`): documented in
+  `pipeline.RunVars`, but easy to trip on. The tutorial's audit table
+  first keyed on it and failed with a duplicate key on the second script
+  run. Either give script runs an id of their own (same format, trigger
+  `script`) or have `pipeline.Check` warn when `${run.id}` appears in a
+  `sql.exec`/`sql.write` key position. At least say it in the README's
+  run-values list.
+- **N-207** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
+  Headless SQL on SQLite reports a stale rows-affected for DDL: in a
+  multi-statement run, a `CREATE TABLE` right after an `INSERT … 4 rows`
+  shows "4 rows affected" (the driver's `changes()` carries over). Report
+  0 (or nothing) for DDL statements, at least on SQLite.
+- **N-208** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
+  Two small stats oddities from the tutorial runs: `dbc -t json script`
+  writes `"duration": "0s"` for each shown result while the text banner
+  has the real time (`80µs`); and a `--preview` stats line counts rows in
+  oddly, `src 0→4, paid 2→2` where `paid` received 4 (the inserted
+  `rows.limit` seems to be counted before the transforms). Check both and
+  make the numbers agree with what moved.
 ## Validate
 
 Items whose remaining work is purely testing: hand checks in a real terminal

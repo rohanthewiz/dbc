@@ -177,6 +177,11 @@ func jobTabs(t *testing.T, e *env, p *rod.Page) {
 	// ── ▶ Run: the tab's runs face, the run's page, to succeeded ─────────
 	clickSel(t, p, "#run", proto.InputMouseButtonLeft)
 	waitFor(t, p, "the run page", `() => !document.querySelector("#jobp .jruns").hidden && !!document.querySelector("#jobp .rvhead")`)
+	// the run page has the results' room (N-184): they fold away, and the
+	// editor pane it is drawn in takes most of the work column
+	waitFor(t, p, "the results folded under the run page", `() => document.querySelector(".app").classList.contains("job-runs") &&
+	  getComputedStyle(document.getElementById("results")).display === "none" &&
+	  document.getElementById("editor-wrap").getBoundingClientRect().height > 0.6 * document.querySelector(".work").getBoundingClientRect().height`)
 	waitFor(t, p, "the run succeeded, every step ✓", `() => {
 	  const h = document.querySelector("#jobp .rvhead .rvst");
 	  return !!h && /succeeded/.test(h.textContent) && document.querySelectorAll("#jobp .rvdag .dcard.s-succeeded").length === 4;
@@ -219,8 +224,10 @@ func jobTabs(t *testing.T, e *env, p *rod.Page) {
 
 	// ── ⊞ Design: the cards carry the run's states ───────────────────────
 	clickSel(t, p, `#jobp .pbar button[data-act="design"]`, proto.InputMouseButtonLeft)
-	waitFor(t, p, "the canvas, every card ✓", `() => !document.querySelector("#jobp .pbody").hidden &&
-	  document.querySelectorAll("#jobp .jcard.s-succeeded").length === 4`)
+	waitFor(t, p, "the canvas, every card ✓, the results back", `() => !document.querySelector("#jobp .pbody").hidden &&
+	  document.querySelectorAll("#jobp .jcard.s-succeeded").length === 4 &&
+	  !document.querySelector(".app").classList.contains("job-runs") &&
+	  getComputedStyle(document.getElementById("results")).display !== "none"`)
 	shot(t, p, "job-tab-after-run")
 
 	// ── a reload: the job tab comes back, its cards on the last run ──────

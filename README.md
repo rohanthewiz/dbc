@@ -2268,9 +2268,12 @@ examples on the left, an inspector on the right.
   is found and checked too, and what is wrong is marked ⚠ on its card.
 - **▶ Run** (`Ctrl+Enter`) saves, then runs the job in dbc web's engine.
   The tab turns to its **◷ Runs** face, on the new run's page, live; ■ Stop
-  stops it. A preview sink in one of its pipelines lands its rows in the
-  tab's grid. Back on **⊞ Design**, each card shows its step's state in
-  the job's newest run — this tab's, a scheduled one, another window's.
+  stops it. The results fold away while the Runs face is up, so the page
+  has the whole column (the log stays below). A preview sink in one of its
+  pipelines lands its rows in the tab's grid, which ◎ Open preview (or
+  ⊞ Design) brings back. Back on **⊞ Design**, each card shows its step's
+  state in the job's newest run — this tab's, a scheduled one, another
+  window's.
 - Saving, drafts, `{ } JSON` and rename are the pipeline tab's.
 
 **The Runs view** — `Alt+R` or ◷ Runs on the top bar, for every run; a job

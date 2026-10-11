@@ -2661,7 +2661,14 @@
       return r.kind === "job" ? jobKit.edit(file) : pipeKit.edit(file);
     },
     tabOfOrigin: (ws) => (ws ? tabOf(ws) || null : null),
-    showOrigin: (ws) => { const t = tabOf(ws); if (t && t !== state.tab) activate(t); },
+    // a run page's ◎ Open preview: the tab whose grid holds its rows — the
+    // job tab on screen itself, folded under its run page, shows its
+    // canvas again, and the grid with it
+    showOrigin: (ws) => {
+      const t = tabOf(ws);
+      if (t && t !== state.tab) activate(t);
+      else if (t && t.job) jobKit.setFace(t.job, "design");
+    },
     // a fragment's preview again, now: its pipeline in a tab (once the
     // tab has its workspace, where the rows land), then ◎ on the fragment
     preview: async (pipe, frag) => {
@@ -2689,6 +2696,9 @@
     runs: () => runsKit,
     openPipeline: (name) => pipeKit.edit(/\.json$/i.test(name) ? name : name + ".json"),
     onScreen: (file) => !!(state.tab && state.tab.job === file),
+    // runsFace: the job tab on screen shows its runs (on) or its canvas;
+    // the results fold away under a run page (app.css .job-runs, N-184)
+    runsFace: (on) => els.app.classList.toggle("job-runs", on),
     changed: (name) => {
       renderTabs();
       if (state.tab && state.tab.job === name) drawScriptHead();
@@ -2745,6 +2755,7 @@
     els.app.classList.toggle("script-mode", on);
     els.app.classList.toggle("pipe-mode", pipe);
     els.app.classList.toggle("job-mode", job);
+    if (!job) els.app.classList.remove("job-runs"); // the job kit sets it while its run page is up
     els.app.classList.toggle("pipe-json", pipe && (job ? jobKit.json(t.job) : pipeKit.json(t.pipeline)));
     els.run.title = pipe ? "Save the " + what + ", then run it (Ctrl+Enter)" :
       on ? "Save the script, then run it (Ctrl+Enter)" : "Run the statement under the caret (Ctrl+Enter)";

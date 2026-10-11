@@ -1217,6 +1217,14 @@ body.insp-dragging { cursor: col-resize; user-select: none; }
 .jcanvas .dcard { cursor: pointer; }
 .jhint { position: absolute; left: 24px; top: 24px; width: 380px; color: var(--muted); font-style: italic; }
 .jruns { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+/* while a job tab's run page is up (.job-runs, jobs.js setFace) the
+   results fold away and the editor pane, where the page is drawn, takes
+   their room (N-184): the DAG and its drilldown — fragments, nodes, log —
+   fit without scrolling past a third of the column. A job's rows are in
+   its record, not this grid; ◎ Open preview goes back to the canvas,
+   results and all. The log stays, below. */
+.app.job-runs #splitter, .app.job-runs #results { display: none; }
+.app.job-runs .editor-wrap { flex: 1 1 auto; height: auto !important; }
 .jcronrow { display: flex; gap: 4px; align-items: center; margin-bottom: 2px; }
 .jcronrow input { flex: 1 1 auto; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg); background: var(--bg);
   border: 1px solid var(--line); border-radius: 3px; padding: 3px 5px; min-width: 0; }

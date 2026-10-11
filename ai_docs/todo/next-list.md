@@ -68,13 +68,6 @@ ten session docs in `ai_docs/claude_sessions/`
   Fragments are reordered from a lane's ⋯ menu (Move up / Move down). The
   plan sketched dragging a lane by its header; add it if the menu turns
   out slow for pipelines with many fragments.
-- **N-184** · raised `2026-1009-1349-phase-4-jobs-tab-runs-view` · value low
-  A job tab's Runs face sits in the editor's pane, about a third of the
-  work column by default: the run page's DAG fills it, and the drilldown
-  (fragments, nodes, log) is below, out of sight until scrolled (a click on
-  a step or fragment now scrolls its section in). Give the run page more
-  room while it is up — fold the results under it, or let ◷ Runs open the
-  page in the Runs dialog, which has the whole window.
 - **N-185** · raised `2026-1009-1349-phase-4-jobs-tab-runs-view` · value low
   A preview sink's rows from a real run land in the grid of the tab that
   started it; a scheduled, webhook or CLI run has no such tab, and run
@@ -488,6 +481,14 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-184** · raised `2026-1009-1349-phase-4-jobs-tab-runs-view` · value low
+  A job tab's Runs face sits in the editor's pane, about a third of the
+  work column by default: the run page's DAG fills it, and the drilldown
+  (fragments, nodes, log) is below, out of sight until scrolled (a click on
+  a step or fragment now scrolls its section in). Give the run page more
+  room while it is up — fold the results under it, or let ◷ Runs open the
+  page in the Runs dialog, which has the whole window.
+  closed 2026-10-10, `2026-1010-2022-n184-n185-n170` (from the cats-todo backlog): the first option, results folded under the page. The Runs dialog would leave the tab with nothing to show after ▶ Run, which is the page's main use. While a job tab shows its Runs face, `jobs.js` `setFace` tells the host (`runsFace`) and `.app.job-runs` hides `#splitter` and `#results`. The editor pane, where the page is drawn, takes their room (`flex: 1`; its splitter height overridden), and the log stays below. `hide()` and `setMode` clear the class for any other tab. ◎ Open preview on a run page pointing at this very tab now switches it to ⊞ Design, where the grid with the preview's rows is, rather than doing nothing. README's job-tab ▶ Run bullet. e2e "job tabs": after ▶ Run, `.job-runs` is on, `#results` is `display: none` and the editor pane is over 60% of the work column; ⊞ Design brings them back. A screenshot (`job-run-fragment`) shows the DAG, the fragment timeline, the node table and the run's log all in view, where before the drilldown was below the fold.
 - **N-186** · raised `2026-1009-1449-phase-5-tui-pipelines-jobs` · value low
   A preview sink in a job a script starts (`s.RunJob`) shows its rows
   nowhere. `Engine.ScriptRunner` starts the job with no origin, so dbc web

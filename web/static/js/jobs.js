@@ -573,6 +573,7 @@
     function hide() {
       if (shown && shown.json) syncFromEditor(shown);
       shown = null;
+      host.runsFace(false);
       if (runsView) { runsView.destroy(); runsView = null; }
       if (dom) dom.root.hidden = true;
       flush();
@@ -586,6 +587,7 @@
       const runs = face === "runs";
       dom.body.hidden = runs;
       dom.runsBox.hidden = !runs;
+      host.runsFace(runs);
       dom.design.classList.toggle("on", !runs);
       dom.runsB.classList.toggle("on", runs);
       if (runs && !runsView) {

@@ -42,20 +42,6 @@ ten session docs in `ai_docs/claude_sessions/`
   A dump for MySQL connections with mysqldump, behind the same menu row and
   dialog (the row is dimmed on MySQL today). No one has asked; worth it only
   if a MySQL user does.
-- **N-187** · raised `2026-1009-1449-phase-5-tui-pipelines-jobs` · value low
-  Every run listing reads every record file whole
-  (`userdata.ListRuns` → `readHead` unmarshals each), whatever the
-  filter's limit: `dbc runs`, dbc web's Runs view, the TUI's Runs list.
-  The TUI's list re-reads only when `userdata.RunsStamp` moved, but that
-  is every 2s while another process runs a job (its record is rewritten).
-  With `runs_keep` 200 per name and many names this grows; reading only a
-  record's leading bytes (the header fields come first) or a per-name
-  index would bound it. Contingent on a `runs_dir` big enough to notice.
-  Updated 2026-10-10 (`/next-list`): the record's head is not all stored
-  fields. `RunHead.Rows` is summed by `readHead` from
-  `pipelines[].fragments[].rows`, so reading only the leading bytes would
-  also mean writing Rows into the header. `Log` comes last in `jobs.Run`,
-  so a read could at least stop before it.
 - **N-188** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value low
   Report the yaegi mis-store upstream (traefik/yaegi, v0.16.1): a binary or
   unary operator's result assigned straight into an element of a `[]any`
@@ -464,6 +450,21 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-187** · raised `2026-1009-1449-phase-5-tui-pipelines-jobs` · value low
+  Every run listing reads every record file whole
+  (`userdata.ListRuns` → `readHead` unmarshals each), whatever the
+  filter's limit: `dbc runs`, dbc web's Runs view, the TUI's Runs list.
+  The TUI's list re-reads only when `userdata.RunsStamp` moved, but that
+  is every 2s while another process runs a job (its record is rewritten).
+  With `runs_keep` 200 per name and many names this grows; reading only a
+  record's leading bytes (the header fields come first) or a per-name
+  index would bound it. Contingent on a `runs_dir` big enough to notice.
+  Updated 2026-10-10 (`/next-list`): the record's head is not all stored
+  fields. `RunHead.Rows` is summed by `readHead` from
+  `pipelines[].fragments[].rows`, so reading only the leading bytes would
+  also mean writing Rows into the header. `Log` comes last in `jobs.Run`,
+  so a read could at least stop before it.
+  closed 2026-10-11, `2026-1011-1341-n188-n187`: an in-process cache of record heads in `userdata` (`heads`, read by `readHeads`), so a listing parses only the records written since this process last listed. A head stays good while its file has the same identity (`os.SameFile`), size and modification time. `writeAtomic` renames a new file in on every write, so a rewrite is always a new file. `forget` drops the heads of pruned records on each directory read. Neither proposed fix was taken. A Limit cannot cut the reads short, because it keeps the newest by Started and an id's local wall-clock second can be out of order (the hour a clock falls back, a change of zone). Reading only a file's leading bytes would need Rows written into the header. The long-lived listers gain (the TUI's Runs list, dbc web's Runs view); a one-shot `dbc runs` still parses everything once. Measured on 4,000 records (20 names × 200) with logs: a 200-row listing took 482 ms cold and about 13 ms cached. Test: `userdata.TestRunHeadsCache`.
 - **N-208** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
   Two small stats oddities from the tutorial runs: `dbc -t json script`
   writes `"duration": "0s"` for each shown result while the text banner

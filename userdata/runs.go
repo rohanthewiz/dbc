@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rohanthewiz/serr"
@@ -168,9 +169,10 @@ func ListRuns(dir string, f RunFilter) ([]RunHead, error) {
 // RunsStamp is the newest modification time among the record directories
 // (<dir>/<kind>/<name>), zero when there are none. A record written,
 // rewritten or pruned moves its directory's time — an atomic write renames
-// a file into it — so a listing kept open (the TUI's Runs list) re-reads
+// a file into it — so a listing kept open (the TUI's Runs list) re-lists
 // the records only when the stamp has moved: two directory reads and a
-// stat per name, where a listing reads every record whole.
+// stat per name, where a listing reads every directory, stats every
+// record, and parses each one the heads cache does not hold.
 func RunsStamp(dir string) time.Time {
 	var newest time.Time
 	if dir == "" {
@@ -195,12 +197,14 @@ func RunsStamp(dir string) time.Time {
 
 // readHeads reads the records of one kind/name directory that pass f.
 // The id is the start to the second, so a Since filter skips a file by its
-// name before reading it.
+// name before reading it. A record unchanged since this process last read
+// it comes from the heads cache, not the disk.
 func readHeads(d string, f RunFilter) ([]RunHead, error) {
 	ents, err := os.ReadDir(d)
 	if err != nil {
 		return nil, serr.Wrap(err, "op", "list runs", "dir", d)
 	}
+	heads.forget(d, ents)
 	var out []RunHead
 	for _, e := range ents {
 		id, ok := strings.CutSuffix(e.Name(), ".json")
@@ -213,7 +217,11 @@ func readHeads(d string, f RunFilter) ([]RunHead, error) {
 				continue
 			}
 		}
-		h, err := readHead(filepath.Join(d, e.Name()))
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		h, err := heads.read(d, fi)
 		if err != nil {
 			continue
 		}
@@ -226,11 +234,20 @@ func readHeads(d string, f RunFilter) ([]RunHead, error) {
 }
 
 func readHead(p string) (RunHead, error) {
-	bs, err := os.ReadFile(p)
+	fi, err := os.Stat(p)
 	if err != nil {
 		return RunHead{}, err
 	}
-	fi, err := os.Stat(p)
+	return parseHead(p, fi)
+}
+
+// parseHead reads the record at p, whose file is fi, and parses its head.
+// fi is taken before the read. If a writer renames a new record in between,
+// the head is the newer content stamped with the older file, and the next
+// listing sees a different file and parses again. The reverse never
+// happens: an old head is not kept as though it were current.
+func parseHead(p string, fi fs.FileInfo) (RunHead, error) {
+	bs, err := os.ReadFile(p)
 	if err != nil {
 		return RunHead{}, err
 	}
@@ -246,6 +263,90 @@ func readHead(p string) (RunHead, error) {
 	}
 	h.Mod = fi.ModTime()
 	return h, nil
+}
+
+// heads holds the head of every record this process has listed, so a
+// listing parses only the records written since the last one. The long-
+// lived listers (the TUI's Runs list, dbc web's Runs view) re-list every
+// couple of seconds while a run is live, and that run's record is then the
+// only one that changed. A one-shot `dbc runs` starts empty and gains
+// nothing, but it lists only once.
+//
+// WHY A CACHE, NOT A SHORTER READ. A listing's Limit cannot be applied
+// before reading. It keeps the newest by Started, and an id's start is the
+// local wall clock to the second, which the hour a clock falls back (or a
+// machine that changed zones) puts out of order. Reading only the front of
+// each file would not help either: Rows is summed over every fragment,
+// deep in the record. A finished record never changes, so remembering its
+// head is exact, whatever the order of the ids.
+//
+// A head is good while its file is unchanged: the same file (os.SameFile,
+// device and inode on Unix), size and modification time. writeAtomic
+// renames a new file over the old on every write, so a rewrite is always a
+// different file, even within one tick of the clock.
+//
+//	heads.dirs: "<runs>/job/nightly" → "20261009-020000-7f3a.json" → {fi, head}
+//
+// It is keyed by directory so that readHeads can drop, in one pass over the
+// directory it just read, the records pruned or removed since (forget). A
+// directory that goes altogether keeps its entries, a few hundred bytes a
+// record, bounded by the records this process has ever listed.
+var heads = &headCache{dirs: map[string]map[string]cachedHead{}}
+
+type headCache struct {
+	mu   sync.Mutex
+	dirs map[string]map[string]cachedHead
+}
+
+type cachedHead struct {
+	fi fs.FileInfo
+	h  RunHead
+}
+
+// read is the head of the record fi in d, from the cache when its file is
+// unchanged. The lock is not held across the file read. Two listings that
+// race parse the record twice and the last to finish is kept; either one
+// is the head of a file that was current when its read began.
+func (c *headCache) read(d string, fi fs.FileInfo) (RunHead, error) {
+	c.mu.Lock()
+	ch, ok := c.dirs[d][fi.Name()]
+	c.mu.Unlock()
+	if ok && os.SameFile(ch.fi, fi) && ch.fi.Size() == fi.Size() && ch.fi.ModTime().Equal(fi.ModTime()) {
+		return ch.h, nil
+	}
+	h, err := parseHead(filepath.Join(d, fi.Name()), fi)
+	if err != nil {
+		return RunHead{}, err
+	}
+	c.mu.Lock()
+	m := c.dirs[d]
+	if m == nil {
+		m = map[string]cachedHead{}
+		c.dirs[d] = m
+	}
+	m[fi.Name()] = cachedHead{fi: fi, h: h}
+	c.mu.Unlock()
+	return h, nil
+}
+
+// forget drops d's heads whose files are not among ents, the directory as
+// just read.
+func (c *headCache) forget(d string, ents []fs.DirEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	m := c.dirs[d]
+	if len(m) == 0 {
+		return
+	}
+	names := make(map[string]bool, len(ents))
+	for _, e := range ents {
+		names[e.Name()] = true
+	}
+	for n := range m {
+		if !names[n] {
+			delete(m, n)
+		}
+	}
 }
 
 // ReadRun is one record's bytes, found by id under any kind and name, and

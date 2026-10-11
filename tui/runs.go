@@ -97,9 +97,10 @@ func (rm *runsModal) reload(m *Model) {
 // move every second, drawn from what the list holds; the records are read
 // again only every other tick and only when the runs directory says one
 // was written since (a run of another process starting, ending, or — every
-// 2s while it runs — rewriting its record). Every listing reads every
-// record whole, which the runs_keep prune bounds but does not make free,
-// so an idle list does not do it every two seconds.
+// 2s while it runs — rewriting its record). A listing parses only the
+// records written since the last (userdata's heads cache), but it still
+// reads every directory and stats every record, so an idle list does not
+// do it every two seconds.
 func (rm *runsModal) tick(m *Model, disk bool) {
 	if disk && !userdata.RunsStamp(m.runsDir).Equal(rm.stamp) {
 		rm.reload(m)

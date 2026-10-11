@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -106,5 +107,78 @@ func TestRunsStamp(t *testing.T) {
 	}
 	if s := RunsStamp(dir); !s.Equal(again) {
 		t.Errorf("an unchanged dir's stamp moved: %v then %v", again, s)
+	}
+}
+
+// A listing parses a record only when its file changed since this process
+// last read it: a rewrite through SaveRun is seen at once, even with the
+// same size in the same clock tick; a record pruned leaves the cache; and
+// a file changed under the cache's nose — same file, size and time, which
+// no writer of records does — still reads as the cached head, which is
+// how the test sees the cache answering.
+func TestRunHeadsCache(t *testing.T) {
+	dir := t.TempDir()
+	const id = "20261009-020000-aaaa"
+	save := func(id, status string) {
+		t.Helper()
+		bs := []byte(`{"id": "` + id + `", "kind": "job", "name": "nightly", "status": "` + status + `"}`)
+		if err := SaveRun(dir, "job", "nightly", id, bs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status := func() string {
+		t.Helper()
+		hs, err := ListRuns(dir, RunFilter{Kind: "job", Name: "nightly"})
+		if err != nil || len(hs) == 0 {
+			t.Fatalf("list: %v %v", hs, err)
+		}
+		return hs[len(hs)-1].Status
+	}
+	save(id, "running")
+	if s := status(); s != "running" {
+		t.Fatalf("first read: %q", s)
+	}
+	// "failed!" is as long as "running": only the file's identity differs
+	save(id, "failed!")
+	if s := status(); s != "failed!" {
+		t.Errorf("a rewrite of the same size was not re-read: %q", s)
+	}
+
+	p := filepath.Join(dir, "job", "nightly", id+".json")
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(p, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bs, _ := os.ReadFile(p)
+	_, err = f.WriteAt([]byte(strings.Replace(string(bs), "failed!", "zzzzzzz", 1)), 0)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chtimes(p, fi.ModTime(), fi.ModTime())
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := status(); s != "failed!" {
+		t.Errorf("an unchanged file was parsed again: %q", s)
+	}
+
+	save("20261008-020000-bbbb", "succeeded")
+	_ = status()
+	d := filepath.Join(dir, "job", "nightly")
+	if n := len(heads.dirs[d]); n != 2 {
+		t.Fatalf("cached heads: %d, want 2", n)
+	}
+	if _, err = PruneRuns(dir, "job", "nightly", 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	_ = status()
+	if _, ok := heads.dirs[d]["20261008-020000-bbbb.json"]; ok || len(heads.dirs[d]) != 1 {
+		t.Errorf("a pruned record stayed cached: %v", heads.dirs[d])
 	}
 }

@@ -79,10 +79,12 @@
   let warmed = "";   // the connection completions were last warmed for
   let lastNote = ""; // the last completion note logged, so it is logged once
   // minis: the models of the small editors mini() makes (a pipeline
-  // inspector's code fields). The workspace's SQL providers skip them:
-  // they complete and resolve against the tab's connection, and a
-  // pipeline tab has none — its nodes name their own (see mini).
-  const minis = new WeakSet();
+  // inspector's code fields), each with its options. The workspace's SQL
+  // providers do not ask the tab's workspace for them: a pipeline tab has
+  // no connection — its nodes name their own. Completion asks by that
+  // connection instead (opts.conn, POST /api/v1/conn-complete); go to
+  // definition and rename skip them.
+  const minis = new WeakMap();
 
   // ── the API the rest of the page uses ─────────────────────────────────
   const api = {
@@ -285,7 +287,9 @@
     // null until Monaco has loaded; the caller keeps its textarea then.
     //
     //	opts  text, language ("go", "sql", "pgsql", "mysql"),
-    //	      onChange(text), minLines, maxLines
+    //	      onChange(text), minLines, maxLines, conn() — the
+    //	      connection a SQL field completes against, asked at each
+    //	      completion ("" or none: no suggestions)
     //	→     { editor, setMarkers(diags), focus(), dispose() }
     //
     // HEIGHT follows the text, between minLines and maxLines: a field is
@@ -311,7 +315,7 @@
       const m = monaco.editor.createModel(opts.text || "", opts.language || "sql");
       // a Go field indents with tabs, as gofmt and newModel do
       m.updateOptions(go ? { insertSpaces: false, tabSize: 4 } : { insertSpaces: true, tabSize: 4 });
-      minis.add(m);
+      minis.set(m, { conn: opts.conn || null });
       const me = monaco.editor.create(box, {
         model: m,
         theme: "dbc",
@@ -545,12 +549,16 @@
     const provider = {
       triggerCharacters: [".", ":"],
       async provideCompletionItems(model, position, _ctx, token) {
-        if (!dbc.state.ws || minis.has(model)) return { suggestions: [] };
+        // a pipeline field completes against its node's connection, a
+        // statement editor against its tab's workspace
+        const mini = minis.get(model);
+        const conn = mini ? (mini.conn && mini.conn()) || "" : "";
+        if (mini ? !conn : !dbc.state.ws) return { suggestions: [] };
         let r;
         try {
-          r = await dbc.api("POST", dbc.wsPath("/complete"), {
-            buffer: model.getValue(), caret: model.getOffsetAt(position),
-          });
+          const ask = { buffer: model.getValue(), caret: model.getOffsetAt(position) };
+          r = mini ? await dbc.api("POST", "/api/v1/conn-complete", Object.assign({ conn }, ask))
+            : await dbc.api("POST", dbc.wsPath("/complete"), ask);
         } catch (_) {
           return { suggestions: [] }; // a lost server is the status bar's to report
         }

@@ -294,3 +294,41 @@ func TestPipelineTabSaved(t *testing.T) {
 		t.Errorf("tabs = %+v", tabs)
 	}
 }
+
+// The pipeline inspector's fields ask by connection, with no workspace
+// (N-192, N-176): a sql field's completion against its node's conn, in
+// UTF-16 offsets as a statement editor's; a table field's tables. An
+// unknown conn (a node's, half typed) is a note, or an error field: never
+// an error status.
+func TestConnCompleteAndTables(t *testing.T) {
+	e := newTestEnv(t)
+	type answer struct {
+		From, To int
+		Items    []completeItem
+		Note     string
+	}
+	buf := "SELECT * FROM c"
+	body := func(conn string) string {
+		b, _ := json.Marshal(map[string]any{"conn": conn, "buffer": buf, "caret": len(buf)})
+		return string(b)
+	}
+	got := decodeData[answer](t, e.api("POST", "/api/v1/conn-complete", body("demo-sqlite"), 200))
+	if got.Note != "" || got.From != len(buf)-1 || !slices.ContainsFunc(got.Items, func(it completeItem) bool { return it.Label == "cats" }) {
+		t.Errorf("complete = %+v", got)
+	}
+	got = decodeData[answer](t, e.api("POST", "/api/v1/conn-complete", body("nope"), 200))
+	if !strings.Contains(got.Note, "no connection named nope") {
+		t.Errorf("an unknown conn = %+v", got)
+	}
+
+	type tables struct {
+		Tables []string
+		Error  string
+	}
+	if ts := decodeData[tables](t, e.api("GET", "/api/v1/conn-tables?conn=demo-sqlite", "", 200)); ts.Error != "" || !slices.Contains(ts.Tables, "cats") {
+		t.Errorf("tables = %+v", ts)
+	}
+	if ts := decodeData[tables](t, e.api("GET", "/api/v1/conn-tables?conn=nope", "", 200)); len(ts.Tables) != 0 || ts.Error == "" {
+		t.Errorf("an unknown conn's tables = %+v", ts)
+	}
+}

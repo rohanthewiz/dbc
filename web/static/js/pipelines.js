@@ -1065,11 +1065,35 @@
     // one place the page keeps each connection's driver). A ${…} conn, or
     // one not configured here, is generic SQL.
     function sqlLang(n) {
+      const conn = connOf(n);
+      const b = conn && [...document.querySelectorAll("#conns .conn-item")].find((x) => x.dataset.conn === conn);
+      return dbc.editor.langOf(b ? b.dataset.driver : "");
+    }
+
+    // connOf is the connection node n names in its conn field (or the
+    // field's default), "" when it has none — or names one through a
+    // ${param}, which only a run resolves. A node's sql field completes
+    // against it and its table field offers its tables (N-192, N-176):
+    // a pipeline tab is on no connection of its own.
+    function connOf(n) {
       const p = reg && reg.byName.get(n.plugin);
       const cf = p && p.fields.find((x) => x.type === "conn");
       const conn = cf ? String(n.cfg[cf.name] || cf.default || "").trim() : "";
-      const b = conn && [...document.querySelectorAll("#conns .conn-item")].find((x) => x.dataset.conn === conn);
-      return dbc.editor.langOf(b ? b.dataset.driver : "");
+      return conn.includes("${") ? "" : conn;
+    }
+
+    // tablesOf is conn's tables and views for a table field, asked once
+    // per conn and kept a little while (the server keeps its read longer):
+    // the inspector is drawn again after every check, and each redraw
+    // must not ask again. A failed ask is no tables: the field stays a
+    // plain line.
+    const tableAsks = new Map(); // conn → {at, p}
+    function tablesOf(conn) {
+      const hit = tableAsks.get(conn);
+      if (hit && Date.now() - hit.at < 30e3) return hit.p;
+      const p = api("GET", "/api/v1/conn-tables?conn=" + encodeURIComponent(conn)).then((r) => r.tables || [], () => []);
+      tableAsks.set(conn, { at: Date.now(), p });
+      return p;
     }
 
     function row(label, input, doc, type) {
@@ -1198,6 +1222,8 @@
     //   enum                   a picker        text  a few lines
     //   conn                   a line offering the connections
     //   columns                a line offering the columns previews saw
+    //   table                  a line offering its node's connection's
+    //                          tables (tablesOf)
     //   sql, go                a small Monaco editor (codeField); a code
     //                          box (Tab indents) until Monaco has loaded
     // Every value stays a string, as the spec holds it; ${…} works anywhere.
@@ -1260,6 +1286,17 @@
             input.addEventListener("input", () => set(input.value));
             return el("label", "ifield", el("span", "iname", label, el("span", "itype", fd.type)), input, dl, el("span", "idoc", doc));
           }
+          // a table field offers its node's connection's tables, once they
+          // come (the first ask reads the catalog): the list fills in place
+          const conn = fd.type === "table" && connOf(n);
+          if (conn) {
+            const listID = "pl-" + fd.name + "-" + Math.random().toString(36).slice(2, 7);
+            input.setAttribute("list", listID);
+            const dl = el("datalist", { id: listID, "data-conn": conn });
+            tablesOf(conn).then((ts) => dl.replaceChildren(...ts.map((v) => el("option", { value: v }))));
+            input.addEventListener("input", () => set(input.value));
+            return el("label", "ifield", el("span", "iname", label, el("span", "itype", fd.type)), input, dl, el("span", "idoc", doc));
+          }
           input.addEventListener("input", () => set(input.value));
         }
       }
@@ -1283,6 +1320,8 @@
         text: cur || "", language: go ? "go" : sqlLang(n),
         minLines: go ? 8 : 3, maxLines: go ? 30 : 14,
         onChange: (v) => set(v),
+        // read at each ask: the conn field may change under the editor
+        conn: go ? undefined : () => connOf(n),
       });
       if (!h) return null;
       codeEds.push({ name: fd.name, h });

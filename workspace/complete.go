@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/erd"
 	"github.com/rohanthewiz/dbc/model"
@@ -242,10 +243,18 @@ func (w *Workspace) LoadCompletions(ctx context.Context) error {
 	w.compl = complState{conn: conn, gen: gen, loading: done}
 	w.mu.Unlock()
 
-	sc, path, scope, err := w.readCompletions(ctx, conn, focus, scoped)
+	sc, path, scope, tooBig, err := readCompletions(ctx, w.mgr, navigable(w.cfg, conn), conn, focus, scoped)
+	if tooBig {
+		w.mu.Lock()
+		if w.complScoped == nil {
+			w.complScoped = map[string]bool{}
+		}
+		w.complScoped[conn] = true
+		w.mu.Unlock()
+	}
 	var routines []model.Routine
 	if err == nil {
-		routines = w.readRoutines(ctx, conn, scope)
+		routines = readRoutines(ctx, w.mgr, conn, scope)
 	}
 
 	w.mu.Lock()
@@ -259,10 +268,12 @@ func (w *Workspace) LoadCompletions(ctx context.Context) error {
 	return err
 }
 
-// readCompletions reads what the completion cache holds: the schema, whole
+// readCompletions reads what a completion cache holds: the schema, whole
 // or scoped (see A CATALOG TOO BIG above), and the search path. scope is
 // the schemas a scoped read covered, nil after a whole read; on an error
-// the schema and scope are nil.
+// the schema and scope are nil. tooBig reports that the whole read
+// overflowed, for the caller to remember the connection as one to read
+// scoped from now on. A workspace's cache and ConnCompletions share it.
 //
 // The path is read first, being cheap and what a scoped read is scoped by.
 // Failing it is no reason to go without the schema: the dialect's default
@@ -270,47 +281,41 @@ func (w *Workspace) LoadCompletions(ctx context.Context) error {
 //
 // Each read of the schema gets CompletionTimeout of its own, so a whole
 // read that ran long before it overflowed does not leave the scoped one
-// none.
-func (w *Workspace) readCompletions(ctx context.Context, conn, focus string, scoped bool) (*erd.Schema, []string, []string, error) {
+// none. Only a navigable connection (schemas to scope by) is read scoped.
+func readCompletions(ctx context.Context, mgr *db.Manager, navigable bool, conn, focus string, scoped bool) (sc *erd.Schema, path, scope []string, tooBig bool, err error) {
 	pctx, pcancel := context.WithTimeout(ctx, CompletionTimeout)
-	path, _ := w.mgr.SearchPath(pctx, conn)
+	path, _ = mgr.SearchPath(pctx, conn)
 	pcancel()
 
 	if !scoped {
 		sctx, scancel := context.WithTimeout(ctx, CompletionTimeout)
-		sc, err := w.mgr.Schema(sctx, conn)
+		sc, err = mgr.Schema(sctx, conn)
 		scancel()
-		if !errors.Is(err, db.ErrCatalogTooBig) || !w.navigable(conn) {
+		if !errors.Is(err, db.ErrCatalogTooBig) || !navigable {
 			if err != nil {
-				return nil, path, nil, err
+				return nil, path, nil, false, err
 			}
-			return sc, path, nil, nil
+			return sc, path, nil, false, nil
 		}
-		w.mu.Lock()
-		if w.complScoped == nil {
-			w.complScoped = map[string]bool{}
-		}
-		w.complScoped[conn] = true
-		w.mu.Unlock()
+		tooBig = true
 	}
 
-	scope := complScope(focus, path)
+	scope = complScope(focus, path)
 	sctx, scancel := context.WithTimeout(ctx, CompletionTimeout)
 	defer scancel()
-	sc, err := w.mgr.SchemaIn(sctx, conn, scope)
-	if err != nil {
-		return nil, path, nil, err
+	if sc, err = mgr.SchemaIn(sctx, conn, scope); err != nil {
+		return nil, path, nil, tooBig, err
 	}
-	return sc, path, scope, nil
+	return sc, path, scope, tooBig, nil
 }
 
-// readRoutines reads the stored functions and procedures for the cache, from
+// readRoutines reads the stored functions and procedures for a cache, from
 // scope's schemas (nil: every one), with a CompletionTimeout of their own.
 // A failure is nil routines and nothing more (see THE ROUTINES above).
-func (w *Workspace) readRoutines(ctx context.Context, conn string, scope []string) []model.Routine {
+func readRoutines(ctx context.Context, mgr *db.Manager, conn string, scope []string) []model.Routine {
 	rctx, cancel := context.WithTimeout(ctx, CompletionTimeout)
 	defer cancel()
-	routines, err := w.mgr.Routines(rctx, conn, scope)
+	routines, err := mgr.Routines(rctx, conn, scope)
 	if err != nil {
 		return nil
 	}
@@ -319,7 +324,7 @@ func (w *Workspace) readRoutines(ctx context.Context, conn string, scope []strin
 
 // navigable reports whether conn's driver lists its tables by schema
 // (db.Navigable), the only kind a scoped read narrows.
-func (w *Workspace) navigable(conn string) bool {
-	cc, ok := w.cfg.ConnByName(conn)
+func navigable(cfg *config.Config, conn string) bool {
+	cc, ok := cfg.ConnByName(conn)
 	return ok && db.Navigable(cc.Driver)
 }

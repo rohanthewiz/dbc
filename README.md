@@ -2096,8 +2096,10 @@ below it as for a query.
 - **The inspector** is drawn from the plugin's own fields: a connection
   field offers the configured connections (a click on one in the sidebar
   sets it on the selected node), a columns field the columns a preview
-  saw. SQL and Go fields are small editors: SQL coloured in the dialect
-  of the node's connection, Go with the script tab's `sdb` completion and
+  saw, a table field the tables of the node's connection. SQL and Go
+  fields are small editors: SQL coloured in the dialect of the node's
+  connection and completed against it (tables, columns, functions, as in
+  a query tab), Go with the script tab's `sdb` completion and
   hover (`b.` in `func Apply(b *sdb.Batch)` lists Batch's methods), its
   `F12` / `Shift+F12` / `F2` within the field (the node's entry points,
   `Apply` and the like, are not renamed: dbc calls them by name) and the

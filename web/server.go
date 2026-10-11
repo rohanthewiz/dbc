@@ -130,6 +130,11 @@ type Server struct {
 	// dumps is the one "Dump database…" running, across windows (dump.go).
 	dumps dumps
 
+	// connCompl completes SQL, and lists tables, against a connection by
+	// name, for the pipeline inspector's fields (complete.go): a pipeline
+	// tab is on no connection.
+	connCompl *workspace.ConnCompletions
+
 	// jobs runs pipelines — previews and runs from pipeline tabs — and
 	// jobs, outside any query tab's run slot, several at once
 	// (pipelines.go, jobs.go). It is the server's for its whole life;
@@ -190,6 +195,7 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) (*Server, error) {
 
 	s := &Server{cfg: cfg, mgr: mgr, opt: opt, store: opt.Store, saved: opt.Conns, auth: a,
 		ready: make(chan struct{}, 1), ver: assetVersion()}
+	s.connCompl = workspace.NewConnCompletions(cfg, mgr)
 	s.jobs = jobs.New(cfg, mgr, jobs.Options{Sink: s.onJob, RunsDir: cfg.RunsDir, RunsKeep: cfg.RunsKeep})
 	// a script tab's s.RunJob runs on the server's engine: beside its other
 	// runs, under one job's overlap rule, its lines where every run's go
@@ -362,6 +368,8 @@ func (s *Server) routes() {
 	r.Post("/api/v1/ws/:id/columns", s.handleColumns)
 	r.Get("/api/v1/ws/:id/history", s.handleTabHistory)
 	r.Post("/api/v1/ws/:id/complete", s.handleComplete)
+	r.Post("/api/v1/conn-complete", s.handleConnComplete)
+	r.Get("/api/v1/conn-tables", s.handleConnTables)
 	r.Post("/api/v1/ws/:id/symbol", s.handleSymbol)
 	r.Post("/api/v1/ws/:id/rename", s.handleRename)
 	r.Post("/api/v1/ws/:id/explain", s.handleExplain)

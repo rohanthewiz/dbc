@@ -211,6 +211,7 @@ func pipelineTabs(t *testing.T, e *env, p *rod.Page) {
 	pipelineDottedIDs(t, p)
 	pipelineInvalidNames(t, p)
 	pipelineUnknownKeys(t, p)
+	pipelineConnFields(t, p)
 	pipelineInspectorWidth(t, p)
 
 	// ── ⇪ Go: the same pipeline as a script, in a script tab ──────────────
@@ -507,6 +508,62 @@ func pipelineUnknownKeys(t *testing.T, p *rod.Page) {
 
 	// the tab as it was
 	eval(t, p, `() => monaco.editor.getEditors()[0].setValue(window.__keptUK)`)
+	toggle()
+	waitFor(t, p, "the waiting pipeline back, nothing unsaved", `() =>
+	  !document.querySelector(".app").classList.contains("pipe-json") &&
+	  !!document.querySelector('.plane[data-frag="w"] .pcard[data-id="src"]') &&
+	  !document.querySelector("#qtabs .qtab.pipeline.on .qdirty")`)
+}
+
+// connFieldsPipeline reads lite's cats and writes them back: a sql field
+// and a table field, both on a node's own connection.
+const connFieldsPipeline = `{
+  "name": "e2e_pipe",
+  "fragments": [
+    {
+      "name": "w",
+      "nodes": [
+        { "id": "src", "plugin": "sql.read", "cfg": { "conn": "lite", "query": "SELECT 1" } },
+        { "id": "dst", "plugin": "sql.write", "cfg": { "conn": "lite", "table": "" } }
+      ],
+      "edges": [["src", "dst"]]
+    }
+  ]
+}
+`
+
+// pipelineConnFields (N-192, N-176): a pipeline tab is on no connection,
+// so its fields ask by their node's: src's query field suggests lite's
+// tables as a statement editor would, and dst's table field offers them.
+func pipelineConnFields(t *testing.T, p *rod.Page) {
+	toggle := func() { eval(t, p, `() => document.querySelector('#pipe .pbar button[data-act="json"]').click()`) }
+	toggle()
+	waitFor(t, p, "the JSON view", `() => document.querySelector(".app").classList.contains("pipe-json")`)
+	eval(t, p, `(text) => { const ed = monaco.editor.getEditors()[0]; window.__keptCF = ed.getValue(); ed.setValue(text); }`, connFieldsPipeline)
+	toggle()
+	waitFor(t, p, "the canvas with src and dst", `() => !document.querySelector(".app").classList.contains("pipe-json") &&
+	  !!document.querySelector('.plane[data-frag="w"] .pcard[data-id="dst"]')`)
+
+	clickAt(t, p, `.plane[data-frag="w"] .pcard[data-id="src"] .cid`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "src's query field", `() => !!codeEd("query")`)
+	eval(t, p, `() => { const ed = codeEd("query"); ed.setValue("SELECT * FROM c"); ed.setPosition({ lineNumber: 1, column: 16 }); ed.focus();
+	  ed.trigger("e2e", "editor.action.triggerSuggest", {}); }`)
+	waitFor(t, p, "lite's cats offered in the field", `() =>
+	  [...document.querySelectorAll(".pinsp .suggest-widget.visible .monaco-list-row")]
+	    .some((r) => /^cats\b/.test(r.getAttribute("aria-label") || r.textContent))`)
+	p.Keyboard.MustType(input.Escape)
+
+	clickAt(t, p, `.plane[data-frag="w"] .pcard[data-id="dst"] .cid`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "dst's table field offering lite's tables", `() => {
+	  const f = [...document.querySelectorAll(".pinsp .ifield")].find((x) => /^table/.test((x.querySelector(".iname") || {}).textContent || ""));
+	  const dl = f && f.querySelector("datalist");
+	  return !!dl && dl.dataset.conn === "lite" && [...dl.options].some((o) => o.value === "cats");
+	}`)
+
+	// the tab as it was
+	toggle()
+	waitFor(t, p, "the JSON view", `() => document.querySelector(".app").classList.contains("pipe-json")`)
+	eval(t, p, `() => monaco.editor.getEditors()[0].setValue(window.__keptCF)`)
 	toggle()
 	waitFor(t, p, "the waiting pipeline back, nothing unsaved", `() =>
 	  !document.querySelector(".app").classList.contains("pipe-json") &&

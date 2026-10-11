@@ -93,7 +93,7 @@ func (w *Workspace) readDiagram(ctx context.Context, conn string, sel erd.Select
 		sctx, scancel := context.WithTimeout(ctx, DiagramTimeout)
 		s, err := w.mgr.Schema(sctx, conn)
 		scancel()
-		if !errors.Is(err, db.ErrCatalogTooBig) || !w.navigable(conn) {
+		if !errors.Is(err, db.ErrCatalogTooBig) || !navigable(w.cfg, conn) {
 			return s, err
 		}
 		w.mu.Lock()

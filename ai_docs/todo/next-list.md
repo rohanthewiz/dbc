@@ -64,12 +64,6 @@ ten session docs in `ai_docs/claude_sessions/`
   A dump for MySQL connections with mysqldump, behind the same menu row and
   dialog (the row is dimmed on MySQL today). No one has asked; worth it only
   if a MySQL user does.
-- **N-176** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
-  A node's `table` field is a plain line. A pipeline tab is on no
-  connection, so there is no catalog to pick from; a route listing a
-  connection's tables without a workspace (the Manager's catalog read, as
-  the sidebar does it) would let the field offer them, for the node's own
-  `conn`.
 - **N-178** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
   The assistant in a pipeline tab is handed the pipeline's JSON as "the
   query": the editor under the canvas holds it, and `ChatContext` reads the
@@ -159,14 +153,6 @@ ten session docs in `ai_docs/claude_sessions/`
   named, so the semantics differ from Postgres and SQLite. Worth it only
   if a MySQL user asks (as N-172); then say the difference in the field's
   doc, or require that `key` be the table's only unique key.
-- **N-192** · raised `2026-1009-1632-n175-pipeline-code-editors` · value low
-  A pipeline inspector's `sql` field is coloured but offers no completion:
-  the workspace's SQL providers complete against the tab's connection, and
-  a pipeline tab has none, so they skip the field's model (`editor.js`
-  `minis`). Complete against the node's own `conn` instead: a completion
-  route keyed by a connection name rather than a workspace — the same
-  catalog read N-176 wants for the `table` field, so the two land together.
-
 ## Validate
 
 Items whose remaining work is purely testing: hand checks in a real terminal
@@ -537,6 +523,21 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-192** · raised `2026-1009-1632-n175-pipeline-code-editors` · value low
+  A pipeline inspector's `sql` field is coloured but offers no completion:
+  the workspace's SQL providers complete against the tab's connection, and
+  a pipeline tab has none, so they skip the field's model (`editor.js`
+  `minis`). Complete against the node's own `conn` instead: a completion
+  route keyed by a connection name rather than a workspace — the same
+  catalog read N-176 wants for the `table` field, so the two land together.
+  closed 2026-10-10, `2026-1010-2001-n176-n192-n178` (from the cats-todo backlog): the completion route keyed by a connection name the item proposed, `POST /api/v1/conn-complete {conn, buffer, caret}`, the name in the body because a `<conn>/<database>` name holds a slash. It answers in the statement editor's shape (`completeAnswer`, shared with `handleComplete`). The server keeps one `workspace.ConnCompletions`, a cache per connection name with the workspace's reading rules: `readCompletions` and `readRoutines` were lifted out of the `Workspace` into package functions both share (whole or scoped read on the pool, the routines beside it, a failure remembered for `complRetry`). Nothing runs through this cache, so instead of a workspace's drop-on-DDL an entry is read again after `ConnComplTTL` (a minute), and an edited or deleted connection drops them all. In the page, `editor.js` `minis` became a WeakMap holding each small editor's options. A SQL field passes `conn()` (`pipelines.js` `connOf`, read at each ask, since the conn field may change under it), and the SQL provider asks by that connection for a mini rather than skipping it. F12 and F2 still skip the minis. README's inspector paragraph says so. Tests: `workspace.TestConnCompletions` (complete, tables, read once until dropped, unknown conn), `web.TestConnCompleteAndTables`; e2e `pipelineConnFields`: src's query field suggests lite's cats, failing on the old JS. Whole `./workspace` live suite green on postgres:17 after the lift.
+- **N-176** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
+  A node's `table` field is a plain line. A pipeline tab is on no
+  connection, so there is no catalog to pick from; a route listing a
+  connection's tables without a workspace (the Manager's catalog read, as
+  the sidebar does it) would let the field offer them, for the node's own
+  `conn`.
+  closed 2026-10-10, `2026-1010-2001-n176-n192-n178` (from the cats-todo backlog), with N-192, as the item said. A table field offers its node's connection's tables in a `<datalist>`, as the conn and columns fields offer theirs. They come from `GET /api/v1/conn-tables?conn=`, answered from the same per-connection cache as N-192's completion (`workspace.ConnCompletions.Tables`): each table's sidebar label, tables then views, sorted. So it is the completion read, not the Manager's per-schema catalog read the item named: one read serves both fields, and a catalog too big to read whole is read scoped as completion's is. `pipelines.js` `tablesOf` asks once per conn and keeps the answer 30 s, since the inspector redraws after every check. A conn written through `${param}` offers nothing (only a run resolves it), and a failed read leaves a plain line (the route answers 200 with `error`). Tests: `workspace.TestConnCompletions`, `web.TestConnCompleteAndTables`; e2e "pipeline tabs" `pipelineConnFields` checks dst's table field offers lite's cats (fails on the old JS).
 - **N-191** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value low
   Copying an example plugin twice (or duplicating a plugin file) gives two
   files declaring one `Name`; the second does not load ("… is already the

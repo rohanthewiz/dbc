@@ -356,6 +356,7 @@ func (s *Server) handleConnEdit(ctx rweb.Context) error {
 	if res.Renamed {
 		list["renamed"] = map[string]string{"from": name, "to": to}
 	}
+	s.connCompl.Drop("") // what a pipeline field completed against may be gone
 	s.hub.broadcast("conns", list)
 	list["warnings"] = warns
 	return ok(ctx, list)
@@ -379,6 +380,7 @@ func (s *Server) handleConnDelete(ctx rweb.Context) error {
 		// told, and the failure (it comes back at the next start) is the
 		// answer
 		list := s.connList()
+		s.connCompl.Drop("") // what a pipeline field completed against may be gone
 		s.hub.broadcast("conns", list)
 		if err == nil {
 			return ok(ctx, list)

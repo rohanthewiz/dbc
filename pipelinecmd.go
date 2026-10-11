@@ -405,7 +405,14 @@ func runText(st *pipeline.RunStats) string {
 		for _, n := range fr.Nodes {
 			nodes = append(nodes, fmt.Sprintf("%s %d→%d", n.ID, n.In, n.Out))
 		}
-		line := fmt.Sprintf("  %-12s %-9s %8d rows %8s", fr.Name, fr.Status, fr.Rows, fr.Elapsed().Round(time.Millisecond))
+		// a skipped fragment shows no time (N-204): left out by --fragment
+		// it never started, and an action skipped in a preview only
+		// started to be skipped, so any figure would read as work done
+		took := "-"
+		if fr.Status != pipeline.Skipped {
+			took = fr.Elapsed().Round(time.Millisecond).String()
+		}
+		line := fmt.Sprintf("  %-12s %-9s %8d rows %8s", fr.Name, fr.Status, fr.Rows, took)
 		if fr.Direct {
 			line += "  direct COPY"
 		}

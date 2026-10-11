@@ -279,6 +279,34 @@ func TestRunPreview(t *testing.T) {
 	}
 }
 
+// A fragment Options.Fragment leaves out never starts: it is reported
+// skipped with no time, not time.Since(the zero time), which saturates at
+// the largest Duration (N-204).
+func TestRunFragmentSkippedHasNoTime(t *testing.T) {
+	h := newTestHost(t)
+	spec := mustParse(t, `{"name": "p", "fragments": [
+	  {"name": "act", "nodes": [{"id": "x", "plugin": "sql.exec", "cfg": {"conn": "b", "sql": "CREATE TABLE t (x INTEGER)"}}]},
+	  {"name": "f", "nodes": [
+	    {"id": "src", "plugin": "sql.read", "cfg": {"conn": "a", "query": "SELECT id FROM cats"}},
+	    {"id": "show", "plugin": "preview", "cfg": {}}
+	  ], "edges": [["src", "show"]]}
+	]}`)
+	st, err := Run(context.Background(), h, spec, Options{Fragment: "f"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	act := st.Fragments[0]
+	if act.Status != Skipped || !act.Started.IsZero() {
+		t.Fatalf("the left-out fragment: %+v", act)
+	}
+	if d := act.Elapsed(); d != 0 {
+		t.Errorf("the left-out fragment's Elapsed = %v, want 0", d)
+	}
+	if d := st.Fragments[1].Elapsed(); d <= 0 || d > time.Minute {
+		t.Errorf("the run fragment's Elapsed = %v, want a short positive time", d)
+	}
+}
+
 // A sink no rows reached, with nothing but the source above it, is still
 // opened: its truncate empties the table (a reload from an empty source
 // is an empty table, not a stale one).

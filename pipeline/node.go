@@ -209,12 +209,16 @@ type NodeStats struct {
 	Error   string        `json:"error,omitempty"`
 }
 
-// FragmentStats is one fragment's run.
+// FragmentStats is one fragment's run. Started and Ended are left out of
+// the JSON while zero (N-204): a fragment --fragment leaves out never
+// started, and "0001-01-01T00:00:00Z" in the stats and the run record read
+// as a time. Every reader (Go structs, the web's tOf, runs --sql) already
+// takes a missing time as the zero one.
 type FragmentStats struct {
 	Name    string            `json:"name"`
 	Status  Status            `json:"status"`
-	Started time.Time         `json:"started"`
-	Ended   time.Time         `json:"ended"`
+	Started time.Time         `json:"started,omitzero"`
+	Ended   time.Time         `json:"ended,omitzero"`
 	Rows    int64             `json:"rows"`   // rows the sinks committed, or an action's rows affected
 	Direct  bool              `json:"direct"` // ran as a direct Postgres COPY
 	Nodes   []NodeStats       `json:"nodes"`
@@ -222,8 +226,14 @@ type FragmentStats struct {
 	Error   string            `json:"error,omitempty"`
 }
 
-// Elapsed is the fragment's wall time so far, or in all.
+// Elapsed is the fragment's wall time so far, or in all; 0 for one that
+// never started (N-204). A fragment Options.Fragment leaves out is
+// reported skipped with zero Started and Ended, and time.Since of the zero
+// time saturates at the largest Duration ("2562047h47m16.85s").
 func (f *FragmentStats) Elapsed() time.Duration {
+	if f.Started.IsZero() {
+		return 0
+	}
 	if f.Ended.IsZero() {
 		return time.Since(f.Started)
 	}

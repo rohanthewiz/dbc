@@ -85,13 +85,6 @@ ten session docs in `ai_docs/claude_sessions/`
   named, so the semantics differ from Postgres and SQLite. Worth it only
   if a MySQL user asks (as N-172); then say the difference in the field's
   doc, or require that `key` be the table's only unique key.
-- **N-204** · raised `2026-1011-0035-scripting-etl-tutorial` · value medium
-  A pipeline's stats print `2562047h47m16.854775807s` (the max
-  `time.Duration`) as the time of a skipped fragment: actions in a
-  `--preview`, and the fragments `--fragment` leaves out. Seen in `dbc
-  pipeline run … --preview` text output; check the JSON stats, the run
-  record and both UIs' run views for the same value. A skipped fragment
-  should show no time (or 0).
 - **N-205** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
   A whole-pipeline `--preview` fails on a fresh database when a later
   fragment reads a table an earlier fragment creates (a preview writes
@@ -479,6 +472,14 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-204** · raised `2026-1011-0035-scripting-etl-tutorial` · value medium
+  A pipeline's stats print `2562047h47m16.854775807s` (the max
+  `time.Duration`) as the time of a skipped fragment: actions in a
+  `--preview`, and the fragments `--fragment` leaves out. Seen in `dbc
+  pipeline run … --preview` text output; check the JSON stats, the run
+  record and both UIs' run views for the same value. A skipped fragment
+  should show no time (or 0).
+  closed 2026-10-11, `2026-1011-0040-n179-n203-n208`: the max Duration came only from the fragments `--fragment` leaves out. They are reported skipped with zero Started and Ended, and `FragmentStats.Elapsed` was `time.Since(zero)`, which saturates. An action skipped in a preview has a Started (and showed `0s`), so the item's first case did not reproduce. Fixes: `Elapsed` is 0 for a fragment that never started; the headless stats line (`runText`) shows `-` for any skipped fragment; `FragmentStats.Started`/`Ended` are `omitzero` in JSON, so the stats and the run record no longer carry `0001-01-01T00:00:00Z`. Checked, no change needed: the record's tree (`jobs/tree.go` `took` is "" on a zero start), `runs --sql` (NULL), the web Runs view (`tOf` treats a zero or missing time as none; skipped rows say "skipped"), the TUI's (`took` ""). Tests `pipeline.TestRunFragmentSkippedHasNoTime`, `TestRunTextSkippedHasNoTime`; checked in a fresh build with `--fragment`, `--preview`, `-t json` and `dbc run show`.
 - **N-203** · raised `2026-1011-0035-scripting-etl-tutorial` · value medium
   `os.Getenv` is always `""` inside a script, a `go.*` node and a user
   plugin: `script/engine.go` builds the interpreter with

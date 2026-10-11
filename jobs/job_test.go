@@ -534,3 +534,22 @@ func TestRecordsNameASignalableProcess(t *testing.T) {
 		}
 	}
 }
+
+// A run id the caller picked (JobRequest.ID: `dbc job run --wait=false`'s
+// child) is the run's; one that is not a run id is refused.
+func TestStartJobWithID(t *testing.T) {
+	je := newJobEngine(t, func(*Options) {})
+	je.act("pa", func(*pipeline.Env) error { return nil })
+	spec := job(t, `{"name": "named", "pipelines": [{"id": "a", "pipeline": "pa"}]}`)
+	id := NewRunID()
+	head, err := je.StartJob(JobRequest{Spec: spec, ID: id})
+	if err != nil || head.ID != id {
+		t.Fatalf("start = %+v, %v; want id %s", head, err, id)
+	}
+	if fin := je.wait(t, id); fin.Status != pipeline.Succeeded {
+		t.Errorf("run = %+v", fin)
+	}
+	if _, err := je.StartJob(JobRequest{Spec: spec, ID: "../x"}); err == nil {
+		t.Error("a bad id was taken")
+	}
+}

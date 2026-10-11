@@ -12,6 +12,7 @@ import (
 	"github.com/rohanthewiz/serr"
 
 	"github.com/rohanthewiz/dbc/pipeline"
+	"github.com/rohanthewiz/dbc/userdata"
 )
 
 // JobRequest is what StartJob runs.
@@ -22,6 +23,10 @@ type JobRequest struct {
 	By      string            // see Run.By
 	Origin  string            // see Run.Origin
 	Source  string            // the job's file name, see Run.Source
+	// ID is the run's id when the caller picked it (NewRunID): `dbc job
+	// run --wait=false` prints the id of a run its detached child starts.
+	// "" makes one.
+	ID string
 }
 
 // StartJob starts a run of a job and returns its header at once; the run
@@ -59,9 +64,15 @@ func (e *Engine) StartJob(req JobRequest) (Run, error) {
 		req.Trigger = TriggerManual
 	}
 
+	id := req.ID
+	if id == "" {
+		id = newID(time.Now())
+	} else if !userdata.ValidRunID(id) {
+		return Run{}, serr.New("not a run id", "id", id)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	now := time.Now()
-	lr := newLive(newID(now), cancel)
+	lr := newLive(id, cancel)
 	lr.rec = Run{
 		ID: lr.id, Kind: KindJob, Name: spec.Name, Source: req.Source, Trigger: req.Trigger, By: req.By,
 		Params: params, Origin: req.Origin, Started: now, Status: pipeline.Running,

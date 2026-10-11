@@ -68,14 +68,6 @@ ten session docs in `ai_docs/claude_sessions/`
   Fragments are reordered from a lane's ⋯ menu (Move up / Move down). The
   plan sketched dragging a lane by its header; add it if the menu turns
   out slow for pipelines with many fragments.
-- **N-181** · raised `2026-1009-1254-phase-3-jobs-scheduler-runs` · value low
-  `dbc job run --wait=false` (plan §4/§5): return the run id as soon as it
-  has started, for an external trigger that polls `dbc run show ID`. The
-  run lives in the command's own engine, so it needs a detached child
-  (re-exec with `Setsid`, the parent picking the run id and passing it
-  down; Windows needs its own `SysProcAttr`) that outlives the command and
-  writes the record. Left out of Phase 3; cron and the webhook cover the
-  triggers meanwhile.
 - **N-184** · raised `2026-1009-1349-phase-4-jobs-tab-runs-view` · value low
   A job tab's Runs face sits in the editor's pane, about a third of the
   work column by default: the run page's DAG fills it, and the drilldown
@@ -504,6 +496,15 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-181** · raised `2026-1009-1254-phase-3-jobs-scheduler-runs` · value low
+  `dbc job run --wait=false` (plan §4/§5): return the run id as soon as it
+  has started, for an external trigger that polls `dbc run show ID`. The
+  run lives in the command's own engine, so it needs a detached child
+  (re-exec with `Setsid`, the parent picking the run id and passing it
+  down; Windows needs its own `SysProcAttr`) that outlives the command and
+  writes the record. Left out of Phase 3; cron and the webhook cover the
+  triggers meanwhile.
+  closed 2026-10-10, `2026-1010-2012-n183-n181-n186` (from the cats-todo backlog): as planned. `dbc job run --wait=false` checks the job in the calling shell (`CheckJob` with its pipelines, so a broken one fails there with its findings and exit 1), picks the run id (`jobs.NewRunID`), and re-executes dbc with the same arguments and `DBC_RUN_ID=<id>`. The child is detached: `Setsid` on unix, `CREATE_NEW_PROCESS_GROUP|DETACHED_PROCESS` on Windows (`detach_unix.go`, `detach_windows.go`), with stdio at the null device, since the record keeps the log. With the variable set, `dbc job run` runs in the foreground under that id (`JobRequest.ID`; an id that is not one is refused), as an ordinary Signalable run, so N-183's `dbc run cancel` and dbc web's ■ Stop interrupt it. The parent waits for the record to appear (at most 30 s), prints "started run ID (job NAME) — dbc run show ID · dbc run cancel ID" (`-t json`: `{"id", "kind", "name", "status"}`) and exits 0, releasing the child. A child that exits without a record is reported ("the run did not start (dbc job run exited 1) — run it with --wait to see why", exit 1): an unknown `-p` param, which only the engine checks. Only `dbc job run` has it, as the item asked; two detached runs of one job both start, since overlap is per process as for two cron runs. Also fixed: N-183 left `dbc run cancel`'s help text saying a `dbc job run`'s run is stopped where it runs. README "Jobs headless" and SKILL.md. Tests: `jobs.TestStartJobWithID`; cross-compiled for Windows. Real binary: two detached runs of a job waiting on its context returned in 0.75 s, listed running in `dbc runs`, and stopped by `dbc run cancel` (records canceled, no dbc process left); a broken job and an unknown param failed as above.
 - **N-183** · raised `2026-1009-1349-phase-4-jobs-tab-runs-view` · value low
   A run another process runs — a cron's `dbc job run` — cannot be stopped
   from dbc web's Runs view or `dbc run cancel`: dbc web's engine has no

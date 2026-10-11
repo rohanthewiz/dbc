@@ -947,6 +947,10 @@ func errText(err error) string {
 	return err.Error() + " — " + strings.Join(parts, " · ")
 }
 
+// NewRunID is a fresh run id, for a caller that names a run before
+// starting it (JobRequest.ID).
+func NewRunID() string { return newID(time.Now()) }
+
 // newID is a run id: the start to the second, then four random hex digits,
 // so ids sort by start and two runs in one second still differ.
 func newID(t time.Time) string {

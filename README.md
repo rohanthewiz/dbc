@@ -2761,6 +2761,7 @@ current directory: `-p in=$PWD/orders.csv` for a file there.
 ./dbc jobs                                        # jobs_dir and the examples: schedule, next fire, last run
 ./dbc job run nightly -p min_age=3                # run it here and wait; a path, a name, or an example
 ./dbc job run nightly -t json | jq .status        # the whole run record as the document
+./dbc job run nightly --wait=false                # start it, print its id, return: it runs on, detached
 ./dbc job check nightly                           # the job and every pipeline it runs; exit 1 on an error
 ./dbc runs                                        # the run records, newest first (any process's)
 ./dbc runs --job nightly --status failed --since 7d
@@ -2777,6 +2778,10 @@ the `-o` file), as a pipeline run's. Exit 0 when the job
 succeeded, 1 when not, 130 when interrupted (the run is stopped and every
 load in flight rolled back first). It is how a crontab drives a job
 without `dbc web`: `0 2 * * * /usr/local/bin/dbc job run nightly`.
+`--wait=false` is for a trigger that should not wait (a CI step, another
+scheduler): it checks the job, starts the run in a detached copy of dbc,
+and prints its id once the run has started (`-t json`: `{"id", …}`), so
+`dbc run show ID` follows it and `dbc run cancel ID` stops it.
 `--sql` loads the records as four tables — `runs`, `pipelines`
 (`run_id`, `step`, …), `fragments` and `nodes`, each with its status,
 times, `seconds` and rows — into a throwaway bytdb and runs the query in

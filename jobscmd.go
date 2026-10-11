@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rohanthewiz/serr"
 	"github.com/urfave/cli/v3"
 
 	"github.com/rohanthewiz/dbc/config"
@@ -69,6 +70,9 @@ func jobCommand() *cli.Command {
 				Flags: []cli.Flag{
 					&cli.StringSliceFlag{Name: "param", Aliases: []string{"p"}, Usage: "set a job parameter, `NAME=VALUE` (repeatable)",
 						Destination: &flagParams},
+					&cli.BoolFlag{Name: "wait", Value: true, Destination: &flagJobWait,
+						Usage: "wait for the run to end; --wait=false prints its id once it has started and leaves it running " +
+							"(dbc run show ID follows it, dbc run cancel ID stops it)"},
 				},
 				Action: jobRunAction,
 			},
@@ -114,7 +118,7 @@ func runsCommand() *cli.Command {
 func runCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "run",
-		Usage: "show one run's record, or stop a run of dbc web (dbc run help)",
+		Usage: "show one run's record, or stop a run (dbc run help)",
 		Commands: []*cli.Command{
 			{
 				Name:      "show",
@@ -124,10 +128,11 @@ func runCommand() *cli.Command {
 			},
 			{
 				Name:  "cancel",
-				Usage: "stop a run of a running dbc web (a scheduled job, a run started in the browser)",
-				Description: "Asks the dbc web at --url to stop the run, through its API, with the secret dbc web was " +
-					"started with (dbc web --secret, or $DBC_WEB_SECRET for both). It waits for the run to end and " +
-					"prints how it ended. A run that a `dbc job run` is running is stopped where it runs (Ctrl+C there).",
+				Usage: "stop a run: a dbc job run's on this machine, or a running dbc web's (a scheduled job, the browser's)",
+				Description: "A run a `dbc job run` or `dbc pipeline run` is running on this machine is stopped by " +
+					"interrupting its process, which the run's record names (as Ctrl+C there would). Any other run is " +
+					"asked of the dbc web at --url, through its API, with the secret dbc web was started with " +
+					"(dbc web --secret, or $DBC_WEB_SECRET for both). It waits for the run to end and prints how it ended.",
 				ArgsUsage: "<run id>",
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "url", Value: "http://" + web.DefaultListen, Sources: cli.EnvVars("DBC_WEB_URL"),
@@ -217,6 +222,9 @@ func findJob(cfg *config.Config, arg string) config.JobRef {
 	return ref
 }
 
+// flagJobWait is `dbc job run --wait`: false detaches the run (detach.go).
+var flagJobWait bool
+
 func jobRunAction(ctx context.Context, cmd *cli.Command) error {
 	refuseQueryFlags("job run")
 	if cmd.Args().Len() != 1 {
@@ -247,6 +255,23 @@ func jobRunAction(ctx context.Context, cmd *cli.Command) error {
 		fail(err, "not a job")
 	}
 	f := outFormat()
+	detachedID := os.Getenv(detachedRunEnv)
+	if !flagJobWait && detachedID == "" {
+		// checked here, as the run would check it, so a broken job fails
+		// in the shell that asked rather than in a child with no output
+		var conns []string
+		for _, c := range cfg.Conns() {
+			conns = append(conns, c.Name)
+		}
+		if diags := jobs.CheckJob(spec, jobs.CheckOptions{Find: jobs.PipelineFinder(cfg.PipelinesDir), Conns: conns}); pipeline.HasError(diags) {
+			for _, d := range diags {
+				fmt.Fprintf(os.Stderr, "%s: %s\n", d.Where, d.Msg)
+			}
+			fail(serr.New("the job does not check out", "job", spec.Name), "the run did not start")
+		}
+		mgr.Close()
+		return startDetached(ctx, cfg, spec.Name, f)
+	}
 	out := newRunOutput(f)
 	// a fan-out holds a reader and a writer per running fragment: the
 	// in-memory SQLite demo's pool (3 by default) would make max_parallel
@@ -268,7 +293,8 @@ func jobRunAction(ctx context.Context, cmd *cli.Command) error {
 	})
 	runCtx, stop := interruptible()
 	defer stop()
-	head, err := e.StartJob(jobs.JobRequest{Spec: spec, Params: params, Trigger: jobs.TriggerCLI, Source: ref.FileName()})
+	head, err := e.StartJob(jobs.JobRequest{Spec: spec, Params: params, Trigger: jobs.TriggerCLI, Source: ref.FileName(),
+		ID: detachedID})
 	if err != nil {
 		fail(err, "the job did not start")
 	}

@@ -2,7 +2,13 @@ package web
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +44,22 @@ import (
 // The dump writes on the machine dbc web runs on, as dbc's own files
 // (consoles, scripts) are: dbc web is a local workbench.
 //
+// DOWNLOADING IT (N-171). With dbc web serving another machine (--listen),
+// the dialog's ⤓ Download writes a single-file dump (plain, custom, tar)
+// into a temp directory of the server instead, and hands it to the page
+// that asked once it is done:
+//
+//	POST /api/v1/dump {…, download: true} ─► {ok, token}; the dump runs as any
+//	     dump runs, to <temp>/pg-….sql
+//	the end ──► "dump" event {ready: token, name, size} ─► that page fetches
+//	GET /api/v1/dump/file/:token ──► the file, as an attachment, once: then removed
+//
+// Not streamed as pg_dump writes it: rweb holds a response's body in
+// memory, and only server-sent events go out a piece at a time. So the
+// file is sent whole, and a dump over MaxDumpDownload stays on the server,
+// at the path the log names. One never fetched is removed after
+// dumpFileTTL, and every one at Shutdown.
+//
 // One dump at a time, across windows, as in the TUI: dumps are long and
 // heavy on the server, and a second is more likely a double click than a
 // plan. Shutdown stops a running one, so pg_dump does not outlive dbc.
@@ -63,11 +85,27 @@ type dumpState struct {
 	Started string `json:"started"` // RFC 3339
 }
 
-// dumps holds the one running dump.
+// dumps holds the one running dump, and the finished downloads waiting
+// for their page (ready, by token).
 type dumps struct {
-	mu  sync.Mutex
-	job *dumpJob
+	mu    sync.Mutex
+	job   *dumpJob
+	ready map[string]readyDump
 }
+
+// readyDump is a downloaded dump's file, waiting to be fetched.
+type readyDump struct {
+	path string // in dir
+	dir  string // the temp directory, removed with it
+	name string // the download's file name
+}
+
+// MaxDumpDownload is the biggest dump the dialog's ⤓ Download sends: the
+// response is held in memory whole (see DOWNLOADING IT).
+const MaxDumpDownload = 512 << 20
+
+// dumpFileTTL is how long a finished download waits for its page.
+const dumpFileTTL = 30 * time.Minute
 
 func (d *dumps) state() *dumpState {
 	d.mu.Lock()
@@ -96,6 +134,9 @@ func (s *Server) handleDumpInfo(ctx rweb.Context) error {
 type dumpReq struct {
 	Conn string `json:"conn"`
 	pgdump.Form
+	// Download: write it to a temp file and hand it to the page (see
+	// DOWNLOADING IT); Form's out is then ignored.
+	Download bool `json:"download"`
 }
 
 // handleDumpStart is POST /api/v1/dump.
@@ -113,13 +154,30 @@ func (s *Server) handleDumpStart(ctx rweb.Context) error {
 	refused := func(err error) error {
 		return ok(ctx, map[string]any{"ok": false, "error": serr.UserMsgFromErr(err, err.Error())})
 	}
+	if req.Download && strings.TrimSpace(req.Form.Out) == "" {
+		req.Form.Out = "download" // replaced below: a download's file is the server's temp one
+	}
 	opts, err := req.Form.Options()
 	if err != nil {
 		return refused(err)
 	}
+	var token, tmp string
+	if req.Download {
+		if opts.Format.ToDir() {
+			return refused(errors.New("only a single-file dump (plain, custom, tar) downloads — a directory stays on the server"))
+		}
+		if tmp, err = os.MkdirTemp("", "dbc-download-"); err != nil {
+			return fail(ctx, serr.Wrap(err))
+		}
+		opts.Out = filepath.Join(tmp, filepath.Base(pgdump.DefaultOut(req.Conn, opts.Format, time.Now())))
+		token = newDumpToken()
+	}
 	c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	run, err := prepareDump(c, s.cfg, s.mgr, req.Conn, opts)
+	if err != nil && tmp != "" {
+		_ = os.RemoveAll(tmp)
+	}
 	switch {
 	case errors.Is(err, pgdump.ErrNoConn):
 		return fail(ctx, badRequest("%s", err.Error()))
@@ -142,16 +200,89 @@ func (s *Server) handleDumpStart(ctx rweb.Context) error {
 
 	go func() {
 		defer close(job.done)
-		_ = run.Report(runCtx, func(level, text string) {
+		say := func(level, text string) {
 			s.hub.broadcast("dump", map[string]any{"level": level, "text": text, "conn": req.Conn})
-		})
+		}
+		err := run.Report(runCtx, say)
 		stop()
 		s.dumps.mu.Lock()
 		s.dumps.job = nil
 		s.dumps.mu.Unlock()
+		if tmp != "" {
+			s.readyDownload(err, token, tmp, opts.Out, say)
+		}
 		s.hub.broadcast("dump", map[string]any{"running": s.dumps.state()})
 	}()
-	return ok(ctx, map[string]any{"ok": true, "out": opts.Out, "tool": run.Tools.Version})
+	return ok(ctx, map[string]any{"ok": true, "out": opts.Out, "tool": run.Tools.Version, "token": token})
+}
+
+// readyDownload ends a download's dump: a failed one's temp directory
+// removed; one too big to send left where it is, said; else the file kept
+// under token for its page, which the "dump" event's ready tells to fetch
+// it — and removed after dumpFileTTL if it never does.
+func (s *Server) readyDownload(err error, token, dir, path string, say func(level, text string)) {
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return
+	}
+	size := pgdump.Size(path)
+	if size > MaxDumpDownload {
+		say("warn", fmt.Sprintf("the dump is %s, more than dbc web sends to a browser (%s): it stays on the server, at %s",
+			pgdump.HumanSize(size), pgdump.HumanSize(MaxDumpDownload), path))
+		return
+	}
+	name := filepath.Base(path)
+	s.dumps.mu.Lock()
+	if s.dumps.ready == nil {
+		s.dumps.ready = map[string]readyDump{}
+	}
+	s.dumps.ready[token] = readyDump{path: path, dir: dir, name: name}
+	s.dumps.mu.Unlock()
+	time.AfterFunc(dumpFileTTL, func() { s.dropDownload(token) })
+	s.hub.broadcast("dump", map[string]any{"ready": token, "name": name, "size": size})
+}
+
+// dropDownload forgets a waiting download and removes its file; a no-op
+// for a token already fetched or dropped.
+func (s *Server) dropDownload(token string) {
+	s.dumps.mu.Lock()
+	r, ok := s.dumps.ready[token]
+	delete(s.dumps.ready, token)
+	s.dumps.mu.Unlock()
+	if ok {
+		_ = os.RemoveAll(r.dir)
+	}
+}
+
+// handleDumpFile is GET /api/v1/dump/file/:token: a finished download's
+// file, as an attachment, once — it is removed as it is sent.
+func (s *Server) handleDumpFile(ctx rweb.Context) error {
+	token := ctx.Request().PathParam("token")
+	s.dumps.mu.Lock()
+	r, found := s.dumps.ready[token]
+	delete(s.dumps.ready, token)
+	s.dumps.mu.Unlock()
+	if !found {
+		return fail(ctx, notFound("no dump waiting under that name — it was fetched already, or waited too long"))
+	}
+	defer os.RemoveAll(r.dir)
+	body, err := os.ReadFile(r.path)
+	if err != nil {
+		return fail(ctx, serr.Wrap(err))
+	}
+	h := ctx.Response()
+	h.SetHeader("Content-Type", "application/octet-stream")
+	h.SetHeader("Content-Disposition", `attachment; filename="`+r.name+`"`)
+	h.SetHeader("Cache-Control", "no-store")
+	return ctx.Bytes(body)
+}
+
+// newDumpToken names a download: unguessable, since its route serves the
+// dump to whoever holds it (and is signed in).
+func newDumpToken() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 // handleDumpStop is POST /api/v1/dump/stop: interrupt the running dump.
@@ -171,6 +302,7 @@ func (s *Server) handleDumpStop(ctx rweb.Context) error {
 // to end, so pg_dump does not outlive dbc and its partial output is
 // removed rather than left looking like a dump.
 func (s *Server) stopDump(grace time.Duration) {
+	defer s.dropDownloads() // after the dump: one stopped now ends as a failure, its file gone
 	s.dumps.mu.Lock()
 	job := s.dumps.job
 	s.dumps.mu.Unlock()
@@ -182,5 +314,19 @@ func (s *Server) stopDump(grace time.Duration) {
 	select {
 	case <-job.done:
 	case <-time.After(grace):
+	}
+}
+
+// dropDownloads removes every download nobody fetched, at Shutdown: they
+// are dbc's temp files, not the user's.
+func (s *Server) dropDownloads() {
+	s.dumps.mu.Lock()
+	var waiting []string
+	for token := range s.dumps.ready {
+		waiting = append(waiting, token)
+	}
+	s.dumps.mu.Unlock()
+	for _, token := range waiting {
+		s.dropDownload(token)
 	}
 }

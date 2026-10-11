@@ -528,6 +528,12 @@ dump at a time). Quitting the TUI or stopping `dbc web` stops it too. To
 point dbc at client tools it doesn't find itself, set `pg_bin` in the
 config (or `$DBC_PG_BIN`).
 
+In dbc web the dialog also has **⤓ Download**, for a dbc web that serves
+another machine (`--listen`): a plain, custom or tar dump is written to a
+temp file where dbc web runs, then saved by your browser, and removed. A
+dump over 512 MB stays there instead (the log says where), because dbc
+web sends a download whole rather than as it is written.
+
 ### Completion
 
 The editor suggests what comes next from the connection's schema — its

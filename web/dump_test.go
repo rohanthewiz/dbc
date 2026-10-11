@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -150,4 +151,50 @@ func TestDumpOneAtATimeAndStop(t *testing.T) {
 			t.Fatalf("%s left behind: %v", p, err)
 		}
 	}
+}
+
+// ⤓ Download (N-171): the dump goes to a temp file of the server, the
+// page that asked is told its token is ready, and the file is sent once,
+// as an attachment, then removed; a directory format does not download.
+func TestDumpDownload(t *testing.T) {
+	fakeDumpTool(t, "0")
+	e := newTestEnv(t)
+	_, s := e.open()
+	type started struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+		Out   string `json:"out"`
+		Token string `json:"token"`
+	}
+	r := decodeData[started](t, e.api("POST", "/api/v1/dump", `{"conn":"demo-sqlite","format":"directory","out":"~/d","download":true}`, 200))
+	if r.OK || !strings.Contains(r.Error, "single-file") {
+		t.Fatalf("a directory download: %+v", r)
+	}
+	r = decodeData[started](t, e.api("POST", "/api/v1/dump", `{"conn":"demo-sqlite","format":"plain","download":true}`, 200))
+	if !r.OK || len(r.Token) != 32 || !strings.Contains(r.Out, "dbc-download-") {
+		t.Fatalf("start: %+v", r)
+	}
+	// its "dump" event names the token, the file's name and size
+	var ready struct {
+		Ready, Name string
+		Size        int64
+	}
+	for ready.Ready == "" {
+		ev, _ := s.await(t, "dump")
+		_ = json.Unmarshal(ev.Data, &ready)
+	}
+	if ready.Ready != r.Token || ready.Name != filepath.Base(r.Out) || ready.Size != int64(len("-- dumped\n")) {
+		t.Fatalf("ready = %+v", ready)
+	}
+	res := e.req("GET", "/api/v1/dump/file/"+r.Token, "", nil)
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != 200 || string(body) != "-- dumped\n" ||
+		res.Header.Get("Content-Disposition") != `attachment; filename="`+ready.Name+`"` {
+		t.Fatalf("download = %d %q %q", res.StatusCode, body, res.Header.Get("Content-Disposition"))
+	}
+	if _, err := os.Stat(filepath.Dir(r.Out)); !os.IsNotExist(err) {
+		t.Errorf("the temp directory is still there: %v", err)
+	}
+	e.api("GET", "/api/v1/dump/file/"+r.Token, "", 404) // once
 }

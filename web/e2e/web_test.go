@@ -1100,6 +1100,22 @@ func dumpDialog(t *testing.T, e *env, p *rod.Page) {
 	if _, err := os.Stat(out); err != nil {
 		t.Fatalf("the log says dumped, but %s: %v", out, err)
 	}
+
+	// ⤓ Download (N-171): a custom archive, saved by this browser rather
+	// than written on the server (it arrives through a navigation to a
+	// one-use URL once the dump is done)
+	waitFor(t, p, "the first dump over", `() => ![...document.querySelectorAll(".menu .mitem")].some((b) => /Stop dump/.test(b.textContent))`)
+	clickAt(t, p, `#conns .conn-item[data-conn="pg"]`, proto.InputMouseButtonRight)
+	waitFor(t, p, "the menu", `() => !!document.querySelector(".menu")`)
+	menuPick(t, p, "Dump database…")
+	waitFor(t, p, "the dialog", `() => !!document.getElementById("dp-format")`)
+	eval(t, p, `() => { const f = document.getElementById("dp-format"); f.value = "custom"; f.dispatchEvent(new Event("change")); }`)
+	wait := p.Browser().MustWaitDownload() // the bytes the browser saved
+	p.MustElementR(".modal button", "Download").MustClick()
+	if file := wait(); !strings.HasPrefix(string(file), "PGDMP") {
+		t.Fatalf("the download is not a custom archive: %q", file[:min(len(file), 16)])
+	}
+	waitFor(t, p, "the log's download line", `() => [...document.querySelectorAll("#log > div")].some((d) => /⤓ downloading pg-\d{8}-\d{4}\.dump/.test(d.textContent))`)
 }
 
 // pgRoutines: on Postgres the heading's Routines word lists the picked

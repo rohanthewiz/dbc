@@ -38,12 +38,6 @@ ten session docs in `ai_docs/claude_sessions/`
 
 ## Open
 
-- **N-171** · raised `2026-1009-0748-pg-dump-cli-tui-web` · value low
-  dbc web: download a single-file dump (plain, custom, tar) in the browser.
-  Today the dialog writes on the machine dbc web runs on, which is right for
-  the local workbench but not when `--listen` serves another machine.
-  Streaming pg_dump's stdout as the response would do; directory and split
-  stay server-side.
 - **N-172** · raised `2026-1009-0748-pg-dump-cli-tui-web` · value low
   A dump for MySQL connections with mysqldump, behind the same menu row and
   dialog (the row is dimmed on MySQL today). No one has asked; worth it only
@@ -464,6 +458,13 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-171** · raised `2026-1009-0748-pg-dump-cli-tui-web` · value low
+  dbc web: download a single-file dump (plain, custom, tar) in the browser.
+  Today the dialog writes on the machine dbc web runs on, which is right for
+  the local workbench but not when `--listen` serves another machine.
+  Streaming pg_dump's stdout as the response would do; directory and split
+  stay server-side.
+  closed 2026-10-10, `2026-1010-2032-n171-n157-n145` (from the cats-todo backlog): done, but not streamed, because the item's premise ("streaming pg_dump's stdout as the response would do") does not hold with rweb. Its responses are held in memory whole (`ctx.Bytes`, even static files are `os.ReadFile`), and only SSE writes as it goes. Streaming would mean changing rweb, which is the user's library and a release of its own, so that is left to them. Instead, the dialog's new ⤓ Download (single-file formats; hidden for directory and split) posts the dump with `download: true`. The server writes it to a temp directory (`dbc-download-*`, the out typed ignored) and answers a 128-bit token, and the dump runs as any dump does. At its end `readyDownload` keeps the file under the token and broadcasts `{ready, name, size}`. The page that holds the token (`conns.js` `downloads`) navigates to `GET /api/v1/dump/file/:token`, so the browser saves it as an attachment; the route serves it once and removes it. Bounds: over `MaxDumpDownload` (512 MB, since rweb holds it in memory) it stays on the server and the log says where; one never fetched is removed after 30 min, and every waiting one at Shutdown (after a running dump ends). README's dialog paragraph. Tests: `web.TestDumpDownload` (a directory refused; the token, the ready event, the attachment once, then 404 and the temp dir gone), with the fake pg_dump. e2e "dump database dialog" against postgres:17 (via N-170's Docker pg_dump): ⤓ Download of a custom dump, whose bytes the browser saved begin `PGDMP`, and the log's "⤓ downloading pg-….dump" line.
 - **N-170** · raised `2026-1009-0748-pg-dump-cli-tui-web` · value medium
   Run pg_dump from Docker when no local one is new enough. `pgdump.Locate`
   refuses a server newer than every pg_dump it finds. (Corrected 2026-10-10

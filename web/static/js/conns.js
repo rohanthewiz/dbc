@@ -496,7 +496,7 @@
       // Enter starts, from anywhere but the open dropdown's own list
       onKey: (e) => {
         if (e.key !== "Enter" || e.target.tagName === "SELECT") return false;
-        run();
+        run(false);
         return true;
       },
       // closing does not stop a start already sent: the server finishes it,
@@ -554,10 +554,33 @@
   let dumping = null;
   dbc.api("GET", "/api/v1/dump").then((r) => { dumping = r.running || null; }).catch(() => {});
 
-  // onDump takes a "dump" event: a line for the log, or the running state.
+  // sizeText is a byte count as pgdump.HumanSize says it: "512 B", "3.4 MB".
+  function sizeText(n) {
+    if (n < 1024) return n + " B";
+    let i = -1;
+    do { n /= 1024; i++; } while (n >= 1024 && i < 4);
+    return n.toFixed(1) + " " + "KMGTP"[i] + "B";
+  }
+
+  // downloads are the tokens of dumps this page asked to download (the
+  // dialog's ⤓ Download): the "dump" event's ready names one when its file
+  // is on the server, and this page — not another window — fetches it.
+  const downloads = new Set();
+
+  // onDump takes a "dump" event: a line for the log, the running state, or
+  // a download ready to fetch.
   function onDump(d) {
     if ("running" in d) dumping = d.running || null;
     if (d.text) dbc.log(d.level, d.text);
+    if (d.ready && downloads.delete(d.ready)) {
+      // a navigation, not a fetch: the browser saves it as it comes,
+      // without the page holding the whole dump
+      const a = el("a", { href: "/api/v1/dump/file/" + encodeURIComponent(d.ready), download: d.name || "" });
+      document.body.append(a);
+      a.click();
+      a.remove();
+      dbc.log("ok", "⤓ downloading " + d.name + " (" + sizeText(d.size || 0) + ") — the browser saves it");
+    }
   }
 
   function openDump(name) {
@@ -586,6 +609,11 @@
     const clean = box("dp-clean", "DROP before creating", "drop each object (with -t split: the database) first");
     const result = el("div", { class: "connresult", "aria-live": "polite", hidden: "hidden" });
     const go = el("button", { type: "button", class: "primary" }, "Dump");
+    // ⤓ Download: the same dump, written to a temp file of the server and
+    // then saved by this browser — for a dbc web serving another machine
+    // (web/dump.go DOWNLOADING IT); single-file formats only
+    const dl = el("button", { type: "button", title: "Dump it, then save it here, in this browser's downloads " +
+      "(plain, custom or tar; up to 512 MB)" }, "⤓ Download");
     const cancel = el("button", { type: "button" }, "Cancel");
     cancel.addEventListener("click", () => dbc.modal.close());
 
@@ -610,6 +638,7 @@
       for (const e of jobsRow) e.hidden = !toDir(f);
       for (const e of archiveOnly) e.hidden = isArchive(f);
       outLabel.textContent = toDir(f) ? "To directory" : "To file";
+      dl.hidden = toDir(f);
       what.textContent = toDir(f) ? "a directory that does not exist yet, or is empty" : "";
       // a suggested name follows the format; one typed by hand stays
       const old = suffixOf(prevFormat);
@@ -624,29 +653,32 @@
       if (r.running) say("warn", "a dump of " + r.running.conn + " is still running — one at a time");
     }).catch((e) => { if (open) say("err", e.message); });
 
-    async function run() {
+    async function run(download) {
       if (go.disabled) return;
       const f = format.value;
       const body = {
+        download: download === true,
         conn: name, format: f, out: out.value, jobs: toDir(f) ? jobs.value : "", content: content.value,
         schemas: schemas.value, tables: tables.value, exclude_tables: exclTables.value, exclude_data: exclData.value,
         no_privileges: noPriv.c.checked, inserts: inserts.c.checked, extra: extra.value,
         no_owner: !isArchive(f) && noOwner.c.checked, create: !isArchive(f) && create.c.checked,
         clean: !isArchive(f) && clean.c.checked,
       };
-      go.disabled = true;
+      go.disabled = dl.disabled = true;
       say("", "checking the server's version and finding pg_dump…");
       try {
         const r = await dbc.api("POST", "/api/v1/dump", body);
         if (!r.ok) { if (open) say("err", r.error); return; }
+        if (r.token) downloads.add(r.token); // fetched when its "dump" event says ready
         if (open) dbc.modal.close(); // the dump's own lines take it from here
       } catch (e) {
         if (open) say(e.status === 409 ? "warn" : "err", e.message);
       } finally {
-        go.disabled = false;
+        go.disabled = dl.disabled = false;
       }
     }
-    go.addEventListener("click", run);
+    go.addEventListener("click", () => run(false));
+    dl.addEventListener("click", () => run(true));
 
     show();
     dbc.modal.open({
@@ -663,13 +695,14 @@
           el("span", "check full", noPriv.label, inserts.label, noOwner.label),
           el("span"), el("span", "check full", create.label, clean.label),
           ...rowOf("More options", extra),
-          el("span"), el("span", "hint full", "Written on the machine dbc web runs on (~ is its home). " +
-            "Runs pg_dump — found on PATH, in Homebrew's libpq, or at the config's pg_bin.")),
+          el("span"), el("span", "hint full", "Dump writes it on the machine dbc web runs on (~ is its home); " +
+            "⤓ Download saves it in this browser instead. Runs pg_dump — found on PATH, in Homebrew's libpq, " +
+            "at the config's pg_bin, or the server's own in Docker.")),
         result),
-      foot: el("div", "mfoot", el("span", "hint", ""), go, cancel),
+      foot: el("div", "mfoot", el("span", "hint", ""), dl, go, cancel),
       onKey: (e) => {
         if (e.key !== "Enter" || e.target.tagName === "SELECT") return false;
-        run();
+        run(false);
         return true;
       },
       onClose: () => { open = false; dbc.editor.focus(); },

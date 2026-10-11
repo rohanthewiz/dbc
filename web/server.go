@@ -280,6 +280,7 @@ func (s *Server) routes() {
 	r.Get("/api/v1/dump", s.handleDumpInfo)
 	r.Post("/api/v1/dump", s.handleDumpStart)
 	r.Post("/api/v1/dump/stop", s.handleDumpStop)
+	r.Get("/api/v1/dump/file/:token", s.handleDumpFile)
 	r.Get("/api/v1/tabs", s.handleTabs)
 	r.Put("/api/v1/tabs/:id", s.handleSaveTab)
 	r.Delete("/api/v1/tabs/:id", s.handleDeleteTab)

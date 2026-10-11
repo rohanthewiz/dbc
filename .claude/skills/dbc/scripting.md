@@ -354,6 +354,9 @@ run|check|export NAME` (`-p k=v`, `--preview N`, `--fragment F`, `-t json`),
 
 - A script is interpreted: keep it to stdlib + `sdb`. Third-party imports
   are not available.
+- `os.Getenv` reads a copy of the running dbc's environment (the shell's
+  headless; `dbc web`'s own in the browser); a script's `os.Setenv` stays
+  in that copy.
 - **yaegi's compile pass is not the Go compiler.** `--check` catches
   undefined names, type mismatches and bad imports, but an unused variable
   or import passes, and only the first compile error is reported.

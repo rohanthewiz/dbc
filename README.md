@@ -1603,7 +1603,11 @@ save. `dbc scripts` prints the directory and lists what is in it, and the
 scripts browser names it in its title.
 
 Scripts are interpreted at runtime (via yaegi) — no compile step, edit and
-re-run. The full Go standard library is available. The `//go:build ignore`
+re-run. The full Go standard library is available. `os.Getenv` sees the
+environment of the dbc that runs the script (the shell's for headless and
+the TUI, `dbc web`'s own for a script run in the browser), copied when the
+script starts: a script's `os.Setenv` changes only its own copy. The same
+holds for `go.*` nodes and plugins. The `//go:build ignore`
 line just keeps `go build` from compiling script files if they live inside a
 Go module; dbc runs them regardless.
 

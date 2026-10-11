@@ -4,6 +4,7 @@ package script
 
 import (
 	"fmt"
+	"os"
 	"reflect"
 
 	"github.com/traefik/yaegi/interp"
@@ -19,8 +20,19 @@ import (
 // the sdb API, and nothing else. Run and Check (check.go) both start from
 // it, so a script Check passes imports exactly what Run will give it; two
 // hand-kept copies of this list would drift the first time sdb grew a type.
+//
+// The interpreter's environment is a copy of the process's, taken when it
+// is made (N-203): os.Getenv in a script, a go.* node or a plugin reads
+// what a shell script run from the same place would. Left empty, as yaegi
+// does by default, a knob read from the environment silently took its
+// default. The copy is yaegi's restricted mode, not Unrestricted: a
+// script's os.Setenv/Unsetenv changes only its own interpreter, never the
+// dbc process, where it would leak into every later script, connection DSN
+// expansion and child process (dbc web runs many scripts in one process).
+// This hands a script nothing it could not already reach: the full
+// stdlib, os/exec and the files under $HOME are in scope either way.
 func newInterp() (*interp.Interpreter, error) {
-	i := interp.New(interp.Options{})
+	i := interp.New(interp.Options{Env: os.Environ()})
 	if err := i.Use(stdlib.Symbols); err != nil {
 		return nil, serr.Wrap(err, "phase", "load stdlib symbols")
 	}

@@ -247,3 +247,43 @@ func TestRunSource(t *testing.T) {
 		t.Errorf("err = %v, want the compile error for s.Nope", err)
 	}
 }
+
+// A script sees the process's environment (N-203), and its own Setenv
+// stays inside its interpreter: the process, and so the next script, never
+// sees it.
+func TestScriptEnvironment(t *testing.T) {
+	t.Setenv("DBC_SCRIPT_ENV_TEST", "from the shell")
+	mgr := db.NewManager(&config.Config{MaxRows: 1000})
+	t.Cleanup(mgr.Close)
+	var printed []string
+	s := sdb.New(mgr, func(*model.Result) {}, func(line string) { printed = append(printed, line) })
+	const src = `//go:build ignore
+
+package main
+
+import (
+	"os"
+
+	"github.com/rohanthewiz/dbc/sdb"
+)
+
+func Run(s *sdb.S) error {
+	_, set := os.LookupEnv("DBC_SCRIPT_SET")
+	s.Print("%s | %v", os.Getenv("DBC_SCRIPT_ENV_TEST"), set)
+	os.Setenv("DBC_SCRIPT_SET", "1")
+	return nil
+}
+`
+	for i := 0; i < 2; i++ {
+		if err := RunSource("env.go", src, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{"from the shell | false", "from the shell | false"}
+	if strings.Join(printed, "\n") != strings.Join(want, "\n") {
+		t.Errorf("printed %q, want %q", printed, want)
+	}
+	if v, ok := os.LookupEnv("DBC_SCRIPT_SET"); ok {
+		t.Errorf("the script's Setenv reached the process: DBC_SCRIPT_SET=%q", v)
+	}
+}

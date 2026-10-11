@@ -85,16 +85,6 @@ ten session docs in `ai_docs/claude_sessions/`
   named, so the semantics differ from Postgres and SQLite. Worth it only
   if a MySQL user asks (as N-172); then say the difference in the field's
   doc, or require that `key` be the table's only unique key.
-- **N-203** · raised `2026-1011-0035-scripting-etl-tutorial` · value medium
-  `os.Getenv` is always `""` inside a script, a `go.*` node and a user
-  plugin: `script/engine.go` builds the interpreter with
-  `interp.Options{}`, and yaegi then hands the interpreted `os` an empty
-  environment. Nothing says so, and a script reading a knob from the
-  environment silently takes its default (found writing the tutorial).
-  Either pass `Env: os.Environ()` (scripts get the process's env, as a
-  shell script would) or keep it empty on purpose and say so in the README
-  and the scripting reference. The tutorial currently documents the empty
-  environment; update its §2 and pitfalls row if this changes.
 - **N-204** · raised `2026-1011-0035-scripting-etl-tutorial` · value medium
   A pipeline's stats print `2562047h47m16.854775807s` (the max
   `time.Duration`) as the time of a skipped fragment: actions in a
@@ -489,6 +479,17 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-203** · raised `2026-1011-0035-scripting-etl-tutorial` · value medium
+  `os.Getenv` is always `""` inside a script, a `go.*` node and a user
+  plugin: `script/engine.go` builds the interpreter with
+  `interp.Options{}`, and yaegi then hands the interpreted `os` an empty
+  environment. Nothing says so, and a script reading a knob from the
+  environment silently takes its default (found writing the tutorial).
+  Either pass `Env: os.Environ()` (scripts get the process's env, as a
+  shell script would) or keep it empty on purpose and say so in the README
+  and the scripting reference. The tutorial currently documents the empty
+  environment; update its §2 and pitfalls row if this changes.
+  closed 2026-10-11, `2026-1011-0040-n179-n203-n208`: scripts get the process's environment. `script.newInterp`, the one interpreter every script, `go.*` node, plugin and `--check` starts from, passes `interp.Options{Env: os.Environ()}`. It stays yaegi's restricted mode, so the interpreted `os.Getenv`/`LookupEnv`/`Environ` read a copy taken when the interpreter is made, and a script's `Setenv`/`Unsetenv`/`Clearenv` change only that copy, never the dbc process (which would leak into later scripts, DSN expansion and child processes in a long-lived dbc web). Nothing new is reachable: the full stdlib, `os/exec` included, was already there. Docs: README's scripts paragraph, the tutorial's §2 "Parameters" (an env var is a knob now, with dbc web's caveat: its own environment, from when it started) and its pitfalls row, the dbc skill's scripting reference. Test `script.TestScriptEnvironment` (a var set in the test is seen; a script's Setenv is seen neither by the next run nor by the process). Checked in a fresh build: `LIMIT=2 dbc script ./env.go` prints `LIMIT="2"`.
 - **N-179** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
   Fragments are reordered from a lane's ⋯ menu (Move up / Move down). The
   plan sketched dragging a lane by its header; add it if the menu turns

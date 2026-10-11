@@ -288,10 +288,16 @@ new.
 
 **Parameters.** A script takes no command-line arguments. Put the knobs in
 constants at the top of the file, as the built-in examples do, or read a
-small settings file through `s.Path`. Don't use environment variables: the
-interpreter starts with an empty environment, so `os.Getenv` returns `""`
-inside a script. When you need real runtime parameters (`-p key=value`),
-use a pipeline (§6).
+small settings file through `s.Path`, or read an environment variable:
+`os.Getenv` sees the environment of the dbc that runs the script (your
+shell's for `dbc script`; `dbc web`'s own for a script run in the browser,
+so a variable set in a terminal later doesn't reach it). The script gets a
+copy, so its `os.Setenv` changes nothing outside it. When you need real
+runtime parameters (`-p key=value`), use a pipeline (§6).
+
+```sh
+LIMIT=2 dbc script ./report.go   # os.Getenv("LIMIT") == "2" inside
+```
 
 ---
 
@@ -1146,7 +1152,7 @@ the tab that started the run.
 | --- | --- | --- |
 | A map is missing values you assigned | yaegi drops `m[k], _ = v.(T)` (and any two-value assignment into a map element) | `v, _ := x.(T); m[k] = v`. `--check` warns |
 | A `go.transform` returns no rows | yaegi mis-stores an operator's result put straight into a row: `b.Rows[i][c] = s + "!"` | `v := s + "!"; b.Rows[i][c] = v`. Calls like `strings.ToLower(s)` are fine |
-| `os.Getenv` is empty in a script | The interpreter starts with an empty environment | Constants, a settings file via `s.Path`, or pipeline params |
+| `os.Getenv` is empty in a script run from `dbc web` | The script sees `dbc web`'s environment, from when it started, not your terminal's | Set the variable before starting `dbc web`, or use constants, a settings file via `s.Path`, or pipeline params |
 | A file isn't where you expected | Relative paths resolve to `files_dir` (default `$HOME`), not the cwd | `s.Path(...)` in scripts; `$PWD/...` in `-p` |
 | Preview fails at `lookup`/`sql.read` of a table an earlier fragment makes | Previews write nothing, earlier fragments included | Run once for real, or `--fragment` |
 | `${run.id}` is empty | It's only set by the jobs engine, not by `s.RunPipeline*` | Don't key on it: use a `bigserial` key, or `cols.add`'s `uuid()` |

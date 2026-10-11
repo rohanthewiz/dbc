@@ -30,7 +30,7 @@ import (
 //
 //	GET    /api/v1/plugin-files                   the list: files (with what each loaded as), examples, trash
 //	GET    /api/v1/plugin-files/:name             {text, rev}
-//	PUT    /api/v1/plugin-files/:name?win=        {text, base} → {rev} | {conflict, text, rev}
+//	PUT    /api/v1/plugin-files/:name?win=        {text, base, fit?} → {rev, renamed?} | {conflict, text, rev}
 //	POST   /api/v1/plugin-files/:name/rename?win= {to}
 //	DELETE /api/v1/plugin-files/:name?win=        to .trash → {id}
 //	POST   /api/v1/plugin-trash/:id/restore       {to?} → {name}
@@ -197,17 +197,34 @@ func (s *Server) handlePluginRead(ctx rweb.Context) error {
 // handlePluginSave is PUT /api/v1/plugin-files/:name?win=: the scripts
 // save, and then the reload, so the answer's caller can read the file's
 // load result (pluginStatus) right after.
+//
+// fit, on a create (base ""), says the text is a copy — an example copied,
+// a file duplicated — whose Plugin.Name another plugin may already have:
+// it is then made the file's own (script.FitPluginName) before the write,
+// as the TUI's copy does, and the answer's renamed says from what to what.
+// As written, the copy would not load.
 func (s *Server) handlePluginSave(ctx rweb.Context) error {
 	name, err := pluginName(ctx)
 	if err != nil {
 		return fail(ctx, err)
 	}
-	var req scriptSave
+	var req struct {
+		scriptSave
+		Fit bool `json:"fit"`
+	}
 	if err = decode(ctx, &req); err != nil {
 		return fail(ctx, err)
 	}
 	if len(req.Text) > userdata.MaxScriptBytes {
 		return fail(ctx, badRequest("the plugin file is %d KB; files save up to %d KB", len(req.Text)>>10, userdata.MaxScriptBytes>>10))
+	}
+	var renamed *pluginRenamed
+	if req.Fit && req.Base == "" {
+		s.syncPlugins() // taken is asked of the registry: as the files are now
+		var from, to string
+		if req.Text, from, to = script.FitPluginName(req.Text, name, script.PluginNameTaken); to != "" {
+			renamed = &pluginRenamed{From: from, To: to}
+		}
 	}
 	rev, isConflict, err := userdata.SavePlugin(s.cfg.PluginsDir, name, req.Text, req.Base)
 	if err != nil {
@@ -218,14 +235,21 @@ func (s *Server) handlePluginSave(ctx rweb.Context) error {
 		return ok(ctx, scriptSaved{Rev: rev, Conflict: true, Text: text})
 	}
 	s.pluginChanged(scriptsEvent{Op: "saved", Name: name, Rev: rev, Win: ctx.Request().QueryParam("win")})
-	return ok(ctx, pluginSaved{scriptSaved: scriptSaved{Rev: rev}, Load: s.pluginStatus(name)})
+	return ok(ctx, pluginSaved{scriptSaved: scriptSaved{Rev: rev}, Load: s.pluginStatus(name), Renamed: renamed})
 }
 
-// pluginSaved is a plugin save's answer: the scripts answer, and what the
-// loader made of the saved file, for the log.
+// pluginSaved is a plugin save's answer: the scripts answer, what the
+// loader made of the saved file, for the log, and the Name a fit changed.
 type pluginSaved struct {
 	scriptSaved
-	Load pluginLoad `json:"load"`
+	Load    pluginLoad     `json:"load"`
+	Renamed *pluginRenamed `json:"renamed,omitempty"`
+}
+
+// pluginRenamed is the Plugin.Name a fitted copy had, and the one it got.
+type pluginRenamed struct {
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 // pluginLoad is one file's load result: its plugin, or why there is none.

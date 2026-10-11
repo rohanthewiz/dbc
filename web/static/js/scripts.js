@@ -405,22 +405,30 @@
     }
 
     // makePlugin is makeScript for a plugin file: written to plugins_dir
-    // (where the server loads it at once), then opened in a tab.
+    // (where the server loads it at once), then opened in a tab. Every
+    // caller makes a copy (an example, a duplicate, + New from an example),
+    // so the PUT asks the server to fit its Plugin.Name: one another plugin
+    // has is made the file's own (script.FitPluginName), since two files
+    // may not declare one Name and the copy would not load.
     async function makePlugin(suggest, text, what) {
       let taken = [];
       try { taken = (await api("GET", "/api/v1/plugin-files")).plugins.map((s) => s.name); } catch (_) { /* the server will say */ }
       let name = freeName(fileOf(suggest), taken), hint = "A file in plugins_dir: letters, digits, '.', '-' and '_', ending in .go. " +
-        "Two files may not declare one plugin name, so change Name in the copy before using both.";
+        "Its plugin is renamed after the file when another plugin has its Name.";
+      let r;
       for (;;) {
         name = goName(await ask({ title: what, hint, value: name, ok: "Create" }));
         if (!name) return;
         try {
-          await api("PUT", path(PLUG + name) + host.winQuery(), { text, base: "" });
+          r = await api("PUT", path(PLUG + name) + host.winQuery(), { text, base: "", fit: true });
           break;
         } catch (err) {
           if (err.status !== 409 && err.status !== 400) { log("err", what + ": " + err.message); return; }
           hint = err.message;
         }
+      }
+      if (r && r.renamed) {
+        log("info", name + ": its plugin is named " + r.renamed.to + " — " + r.renamed.from + " is taken (two files may not declare one Name)");
       }
       log("ok", "created " + name + " in plugins_dir — Ctrl+S saves and loads it; its plugin is in the pipeline palette under Yours");
       await edit(PLUG + name);

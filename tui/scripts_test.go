@@ -552,3 +552,44 @@ func TestScriptsBrowserPlugins(t *testing.T) {
 		t.Errorf("rows %v", labels)
 	}
 }
+
+// An example plugin copied twice (N-191): the second copy's Plugin.Name
+// would be the first's, and two files may not declare one Name — so the
+// copy is written with the file's own name (script.FitPluginName), said in
+// the log, and loads beside the first.
+func TestPluginCopyGetsItsOwnName(t *testing.T) {
+	m, _, edits := scriptsModel(t, func(string) {})
+	pdir := m.cfg.PluginsDir
+	for range 2 {
+		key(t, m, "ctrl+o")
+		// the example's row, not the first copy's (both say mask_email.go)
+		sm := browser(t, m)
+		sm.lst.cur = slices.IndexFunc(sm.lst.items, func(it listItem) bool {
+			r, ok := it.data.(scriptRow)
+			return ok && !it.head && r.kind == rowPluginExample && r.name == "mask_email.go"
+		})
+		if sm.lst.cur < 0 {
+			t.Fatalf("no example row in %v", rowLabels(sm))
+		}
+		key(t, m, "enter")
+		key(t, m, "enter") // accept the offered name: mask_email.go, then mask_email-2.go
+		key(t, m, "esc")
+	}
+	if len(*edits) != 2 || (*edits)[1] != filepath.Join(pdir, "mask_email-2.go") {
+		t.Fatalf("edits = %v", *edits)
+	}
+	bs, err := os.ReadFile(filepath.Join(pdir, "mask_email-2.go"))
+	if err != nil || !strings.Contains(string(bs), `Name:`) || !strings.Contains(string(bs), `"mask.email-2"`) {
+		t.Fatalf("the copy:\n%s %v", bs, err)
+	}
+	log := logText(m)
+	if !strings.Contains(log, "its plugin is named mask.email-2: mask.email is taken") ||
+		!strings.Contains(log, "mask_email-2.go loaded: ƒ mask.email-2 (transform)") {
+		t.Errorf("log:\n%s", log)
+	}
+	for name, file := range map[string]string{"mask.email": "mask_email.go", "mask.email-2": "mask_email-2.go"} {
+		if p, ok := pipeline.Lookup(name); !ok || p.File != filepath.Join(pdir, file) {
+			t.Errorf("registry %s: %+v %v", name, p, ok)
+		}
+	}
+}

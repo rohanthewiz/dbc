@@ -34,6 +34,38 @@ func (e *testEnv) putPlugin(name, text, base string, want int) pluginSaved {
 	return decodeData[pluginSaved](e.t, env)
 }
 
+// A copy saved with fit (N-191): the example's Name, mask.email, is the
+// first copy's, so the second is renamed after its file and loads beside
+// it; a fit on a free Name, and a plain save of a taken one, write the
+// text as it is.
+func TestPluginSaveFit(t *testing.T) {
+	e, dir := pluginEnv(t)
+	ex, _ := scripts.PluginExampleByName("mask_email.go")
+	put := func(name, text string, fit bool) pluginSaved {
+		t.Helper()
+		b, _ := json.Marshal(struct {
+			scriptSave
+			Fit bool `json:"fit"`
+		}{scriptSave{Text: text}, fit})
+		return decodeData[pluginSaved](t, e.api("PUT", "/api/v1/plugin-files/"+name+"?win=w1", string(b), 200))
+	}
+	if r := put("mask_email.go", ex.Text, true); r.Renamed != nil || r.Load.Plugin != "mask.email" {
+		t.Fatalf("the first copy = %+v", r)
+	}
+	r := put("mask_email-2.go", ex.Text, true)
+	if r.Renamed == nil || *r.Renamed != (pluginRenamed{From: "mask.email", To: "mask.email-2"}) ||
+		r.Load.Plugin != "mask.email-2" || r.Load.Error != "" {
+		t.Fatalf("the second copy = %+v %+v", r, r.Renamed)
+	}
+	if bs, _ := os.ReadFile(filepath.Join(dir, "mask_email-2.go")); !strings.Contains(string(bs), `"mask.email-2"`) {
+		t.Errorf("the second copy on disk:\n%s", bs)
+	}
+	// without fit the text is the caller's: the third does not load
+	if r := put("mask_three.go", ex.Text, false); r.Renamed != nil || !strings.Contains(r.Load.Error, "already the plugin of") {
+		t.Errorf("a plain save = %+v", r)
+	}
+}
+
 // The plugin files' life through the API: listed with the examples, made
 // from one, loaded at once (the save says as what, the windows hear
 // "scripts" under the tab's name and "plugins"), placed in the registry

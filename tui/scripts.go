@@ -910,7 +910,10 @@ func (m *Model) restoreScript(dir string, t userdata.TrashInfo) {
 }
 
 // makePlugin is makeScript for a plugin file: written to plugins_dir —
-// where the loader finds it when the editor returns — then edited.
+// where the loader finds it when the editor returns — then edited. Every
+// caller makes a copy (an example, a duplicate), so the copy's
+// Plugin.Name is made its own when another plugin has it
+// (script.FitPluginName): as written, the copy would not load.
 func (m *Model) makePlugin(dir, suggest, text, title string) {
 	var taken []string
 	if infos, err := userdata.ListPlugins(dir); err == nil {
@@ -924,10 +927,15 @@ func (m *Model) makePlugin(dir, suggest, text, title string) {
 			if !userdata.ValidPluginName(name) {
 				return nil, scriptNameErr(userdata.ErrBadScriptName, name)
 			}
-			if _, _, err := userdata.SavePlugin(dir, name, text, ""); err != nil {
+			m.syncPlugins() // taken is asked of the registry: as the files are now
+			out, from, to := script.FitPluginName(text, name, script.PluginNameTaken)
+			if _, _, err := userdata.SavePlugin(dir, name, out, ""); err != nil {
 				return nil, scriptNameErr(err, name)
 			}
 			m.logf(logOk, "created %s in %s", name, config.TildePath(dir))
+			if to != "" {
+				m.logf(logInfo, "its plugin is named %s: %s is taken (two files may not declare one Name)", to, from)
+			}
 			return m.editPlugin(dir, name), nil
 		})
 	selectStem(p.field)

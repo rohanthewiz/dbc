@@ -2427,7 +2427,10 @@ Four examples ship in the binary, one per kind — `mask_email.go`
 (transform), `gen_series.go` (source), `webhook_post.go` (a sink that
 posts the rows as JSON when the fragment commits) and `wait_file.go` (an
 action that waits for a file) — copied into `plugins_dir` from the
-browser to load and change:
+browser to load and change. A copy whose `Name` another plugin already
+has (an example copied twice, a file duplicated) is renamed after its
+file as it is written (`mask_email-2.go` → `mask.email-2`, when `Name` is
+a plain string), and the log says so: as written it would not load.
 
 - **dbc web**: `Ctrl+O` lists your plugin files under *Plugins* (each with
   what it loaded as, or ⚠ and why), the examples to copy, and the trash; +

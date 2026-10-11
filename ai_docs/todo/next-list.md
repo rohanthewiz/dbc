@@ -159,13 +159,6 @@ ten session docs in `ai_docs/claude_sessions/`
   named, so the semantics differ from Postgres and SQLite. Worth it only
   if a MySQL user asks (as N-172); then say the difference in the field's
   doc, or require that `key` be the table's only unique key.
-- **N-191** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value low
-  Copying an example plugin twice (or duplicating a plugin file) gives two
-  files declaring one `Name`; the second does not load ("… is already the
-  plugin of …", said in the log and the list). The copy flows (both UIs)
-  could offer to rename `Plugin.Name` in the new file to match its file
-  name, when the name is a plain string literal.
-
 - **N-192** · raised `2026-1009-1632-n175-pipeline-code-editors` · value low
   A pipeline inspector's `sql` field is coloured but offers no completion:
   the workspace's SQL providers complete against the tab's connection, and
@@ -544,6 +537,13 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-191** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value low
+  Copying an example plugin twice (or duplicating a plugin file) gives two
+  files declaring one `Name`; the second does not load ("… is already the
+  plugin of …", said in the log and the list). The copy flows (both UIs)
+  could offer to rename `Plugin.Name` in the new file to match its file
+  name, when the name is a plain string literal.
+  closed 2026-10-10, `2026-1010-1946-n177-n201-n191` (from the cats-todo backlog): renamed when needed, not offered. Every caller of either UI's `makePlugin` makes a copy, and a copy whose Name is taken never loads, so there is nothing to ask. `script.FitPluginName(text, file, taken)` parses the copy, finds `var Plugin = sdb.Plugin{Name: "…"}` written as a plain string literal (interpreted or raw), and when that Name is taken rewrites only the literal. The new name is the file's own (`PluginNameFor`: the stem with its underscores as dots, the examples' pairing, so `mask_email-2.go` gets `mask.email-2`), made free with -2, -3…. A computed Name, or text that does not parse, is written as it is. `script.PluginNameTaken` asks the registry (a built-in or a loaded file's plugin) and the load problems (a broken file's Name would take it back once fixed); both hosts sync the plugins first. The TUI's `makePlugin` calls it and logs "its plugin is named mask.email-2: mask.email is taken". dbc web's plugin PUT takes `fit: true` on a create and answers `renamed: {from, to}`; `scripts.js` `makePlugin` sends it, logs the rename, and its name prompt's hint now says so (it used to tell you to change Name by hand). README's plugins section says it. Tests: `script.TestFitPluginName` (7 cases), `tui.TestPluginCopyGetsItsOwnName` (an example copied twice: both load; fails on the old TUI), `web.TestPluginSaveFit` (fit renames; a plain save of a taken Name still does not load). The web e2e "plugin files and the palette" step still passes.
 - **N-201** · raised `2026-1010-1946-n177-n201-n191` · value medium
   The web e2e suite fails in "sidebar fold keys" on its JavaScript-error
   check, not the step: Chrome reports "ResizeObserver loop completed with

@@ -349,19 +349,6 @@ and `raised`.
   test in `web/e2e`: run all on two SELECTs, see two tabs with the second
   on the grid, run again and see the same two tabs refilled.
 
-- **N-156** · raised `2026-1007-2355-routine-completion` · value high
-  `TestLiveWorkspaceNotices` (Postgres) fails on main since N-155's
-  per-write log lines: a `DO` block now gets a "statement 1/2: 0 affected"
-  line between the NOTICE and the WARNING, and the test wants NOTICE,
-  WARNING, then the done note. Confirmed on a clean HEAD worktree, so not
-  the routine work. Repair the test (expect the write lines, or check the
-  order of the three it names); decide while there whether a `DO` should
-  count as a write that gets a line at all.
-  Updated `2026-1009-1632-n175-pipeline-code-editors` (`/next-list`): still failing on HEAD (`8452803`,
-  postgres:17). The notes are NOTICE, "statement 1/2: 0 affected — DO …",
-  WARNING, "statement 2/2: …", then the done note: five, where the test
-  wants three. Value raised to high: every live run of `./workspace` is red
-  on it, so each session that runs the live suite must route around it.
 - **N-157** · raised `2026-1007-2355-routine-completion` · value low
   Routine completion has not been watched in either UI. The workspace's
   live tests cover the cache and the suggestions on postgres:17 and
@@ -616,6 +603,20 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-156** · raised `2026-1007-2355-routine-completion` · value high
+  `TestLiveWorkspaceNotices` (Postgres) fails on main since N-155's
+  per-write log lines: a `DO` block now gets a "statement 1/2: 0 affected"
+  line between the NOTICE and the WARNING, and the test wants NOTICE,
+  WARNING, then the done note. Confirmed on a clean HEAD worktree, so not
+  the routine work. Repair the test (expect the write lines, or check the
+  order of the three it names); decide while there whether a `DO` should
+  count as a write that gets a line at all.
+  Updated `2026-1009-1632-n175-pipeline-code-editors` (`/next-list`): still failing on HEAD (`8452803`,
+  postgres:17). The notes are NOTICE, "statement 1/2: 0 affected — DO …",
+  WARNING, "statement 2/2: …", then the done note: five, where the test
+  wants three. Value raised to high: every live run of `./workspace` is red
+  on it, so each session that runs the live suite must route around it.
+  closed 2026-10-10, `2026-1010-1913-n156-n200-n180` (from the cats-todo backlog): repaired, and a `DO` keeps its line but says "done". Its "0 affected" was false: a block may write any number of rows, but Postgres's command tag (`DO`, `CALL`) carries no count, so the driver reports 0. MySQL's `CALL` reports only the last inner statement's. The line itself is worth keeping: it says the statement ran, between the notices it raised. `writeLog.see` now asks `countless(stmt)` (DDL, `DO`, `CALL`) for "done". Found on the way: the fold total added a DDL's count despite its comment saying it did not, and on SQLite that count is the INSERT's before it (`sqlite3_changes`), so a folded `CREATE TABLE` inflated the total. Countless writes now add nothing. The live test expects all five notes in order: the NOTICE, "statement 1/2: done — DO …", the WARNING, "statement 2/2: done — DO …", then the done note. README's write-line sentence names DO and CALL. Tests: `TestWriteLogCountless` (DO, CALL, the fold), and a folded-DDL case in `TestRunAllLogsEachWrite` (said 4 affected, not 1, on the old code). `TestLiveWorkspaceNotices` passes, and the whole `./workspace` live suite is green on postgres:17 (Docker).
 - **N-182** · raised `2026-1009-1254-phase-3-jobs-scheduler-runs` · value low
   `dbc pipeline run NAME --preview N -t json` writes two JSON documents to
   stdout: the preview sinks' results (collected, as a script's) and then

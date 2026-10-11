@@ -637,6 +637,17 @@ func TestRunAllLogsEachWrite(t *testing.T) {
 		t.Errorf("folded:\n got %q\nwant %q", got, want)
 	}
 
+	// a DDL folded among the writes adds nothing to the total, though
+	// SQLite's count for it is the INSERT's before it (sqlite3_changes)
+	stmts = nil
+	for i := range 5 {
+		stmts = append(stmts, fmt.Sprintf("INSERT INTO lw2 VALUES (%d), (%d), (%d)", i, i, i))
+	}
+	stmts = append(stmts, "CREATE TEMP TABLE lw3 (x INT)", "INSERT INTO lw3 VALUES (1)")
+	if got := lines(run(t, w, stmts...)); len(got) != 6 || got[5] != "… 2 more writes, to statement 7: 1 affected in all" {
+		t.Errorf("a DDL folded: %q", got)
+	}
+
 	// a failed run logs the writes before the failure, ahead of the error
 	ev = run(t, w, "INSERT INTO lw VALUES (9)", "SELECT * FROM no_such_table", "INSERT INTO lw VALUES (10)")
 	if ev.Err == nil {
@@ -647,6 +658,35 @@ func TestRunAllLogsEachWrite(t *testing.T) {
 	}
 	if n := ev.Notes[len(ev.Notes)-1]; n.Level != Err {
 		t.Errorf("last note = %+v, want the error", n)
+	}
+}
+
+// A DO block or a CALL may write any number of rows, but its count is
+// none (the command tag has no count; MySQL's CALL reports only the last
+// inner statement's): its line says "done", and the fold adds nothing.
+func TestWriteLogCountless(t *testing.T) {
+	l := &writeLog{on: true}
+	got := slices.Concat(
+		l.see(1, 9, "DO $$ BEGIN UPDATE t SET x = 1; END $$", &model.Result{IsExec: true}),
+		l.see(2, 9, "call refresh_totals()", &model.Result{IsExec: true, Affected: 3}),
+		l.see(3, 9, "UPDATE t SET x = 2", &model.Result{IsExec: true, Affected: 4}))
+	var texts []string
+	for _, n := range got {
+		texts = append(texts, n.Text)
+	}
+	want := []string{
+		"statement 1/9: done — DO $$ BEGIN UPDATE t SET x = 1; END $$",
+		"statement 2/9: done — call refresh_totals()",
+		"statement 3/9: 4 affected — UPDATE t SET x = 2",
+	}
+	if !slices.Equal(texts, want) {
+		t.Errorf("lines:\n got %q\nwant %q", texts, want)
+	}
+	l.logged = writeLines
+	l.see(7, 9, "CALL refresh_totals()", &model.Result{IsExec: true, Affected: 5})
+	l.see(8, 9, "DELETE FROM t", &model.Result{IsExec: true, Affected: 2})
+	if f := l.fold(); len(f) != 1 || f[0].Text != "… 2 more writes, to statement 8: 2 affected in all" {
+		t.Errorf("fold = %v", f)
 	}
 }
 

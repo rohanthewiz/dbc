@@ -1049,11 +1049,16 @@ func TestLiveWorkspaceNotices(t *testing.T) {
 		for _, n := range ev.Notes {
 			texts = append(texts, n.Text)
 		}
-		if len(ev.Notes) != 3 ||
+		// each statement's notices, then its write line (N-155), which
+		// says "done" for a DO: its block may write, but the command tag
+		// has no count (workspace countless); the completed note last
+		if len(ev.Notes) != 5 ||
 			ev.Notes[0] != (Note{Info, "NOTICE: dbc_live_ws : 3"}) ||
-			ev.Notes[1] != (Note{Warn, "WARNING: second"}) ||
-			ev.Notes[2].Level != Ok {
-			t.Errorf("notes = %q, want the NOTICE, the WARNING, then the completed note", texts)
+			ev.Notes[1] != (Note{Info, "statement 1/2: done — DO $$ BEGIN RAISE NOTICE '% : %', 'dbc_live_ws', 3; END $$"}) ||
+			ev.Notes[2] != (Note{Warn, "WARNING: second"}) ||
+			ev.Notes[3] != (Note{Info, "statement 2/2: done — DO $$ BEGIN RAISE WARNING 'second'; END $$"}) ||
+			ev.Notes[4].Level != Ok {
+			t.Errorf("notes = %q, want the NOTICE, its line, the WARNING, its line, then the completed note", texts)
 		}
 	})
 }

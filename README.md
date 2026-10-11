@@ -1257,8 +1257,9 @@ A run of **several statements** (Run all, or a selection of several) opens
 a tab per statement that returns rows, as DBeaver and DataGrip do; an
 `INSERT`, `UPDATE` or DDL statement gets none, and when no statement
 returns rows the last one's result lands alone. The log has a line for each
-write instead (`statement 2/3: 4 affected — UPDATE …`, or `done` for DDL;
-none for `BEGIN`, `SET` or `COMMIT`); past five, the rest fold into one
+write instead (`statement 2/3: 4 affected — UPDATE …`, or `done` for DDL,
+a `DO` block or a `CALL`, whose counts mean nothing; none for `BEGIN`,
+`SET` or `COMMIT`); past five, the rest fold into one
 line with their total (`… 495 more writes, to statement 500: 495 affected
 in all`), so a script of INSERTs does not flood it. The last
 tab filled is the one on screen. Those tabs stay together, and running the

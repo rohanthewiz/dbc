@@ -282,12 +282,14 @@ const writeLines = 5
 //
 //	statement 2/500: 3 affected — UPDATE t SET …
 //	statement 3/500: done — CREATE TABLE u (…)      (DDL: no count worth giving)
+//	statement 4/500: done — DO $$ … $$              (a block: its count is none)
 //	…                                                 (writeLines lines in all)
-//	… 495 more writes, to statement 500: 495 affected in all
+//	… 494 more writes, to statement 500: 494 affected in all
 //
-// The fold line totals the affected counts; a DDL among them adds nothing
-// to it. It comes once the run is over, so a stopped or failed run still
-// gets it, for the writes that went through.
+// The fold line totals the affected counts; a DDL, a DO or a CALL among
+// them adds nothing to it (countless). It comes once the run is over, so
+// a stopped or failed run still gets it, for the writes that went
+// through.
 type writeLog struct {
 	on       bool  // the run has several statements
 	logged   int   // writes given a line of their own
@@ -303,19 +305,37 @@ func (l *writeLog) see(n, total int, stmt string, res *model.Result) []Note {
 	}
 	if l.logged >= writeLines {
 		l.folded++
-		l.affected += max(res.Affected, 0)
+		if !countless(stmt) {
+			l.affected += max(res.Affected, 0)
+		}
 		l.last = n
 		return nil
 	}
 	l.logged++
 	what := fmt.Sprintf("%d affected", res.Affected)
-	if sqlsplit.ChangesCatalog(stmt) {
-		// a DDL's count means nothing: 0 on most drivers, and on SQLite
-		// the last INSERT's, which sqlite3_changes still holds. A CREATE
-		// TABLE … AS SELECT's rows go unsaid with it.
+	if countless(stmt) {
 		what = "done"
 	}
 	return []Note{notef(Info, "statement %d/%d: %s — %s", n, total, what, Preview(stmt))}
+}
+
+// countless says whether a write's affected count means nothing, so its
+// line says "done" and the fold adds nothing for it:
+//
+//   - a DDL: 0 on most drivers, and on SQLite the last INSERT's, which
+//     sqlite3_changes still holds. A CREATE TABLE … AS SELECT's rows go
+//     unsaid with it.
+//   - a DO block or a CALL: the block may write any number of rows, but
+//     Postgres's command tag ("DO", "CALL") carries no count, so the
+//     driver says 0; MySQL's CALL reports only the last statement inside
+//     the procedure's. A line still says it ran, between the notices it
+//     raised.
+func countless(stmt string) bool {
+	if sqlsplit.ChangesCatalog(stmt) {
+		return true
+	}
+	v := sqlsplit.FirstKeyword(stmt)
+	return v == "do" || v == "call"
 }
 
 // fold is the line for the writes past writeLines, or none.

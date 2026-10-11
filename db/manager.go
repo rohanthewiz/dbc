@@ -566,6 +566,21 @@ func isRead(stmt string) bool {
 // happen before it does.
 func IsRead(stmt string) bool { return isRead(stmt) }
 
+// sqliteCountVerbs are the statements SQLite's changes() counts: "only
+// changes made directly by the INSERT, UPDATE or DELETE statement" (REPLACE
+// is INSERT OR REPLACE; a WITH's main verb is the one after its CTEs).
+var sqliteCountVerbs = map[string]bool{"insert": true, "update": true, "delete": true, "replace": true}
+
+// sqliteCounts reports whether SQLite's rows affected means anything for
+// stmt (N-207). The driver's RowsAffected is sqlite3_changes(), which only
+// INSERT/UPDATE/DELETE set and nothing resets: a CREATE TABLE right after
+// an INSERT of 4 rows reported "4 rows affected" in a multi-statement run.
+// For any other statement the count is the previous write's, so run
+// reports 0. Other engines report their own count for DDL (MySQL's CREATE
+// TABLE … SELECT, Postgres's CREATE TABLE AS give the rows they copied),
+// so the rule is SQLite's only.
+func sqliteCounts(stmt string) bool { return sqliteCountVerbs[sqlsplit.Verbs(stmt).Main] }
+
 // isQuery reports whether a statement returns rows, and so must run as a
 // Query rather than an Exec. That is every statement whose main verb is a
 // read, plus a write with a RETURNING clause: run as an Exec, `INSERT …
@@ -632,6 +647,11 @@ func (m *Manager) run(ctx context.Context, ex execQuerier, name, stmt string, ar
 			return nil, wrapRunErr(ctx, err, name)
 		}
 		aff, _ := res.RowsAffected()
+		if aff != 0 && !sqliteCounts(stmt) {
+			if drv, _ := m.DriverOf(name); drv == "sqlite" {
+				aff = 0
+			}
+		}
 		return &model.Result{
 			Conn: name, Query: stmt, IsExec: true, Affected: aff,
 			Columns:  []string{"rows_affected"},

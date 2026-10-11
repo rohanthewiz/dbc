@@ -85,11 +85,6 @@ ten session docs in `ai_docs/claude_sessions/`
   named, so the semantics differ from Postgres and SQLite. Worth it only
   if a MySQL user asks (as N-172); then say the difference in the field's
   doc, or require that `key` be the table's only unique key.
-- **N-207** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
-  Headless SQL on SQLite reports a stale rows-affected for DDL: in a
-  multi-statement run, a `CREATE TABLE` right after an `INSERT … 4 rows`
-  shows "4 rows affected" (the driver's `changes()` carries over). Report
-  0 (or nothing) for DDL statements, at least on SQLite.
 - **N-208** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
   Two small stats oddities from the tutorial runs: `dbc -t json script`
   writes `"duration": "0s"` for each shown result while the text banner
@@ -455,6 +450,12 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-207** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
+  Headless SQL on SQLite reports a stale rows-affected for DDL: in a
+  multi-statement run, a `CREATE TABLE` right after an `INSERT … 4 rows`
+  shows "4 rows affected" (the driver's `changes()` carries over). Report
+  0 (or nothing) for DDL statements, at least on SQLite.
+  closed 2026-10-11, `2026-1011-0040-n179-n203-n208`: SQLite only, in `db.Manager.run`, the one Exec path for headless, the TUI, dbc web and scripts. The driver's RowsAffected is `sqlite3_changes()`, which only INSERT/UPDATE/DELETE set and nothing resets. So when the count is non-zero, the statement's main verb (`sqlsplit.Verbs`, so a `WITH … DELETE` counts) is not one of insert/update/delete/replace, and the connection is SQLite, it reports 0. Not applied to other engines, whose DDL counts are their own (MySQL's `CREATE TABLE … SELECT`, Postgres's `CREATE TABLE AS` report the rows copied); bytdb checked in a fresh build, already 0. Test `db.TestSqliteDDLRowsAffected` on a pinned session: CREATE/INDEX/DROP/ALTER/VIEW after writes give 0, while INSERT, REPLACE, UPDATE and WITH … DELETE keep their counts. Checked in a fresh build: the item's run now reads 0, 4, 0, 0.
 - **N-206** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
   `${run.id}` is empty when a script runs a pipeline
   (`s.RunPipelineNamed`/`s.RunPipeline`): documented in

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -132,5 +133,44 @@ func TestDisconnectSparesInMemory(t *testing.T) {
 	}
 	if _, err := m.Run("mem", "SELECT count(*) FROM t"); err != nil {
 		t.Errorf("the in-memory database lost its table: %v", err)
+	}
+}
+
+// SQLite's rows affected is the last write's until another write: a DDL
+// statement after an INSERT of 4 rows reports 0, not 4 (N-207). The writes
+// keep their own counts, a REPLACE and a WITH … DELETE included. On one
+// pinned session, as a headless multi-statement run has.
+func TestSqliteDDLRowsAffected(t *testing.T) {
+	mgr := NewManager(&config.Config{MaxRows: 1000, Connections: []config.Connection{
+		{Name: "lite", Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "aff.db")},
+	}})
+	defer mgr.Close()
+	s, err := mgr.Session(context.Background(), "lite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, c := range []struct {
+		stmt string
+		want int64
+	}{
+		{"CREATE TABLE a (x INTEGER PRIMARY KEY)", 0},
+		{"INSERT INTO a VALUES (1), (2), (3), (4)", 4},
+		{"CREATE TABLE b (y INTEGER)", 0},
+		{"CREATE INDEX bi ON b (y)", 0},
+		{"DROP TABLE b", 0},
+		{"REPLACE INTO a VALUES (1), (2)", 2},
+		{"ALTER TABLE a ADD COLUMN z TEXT", 0},
+		{"UPDATE a SET z = 'k' WHERE x > 1", 3},
+		{"WITH d AS (SELECT 4 AS x) DELETE FROM a WHERE x IN (SELECT x FROM d)", 1},
+		{"CREATE VIEW v AS SELECT x FROM a", 0},
+	} {
+		r, err := s.Run(context.Background(), c.stmt)
+		if err != nil {
+			t.Fatalf("%s: %v", c.stmt, err)
+		}
+		if r.Affected != c.want {
+			t.Errorf("%s: %d rows affected, want %d", c.stmt, r.Affected, c.want)
+		}
 	}
 }

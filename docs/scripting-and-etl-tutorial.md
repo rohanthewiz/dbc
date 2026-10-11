@@ -1154,7 +1154,7 @@ the tab that started the run.
 | A `go.transform` returns no rows | yaegi mis-stores an operator's result put straight into a row: `b.Rows[i][c] = s + "!"` | `v := s + "!"; b.Rows[i][c] = v`. Calls like `strings.ToLower(s)` are fine |
 | `os.Getenv` is empty in a script run from `dbc web` | The script sees `dbc web`'s environment, from when it started, not your terminal's | Set the variable before starting `dbc web`, or use constants, a settings file via `s.Path`, or pipeline params |
 | A file isn't where you expected | Relative paths resolve to `files_dir` (default `$HOME`), not the cwd | `s.Path(...)` in scripts; `$PWD/...` in `-p` |
-| Preview fails at `lookup`/`sql.read` of a table an earlier fragment makes | Previews write nothing, earlier fragments included | Run once for real, or `--fragment` |
+| Preview fails at `lookup`/`sql.read` of a table an earlier fragment makes (the error's hint names the fragments that would have written) | Previews write nothing, earlier fragments included | Run once for real, or `--fragment` |
 | `${run.id}` is empty | It's only set by the jobs engine, not by `s.RunPipeline*` | Don't key on it: use a `bigserial` key, or `cols.add`'s `uuid()` |
 | bytdb refuses a copy | bytdb tables need a primary key | Create the destination first, with a PK |
 | A `Query` result is cut off | `s.Query` is capped at `max_rows` | `s.Reader` streams uncapped |

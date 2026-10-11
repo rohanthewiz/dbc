@@ -85,14 +85,6 @@ ten session docs in `ai_docs/claude_sessions/`
   named, so the semantics differ from Postgres and SQLite. Worth it only
   if a MySQL user asks (as N-172); then say the difference in the field's
   doc, or require that `key` be the table's only unique key.
-- **N-205** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
-  A whole-pipeline `--preview` fails on a fresh database when a later
-  fragment reads a table an earlier fragment creates (a preview writes
-  nothing, earlier sinks included): "the side query: no such table" from
-  `lookup`. As designed, but the error does not say why; in a preview,
-  add a hint ("earlier fragments write nothing in a preview; run once, or
-  `--fragment`"), or have `pipeline.Check`/the preview warn when a node
-  reads a table a preceding `sql.write` creates.
 - **N-206** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
   `${run.id}` is empty when a script runs a pipeline
   (`s.RunPipelineNamed`/`s.RunPipeline`): documented in
@@ -472,6 +464,15 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-205** · raised `2026-1011-0035-scripting-etl-tutorial` · value low
+  A whole-pipeline `--preview` fails on a fresh database when a later
+  fragment reads a table an earlier fragment creates (a preview writes
+  nothing, earlier sinks included): "the side query: no such table" from
+  `lookup`. As designed, but the error does not say why; in a preview,
+  add a hint ("earlier fragments write nothing in a preview; run once, or
+  `--fragment`"), or have `pipeline.Check`/the preview warn when a node
+  reads a table a preceding `sql.write` creates.
+  closed 2026-10-11, `2026-1011-0040-n179-n203-n208`: the hint, not a Check warning. `pipeline.Run` keeps the fragments run so far that would write outside a preview (`writes`: an action, or a sink other than preview/discard). When a later fragment fails in a whole-pipeline preview, `previewHint` adds a serr `hint`: "a preview writes nothing, so what stage would have written is not there: run the pipeline once, or preview this fragment on its own". jobs' `errText` prints it after the error's other fields, so the headless log, the run record, dbc web and the TUI (all via the jobs engine) and a script's `s.RunPipeline` error carry it. It is added to any such failure, not only ones that look like a missing table, since matching each driver's wording would be brittle. A cancel gets no hint, nor does a first fragment's failure. The Check-time warning the item also offered was left out: a node reading a table a preceding `sql.write` creates would need parsing every SQL field and `lookup`'s query for table names, for a case the hint already explains at the moment it bites. README (Pipelines headless: a paragraph on what a preview skips) and the tutorial's pitfalls row. Test `pipeline.TestRunPreviewHint` (the hint names `stage`; after a real run the same preview passes; a first fragment's failure has none). Checked in a fresh build on a fresh SQLite file.
 - **N-204** · raised `2026-1011-0035-scripting-etl-tutorial` · value medium
   A pipeline's stats print `2562047h47m16.854775807s` (the max
   `time.Duration`) as the time of a skipped fragment: actions in a

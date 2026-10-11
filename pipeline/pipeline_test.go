@@ -15,6 +15,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/etl"
 	"github.com/rohanthewiz/dbc/model"
+	"github.com/rohanthewiz/serr"
 )
 
 // testHost is a Host over bare *sql.DBs: no db.Manager, no config, so
@@ -304,6 +305,54 @@ func TestRunFragmentSkippedHasNoTime(t *testing.T) {
 	}
 	if d := st.Fragments[1].Elapsed(); d <= 0 || d > time.Minute {
 		t.Errorf("the run fragment's Elapsed = %v, want a short positive time", d)
+	}
+}
+
+// A whole-pipeline preview that fails after fragments that would have
+// written says why the table may be missing (N-205): they wrote nothing.
+// The first fragment's own failure gets no hint: nothing ran before it.
+func TestRunPreviewHint(t *testing.T) {
+	h := newTestHost(t)
+	hintOf := func(err error) string {
+		f := serr.SErrFromErr(err).UserFields()
+		for i := 0; i+1 < len(f); i += 2 {
+			if f[i] == "hint" {
+				return f[i+1]
+			}
+		}
+		return ""
+	}
+	spec := mustParse(t, `{"name": "p", "fragments": [
+	  {"name": "stage", "nodes": [
+	    {"id": "src", "plugin": "sql.read", "cfg": {"conn": "a", "query": "SELECT id, name FROM cats"}},
+	    {"id": "dst", "plugin": "sql.write", "cfg": {"conn": "b", "table": "staged", "create": "true"}}
+	  ], "edges": [["src", "dst"]]},
+	  {"name": "use", "nodes": [
+	    {"id": "src", "plugin": "sql.read", "cfg": {"conn": "b", "query": "SELECT id FROM staged"}},
+	    {"id": "show", "plugin": "preview", "cfg": {}}
+	  ], "edges": [["src", "show"]]}
+	]}`)
+	_, err := Run(context.Background(), h, spec, Options{PreviewRows: 5})
+	if err == nil {
+		t.Fatal("the preview read a table nothing made")
+	}
+	if hint := hintOf(err); !strings.Contains(hint, "what stage would have written") {
+		t.Errorf("hint = %q, want it to name stage", hint)
+	}
+	// a real run makes the table, so the same preview passes
+	if _, err := Run(context.Background(), h, spec, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(context.Background(), h, spec, Options{PreviewRows: 5}); err != nil {
+		t.Errorf("the preview after a run: %v", err)
+	}
+
+	first := mustParse(t, `{"name": "q", "fragments": [{"name": "f", "nodes": [
+	  {"id": "src", "plugin": "sql.read", "cfg": {"conn": "b", "query": "SELECT x FROM nowhere"}},
+	  {"id": "show", "plugin": "preview", "cfg": {}}
+	], "edges": [["src", "show"]]}]}`)
+	if _, err := Run(context.Background(), h, first, Options{PreviewRows: 5}); err == nil || hintOf(err) != "" {
+		t.Errorf("a first fragment's failure: err %v, hint %q; want an error and no hint", err, hintOf(err))
 	}
 }
 

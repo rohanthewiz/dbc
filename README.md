@@ -2787,6 +2787,13 @@ leaves a record in `runs_dir`, as every run does ([Jobs](#jobs)). A file
 node's relative path is in `files_dir`, as from dbc web — not the shell's
 current directory: `-p in=$PWD/orders.csv` for a file there.
 
+A preview writes nothing, earlier fragments included: their sinks become
+previews and their actions are skipped. So on a fresh database a later
+fragment that reads a table an earlier one creates or fills fails ("no
+such table"); the error then carries a hint naming the fragments that
+would have written. Run the pipeline once, or preview the later fragment
+on its own (`--fragment`, or the lane's ◎).
+
 ### Jobs headless
 
 ```sh

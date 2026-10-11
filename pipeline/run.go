@@ -112,6 +112,9 @@ func Run(ctx context.Context, h Host, spec *Spec, opt Options) (*RunStats, error
 	if opt.Fragment != "" && spec.Fragment(opt.Fragment) == nil {
 		return fail(serr.New("no such fragment", "pipeline", spec.Name, "fragment", opt.Fragment))
 	}
+	// wrote is the fragments run so far that would have written, had this
+	// not been a preview (see previewHint)
+	var wrote []string
 	for i := range spec.Fragments {
 		f := &spec.Fragments[i]
 		if opt.Fragment != "" && f.Name != opt.Fragment {
@@ -124,6 +127,12 @@ func Run(ctx context.Context, h Host, spec *Spec, opt Options) (*RunStats, error
 		st.Fragments = append(st.Fragments, fs)
 		for k, v := range fs.Vars {
 			r.vars["frag."+f.Name+"."+k] = v
+		}
+		if err != nil && st.Preview && len(wrote) > 0 && ctx.Err() == nil {
+			err = previewHint(err, wrote)
+		}
+		if st.Preview && writes(f) {
+			wrote = append(wrote, f.Name)
 		}
 		if err != nil {
 			if f.OnError == "continue" && ctx.Err() == nil {
@@ -716,6 +725,37 @@ type directSource interface {
 // directSink is a sink that can be the destination side of an etl.Copy.
 type directSink interface {
 	directSink() (conn, table string, create, truncate bool, batch int, ok bool)
+}
+
+// writes reports whether f writes when it is not a preview: an action, or
+// a sink other than preview and discard. In a preview those write nothing
+// (previewShape turns sinks into previews, the runner skips actions).
+func writes(f *Fragment) bool {
+	for _, n := range f.Nodes {
+		kind, _, err := nodeKind(n)
+		if err != nil {
+			continue
+		}
+		if kind == KindAction || (kind == KindSink && n.Plugin != "preview" && n.Plugin != "discard") {
+			return true
+		}
+	}
+	return false
+}
+
+// previewHint adds a hint to a fragment's failure in a whole-pipeline
+// preview after fragments that would have written (N-205). A preview
+// writes nothing, earlier fragments included, so a later fragment that
+// reads a table they create or fill fails on a fresh database with the
+// driver's bare "no such table" — as designed, but it does not say why.
+// The hint goes on every such failure, not only ones that look like a
+// missing table: matching each driver's wording ("no such table", "does
+// not exist", "doesn't exist") would be brittle, and the hint is phrased
+// as a possibility. It is a serr field, so the run's log and record show
+// it after the error (jobs errText: "… · hint …").
+func previewHint(err error, wrote []string) error {
+	return serr.Wrap(err, "hint", fmt.Sprintf("a preview writes nothing, so what %s would have written is not there: "+
+		"run the pipeline once, or preview this fragment on its own", strings.Join(wrote, ", ")))
 }
 
 // previewShape is f as a preview runs it: a rows.limit after the source,

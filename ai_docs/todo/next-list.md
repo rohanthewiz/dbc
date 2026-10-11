@@ -308,20 +308,6 @@ and `raised`.
   mark, the chip's "shared result N: …" note, and that a column hidden in
   the shared tab stays out of the prompt while another tab is on screen.
 
-- **N-150** · raised `2026-1007-1347-connection-refresh` · value low
-  Refresh has not been tried against a real Postgres. Keeping the listed
-  schema (or "all schemas") across a refresh (`refreshPickLocked`) is
-  covered by unit tests, and the rest only on SQLite (workspace, web, TUI
-  and e2e tests). Add a step to `TestLiveWorkspacePickSchema`: pick a
-  schema, create a table in it through the pool, Refresh, and check that
-  the schema stays picked and the table is listed.
-  Updated 2026-10-10 (`/next-list`): the code to check has moved on.
-  `refreshPickLocked` now returns a pick still loading (`w.schemaPick`,
-  `d20b5c4`, `2026-1007-1612-sidebar-relist-after-ddl`), and the same
-  re-read now runs by itself after a run's DDL (`kindRelist`). The step can
-  cover both on Postgres: a CREATE TABLE run through the workspace should
-  relist with the pick kept, without a Refresh.
-
 - **N-154** · raised `2026-1007-1606-run-all-tab-per-statement` · value low
   Tabs per statement (N-147) have not been watched in a browser. The
   workspace tests cover the strip, the web wire test covers the "run" event,
@@ -584,6 +570,20 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-150** · raised `2026-1007-1347-connection-refresh` · value low
+  Refresh has not been tried against a real Postgres. Keeping the listed
+  schema (or "all schemas") across a refresh (`refreshPickLocked`) is
+  covered by unit tests, and the rest only on SQLite (workspace, web, TUI
+  and e2e tests). Add a step to `TestLiveWorkspacePickSchema`: pick a
+  schema, create a table in it through the pool, Refresh, and check that
+  the schema stays picked and the table is listed.
+  Updated 2026-10-10 (`/next-list`): the code to check has moved on.
+  `refreshPickLocked` now returns a pick still loading (`w.schemaPick`,
+  `d20b5c4`, `2026-1007-1612-sidebar-relist-after-ddl`), and the same
+  re-read now runs by itself after a run's DDL (`kindRelist`). The step can
+  cover both on Postgres: a CREATE TABLE run through the workspace should
+  relist with the pick kept, without a Refresh.
+  closed 2026-10-10, `2026-1010-1929-n150-n154-n159` (from the cats-todo backlog): `TestLiveWorkspacePickSchema` gains the step, covering all three paths the item named, on postgres:17 (Docker). With dbc_live_wsb picked, a table another client creates there is listed after a Refresh, with the pick kept: schema wsb, not public, and public's table not listed. A `CREATE TABLE` run through the workspace relists by itself (`Relist`, `Relisted`), pick kept, the new table listed. A Refresh while a pick of dbc_live_wsa is still loading re-reads wsa, the user's latest pick, not wsb, and the pick's own load lands stale. All three pass; the whole `./workspace` live suite stays green. No defect found.
 - **N-180** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
   A canvas edit writes the spec again from what the canvas knows
   (`specText`), so a key the spec has no field for — a typo such as

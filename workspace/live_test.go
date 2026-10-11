@@ -702,6 +702,49 @@ func TestLiveWorkspacePickSchema(t *testing.T) {
 			t.Errorf("columns of t2: %+v", cev)
 		}
 
+		// REFRESH ON A REAL POSTGRES (N-150). A table another client made
+		// in the picked schema is listed after a Refresh, the pick kept
+		// (refreshPickLocked) — the sidebar does not fall back to public.
+		obsExec(t, obs, `CREATE TABLE dbc_live_wsb.t4 (id int)`)
+		if hasTable(w, "t4") {
+			t.Fatal("t4 listed before any refresh: the step proves nothing")
+		}
+		rst, err := w.Refresh()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rev := rst.Job().(*Connected); rev.Err != nil || rev.Schema != "dbc_live_wsb" || rev.Status != "refreshed" ||
+			w.CatalogSchema() != "dbc_live_wsb" || !hasTable(w, "t4") || hasTable(w, liveTable) {
+			t.Errorf("refresh: %+v; schema %q, t4 listed %v", rev, w.CatalogSchema(), hasTable(w, "t4"))
+		}
+		// A CREATE TABLE run through the workspace relists by itself, no
+		// Refresh asked for, and keeps the pick too.
+		done := run(t, w, `CREATE TABLE dbc_live_wsb.t5 (id int)`)
+		if done.Err != nil || done.Relist == nil {
+			t.Fatalf("CREATE TABLE: %+v, want a Relist", done)
+		}
+		if re := done.Relist().(*Connected); re.Err != nil || !re.Relisted || re.Schema != "dbc_live_wsb" ||
+			w.CatalogSchema() != "dbc_live_wsb" || !hasTable(w, "t5") {
+			t.Errorf("relist: %+v; schema %q, t5 listed %v", re, w.CatalogSchema(), hasTable(w, "t5"))
+		}
+		// A pick still loading is what a Refresh re-reads: the user's
+		// latest pick (wsa), not the schema listed before it (wsb). The
+		// pick's own load is canceled and lands stale.
+		pst, err := w.PickSchema(SchemaPick{Name: "dbc_live_wsa"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rst, err = w.Refresh()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rev := rst.Job().(*Connected); rev.Err != nil || rev.Schema != "dbc_live_wsa" || !hasTable(w, "t1") {
+			t.Errorf("refresh mid-pick: %+v, want wsa listed", rev)
+		}
+		if pev := pst.Job().(*SchemaLoaded); !pev.Stale {
+			t.Errorf("the pick the refresh took over: %+v, want it stale", pev)
+		}
+
 		ev = pick(SchemaPick{All: true})
 		names := map[string]bool{}
 		for _, r := range db.TableRefs(ev.Catalog.Rows) {

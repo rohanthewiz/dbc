@@ -723,7 +723,7 @@
         {
           "name": "Elapsed",
           "sig": "func (f *FragmentStats) Elapsed() time.Duration",
-          "doc": "Elapsed is the fragment's wall time so far, or in all.",
+          "doc": "Elapsed is the fragment's wall time so far, or in all; 0 for one that\nnever started (a fragment Options.Fragment left out).",
           "params": []
         }
       ]
@@ -1837,7 +1837,7 @@
         {
           "name": "RunPipelineSpec",
           "sig": "func (s *S) RunPipelineSpec(spec *PipelineSpec, opt PipelineOpts) (*RunStats, error)",
-          "doc": "RunPipelineSpec runs a pipeline given as data (ParsePipeline, or a\nliteral). A relative path in its file nodes is in the host's files_dir\n(Paths.FilesDir) unless opt.FilesDir names another directory, so a\npipeline run from a script finds the files it finds when scheduled.",
+          "doc": "RunPipelineSpec runs a pipeline given as data (ParsePipeline, or a\nliteral). A relative path in its file nodes is in the host's files_dir\n(Paths.FilesDir) unless opt.FilesDir names another directory, so a\npipeline run from a script finds the files it finds when scheduled.\n\n${run.trigger} is \"script\" unless opt.Run says otherwise, and ${run.id}\na fresh id of the run's own (pipeline.RunID), as the jobs engine's runs\nhave; no run record is written for it.",
           "params": [
             {
               "name": "spec",

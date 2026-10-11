@@ -227,10 +227,11 @@ type FragmentStats struct {
 }
 
 // Elapsed is the fragment's wall time so far, or in all; 0 for one that
-// never started (N-204). A fragment Options.Fragment leaves out is
-// reported skipped with zero Started and Ended, and time.Since of the zero
-// time saturates at the largest Duration ("2562047h47m16.85s").
+// never started (a fragment Options.Fragment left out).
 func (f *FragmentStats) Elapsed() time.Duration {
+	// N-204: a left-out fragment is reported skipped with zero Started and
+	// Ended, and time.Since of the zero time saturates at the largest
+	// Duration ("2562047h47m16.85s")
 	if f.Started.IsZero() {
 		return 0
 	}

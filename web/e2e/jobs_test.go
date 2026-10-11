@@ -224,11 +224,31 @@ func jobTabs(t *testing.T, e *env, p *rod.Page) {
 	shot(t, p, "job-tab-after-run")
 
 	// ── a reload: the job tab comes back, its cards on the last run ──────
+	// and a closed window's unsaved draft of the job — an orphan, its owner
+	// never beat — is put back by it, moved under this window's key, as a
+	// script's is (drafts.js, N-177)
+	saved := disk("e2e_nightly.json")
+	orphan := strings.Replace(saved, `"name": "e2e_nightly",`, `"name": "e2e_nightly",`+"\n"+`  "desc": "a closed window's draft",`, 1)
+	if orphan == saved {
+		t.Fatalf("no name line to put a desc after:\n%s", saved)
+	}
+	eval(t, p, `(text) => localStorage.setItem("dbc.job.draft.e2egone:e2e_nightly.json", JSON.stringify({ base: "", text, at: Date.now() }))`, orphan)
 	p.MustReload()
-	waitFor(t, p, "the job tab after a reload, its cards ✓", `() => {
-	  const t = document.querySelector("#qtabs .qtab.job.on .qt");
-	  return !!t && t.textContent === "e2e_nightly.json" && document.querySelectorAll("#jobp .jcard.s-succeeded").length === 4;
+	waitFor(t, p, "the job tab after a reload, its cards ✓, the orphan adopted", `() => {
+	  const t = document.querySelector("#qtabs .qtab.job.on .qt"), me = sessionStorage.getItem("dbc.draftOwner");
+	  return !!t && t.textContent === "e2e_nightly.json" && document.querySelectorAll("#jobp .jcard.s-succeeded").length === 4 &&
+	    !!document.querySelector("#qtabs .qtab.job.on .qdirty") &&
+	    localStorage.getItem("dbc.job.draft.e2egone:e2e_nightly.json") === null &&
+	    /a closed window's draft/.test(localStorage.getItem("dbc.job.draft." + me + ":e2e_nightly.json") || "");
 	}`)
+	// the saved text back through the JSON view: nothing unsaved, no draft
+	eval(t, p, `() => document.querySelector('#jobp .pbar button[data-act="json"]').click()`)
+	waitFor(t, p, "the job's JSON view", `() => document.querySelector(".app").classList.contains("pipe-json")`)
+	eval(t, p, `(text) => monaco.editor.getEditors()[0].setValue(text)`, saved)
+	eval(t, p, `() => document.querySelector('#jobp .pbar button[data-act="json"]').click()`)
+	waitFor(t, p, "the job as saved, its draft dropped", `() => { const me = sessionStorage.getItem("dbc.draftOwner");
+	  return !document.querySelector(".app").classList.contains("pipe-json") && !document.querySelector("#qtabs .qtab.job.on .qdirty") &&
+	    localStorage.getItem("dbc.job.draft." + me + ":e2e_nightly.json") === null; }`)
 
 	// ── + New ▾ → Job, one step dropped in, a live run stopped ───────────
 	clickSel(t, p, "#scripts-btn", proto.InputMouseButtonLeft)

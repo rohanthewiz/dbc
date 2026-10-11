@@ -40,7 +40,8 @@
 // THE FILE is a job in jobs_dir, saved only when asked (Ctrl+S, ⤓ Save,
 // ▶ Run, which saves first: what runs is the file, as cron and the
 // scheduler would run it), against the revision it was read at; unsaved
-// text survives a reload in localStorage (dbc.job.draft.<name>).
+// text survives a reload in localStorage, per window (drafts.js,
+// dbc.job.draft.<owner>:<name>), as a pipeline's does.
 //
 // RUNS are the server's engine's. ▶ Run saves and starts one with this tab
 // as its origin (its Stop, its busy mark, the grid any preview sink's rows
@@ -163,20 +164,11 @@
       " " + d.toTimeString().slice(0, 5);
   }
 
-  // drafts: unsaved text per job in this browser (see pipelines.js)
-  const DRAFT = "dbc.job.draft.";
-  function readDraft(name) {
-    try {
-      const d = JSON.parse(localStorage.getItem(DRAFT + name) || "null");
-      return d && typeof d.text === "string" ? d : null;
-    } catch (_) { return null; }
-  }
-  function writeDraft(name, d) {
-    try {
-      if (d) localStorage.setItem(DRAFT + name, JSON.stringify(d));
-      else localStorage.removeItem(DRAFT + name);
-    } catch (_) { /* no storage: no net */ }
-  }
+  // drafts: unsaved text per job, per window, in this browser (drafts.js:
+  // a closed window's is adopted by the next to open the file, a live
+  // window's left alone). Storage may refuse (a private window); a draft is
+  // only a safety net, so a failure costs nothing but the net.
+  const drafts = dbc.drafts.kit("dbc.job.draft.", log);
 
   function create(host) {
     // files: job file → what this window has of it:
@@ -212,13 +204,17 @@
       e = { name, rev: f.rev, saved: f.text, text: f.text, spec: null, diags: [], fires: [], layout: null, json: false,
         face: "design", sel: null, view: null, run: "", runLooked: false };
       e.spec = parseJob(f.text).spec || null;
-      const d = readDraft(name);
+      const { d, liveN } = drafts.adopt(name);
+      if (!d && liveN) {
+        log("info", name + " has unsaved edits in another dbc web window — this tab shows the saved file; " +
+          "save there first to see them here", logKey(name));
+      }
       if (d && d.text !== f.text) {
         e.text = d.text;
         e.rev = d.base || "";
         e.spec = parseJob(d.text).spec || null;
         log("info", name + ": unsaved changes from before were put back — Ctrl+S saves them", logKey(name));
-      } else if (d) writeDraft(name, null);
+      } else if (d) drafts.write(name, null);
       files.set(name, e);
       check(name);
       return e;
@@ -226,7 +222,7 @@
 
     function adopt(e, text, rev) {
       Object.assign(e, { text, saved: text, rev, spec: parseJob(text).spec || null, parseErr: "" });
-      writeDraft(e.name, null);
+      drafts.write(e.name, null);
       dbc.editor.replaceDoc(docKey(e.name), text);
       changedView(e);
       check(e.name);
@@ -258,7 +254,7 @@
       }
       if (r.conflict) return conflicted(e, text, r.text, r.rev);
       Object.assign(e, { rev: r.rev, saved: text });
-      writeDraft(name, null);
+      drafts.write(name, null);
       changedView(e);
       return true;
     }
@@ -319,20 +315,30 @@
       e.parseErr = p.err || "";
     }
 
-    let draftTimer = 0;
+    // storeDraft writes e's draft a beat after its last edit (or drops it
+    // once nothing is unsaved). Each file has its own timer: one shared
+    // timer let an edit to a second file within the beat cancel the first
+    // file's write.
+    const draftOf = (e) => (isDirty(e) ? { base: e.rev, text: e.text, at: Date.now() } : null);
     function storeDraft(e) {
-      clearTimeout(draftTimer);
-      draftTimer = setTimeout(() => writeDraft(e.name, isDirty(e) ? { base: e.rev, text: e.text, at: Date.now() } : null), 300);
+      clearTimeout(e.draftTimer);
+      e.draftTimer = setTimeout(() => { e.draftTimer = 0; drafts.write(e.name, draftOf(e)); }, 300);
     }
+    // flush writes every pending draft now (a tab switch, the page going)
     function flush() {
-      clearTimeout(draftTimer);
-      for (const e of files.values()) writeDraft(e.name, isDirty(e) ? { base: e.rev, text: e.text, at: Date.now() } : null);
+      for (const e of files.values()) {
+        clearTimeout(e.draftTimer);
+        e.draftTimer = 0;
+        drafts.write(e.name, draftOf(e));
+      }
     }
 
     function forget(name, discard) {
       const e = files.get(name);
       if (!e) return;
-      if (discard || !isDirty(e)) writeDraft(name, null);
+      clearTimeout(e.draftTimer);
+      if (discard || !isDirty(e)) drafts.write(name, null);
+      else drafts.write(name, draftOf(e));
       files.delete(name);
       dbc.editor.dropDoc(docKey(name));
       if (shown === e) shown = null;
@@ -1301,10 +1307,10 @@
         e.name = to;
         files.set(to, e);
         dbc.editor.renameDoc(docKey(from), docKey(to));
-        const d = readDraft(from);
-        writeDraft(from, null);
-        if (d) writeDraft(to, d);
       }
+      // this window's draft follows the file, and so do closed windows'
+      // (a live window's moves when it gets this same event)
+      drafts.rename(from, to);
       for (const r of live.values()) if (r.source === from) r.source = to;
       dbc.moveLog(logKey(from), logKey(to));
       host.renamed(from, to);

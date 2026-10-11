@@ -3990,9 +3990,9 @@
         } catch (e) {
           if (e.status !== 409) throw e;
           log("info", "this browser tab is a copy of another one of dbc web — it gets a window (and sessions) of its own");
-          // and its own script drafts: the copied sessionStorage holds the
-          // original's draft owner id (scripts.js DRAFTS)
-          dbc.scripts.newOwner();
+          // and its own drafts (scripts, pipelines, jobs): the copied
+          // sessionStorage holds the original's draft owner id (drafts.js)
+          dbc.drafts.newOwner();
           win = "";
           live = [];
         }

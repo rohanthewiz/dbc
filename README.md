@@ -2126,8 +2126,9 @@ below it as for a query.
   parameters…" (the tab's menu) asks for all of them.
 - **Saving** is the script tab's: explicit (`Ctrl+S`, ⤓ Save, or Run),
   `⛓ name.json ●` while unsaved, the unsaved text kept in the browser
-  across a reload, and a file changed on disk meanwhile is not written
-  over — you choose to keep yours or load the file's. A canvas edit writes
+  across a reload (each browser tab its own, as a script's), and a file
+  changed on disk meanwhile is not written over — you choose to keep yours
+  or load the file's. A canvas edit writes
   the file the way `dbc` does (two-space indent, keys sorted, edges on one
   line), so it diffs well in git.
 - **{ } JSON** shows the same pipeline as JSON in the editor (with the

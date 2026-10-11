@@ -70,14 +70,6 @@ ten session docs in `ai_docs/claude_sessions/`
   connection's tables without a workspace (the Manager's catalog read, as
   the sidebar does it) would let the field offer them, for the node's own
   `conn`.
-- **N-177** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
-  Pipeline drafts are one localStorage key per pipeline
-  (`dbc.pipe.draft.<name>`), so two windows with one pipeline open share
-  it and the last to type wins, as script drafts did before N-135. Port the
-  script drafts' owner and heartbeat scheme (`scripts.js` DRAFTS), or share
-  it between the two kits.
-  Updated `2026-1009-1349-phase-4-jobs-tab-runs-view`: job tabs (`jobs.js`) have the same scheme
-  (`dbc.job.draft.<name>`) and the same gap; the fix should cover all three kits.
 - **N-178** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
   The assistant in a pipeline tab is handed the pipeline's JSON as "the
   query": the editor under the canvas holds it, and `ChatContext` reads the
@@ -552,6 +544,15 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-177** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
+  Pipeline drafts are one localStorage key per pipeline
+  (`dbc.pipe.draft.<name>`), so two windows with one pipeline open share
+  it and the last to type wins, as script drafts did before N-135. Port the
+  script drafts' owner and heartbeat scheme (`scripts.js` DRAFTS), or share
+  it between the two kits.
+  Updated `2026-1009-1349-phase-4-jobs-tab-runs-view`: job tabs (`jobs.js`) have the same scheme
+  (`dbc.job.draft.<name>`) and the same gap; the fix should cover all three kits.
+  closed 2026-10-10, `2026-1010-1946-n177-n201-n191` (from the cats-todo backlog): shared, not ported. The script kit's scheme (owner id in sessionStorage, the 30 s heartbeat, orphans after 5 min, 15 s on pagehide, adopting the newest orphan, renaming closed windows' drafts) moved whole into a new `drafts.js` (`dbc.drafts`), loaded before `scripts.js` (`web/pages/workbench.go`). One owner and one heartbeat serve every kit. Each kit asks `dbc.drafts.kit(prefix, log)` for `read`, `write`, `adopt` (own draft, else the newest orphan, plus how many live windows hold one) and `rename`. The prefixes stay `dbc.script.draft.`, `dbc.pipe.draft.` and `dbc.job.draft.`, so an older page's one-key pipeline or job draft (`dbc.pipe.draft.<name>`) is adopted as an orphan, as the scripts' was. `forgetGone` keeps an owner's heartbeat while it has a draft in any kit, and app.js's duplicated-tab path calls `dbc.drafts.newOwner`. Pipeline and job tabs now say when another live window has unsaved edits, as script tabs do. Found on the way: both canvas kits had one draft timer for all files, so an edit to a second file within 300 ms cancelled the first file's draft write, and a pending timer could write a draft back after Discard. Each file now has its own timer, cleared by `forget`, and a non-discarding close writes the latest text at once. README: pipeline (and job) drafts are per browser tab. Tests: e2e "pipeline tabs" plants another live window's newer draft before its reload, then checks the tab's own key, that its own text comes back, and that the other's draft is untouched. "Job tabs" plants a closed window's draft before its reload and sees it adopted (unsaved, the orphan key gone, under this window's key), then restores the saved text. Both fail on the old JS, and "script tabs" passes on the shared module.
 - **N-159** · raised `2026-1008-0000-rerun-result-tab` · value low
   dbc web's confirm before rerunning a tab whose statement may write
   (`rerun` in `app.js`, the "Run this statement again?" modal) has not been

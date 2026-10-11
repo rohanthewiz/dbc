@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/input"
@@ -167,11 +166,27 @@ func pipelineTabs(t *testing.T, e *env, p *rod.Page) {
 	  ta.dispatchEvent(new Event("input", { bubbles: true }));
 	}`)
 	waitFor(t, p, "unsaved", `() => !!document.querySelector("#qtabs .qtab.pipeline.on .qdirty")`)
-	time.Sleep(400 * time.Millisecond) // the draft's write is debounced
+	// the draft is this window's own (drafts.js, N-177): another live
+	// window's draft of the same pipeline — planted, newer and beating —
+	// is neither taken nor touched by the reload
+	eval(t, p, `() => {
+	  localStorage.setItem("dbc.draftSeen.e2eother", String(Date.now() + 3600e3));
+	  localStorage.setItem("dbc.pipe.draft.e2eother:e2e_pipe.json",
+	    JSON.stringify({ base: "", text: "{\"name\": \"other window\"}", at: Date.now() + 3600e3 }));
+	}`)
+	waitFor(t, p, "the draft kept under this window's key", `() => { const me = sessionStorage.getItem("dbc.draftOwner");
+	  return !!me && /two cats of three/.test(localStorage.getItem("dbc.pipe.draft." + me + ":e2e_pipe.json") || ""); }`)
 	p.MustReload()
 	waitFor(t, p, "the pipeline tab back, unsaved, its draft on the canvas", `() =>
 	  !!document.querySelector("#qtabs .qtab.pipeline.on .qdirty") && document.querySelectorAll(".pcard").length === 4 &&
 	  /two cats of three/.test(document.querySelector(".pbar .pmeta").textContent)`)
+	if got := evalStr(t, p, `() => {
+	  const v = localStorage.getItem("dbc.pipe.draft.e2eother:e2e_pipe.json");
+	  localStorage.removeItem("dbc.pipe.draft.e2eother:e2e_pipe.json");
+	  localStorage.removeItem("dbc.draftSeen.e2eother");
+	  return v || "<gone>"; }`); !strings.Contains(got, "other window") {
+		t.Fatalf("the other window's pipeline draft was touched: %q", got)
+	}
 
 	// ── the JSON view edits the same pipeline: a waiting source, then ■ Stop
 	eval(t, p, `() => document.querySelector('.pbar button[data-act="json"]').click()`)

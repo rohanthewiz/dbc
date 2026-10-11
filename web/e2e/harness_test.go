@@ -354,14 +354,22 @@ func (e *env) launchBrowser(t *testing.T, chrome string) {
 //   - errs: uncaught errors, unhandled promise rejections and
 //     console.error calls. A run that logs one fails: those are exactly
 //     the bugs a person would not notice (Phase 6's disposed Monaco model
-//     and its stray rejection were found this way).
+//     and its stray rejection were found this way). One error event is
+//     not a bug and is left out (benign): Chrome's "ResizeObserver loop
+//     completed with undelivered notifications", which it raises when an
+//     observer's callback resizes something in the same frame (here as
+//     the sidebar folds and the panes lay out again) and whose
+//     notifications then arrive a frame later. It failed "sidebar fold keys" whenever few
+//     steps ran before it (N-201).
 //   - reqs: every fetch the page makes, "METHOD path", so a check can say
 //     a key did NOT fire a request (⌘C on a table must not run Show
 //     columns), which the screen alone cannot prove.
 const probe = `(() => {
   const p = window.__e2e = { errs: [], reqs: [] };
   const why = (x) => x && (x.stack || x.message) || String(x);
-  addEventListener("error", (e) => p.errs.push("error: " + (e.error ? why(e.error) : e.message)));
+  const benign = /^ResizeObserver loop (completed with undelivered notifications|limit exceeded)/;
+  addEventListener("error", (e) => { if (!e.error && benign.test(e.message || "")) return;
+    p.errs.push("error: " + (e.error ? why(e.error) : e.message)); });
   addEventListener("unhandledrejection", (e) => p.errs.push("unhandledrejection: " + why(e.reason)));
   const ce = console.error;
   console.error = function (...a) { p.errs.push("console.error: " + a.map(why).join(" ")); return ce.apply(this, a); };

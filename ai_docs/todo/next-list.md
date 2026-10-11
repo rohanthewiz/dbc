@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-201
+**Next ID:** N-202
 
 ## Open
 
@@ -544,6 +544,15 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-201** · raised `2026-1010-1946-n177-n201-n191` · value medium
+  The web e2e suite fails in "sidebar fold keys" on its JavaScript-error
+  check, not the step: Chrome reports "ResizeObserver loop completed with
+  undelivered notifications" as a window error when the sidebar folds and
+  the panes lay out again. With few steps before it ("boot, sidebar fold")
+  it fails every time, already at `d9e99c3`; in the full suite about half
+  the runs. The notice is benign (the notifications arrive a frame later),
+  so the harness's probe should leave it out.
+  closed 2026-10-10, `2026-1010-1946-n177-n201-n191`: the probe (`harness_test.go`) ignores an error event with no error object whose message is Chrome's ResizeObserver loop notice ("completed with undelivered notifications", or the older "limit exceeded"), with a comment saying why. Every other error still fails a step. "boot, sidebar fold" then passed 3 of 3, and the full suite 3 of 3 (with N-177's changes in).
 - **N-177** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
   Pipeline drafts are one localStorage key per pipeline
   (`dbc.pipe.draft.<name>`), so two windows with one pipeline open share

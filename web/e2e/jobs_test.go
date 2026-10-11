@@ -204,6 +204,18 @@ func jobTabs(t *testing.T, e *env, p *rod.Page) {
 	  /log · clean\//.test(document.querySelector("#jobp .rvlogs .rvsub").textContent)`)
 	shot(t, p, "job-run-fragment")
 
+	// report's preview sink: its rows, as the record kept them (N-185)
+	clickSel(t, p, `#jobp .rvdag .dcard[data-step="report"]`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "report's fragment", `() => [...document.querySelectorAll("#jobp .rvpipe .trow")].length >= 1 &&
+	  /cats-report/.test(document.querySelector("#jobp .rvpipe .rvsub").textContent)`)
+	clickSel(t, p, "#jobp .rvpipe .trow", proto.InputMouseButtonLeft)
+	waitFor(t, p, "the preview's kept rows on the page", `() => {
+	  const box = document.querySelector("#jobp .rvfrag .rvshown");
+	  return !!box && /^◎ preview report\/peek/.test(box.querySelector(".rvsub").textContent) &&
+	    [...box.querySelectorAll("thead th")].map((h) => h.textContent).join(",") === "breed,n" &&
+	    box.querySelectorAll("tbody tr").length >= 1;
+	}`)
+
 	// ── back to the job's list ───────────────────────────────────────────
 	clickSel(t, p, "#jobp .rvback", proto.InputMouseButtonLeft)
 	waitFor(t, p, "the job's runs, listed", `() => {

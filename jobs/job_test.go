@@ -568,3 +568,51 @@ func TestStartJobWithID(t *testing.T) {
 		t.Error("a bad id was taken")
 	}
 }
+
+// A run's record keeps what its pipelines showed (N-185), cut to bound
+// the file: a preview sink's first MaxShownRows rows, each value at most
+// MaxShownCell runes, with the total; a preview run keeps none.
+func TestRecordKeepsShown(t *testing.T) {
+	runs := t.TempDir()
+	je := newJobEngine(t, func(o *Options) { o.RunsDir = runs })
+	spec, err := pipeline.Parse(`{"name": "shows", "fragments": [{"name": "f", "nodes": [
+	  {"id": "src", "plugin": "sql.read", "cfg": {"conn": "a", "query":
+	    "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 120) SELECT n, substr(hex(zeroblob(400)), 1, 600) AS s FROM r"}},
+	  {"id": "peek", "plugin": "preview", "cfg": {"rows": "100"}}], "edges": [["src", "peek"]]}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := je.StartPipeline(Request{Spec: spec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fin := je.wait(t, head.ID)
+	if fin.Status != pipeline.Succeeded || len(fin.Pipelines[0].Shown) != 1 {
+		t.Fatalf("run = %s %q, shown %+v", fin.Status, fin.Error, fin.Pipelines[0].Shown)
+	}
+	sh := fin.Pipelines[0].Shown[0]
+	if sh.Fragment != "f" || sh.Title != "preview f/peek" || len(sh.Rows) != MaxShownRows || sh.Total != 100 || !sh.Truncated ||
+		!slices.Equal(sh.Columns, []string{"n", "s"}) || sh.Rows[0][0] != "1" {
+		t.Errorf("shown = %s %q %d rows of %d, truncated %v, %v", sh.Fragment, sh.Title, len(sh.Rows), sh.Total, sh.Truncated, sh.Columns)
+	}
+	if v := []rune(sh.Rows[0][1]); len(v) != MaxShownCell+1 || v[len(v)-1] != '…' {
+		t.Errorf("a 600-rune value kept as %d runes", len(v))
+	}
+	// on disk, as written: the record is what a later page reads
+	bs, _, err := userdata.ReadRun(runs, head.ID)
+	var onDisk Run
+	if err != nil || json.Unmarshal(bs, &onDisk) != nil || len(onDisk.Pipelines[0].Shown) != 1 {
+		t.Errorf("record on disk: %v %+v", err, onDisk.Pipelines)
+	}
+	if !strings.Contains(fin.Tree(), "◎ preview f/peek: 50 rows kept of 100") {
+		t.Errorf("tree:\n%s", fin.Tree())
+	}
+
+	pv, err := je.StartPipeline(Request{Spec: spec, PreviewRows: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fin := je.wait(t, pv.ID); len(fin.Pipelines[0].Shown) != 0 {
+		t.Errorf("a preview run kept %d results", len(fin.Pipelines[0].Shown))
+	}
+}

@@ -68,12 +68,6 @@ ten session docs in `ai_docs/claude_sessions/`
   Fragments are reordered from a lane's ⋯ menu (Move up / Move down). The
   plan sketched dragging a lane by its header; add it if the menu turns
   out slow for pipelines with many fragments.
-- **N-185** · raised `2026-1009-1349-phase-4-jobs-tab-runs-view` · value low
-  A preview sink's rows from a real run land in the grid of the tab that
-  started it; a scheduled, webhook or CLI run has no such tab, and run
-  records keep no rows, so the run page's ◎ can only preview the fragment
-  again, today. Keep a capped preview (say the first 50 rows per preview
-  node) in the record, for the run page to show as it was.
 - **N-187** · raised `2026-1009-1449-phase-5-tui-pipelines-jobs` · value low
   Every run listing reads every record file whole
   (`userdata.ListRuns` → `readHead` unmarshals each), whatever the
@@ -481,6 +475,13 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-185** · raised `2026-1009-1349-phase-4-jobs-tab-runs-view` · value low
+  A preview sink's rows from a real run land in the grid of the tab that
+  started it; a scheduled, webhook or CLI run has no such tab, and run
+  records keep no rows, so the run page's ◎ can only preview the fragment
+  again, today. Keep a capped preview (say the first 50 rows per preview
+  node) in the record, for the run page to show as it was.
+  closed 2026-10-10, `2026-1010-2022-n184-n185-n170` (from the cats-todo backlog): as proposed, at the suggested 50. `jobs.PipelineRun.Shown` keeps each result a pipeline showed: a preview sink's rows, and a go node's `s.Show` too, since both reach the run's session through one callback. Each `Shown` has its fragment (the result's Conn), title, columns, the first `MaxShownRows` (50) rows with each value cut at `MaxShownCell` (500) runes, the total and the source's truncation. Past `MaxShownResults` (20 per pipeline; a go node may show in a loop) none are kept, because the record is rewritten every flush and read whole by listings. `keepShown` runs in `runOne`'s show callback beside the Sink or `JobRequest.Show` hand-off, and a preview run keeps none (it is never recorded, and its rows are on screen). The run page draws a fragment's kept results under its node table (`runs.js` `shownTable`, a scrolling box; "the first 50 of 120 rows" when cut), and `Run.Tree` (`dbc run show`) names them ("◎ preview f/peek: 50 rows kept of 100"); `-t json` has the rows. README's run-records paragraph. Tests: `jobs.TestRecordKeepsShown` (120 source rows through a 100-row preview: 50 kept of 100, truncated, a 600-rune value cut to 500+…, on disk, in the tree; a preview run keeps none); e2e "job tabs": report's fragment on the run page shows the kept `breed,n` rows of "preview report/peek".
 - **N-184** · raised `2026-1009-1349-phase-4-jobs-tab-runs-view` · value low
   A job tab's Runs face sits in the editor's pane, about a third of the
   work column by default: the run page's DAG fills it, and the drilldown

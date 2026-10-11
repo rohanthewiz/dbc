@@ -2221,7 +2221,9 @@ in `~/.config/dbc/jobs/<name>.json` (`jobs_dir`):
 **Run records.** Every run of a job or a pipeline (not a preview) leaves
 `~/.config/dbc/runs/<job|pipeline>/<name>/<run id>.json` (`runs_dir`):
 who started it, every step's, fragment's and node's state and counters,
-and its log. It is rewritten every two seconds while the run goes, so a
+its log, and the first 50 rows of what each preview sink showed (a run's
+page shows them under their fragment, a scheduled run's too, which had
+no tab to land them in). It is rewritten every two seconds while the run goes, so a
 crash leaves a record the next dbc reads as **interrupted**, and the
 newest `runs_keep` (200) per name are kept. Any process reads them —
 `dbc runs` from a shell sees what `dbc web`'s schedule ran, and the

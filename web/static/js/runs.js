@@ -584,7 +584,22 @@
           (f.nodes || []).length ? el("table", "ntable", el("thead", null, head), el("tbody", null, ...body)) :
             el("div", "pnote", "no node has reported yet"),
           f.vars && Object.keys(f.vars).length ? el("div", "rvparams", "values: " +
-            Object.keys(f.vars).sort().map((k) => "${frag." + f.name + "." + k + "} = " + f.vars[k]).join(" · ")) : null);
+            Object.keys(f.vars).sort().map((k) => "${frag." + f.name + "." + k + "} = " + f.vars[k]).join(" · ")) : null,
+          ...(p.shown || []).filter((x) => x.fragment === f.name).map(shownTable));
+      }
+
+      // shownTable is a result the fragment showed (a preview sink's rows,
+      // a go node's s.Show) as the run's record kept it: its first rows
+      // (jobs.MaxShownRows), N-185. They are what the starting tab's grid
+      // got — here for any run, a scheduled one that had no tab included.
+      function shownTable(x) {
+        const rows = x.rows || [], cols = x.columns || [];
+        const what = rows.length < x.total ? "the first " + rows.length + " of " + fmtRows(x.total) + " rows" : fmtRows(rows.length) + " rows";
+        return el("div", "rvshown",
+          el("div", "rvsub", "◎ " + x.title + " · " + what + (x.truncated ? " (the source sent more)" : "")),
+          el("div", "rvshownbox", el("table", "ntable stable",
+            el("thead", null, el("tr", null, ...cols.map((c) => el("th", null, c)))),
+            el("tbody", null, ...rows.map((r) => el("tr", null, ...r.map((v) => el("td", null, v))))))));
       }
 
       // previewAct is what a fragment with a preview sink offers: its rows

@@ -19,6 +19,7 @@ import (
 //	      ✓ cats      8 rows    22ms   src 8→8 · dst 8→8
 //	  ✓ clean    clean-and-load     8 rows     5ms   after copy
 //	      ✓ clean     7 rows     3ms   src 8→8 · tidy 8→8 · keep 8→7 · dst 7→7 · peek 7→7
+//	          ◎ preview clean/peek: 7 rows kept of 7
 //	      ✓ stamp     1 rows     0s    log 0→1
 //	  ↷ report   cats-report                         after clean, breeds
 //	  error: breeds: …
@@ -77,6 +78,13 @@ func (r *Run) Tree() string {
 			sb.WriteString(strings.TrimRight(fl, " ") + "\n")
 			if f.Error != "" {
 				sb.WriteString("          " + f.Error + "\n")
+			}
+			// what the fragment showed, kept in the record (N-185): named
+			// here, its rows in the record (-t json) and on the run page
+			for _, sh := range p.Shown {
+				if sh.Fragment == f.Name {
+					fmt.Fprintf(&sb, "          ◎ %s: %d rows kept of %d\n", sh.Title, len(sh.Rows), sh.Total)
+				}
 			}
 		}
 		if p.Error != "" && !fragmentSaid(p) {

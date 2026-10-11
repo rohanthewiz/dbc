@@ -128,7 +128,36 @@ type PipelineRun struct {
 	After  []string          `json:"after,omitempty"`
 	Params map[string]string `json:"params,omitempty"`
 	pipeline.RunStats
+	// Shown is what the pipeline showed — each preview sink's rows, a go
+	// node's s.Show — cut down to keep (keepShown), so a run's page has
+	// them however the run was started (N-185). The rows themselves went
+	// to the starting tab's grid, when there was one; a scheduled, webhook
+	// or CLI run has none, and before this its rows were gone.
+	Shown []Shown `json:"shown,omitempty"`
 }
+
+// Shown is one result a run's pipeline showed, as its record keeps it:
+// the first MaxShownRows rows, each value at most MaxShownCell runes.
+type Shown struct {
+	Fragment string     `json:"fragment"` // the fragment that showed it
+	Title    string     `json:"title"`    // "preview report/peek", as the grid's tab named it
+	Columns  []string   `json:"columns"`
+	Rows     [][]string `json:"rows"`
+	// Total is the rows the result had, of which Rows are the first;
+	// Truncated says the result was itself a cut of more (a preview's
+	// rows, under the rows the source sent).
+	Total     int  `json:"total"`
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// The bounds of what a record keeps of shown results: a record is
+// rewritten every FlushEvery while its run goes, and listed by reading
+// it, so it stays small whatever a preview showed.
+const (
+	MaxShownRows    = 50
+	MaxShownCell    = 500
+	MaxShownResults = 20 // per pipeline: a go node that s.Shows in a loop
+)
 
 // Line is one line of a run's log. Pipeline is the PipelineRun it came
 // from — a job's step — or "" for the run's own lines.
@@ -551,6 +580,9 @@ func (e *Engine) runOne(ctx context.Context, lr *liveRun, idx int, spec *pipelin
 	line := func(level, text string) { e.line(lr, pid, level, text) }
 	s := sdb.New(e.mgr,
 		func(r *model.Result) {
+			if r != nil && !preview {
+				keepShown(lr, idx, r)
+			}
 			switch {
 			case r == nil:
 			case lr.show != nil:
@@ -774,6 +806,29 @@ func (lr *liveRun) header() Run {
 
 // clone copies a record deeply enough that the copy's holder and the run
 // never see each other's changes.
+// keepShown puts result r, cut down to the record's bounds, among the
+// pipeline idx's shown results — past MaxShownResults it is not kept. A
+// preview run keeps none: it is never recorded, and its rows are on
+// screen.
+func keepShown(lr *liveRun, idx int, r *model.Result) {
+	sh := Shown{Fragment: r.Conn, Title: r.Query, Columns: slices.Clone(r.Columns), Total: len(r.Rows), Truncated: r.Truncated}
+	for _, row := range r.Rows[:min(len(r.Rows), MaxShownRows)] {
+		cut := make([]string, len(row))
+		for i, v := range row {
+			if rs := []rune(v); len(rs) > MaxShownCell {
+				v = string(rs[:MaxShownCell]) + "…"
+			}
+			cut[i] = v
+		}
+		sh.Rows = append(sh.Rows, cut)
+	}
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	if p := &lr.rec.Pipelines[idx]; len(p.Shown) < MaxShownResults {
+		p.Shown = append(p.Shown, sh)
+	}
+}
+
 func (r *Run) clone() Run {
 	c := *r
 	c.Params = maps.Clone(r.Params)
@@ -782,6 +837,7 @@ func (r *Run) clone() Run {
 		cp := p
 		cp.After = slices.Clone(p.After)
 		cp.Params = maps.Clone(p.Params)
+		cp.Shown = slices.Clone(p.Shown) // each Shown is never changed once kept
 		cp.Fragments = make([]pipeline.FragmentStats, len(p.Fragments))
 		for j, f := range p.Fragments {
 			cf := f

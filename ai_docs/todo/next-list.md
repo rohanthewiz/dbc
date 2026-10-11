@@ -308,14 +308,6 @@ and `raised`.
   mark, the chip's "shared result N: …" note, and that a column hidden in
   the shared tab stays out of the prompt while another tab is on screen.
 
-- **N-154** · raised `2026-1007-1606-run-all-tab-per-statement` · value low
-  Tabs per statement (N-147) have not been watched in a browser. The
-  workspace tests cover the strip, the web wire test covers the "run" event,
-  and the TUI test covers its model; the page's JS is unchanged because it
-  already redraws the strip from the run event. Add a step to the go-rod
-  test in `web/e2e`: run all on two SELECTs, see two tabs with the second
-  on the grid, run again and see the same two tabs refilled.
-
 - **N-157** · raised `2026-1007-2355-routine-completion` · value low
   Routine completion has not been watched in either UI. The workspace's
   live tests cover the cache and the suggestions on postgres:17 and
@@ -570,6 +562,14 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-154** · raised `2026-1007-1606-run-all-tab-per-statement` · value low
+  Tabs per statement (N-147) have not been watched in a browser. The
+  workspace tests cover the strip, the web wire test covers the "run" event,
+  and the TUI test covers its model; the page's JS is unchanged because it
+  already redraws the strip from the run event. Add a step to the go-rod
+  test in `web/e2e`: run all on two SELECTs, see two tabs with the second
+  on the grid, run again and see the same two tabs refilled.
+  closed 2026-10-10, `2026-1010-1929-n150-n154-n159` (from the cats-todo backlog): the go-rod step is "run all: a tab per statement" (`runAllTabs`, after "result tabs and logs per connection"). Run all on two SELECTs replaces the unpinned tab on screen with two tabs titled by their statements, the second on screen with its columns, and the first tab holds the first statement's result. Run all again (from the first tab) refills the same two tabs, the same `data-rt` ids, each with a fresh result, the second back on screen, no tab added. Passes 3 of 3 alone and in the full suite. No defect found.
 - **N-150** · raised `2026-1007-1347-connection-refresh` · value low
   Refresh has not been tried against a real Postgres. Keeping the listed
   schema (or "all schemas") across a refresh (`refreshPickLocked`) is

@@ -2137,6 +2137,13 @@ below it as for a query.
   check's findings marked on their lines), to edit by hand; ⊞ Canvas goes
   back once it parses. **⇪ Go** exports it as a dbc script in a script
   tab — the builder form `dbc pipeline export` writes.
+- **The assistant** is asked about the pipeline (a job tab's, the job):
+  it gets the spec as JSON, the configured connection names and drivers,
+  the tables its SQL names, and the error of the run the canvas shows, or
+  a preview's rows on screen. The first such question of a conversation
+  also sends the plugins and the `sdb` API, as a script's does. Answers
+  suggest JSON; SQL in them is copied into a node's field, not inserted
+  (the tab's editor holds the spec).
 
 Double-click the tab to rename the pipeline. One pipeline has one tab.
 

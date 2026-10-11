@@ -2011,6 +2011,8 @@
       dirty: (name) => isDirty(files.get(name)),
       diags: (name) => (files.get(name) || {}).diags || [],
       json: (name) => !!(files.get(name) || {}).json,
+      // the run the canvas shows (its newest), for the assistant
+      lastRun: (name) => latest.get(name) || "",
     };
   }
 

@@ -70,6 +70,10 @@
   // the click checks: Go goes only into a script tab, never into SQL.
   const GO_LANGS = new Set(["go", "golang"]);
   const inScriptTab = () => !!(state.tab && state.tab.script);
+  // a pipeline or job tab's editor holds its JSON spec (hidden behind the
+  // canvas), not a statement: SQL is not inserted there, and a question
+  // goes with the spec as one (workspace.PipelineChatContext, N-178)
+  const inSpecTab = () => !!(state.tab && (state.tab.pipeline || state.tab.job));
 
   // ── the transcript ─────────────────────────────────────────────────────
   function atBottom() {
@@ -231,6 +235,10 @@
     if (SQL_LANGS.has(lang)) {
       const ins = el("button", { type: "button", class: "linkish", title: "Put it in the editor at the caret — nothing runs" }, "⤓ insert");
       ins.addEventListener("click", () => {
+        if (inSpecTab()) {
+          log("warn", "this tab's editor holds the spec's JSON — ⧉ copy the SQL into a node's sql field instead");
+          return;
+        }
         dbc.editor.insert(code.replace(/\n+$/, ""));
         log("ok", "inserted the assistant's SQL at the caret — review it, then Ctrl+Enter runs it");
       });
@@ -426,10 +434,15 @@
   // shared: the view kept for the result tab shared with the assistant,
   // when it is not the one on screen (app.js sharedView) — its hidden
   // columns stay hidden from the model, as the grid's do.
+  // pipeline, job: in a pipeline or job tab, the file — the server reads
+  // the editor as its spec — and run, the run its canvas shows, whose
+  // error goes along.
   const request = (question) => ({
     question, attach: els.attach.checked, editor: dbc.cmd.editorState(), view: gridView(),
     shared: dbc.cmd.sharedView ? dbc.cmd.sharedView() : null,
     script: inScriptTab() ? state.tab.script : "",
+    pipeline: (state.tab && state.tab.pipeline) || "", job: (state.tab && state.tab.job) || "",
+    run: inSpecTab() && dbc.cmd.lastRun ? dbc.cmd.lastRun(state.tab) : "",
   });
 
   async function submit() {

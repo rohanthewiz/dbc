@@ -343,3 +343,35 @@ func TestSharedResult(t *testing.T) {
 		t.Errorf("withheld: note %q\n%s", p.Note, p.Text)
 	}
 }
+
+// A pipeline or job tab's question is framed as the spec it is (N-178):
+// fenced as JSON and named, with the pipeline preamble asking for JSON
+// back, and the connections a node names; never as SQL.
+func TestPipelineQuestion(t *testing.T) {
+	spec := `{"name": "orders", "fragments": []}`
+	ctx := Context{Pipeline: "orders.json", PipelineKind: "pipeline", Query: spec, Err: "fragment load: no such table",
+		ScriptConns: []string{"prod (postgres)"}, ScriptAPI: "sql.read — Reads rows. [conn*, query*]"}
+	p := Build("why did it fail?", ctx, true)
+	for _, want := range []string{
+		"The dbc pipeline in question (orders.json):\n```json\n" + spec + "\n```",
+		"editing a dbc pipeline or job: a JSON spec", // the pipeline preamble, not the script's
+		"The sdb API, by signature:\n```\nsql.read",
+		"Connections configured in dbc (a node names one in its conn field): prod (postgres).",
+		"Running it failed with:\n```\nfragment load: no such table",
+	} {
+		if !strings.Contains(p.Text, want) {
+			t.Errorf("missing %q in:\n%s", want, p.Text)
+		}
+	}
+	if strings.Contains(p.Text, "The SQL in question") || strings.Contains(p.Text, "a Go program run by") {
+		t.Errorf("a pipeline was framed as SQL or a script:\n%s", p.Text)
+	}
+	if p.Note != "sent: sdb API, connection names, pipeline, error" {
+		t.Errorf("note = %q", p.Note)
+	}
+	ctx.PipelineKind, ctx.Pipeline, ctx.ScriptAPI = "job", "nightly.json", ""
+	if p = Build("q", ctx, false); !strings.Contains(p.Text, "The dbc job in question (nightly.json):\n```json\n") ||
+		p.Note != "sent: connection names, job, error" {
+		t.Errorf("a job: note %q, text:\n%s", p.Note, p.Text)
+	}
+}

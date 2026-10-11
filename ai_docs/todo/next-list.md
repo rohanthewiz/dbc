@@ -64,14 +64,6 @@ ten session docs in `ai_docs/claude_sessions/`
   A dump for MySQL connections with mysqldump, behind the same menu row and
   dialog (the row is dimmed on MySQL today). No one has asked; worth it only
   if a MySQL user does.
-- **N-178** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
-  The assistant in a pipeline tab is handed the pipeline's JSON as "the
-  query": the editor under the canvas holds it, and `ChatContext` reads the
-  editor's text as SQL. Give it the pipeline as a pipeline (the spec, the
-  plugins' summary from `pipeline.Plugins()`, the last run's error or
-  preview), as N-134 did for script tabs, or leave the editor out there.
-  Updated `2026-1009-1349-phase-4-jobs-tab-runs-view`: a job tab's hidden editor holds the job's JSON
-  too (`j:<name>`), so its assistant reads a job as SQL the same way.
 - **N-179** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
   Fragments are reordered from a lane's ⋯ menu (Move up / Move down). The
   plan sketched dragging a lane by its header; add it if the menu turns
@@ -523,6 +515,15 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-178** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
+  The assistant in a pipeline tab is handed the pipeline's JSON as "the
+  query": the editor under the canvas holds it, and `ChatContext` reads the
+  editor's text as SQL. Give it the pipeline as a pipeline (the spec, the
+  plugins' summary from `pipeline.Plugins()`, the last run's error or
+  preview), as N-134 did for script tabs, or leave the editor out there.
+  Updated `2026-1009-1349-phase-4-jobs-tab-runs-view`: a job tab's hidden editor holds the job's JSON
+  too (`j:<name>`), so its assistant reads a job as SQL the same way.
+  closed 2026-10-10, `2026-1010-2001-n176-n192-n178` (from the cats-todo backlog): the pipeline as a pipeline, not the editor left out, the way N-134 did script tabs. The page sends `pipeline` or `job` (the file) and `run` (the run its canvas shows: `latest` in pipelines.js, `e.run` in jobs.js, through `dbc.cmd.lastRun`). The server's `workspace.PipelineChatContext` marks the editor's text as the spec (`ai.Context.Pipeline`, `PipelineKind`) and adds the connections by name and driver (a node names its own) and the tables its SQL names. Its error is that run's, read from the jobs engine (`Server.runErr`), and only when the run's Source is this file, so an id from elsewhere cannot put another run's error under the spec; without an error, a preview's rows on screen go (a tab holding shown rows, as a script's). `ai.Build` fences the spec as JSON ("The dbc pipeline in question (orders.json)") with a pipeline preamble asking for JSON back. The plugin catalog and the sdb API (`ScriptAPI`, which already carried `pipeline.Summary()`) go on the conversation's first pipeline or job question, as a script's (`withAPILocked`). In a pipeline or job tab, "⤓ insert" on a SQL block now refuses with a hint: the tab's editor is the hidden JSON spec, which the insert would have corrupted. README: a pipeline-tab bullet. Tests: `ai.TestPipelineQuestion`, `workspace.TestPipelineChatContext`, `web.TestChatPipelineTab` (a real failed run's error goes with its own file's question and not another's). The TUI has no pipeline tab with a chat, so nothing there.
 - **N-192** · raised `2026-1009-1632-n175-pipeline-code-editors` · value low
   A pipeline inspector's `sql` field is coloured but offers no completion:
   the workspace's SQL providers complete against the tab's connection, and

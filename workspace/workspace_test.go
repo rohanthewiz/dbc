@@ -891,6 +891,42 @@ func TestScriptChatContext(t *testing.T) {
 	}
 }
 
+// A pipeline or job tab's question (N-178): the spec as the query, marked
+// as the pipeline it is, its SQL's tables named, the connections listed;
+// the run's error when the caller passes one, else a preview's rows on
+// screen, as the grid shows them — and never a statement's result.
+func TestPipelineChatContext(t *testing.T) {
+	w := newTestWorkspace(t)
+	w.cfg.Connections[0].AIRows = true
+	spec := `{"name": "p", "fragments": [{"name": "f", "nodes": [{"id": "src", "plugin": "sql.read", "cfg": {"conn": "` + demo +
+		`", "query": "SELECT id, name FROM cats"}}]}]}`
+	ctx, refs := w.PipelineChatContext("why?", "pipeline", "p.json", spec, "", GridView{SortCol: -1})
+	if ctx.Pipeline != "p.json" || ctx.PipelineKind != "pipeline" || ctx.Query != spec || ctx.Script != "" || ctx.Columns != nil || ctx.Err != "" {
+		t.Errorf("before a preview: %+v", ctx)
+	}
+	if len(refs) != 1 || len(ctx.Tables) != 1 || len(ctx.ScriptConns) == 0 {
+		t.Errorf("cats, named in the spec's SQL, and the connections should go: %+v %q", ctx.Tables, ctx.ScriptConns)
+	}
+	// a statement's result on screen is not the pipeline's
+	run(t, w, "SELECT id FROM cats")
+	if ctx, _ = w.PipelineChatContext("", "pipeline", "p.json", spec, "", GridView{SortCol: -1}); ctx.Columns != nil {
+		t.Errorf("a statement's result went as the pipeline's: %+v", ctx)
+	}
+	// a preview's rows (ShowResult, as dbc web lands them) go, with the view
+	r := &model.Result{Columns: []string{"id", "name"}, Rows: [][]string{{"1", "Tom"}, {"2", "Mia"}}}
+	if err := w.ShowResult("run1", "preview f/src", r); err != nil {
+		t.Fatal(err)
+	}
+	ctx, _ = w.PipelineChatContext("", "pipeline", "p.json", spec, "", GridView{Result: w.LastResult(), SortCol: -1, Hidden: []int{1}})
+	if len(ctx.Rows) != 2 || len(ctx.Hidden) != 1 {
+		t.Errorf("the preview's rows should go, as the grid shows them: %+v", ctx)
+	}
+	// the run's error replaces them
+	if ctx, _ = w.PipelineChatContext("", "job", "j.json", spec, "step x failed", GridView{SortCol: -1}); ctx.Err != "step x failed" || ctx.Columns != nil || ctx.PipelineKind != "job" {
+		t.Errorf("with the run's error: %+v", ctx)
+	}
+}
+
 // A script's s.Print and s.Show reach the sink mid-run, in order, and each
 // s.Show publishes its result; the Job lands the script as a run.
 func TestScriptEventsReachTheSink(t *testing.T) {

@@ -71,15 +71,27 @@ type Context struct {
 	// fields are then the last run of THIS script, when it was the last
 	// thing the tab ran.
 	Script string
+	// Pipeline names the pipeline or job file ("orders.json") when the
+	// question is asked from a pipeline or job tab, and PipelineKind says
+	// which ("pipeline", "job"). Query then holds its JSON spec, not SQL:
+	// Build fences it as JSON and calls it the pipeline (or job), so the
+	// model neither reads the spec as a malformed statement nor answers
+	// with SQL meant to replace it. Err is its last run's error, and the
+	// result fields a preview's rows on screen.
+	Pipeline     string
+	PipelineKind string
 	// ScriptConns are the configured connections, "name (driver)", for a
-	// script question: a script names its connections in strings (a script
-	// tab has no connection of its own), so these are the names it can use
-	// and the dialect each one's SQL must be written in. Names and drivers
-	// are configuration, not data, so they go on every connection.
+	// script, pipeline or job question: a script names its connections in
+	// strings and a pipeline's nodes in their conn fields (neither tab has
+	// a connection of its own), so these are the names they can use and
+	// the dialect each one's SQL must be written in. Names and drivers are
+	// configuration, not data, so they go on every connection.
 	ScriptConns []string
 	// ScriptAPI is the sdb API summary (sdbapi.Summary) the script is
-	// written against. The caller sets it on the first script question of
-	// a conversation only: the agent keeps the session's history, so the
+	// written against, with the pipeline plugins (pipeline.Summary) a
+	// pipeline's nodes — and a script's pipelines — are made of. The caller
+	// sets it on the first script, pipeline or job question of a
+	// conversation only: the agent keeps the session's history, so the
 	// same ~2k tokens on every turn would buy nothing — the preamble's rule.
 	ScriptAPI string
 
@@ -177,6 +189,15 @@ const scriptPreamble = "The user is also editing a dbc script: a Go program run 
 	"When you suggest a change to a script, put the Go in a fenced ```go block; " +
 	"connections are named by the strings passed as conn, src and dst.\n\n"
 
+// pipelinePreamble is scriptPreamble for a pipeline or job tab's question:
+// the spec is JSON, its nodes are the plugins the API below lists, and a
+// change to it comes back as JSON, not as SQL or a script.
+const pipelinePreamble = "The user is also editing a dbc pipeline or job: a JSON spec. A pipeline is fragments, " +
+	"each a small graph of nodes (a source, transforms, sinks — the plugins listed below, configured in \"cfg\" " +
+	"with string values) run in batches; a job is a DAG of pipelines (\"pipelines\": steps with \"after\"). " +
+	"go.* nodes hold Go written against the sdb API below. When you suggest a change, put the JSON in a fenced " +
+	"```json block (the whole spec, or the part that changes, said so); connections are named in each node's conn.\n\n"
+
 // Build renders a question plus its context as one prompt. first says
 // whether this is the first turn of the conversation, which is the only one
 // that carries the preamble — the agent keeps the session's history, so
@@ -199,20 +220,29 @@ func Build(question string, ctx Context, first bool) Prompt {
 		}
 		sent = append(sent, schemaNote(ctx.Tables))
 	}
-	if api := strings.TrimSpace(ctx.ScriptAPI); api != "" && ctx.Script != "" {
-		sb.WriteString(scriptPreamble)
+	if api := strings.TrimSpace(ctx.ScriptAPI); api != "" && (ctx.Script != "" || ctx.Pipeline != "") {
+		sb.WriteString(pick(ctx.Pipeline != "", pipelinePreamble, scriptPreamble))
 		sb.WriteString("The sdb API, by signature:\n```\n")
 		sb.WriteString(api)
 		sb.WriteString("\n```\n\n")
 		sent = append(sent, "sdb API")
 	}
-	if ctx.Script != "" && len(ctx.ScriptConns) > 0 {
-		fmt.Fprintf(&sb, "Connections configured in dbc (a script names them as conn, src and dst): %s.\n\n",
+	if (ctx.Script != "" || ctx.Pipeline != "") && len(ctx.ScriptConns) > 0 {
+		fmt.Fprintf(&sb, "Connections configured in dbc (%s): %s.\n\n",
+			pick(ctx.Pipeline != "", "a node names one in its conn field", "a script names them as conn, src and dst"),
 			strings.Join(ctx.ScriptConns, ", "))
 		sent = append(sent, "connection names")
 	}
 	if q := strings.TrimSpace(ctx.Query); q != "" {
-		if ctx.Script != "" {
+		if ctx.Pipeline != "" {
+			// A spec, not a statement: fenced as JSON and named, so "the
+			// clean fragment" and "line 12" have a file to belong to.
+			kind := pick(ctx.PipelineKind != "", ctx.PipelineKind, "pipeline")
+			fmt.Fprintf(&sb, "The dbc %s in question (%s):\n```json\n", kind, ctx.Pipeline)
+			sb.WriteString(q)
+			sb.WriteString("\n```\n\n")
+			sent = append(sent, kind)
+		} else if ctx.Script != "" {
 			// A script, not a statement: fenced as Go, so the model reads
 			// it as the program it is, and named, so "line 12" and "the
 			// Copy call" have a file to belong to.

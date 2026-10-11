@@ -160,6 +160,50 @@ func (w *Workspace) ScriptChatContext(question, name, source string, views ...Gr
 	return ctx, refs
 }
 
+// PipelineChatContext is ChatContext for a pipeline or job tab (kind
+// "pipeline" or "job"): the editor holds the spec's JSON (name, its file
+// name; source, the tab's text), not SQL — the tab's hidden editor, which
+// ChatContext would read as a statement (N-178).
+//
+// As ScriptChatContext, and why it differs:
+//   - The whole spec is "the query", marked as the pipeline (or job) it is
+//     (ctx.Pipeline): a statement picked out of its JSON is neither.
+//   - The connections go by name and driver: a node names its own, and
+//     the tab has none.
+//   - Tables are looked for in the spec (its nodes' SQL) and the question.
+//   - The last run is not the workspace's: a pipeline runs on the jobs
+//     engine, so the caller passes runErr, the error of the run the tab
+//     shows ("" when it did not fail). Without one, the rows on screen go
+//     when they are a preview's (a tab of shown rows, which in this tab's
+//     workspace only this pipeline's previews land in).
+//
+// The plugin catalog (pipeline.Summary) is not set here: it goes once per
+// conversation, with the sdb API (ai.Context.ScriptAPI), which only the
+// assistant knows.
+func (w *Workspace) PipelineChatContext(question, kind, name, source, runErr string, views ...GridView) (ctx ai.Context, refs []db.TableRef) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	ctx = w.chatBaseLocked()
+	ctx.Pipeline, ctx.PipelineKind, ctx.Query = name, kind, source
+	for _, n := range w.cfg.ConnOrder(w.active) {
+		cc, _ := w.cfg.ConnByName(n)
+		ctx.ScriptConns = append(ctx.ScriptConns, n+" ("+cc.Driver+")")
+	}
+	if sh, at := w.activeSetLocked().sharedTab(); sh != nil {
+		refs = w.mentionedLocked(&ctx, source+"\n"+sh.stmt, question)
+		attachShared(&ctx, sh, at, "", views)
+		return ctx, refs
+	}
+	refs = w.mentionedLocked(&ctx, source, question)
+	if runErr != "" {
+		ctx.Err = runErr
+		return ctx, refs
+	}
+	// "": a preview's tab holds no statement (ShowResult)
+	w.attachTabLocked(&ctx, views, "")
+	return ctx, refs
+}
+
 // lastLocked is the active connection's result set for reading its last
 // run — an empty one before anything ran there, so callers need no nil
 // check. It is never stored: a run lands in a set made by setLocked.

@@ -10,6 +10,7 @@ import (
 	"github.com/rohanthewiz/dbc/ai"
 	"github.com/rohanthewiz/dbc/ai/aitest"
 	"github.com/rohanthewiz/dbc/config"
+	"github.com/rohanthewiz/dbc/pipeline"
 	"github.com/rohanthewiz/dbc/userdata"
 )
 
@@ -429,5 +430,51 @@ func TestScriptListAndRun(t *testing.T) {
 	pg := decodeData[resultPage](t, e.api("GET", "/api/v1/ws/"+id+"/result", "", 200))
 	if len(pg.Cells) != 3 || *pg.Cells[0][0] != "Bella" {
 		t.Errorf("the shown result is not in the grid: %+v", pg.Cells)
+	}
+}
+
+// A question from a pipeline tab sends the editor as the pipeline's spec,
+// not as SQL (N-178), with the API and connections as a script's does; the
+// run the tab shows goes along with its error — only when it is that
+// file's run.
+func TestChatPipelineTab(t *testing.T) {
+	f := &aitest.Fake{}
+	e, _ := chatEnv(t, f, func(c *config.Config, _ *Options) { c.PipelinesDir = filepath.Join(t.TempDir(), "pipelines") })
+	id, s := e.open()
+	spec := `{"name": "bad", "fragments": [{"name": "f", "nodes": [` +
+		`{"id": "src", "plugin": "sql.read", "cfg": {"conn": "demo-sqlite", "query": "SELECT * FROM no_such_table"}}, ` +
+		`{"id": "show", "plugin": "preview"}], "edges": [["src", "show"]]}]}`
+	e.putPipeline("bad.json", spec, "", 200)
+	run := decodeData[runEnvelope](t, e.api("POST", "/api/v1/pipeline-run", `{"ws":"`+id+`","name":"bad.json"}`, 200)).Run
+	for {
+		if done := awaitJob[runEnvelope](t, s, "job.done"); done.Run.ID == run.ID {
+			if done.Run.Status != pipeline.Failed {
+				t.Fatalf("run = %+v", done.Run)
+			}
+			break
+		}
+	}
+	req := func(q, file, runID string) string {
+		b, _ := json.Marshal(chatReq{Question: q, Attach: true, Editor: runReq{Buffer: spec, Caret: 5}, Pipeline: file, Run: runID})
+		return string(b)
+	}
+	forecast := func(file, runID string) string {
+		return decodeData[map[string]string](t, e.api("POST", "/api/v1/ws/"+id+"/chat/context", req("", file, runID), 200))["note"]
+	}
+	if got := forecast("bad.json", run.ID); !strings.Contains(got, "pipeline") || !strings.Contains(got, "error") ||
+		!strings.Contains(got, "sdb API") || strings.Contains(got, "query") {
+		t.Errorf("forecast = %q", got)
+	}
+	// another file's tab does not get this run's error
+	if got := forecast("other.json", run.ID); strings.Contains(got, "error") {
+		t.Errorf("another file's forecast = %q", got)
+	}
+
+	e.api("POST", "/api/v1/ws/"+id+"/chat/ask", req("why did it fail?", "bad.json", run.ID), 200)
+	awaitChat(t, s, func(v chatView) bool { return chatReadyView(v) && len(f.Prompts()) == 1 })
+	p := f.Prompts()[0]
+	if !strings.Contains(p, "The dbc pipeline in question (bad.json):\n```json\n"+spec) || !strings.Contains(p, "no_such_table") ||
+		strings.Contains(p, "The SQL in question") {
+		t.Errorf("prompt:\n%s", p)
 	}
 }

@@ -1438,6 +1438,8 @@
       pipelinesChanged, setFace: (name, face) => { const e = files.get(name); if (e) setFace(e, face); },
       entry: (name) => files.get(name) || null,
       dirty: (name) => isDirty(files.get(name)),
+      // the run the canvas shows, for the assistant
+      lastRun: (name) => (files.get(name) || {}).run || "",
       diags: (name) => (files.get(name) || {}).diags || [],
       json: (name) => !!(files.get(name) || {}).json,
       face: (name) => (files.get(name) || {}).face || "design",

@@ -3030,6 +3030,9 @@
     } catch (_) { /* the stream's onerror deals with a lost window */ }
   }
   dbc.cmd.syncResultTabs = syncResultTabs;
+  // lastRun is the run a pipeline or job tab's canvas shows, for the
+  // assistant (chat.js request): its error goes with a question
+  dbc.cmd.lastRun = (t) => (t.pipeline ? pipeKit.lastRun(t.pipeline) : t.job ? jobKit.lastRun(t.job) : "");
 
   // sharedView is the grid view kept for the result tab shared with the
   // assistant, when it is not the one on screen (the grid's own view

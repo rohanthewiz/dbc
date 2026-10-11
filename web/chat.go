@@ -439,12 +439,12 @@ func (a *assistant) finishLocked(q string, ctx ai.Context) {
 	a.sendLocked(prompt.Text)
 }
 
-// withAPILocked adds the sdb API summary to a script question's context
-// when this conversation has not been sent it yet. The send (finishLocked)
+// withAPILocked adds the sdb API summary to a script, pipeline or job
+// question's context when this conversation has not been sent it yet. The send (finishLocked)
 // and the chip's forecast (handleChatContext) both go through here, so the
 // chip says "sdb API" exactly when the question would carry it.
 func (a *assistant) withAPILocked(ctx ai.Context) ai.Context {
-	if ctx.Script != "" && !a.apiSent {
+	if (ctx.Script != "" || ctx.Pipeline != "") && !a.apiSent {
 		// the pipeline plugins ride along: a script builds pipelines from
 		// them, and a plugin file (a script tab too) is written against
 		// their shape — the user's own plugins included
@@ -827,6 +827,13 @@ type chatReq struct {
 	// editor then holds Go, and workspace.ScriptChatContext reads it as a
 	// script rather than picking a SQL statement out of it.
 	Script string `json:"script"`
+	// Pipeline and Job are the file's name when asked from a pipeline or
+	// job tab: the editor then holds its JSON spec, and
+	// workspace.PipelineChatContext reads it as one (N-178). Run is the run
+	// the tab shows (its canvas's counters), whose error goes along.
+	Pipeline string `json:"pipeline"`
+	Job      string `json:"job"`
+	Run      string `json:"run"`
 }
 
 // chatGrid is the grid's view of the result it shows: the result's seq,
@@ -879,8 +886,31 @@ func (s *Server) chatContext(t *tab, req chatReq) (ai.Context, []db.TableRef, er
 		ctx, refs := t.ws.ScriptChatContext(req.Question, filepath.Base(req.Script), req.Editor.Buffer, views...)
 		return ctx, refs, nil
 	}
+	if req.Pipeline != "" || req.Job != "" {
+		kind, name := "pipeline", req.Pipeline
+		if name == "" {
+			kind, name = "job", req.Job
+		}
+		ctx, refs := t.ws.PipelineChatContext(req.Question, kind, filepath.Base(name), req.Editor.Buffer, s.runErr(req.Run, name), views...)
+		return ctx, refs, nil
+	}
 	ctx, refs := t.ws.ChatContext(req.Question, ed, views...)
 	return ctx, refs, nil
+}
+
+// runErr is the error run id ended with, for a question from the tab of
+// file: "" when it did not fail, is not this server's (gone from its
+// engine's memory), or is another file's run — an id the page sent that
+// would put some other run's error under this spec.
+func (s *Server) runErr(id, file string) string {
+	if id == "" {
+		return ""
+	}
+	r, ok := s.jobs.Get(id)
+	if !ok || r.Source != file || r.Status != pipeline.Failed {
+		return ""
+	}
+	return r.Error
 }
 
 // sharedView builds the GridView of a result tab that is not on screen —

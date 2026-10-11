@@ -56,7 +56,7 @@ ten session docs in `ai_docs/claude_sessions/`
   `pipelines[].fragments[].rows`, so reading only the leading bytes would
   also mean writing Rows into the header. `Log` comes last in `jobs.Run`,
   so a read could at least stop before it.
-- **N-188** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value medium
+- **N-188** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value low
   Report the yaegi mis-store upstream (traefik/yaegi, v0.16.1): a binary or
   unary operator's result assigned straight into an element of a `[]any`
   that compiled code handed in (`b.Rows[i][c] = s + "!"`, also via
@@ -79,6 +79,13 @@ ten session docs in `ai_docs/claude_sessions/`
   `Apply`). It reproduces on v0.16.1: Apply returns nil and the rows are
   unchanged, while a control storing through a variable works. Posting it
   is the user's: it goes out under their GitHub account.
+  Updated 2026-10-11: filed as https://github.com/traefik/yaegi/issues/1736
+  (from the user's account, at their request), in yaegi's bug-report
+  layout. Before filing, the standalone repro was re-run on v0.16.1 and
+  matched the draft, yaegi's tracker had no duplicate, and master was still
+  fcb76d1. What remains is to watch #1736. Once a release has the fix, bump
+  yaegi, and the failing `TestYaegiStoreComputedBug` is the cue to drop the
+  lint and the README paragraph. Value is now low, since it waits on upstream.
 - **N-189** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value low
   `sql.write mode: upsert` on MySQL. It refuses today: MySQL's
   `ON DUPLICATE KEY UPDATE` matches any unique key, not the `key` columns

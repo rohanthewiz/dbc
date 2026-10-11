@@ -1,7 +1,8 @@
 # Draft: yaegi issue — an operator's result stored into a compiled [][]any's element is mis-stored
 
-For N-188. A report ready to file at https://github.com/traefik/yaegi/issues
-(the user's to post; dbc's own copy of the repro is
+For N-188. Filed 2026-10-11 as https://github.com/traefik/yaegi/issues/1736
+(posted in yaegi's bug-report layout, so the wording there differs a little
+from this draft; dbc's own copy of the repro is
 `script.TestYaegiStoreComputedBug`). Written 2026-10-10 against yaegi
 v0.16.1. The master build fcb76d1 (2026-02-09) still reproduces it, per
 the 2026-10-10 `/next-list` check.

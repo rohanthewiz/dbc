@@ -24,6 +24,9 @@ import (
 //	                    session's connections and paths for the length of
 //	                    the call, whose lines are the script's own Print
 //	                    lines, each with its step
+//
+// Either way a preview sink's rows are the script's own s.Show results
+// (JobRequest.Show), whichever host runs it.
 
 func init() {
 	sdb.DefaultJobRunner = runOnOwnEngine
@@ -65,7 +68,10 @@ func (e *Engine) runForScript(s *sdb.S, name string, params map[string]string) (
 	if err != nil {
 		return nil, err
 	}
-	head, err := e.StartJob(JobRequest{Spec: spec, Params: params, Trigger: TriggerScript, Source: file})
+	// the job's preview rows join the script's own results (s.Show), as a
+	// pipeline the script runs itself shows them: the run has no origin a
+	// host could land them by
+	head, err := e.StartJob(JobRequest{Spec: spec, Params: params, Trigger: TriggerScript, Source: file, Show: s.Show})
 	if err != nil {
 		return nil, err
 	}

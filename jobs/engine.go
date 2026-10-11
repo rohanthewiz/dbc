@@ -327,6 +327,10 @@ type liveRun struct {
 	// saveFailed is set (under mu) after a record write failed and was
 	// reported, so a run on a full disk says so once, not every flush
 	saveFailed bool
+	// show takes the run's preview rows in place of Preview events
+	// (JobRequest.Show); nil sends them to the Sink. Set before the run
+	// starts and never changed.
+	show func(*model.Result)
 }
 
 func newLive(id string, cancel context.CancelFunc) *liveRun {
@@ -547,7 +551,11 @@ func (e *Engine) runOne(ctx context.Context, lr *liveRun, idx int, spec *pipelin
 	line := func(level, text string) { e.line(lr, pid, level, text) }
 	s := sdb.New(e.mgr,
 		func(r *model.Result) {
-			if r != nil {
+			switch {
+			case r == nil:
+			case lr.show != nil:
+				lr.show(r) // the requester's own results (JobRequest.Show)
+			default:
 				e.emit(lr, &Preview{Run: lr.id, Origin: origin, Pipeline: pid, Result: r})
 			}
 		},

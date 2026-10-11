@@ -2214,7 +2214,9 @@ in `~/.config/dbc/jobs/<name>.json` (`jobs_dir`):
   A job that does not set it answers 403; the page's own Run needs nothing.
 - **From a script**, `run, err := s.RunJob("nightly", sdb.Params{"min_age": "3"})`
   runs the job and waits for it; `run.Pipelines` has each step's stats. In
-  `dbc web` it runs on the server's engine, beside its other runs.
+  `dbc web` it runs on the server's engine, beside its other runs. Its
+  preview sinks' rows are the script's own shown results, as `s.Show`'s
+  are, wherever the script runs.
 
 **Run records.** Every run of a job or a pipeline (not a preview) leaves
 `~/.config/dbc/runs/<job|pipeline>/<name>/<run id>.json` (`runs_dir`):
@@ -2344,7 +2346,7 @@ While a run goes, its lines go to the log too, tagged with whose they are
 sink's rows land in the grid of the tab the run was started from. `Ctrl+C`
 does not quit over a run (it says where it is); `Ctrl+Q` does, and stops
 it, rolling back. A script's `s.RunJob` runs on the same engine, and shows
-the same way.
+the same way; its preview sinks' rows join the script's own results.
 
 `Alt+J` (or ◷ Runs in the browser) lists **the runs**: this TUI's, and the
 records in `runs_dir` — `dbc web`'s, a cron's `dbc job run` — newest

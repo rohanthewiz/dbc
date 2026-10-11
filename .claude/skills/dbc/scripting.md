@@ -298,7 +298,9 @@ run|check|export NAME` (`-p k=v`, `--preview N`, `--fragment F`, `-t json`),
 - **s.RunJob** (`sdb/jobs.go`): runs on the session's `WithJobs` runner
   (dbc web hands `Engine.ScriptRunner()` to every workspace), else
   `sdb.DefaultJobRunner`, which package jobs sets to a private engine.
-  `sdb` cannot import `jobs`; that is why it is a hook.
+  `sdb` cannot import `jobs`; that is why it is a hook. Either way the
+  job's preview sinks' rows go to the script's `s.Show`
+  (`JobRequest.Show`), not to the host as Preview events.
 - dbc web: `web/jobs.go` (store, `job-check` with each cron line's next five
   fires, `POST /api/v1/jobs/:name/run` = manual with the cookie, webhook
   with the Bearer secret and only for `triggers.webhook`),

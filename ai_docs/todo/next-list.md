@@ -81,14 +81,6 @@ ten session docs in `ai_docs/claude_sessions/`
   records keep no rows, so the run page's ◎ can only preview the fragment
   again, today. Keep a capped preview (say the first 50 rows per preview
   node) in the record, for the run page to show as it was.
-- **N-186** · raised `2026-1009-1449-phase-5-tui-pipelines-jobs` · value low
-  A preview sink in a job a script starts (`s.RunJob`) shows its rows
-  nowhere. `Engine.ScriptRunner` starts the job with no origin, so dbc web
-  drops the rows (no tab to land them in), and the TUI hands them to the
-  tab on screen — usually the script's own, which refuses them while the
-  script runs ("busy"). The script's workspace could pass itself as the
-  run's origin (sdb's job runner hook would need the session's tag), so
-  the rows join the script's own `s.Show` results.
 - **N-187** · raised `2026-1009-1449-phase-5-tui-pipelines-jobs` · value low
   Every run listing reads every record file whole
   (`userdata.ListRuns` → `readHead` unmarshals each), whatever the
@@ -496,6 +488,15 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-186** · raised `2026-1009-1449-phase-5-tui-pipelines-jobs` · value low
+  A preview sink in a job a script starts (`s.RunJob`) shows its rows
+  nowhere. `Engine.ScriptRunner` starts the job with no origin, so dbc web
+  drops the rows (no tab to land them in), and the TUI hands them to the
+  tab on screen — usually the script's own, which refuses them while the
+  script runs ("busy"). The script's workspace could pass itself as the
+  run's origin (sdb's job runner hook would need the session's tag), so
+  the rows join the script's own `s.Show` results.
+  closed 2026-10-10, `2026-1010-2012-n183-n181-n186` (from the cats-todo backlog): the rows join the script's own `s.Show` results, as the item wanted, but without an origin tag. `runForScript` has the script's session in hand, so the run is asked to show its preview rows there: a new `JobRequest.Show`, kept on the live run, which `runOne`'s show callback calls in place of emitting a `Preview` event. This needs no session tag through sdb's job-runner hook and no host-side landing, and it covers every host at once. dbc web's script tab and the TUI's get the rows with the script's other shows. Headless `dbc script`, whose private engine dropped Preview events entirely, now writes them out: a script running the nightly example printed both of its previews. README (both mentions of `s.RunJob`) and scripting.md say so. Test: `jobs.TestScriptRunsAJob` now checks that the session's show got the job's preview result and that no Preview event reached the engine's sink; it fails on the old engine.
 - **N-181** · raised `2026-1009-1254-phase-3-jobs-scheduler-runs` · value low
   `dbc job run --wait=false` (plan §4/§5): return the run id as soon as it
   has started, for an external trigger that polls `dbc run show ID`. The

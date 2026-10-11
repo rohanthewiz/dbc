@@ -11,6 +11,7 @@ import (
 
 	"github.com/rohanthewiz/serr"
 
+	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/pipeline"
 	"github.com/rohanthewiz/dbc/userdata"
 )
@@ -27,6 +28,12 @@ type JobRequest struct {
 	// run --wait=false` prints the id of a run its detached child starts.
 	// "" makes one.
 	ID string
+	// Show, when set, takes the rows the run's preview sinks show, in
+	// place of the Sink's Preview events: s.RunJob's script shows them as
+	// its own s.Show results (runForScript, N-186). Its run has no origin
+	// for a host to land them by, and the tab on screen is the script's,
+	// which refuses rows while the script runs.
+	Show func(*model.Result)
 }
 
 // StartJob starts a run of a job and returns its header at once; the run
@@ -73,6 +80,7 @@ func (e *Engine) StartJob(req JobRequest) (Run, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	now := time.Now()
 	lr := newLive(id, cancel)
+	lr.show = req.Show
 	lr.rec = Run{
 		ID: lr.id, Kind: KindJob, Name: spec.Name, Source: req.Source, Trigger: req.Trigger, By: req.By,
 		Params: params, Origin: req.Origin, Started: now, Status: pipeline.Running,

@@ -14,6 +14,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/pipeline"
 	"github.com/rohanthewiz/dbc/script"
 	"github.com/rohanthewiz/dbc/sdb"
@@ -486,15 +487,29 @@ func Run(s *sdb.S) error {
 }
 `
 	var lines []string
+	var shown []*model.Result
 	var lmu sync.Mutex
 	print := func(m string) { lmu.Lock(); lines = append(lines, m); lmu.Unlock() }
-	s := sdb.New(je.mgr, nil, print).WithJobs(je.ScriptRunner())
+	show := func(r *model.Result) { lmu.Lock(); shown = append(shown, r); lmu.Unlock() }
+	s := sdb.New(je.mgr, show, print).WithJobs(je.ScriptRunner())
 	if err := script.RunSource("sj.go", src, s); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Contains(lines, "done sj succeeded 1") {
 		t.Errorf("lines = %q", lines)
 	}
+	// the job's preview sink's rows are the script's own shown results
+	// (N-186), not Preview events with no origin to land by
+	if len(shown) != 1 || !strings.HasPrefix(shown[0].Query, "preview ") || len(shown[0].Rows) == 0 {
+		t.Errorf("shown = %+v", shown)
+	}
+	je.testEngine.mu.Lock()
+	for _, ev := range je.evs {
+		if _, ok := ev.(*Preview); ok {
+			t.Errorf("a Preview event reached the sink: %+v", ev)
+		}
+	}
+	je.testEngine.mu.Unlock()
 	hs, _ := je.History(userdata.RunFilter{Kind: KindJob, Name: "sj"})
 	if len(hs) != 1 || hs[0].Trigger != TriggerScript || hs[0].Status != "succeeded" {
 		t.Errorf("history = %+v", hs)

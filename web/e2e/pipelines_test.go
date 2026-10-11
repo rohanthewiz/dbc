@@ -195,6 +195,7 @@ func pipelineTabs(t *testing.T, e *env, p *rod.Page) {
 	pipelineCodeField(t, p, disk)
 	pipelineDottedIDs(t, p)
 	pipelineInvalidNames(t, p)
+	pipelineUnknownKeys(t, p)
 	pipelineInspectorWidth(t, p)
 
 	// ── ⇪ Go: the same pipeline as a script, in a script tab ──────────────
@@ -296,7 +297,11 @@ func pipelineCodeField(t *testing.T, p *rod.Page, disk func(string) string) {
 	waitFor(t, p, "F12: the caret on n's :=", `() => { const at = codeEd("code").getPosition(); return at.lineNumber === 2 && at.column === 2; }`)
 	chord(t, p, 0, "F2", "F2", 113)
 	waitFor(t, p, "the rename box, holding n", `() => { const i = document.querySelector(".rename-box input"); return !!i && i.value === "n"; }`)
-	eval(t, p, `() => { const i = document.querySelector(".rename-box input"); i.select(); }`)
+	// the box takes focus a beat after it shows: typed before, the name
+	// would land in the code
+	eval(t, p, `() => { const i = document.querySelector(".rename-box input"); i.focus(); i.select(); }`)
+	waitFor(t, p, "the rename box focused, n selected", `() => { const i = document.querySelector(".rename-box input");
+	  return document.activeElement === i && i.selectionStart === 0 && i.selectionEnd === 1; }`)
 	p.MustInsertText("count")
 	p.Keyboard.MustType(input.Enter)
 	waitFor(t, p, "F2: both renamed", `() => /\tcount := 1\n\treturn nil, fmt\.Errorf\("%d", count\)/.test(codeEd("code").getValue())`)
@@ -441,6 +446,53 @@ func pipelineInvalidNames(t *testing.T, p *rod.Page) {
 	waitFor(t, p, "the JSON view", `() => document.querySelector(".app").classList.contains("pipe-json")`)
 	eval(t, p, `() => monaco.editor.getEditors()[0].setValue(window.__kept)`)
 	eval(t, p, `() => document.querySelector('.pbar button[data-act="json"]').click()`)
+	waitFor(t, p, "the waiting pipeline back, nothing unsaved", `() =>
+	  !document.querySelector(".app").classList.contains("pipe-json") &&
+	  !!document.querySelector('.plane[data-frag="w"] .pcard[data-id="src"]') &&
+	  !document.querySelector("#qtabs .qtab.pipeline.on .qdirty")`)
+}
+
+// pipelineUnknownKeys (N-180): a key the spec has no field for — a typo
+// such as "on_eror" — survives a canvas edit, which writes the text again
+// from what the canvas knows (specText), at every level it rewrites: the
+// pipeline, a param, a fragment, a node. The check goes on naming it.
+func pipelineUnknownKeys(t *testing.T, p *rod.Page) {
+	toggle := func() { eval(t, p, `() => document.querySelector('#pipe .pbar button[data-act="json"]').click()`) }
+	toggle()
+	waitFor(t, p, "the JSON view", `() => document.querySelector(".app").classList.contains("pipe-json")`)
+	eval(t, p, `() => {
+	  const ed = monaco.editor.getEditors()[0];
+	  window.__keptUK = ed.getValue();
+	  const s = JSON.parse(window.__keptUK);
+	  s.colour = "red";
+	  s.params = Object.assign(s.params || {}, { day: { default: "", hint: "x" } });
+	  s.fragments[0].on_eror = "continue";
+	  s.fragments[0].nodes[0].note = "kept";
+	  ed.setValue(JSON.stringify(s, null, 2));
+	}`)
+	toggle()
+	waitFor(t, p, "the canvas, the check naming the unknown key", `() => !document.querySelector(".app").classList.contains("pipe-json") &&
+	  monaco.editor.getModelMarkers({ owner: "dbc" }).some((m) => /unknown field "/.test(m.message))`)
+	// a canvas edit: the pipeline's description, in its own form
+	eval(t, p, `() => document.querySelector("#pipe .pcanvas").focus()`)
+	p.Keyboard.MustType(input.Escape)
+	waitFor(t, p, "the pipeline's own form", `() => /pipeline/.test(document.querySelector(".pinsp .ihead").textContent)`)
+	eval(t, p, `() => {
+	  const ta = document.querySelector(".pinsp .ifield textarea");
+	  ta.value = "unknown keys kept";
+	  ta.dispatchEvent(new Event("input", { bubbles: true }));
+	}`)
+	toggle()
+	waitFor(t, p, "the JSON view", `() => document.querySelector(".app").classList.contains("pipe-json")`)
+	got := evalStr(t, p, `() => { const s = JSON.parse(monaco.editor.getEditors()[0].getValue());
+	  return [s.desc, s.colour, s.params.day.hint, s.fragments[0].on_eror, s.fragments[0].nodes[0].note].join("|"); }`)
+	if want := "unknown keys kept|red|x|continue|kept"; got != want {
+		t.Errorf("after a canvas edit = %q, want %q", got, want)
+	}
+
+	// the tab as it was
+	eval(t, p, `() => monaco.editor.getEditors()[0].setValue(window.__keptUK)`)
+	toggle()
 	waitFor(t, p, "the waiting pipeline back, nothing unsaved", `() =>
 	  !document.querySelector(".app").classList.contains("pipe-json") &&
 	  !!document.querySelector('.plane[data-frag="w"] .pcard[data-id="src"]') &&

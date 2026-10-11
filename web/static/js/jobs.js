@@ -85,31 +85,46 @@
     for (const k of Object.keys(obj || {}).sort()) out[k] = f ? f(obj[k]) : obj[k];
     return out;
   }
+  // keepRest copies the keys of from that the job canvas has no field for into o,
+  // after o's own and in the file's order. A canvas edit writes the text
+  // again from what the canvas knows, so without this an unknown key — a
+  // typo such as "on_eror" — was dropped by the first edit, silently.
+  // Kept, the check goes on naming it ("unknown field") until it is put
+  // right in the JSON view; refusing canvas edits instead would stop all
+  // work over one typo.
+  function keepRest(o, from, known) {
+    if (from && typeof from === "object" && !Array.isArray(from)) {
+      for (const k of Object.keys(from)) if (!known.includes(k)) o[k] = from[k];
+    }
+    return o;
+  }
   function jobText(spec) {
     const o = { name: spec.name || "" };
     if (spec.desc) o.desc = spec.desc;
     if (spec.root) o.root = spec.root;
     if (spec.params && Object.keys(spec.params).length) {
-      o.params = sorted(spec.params, (p) => (p && p.doc ? { default: p.default || "", doc: p.doc } : { default: (p && p.default) || "" }));
+      o.params = sorted(spec.params, (p) => keepRest(p && p.doc ? { default: p.default || "", doc: p.doc } : { default: (p && p.default) || "" },
+        p, ["default", "doc"]));
     }
     o.pipelines = (spec.pipelines || []).map((st) => {
       const m = { id: st.id || "", pipeline: st.pipeline || "" };
       if (st.after && st.after.length) m.after = st.after.slice();
       if (st.params && Object.keys(st.params).length) m.params = sorted(st.params);
-      return m;
+      return keepRest(m, st, ["id", "pipeline", "after", "params"]);
     });
     const t = spec.triggers || {}, tr = {};
     if (t.schedule && t.schedule.length) tr.schedule = t.schedule.slice();
     if (t.tz) tr.tz = t.tz;
     if (t.catch_up) tr.catch_up = true;
     if (t.webhook) tr.webhook = true;
-    o.triggers = tr;
+    o.triggers = keepRest(tr, t, ["schedule", "tz", "catch_up", "webhook"]);
     const p = spec.policy || {}, po = {};
     if (p.on_failure) po.on_failure = p.on_failure;
     if (p.max_parallel) po.max_parallel = p.max_parallel;
     if (p.overlap) po.overlap = p.overlap;
     if (p.timeout) po.timeout = p.timeout;
-    o.policy = po;
+    o.policy = keepRest(po, p, ["on_failure", "max_parallel", "overlap", "timeout"]);
+    keepRest(o, spec, ["name", "desc", "root", "params", "pipelines", "triggers", "policy"]);
     return JSON.stringify(o, null, 2).replace(SCALARS, (m) =>
       "[" + m.slice(1, -1).split(",").map((s) => s.trim()).join(", ") + "]") + "\n";
   }

@@ -107,11 +107,25 @@
     for (const k of Object.keys(obj || {}).sort()) out[k] = f ? f(obj[k]) : obj[k];
     return out;
   }
+  // keepRest copies the keys of from that the pipeline canvas has no field for into o,
+  // after o's own and in the file's order. A canvas edit writes the text
+  // again from what the canvas knows, so without this an unknown key — a
+  // typo such as "on_eror" — was dropped by the first edit, silently.
+  // Kept, the check goes on naming it ("unknown field") until it is put
+  // right in the JSON view; refusing canvas edits instead would stop all
+  // work over one typo.
+  function keepRest(o, from, known) {
+    if (from && typeof from === "object" && !Array.isArray(from)) {
+      for (const k of Object.keys(from)) if (!known.includes(k)) o[k] = from[k];
+    }
+    return o;
+  }
   function specText(spec) {
     const o = { name: spec.name || "" };
     if (spec.desc) o.desc = spec.desc;
     if (spec.params && Object.keys(spec.params).length) {
-      o.params = sorted(spec.params, (p) => (p && p.doc ? { default: p.default || "", doc: p.doc } : { default: (p && p.default) || "" }));
+      o.params = sorted(spec.params, (p) => keepRest(p && p.doc ? { default: p.default || "", doc: p.doc } : { default: (p && p.default) || "" },
+        p, ["default", "doc"]));
     }
     o.fragments = (spec.fragments || []).map((f) => {
       const g = { name: f.name || "" };
@@ -120,12 +134,13 @@
       g.nodes = (f.nodes || []).map((n) => {
         const m = { id: n.id, plugin: n.plugin };
         if (n.cfg && Object.keys(n.cfg).length) m.cfg = sorted(n.cfg);
-        return m;
+        return keepRest(m, n, ["id", "plugin", "cfg"]);
       });
       if (f.edges && f.edges.length) g.edges = f.edges.map((e) => [e[0], e[1]]);
       if (f.ui && Object.keys(f.ui).length) g.ui = sorted(f.ui, (p) => [p[0], p[1]]);
-      return g;
+      return keepRest(g, f, ["name", "batch", "on_error", "nodes", "edges", "ui"]);
     });
+    keepRest(o, spec, ["name", "desc", "params", "fragments"]);
     return JSON.stringify(o, null, 2).replace(SCALARS, (m) =>
       "[" + m.slice(1, -1).split(",").map((s) => s.trim()).join(", ") + "]") + "\n";
   }

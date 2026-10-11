@@ -90,14 +90,6 @@ ten session docs in `ai_docs/claude_sessions/`
   Fragments are reordered from a lane's ⋯ menu (Move up / Move down). The
   plan sketched dragging a lane by its header; add it if the menu turns
   out slow for pipelines with many fragments.
-- **N-180** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
-  A canvas edit writes the spec again from what the canvas knows
-  (`specText`), so a key the spec has no field for — a typo such as
-  `"on_eror"` — is dropped by the first edit, silently. The check flags it
-  first ("unknown field"), but the drop is not said. Keep unknown keys
-  through the round trip, or refuse canvas edits while the text has any.
-  Updated `2026-1009-1349-phase-4-jobs-tab-runs-view`: the job canvas does the same (`jobText`), and
-  its check flags the key as `jobs.ParseJob`'s unknown field.
 - **N-181** · raised `2026-1009-1254-phase-3-jobs-scheduler-runs` · value low
   `dbc job run --wait=false` (plan §4/§5): return the run id as soon as it
   has started, for an external trigger that polls `dbc run show ID`. The
@@ -592,6 +584,15 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-180** · raised `2026-1009-1122-phase-2-pipeline-tab` · value low
+  A canvas edit writes the spec again from what the canvas knows
+  (`specText`), so a key the spec has no field for — a typo such as
+  `"on_eror"` — is dropped by the first edit, silently. The check flags it
+  first ("unknown field"), but the drop is not said. Keep unknown keys
+  through the round trip, or refuse canvas edits while the text has any.
+  Updated `2026-1009-1349-phase-4-jobs-tab-runs-view`: the job canvas does the same (`jobText`), and
+  its check flags the key as `jobs.ParseJob`'s unknown field.
+  closed 2026-10-10, `2026-1010-1913-n156-n200-n180` (from the cats-todo backlog): unknown keys are kept through the round trip, the first of the two options. Refusing canvas edits would stop all work over one typo, while a kept key leaves the check naming it ("unknown field", from the server's strict parse) until the JSON view puts it right. `keepRest(o, from, known)` sits beside `sorted` in both kits, which already keep their own copies of it and `SCALARS`. It appends the keys the canvas has no field for after its own, in the file's order, at every level `specText` and `jobText` rewrite: the pipeline or job, a param, a fragment, a node, a step, the triggers, the policy (cfg and ui are free maps already). Neither kit stores transient state on spec objects, so nothing of the page's leaks into the file. Tests: e2e "pipeline tabs" gains `pipelineUnknownKeys` and "job tabs" `jobUnknownKeys`. Each adds an unknown key at every level through the JSON view, sees the check's marker, edits the description in the canvas's own form, and finds every key still in the text. Both fail on the old JS. Also hardened N-193's F2 check in `pipelineCodeField`: it failed about one run in six by typing before Monaco had focused the rename box, so it now focuses the box and waits; 6 of 6 runs then passed.
 - **N-200** · raised `2026-1010-1750-n199-script-path` · value low
   A `go.action` or `script.run` node's `s.Path` ignores the run's own
   files_dir. The node gets the session that ran the pipeline, and

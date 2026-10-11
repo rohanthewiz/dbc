@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/input"
 	"github.com/go-rod/rod/lib/proto"
 )
 
@@ -146,6 +147,7 @@ func jobTabs(t *testing.T, e *env, p *rod.Page) {
 	}`)
 	shot(t, p, "job-tab")
 	jobDottedIDs(t, p)
+	jobUnknownKeys(t, p)
 
 	// ── a palette drag onto a card, then Delete ──────────────────────────
 	dragTo(t, p, `#jobp .pitem[data-pipe="cats-report"]`, `#jobp .jcard[data-step="report"]`, 0, 0)
@@ -323,6 +325,53 @@ func jobDottedIDs(t *testing.T, p *rod.Page) {
 	waitFor(t, p, "the job's JSON view", `() => document.querySelector(".app").classList.contains("pipe-json")`)
 	eval(t, p, `() => monaco.editor.getEditors()[0].setValue(window.__keptJob)`)
 	toggleJSON()
+	waitFor(t, p, "the job back, nothing unsaved", `() =>
+	  !document.querySelector(".app").classList.contains("pipe-json") &&
+	  document.querySelectorAll("#jobp .jcard").length === 4 &&
+	  !document.querySelector("#qtabs .qtab.job.on .qdirty")`)
+}
+
+// jobUnknownKeys (N-180): a key the job has no field for survives a canvas
+// edit (jobText) at every level it rewrites — the job, a param, a step,
+// the triggers, the policy — and the check goes on naming it.
+func jobUnknownKeys(t *testing.T, p *rod.Page) {
+	toggle := func() { eval(t, p, `() => document.querySelector('#jobp .pbar button[data-act="json"]').click()`) }
+	toggle()
+	waitFor(t, p, "the job's JSON view", `() => document.querySelector(".app").classList.contains("pipe-json")`)
+	eval(t, p, `() => {
+	  const ed = monaco.editor.getEditors()[0];
+	  window.__keptJobUK = ed.getValue();
+	  const s = JSON.parse(window.__keptJobUK);
+	  s.colour = "red";
+	  s.params = Object.assign(s.params || {}, { day: { default: "", hint: "x" } });
+	  s.pipelines[0].retries = 3;
+	  s.triggers = Object.assign(s.triggers || {}, { shedule: ["0 3 * * *"] });
+	  s.policy = Object.assign(s.policy || {}, { on_fail: "stop" });
+	  ed.setValue(JSON.stringify(s, null, 2));
+	}`)
+	toggle()
+	waitFor(t, p, "the canvas, the check naming the unknown key", `() => !document.querySelector(".app").classList.contains("pipe-json") &&
+	  monaco.editor.getModelMarkers({ owner: "dbc" }).some((m) => /unknown field "/.test(m.message))`)
+	// a canvas edit: the job's description, in its own form
+	eval(t, p, `() => document.querySelector("#jobp .pcanvas").focus()`)
+	p.Keyboard.MustType(input.Escape)
+	waitFor(t, p, "the job's own form", `() => /job/.test(document.querySelector("#jobp .pinsp .ihead").textContent)`)
+	eval(t, p, `() => {
+	  const ta = document.querySelector("#jobp .pinsp .ifield textarea");
+	  ta.value = "unknown keys kept";
+	  ta.dispatchEvent(new Event("input", { bubbles: true }));
+	}`)
+	toggle()
+	waitFor(t, p, "the job's JSON view", `() => document.querySelector(".app").classList.contains("pipe-json")`)
+	got := evalStr(t, p, `() => { const s = JSON.parse(monaco.editor.getEditors()[0].getValue());
+	  return [s.desc, s.colour, s.params.day.hint, s.pipelines[0].retries, s.triggers.shedule.join(), s.policy.on_fail].join("|"); }`)
+	if want := "unknown keys kept|red|x|3|0 3 * * *|stop"; got != want {
+		t.Errorf("after a canvas edit = %q, want %q", got, want)
+	}
+
+	// the tab as it was
+	eval(t, p, `() => monaco.editor.getEditors()[0].setValue(window.__keptJobUK)`)
+	toggle()
 	waitFor(t, p, "the job back, nothing unsaved", `() =>
 	  !document.querySelector(".app").classList.contains("pipe-json") &&
 	  document.querySelectorAll("#jobp .jcard").length === 4 &&

@@ -1,0 +1,15 @@
+{
+  "name": "order-tiers",
+  "desc": "Grade every order with the order.tier plugin and preview it.",
+  "fragments": [
+    {
+      "name": "tiers",
+      "nodes": [
+        { "id": "src",  "plugin": "sql.table",  "cfg": { "conn": "shop", "table": "orders", "columns": "id, total", "order": "id" } },
+        { "id": "tier", "plugin": "order.tier", "cfg": { "column": "total", "medium": "40" } },
+        { "id": "peek", "plugin": "preview",    "cfg": { "rows": "10" } }
+      ],
+      "edges": [ ["src", "tier"], ["tier", "peek"] ]
+    }
+  ]
+}

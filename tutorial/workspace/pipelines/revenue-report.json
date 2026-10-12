@@ -1,0 +1,16 @@
+{
+  "name": "revenue-report",
+  "desc": "Paid revenue per region from the warehouse, to a dated CSV.",
+  "fragments": [
+    {
+      "name": "revenue",
+      "nodes": [
+        { "id": "src",  "plugin": "sql.read",  "cfg": { "conn": "warehouse",
+            "query": "SELECT region, count(*) AS orders, sum(total) AS revenue FROM order_facts WHERE paid GROUP BY region ORDER BY region" } },
+        { "id": "csv",  "plugin": "csv.write", "cfg": { "path": "exports/revenue_${run.date}.csv" } },
+        { "id": "peek", "plugin": "preview",   "cfg": { "rows": "20", "title": "Revenue by region" } }
+      ],
+      "edges": [ ["src", "csv"], ["src", "peek"] ]
+    }
+  ]
+}

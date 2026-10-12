@@ -1,0 +1,13 @@
+{
+  "name": "nightly-shop",
+  "desc": "Rebuild the warehouse, then the export and the revenue report side by side.",
+  "root": "facts",
+  "params": { "min_total": { "default": "20", "doc": "Passed to shop-sync" } },
+  "pipelines": [
+    { "id": "facts",   "pipeline": "warehouse-facts" },
+    { "id": "sync",    "pipeline": "shop-sync",      "after": ["facts"], "params": { "min_total": "${min_total}" } },
+    { "id": "revenue", "pipeline": "revenue-report", "after": ["facts"] }
+  ],
+  "triggers": { "schedule": ["30 2 * * *"], "tz": "America/Chicago", "catch_up": false },
+  "policy": { "on_failure": "finish_branches", "max_parallel": 2, "overlap": "skip", "timeout": "30m" }
+}

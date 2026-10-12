@@ -1,0 +1,48 @@
+{
+  "name": "shop-sync",
+  "desc": "Customers into the warehouse, then paid orders over min_total to a dated CSV.",
+  "params": {
+    "min_total": { "default": "20", "doc": "Smallest order total to export" }
+  },
+  "fragments": [
+    {
+      "name": "customers",
+      "nodes": [
+        { "id": "src",   "plugin": "sql.table",  "cfg": { "conn": "shop", "table": "customers", "order": "id" } },
+        { "id": "tidy",  "plugin": "text.clean", "cfg": { "columns": "email", "trim": "true", "case": "lower" } },
+        { "id": "fill",  "plugin": "go.transform", "cfg": { "code": "func Apply(b *sdb.Batch) (*sdb.Batch, error) {\n\tc := b.Col(\"region\")\n\tfor i := range b.Rows {\n\t\tif b.Rows[i][c] == nil {\n\t\t\tb.Rows[i][c] = \"unknown\"\n\t\t}\n\t}\n\treturn b, nil\n}" } },
+        { "id": "dst",   "plugin": "sql.write",  "cfg": { "conn": "warehouse", "table": "dim_customer", "create": "true", "truncate": "true", "key": "id" } }
+      ],
+      "edges": [ ["src", "tidy"], ["tidy", "fill"], ["fill", "dst"] ]
+    },
+    {
+      "name": "gate",
+      "nodes": [
+        { "id": "check", "plugin": "pipeline.check", "cfg": {
+            "conn": "warehouse", "query": "SELECT count(*) FROM dim_customer",
+            "rule": ">= 1", "message": "no customers loaded" } }
+      ]
+    },
+    {
+      "name": "big_orders",
+      "nodes": [
+        { "id": "src",    "plugin": "sql.read", "cfg": { "conn": "shop",
+            "query": "SELECT id, customer_id, total, status FROM orders WHERE total >= ${min_total} ORDER BY id" } },
+        { "id": "paid",   "plugin": "rows.filter", "cfg": { "rules": "status = paid" } },
+        { "id": "who",    "plugin": "lookup", "cfg": { "conn": "warehouse",
+            "query": "SELECT id, email, region FROM dim_customer", "key": "customer_id", "match": "id" } },
+        { "id": "stamp",  "plugin": "cols.add", "cfg": { "columns": "run_id = '${run.id}'\nexported_at = now()" } },
+        { "id": "csv",    "plugin": "csv.write", "cfg": { "path": "exports/big_orders_${run.date}.csv" } },
+        { "id": "peek",   "plugin": "preview",   "cfg": { "rows": "10" } }
+      ],
+      "edges": [ ["src", "paid"], ["paid", "who"], ["who", "stamp"], ["stamp", "csv"], ["stamp", "peek"] ]
+    },
+    {
+      "name": "log",
+      "nodes": [
+        { "id": "log", "plugin": "sql.exec", "cfg": { "conn": "warehouse",
+            "sql": "CREATE TABLE IF NOT EXISTS load_log (id bigserial PRIMARY KEY, started text, run_id text, exported bigint, file text);\nINSERT INTO load_log (started, run_id, exported, file) VALUES ('${run.started}', '${run.id}', ${frag.big_orders.rows}, '${frag.big_orders.path}')" } }
+      ]
+    }
+  ]
+}

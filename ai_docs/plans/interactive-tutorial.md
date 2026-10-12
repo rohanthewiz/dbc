@@ -1,7 +1,8 @@
 # An interactive scripting and ETL tutorial: `dbc tutorial`
 
 Raised 2026-10-12. The ask: make `docs/scripting-and-etl-tutorial.md`
-interactive. This plan covers **step 1**, a headless `dbc tutorial` command.
+interactive. This plan covers **step 1**, a headless `dbc tutorial` command. **Step 1
+is done** (2026-10-12; all five phases).
 A panel in `dbc web` (step 2) and a TUI pane (step 3) are under *Later*.
 They would reuse the lessons and checks built here.
 
@@ -62,11 +63,12 @@ to the code blocks in the Markdown, so the two can't drift.
 
 ```
 dbc tutorial                      the lessons, with ✓ / ✗ / · when run in a workspace
-dbc tutorial init [DIR] [--force] write dbc.toml, seed.sql, bad.go and the empty dirs; say what's next
-dbc tutorial step N [--dir D] [--run] [--force]
+dbc tutorial init [DIR] [--force] write dbc.toml, seed.sql and the empty dirs; say what's next
+dbc tutorial step N [--dir D] [--run] [--files] [--force]
                                   print lesson N: what it teaches, its files (✓ present / + to write),
-                                  its commands, and the doc section. --run writes the missing files,
-                                  runs the commands (echoing "$ dbc …"), then runs check N
+                                  its commands, and the doc section. --files prints the files' content.
+                                  --run writes the missing files, runs the commands (echoing
+                                  "$ dbc …"), then runs check N
 dbc tutorial check [N] [--dir D]  check lesson N, or every lesson; exit 1 if a check fails
 ```
 
@@ -87,7 +89,7 @@ The SQL checks run `dbc -c CONN -t json "SELECT …"` and read the JSON.
 | 0 | `dbc.toml`, `seed.sql` (by `init`) | `-f seed.sql` · `-t markdown "SELECT * FROM orders"` | shop has 4 customers and 6 orders |
 | 1 | `scripts/order_summary.go` | `script order_summary` · `scripts` | the script exists; `script --check` is clean |
 | 2 | `scripts/region_report.go` | `script region_report` | `data/reports/orders_{amer,emea,none}.csv` and `overview.html` exist |
-| 3 | `bad.go` (by `init`, outside `scripts_dir`) | `script --check order_summary region_report` · `script --check bad.go` | every script in `scripts/` checks clean |
+| 3 | `bad.go` (outside `scripts_dir`, so it never runs by name) | `script --check order_summary region_report` · `script --check bad.go` | every script in `scripts/` checks clean |
 | 4 | — | the two copies · the failing re-copy (ExpectFail) · the count | warehouse has `orders` = 6 and `paid_orders` = 4 |
 | 5 | `scripts/load_warehouse.go` | `script load_warehouse` · the customers query | warehouse `customers` = 4, emails trimmed and lower case, no NULL region; `order_facts` = 6 |
 | 6 | `pipelines/shop-sync.json` | `pipelines` · `pipeline check` · `pipeline run -p min_total=30` · the fragment preview | `pipeline check` is clean; `dim_customer` = 4; `load_log` ≥ 1; a `data/exports/big_orders_*.csv` |
@@ -106,9 +108,11 @@ that a preview on a fresh warehouse fails at `lookup`, because
 
 ```
 tutorial/                     ◄─ new package, no dependency on main
-    tutorial.go               Lesson, Command, Check types; Lessons(); Files(); WriteFile
+    tutorial.go               Lesson, Command, Check types; File, WriteFile, Init, CheckWorkspace
     lessons.go                the table above
-    checks.go                 check helpers: rowCount, fileGlob, cleanRun, runRecord
+    checks.go                 check helpers: rowsEqual, fileMatches, clean, runRecord
+    flow.go                   Show, Run, CheckLesson, Status
+    runner.go                 Runner, ExecRunner, CommandLine (shell quoting)
     workspace/                embedded, //go:build ignore on every .go
         dbc.toml  seed.sql  bad.go
         scripts/  pipelines/  jobs/  plugins/
@@ -125,9 +129,10 @@ tutorialcmd_test.go           argument and usage handling
 - **Streaming.** `--run` streams each child's stdout and stderr through to
   the terminal, so the learner sees what they would see typing it. Checks
   capture the output instead.
-- **Errors** are wrapped with `serr` (`serr.Wrap(err, "lesson", "6")`).
-  User-facing results (✓ ✗, hints) print as plain text, and failures to run
-  anything go through the `fail()` path as elsewhere.
+- **Errors** are wrapped with `serr` where they are failures (a file that
+  can't be written, a config that can't be read). What a learner reads
+  (✓ ✗, "found:", hints, "not a tutorial workspace") is plain text. A
+  dbc log line in a check's output is cut down to its `msg` and `error`.
 
 ## Keeping the doc and the files in step
 
@@ -147,8 +152,8 @@ breaks the tutorial is caught too.
 
 - The tutorial gets a box at the top: "Prefer to follow along
   interactively? `dbc tutorial init`, then `dbc tutorial step 0`."
-- README: a row for `dbc tutorial` in the headless commands, next to the
-  tutorial link at the "New to scripts, pipelines and jobs?" note.
+- README: `dbc tutorial` in the "New to scripts, pipelines and jobs?" note
+  that links the tutorial (the README has no single table of subcommands).
 - The dbc skill's subcommand table gets the row too.
 
 ## Phases
@@ -163,6 +168,22 @@ breaks the tutorial is caught too.
 4. **End to end.** The e2e test, plus a manual run of a fresh build in a
    scratch HOME and directory (per the dbc skill).
 5. **Docs.** The tutorial box, the README row, and the skill row.
+
+## What was built (step 1)
+
+- `tutorial/` and `tutorialcmd.go` as laid out above; `tutorialCommand()`
+  in `newCLI()`, and `tutorial` in `cats-plugin.toml`'s completions.
+- Tests: `TestWorkspaceMatchesDoc`, `TestLessonsMatchDocHeadings`,
+  `TestLessonFilesEmbedded`, fake-runner tests for each check kind and for
+  `Run` (skip when done, ExpectFail, stop on failure), and
+  `TestTutorialEndToEnd` (builds dbc and does every lesson, about 7s;
+  skipped with `-short`).
+- Checked by hand on a fresh build in a scratch HOME: `init`, every
+  `step N --run`, a re-run (skipped as done), `check` on an empty
+  workspace (✗ with hints), an unknown lesson and a foreign `dbc.toml`
+  (both exit 2).
+- `bad.go` is lesson 3's file, not `init`'s, so each lesson writes only
+  what it introduces.
 
 ## Later
 

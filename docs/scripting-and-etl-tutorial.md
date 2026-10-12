@@ -5,6 +5,12 @@ time. You start with a Go script that queries one database and end with a
 scheduled job that rebuilds a warehouse, exports CSVs and keeps an audit
 trail. Every command and every output below was run against a fresh build.
 
+> **Follow along interactively.** `dbc tutorial init` makes the workspace
+> from §0 for you. Then, in it, `dbc tutorial step 0` shows a lesson,
+> `dbc tutorial step 0 --run` writes its files and runs its commands, and
+> `dbc tutorial check 0` says whether it worked. `dbc tutorial` lists every
+> lesson with ✓ or ✗.
+
 ```
    shop (SQLite)                              warehouse (bytdb)
  ┌───────────────┐   dbc copy / s.Copy      ┌──────────────────┐

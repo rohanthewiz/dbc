@@ -1568,7 +1568,10 @@ leaves a server behind.
 ## Scripting in Go
 
 > New to scripts, pipelines and jobs? [The scripting and ETL tutorial](docs/scripting-and-etl-tutorial.md)
-> builds a small warehouse load end to end, one layer at a time.
+> builds a small warehouse load end to end, one layer at a time. To follow it
+> interactively, `dbc tutorial init` makes a workspace for it; then
+> `dbc tutorial step N` shows lesson N, `--run` does it for you, and
+> `dbc tutorial check N` says whether it worked (with a hint when it didn't).
 
 A script is a plain Go file defining one function:
 

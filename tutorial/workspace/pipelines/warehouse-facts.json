@@ -1,0 +1,7 @@
+{
+  "name": "warehouse-facts",
+  "desc": "Rebuild the warehouse's customers and order_facts with the load_warehouse script.",
+  "fragments": [
+    { "name": "load", "nodes": [ { "id": "run", "plugin": "script.run", "cfg": { "name": "load_warehouse" } } ] }
+  ]
+}

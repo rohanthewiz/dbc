@@ -121,6 +121,7 @@ Exit codes: `0` ok, `1` failure, `2` bad usage (incl. unknown connection),
 | `dbc dump [-t plain\|custom\|directory\|tar\|split] [-j N] [-o PATH] [--schema-only] [--table P] [--dry-run] [-- pg_dump opts]` | Postgres only: runs pg_dump (found on PATH, Homebrew kegs, or `--pg-bin`; when none is new enough for the server, `postgres:<major>`'s in Docker) on the connection; `split` = SQL file per table + `restore.sql`; config `pg_bin` names the tools' dir. Also "Dump database…" in the TUI/web connections menu | Dumps headless (Postgres) |
 | `dbc migrate status\|version\|up\|up-by-one\|up-to V\|down\|down-to V\|redo\|create NAME` | goose-compatible migrations; `--dir`, `--allow-missing` | Migrations |
 | `dbc web [--no-open] [--listen ADDR]` | browser workbench on 127.0.0.1:8450 | The browser workbench |
+| `dbc tutorial [init [DIR] \| step N [--run] [--files] [--force] \| check [N]] [--dir D]` | the scripting and ETL tutorial (`docs/scripting-and-etl-tutorial.md`) interactively: `init` makes a workspace (`dbc.toml` with `shop` SQLite + `warehouse` bytdb), `step N --run` writes lesson N's files and runs its commands, `check` verifies the state each lesson leaves (exit 1 on a failure). Lessons live in `tutorial/lessons.go`; `tutorial/workspace/` must match the doc's code blocks (`TestWorkspaceMatchesDoc`) | Scripting in Go |
 | `dbc version` | version | Build |
 
 A relative `path` in a file node (`csv.*`, `jsonl.*`) is in `files_dir`

@@ -211,6 +211,7 @@ func newCLI() *cli.Command {
 			erdCommand(),
 			dumpCommand(),
 			webCommand(),
+			tutorialCommand(),
 			{
 				// A subcommand as well as the --version / -v flag the cli
 				// package adds, since `dbc version` is what people type first.

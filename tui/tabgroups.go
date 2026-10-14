@@ -146,23 +146,29 @@ func (m *Model) groupLive(g *tabGroup) bool { return g != nil && slices.Contains
 func (m *Model) tabIndex(t *queryTab) int { return slices.Index(m.tabs, t) }
 
 // tabConn is the connection t is on for grouping: the one a connect in
-// flight is dialing, else tabTarget's (a restored tab's lazy one, none for
-// a tab never connected). The connect in flight comes first so a tab joins
-// the group it is headed for at once — a tab just opened into a connection
-// group would otherwise read as on the workspace's default until its
-// connect lands, and arrangeTabs would move it out and back.
+// flight is dialing, else tabAim's (a restored tab's lazy one; for a tab
+// that has never connected, the one it was last sent to). The connect in
+// flight comes first so a tab joins the group it is headed for at once — a
+// tab switching from one connection to another reads as on the new one.
+//
+// A tab whose FIRST connect fails or is canceled stays in the group it was
+// headed for (tabAim): its workspace still names the config's default as
+// active (workspace.New), and read as on that, the tab fell out of its
+// group — the orphan seen beside a Postgres in Docker group while Docker
+// was starting. One that was already on a connection and fails to switch
+// stays on (and grouped with) the connection it never left.
 func (m *Model) tabConn(t *queryTab) string {
 	i := m.tabIndex(t)
 	if i < 0 {
 		return ""
 	}
-	conn, ws := m.tabTarget(i)
+	_, ws := m.tabTarget(i)
 	if ws != nil && t.lazy == "" {
 		if c, ok := ws.Connecting(); ok && c != "" {
 			return c
 		}
 	}
-	return conn
+	return m.tabAim(i)
 }
 
 // connUnder reports whether conn is base or one of base's other databases
@@ -273,8 +279,11 @@ func (m *Model) dropEmptyGroups() {
 }
 
 // newTabConn is the connection a plain new tab (⌥T, a click on +) starts on:
-// the tab on screen's, as newTab has always taken it.
-func (m *Model) newTabConn() string { return m.ws.Active() }
+// the tab on screen's, as newTab has always taken it — tabAim's, so a tab
+// on screen whose connect failed opens its sibling where it was headed
+// (and in the group the + names), not on the default its workspace
+// reports.
+func (m *Model) newTabConn() string { return m.tabAim(m.curTab) }
 
 // landing is the group a plain new tab joins: the tab on screen's ad-hoc
 // group (joinNewTab), else whichever connection group claims the

@@ -199,7 +199,8 @@ func (w *Workspace) connectLocked(name string, pick SchemaPick, kind connectKind
 //
 // It runs as a connect does — on the pool, under connGen, cancelable with
 // Cancel — so a connect started after it supersedes it, and it supersedes a
-// schema pick or a counting in flight. Refused with no active connection,
+// schema pick or a counting in flight. Refused with no active connection
+// (or only the default a workspace that never connected names: Connected),
 // and while a connect is still in flight (the catalog it would re-read is
 // about to be replaced).
 //
@@ -211,7 +212,9 @@ func (w *Workspace) Refresh() (Start, error) {
 	switch {
 	case w.connCancel != nil:
 		return Start{}, refuse(Busy, Warn, "still connecting to %s", w.connName)
-	case name == "":
+	case name == "" || !w.landed:
+		// !landed: a workspace whose first connect failed still names the
+		// config's default (New), which a re-read would quietly connect
 		return Start{}, refuse(NoConnection, Warn, "not connected — nothing to refresh")
 	}
 	w.mgr.ForgetRowCounts(name)
@@ -473,7 +476,7 @@ func (w *Workspace) landConnect(ev *Connected, gen int, kind connectKind) {
 	if ev.Changed {
 		ev.Left = w.active
 	}
-	w.active = ev.Name
+	w.active, w.landed = ev.Name, true
 	// the levels above go in first: the catalog's index reads the schemas
 	w.databases, w.schemas, w.schema = ev.Databases, ev.Schemas, ev.Schema
 	w.setCatalogLocked(ev.Catalog)
@@ -725,7 +728,7 @@ func (w *Workspace) Disconnect() (left string, st Start, err error) {
 	}
 	w.cancelCatalogWorkLocked()
 	w.connGen++ // anything of the old connection's still landing is Stale
-	w.active, w.databases, w.schemas, w.schema = "", nil, nil, ""
+	w.active, w.landed, w.databases, w.schemas, w.schema = "", false, nil, nil, ""
 	w.setCatalogLocked(nil)
 	w.dropCompletionsLocked()
 	return left, Start{

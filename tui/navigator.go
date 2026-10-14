@@ -495,6 +495,9 @@ func (m *Model) disconnectNow() tea.Cmd {
 	}
 	m.notes(st.Notes)
 	m.setStatus("disconnected")
+	// on nothing by the user's own hand: a tab whose connect failed lets
+	// go of where it was headed too (queryTab.aim), leaving its group
+	m.active().aim = ""
 	m.syncResults() // on no connection: no connection's results
 	m.schemaLoading = ""
 	m.refreshConns()

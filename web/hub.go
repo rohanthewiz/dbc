@@ -418,7 +418,18 @@ var levelNames = map[workspace.Level]string{
 // "connected to lite" after the switch landed, in lite's. Work that ran on
 // a connection of its own — a run, an explain, a script — names it with
 // notesOn instead.
-func (t *tab) notes(ns []workspace.Note) { t.notesOn(t.ws.Active(), ns) }
+//
+// A workspace that has never connected (workspace.Connected) is on no
+// connection: its words go unstamped, to the log on screen — the one of
+// the connection the tab is headed for — not to the config's default that
+// its Active still names, which nobody is looking at.
+func (t *tab) notes(ns []workspace.Note) {
+	conn := ""
+	if t.ws.Connected() {
+		conn = t.ws.Active()
+	}
+	t.notesOn(conn, ns)
+}
 
 // notesOn sends notes to conn's log.
 func (t *tab) notesOn(conn string, ns []workspace.Note) {
@@ -524,10 +535,17 @@ type busyEvent struct {
 // It is also what a schema pick lands as (Changed false): the sidebar is
 // redrawn from it either way, so the page has one way to draw one.
 type connEvent struct {
-	Active  string `json:"active"`
-	Changed bool   `json:"changed"`
-	Failed  bool   `json:"failed"`
-	Status  string `json:"status,omitempty"`
+	Active string `json:"active"`
+	// Connected: the workspace is on Active (workspace.Connected). False
+	// with Failed after a tab's FIRST connect failed — a Postgres in
+	// Docker while Docker is still starting — when Active is only the
+	// config's default, which the tab never reached: the page keeps the
+	// tab on the connection it was headed for (its group, its saved place,
+	// its console) and shows it on none.
+	Connected bool   `json:"connected"`
+	Changed   bool   `json:"changed"`
+	Failed    bool   `json:"failed"`
+	Status    string `json:"status,omitempty"`
 	// Relisted: the sidebar was listed again after a run's DDL
 	// (workspace.Connected.Relisted), so the page keeps the run's status.
 	Relisted bool `json:"relisted,omitempty"`
@@ -545,7 +563,7 @@ type connEvent struct {
 // connEventOf builds a connEvent from the workspace as it is now.
 func (s *Server) connEventOf(t *tab, changed, failed bool, status string) connEvent {
 	return connEvent{
-		Active: t.ws.Active(), Changed: changed, Failed: failed, Status: status,
+		Active: t.ws.Active(), Connected: t.ws.Connected(), Changed: changed, Failed: failed, Status: status,
 		sideState: s.sidebar(t.ws), resultTabsState: resultTabsOf(t.ws),
 		HasResult: t.ws.LastResult() != nil, HasPlan: t.planState().plan != nil, Sets: scriptSets(t.ws),
 	}
@@ -612,21 +630,29 @@ type schemaRef struct {
 }
 
 // sidebar is the tab's sideState now, with its console database.
+//
+// Only a workspace ON its connection (workspace.Connected) has one: one
+// whose first connect failed still names the config's default as active,
+// and handing the page that database's console swapped it into the tab —
+// another database's SQL appearing in the editor of a tab that never left
+// for it.
 func (s *Server) sidebar(ws *workspace.Workspace) sideState {
 	st := sidebar(s.cfg, ws)
-	if ws.Active() != "" {
+	if ws.Active() != "" && ws.Connected() {
 		st.Console = s.consoleFor(ws.Active())
 	}
 	return st
 }
 
-// sidebar is the tab's sideState now, but for its console.
+// sidebar is the tab's sideState now, but for its console. A workspace on
+// no connection — disconnected, or never connected — has an empty one,
+// rather than the default's that its Active still names.
 func sidebar(cfg *config.Config, ws *workspace.Workspace) sideState {
 	st := sideState{Tables: tables(ws), Schema: ws.CatalogSchema(), RowCounts: ws.RowCountsShown(),
 		ShowRoutines: ws.RoutinesShown(), Routines: routines(ws)}
 	active := ws.Active()
 	cc, ok := cfg.ConnByName(active)
-	if !ok {
+	if !ok || !ws.Connected() {
 		return st
 	}
 	st.Base, st.Navigable, st.HasRoutines = active, db.Navigable(cc.Driver), db.HasRoutines(cc.Driver)

@@ -70,6 +70,7 @@ func TestWeb(t *testing.T) {
 		{"job runs in the log", jobRuns},
 		{"job tabs and the runs view", jobTabs},
 		{"plugin files and the palette", pluginFiles},
+		{"connection clicks and failed connects", connClicks},
 	}
 	// DBC_E2E_STEPS narrows a run to the steps whose names contain one of
 	// its comma-separated words (plus the sign-in and boot every step

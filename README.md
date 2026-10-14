@@ -1207,7 +1207,10 @@ tab stays as a hollow `[name]` chip after the tabs — click it to open a tab
 on its connection. The `+` wears the colour of the group `⌥T` would put the
 new tab in (hover it to read which), and right-click on `+` opens a tab in
 any group. Names are up to 8 letters or digits. Groups are saved with the
-tabs and follow a renamed connection.
+tabs and follow a renamed connection. A tab whose connect fails before it
+has ever connected — a Postgres in Docker while Docker is still starting —
+is on no connection but stays in the group it was opened in, is saved
+there, and tries again each time it comes back on screen.
 
 Two tabs on one database get two consoles, never one file written by both: a
 new tab takes a console no other tab shows (or a new one), `⌥C` skips the
@@ -1383,7 +1386,10 @@ other databases, including tabs that switch to it later. Click a chip to
 fold its group down to the chip (`wip +2`), and right-click it to rename,
 ungroup, close the group's tabs, or jump to one of them. Names are up to 8
 letters or digits. Groups are saved with the layout and follow a
-renamed connection.
+renamed connection. A tab whose first connect fails — a Postgres in Docker
+while Docker is still starting — says it is not connected but stays in the
+group it was opened in (and is saved there); showing it again, or a click
+on the connection, tries again.
 
 A tab's text is one of its database's **consoles** — the TUI's files (see
 [Consoles](#consoles-and-multi-statement-buffers)), so the terminal and the
@@ -1695,8 +1701,10 @@ with the grid and the log beside it as for a query.
   `Result`, `CopyOpts` or `WriteOpts`), with signatures and doc comments,
   and connection names inside a connection argument (`s.Query("…`).
 - A script names its own connections, so a script tab is never connected:
-  a click on a connection in the sidebar puts its name in at the caret, and
-  Explain, Run all and the rows box are hidden.
+  a click on a connection in the sidebar puts its name in at the caret (in
+  the script itself: while the tab is still opening the click only says so,
+  and a query tab's console is never typed into), and Explain, Run all and
+  the rows box are hidden.
 - **Several results.** Each `s.Show` is kept (the newest 20 of a run) in
   the one result tab the run lands in (see
   [Result tabs](#result-tabs-and-the-log-per-connection)), and

@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-211
+**Next ID:** N-214
 
 ## Open
 
@@ -78,6 +78,15 @@ ten session docs in `ai_docs/claude_sessions/`
   named, so the semantics differ from Postgres and SQLite. Worth it only
   if a MySQL user asks (as N-172); then say the difference in the field's
   doc, or require that `key` be the table's only unique key.
+- **N-211** · raised `2026-1014-1547-failed-connects-groups-conn-clicks` · value high
+  `dbc tutorial` is missing its workspace's `dbc.toml`. The `.gitignore`
+  rule `dbc.toml` (meant for the repo root's) also matches
+  `tutorial/workspace/dbc.toml`, so the tutorial's commit (d0766e0) never
+  included it. Lesson 0 cannot be written, and `go test ./tutorial` fails
+  on a clean checkout (`TestTutorialEndToEnd`, `TestWorkspaceMatchesDoc`,
+  `TestLessonFilesEmbedded`, `TestInitAndWriteFile`). Anchor the rule
+  (`/dbc.toml`) and commit the file — from the session that wrote it, or
+  rewritten from the tutorial doc's `dbc.toml` section.
 ## Validate
 
 Items whose remaining work is purely testing: hand checks in a real terminal
@@ -258,6 +267,25 @@ and `raised`.
   wait looks too tight for the full suite's parallel load. Make the wait
   follow the reports it expects rather than a fixed window, or lengthen
   it, and run the full suite a few times to see it hold.
+
+- **N-212** · raised `2026-1014-1547-failed-connects-groups-conn-clicks` · value low
+  Hand-check a first connect that fails, with a real Postgres in Docker
+  while Docker Desktop is stopped and then starting. The tests stand in a
+  missing SQLite file and a listener that accepts and never answers. In
+  the TUI and in dbc web: a tab opened from the group's idle chip or
+  "New tab in" (and a restored one on its first look) stays behind the
+  group's chip, says it is not connected, is saved there across a restart,
+  and connects once Docker is up when it is looked at again (or Refresh /
+  a click on the connection).
+- **N-213** · raised `2026-1014-1547-failed-connects-groups-conn-clicks` · value low
+  In headless Chrome an overflowing query-tab strip lays its overlay
+  scrollbar over the lower half of every tab and chip: a click there hits
+  the strip, not the tab (`elementFromPoint` at a tab's centre returned
+  `#qtabs`; the e2e `clickAt` now aims higher). Check a real Chrome, Safari
+  and `dbc.app`'s WKWebView with enough tabs to scroll, with macOS's
+  scrollbars on "When scrolling" and on "Always": does a click on a tab's
+  lower half, or its ✕, still land? If not, raise it as a defect (room for
+  the scrollbar below the tabs, or a strip that does not scroll that way).
 
 ## Roadmap
 

@@ -1257,6 +1257,56 @@ func TestRefreshRefusals(t *testing.T) {
 	refusal(t, err, NoConnection)
 }
 
+// Connected tells a workspace on its connection from one that only names
+// one. A new workspace names the config's default before any connect — and
+// still does after its first connect fails, the case a UI must not read as
+// "on the default" (a query tab would leave its group, and dbc web would
+// swap in the default's console). A failed switch away from a connection
+// leaves it on that one; a Disconnect leaves it on nothing. Refresh, which
+// re-reads the active connection, refuses on one never connected rather
+// than quietly connecting the default.
+func TestConnectedOnlyOnceAConnectLanded(t *testing.T) {
+	cfg := &config.Config{
+		MaxRows: 1000, MaxDisplayRows: 2000, DefaultConnection: demo,
+		Connections: []config.Connection{
+			{Name: demo, Driver: "sqlite", DSN: memDSN()},
+			{Name: "broken", Driver: "sqlite", DSN: "file:" + filepath.Join(t.TempDir(), "no", "such", "x.db") + "?mode=ro"},
+		},
+	}
+	mgr := db.NewManager(cfg)
+	t.Cleanup(mgr.Close)
+	w := New(cfg, mgr, nil, Options{})
+	t.Cleanup(w.Close)
+	if w.Active() != demo || w.Connected() {
+		t.Fatalf("new: active %q, connected %v", w.Active(), w.Connected())
+	}
+
+	if ev := w.Connect("broken").Job().(*Connected); ev.Err == nil {
+		t.Fatal("broken connected")
+	}
+	if w.Active() != demo || w.Connected() {
+		t.Fatalf("first connect failed: active %q, connected %v — want the default named, not connected", w.Active(), w.Connected())
+	}
+	_, err := w.Refresh()
+	refusal(t, err, NoConnection)
+
+	if ev := w.Connect(demo).Job().(*Connected); ev.Err != nil || !w.Connected() {
+		t.Fatalf("connect: %v, connected %v", ev.Err, w.Connected())
+	}
+	if ev := w.Switch("broken").Job().(*Connected); ev.Err == nil || w.Active() != demo || !w.Connected() {
+		t.Fatalf("failed switch: err %v, active %q, connected %v — want still on %s", ev.Err, w.Active(), w.Connected(), demo)
+	}
+
+	_, st, err := w.Disconnect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Job()
+	if w.Connected() {
+		t.Error("connected after a disconnect")
+	}
+}
+
 // A refresh that could not read the tables keeps the list the sidebar
 // shows — stale beats empty — where a connect (which has no list of its
 // own to keep) lands the empty one. Driven through landConnect directly:

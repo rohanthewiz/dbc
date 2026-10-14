@@ -42,8 +42,15 @@ type inUseEvent struct {
 // on is the connection t holds: its active one, or — mid-dial with none yet
 // — the one it is dialing, which tabsOn counts the same way, since a dial
 // that lands is a pool open.
+//
+// The active one only once a connect has landed there (workspace.Connected):
+// a new workspace names the config's default before its first connect, and
+// still does after that connect failed, though it holds nothing on it. Read
+// as on the default, every tab mid-way through its first dial — and every
+// tab whose first connect failed — marked the default's row as another
+// tab's, and kept it from being edited or removed.
 func (t *tab) on() string {
-	if a := t.ws.Active(); a != "" {
+	if a := t.ws.Active(); a != "" && t.ws.Connected() {
 		return a
 	}
 	if name, dialing := t.ws.Connecting(); dialing {

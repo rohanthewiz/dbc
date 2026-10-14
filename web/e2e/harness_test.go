@@ -600,11 +600,21 @@ func clickAt(t *testing.T, p *rod.Page, sel string, button proto.InputMouseButto
 	  if (!e) return false;
 	  const r = e.getBoundingClientRect();
 	  return r.width > 0 && r.height > 0; }`, sel)
+	// The point pressed is one that hit-tests to the target: its centre,
+	// as a hand aims, unless something is drawn over that — the query-tab
+	// strip, once it overflows, has its horizontal scrollbar laid over the
+	// lower half of every tab and chip (an overlay scrollbar: it takes no
+	// room), and a press at a chip's centre landed on the scrollbar and
+	// clicked nothing. Higher points of the target are tried next.
 	box, ok := eval(t, p, `(s) => { const e = document.querySelector(s);
 	  if (!e) return null;
 	  e.scrollIntoView({ block: "nearest", inline: "nearest" });
-	  const r = e.getBoundingClientRect();
-	  return [r.x + r.width / 2, r.y + r.height / 2]; }`, sel).([]any)
+	  const r = e.getBoundingClientRect(), x = r.x + r.width / 2;
+	  for (const y of [r.y + r.height / 2, r.y + r.height / 3, r.y + Math.min(4, r.height / 2)]) {
+	    const hit = document.elementFromPoint(x, y);
+	    if (hit && e.contains(hit)) return [x, y];
+	  }
+	  return [x, r.y + r.height / 2]; }`, sel).([]any)
 	if !ok {
 		t.Fatalf("click %s: it went away before the click", sel)
 	}

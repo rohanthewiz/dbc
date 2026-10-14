@@ -24,6 +24,12 @@ import (
 func (m *Model) refreshConns() {
 	items := make([]listItem, 0, len(m.cfg.Conns()))
 	on := m.baseOf(m.ws.Active())
+	if len(m.tabs) > 0 && m.active().unconnected {
+		// on nothing: its workspace's active is only the config's default
+		// (queryTab.unconnected), which a ● would claim it is on — while
+		// its first connect is dialing, and after one that failed
+		on = ""
+	}
 	others := map[string]bool{}
 	for i := range m.tabs {
 		if target, _ := m.tabTarget(i); i != m.curTab && target != "" {

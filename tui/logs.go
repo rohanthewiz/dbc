@@ -42,10 +42,18 @@ import (
 // logKey is the connection whose log is on screen: the query tab's own, or
 // "" when it is on none. An unconnected tab's workspace still reports the
 // config's default as active (see queryTab.unconnected), so that is asked
-// first.
+// first: such a tab shows the log of the connection it is headed for (its
+// aim) — the one it is dialing, or whose connect failed, so "connect
+// failed: …" is kept with that connection and found there on the tab's
+// next look — and the holding log only when it is headed nowhere. Shown
+// the holding log instead, its lines would be folded into whichever
+// connection's log was shown next, another tab's included (syncLog).
 func (m *Model) logKey() string {
-	if m.ws == nil || len(m.tabs) > 0 && m.active().unconnected {
-		return "" // before New has built the first workspace, too
+	if m.ws == nil {
+		return "" // before New has built the first workspace
+	}
+	if len(m.tabs) > 0 && m.active().unconnected {
+		return m.active().aim
 	}
 	return m.ws.Active()
 }
@@ -85,10 +93,10 @@ func (m *Model) logPaneOf(conn string) *logPane {
 }
 
 // logTo writes a line to conn's log — the shown one when conn is the
-// connection on screen, which may be the holding log's ("" for an
-// unconnected tab whose workspace still names its default).
+// connection on screen (logKey: for an unconnected tab, not the default its
+// workspace still names).
 func (m *Model) logTo(conn string, kind logKind, text string) {
-	if conn == m.ws.Active() {
+	if conn == m.logKey() {
 		m.log(kind, text)
 		return
 	}

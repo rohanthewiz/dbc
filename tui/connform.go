@@ -890,13 +890,15 @@ func (m *Model) connRenamed(from, to string) {
 		return config.DerivedName(to, rest), true
 	}
 	// a restored tab not yet looked at keeps its connection by name
-	// (tabs.go): it follows the rename, or its first look would fail
+	// (tabs.go): it follows the rename, or its first look would fail; so
+	// does a tab whose first connect failed (its aim), or it would leave
+	// the group that follows the rename below
 	for _, t := range m.tabs {
-		if t.lazy == "" {
-			continue
-		}
-		if nto, ok := rename(t.lazy); ok {
+		if nto, ok := rename(t.lazy); ok && t.lazy != "" {
 			t.lazy = nto
+		}
+		if nto, ok := rename(t.aim); ok && t.aim != "" {
+			t.aim = nto
 		}
 	}
 	for conn, p := range m.schemaPicks {
@@ -945,6 +947,11 @@ func (m *Model) removeConn(name string, x, y int) tea.Cmd {
 // config no longer has.
 func (m *Model) connRemovedFromTabs(name string) {
 	for _, t := range m.tabs {
+		// a tab whose connect failed was headed for a name that is gone:
+		// it is on nothing, and its next look has nothing to try again
+		if _, ok := m.cfg.ConnByName(t.aim); t.aim != "" && !ok {
+			t.aim = ""
+		}
 		if t.lazy == "" {
 			continue
 		}

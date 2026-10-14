@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	bytdbdrv "github.com/rohanthewiz/bytdb/stdlib"
@@ -40,6 +41,63 @@ func TestConnSaysTheConsoleDatabase(t *testing.T) {
 	st := decodeData[wsState](t, e.api("GET", "/api/v1/ws/"+id, "", 200))
 	if st.Console == nil || st.Console.Database != "demo-sqlite" {
 		t.Errorf("ws state's console = %+v", st.Console)
+	}
+}
+
+// A tab whose FIRST connect fails — a Postgres in Docker while Docker is
+// still starting — is on nothing, and its "conn" says so: not connected, no
+// console and no sidebar. Its workspace still names the config's default
+// as active (workspace.New); the event used to carry that database's
+// console, which the page then swapped into the tab — another database's
+// SQL appearing in its editor — and the page took the default for the
+// tab's connection, moving it out of its group. A tab already on a
+// connection that fails to switch stays on it, console and all.
+func TestFailedFirstConnectIsOnNothing(t *testing.T) {
+	e, _ := consoleEnv(t, func(c *config.Config, _ *Options) {
+		c.Connections = append(c.Connections, config.Connection{Name: "broken", Driver: "sqlite",
+			DSN: "file:" + filepath.Join(t.TempDir(), "no", "such", "x.db") + "?mode=ro"})
+	})
+	id, s := e.open()
+	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"broken"}`, 200)
+	ev, _ := s.await(t, "conn")
+	c := decodeData[connEvent](t, testEnvelope{Data: ev.Data})
+	if !c.Failed || c.Connected || c.Console != nil || c.Base != "" || len(c.Tables) != 0 {
+		t.Fatalf("failed first connect: %+v, console %+v — want failed, not connected, no console or sidebar", c, c.Console)
+	}
+	// a reattaching page reads the same: on nothing (so it connects the
+	// tab again rather than drawing it as on the default)
+	st := decodeData[wsState](t, e.api("GET", "/api/v1/ws/"+id, "", 200))
+	if st.Connected || st.Console != nil {
+		t.Errorf("ws state after the failure: connected %v, console %+v", st.Connected, st.Console)
+	}
+	// nor does any window see it on the default: no in-use mark on the
+	// default's row, and nothing keeping it from an edit or a removal
+	if n := e.srv.hub.tabsOn("demo-sqlite"); n != 0 {
+		t.Errorf("%d tabs counted on demo-sqlite", n)
+	}
+	if u := e.srv.hub.inUseFor(nil); len(u.Tabs) != 0 {
+		t.Errorf("in use: %+v", u.Tabs)
+	}
+	// and a Refresh does not quietly connect the default; its refusal is
+	// said on screen, not filed in the default's log
+	if env := e.api("POST", "/api/v1/ws/"+id+"/refresh", "", 400); !strings.Contains(env.Error, "not connected") {
+		t.Errorf("refresh: %+v", env)
+	}
+	ev, _ = s.awaitLog(t, "not connected — nothing to refresh")
+	if l := decodeData[logLine](t, testEnvelope{Data: ev.Data}); l.Conn != "" {
+		t.Errorf("the refusal went to %q's log", l.Conn)
+	}
+
+	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"demo-sqlite"}`, 200)
+	ev, _ = s.await(t, "conn")
+	if c := decodeData[connEvent](t, testEnvelope{Data: ev.Data}); !c.Connected || c.Failed || c.Console == nil {
+		t.Fatalf("connect: %+v", c)
+	}
+	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"broken"}`, 200)
+	ev, _ = s.await(t, "conn")
+	c = decodeData[connEvent](t, testEnvelope{Data: ev.Data})
+	if !c.Failed || !c.Connected || c.Active != "demo-sqlite" || c.Console == nil || c.Console.Database != "demo-sqlite" {
+		t.Fatalf("failed switch: %+v, console %+v — want still on demo-sqlite", c, c.Console)
 	}
 }
 

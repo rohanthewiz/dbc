@@ -1213,6 +1213,7 @@
         setStatus((d.refresh ? "refreshing " : "connecting to ") + d.name + "…", "warn");
         break;
       case "conn":
+        if (firstFailed(d)) { onNowhere(t, d); break; }
         state.active = d.active;
         t.conn = d.active;
         t.counting = countsComing(d);
@@ -1252,6 +1253,35 @@
         break;
     }
     trackTab(t, ev.type, d);
+  }
+
+  // firstFailed says "conn" event d is a tab's FIRST connect failing (or
+  // canceled): its workspace was never on a connection, and d.active is
+  // only the config's default that a new workspace names (web/hub.go
+  // connEvent.Connected) — not where the tab is. A tab already on one that
+  // fails to switch is still connected, and stays on it as ever.
+  const firstFailed = (d) => !!d.failed && !d.connected;
+
+  // onNowhere draws a tab on screen whose first connect failed: on nothing,
+  // as after a disconnect, but still headed where it was going. Its conn
+  // is left as it is — so it stays in its group, keeps its saved place
+  // and its console, and the next look at it (activate) or a click on the
+  // connection tries again. Taking d.active as its connection moved it to
+  // the default: out of its group (the orphan beside a Postgres in Docker
+  // group while Docker was starting), saved there, and showing the
+  // default's console in its editor.
+  function onNowhere(t, d) {
+    state.active = "";
+    t.counting = false;
+    markActive("", "");
+    els.stateful.hidden = true;
+    t.stateful = false;
+    showSide(d); // empty: the server sends none for a workspace on nothing
+    setStatus(d.status || "not connected — the connect to " + (t.conn || "the connection") + " failed (see the log)",
+      d.status ? "warn" : "err");
+    showLogOf(t);
+    renderTabs(); // the + no longer lands where the default's tab would
+    dbc.chat.refresh();
   }
 
   // offScreen tells, in the log and status bar on screen, what became of a
@@ -1306,6 +1336,9 @@
         savePlans();
         break;
       case "conn":
+        // a first connect that failed leaves it headed where it was (see
+        // onNowhere)
+        if (firstFailed(d)) break;
         t.conn = d.active;
         t.counting = countsComing(d);
         if (d.changed) saveTab(t);
@@ -1394,7 +1427,13 @@
       prev.grid = dbc.grid.snapshot();
       keepView(prev, prev.grid);
       prev.planOpen = dbc.cmd.planOpen();
-      saveTab(prev);
+      // A tab just closed is not saved: reallyClose brings its neighbour on
+      // through here, and this PUT raced the close's DELETE — landing
+      // second, it put the closed tab back on the server, and the next boot
+      // claimed it: a tab the user had closed, back as an extra one outside
+      // the group it was closed from. Its console is still saved (what was
+      // typed is kept, as leaveDoc keeps it).
+      if (tabs.includes(prev)) saveTab(prev);
       saveConsole(docOf(prev));
     }
     state.tab = t;
@@ -1500,18 +1539,27 @@
   function applyState(st, fresh) {
     const t = state.tab;
     if (t.script || t.pipeline || t.job) { applyScriptState(st, fresh); return; }
-    state.active = st.active;
-    t.conn = st.active;
+    // A workspace whose first connect has not landed (st.connected false
+    // while it names a connection) is on nothing: still dialing — a Docker
+    // that is slow to answer — or failed. Its active is only the config's
+    // default, so the tab keeps the connection it was headed for (see
+    // onNowhere): taking the default moved it out of its group whenever it
+    // came back on screen mid-dial. A disconnected one names none, and is
+    // on none.
+    const on = st.connected ? st.active : "";
+    state.active = on;
+    if (st.connected || !st.active) t.conn = st.active;
     showLogOf(t);
     followConsole(t, st.console);
-    markActive(st.active, st.connecting || "");
+    markActive(on, st.connecting || "");
     showSide(st);
     setBusy(st.busy);
     t.busy = st.busy;
     if (!st.busy) { els.stateful.hidden = !st.stateful; t.stateful = st.stateful; }
     if (st.busy) setStatus(st.status, "warn");
+    else if (st.connecting) setStatus("connecting to " + st.connecting + "…", "warn");
     else if (fresh && t.status) setStatus(t.status, t.level);
-    else setStatus(st.active ? "ready on " + st.active : "not connected", "");
+    else setStatus(on ? "ready on " + on : "not connected", "");
     if (st.hasResult) {
       if (fresh) dbc.grid.restore(viewFor(t, st) || t.grid); else dbc.grid.load();
     }
@@ -1930,25 +1978,44 @@
   // a connection's row: a query tab switches to it; a script tab, which is
   // never on one, gets the name typed in at the caret as a Go string —
   // the argument s.Query and friends take
+  //
+  // A click NEVER types into a query tab's console. The typing goes
+  // through typeConn, which writes only into the tab's own document: a
+  // script, pipeline or job tab is state.tab from the moment it is
+  // clicked, but until activate has read its file (or drawn its canvas)
+  // the editor still shows the tab left — a console — and the name used
+  // to land there.
   els.conns.addEventListener("click", (e) => {
     const b = e.target.closest(".conn-item");
     if (!b) return;
-    if (state.tab && state.tab.script) { dbc.editor.insert(JSON.stringify(b.dataset.conn)); return; }
+    const t = state.tab;
+    if (t && t.script) { typeConn(t, b.dataset.conn); return; }
     // a pipeline tab: the selected node's connection field (in the JSON
     // view, at the caret, as a script tab types it)
-    if (state.tab && state.tab.pipeline) {
-      if (pipeKit.json(state.tab.pipeline)) dbc.editor.insert(JSON.stringify(b.dataset.conn));
+    if (t && t.pipeline) {
+      if (pipeKit.json(t.pipeline)) typeConn(t, b.dataset.conn);
       else pipeKit.useConn(b.dataset.conn);
       return;
     }
     // a job tab has no connection field of its own: its pipelines do
-    if (state.tab && state.tab.job) {
-      if (jobKit.json(state.tab.job)) dbc.editor.insert(JSON.stringify(b.dataset.conn));
+    if (t && t.job) {
+      if (jobKit.json(t.job)) typeConn(t, b.dataset.conn);
       else setStatus("a job's steps run pipelines, which name their connections — open one (↗ in a step's inspector) to set it", "");
       return;
     }
     connect(b.dataset.conn);
   });
+
+  // typeConn types connection name in at the caret of tab t's own document
+  // as a Go/JSON string — or, while the editor is not on that document yet
+  // (t is still opening), says so and types nothing (see above).
+  function typeConn(t, name) {
+    if (dbc.editor.docKey() !== docOf(t)) {
+      setStatus(t.title + " is still opening — click " + name + " again once it shows", "warn");
+      return;
+    }
+    dbc.editor.insert(JSON.stringify(name));
+  }
 
   // ── the splitter: drag to size the editor; the height is remembered ────
   els.splitter.addEventListener("pointerdown", (e) => {
@@ -2352,6 +2419,9 @@
       log("err", "could not open console " + name + ": " + e.message);
       return false;
     }
+    // closed while the console was read — a slow connect's swap lands
+    // late: saving it now would put the closed tab back (see activate)
+    if (!tabs.includes(t)) return false;
     t.cdb = cdb;
     t.console = name;
     const k = docOf(t);
@@ -3623,10 +3693,11 @@
   // tabs have) and its tooltip names the group and the connection. With
   // several groups on the strip, a plain + read as "somewhere".
   function markNew(plus) {
-    const g = groups.landing(state.tab, state.active);
+    const here = newTabConn();
+    const g = groups.landing(state.tab, here);
     plus.className = "qnew" + (g ? " grp g" + groups.color(g) : "");
     plus.title = "New query tab" + (g ? " in group " + g.name : "") +
-      " on " + (state.active || "the default connection") + " (Alt+T)" +
+      " on " + (here || "the default connection") + " (Alt+T)" +
       (groups.count() ? " · right-click picks another group" : "");
   }
 
@@ -3693,7 +3764,7 @@
   // would pick marked ●; then the plain click itself, beside the tab on
   // screen, for when no group is wanted to steer it.
   function openNewMenu(x, y) {
-    const land = groups.landing(state.tab, state.active);
+    const land = groups.landing(state.tab, newTabConn());
     const items = [{ head: "new query tab in" }];
     for (const g of groups.ordered()) {
       items.push({ label: (g === land ? "● " : "") + g.name + "  · " + groups.describe(g), act: () => newTab(g) });
@@ -3707,19 +3778,34 @@
   // enough — one person, one click at a time.
   const newKey = () => Date.now().toString(36);
 
+  // newTabConn is the connection a plain new tab (Alt+T, a click on +)
+  // starts on: the tab on screen's own, not state.active — right after a
+  // tab switch state.active is still the previous tab's until the new
+  // one's state lands (see tabBody), and a tab whose first connect failed
+  // is on none (onNowhere) while still headed for its own. A script tab
+  // has none, so it, and a tab never sent anywhere, fall back to
+  // state.active as before. The + chip's colour and its menu's ● ask this
+  // too (markNew, openNewMenu), so where they say a tab lands is where it
+  // does.
+  const newTabConn = () => (state.tab && !state.tab.script && !state.tab.pipeline && !state.tab.job && state.tab.conn) || state.active;
+
   // newTab opens a query tab on the active tab's connection — or, given a
   // group g (the group menu, the + button's right-click), in g, on g's
   // connection (tabgroups.js connFor). Its title is the lowest "Query N"
   // not in use; its first save claims it for this window.
   function newTab(g) {
+    // a connection group outlives its connection being removed; a tab
+    // opened there would connect to another (activate falls back to a
+    // connection the list has) and land outside the group it was opened
+    // in — so it is refused, as the TUI refuses it (newTabIn)
+    if (g && g.conn && !connItem(g.conn)) {
+      log("warn", "group " + g.name + " is for " + g.conn + ", which is no longer a connection — Ungroup (right-click its chip) removes the group");
+      return;
+    }
     const used = new Set(tabs.map((t) => t.title));
     let n = 1;
     while (used.has("Query " + n)) n++;
-    // The tab on screen's own connection, not state.active: right after a
-    // tab switch state.active is still the previous tab's until the new
-    // one's state lands (see tabBody). A script tab has none, so it, and a
-    // tab not yet connected, fall back to state.active as before.
-    const here = (state.tab && !state.tab.script && !state.tab.pipeline && !state.tab.job && state.tab.conn) || state.active;
+    const here = newTabConn();
     const t = { key: newKey(), title: "Query " + n, conn: g ? groups.connFor(g, here) : here, buffer: "", ws: "" };
     // Beside the tab on screen; into a group, after its last tab — where
     // the redraw's arrange would gather it anyway, and a connection group

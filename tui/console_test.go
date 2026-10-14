@@ -90,6 +90,43 @@ func TestConsoleStaysOnAFailedConnect(t *testing.T) {
 	}
 }
 
+// A click on a connection — single or double, from the editor, onto a
+// connection that answers or one that does not — never types into the
+// editor: what it shows is each database's console exactly as left, the
+// failed one's included. dbc web once typed into a console on such a click
+// (app.js typeConn); this holds the TUI to the same.
+func TestClickingAConnectionNeverTypesIntoTheEditor(t *testing.T) {
+	m, _ := consoleModel(t)
+	m.refreshConns() // consoleModel's connections, into the list
+	frame(m)         // and onto the screen, where the clicks find them
+	m.editor.SetText("SELECT 'demo'")
+	m.focus = focusEditor
+	clickConn := func(name string, n int) {
+		t.Helper()
+		x, y := connRowAt(t, m, name)
+		for range n {
+			click(t, m, x, y)
+		}
+	}
+	clickConn("a", 1)
+	if m.ws.Active() != "a" || m.editor.Text() != "" {
+		t.Fatalf("on a: active %q, editor %q", m.ws.Active(), m.editor.Text())
+	}
+	m.editor.SetText("SELECT 'a'")
+	clickConn("broken", 2) // fails: the tab stays on a, its console with it
+	if m.ws.Active() != "a" || m.editor.Text() != "SELECT 'a'" {
+		t.Fatalf("after broken: active %q, editor %q", m.ws.Active(), m.editor.Text())
+	}
+	clickConn(config.DemoSQLite, 2)
+	if m.editor.Text() != "SELECT 'demo'" {
+		t.Fatalf("back on the demo: editor %q", m.editor.Text())
+	}
+	clickConn("a", 1)
+	if m.editor.Text() != "SELECT 'a'" {
+		t.Fatalf("back on a: editor %q", m.editor.Text())
+	}
+}
+
 // The first start with consoles seeds the opening console from the old
 // single buffer.sql — once: after that, a console with no file opens empty.
 func TestConsoleSeededFromLegacyBufferOnce(t *testing.T) {

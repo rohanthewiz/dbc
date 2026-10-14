@@ -101,7 +101,11 @@ type Workspace struct {
 
 	mu sync.Mutex // guards everything below down to sessMu
 
-	active   string         // the active connection
+	active string // the active connection
+	// landed: a connect has landed on active and no Disconnect followed
+	// (Connected). active alone cannot say so: a new workspace starts on
+	// the config's default (New), and keeps it when its first connect fails.
+	landed   bool
 	catalog  *model.Result  // its tables, for a sidebar; nil until connected
 	tableIdx *db.TableIndex // the same catalog, indexed for the assistant
 	// The levels above the tables. databases is the server's, on a driver
@@ -257,6 +261,22 @@ func (w *Workspace) Active() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.active
+}
+
+// Connected reports whether the workspace is on its active connection: a
+// connect has landed there and no Disconnect has followed. A new workspace
+// reports the config's default as Active before any connect lands — so a
+// UI can draw it — and still does when its first connect fails or is
+// canceled; Connected is false then, and the workspace is on nothing. A
+// connect that fails to switch away from a connection leaves it on that
+// one, Connected still true.
+//
+// Unlike Catalog() != nil it holds for a connection whose table list
+// could not be read.
+func (w *Workspace) Connected() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.landed
 }
 
 // Catalog is the active connection's tables, as its catalog query returned

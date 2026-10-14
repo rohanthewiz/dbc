@@ -423,7 +423,9 @@ func (h *hub) tabsOn(name string) int {
 	for _, t := range all {
 		connecting, busy := t.ws.Connecting()
 		on := func(c string) bool { return c == name || derivedFrom(t.ws.Config(), c, name) }
-		if on(t.ws.Active()) || (busy && on(connecting)) {
+		// Active only once connected (tab.on): a workspace that never
+		// connected names the default but holds nothing there
+		if (t.ws.Connected() && on(t.ws.Active())) || (busy && on(connecting)) {
 			n++
 		}
 	}

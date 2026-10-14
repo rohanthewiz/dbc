@@ -129,7 +129,20 @@ func (m *Model) startRun(st workspace.Start, err error) tea.Cmd {
 // the user left off; a pick the database no longer has falls back to the
 // default schema (workspace.SchemaPick).
 func (m *Model) connectCmd(name string) tea.Cmd {
+	m.aimAt(name)
 	return m.tag(job(m.ws.ConnectPick(name, m.schemaPicks[name]).Job))
+}
+
+// aimAt records that the tab on screen is being sent to name (queryTab.aim)
+// — before the connect's job runs, so there is no moment between the
+// workspace's "no longer connecting" and the outcome reaching Update when a
+// tab that has never connected reads as on the workspace's default: an
+// arrange pass for any message in that gap would move it out of its group.
+// A tab already on a connection ignores its aim, so it is set regardless.
+func (m *Model) aimAt(name string) {
+	if len(m.tabs) > 0 && name != "" {
+		m.active().aim = name
+	}
 }
 
 // cancelConnect abandons the connect in flight. It reports false when there
@@ -146,6 +159,9 @@ func (m *Model) cancelConnect() bool {
 // picked there (navigator.go), or the default.
 func (m *Model) setActive(name string) tea.Cmd {
 	st := m.ws.SwitchPick(name, m.schemaPicks[name])
+	if st.Job != nil {
+		m.aimAt(name)
+	}
 	m.notes(st.Notes)
 	return m.tag(job(st.Job))
 }
@@ -156,6 +172,16 @@ func (m *Model) setActive(name string) tea.Cmd {
 // a connect back to the same connection does (connected), with a
 // "refreshed …" line saying what the list now holds.
 func (m *Model) refreshCatalog() tea.Cmd {
+	if t := m.active(); t.unconnected {
+		// never connected: its workspace's active is only the config's
+		// default, which a Refresh would quietly connect it to. Refresh
+		// means "try again" here — where the tab was headed, if anywhere.
+		if _, dialing := m.ws.Connecting(); t.aim != "" && !dialing {
+			return m.setActive(t.aim)
+		}
+		m.log(logWarn, "not connected — nothing to refresh")
+		return nil
+	}
 	st, err := m.ws.Refresh()
 	if err != nil {
 		m.refused(err)
@@ -182,7 +208,7 @@ func (m *Model) connected(ev *workspace.Connected) tea.Cmd {
 	if ev.Err != nil {
 		return nil
 	}
-	m.active().unconnected = false
+	m.active().unconnected, m.active().aim = false, ""
 	m.syncResults()          // the results pane follows the connection (resulttabs.go)
 	m.switchConsole(ev.Name) // the editor follows the database (console.go)
 	m.refreshConns()

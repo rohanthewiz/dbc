@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -346,5 +347,220 @@ func TestTabGroupCloseTabs(t *testing.T) {
 	}
 	if !strings.Contains(logText(m), "kept 1 tab") {
 		t.Errorf("log:\n%s", logText(m))
+	}
+}
+
+// brokenGroupModel is groupedModel with two connection groups: brk, on the
+// connection whose connect always fails (consoleModel's "broken": a
+// read-only SQLite file in a directory that does not exist — what a
+// Postgres in Docker is while Docker is still starting), and demo, on the
+// config's default, which Query 2 and Query 3 are on. A tab that wrongly
+// reads as on the default lands in demo.
+func brokenGroupModel(t *testing.T) (m *Model, brk, demo *tabGroup) {
+	t.Helper()
+	m = groupedModel(t)
+	brk = m.newGroup("brk", "broken")
+	demo = m.newGroup("demo", config.DemoSQLite)
+	drive(t, m, nil) // the arrange pass every message ends with
+	return m, brk, demo
+}
+
+// A tab opened into a connection group whose connect fails stays in that
+// group. Its workspace has never connected, so it still reports the
+// config's default as active (workspace.New); read as on that, the tab
+// used to fall out of its group — an orphan beside it, or here a member
+// of demo — and to be saved on the default, so the next start lost it
+// from the group for good.
+func TestTabGroupKeepsATabWhoseFirstConnectFailed(t *testing.T) {
+	m, brk, demo := brokenGroupModel(t)
+	m.editor.SetText("SELECT 'demo'") // Query 3's console, on the default
+
+	cmd := m.newTabIn(brk)
+	tab := m.active()
+	if m.groupOf(tab) != brk {
+		t.Fatalf("connecting: %s is in %v, want brk", tab.title, m.groupOf(tab))
+	}
+	// the connect's job has run — the workspace no longer says it is
+	// connecting — but its outcome has not reached Update yet: the tab
+	// must not read as on the default in between, or an arrange pass run
+	// for any other message would move it out of its group
+	msg := cmd()
+	if m.groupOf(tab) != brk {
+		t.Fatalf("connect over, not yet drawn: %s is in %v, want brk", tab.title, m.groupOf(tab))
+	}
+	drive(t, m, msg)
+	if !strings.Contains(logText(m), "connect failed") {
+		t.Fatalf("the connect did not fail; log:\n%s", logText(m))
+	}
+	if g := m.groupOf(tab); g != brk {
+		t.Fatalf("after the failed connect %s is in %v, want brk (demo has %d tabs)", tab.title, g, len(m.groupMembers(demo)))
+	}
+	if titles(m) != "Query 1,Query 2,Query 3,Query 4" || len(m.idleGroups()) != 0 {
+		t.Fatalf("tabs %s, idle %d", titles(m), len(m.idleGroups()))
+	}
+	if line := stripLine(m); !strings.Contains(line, " brk ─ Query 4") || strings.Contains(line, "[brk]") {
+		t.Fatalf("strip = %q, want brk's chip in front of Query 4 and no idle chip", line)
+	}
+	// it is on no connection: the sidebar marks none as the tab's, and
+	// the default's console never came into its editor
+	for _, it := range m.conns.items {
+		if it.mark == "●" {
+			t.Errorf("the sidebar marks %s as the tab's connection", it.label)
+		}
+	}
+	if got := m.editor.Text(); got != "" {
+		t.Errorf("the failed tab's editor holds %q", got)
+	}
+	// a new tab from it lands in brk, as the + says, and it is saved on
+	// broken, so a restart puts it back in brk
+	if m.landing() != brk {
+		t.Errorf("+ from the failed tab lands in %v, want brk", m.landing())
+	}
+	if saved := m.savedTabs(); saved[3].Conn != "broken" {
+		t.Errorf("the failed tab is saved on %q, want broken", saved[3].Conn)
+	}
+
+	// a connect that does land takes it where it went, out of brk
+	drive(t, m, nil, m.setActive(config.DemoSQLite))
+	if m.groupOf(tab) != demo {
+		t.Fatalf("connected to the default: %s is in %v, want demo", tab.title, m.groupOf(tab))
+	}
+}
+
+// A tab whose first connect fails in the background — it was left while
+// dialing — stays in its group too, and tries again when it comes back on
+// screen, as a restored tab connects on its first look.
+func TestTabGroupKeepsABackgroundTabWhoseConnectFailed(t *testing.T) {
+	m, brk, _ := brokenGroupModel(t)
+	cmd := m.newTabIn(brk)
+	tab := m.active()
+	// mid-dial — a Docker that accepts and does not answer yet — it is in
+	// brk on screen, in the background and back on screen, and coming
+	// back does not dial a second time
+	key(t, m, "alt+1")
+	if m.groupOf(tab) != brk {
+		t.Fatalf("dialing in the background: %s is in %v, want brk", tab.title, m.groupOf(tab))
+	}
+	key(t, m, "alt+4")
+	if c, dialing := m.ws.Connecting(); m.active() != tab || m.groupOf(tab) != brk || !dialing || c != "broken" {
+		t.Fatalf("back mid-dial: on %s, in %v, dialing %q %v", m.active().title, m.groupOf(tab), c, dialing)
+	}
+	key(t, m, "alt+1")
+	drive(t, m, nil, cmd) // lands while Query 4 is in the background
+	if m.groupOf(tab) != brk {
+		t.Fatalf("failed in the background: %s is in %v, want brk", tab.title, m.groupOf(tab))
+	}
+	key(t, m, "alt+4") // the failure, replayed
+	before := strings.Count(logText(m), "connect failed")
+	if m.active() != tab || m.groupOf(tab) != brk || before == 0 {
+		t.Fatalf("back on %s: in %v; log:\n%s", m.active().title, m.groupOf(m.active()), logText(m))
+	}
+	key(t, m, "alt+1")
+	// its failure is broken's to tell (logs.go), not folded into the log
+	// of whatever tab is looked at next
+	if strings.Contains(logText(m), "connect failed") {
+		t.Errorf("Query 1's log (on a) took the failed tab's lines:\n%s", logText(m))
+	}
+	key(t, m, "alt+4") // and the next look tries again
+	if got := strings.Count(logText(m), "connect failed"); got <= before || m.groupOf(tab) != brk {
+		t.Errorf("coming back did not try broken again (%d failures, was %d); log:\n%s", got, before, logText(m))
+	}
+}
+
+// Restored tabs on a connection that will not answer at startup keep their
+// group: the one on screen, connected by Init, and one in the background,
+// connected on its first look.
+func TestTabGroupRestoredTabsWhoseConnectFails(t *testing.T) {
+	m, _ := consoleModel(t)
+	m.restoreTabs([]userdata.LayoutTab{
+		{Title: "one", Conn: "broken"}, {Title: "two", Conn: "a"}, {Title: "three", Conn: "broken"},
+	}, 0)
+	m.restoreGroups([]userdata.LayoutTabGroup{{Name: "brk", Conn: "broken"}})
+	brk := m.groupByName("brk", nil)
+	if brk == nil || titles(m) != "one,three,two" {
+		t.Fatalf("restored: tabs %s, groups %+v", titles(m), m.groups)
+	}
+	drive(t, m, nil, m.Init())
+	if !strings.Contains(logText(m), "connect failed") {
+		t.Fatalf("the first connect did not fail; log:\n%s", logText(m))
+	}
+	key(t, m, "alt+2") // three: its first look connects, and fails
+	key(t, m, "alt+3") // two, on a
+	for _, tab := range m.tabs[:2] {
+		if m.groupOf(tab) != brk {
+			t.Errorf("%s is in %v, want brk", tab.title, m.groupOf(tab))
+		}
+	}
+	if titles(m) != "one,three,two" {
+		t.Errorf("tabs %s", titles(m))
+	}
+	for i, lt := range m.savedTabs() {
+		if want := []string{"broken", "broken", "a"}[i]; lt.Conn != want {
+			t.Errorf("tab %d saved on %q, want %q", i, lt.Conn, want)
+		}
+	}
+}
+
+// A tab that is on a connection and fails to switch to another stays where
+// it was — its connection, its group and its console.
+func TestTabGroupKeepsATabWhoseSwitchFailed(t *testing.T) {
+	m, _, demo := brokenGroupModel(t)
+	m.editor.SetText("SELECT 'demo'")
+	tab := m.active()
+	drive(t, m, nil, m.setActive("broken"))
+	if !strings.Contains(logText(m), "connect failed") {
+		t.Fatalf("the switch did not fail; log:\n%s", logText(m))
+	}
+	if m.ws.Active() != config.DemoSQLite || m.groupOf(tab) != demo || m.editor.Text() != "SELECT 'demo'" {
+		t.Fatalf("after the failed switch: on %q, in %v, editor %q", m.ws.Active(), m.groupOf(tab), m.editor.Text())
+	}
+}
+
+// A tab whose first connect failed follows its connection's rename, as its
+// group does — or the two would part — and lets go of it when it is
+// removed, rather than retrying a name the config no longer has.
+func TestTabGroupFailedTabFollowsRenameAndRemove(t *testing.T) {
+	m, brk, _ := brokenGroupModel(t)
+	drive(t, m, nil, m.newTabIn(brk))
+	tab := m.active()
+	key(t, m, "alt+1")
+	m.connRenamed("broken", "broken2")
+	if tab.aim != "broken2" || brk.conn != "broken2" || m.groupOf(tab) != brk {
+		t.Fatalf("after the rename: aim %q, group on %q, in %v", tab.aim, brk.conn, m.groupOf(tab))
+	}
+	m.cfg.Connections = slices.DeleteFunc(m.cfg.Connections, func(c config.Connection) bool { return c.Name == "broken" })
+	m.connRemovedFromTabs("broken2")
+	if tab.aim != "" || m.groupOf(tab) != nil {
+		t.Fatalf("after the remove: aim %q, in %v", tab.aim, m.groupOf(tab))
+	}
+	before := strings.Count(logText(m), "connect failed")
+	key(t, m, "alt+4")
+	if m.active() != tab || strings.Count(logText(m), "connect failed") != before {
+		t.Errorf("its look tried the removed connection; log:\n%s", logText(m))
+	}
+}
+
+// A folded group whose members cannot connect stays folded: a member looked
+// at through the group's menu tries its connection, fails, and folds away
+// again with the others when another tab comes on screen — rather than
+// dropping out of the group and showing beside the chip as an orphan.
+func TestTabGroupFoldedMembersWhoseConnectFails(t *testing.T) {
+	m, _ := consoleModel(t)
+	m.restoreTabs([]userdata.LayoutTab{
+		{Title: "one", Conn: "a"}, {Title: "two", Conn: "broken"}, {Title: "three", Conn: "broken"},
+	}, 0)
+	m.restoreGroups([]userdata.LayoutTabGroup{{Name: "brk", Conn: "broken", Collapsed: true}})
+	drive(t, m, nil, m.Init())
+	brk := m.groupByName("brk", nil)
+	if line := stripLine(m); !strings.Contains(line, " brk +2 ") || strings.Contains(line, "two") {
+		t.Fatalf("restored strip = %q, want brk folded over two tabs", line)
+	}
+	pickGroupMenu(t, m, brk, "  two") // its first look: the connect fails
+	if !strings.Contains(logText(m), "connect failed") || m.active().title != "two" || m.groupOf(m.active()) != brk {
+		t.Fatalf("on %s in %v; log:\n%s", m.active().title, m.groupOf(m.active()), logText(m))
+	}
+	key(t, m, "alt+1")
+	if line := stripLine(m); !strings.Contains(line, " brk +2 ") || strings.Contains(line, "two") || strings.Contains(line, "three") {
+		t.Fatalf("back on one, strip = %q, want brk folded over both again", line)
 	}
 }

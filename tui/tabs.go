@@ -84,11 +84,24 @@ type queryTab struct {
 	// elapsed-time ticker can be re-armed when the tab comes back; tickSeq
 	// numbers the tab's visits, so only this visit's ticker chain lives.
 	gen, tickSeq int
-	// unconnected marks a tab whose workspace has never connected (one
-	// opened while the current tab had no connection). Its workspace still
-	// reports the config's default as active (workspace.New), so without
-	// this the tab would look like it is on that connection.
+	// unconnected marks a tab whose workspace has never connected: every
+	// tab opened this run or restored, until its first connect lands. Its
+	// workspace still reports the config's default as active
+	// (workspace.New), so without this the tab would look like it is on
+	// that connection.
 	unconnected bool
+	// aim is the connection an unconnected tab was last sent to — the one
+	// newTabIn opened it for, a restored tab's on its first look, a click
+	// in the Connections pane. A connect that fails (a Postgres in Docker
+	// while Docker is still starting) or is canceled leaves the tab on
+	// nothing, but it still belongs where it was headed: tabAim reads it
+	// for the tab's group, its place in the saved layout and the + chip's
+	// landing, and arrive tries it again when the tab comes back on screen.
+	// Without it the tab read as on the default its workspace reports —
+	// it fell out of its group, beside it as an orphan or into the
+	// default's, and was saved on the default, so a restart kept it there.
+	// Unread once the tab connects (unconnected false).
+	aim string
 	// pending holds the events that landed while the tab was in the
 	// background, replayed in order when it is activated.
 	pending []tea.Msg
@@ -191,7 +204,7 @@ func (m *Model) routeTab(tm tabMsg) tea.Cmd {
 		// should not wait on a tab switch. The replay then has no
 		// release left to do.
 		if !ev.Stale && ev.Err == nil {
-			t.unconnected = false
+			t.unconnected, t.aim = false, ""
 			cmd = m.tagFor(t, m.releaseThenCloseOn(t.ws, ev))
 			ev.Release, ev.Left = nil, ""
 			m.refreshConns() // its ○ in the connections list moved
@@ -283,6 +296,12 @@ func (m *Model) arrive() tea.Cmd {
 		name := t.lazy
 		t.lazy = ""
 		cmds = append(cmds, m.connectCmd(name))
+	} else if _, dialing := m.ws.Connecting(); t.unconnected && t.aim != "" && !dialing {
+		// a tab whose connect failed before it ever connected tries again
+		// on each look, as a restored tab connects on its first one (and
+		// as dbc web connects a tab whose workspace has not): whatever kept
+		// it off — Docker still starting — may be over by now
+		cmds = append(cmds, m.connectCmd(t.aim))
 	}
 	// A new chain for this visit: ticks of an earlier visit still in
 	// flight (a quick A → B → A) carry the old number and are dropped, so
@@ -346,12 +365,16 @@ func (m *Model) newTabIn(g *tabGroup) tea.Cmd {
 	// the console first, so the connect's landing (switchConsole) finds
 	// the editor already on this database and swaps nothing
 	m.openTabConsole(conn)
+	// unconnected until the connect lands — it may not (aim keeps where
+	// the tab was headed) — and for good when there is nothing to dial
+	t.unconnected = true
 	var cmd tea.Cmd
-	if conn == "" {
-		t.unconnected = true
-	} else {
+	if conn != "" {
 		cmd = m.connectCmd(conn)
 	}
+	// the ● follows the tab, as on a switch (arrive): it was the tab
+	// left's, and this one is on nothing until its connect lands
+	m.refreshConns()
 	// into its group once its connect is in flight, so tabConn reads the
 	// connection it is headed for (the deeper-group exclusions addToGroup
 	// makes depend on it)
@@ -477,6 +500,20 @@ func (m *Model) tabTarget(i int) (string, *workspace.Workspace) {
 		return "", ws
 	}
 	return ws.Active(), ws
+}
+
+// tabAim is tabTarget's connection, or — for a tab that has never
+// connected — the one it was last sent to (queryTab.aim): where the tab
+// belongs rather than what it is on. Groups, the saved layout and the +
+// chip ask this; what may not be cut from under a tab (Remove, Stop
+// container, a derived pool's close) asks tabTarget, since a tab whose
+// connect failed holds nothing on its aim.
+func (m *Model) tabAim(i int) string {
+	conn, _ := m.tabTarget(i)
+	if t := m.tabs[i]; conn == "" && t.unconnected {
+		return t.aim
+	}
+	return conn
 }
 
 // tabWorkspaces is every tab's workspace, the active one's live value.
@@ -898,10 +935,11 @@ func (m *Model) savedTabs() []userdata.LayoutTab {
 		if i == m.curTab {
 			console = m.consoleName
 		}
-		// tabTarget: a lazy tab's saved connection, not the default its
-		// unconnected workspace reports
-		conn, _ := m.tabTarget(i)
-		out[i] = userdata.LayoutTab{Title: t.title, Console: console, Conn: conn}
+		// tabAim: a lazy tab's saved connection, or the one a tab whose
+		// connect failed was headed for — not the default its unconnected
+		// workspace reports, which would move it there (and out of its
+		// group) on the next start
+		out[i] = userdata.LayoutTab{Title: t.title, Console: console, Conn: m.tabAim(i)}
 	}
 	return out
 }
@@ -947,6 +985,9 @@ func (m *Model) restoreTabs(saved []userdata.LayoutTab, active int) {
 			t.title = m.nextTabTitle()
 		}
 		t.lazy = conn
+		// its workspace is fresh — New's, for the first — so nothing has
+		// connected it yet; lazy says where it will go
+		t.unconnected = true
 		m.restoreTabConsole(conn, lt.Console)
 	}
 	m.park(m.active())

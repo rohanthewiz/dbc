@@ -212,10 +212,15 @@ func (s *Server) handleSaveLayout(ctx rweb.Context) error {
 // wsState is a workspace as the page needs it to draw itself — after an
 // open, and after a reload reattaches to a workspace that already exists.
 type wsState struct {
-	ID         string   `json:"id"`
-	Win        string   `json:"win"` // the window (browser tab) it belongs to
-	Active     string   `json:"active"`
-	Connected  bool     `json:"connected"` // its catalog has loaded
+	ID     string `json:"id"`
+	Win    string `json:"win"` // the window (browser tab) it belongs to
+	Active string `json:"active"`
+	// Connected: on Active — a connect has landed there
+	// (workspace.Connected). False for a workspace whose first connect has
+	// not landed (still dialing, failed, canceled), whose Active is only
+	// the config's default: the page keeps such a tab on the connection it
+	// was headed for, as it does for a "conn" (connEvent.Connected).
+	Connected  bool     `json:"connected"`
 	Connecting string   `json:"connecting,omitempty"`
 	Busy       bool     `json:"busy"`
 	Status     string   `json:"status,omitempty"` // the run in flight
@@ -234,7 +239,7 @@ type wsState struct {
 
 func (s *Server) state(t *tab) wsState {
 	st := wsState{
-		ID: t.id, Win: t.win.id, Active: t.ws.Active(), Connected: t.ws.Catalog() != nil,
+		ID: t.id, Win: t.win.id, Active: t.ws.Active(), Connected: t.ws.Connected(),
 		Busy: t.ws.Busy(), Status: t.ws.RunningStatus(),
 		HasResult: t.ws.LastResult() != nil, HasPlan: t.planState().plan != nil,
 		Sets: scriptSets(t.ws), sideState: s.sidebar(t.ws), resultTabsState: resultTabsOf(t.ws),

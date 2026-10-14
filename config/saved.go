@@ -57,8 +57,10 @@ import (
 // PASSWORDS. A DSN is stored as typed: a ${VAR} reference stays unexpanded
 // and is expanded by each process as it merges the entry (ExpandDSN), so a
 // password kept in the environment never lands in the file. One typed inline
-// is stored as typed, in a file created 0600 in the 0700 ~/.config/dbc — as
-// safe as config.toml, which holds DSNs the same way.
+// is stored too, but a database server's DSN is encrypted on its way to the
+// file and decrypted on its way back, with a key kept beside it in
+// connections.key (secret.go). Both files are created 0600 in the 0700
+// ~/.config/dbc.
 
 // SavedConn is one connection in the saved-connections file.
 type SavedConn struct {
@@ -92,6 +94,11 @@ const savedHeader = `# Connections added in dbc web or the TUI. Every dbc (the T
 # tls_ca, tls_cert and tls_key, where a relative path is relative to this file.
 # tls_key_password is only ever a ${VAR}: an encrypted key's passphrase stays
 # in the environment, never in this file.
+#
+# A postgres or mysql dsn is kept encrypted ("enc:v1:…"), with the key in
+# connections.key beside this file: copy both to move them, and keep the key
+# out of anything you share. Without the key those DSNs cannot be read back.
+# A plain dsn written here by hand is read as is and encrypted by dbc.
 
 `
 
@@ -105,24 +112,36 @@ func SavedFile() string {
 	return filepath.Join(home, ".config", "dbc", "connections.toml")
 }
 
-// ReadSaved reads the saved connections at path, in file order. A missing
-// file, or path == "", is none and no error: most users never add one.
+// ReadSaved reads the saved connections at path, in file order, their DSNs
+// decrypted (secret.go). A missing file, or path == "", is none and no
+// error: most users never add one.
 func ReadSaved(path string) ([]SavedConn, error) {
+	list, _, err := readSaved(path)
+	return list, err
+}
+
+// readSaved is ReadSaved, also reporting whether the file held a DSN that
+// should have been encrypted and was not (see openSaved), which only
+// LoadSaved acts on.
+func readSaved(path string) (list []SavedConn, plain bool, err error) {
 	if path == "" {
-		return nil, nil
+		return nil, false, nil
 	}
 	bs, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return nil, false, nil
 		}
-		return nil, serr.Wrap(err, "path", path)
+		return nil, false, serr.Wrap(err, "path", path)
 	}
 	var doc savedDoc
 	if err = toml.Unmarshal(bs, &doc); err != nil {
-		return nil, serr.Wrap(err, "path", path)
+		return nil, false, serr.Wrap(err, "path", path)
 	}
-	return doc.Connections, nil
+	if plain, err = openSaved(path, doc.Connections); err != nil {
+		return nil, false, err
+	}
+	return doc.Connections, plain, nil
 }
 
 // LoadSaved merges the saved connections at path into c, after what c
@@ -132,14 +151,31 @@ func ReadSaved(path string) ([]SavedConn, error) {
 // character in a file dbc wrote would be out of proportion. See MergeSaved
 // for knownDriver.
 //
+// A DSN found plain in the file that belongs encrypted — the file was
+// written by a dbc from before encryption, or by hand — is encrypted here,
+// by rewriting the file through the usual locked edit, rather than left
+// until the next add or edit, which may be months away. A rewrite that
+// fails is a warning, and the next start tries again; the connections are
+// listed either way.
+//
 // Call it once c is complete (after Load, the demos and any ad-hoc
 // connection), before anything else can see c.
 func (c *Config) LoadSaved(path string, knownDriver func(string) bool) {
-	saved, err := ReadSaved(path)
+	saved, plain, err := readSaved(path)
 	if err != nil {
 		c.Warnings = append(c.Warnings, fmt.Sprintf(
 			"connections added in dbc web could not be read, so they are not listed: %v", err))
 		return
+	}
+	if plain {
+		// an edit that changes nothing: edit re-reads the file under the
+		// lock and writeSaved encrypts on the way out
+		err = OpenSaved(path).edit(func(all []SavedConn) ([]SavedConn, error) { return all, nil })
+		if err != nil {
+			c.Warnings = append(c.Warnings, fmt.Sprintf(
+				"the passwords in %s could not be encrypted, so they are still in plain text there: %v",
+				path, err))
+		}
 	}
 	c.Warnings = append(c.Warnings, c.MergeSaved(saved, knownDriver)...)
 }
@@ -351,12 +387,15 @@ func lockSaved(path string) (io.Closer, error) {
 	}
 }
 
-// writeSaved replaces the file with list, atomically: a temp file in the
-// same directory (so the rename stays on one filesystem, where it is
-// atomic), synced, then renamed over the old one. A reader without the lock
-// thus sees the whole old file or the whole new one. os.CreateTemp makes it
-// 0600, which the rename carries over: the file can hold passwords.
+// writeSaved replaces the file with list, its server DSNs encrypted
+// (sealSaved; list itself is left plain), atomically (writeAtomic). It is
+// only called under the writers' lock, which sealSaved relies on when it
+// makes the key.
 func writeSaved(path string, list []SavedConn) error {
+	list, err := sealSaved(path, list)
+	if err != nil {
+		return err
+	}
 	var buf bytes.Buffer
 	buf.WriteString(savedHeader)
 	if len(list) > 0 {
@@ -364,6 +403,16 @@ func writeSaved(path string, list []SavedConn) error {
 			return serr.Wrap(err, "op", "encode saved connections")
 		}
 	}
+	return writeAtomic(path, buf.Bytes())
+}
+
+// writeAtomic replaces the file at path with data, atomically: a temp file
+// in the same directory (so the rename stays on one filesystem, where it is
+// atomic), synced, then renamed over the old one. A reader without the lock
+// thus sees the whole old file or the whole new one. os.CreateTemp makes it
+// 0600, which the rename carries over: the saved-connections file holds
+// passwords, encrypted, and the key file is what decrypts them.
+func writeAtomic(path string, data []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return serr.Wrap(err, "path", path, "op", "create temp")
@@ -371,7 +420,7 @@ func writeSaved(path string, list []SavedConn) error {
 	// removes the temp file on any failure below; after the rename it names
 	// nothing, and the error is ignored
 	defer func() { _ = os.Remove(tmp.Name()) }()
-	if _, err = tmp.Write(buf.Bytes()); err != nil {
+	if _, err = tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		return serr.Wrap(err, "path", tmp.Name(), "op", "write")
 	}

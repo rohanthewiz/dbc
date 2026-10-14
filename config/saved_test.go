@@ -58,18 +58,28 @@ func TestSavedRoundTrip(t *testing.T) {
 			t.Errorf("dir mode %o, want 700", perm)
 		}
 	}
-	// readable, and copyable into config.toml as is: [[connection]] tables,
-	// the ${VAR} unexpanded, under the header
+	// readable: [[connection]] tables under the header; the postgres DSN
+	// encrypted (secret.go), the sqlite one — a path — left as typed
 	bs, _ := os.ReadFile(path)
 	text := string(bs)
-	for _, want := range []string{"# Connections added in dbc web", "[[connection]]", `${PGPASS}`} {
+	for _, want := range []string{"# Connections added in dbc web", "[[connection]]",
+		`dsn = "` + encPrefix, `dsn = "file:x.db"`} {
 		if !strings.Contains(text, want) {
 			t.Errorf("file lacks %q:\n%s", want, text)
 		}
 	}
+	if strings.Contains(text, "PGPASS") || strings.Contains(text, "@stg/app") {
+		t.Errorf("the postgres DSN is in plain text:\n%s", text)
+	}
+	// the key beside it is the user's alone too
+	if ki, err := os.Stat(keyFile(path)); err != nil {
+		t.Errorf("no key file: %v", err)
+	} else if perm := ki.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o600 {
+		t.Errorf("key file mode %o, want 600", perm)
+	}
 	// no temp file is left behind
-	if ents, _ := os.ReadDir(filepath.Dir(path)); len(ents) != 2 { // the file and its .lock
-		t.Errorf("directory holds %d entries, want the file and its lock", len(ents))
+	if ents, _ := os.ReadDir(filepath.Dir(path)); len(ents) != 3 { // the file, its .lock and .key
+		t.Errorf("directory holds %d entries, want the file, its lock and its key", len(ents))
 	}
 }
 

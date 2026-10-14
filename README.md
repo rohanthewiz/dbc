@@ -1451,13 +1451,22 @@ so the TUI, headless runs (`dbc -c name …`), `script`, `migrate` and
 `explain` see these connections too. If the config file later defines the
 same name, the config file's wins, with a warning. `connections.toml` uses
 the same `[[connection]]` tables as the config file, so an entry can be
-copied across. You may edit it by hand, but dbc rewrites it whole on the
+copied across (a Postgres or MySQL one with its `dsn` written out again: in
+`connections.toml` it is encrypted, see below). You may edit it by hand, but dbc rewrites it whole on the
 next change from the browser, so comments are not kept. A running `dbc web`
 reads it only at startup. A DSN is stored as typed: write `${PGPASS}` and the
 password stays in the environment instead of the file. Each dbc expands it
 from its own environment, so set the variable wherever you run the TUI too.
-A DSN typed with the password inline is stored as typed, in a file only you
-can read (`0600`). A DSN is never sent back to the browser. Connections that
+A Postgres or MySQL DSN — inline password and all — is stored encrypted
+(AES-256-GCM, `dsn = "enc:v1:…"`), with the key in
+`~/.config/dbc/connections.key`, made on first use; both files are readable
+only by you (`0600`). That keeps the passwords out of the file when it is
+backed up, synced or shared on its own; it does not stop something running
+as you, which can read the key too. Copy both files to move the connections
+to another machine. Lose the key, and those DSNs have to be typed in again.
+A SQLite or bytdb DSN is a file path and stays readable. A plain `dsn` (from
+an older dbc, or written by hand) is encrypted the next time dbc starts.
+A DSN is never sent back to the browser. Connections that
 an older `dbc web` kept in `web.bytdb` are moved to `connections.toml` the
 first time it starts. Connections added this way show a muted `✎` before their
 driver (the tab's connection is marked by the bar on its left; a dimmer bar

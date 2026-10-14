@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-214
+**Next ID:** N-217
 
 ## Open
 
@@ -87,6 +87,14 @@ ten session docs in `ai_docs/claude_sessions/`
   `TestLessonFilesEmbedded`, `TestInitAndWriteFile`). Anchor the rule
   (`/dbc.toml`) and commit the file — from the session that wrote it, or
   rewritten from the tutorial doc's `dbc.toml` section.
+- **N-216** · raised `2026-1014-1603-encrypt-saved-passwords` · value low
+  Only `connections.toml` encrypts its DSNs (`config/secret.go`). A
+  `config.toml` or `dbc.toml` DSN with an inline password stays plain:
+  `Load` does not decrypt an `enc:v1:` value, and there is no command that
+  makes one. A `dbc encrypt` (prints the envelope for a DSN typed or piped
+  in, made with `connections.key`), with `Load` opening `enc:v1:` values
+  through the same `openDSN`, would cover it. Contingent on someone keeping
+  inline passwords in the config file rather than in `${VAR}`s.
 ## Validate
 
 Items whose remaining work is purely testing: hand checks in a real terminal
@@ -286,6 +294,17 @@ and `raised`.
   scrollbars on "When scrolling" and on "Always": does a click on a tab's
   lower half, or its ✕, still land? If not, raise it as a defect (room for
   the scrollbar below the tabs, or a strip that does not scroll that way).
+- **N-215** · raised `2026-1014-1603-encrypt-saved-passwords` · value medium
+  Saved DSNs are encrypted now, and a plain `connections.toml` is
+  rewritten encrypted by `LoadSaved` at the first start of a new build. It
+  is tested on a throwaway HOME only; the real file has not been through
+  it. Rebuild every dbc in use (the repo's `./dbc`, `dbc.app` via
+  `mac-install.sh`: an older build would read `enc:v1:…` as the DSN), start
+  one, and check that `~/.config/dbc/connections.toml` shows `enc:v1:` for
+  each postgres/mysql entry, that `connections.key` is there and `0600`,
+  and that each saved connection still connects. Check in the TUI and in
+  dbc web, plus one edit that leaves the password empty (keep-password)
+  and still connects.
 
 ## Roadmap
 
@@ -437,6 +456,16 @@ call.
   image moves its data again, as 18 did.
   Updated 2026-10-10 (`/next-list`): still not time. Docker Hub's newest
   19 tag is `19beta4` (2026-10-07); there is no `19`.
+
+- **N-214** · raised `2026-1014-1603-encrypt-saved-passwords` · value low
+  The key that encrypts `connections.toml`'s DSNs sits beside it in
+  `connections.key` (`0600`). That covers the file leaking alone, not
+  anything running as the user. The user asked for "a simple encryption
+  mechanism for now". The step up is the OS keychain: macOS Keychain
+  (`security add-generic-password` / `find-generic-password`, or
+  Security.framework), with the key file as the fallback elsewhere. Only
+  `readKey` and `loadOrCreateKey` change; the `enc:v1:` format stays.
+  Move an existing key file into the keychain on first use.
 
 ## Non-goals
 

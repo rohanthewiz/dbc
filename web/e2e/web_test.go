@@ -1635,11 +1635,11 @@ func consolesPerDatabase(t *testing.T, e *env, p *rod.Page) {
 	waitFor(t, p, "lite's caret and undo kept", `(n) => dbc.editor.caret() === n &&
 	  monaco.editor.getEditors()[0].getModel().canUndo()`, len("SELECT 'on lite'"))
 
-	// Alt+N: a fresh console of lite, named on the tab
-	before := evalStr(t, p, `() => document.querySelector("#qtabs .qtab.on .qcon").textContent`)
+	// Alt+N: a fresh console of lite, a new name on the shown tab
+	before := evalStr(t, p, `() => dbc.state.tab.console`)
 	chord(t, p, modAlt, "n", "KeyN", 78)
 	waitFor(t, p, "a new console", `(b) => dbc.editor.text() === "" &&
-	  document.querySelector("#qtabs .qtab.on .qcon").textContent !== b`, before)
+	  dbc.state.tab.console !== b`, before)
 	setText("SELECT 'another'")
 	if f := onDisk("SELECT 'another'"); filepath.Dir(f) != filepath.Dir(liteFile) {
 		t.Fatalf("the new console %s is not lite's", f)

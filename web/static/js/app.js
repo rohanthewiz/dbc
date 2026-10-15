@@ -3672,7 +3672,10 @@
           (t.script ? " — double-click renames the script" : t.pipeline ? " — double-click renames the pipeline" :
             t.job ? " — double-click renames the job" : " — double-click renames") },
       t.script ? el("span", "qgo", scriptKit.isPlugin(t.script) ? "◈" : "▷") : t.pipeline ? el("span", "qgo", "⛓") : t.job ? el("span", "qgo", "⧉") : null,
-      el("span", "qt", t.title), t.console ? el("span", "qcon", t.console) : null, marks,
+      // the console's name stays off the tab — it crowds the strip and
+      // reads as noise beside the title; the tooltip above still names it,
+      // and Alt+C's menu lists a database's consoles by name
+      el("span", "qt", t.title), marks,
       tabs.length > 1 ? el("button", { type: "button", class: "qx", title: "Close (Alt+W)", "data-close": t.key }, "×") : null);
       els.qtabs.append(b);
     });

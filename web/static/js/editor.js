@@ -60,6 +60,7 @@
   let decos = null;      // its statement-marker decorations
   let lang = "sql";
   const changeFns = [];
+  const menuFns = [];   // onMenu callbacks: open the editor's right-click menu at (x, y)
 
   // ONE DOCUMENT PER QUERY TAB. With Monaco, each tab gets its own model,
   // so switching tabs keeps each one's undo history, cursor and scroll —
@@ -144,6 +145,58 @@
     focus: () => (ed ? ed.focus() : ta.focus()),
     hasFocus: () => (ed ? ed.hasTextFocus() : document.activeElement === ta),
     onChange: (fn) => changeFns.push(fn),
+    // ── the right-click menu ──
+    // onMenu(fn): fn(x, y) opens the editor's menu at those client
+    // coordinates — app.js editorMenu, dbc's own menu (ui.js), the TUI's
+    // editor menu row for row. Monaco's built-in menu is off (contextmenu:
+    // false in start) and this replaces it: Monaco's could neither say why
+    // a row cannot run nor name what Run would run, and it looked like no
+    // other menu on the page. The plain textarea keeps the browser's menu:
+    // its Cut, Copy and Paste are the textarea's own, and nothing else
+    // there could act on a statement any differently from the toolbar.
+    onMenu: (fn) => menuFns.push(fn),
+    // trigger runs one of Monaco's editor actions by id — the rows the
+    // replaced menu offered (undo, rename, the command palette, …) — on
+    // the editor, focused, as a pick from its own menu would.
+    trigger(id) {
+      if (!ed) return;
+      ed.focus();
+      ed.trigger("dbc", id, null);
+    },
+    // cut and paste are the menu's clipboard rows (copy is the selection
+    // through dbc.clip.copyText). Monaco's own clipboard actions are not
+    // used: run from outside a keystroke, their copy and cut go through
+    // document.execCommand, which a browser may refuse silently. These go
+    // through the async Clipboard API, and say so when it is refused.
+    cut() {
+      if (!ed) return;
+      const sel = ed.getSelection();
+      const text = sel ? ed.getModel().getValueInRange(sel) : "";
+      if (!text) return;
+      // the range is taken now: the write is async, and the selection
+      // could move before it resolves. Removed only once the text is
+      // safely on the clipboard — a refused write must not lose it.
+      dbc.clip.copy({ text }, false).then(() => {
+        ed.executeEdits("dbc", [{ range: sel, text: "", forceMoveMarkers: true }]);
+        ed.pushUndoStop();
+        ed.focus();
+        dbc.log("ok", "cut the selection");
+      }, (e) => dbc.log("err", "cut failed: " + e.message));
+    },
+    // undoable: whether Undo and Redo would change anything, so the
+    // menu's rows can say "nothing to undo" rather than do nothing
+    undoable() {
+      const m = ed && ed.getModel();
+      return { undo: !!(m && m.canUndo()), redo: !!(m && m.canRedo()) };
+    },
+    paste() {
+      if (!navigator.clipboard || !navigator.clipboard.readText) {
+        dbc.log("warn", "this browser does not let a page read the clipboard — paste with Ctrl+V");
+        return;
+      }
+      navigator.clipboard.readText().then((t) => { if (t) api.insert(t); else api.focus(); },
+        () => dbc.log("warn", "the browser would not hand over the clipboard — paste with Ctrl+V"));
+    },
     // setDriver picks the SQL dialect Monaco colors: pgsql and mysql know
     // their own keywords and quoting; everything else is generic sql.
     setDriver(driver) {
@@ -816,7 +869,9 @@
     // the sidebar fold: on a Mac, Ctrl+B is otherwise Monaco's cursor-left
     // and never reaches the page's own Ctrl+B / ⌘B
     bind(0, C.KeyB, () => dbc.cmd.toggleSidebar && dbc.cmd.toggleSidebar());
-    // the TUI's editor menu row, in Monaco's own right-click menu
+    // the TUI's editor menu row, once in Monaco's own right-click menu —
+    // which is now off (bindMenu): the rows live on in app.js editorMenu,
+    // and these stay as commands, in the command palette
     // Two actions, one per kind of tab: a menu item's precondition is its
     // "when", so each shows only where it applies, and a script tab's says
     // what the assistant is actually handed (the script, as Go — see
@@ -843,6 +898,45 @@
       keybindings: [K.Shift | C.F12], precondition: "editorHasReferenceProvider",
       run: () => ed.trigger("dbc", "editor.action.referenceSearch.trigger", {}),
     });
+  }
+
+  // bindMenu opens the onMenu menu on a right-click and from the keyboard.
+  //
+  // RIGHT-CLICK. Monaco reports it as onContextMenu whether or not its own
+  // menu is on. With the option off, its ContextMenuController (registered
+  // first, so it has run by the time this does) has already focused the
+  // editor and moved the caret to the click — unless the click landed
+  // inside the selection, which stays so the menu can act on it. The same
+  // rule is applied here again rather than trusted: the menu's Run picks
+  // its statement from the caret, so the caret must be where the click
+  // was. The browser's own menu is not stopped by Monaco with the option
+  // off, so it is here.
+  //
+  // KEYBOARD. Shift+F10 and the ContextMenu key are Monaco's showContextMenu
+  // action, which does nothing with the option off: they open the menu at
+  // the caret instead, below its line, as a right-click there would.
+  function bindMenu() {
+    const open = (x, y) => { for (const fn of menuFns) fn(x, y); };
+    const T = monaco.editor.MouseTargetType;
+    ed.onContextMenu((e) => {
+      // on Monaco's own widgets — the find box's inputs, the suggestions —
+      // the browser's menu stays, as Monaco's own menu leaves them alone
+      if (e.target.type === T.CONTENT_WIDGET || e.target.type === T.OVERLAY_WIDGET) return;
+      e.event.preventDefault();
+      const pos = e.target.position, sel = ed.getSelection();
+      if (pos && sel && !sel.containsPosition(pos)) ed.setPosition(pos);
+      open(e.event.browserEvent.clientX, e.event.browserEvent.clientY);
+    });
+    const atCaret = () => {
+      const p = ed.getScrolledVisiblePosition(ed.getPosition());
+      const r = ed.getDomNode().getBoundingClientRect();
+      // scrolled out of view, p is null: the editor's top-left corner then
+      if (!p) { open(r.left + 8, r.top + 8); return; }
+      open(r.left + p.left, r.top + p.top + p.height);
+    };
+    const K = monaco.KeyMod, C = monaco.KeyCode;
+    ed.addCommand(K.Shift | C.F10, atCaret);
+    ed.addCommand(C.ContextMenu, atCaret);
   }
 
   function start() {
@@ -888,7 +982,8 @@
       // a promise nobody holds, an "Uncaught (in promise) Canceled" in the
       // console each time. The TUI has no such highlight to match anyway.
       occurrencesHighlight: "off",
-      contextmenu: true,
+      // dbc's own menu instead (api.onMenu, wired in bindMenu)
+      contextmenu: false,
     });
     decos = ed.createDecorationsCollection();
     scriptCtx = ed.createContextKey("dbcScript", api.isScript());
@@ -902,6 +997,7 @@
     });
     ed.onDidChangeCursorPosition(scheduleMark);
     bindKeys();
+    bindMenu();
     const hadFocus = document.activeElement === ta;
     wrap.classList.add("monaco-on");
     if (hadFocus) ed.focus();

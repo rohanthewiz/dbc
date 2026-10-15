@@ -3759,6 +3759,130 @@
   });
   $("qnew").addEventListener("click", () => newTab());
 
+  // ── the editor's right-click menu ──────────────────────────────────────
+  // editorMenu is the editor's context menu (right-click, Shift+F10): the
+  // TUI's (tui/menu.go openEditorMenu) row for row in a query tab, then
+  // the tab's consoles as its tab menu lists them. Its rows follow the
+  // menu grammar (ui.js): one that cannot run now stays, dim, and says why
+  // when picked.
+  //
+  //   query tab                     script tab        pipeline / job (JSON)
+  //   ▶ Run <what Run runs>         ▶ Save and run    ▶ Save and run
+  //   ▶ Run <all n statements>      ■ Stop            ■ Stop
+  //   ■ Stop                        Save · Check      Save · Check
+  //   ◈ Explain · Explain analyze   ── edit rows ──   ── edit rows ──
+  //   ── edit rows ──               Suggest · Ask     Command palette
+  //   History · Suggest · Ask       ── symbols ──
+  //   ── symbols ── palette         palette
+  //   consoles · <db> …
+  //
+  // WHAT RUN WOULD RUN. A query tab's Run rows are labelled by the server
+  // (POST /api/v1/picks — workspace.Pick and PickAll, the splitter a run
+  // itself uses): "Run statement 2/4", "Run selection", "Run all 4
+  // statements". Run all is dimmed where it would do what Run does — one
+  // statement in the buffer, or a selection already covering them all —
+  // the TUI's rule, so the two rows never read as a choice that is not
+  // one. Should the request fail the rows fall back to plain words, never
+  // dim: the run itself still says why when it cannot start.
+  //
+  // The picks and the console list (another window or the TUI may have
+  // added a console) are fetched together before the menu opens, as the
+  // tab menu waits for its console list; both are local and quick. A
+  // second right-click before they land wins (menuSeq), and a menu for a
+  // tab no longer on screen is dropped.
+  let menuSeq = 0;
+  async function editorMenu(x, y) {
+    const t = state.tab;
+    if (!t) return;
+    const seq = ++menuSeq;
+    const sql = !t.script && !t.pipeline && !t.job;
+    const [p] = await Promise.all([
+      sql ? api("POST", "/api/v1/picks", editorState()).catch(() => null) : null,
+      sql && t.cdb ? refreshNames(t.cdb) : null,
+    ]);
+    if (seq !== menuSeq || t !== state.tab) return;
+    const trigger = (id) => () => dbc.editor.trigger(id);
+    const sel = dbc.editor.selection(), noSel = sel ? "" : "nothing is selected";
+    const can = dbc.editor.undoable();
+    const stopWhy = els.stop.disabled ? "nothing is running or connecting" : "";
+    const edit = [
+      { head: "" },
+      { label: "Cut", why: noSel, act: () => dbc.editor.cut() },
+      { label: "Copy", why: noSel, act: () => dbc.clip.copyText(sel, "the selection") },
+      { label: "Paste", act: () => dbc.editor.paste() },
+      { label: "Select all", key: "Ctrl+A", act: trigger("editor.action.selectAll") },
+      { label: "Undo", key: "Ctrl+Z", why: can.undo ? "" : "nothing to undo", act: trigger("undo") },
+      { label: "Redo", key: "Ctrl+Shift+Z", why: can.redo ? "" : "nothing to redo", act: trigger("redo") },
+    ];
+    // the language's providers answer these — registerSymbols for SQL,
+    // scripts.js for Go — and Monaco says so in place when the caret is
+    // on nothing they know ("No definition found"), so they are never
+    // dimmed here: asking the server first would be a third copy of the
+    // symbol rules. A pipeline's JSON has no providers, so no such rows.
+    const symbols = [
+      { head: "" },
+      { label: "Go to definition", key: "F12", act: trigger("editor.action.revealDefinition") },
+      { label: "Go to usages", key: "Shift+F12", act: trigger("dbc.goToUsages") },
+      { label: "Rename…", key: "F2", act: trigger("editor.action.rename") },
+    ];
+    // Monaco's own command palette was reached through its right-click
+    // menu (F1 is dbc's key list), so it moves here
+    const palette = { label: "Command palette…", act: trigger("editor.action.quickCommand") };
+    const suggest = { label: "Suggest…", key: "Ctrl+Space", act: trigger("editor.action.triggerSuggest") };
+    let items;
+    if (t.script) {
+      items = [
+        { label: "▶ Save and run", key: "Ctrl+Enter", act: () => runScriptTab(t) },
+        { label: "■ Stop", key: "Ctrl+K", why: stopWhy, act: stop },
+        { label: "Save", key: "Ctrl+S", act: () => saveNow(t) },
+        { label: "Check", act: () => checkNow(t) },
+        ...edit,
+        { head: "" },
+        suggest,
+        { label: "✦ Ask the assistant about this script", act: () => dbc.cmd.askAbout("Explain this script.") },
+        ...symbols, palette,
+      ];
+    } else if (!sql) {
+      // run and stop route by the tab (run, stop above): the pipeline's
+      // or the job's own. Stop is not dimmed — the Stop button follows the
+      // workspace's runs, not these.
+      items = [
+        { label: "▶ Save and run", key: "Ctrl+Enter", act: () => run(false) },
+        { label: "■ Stop", key: "Ctrl+K", act: stop },
+        { label: "Save", key: "Ctrl+S", act: () => saveNow(t) },
+        { label: "Check", act: () => checkNow(t) },
+        ...edit,
+        { head: "" },
+        palette,
+      ];
+    } else {
+      const runWhy = p && !p.n ? "nothing to run — type a query first" : "";
+      const tag = (p && p.tag) || "statement";
+      let allLabel = (p && p.allTag) || "all", allWhy = "";
+      if (p && !p.all) [allWhy, allLabel] = [runWhy, "all"];
+      else if (p && p.all === 1) [allWhy, allLabel] = ["the buffer holds one statement — Ctrl+Enter runs it", "all"];
+      else if (p && p.same) allWhy = "the selection already covers every statement";
+      items = [
+        { label: "▶ Run " + tag, key: "Ctrl+Enter", why: runWhy, act: () => run(false) },
+        { label: "▶ Run " + allLabel, key: "Ctrl+Shift+Enter", why: allWhy, act: () => run(true) },
+        { label: "■ Stop", key: "Ctrl+K", why: stopWhy, act: stop },
+        { label: "◈ Explain " + tag, key: "Ctrl+X", why: runWhy, act: () => dbc.cmd.explain(false) },
+        { label: "◈ Explain analyze (runs it, timed)", key: "Ctrl+Shift+X", why: runWhy, act: () => dbc.cmd.explain(true) },
+        ...edit,
+        { head: "" },
+        { label: "History…", key: "Ctrl+P", act: history },
+        // the right-click put the caret where it was clicked (editor.js
+        // bindMenu), so the suggestions are for that spot
+        suggest,
+        { label: "✦ Ask the assistant about this query", why: runWhy, act: () => dbc.cmd.askAbout("Explain this query.") },
+        ...symbols, palette,
+        ...consoleItems(t),
+      ];
+    }
+    dbc.menu.open(x, y, items);
+  }
+  dbc.editor.onMenu(editorMenu);
+
   // openNewMenu is the + button's right-click menu: a new tab in any group,
   // listed as the strip shows them (left to right), the one a plain click
   // would pick marked ●; then the plain click itself, beside the tab on
@@ -3944,6 +4068,7 @@
       ["F12 · Ctrl+click", "on a table alias, a CTE name or a column the query names: go to where it is declared"],
       ["Shift+F12", "Go to Usages: list its uses in the statement"],
       ["F2", "rename it everywhere in the statement (also in the right-click menu)"],
+      ["right-click · Shift+F10", "the editor's menu: run, explain, stop, the clipboard, history, the tab's consoles"],
     ]],
     ["Query tabs", [
       ["Alt+T", "new tab"], ["Alt+W", "close the tab"], ["Alt+1 … Alt+9", "go to tab N"],

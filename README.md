@@ -1506,6 +1506,7 @@ file's connections are changed in the file. The TUI has the same form —
 | `Ctrl+I` | the assistant, and back (`Ctrl+A` stays select-all) |
 | `Ctrl+Space` | suggestions (they also open as you type — see [Completion](#completion)) |
 | `F12` · `Shift+F12` · `F2` | on an alias, a CTE name or a column the query names: go to its declaration · list its uses · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename)) |
+| right-click · `Shift+F10` | the editor's menu, the TUI's: **▶ Run** (labelled with what it runs — *statement 2/4*, *selection*), **▶ Run all**, **■ Stop**, **◈ Explain** and explain analyze; cut, copy, paste, select all, undo, redo; history, suggest, ✦ ask; go to definition, usages, rename; Monaco's command palette; the tab's consoles. A row that cannot run now is dim and says why |
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | new tab · close tab · go to tab |
 | `Alt+N` · `Alt+C` | new console · next console of the tab's database |
 | `Alt+R` | every run of a job or a pipeline, drilled into (see [Job tabs and the Runs view](#job-tabs-and-the-runs-view-in-dbc-web)) |

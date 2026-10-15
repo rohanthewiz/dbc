@@ -35,6 +35,7 @@ func TestWeb(t *testing.T) {
 		{"signed-out page", signedOut},
 		{"boot", boot},
 		{"run a query", runQuery},
+		{"editor menu", editorMenu},
 		{"editor completion", completion},
 		{"go to and rename an alias and a column", aliasRename},
 		{"tables sidebar", tablesSidebar},

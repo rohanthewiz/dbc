@@ -372,6 +372,36 @@ func TestStmtRange(t *testing.T) {
 	}
 }
 
+// The editor's right-click menu asks what Run and Run all would execute,
+// so its labels and dim rows match the run the click starts.
+func TestPicks(t *testing.T) {
+	e := newTestEnv(t)
+	ask := func(buf string, caret int, sel string) picksResp {
+		t.Helper()
+		body, _ := json.Marshal(runReq{Buffer: buf, Caret: caret, Selection: sel})
+		return decodeData[picksResp](t, e.api("POST", "/api/v1/picks", string(body), 200))
+	}
+	// the caret's offset is UTF-16: past the emoji's two units it is in
+	// the second statement, which in bytes it would not yet be
+	buf := "SELECT '😀' AS a;\nSELECT 2 AS b;\nSELECT 3"
+	if r := ask(buf, 18, ""); r != (picksResp{Tag: "statement 2/3", N: 1, AllTag: "all 3 statements", All: 3}) {
+		t.Errorf("caret pick = %+v", r)
+	}
+	if r := ask(buf, 0, "SELECT 1; SELECT 2"); r.Tag != "selection (2 statements)" || r.N != 2 || r.Same {
+		t.Errorf("selection pick = %+v", r)
+	}
+	// a selection of every statement: Run all would add nothing
+	if r := ask(buf, 0, buf); !r.Same || r.N != 3 {
+		t.Errorf("whole-buffer selection = %+v, want same", r)
+	}
+	if r := ask("SELECT 1", 3, ""); r != (picksResp{Tag: "query", N: 1, AllTag: "query", All: 1, Same: true}) {
+		t.Errorf("one statement = %+v", r)
+	}
+	if r := ask("  -- nothing\n", 0, ""); r != (picksResp{}) {
+		t.Errorf("empty buffer = %+v, want nothing to run", r)
+	}
+}
+
 // A multi-statement run says which statement it is on, on the stream.
 func TestMultiStatementProgress(t *testing.T) {
 	e := newTestEnv(t)

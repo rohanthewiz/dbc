@@ -566,6 +566,47 @@ func (s *Server) handleStmt(ctx rweb.Context) error {
 	return ok(ctx, [2]int{utf16Len(req.Buffer[:r[0]]), utf16Len(req.Buffer[:r[1]])})
 }
 
+// picksResp is what Run and Run all would execute right now, for the
+// editor's right-click menu: each row's label names its statements
+// ("Run statement 2/4", "Run all 4 statements") and a row that would run
+// nothing — or the same thing as the row above it — is drawn dim with the
+// reason, the TUI's openEditorMenu rules.
+//
+// N and All are counts, not the statements: the menu only labels and
+// greys rows, and a run re-picks from the editor as it is when clicked.
+type picksResp struct {
+	Tag    string `json:"tag"`    // workspace.Pick's tag ("" when nothing to run)
+	N      int    `json:"n"`      // statements Run would execute
+	AllTag string `json:"allTag"` // workspace.PickAll's tag
+	All    int    `json:"all"`    // statements Run all would execute
+	// Same: Run all would execute exactly what Run does — a selection
+	// already covering every statement. (A one-statement buffer is the
+	// other such case; the page tells it from All == 1 and words it apart.)
+	Same bool `json:"same"`
+}
+
+// handlePicks answers picksResp for the editor state a run would send.
+// It asks workspace.Pick and PickAll themselves, for the reason handleStmt
+// does: a JavaScript copy of the splitter would sooner or later disagree
+// with the run about what a statement is. Stateless and tab-free — it
+// needs no connection, so the menu reads the same before the first
+// connect. A buffer past maxBuffer answers "nothing", as handleStmt does;
+// the run itself still says why when one is clicked.
+func (s *Server) handlePicks(ctx rweb.Context) error {
+	var req runReq
+	if err := decode(ctx, &req); err != nil {
+		return fail(ctx, err)
+	}
+	if len(req.Buffer) > maxBuffer {
+		return ok(ctx, picksResp{})
+	}
+	ed := workspace.Editor{Text: req.Buffer, Caret: byteOffset(req.Buffer, req.Caret), Selection: req.Selection}
+	stmts, tag := workspace.Pick(ed)
+	all, allTag := workspace.PickAll(req.Buffer)
+	return ok(ctx, picksResp{Tag: tag, N: len(stmts), AllTag: allTag, All: len(all),
+		Same: len(all) > 0 && slices.Equal(stmts, all)})
+}
+
 // utf16Len is the length of s in UTF-16 code units — byteOffset's inverse.
 func utf16Len(s string) int {
 	n := 0

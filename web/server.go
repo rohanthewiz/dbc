@@ -293,6 +293,7 @@ func (s *Server) routes() {
 	r.Put("/api/v1/layout", s.handleSaveLayout)
 	r.Get("/api/v1/history", s.handleHistory)
 	r.Post("/api/v1/stmt", s.handleStmt)
+	r.Post("/api/v1/picks", s.handlePicks)
 	r.Get("/api/v1/chats", s.handleChats)
 	r.Delete("/api/v1/chats/:id", s.handleChatDelete)
 	r.Get("/api/v1/scripts", s.handleScripts)

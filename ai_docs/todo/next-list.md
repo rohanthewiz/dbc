@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-217
+**Next ID:** N-219
 
 ## Open
 
@@ -95,6 +95,13 @@ ten session docs in `ai_docs/claude_sessions/`
   in, made with `connections.key`), with `Load` opening `enc:v1:` values
   through the same `openDSN`, would cover it. Contingent on someone keeping
   inline passwords in the config file rather than in `${VAR}`s.
+- **N-218** · raised `2026-1014-1945-editor-context-menu` · value low
+  dbc web's editor menu (`app.js editorMenu`) has three rows the TUI's
+  (`tui/menu.go openEditorMenu`) lacks: **■ Stop** (dim with nothing
+  running), **Paste** and **Redo**, and its Undo/Redo dim when there is
+  nothing to undo. Port them to the TUI menu if parity is wanted; no one
+  has asked.
+
 ## Validate
 
 Items whose remaining work is purely testing: hand checks in a real terminal
@@ -305,6 +312,16 @@ and `raised`.
   and that each saved connection still connects. Check in the TUI and in
   dbc web, plus one edit that leaves the password empty (keep-password)
   and still connects.
+- **N-217** · raised `2026-1014-1945-editor-context-menu` · value low
+  The web editor's right-click menu replaces Monaco's (`editor.js
+  bindMenu`, `contextmenu: false`). Its **Paste** reads through
+  `navigator.clipboard.readText`, and **Cut** writes before deleting; both
+  are checked only in headless Chrome with clipboard permission granted
+  (e2e step "editor menu"). Check in a real Chrome (first-paste permission
+  prompt), Safari (its "Paste" pop-up) and `dbc.app`'s WKWebView, where
+  `readText` may be missing or refused — the row should then log "paste
+  with Ctrl+V", never fail silently. Also try a right-click inside the find
+  box (Ctrl+F): the browser's own menu should still open there.
 
 ## Roadmap
 

@@ -597,6 +597,13 @@
         runsView = null;
         dom.runsBox.replaceChildren();
       }
+      // Back on the canvas, the cards are drawn again from the run as the
+      // runs kit now has it. While the runs face was up, onEvent left the
+      // hidden canvas alone (it redraws only the design face), so a run
+      // that started and ended under the run page — ▶ Run's POST answered
+      // before the job's first event — left every card on the state it had
+      // at job.run (○ queued) until something else redrew it.
+      if (!runs) renderCanvas();
       if (!quiet) (runs ? runsView.focus() : dom.canvas.focus({ preventScroll: true }));
     }
 

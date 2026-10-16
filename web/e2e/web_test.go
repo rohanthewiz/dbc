@@ -1838,6 +1838,22 @@ func tabGroups(t *testing.T, _ *env, p *rod.Page) {
 	}`); got != "Query 1:0,Query 2*:0,Renamed tab:0,scroll:0" {
 		t.Fatalf("grouped tabs past the strip's clip (px, * on screen): %s, want none", got)
 	}
+	// The grouped tab on screen is filled with a tint of its group's hue;
+	// the others in the group are not. Computed colours are compared, so
+	// the check holds whatever the theme's --bg and the group's --gc are:
+	// the tint must differ from the page's background (and from an
+	// unfilled tab's transparent one) and lean toward the group's colour.
+	if got := evalStr(t, p, `() => {
+	  const bg = (el) => getComputedStyle(el).backgroundColor;
+	  const page = bg(document.body);
+	  return [...document.querySelectorAll("#qtabs .qtab.grp")].map((b) => {
+	    const c = bg(b);
+	    const tinted = c !== page && c !== "rgba(0, 0, 0, 0)";
+	    return b.querySelector(".qt").textContent + (b.classList.contains("on") ? "*" : "") + ":" + (tinted ? "tint" : "plain");
+	  }).join(",");
+	}`); got != "Query 1:plain,Query 2*:tint,Renamed tab:plain" {
+		t.Fatalf("grouped tab fills (* on screen): %s, want only the tab on screen tinted", got)
+	}
 	at(tabSel("Query 2"), proto.InputMouseButtonRight)
 	menuPick(t, p, "Remove from group wip")
 	waitConnected(t, p, "lite")

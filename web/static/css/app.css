@@ -844,6 +844,21 @@ a.btnlink:hover { border-color: var(--accent); }
 /* folded: the chip alone stands for the group, so it reads as a pill */
 .qchip.folded { outline: 1px dashed var(--gc); outline-offset: 2px; }
 .qtab.grp { box-shadow: inset 0 -2px 0 var(--gc); }
+/* The grouped tab on screen also takes its group's colour as a fill, so
+   which group is being worked in reads at a glance, not just which tab.
+   Two mixes, inner first:
+     1. 70% hue + 30% neutral grey — desaturates it, so six saturated fills
+        across windows don't shout louder than the editor below;
+     2. that at 32% (dark) / 22% (light) over var(--bg) — a tint, not the
+        chip's solid swatch, so the tab keeps var(--fg) text: ≥ 6:1 for
+        every hue on the dark slate, ≥ 10:1 on the light paper.
+   The solid 2px underline still sits on top, now framed by its own tint.
+   Specificity (.qtab.grp.on) beats both .qtab.on and .qtab:hover, so a
+   hovered active tab keeps its tint; ungrouped tabs keep var(--bg). */
+.qtab.grp.on { background: color-mix(in srgb, color-mix(in srgb, var(--gc) 70%, #808080) 32%, var(--bg)); }
+:root[data-theme="light"] .qtab.grp.on {
+  background: color-mix(in srgb, color-mix(in srgb, var(--gc) 70%, #808080) 22%, var(--bg));
+}
 /* the + in the colour of the group a new tab joins (app.js markNew) */
 .qnew.grp, .qnew.grp:hover { color: var(--gc); box-shadow: inset 0 -2px 0 var(--gc); }
 .qnew.grp:hover { filter: brightness(1.2); }

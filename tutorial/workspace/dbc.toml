@@ -1,0 +1,18 @@
+# Tutorial workspace: everything lives beside this file.
+scripts_dir   = "scripts"     # dbc script NAME, Ctrl+O
+pipelines_dir = "pipelines"   # dbc pipeline run NAME, Ctrl+J
+jobs_dir      = "jobs"        # dbc job run NAME
+runs_dir      = "runs"        # one JSON record per pipeline/job run
+plugins_dir   = "plugins"     # your own pipeline node kinds
+files_dir     = "data"        # where relative file paths land (exports, CSVs)
+default_connection = "shop"
+
+[[connection]]
+name   = "shop"
+driver = "sqlite"
+dsn    = "file:shop.db"
+
+[[connection]]
+name   = "warehouse"
+driver = "bytdb"
+dsn    = "warehouse.bytdb"    # created on first open

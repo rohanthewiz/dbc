@@ -78,15 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   named, so the semantics differ from Postgres and SQLite. Worth it only
   if a MySQL user asks (as N-172); then say the difference in the field's
   doc, or require that `key` be the table's only unique key.
-- **N-211** · raised `2026-1014-1547-failed-connects-groups-conn-clicks` · value high
-  `dbc tutorial` is missing its workspace's `dbc.toml`. The `.gitignore`
-  rule `dbc.toml` (meant for the repo root's) also matches
-  `tutorial/workspace/dbc.toml`, so the tutorial's commit (d0766e0) never
-  included it. Lesson 0 cannot be written, and `go test ./tutorial` fails
-  on a clean checkout (`TestTutorialEndToEnd`, `TestWorkspaceMatchesDoc`,
-  `TestLessonFilesEmbedded`, `TestInitAndWriteFile`). Anchor the rule
-  (`/dbc.toml`) and commit the file — from the session that wrote it, or
-  rewritten from the tutorial doc's `dbc.toml` section.
 - **N-216** · raised `2026-1014-1603-encrypt-saved-passwords` · value low
   Only `connections.toml` encrypts its DSNs (`config/secret.go`). A
   `config.toml` or `dbc.toml` DSN with an inline password stays plain:
@@ -532,6 +523,16 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-211** · raised `2026-1014-1547-failed-connects-groups-conn-clicks` · value high
+  `dbc tutorial` is missing its workspace's `dbc.toml`. The `.gitignore`
+  rule `dbc.toml` (meant for the repo root's) also matches
+  `tutorial/workspace/dbc.toml`, so the tutorial's commit (d0766e0) never
+  included it. Lesson 0 cannot be written, and `go test ./tutorial` fails
+  on a clean checkout (`TestTutorialEndToEnd`, `TestWorkspaceMatchesDoc`,
+  `TestLessonFilesEmbedded`, `TestInitAndWriteFile`). Anchor the rule
+  (`/dbc.toml`) and commit the file — from the session that wrote it, or
+  rewritten from the tutorial doc's `dbc.toml` section.
+  closed 2026-10-19: `.gitignore`'s `dbc.toml` rule is now `/dbc.toml`, so it ignores only the repo root's config, and `tutorial/workspace/dbc.toml` is committed. It was rewritten from the doc's `dbc.toml` block, the source `TestWorkspaceMatchesDoc` holds it to byte for byte. No other `dbc.toml` exists in the tree, so the narrower rule un-ignores nothing else. Test: `go test ./tutorial` passes (all four named tests), including from a fresh clone.
 - **N-210** · raised `2026-1011-0054-n179-n203-n208` · value low
   The pipeline canvas's lane drag (N-179) does not scroll the canvas when
   the pointer nears its top or bottom edge, so a lane can only be dragged

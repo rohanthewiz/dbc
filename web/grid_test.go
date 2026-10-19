@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -369,6 +370,25 @@ func TestStmtRange(t *testing.T) {
 	body, _ = json.Marshal(stmtReq{Buffer: "SELECT 1", Caret: 3})
 	if r := decodeData[[2]int](t, e.api("POST", "/api/v1/stmt", string(body), 200)); r != [2]int{} {
 		t.Errorf("one statement = %v, want no marker", r)
+	}
+}
+
+// The editor's folds come back in UTF-16 too: the statement's code and
+// the CTE body, past a non-BMP character that would skew byte offsets.
+func TestFolds(t *testing.T) {
+	e := newTestEnv(t)
+	buf := "SELECT '😀';\nWITH r AS (\n  SELECT 1\n)\nSELECT * FROM r;"
+	body, _ := json.Marshal(stmtReq{Buffer: buf})
+	got := decodeData[[][2]int](t, e.api("POST", "/api/v1/folds", string(body), 200))
+	// the emoji is two units (4 bytes): "WITH" is at unit 13, not byte 15;
+	// the statement ends at its "r" (unit 52), the CTE fold at the "\n"
+	// before ")" (unit 35)
+	want := [][2]int{{13, 52}, {13, 35}}
+	if !slices.Equal(got, want) {
+		t.Errorf("folds = %v, want %v", got, want)
+	}
+	if got := decodeData[[][2]int](t, e.api("POST", "/api/v1/folds", `{"buffer":"SELECT 1"}`, 200)); len(got) != 0 {
+		t.Errorf("one line = %v, want no folds", got)
 	}
 }
 

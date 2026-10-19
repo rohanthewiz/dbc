@@ -15,6 +15,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/export"
 	"github.com/rohanthewiz/dbc/model"
+	"github.com/rohanthewiz/dbc/sqlsplit"
 	"github.com/rohanthewiz/dbc/userdata"
 	"github.com/rohanthewiz/dbc/workspace"
 )
@@ -564,6 +565,59 @@ func (s *Server) handleStmt(ctx rweb.Context) error {
 	}
 	r := workspace.StmtRange(req.Buffer, byteOffset(req.Buffer, req.Caret))
 	return ok(ctx, [2]int{utf16Len(req.Buffer[:r[0]]), utf16Len(req.Buffer[:r[1]])})
+}
+
+// handleFolds is the editor's fold ranges (sqlsplit.Folds): each
+// multi-line statement, and the multi-line parenthesised blocks inside it,
+// as [header, last] pairs of UTF-16 offsets — the page turns them into
+// lines with its own model, which agrees with Monaco about "\r\n". It is
+// the splitter's for the reason handleStmt is: a fold hides exactly the
+// statement Ctrl+Enter runs. Stateless and tab-free, like handlePicks; a
+// buffer past maxBuffer folds nothing.
+func (s *Server) handleFolds(ctx rweb.Context) error {
+	var req stmtReq // only Buffer is read
+	if err := decode(ctx, &req); err != nil {
+		return fail(ctx, err)
+	}
+	out := [][2]int{}
+	if len(req.Buffer) > maxBuffer {
+		return ok(ctx, out)
+	}
+	folds := sqlsplit.Folds(req.Buffer)
+	offs := make([]int, 0, 2*len(folds))
+	for _, f := range folds {
+		offs = append(offs, f.Start, f.End)
+	}
+	units := utf16At(req.Buffer, offs)
+	for _, f := range folds {
+		out = append(out, [2]int{units[f.Start], units[f.End]})
+	}
+	return ok(ctx, out)
+}
+
+// utf16At converts byte offsets into s to UTF-16 offsets in one pass over
+// s, rather than a utf16Len of the prefix per offset: a long console can
+// hold thousands of folds, and that would be quadratic in its size. Each
+// offset must sit on a rune boundary, as the splitter's always do.
+func utf16At(s string, offs []int) map[int]int {
+	want := slices.Clone(offs)
+	slices.Sort(want)
+	out := make(map[int]int, len(want))
+	units, k := 0, 0
+	for i, r := range s {
+		for k < len(want) && want[k] <= i {
+			out[want[k]] = units
+			k++
+		}
+		units++
+		if r >= 0x10000 { // outside the BMP: a surrogate pair in UTF-16
+			units++
+		}
+	}
+	for ; k < len(want); k++ { // at or past the end
+		out[want[k]] = units
+	}
+	return out
 }
 
 // picksResp is what Run and Run all would execute right now, for the

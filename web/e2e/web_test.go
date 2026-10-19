@@ -36,6 +36,7 @@ func TestWeb(t *testing.T) {
 		{"boot", boot},
 		{"run a query", runQuery},
 		{"editor menu", editorMenu},
+		{"statement folding", statementFolding},
 		{"editor completion", completion},
 		{"go to and rename an alias and a column", aliasRename},
 		{"tables sidebar", tablesSidebar},
@@ -1854,6 +1855,7 @@ func tabGroups(t *testing.T, _ *env, p *rod.Page) {
 	}`); got != "Query 1:plain,Query 2*:tint,Renamed tab:plain" {
 		t.Fatalf("grouped tab fills (* on screen): %s, want only the tab on screen tinted", got)
 	}
+	shot(t, p, "tab-group-tint")
 	at(tabSel("Query 2"), proto.InputMouseButtonRight)
 	menuPick(t, p, "Remove from group wip")
 	waitConnected(t, p, "lite")

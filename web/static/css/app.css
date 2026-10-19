@@ -847,17 +847,19 @@ a.btnlink:hover { border-color: var(--accent); }
 /* The grouped tab on screen also takes its group's colour as a fill, so
    which group is being worked in reads at a glance, not just which tab.
    Two mixes, inner first:
-     1. 70% hue + 30% neutral grey — desaturates it, so six saturated fills
-        across windows don't shout louder than the editor below;
-     2. that at 32% (dark) / 22% (light) over var(--bg) — a tint, not the
-        chip's solid swatch, so the tab keeps var(--fg) text: ≥ 6:1 for
-        every hue on the dark slate, ≥ 10:1 on the light paper.
+     1. 85% hue + 15% neutral grey — takes the edge off it, so six fills
+        across windows don't shout louder than the editor below, while the
+        hue still reads as the chip's (70% washed it out to near-grey);
+     2. that at 38% (dark) / 26% (light) over var(--bg) — a tint, not the
+        chip's solid swatch, so the tab keeps var(--fg) text: ≥ 5:1 for
+        every hue on the dark slate, ≥ 9.5:1 on the light paper (the
+        lowest: amber on dark, at 5.1:1).
    The solid 2px underline still sits on top, now framed by its own tint.
    Specificity (.qtab.grp.on) beats both .qtab.on and .qtab:hover, so a
    hovered active tab keeps its tint; ungrouped tabs keep var(--bg). */
-.qtab.grp.on { background: color-mix(in srgb, color-mix(in srgb, var(--gc) 70%, #808080) 32%, var(--bg)); }
+.qtab.grp.on { background: color-mix(in srgb, color-mix(in srgb, var(--gc) 85%, #808080) 38%, var(--bg)); }
 :root[data-theme="light"] .qtab.grp.on {
-  background: color-mix(in srgb, color-mix(in srgb, var(--gc) 70%, #808080) 22%, var(--bg));
+  background: color-mix(in srgb, color-mix(in srgb, var(--gc) 85%, #808080) 26%, var(--bg));
 }
 /* the + in the colour of the group a new tab joins (app.js markNew) */
 .qnew.grp, .qnew.grp:hover { color: var(--gc); box-shadow: inset 0 -2px 0 var(--gc); }

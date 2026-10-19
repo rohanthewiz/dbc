@@ -3776,7 +3776,8 @@
   //   ◈ Explain · Explain analyze   ── edit rows ──   ── edit rows ──
   //   ── edit rows ──               Suggest · Ask     Command palette
   //   History · Suggest · Ask       ── symbols ──
-  //   ── symbols ── palette         palette
+  //   ── symbols ──                 palette
+  //   ── fold rows ── palette
   //   consoles · <db> …
   //
   // WHAT RUN WOULD RUN. A query tab's Run rows are labelled by the server
@@ -3878,7 +3879,22 @@
         // bindMenu), so the suggestions are for that spot
         suggest,
         { label: "✦ Ask the assistant about this query", why: runWhy, act: () => dbc.cmd.askAbout("Explain this query.") },
-        ...symbols, palette,
+        ...symbols,
+        // Monaco's fold commands over the server's ranges (editor.js
+        // registerFolding). Fold takes the innermost range at the caret —
+        // a (…) block before its statement. "Fold the other statements"
+        // is fold level 1: the statements are the outermost ranges, so
+        // their inner blocks stay as they were and open with them, and
+        // Monaco leaves the range holding the caret open — the statement
+        // just right-clicked, so the row reads as "focus on this one" (on
+        // a line between statements, every one folds). Monaco's fold-all
+        // chords start with Ctrl+K, which is Stop's — hence these rows.
+        { head: "" },
+        { label: "Fold", key: "Ctrl+Shift+[", act: trigger("editor.fold") },
+        { label: "Unfold", key: "Ctrl+Shift+]", act: trigger("editor.unfold") },
+        { label: "Fold the other statements", act: trigger("editor.foldLevel1") },
+        { label: "Unfold all", act: trigger("editor.unfoldAll") },
+        palette,
         ...consoleItems(t),
       ];
     }
@@ -4071,7 +4087,8 @@
       ["F12 · Ctrl+click", "on a table alias, a CTE name or a column the query names: go to where it is declared"],
       ["Shift+F12", "Go to Usages: list its uses in the statement"],
       ["F2", "rename it everywhere in the statement (also in the right-click menu)"],
-      ["right-click · Shift+F10", "the editor's menu: run, explain, stop, the clipboard, history, the tab's consoles"],
+      ["Ctrl+Shift+[ · Ctrl+Shift+]", "fold · unfold the statement or (…) block at the caret — also the gutter's arrows; fold the other statements in the right-click menu (on a Mac: Ctrl, or ⌘⌥)"],
+      ["right-click · Shift+F10", "the editor's menu: run, explain, stop, the clipboard, history, folding, the tab's consoles"],
     ]],
     ["Query tabs", [
       ["Alt+T", "new tab"], ["Alt+W", "close the tab"], ["Alt+1 … Alt+9", "go to tab N"],

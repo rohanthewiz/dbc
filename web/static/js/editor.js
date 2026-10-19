@@ -36,6 +36,14 @@
 // from the server too (POST /api/v1/ws/:id/symbol and …/rename), from the
 // scanner completion reads the statement with: F12, Shift+F12 and F2.
 //
+// FOLDING. Each statement that spans lines folds to its first line of code,
+// and so does each multi-line (…) inside it — a CTE's body, a subquery —
+// from the gutter's arrows, Ctrl+Shift+[ and ], or the right-click menu's
+// Fold rows. The ranges are the server's (POST /api/v1/folds,
+// sqlsplit.Folds), from the splitter a run uses: a folded statement is
+// exactly what Ctrl+Enter on it runs. Script and pipeline tabs keep
+// Monaco's own indentation folding.
+//
 // SCRIPT TABS edit Go, not SQL (scripts.js). Their documents are opened
 // with a FIXED language ("go"): the connection's dialect (setDriver) never
 // touches them, the statement marker and the SQL providers leave them
@@ -728,6 +736,41 @@
     }
   }
 
+  // ── folding ────────────────────────────────────────────────────────────
+  // The fold ranges of a SQL model, from the server (see FOLDING above).
+  // They arrive as [header, last] UTF-16 offsets and become lines here, by
+  // the model's own count, so a "\r\n" buffer folds where Monaco draws its
+  // lines. Monaco asks again after each edit, debounced, and cancels a
+  // request the text has moved past (token) — its answer is dropped.
+  //
+  // A failed request answers null, not []: Monaco then falls back to its
+  // indentation folds for the moment rather than unfolding everything the
+  // user had folded because one request was lost. The minis (pipeline
+  // fields) have folding off and are never asked; the check is for safety.
+  function registerFolding() {
+    const provider = {
+      async provideFoldingRanges(model, _ctx, token) {
+        if (minis.has(model)) return [];
+        let r;
+        try {
+          r = await dbc.api("POST", "/api/v1/folds", { buffer: model.getValue() });
+        } catch (_) {
+          return null;
+        }
+        if (token.isCancellationRequested || model.isDisposed()) return null;
+        const out = [];
+        for (const [a, b] of r || []) {
+          const start = model.getPositionAt(a).lineNumber, end = model.getPositionAt(b).lineNumber;
+          // a "\r\n" can put a one-line span's last byte on its header
+          // line: nothing to hide there
+          if (end > start) out.push({ start, end });
+        }
+        return out;
+      },
+    };
+    for (const l of ["sql", "pgsql", "mysql"]) monaco.languages.registerFoldingRangeProvider(l, provider);
+  }
+
   // ── loading Monaco ─────────────────────────────────────────────────────
   // The AMD build: loader.js, then vs/editor/editor.main. Its web worker is
   // a same-origin file (static/js/monaco-worker.js) that points the worker
@@ -869,6 +912,14 @@
     // the sidebar fold: on a Mac, Ctrl+B is otherwise Monaco's cursor-left
     // and never reaches the page's own Ctrl+B / ⌘B
     bind(0, C.KeyB, () => dbc.cmd.toggleSidebar && dbc.cmd.toggleSidebar());
+    // Fold and unfold at the caret: Monaco's Ctrl+Shift+[ and ] elsewhere,
+    // but ⌘⌥[ and ] on a Mac — so Ctrl+Shift+[ and ] are added there, and
+    // the menu's Fold rows can name one key for every platform. Not
+    // through bind(): its ⌘+Shift+[ and ] are Chrome's own tab switches.
+    if (isMac) {
+      ed.addCommand(K.WinCtrl | K.Shift | C.BracketLeft, () => ed.trigger("dbc", "editor.fold", null));
+      ed.addCommand(K.WinCtrl | K.Shift | C.BracketRight, () => ed.trigger("dbc", "editor.unfold", null));
+    }
     // the TUI's editor menu row, once in Monaco's own right-click menu —
     // which is now off (bindMenu): the rows live on in app.js editorMenu,
     // and these stay as commands, in the command palette
@@ -944,6 +995,7 @@
     defineJSON();
     registerCompletion();
     registerSymbols();
+    registerFolding();
     ed = monaco.editor.create(host, {
       // The model is made here, not by the editor from a value: a model
       // the editor made itself is disposed when it switches to another
@@ -961,7 +1013,12 @@
       tabSize: 4,
       wordWrap: "off",
       glyphMargin: false,
-      folding: false,
+      // Folds come from registerFolding for SQL and from indentation for a
+      // script's Go or a pipeline's JSON. The arrows show on hovering the
+      // gutter only ("mouseover", Monaco's default): a column of them on
+      // every statement would crowd the statement marker beside them.
+      folding: true,
+      showFoldingControls: "mouseover",
       lineDecorationsWidth: 8,
       fixedOverflowWidgets: true,
       padding: { top: 8 },

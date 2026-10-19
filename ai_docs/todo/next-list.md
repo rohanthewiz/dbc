@@ -92,12 +92,6 @@ ten session docs in `ai_docs/claude_sessions/`
   running), **Paste** and **Redo**, and its Undo/Redo dim when there is
   nothing to undo. Port them to the TUI menu if parity is wanted; no one
   has asked.
-- **N-219** · raised `2026-1019-1305-query-folding-result-tab-rename` · value low
-  Result tabs can be renamed in dbc web only (F2, double-click, the tab's
-  menu → `Workspace.RenameResultTab`). The TUI's strip would show a name
-  (`ResultTab.Title` is the name when `Named`) but has no way to set one.
-  Add a key and a row on its result-tab menu (`tui/resulttabs.go`) if
-  parity is wanted; no one has asked.
 
 ## Validate
 
@@ -490,6 +484,13 @@ call.
   `readKey` and `loadOrCreateKey` change; the `enc:v1:` format stays.
   Move an existing key file into the keychain on first use.
 
+- **N-219** · raised `2026-1019-1305-query-folding-result-tab-rename` · value low
+  Result tabs can be renamed in dbc web only (F2, double-click, the tab's
+  menu → `Workspace.RenameResultTab`). The TUI's strip would show a name
+  (`ResultTab.Title` is the name when `Named`) but has no way to set one.
+  Add a key and a row on its result-tab menu (`tui/resulttabs.go`) if
+  parity is wanted; no one has asked.
+
 ## Non-goals
 
 - **N-012** · declined `2026-0728-2000-stmt-under-cursor-and-query-cancel` —
@@ -532,7 +533,7 @@ written up in the session docs themselves.
   `TestLessonFilesEmbedded`, `TestInitAndWriteFile`). Anchor the rule
   (`/dbc.toml`) and commit the file — from the session that wrote it, or
   rewritten from the tutorial doc's `dbc.toml` section.
-  closed 2026-10-19: `.gitignore`'s `dbc.toml` rule is now `/dbc.toml`, so it ignores only the repo root's config, and `tutorial/workspace/dbc.toml` is committed. It was rewritten from the doc's `dbc.toml` block, the source `TestWorkspaceMatchesDoc` holds it to byte for byte. No other `dbc.toml` exists in the tree, so the narrower rule un-ignores nothing else. Test: `go test ./tutorial` passes (all four named tests), including from a fresh clone.
+  closed 2026-10-19, `2026-1019-1728-n211-tutorial-dbc-toml`: `.gitignore`'s `dbc.toml` rule is now `/dbc.toml`, so it ignores only the repo root's config, and `tutorial/workspace/dbc.toml` is committed. It was rewritten from the doc's `dbc.toml` block, the source `TestWorkspaceMatchesDoc` holds it to byte for byte. No other `dbc.toml` exists in the tree, so the narrower rule un-ignores nothing else. Test: `go test ./tutorial` passes (all four named tests), including from a fresh clone.
 - **N-210** · raised `2026-1011-0054-n179-n203-n208` · value low
   The pipeline canvas's lane drag (N-179) does not scroll the canvas when
   the pointer nears its top or bottom edge, so a lane can only be dragged

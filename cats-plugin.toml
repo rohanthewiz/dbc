@@ -51,8 +51,11 @@ bin = ["./bin/dbc"]
 # .gitignore'd as the hand-built binary, and giving the plugin host its own copy
 # means a `go build .` in a working tree cannot leave a half-built binary where
 # a plugin launch will find it.
+#
+# scripts/stamp.sh links the commit into dbc web's build badge; it prints
+# nothing when it can't resolve, so the build never fails on its account.
 [[build]]
-command = ["sh", "-c", "mkdir -p bin && go build -o bin/dbc ."]
+command = ["sh", "-c", "mkdir -p bin && go build -ldflags \"$(sh scripts/stamp.sh)\" -o bin/dbc ."]
 
 # The TUI, first so a bare `plugin run` opens it.
 #

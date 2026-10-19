@@ -68,6 +68,8 @@ github.com/rohanthewiz/btypedb v0.9.0 h1:CTD+QR65lLNHDWYVO4Npfb/JmP8h2R2nW5jALlC
 github.com/rohanthewiz/btypedb v0.9.0/go.mod h1:K+7M8clbmaVh33X9QYm1sA5A7DWDKOE1+O9WFQflMI0=
 github.com/rohanthewiz/bytdb v0.21.2 h1:+DJKGKB0UooktGA3wKEya5d7DzkxbFEyzgbaDvNkd7k=
 github.com/rohanthewiz/bytdb v0.21.2/go.mod h1:ay6tTWKDpYkcUDYw0mGMoS8u6GkaoFChz6cx8Kk46VA=
+github.com/rohanthewiz/cats v0.4.1-0.20261015150947-80e336cd65a4 h1:PpTFsn1PtbGF1ilKI5UAvtJjhNKkrNye3cbszqvfyv8=
+github.com/rohanthewiz/cats v0.4.1-0.20261015150947-80e336cd65a4/go.mod h1:incE/ifvIq051jLkV1SBal+gDmxuzmawlzWcetWBlvI=
 github.com/rohanthewiz/element v0.6.0 h1:YS7I69mKKjtMa1ezr1ZQKm+XmrhQzKiE9vOSPxdLUvU=
 github.com/rohanthewiz/element v0.6.0/go.mod h1:YZnKqWX2lSsR+zi06x3vhViYVoOSx8xHQjUMTmM/FLo=
 github.com/rohanthewiz/logger v1.3.0 h1:cJoocqUvv5wsHcjlW7wupMTruyBCUHuu8J380u5fyFs=

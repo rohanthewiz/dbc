@@ -191,10 +191,14 @@ func originOK(origin, host string) bool {
 // injected style cannot run code, and with script-src and connect-src at
 // 'self' it has nowhere to send what it could read; every value the page
 // shows is escaped on its way into the DOM regardless.
+//
+// The build badge's two inline scripts are the one addition to script-src,
+// and only by hash (pages.BadgeScriptSrc): those exact bytes run, and inline
+// script in general still does not.
 func securityHeaders(ctx rweb.Context) {
 	h := ctx.Response()
 	h.SetHeader("Content-Security-Policy",
-		"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "+
+		"default-src 'self'; script-src 'self'"+pages.BadgeScriptSrc()+"; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "+
 			"connect-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 	h.SetHeader("X-Content-Type-Options", "nosniff")
 	h.SetHeader("Referrer-Policy", "no-referrer")

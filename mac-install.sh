@@ -208,8 +208,13 @@ build_all() {
   local contents="$APP/Contents"
   mkdir -p "$contents/MacOS" "$contents/Helpers" "$contents/Resources"
 
+  # scripts/stamp.sh adds the commit (hash, subject, time) for dbc web's build
+  # badge, so the app names the build it is running; it prints nothing rather
+  # than failing when the badge package can't be resolved.
   info "building dbc"
-  ( cd "$SRC" && CGO_ENABLED=0 "$GO_BIN" build -trimpath -ldflags "-s -w" -o "$contents/Helpers/dbc" . )
+  ( cd "$SRC" && CGO_ENABLED=0 "$GO_BIN" build -trimpath \
+      -ldflags "-s -w $(GO="$GO_BIN" sh scripts/stamp.sh)" \
+      -o "$contents/Helpers/dbc" . )
   VERSION="$("$contents/Helpers/dbc" version 2>/dev/null | awk '{print $NF}')"
   [ -n "$VERSION" ] || die "the built dbc does not report a version"
   ok "dbc $VERSION"

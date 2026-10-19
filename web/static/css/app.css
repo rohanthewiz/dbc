@@ -58,6 +58,35 @@ button:focus-visible, textarea:focus-visible, li:focus-visible { outline: 1px so
 }
 .topbar > *, .actions button { white-space: nowrap; }
 .brand { font-weight: 700; color: var(--accent); letter-spacing: .5px; }
+
+/* Build badge beside the brand (github.com/rohanthewiz/cats/buildbadge).
+   The package colours itself through --bb-* custom properties; pointing them
+   at theme.css's variables makes the badge and its hover card follow dbc's
+   light / dark theme instead of the OS colour scheme the package falls back
+   to. These are declared on :root like the package's own, and win because
+   buildbadge.Head() is emitted before this stylesheet (see pages/workbench.go).
+   They are resolved on <html>, which is where the theme variables live, so
+   each var() picks up the active theme's value. */
+:root {
+  --bb-fg: var(--fg);
+  --bb-bg: var(--bg);
+  --bb-muted: var(--muted);
+  --bb-line: var(--line);
+  --bb-accent: var(--accent);
+}
+
+/* The topbar already spaces its items with a 12px gap, so the badge drops
+   the package's own left margin and is pulled toward the brand it
+   annotates. An unknown build leaves the placeholder empty; hiding it keeps
+   that empty item from adding a second gap. */
+.topbar-build {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: -6px;
+}
+.topbar-build:empty { display: none; }
+.topbar-build .build-badge { margin-left: 0; }
 .active-conn { color: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .active-conn.none { color: var(--muted); font-family: inherit; }
 .badge {

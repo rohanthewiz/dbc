@@ -190,6 +190,12 @@ func sideSplitTitle(hidden bool) string {
 func (p Workbench) topbar(b *element.Builder) any {
 	b.HeaderClass("topbar").R(
 		b.SpanClass("brand").T("dbc"),
+		// Build badge placeholder: buildbadge's script appends the short
+		// commit hash here (hover for the subject and commit time). It is a
+		// sibling of the brand rather than inside it, so it doesn't inherit
+		// the brand's weight and letter-spacing. Left empty for an unknown
+		// build, and app.css hides it then so the topbar's gap doesn't double.
+		b.Span("class", "topbar-build", "data-build-badge", "").R(),
 		b.SpanClass("active-conn", "id", "active-conn").T(p.Active),
 		b.SpanClass("badge", "id", "stateful", "hidden", "hidden",
 			"title", "This tab's session may hold a transaction, SET values or temp tables. "+
@@ -423,6 +429,18 @@ func head(b *element.Builder, title, ver string) any {
 		b.Meta("name", "viewport", "content", "width=device-width, initial-scale=1").R(),
 		b.Title().T(title),
 		b.Link("rel", "icon", "href", "/favicon.ico").R(),
+		// Build badge: the commit this binary was built from, shown beside the
+		// topbar brand (see topbar) so a stale install or a lagging Mac app
+		// bundle is visible at a glance. Head() inlines the badge's styles, the
+		// build data and its small script, and is "" for an unknown build.
+		//
+		// It goes BEFORE app.css deliberately: the package declares its --bb-*
+		// colours on :root, and app.css re-points them at the theme variables.
+		// Coming later at equal specificity is what lets app.css win.
+		//
+		// Its scripts are inline; the CSP allows them by hash (see
+		// buildbadge.go), which is why this reads the cached copy.
+		b.Text(badgeHead()),
 		b.Link("rel", "stylesheet", "href", "/theme.css").R(),
 		b.Link("rel", "stylesheet", "href", "/static/css/app.css?v="+ver).R(),
 		b.Link("rel", "stylesheet", "href", "/static/css/plan.css?v="+ver).R(),

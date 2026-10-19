@@ -34,6 +34,7 @@ func TestWeb(t *testing.T) {
 	}{
 		{"signed-out page", signedOut},
 		{"boot", boot},
+		{"build badge", buildBadge},
 		{"run a query", runQuery},
 		{"editor menu", editorMenu},
 		{"statement folding", statementFolding},

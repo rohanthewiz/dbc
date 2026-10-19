@@ -53,6 +53,30 @@ func (e *testEnv) tabOp(id string, rt int, op string, want int) (resultTabOut, t
 	return decodeData[resultTabOut](e.t, env), env
 }
 
+// A rename names the tab on the wire (named set), and a blank one gives
+// back the title its statement made.
+func TestRenameResultTabOnTheWire(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	rt := e.runEv(id, s, "SELECT 1 AS a").ResultTabs[0]
+	rename := func(name string) resultTabRef {
+		t.Helper()
+		body, _ := json.Marshal(resultTabReq{ID: rt.ID, Op: "rename", Name: name})
+		out := decodeData[resultTabOut](t, e.api("POST", "/api/v1/ws/"+id+"/result-tab", string(body), 200))
+		return out.ResultTabs[0]
+	}
+	if got := rename("the one"); got.Title != "the one" || !got.Named {
+		t.Errorf("renamed = %+v", got)
+	}
+	if st := decodeData[wsState](t, e.api("GET", "/api/v1/ws/"+id, "", 200)); st.ResultTabs[0].Title != "the one" {
+		t.Errorf("state's tab = %+v", st.ResultTabs[0])
+	}
+	if got := rename(""); got.Title != "SELECT 1 AS a" || got.Named {
+		t.Errorf("a blank rename = %+v, want the statement's title back", got)
+	}
+	e.api("POST", "/api/v1/ws/"+id+"/result-tab", `{"id":999,"op":"rename","name":"x"}`, 400)
+}
+
 // seqNow is the seq of the result the grid would fetch now (0 for none).
 func (e *testEnv) seqNow(id string) int {
 	e.t.Helper()

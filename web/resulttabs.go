@@ -21,7 +21,8 @@ import (
 //	GET  …/ws/:id            ─┐
 //	"run" / "result" / "conn" ─┼─► resultTabsState {resultTabs, resultTab, resultTabMax}
 //	POST …/ws/:id/result-tab  ─┘
-//	       {id, op: show | pin | unpin | close | close-unpinned | share | unshare}
+//	       {id, op: show | pin | unpin | close | close-unpinned | share | unshare
+//	            | rename (+ name: "" takes the name away)}
 //
 //	POST …/ws/:id/rerun {id}  ─► a run of the tab's own statement, back into
 //	                            that tab (pinned or not); its outcome is a
@@ -49,7 +50,8 @@ type resultTabRef struct {
 	ID       int    `json:"id"`
 	Seq      int    `json:"seq"`
 	Title    string `json:"title"`
-	Stmt     string `json:"stmt,omitempty"` // the whole statement, for the tooltip
+	Named    bool   `json:"named,omitempty"` // Title is the user's name for it (op rename)
+	Stmt     string `json:"stmt,omitempty"`  // the whole statement, for the tooltip
 	Pinned   bool   `json:"pinned"`
 	Rows     int    `json:"rows"`               // the result's rows (fetched, not shown)
 	Exec     bool   `json:"exec"`               // a statement that returns no rows…
@@ -83,7 +85,7 @@ func resultTabsOf(ws *workspace.Workspace) resultTabsState {
 	out := resultTabsState{ResultTabs: make([]resultTabRef, len(tabs)), ResultTabMax: ws.ResultTabLimit(),
 		CanShare: ws.CanShareResults()}
 	for i, t := range tabs {
-		ref := resultTabRef{ID: t.ID, Seq: t.Seq, Title: t.Title, Stmt: t.Stmt, Pinned: t.Pinned, Shows: t.Shows,
+		ref := resultTabRef{ID: t.ID, Seq: t.Seq, Title: t.Title, Named: t.Named, Stmt: t.Stmt, Pinned: t.Pinned, Shows: t.Shows,
 			Shared: t.Shared, Writes: t.Writes, RerunOf: t.RerunOf}
 		if r := t.Result; r != nil {
 			ref.Rows, ref.Exec, ref.Affected = len(r.Rows), r.IsExec, r.Affected
@@ -98,8 +100,9 @@ func resultTabsOf(ws *workspace.Workspace) resultTabsState {
 
 // resultTabReq is a click on the strip (or its menu, or a key).
 type resultTabReq struct {
-	ID int    `json:"id"`
-	Op string `json:"op"` // show, pin, unpin, close, close-unpinned, share, unshare
+	ID   int    `json:"id"`
+	Op   string `json:"op"`             // show, pin, unpin, close, close-unpinned, share, unshare, rename
+	Name string `json:"name,omitempty"` // rename's: the new name, "" for the generated title again
 }
 
 // resultTabOut answers it: the set as it now is, and what the page needs
@@ -138,12 +141,14 @@ func (s *Server) handleResultTab(ctx rweb.Context) error {
 		err = t.ws.CloseResultTab(req.ID)
 	case "close-unpinned":
 		t.ws.CloseUnpinnedResultTabs()
+	case "rename":
+		err = t.ws.RenameResultTab(req.ID, req.Name)
 	case "share", "unshare":
 		if err = t.ws.ShareResultTab(req.ID, req.Op == "share"); err == nil {
 			t.shareNote(req.ID, req.Op == "share")
 		}
 	default:
-		err = badRequest("no result tab op %q (show, pin, unpin, close, close-unpinned, share, unshare)", req.Op)
+		err = badRequest("no result tab op %q (show, pin, unpin, close, close-unpinned, share, unshare, rename)", req.Op)
 	}
 	if err != nil {
 		if r, isRefusal := asRefusal(err); isRefusal {

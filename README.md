@@ -1250,6 +1250,13 @@ its statement (or `preview cats`, `columns cats`, `script x.go`). A script's
 `s.Show` results all land in one tab, where "Result 1 · 2 · 3" steps through
 them.
 
+In `dbc web` you can **rename** a result tab: double-click it, press `F2` in
+the results, or pick **Rename…** on its right-click menu, then type a name
+and press `Enter` (`Esc` leaves it as it was). The name is for the result
+in the tab, so a rerun (`r`, **↻**) keeps it, and another query run into the
+tab clears it. Empty the box to name the tab after its query again. The
+tab's tooltip still shows the statement.
+
 **Rerun** a tab (`r`, a click on the **↻** beside the tab on screen, or
 **↻ Rerun its query** on its right-click menu) to bring its result up to
 date: its statement runs again, on the same session,
@@ -1512,6 +1519,7 @@ file's connections are changed in the file. The TUI has the same form —
 | `Alt+N` · `Alt+C` | new console · next console of the tab's database |
 | `Alt+R` | every run of a job or a pipeline, drilled into (see [Job tabs and the Runs view](#job-tabs-and-the-runs-view-in-dbc-web)) |
 | `{` · `}` · `P` · `r` · `S` · `x` | in the results: previous · next result tab · pin · rerun its query into it · share with the assistant · close |
+| `F2` · double-click a result tab | rename it (↻ keeps the name, another query run into the tab clears it; an empty name gives back its query's) |
 | `F1` or `?` | every key |
 
 On a Mac, `⌘` works wherever `Ctrl` is listed.

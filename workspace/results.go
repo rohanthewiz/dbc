@@ -116,8 +116,15 @@ import (
 
 // resultTab is one tab of a result set.
 type resultTab struct {
-	id     int    // unique within the workspace, for the tab's whole life
-	title  string // what produced it, one line: see resultTitle
+	id    int    // unique within the workspace, for the tab's whole life
+	title string // what produced it, one line: see resultTitle
+	// name is the user's own for the tab (RenameResultTab), "" for none:
+	// it is shown in place of title. It names the RESULT, so a rerun of
+	// the tab's own statement keeps it and anything else landing in the
+	// tab clears it (placeRunLocked) — a name like "open orders" left on
+	// another query's rows would mislabel them. Kept apart from title so
+	// clearing it brings the generated title back.
+	name   string
 	stmt   string // the statement whose result it is ("" for a script's)
 	pinned bool
 	res    *model.Result // what the tab shows
@@ -141,6 +148,15 @@ type resultTab struct {
 	// run into the tab, then a rerun of that) would otherwise carry a sort
 	// over from a different question.
 	rerunOf int
+}
+
+// label is what the tab is called: the user's name, else the generated
+// title.
+func (t *resultTab) label() string {
+	if t.name != "" {
+		return t.name
+	}
+	return t.title
 }
 
 // landing is one result a run puts in a tab: what placeRunLocked takes.
@@ -312,6 +328,8 @@ func (w *Workspace) placeRunLocked(conn string, target *resultTab, run int, grou
 			t.rerunOf = 0
 			if t == w.runAgain {
 				t.rerunOf = t.seq
+			} else {
+				t.name = "" // another question: the user's name was for the last one's rows
 			}
 			t.title, t.stmt, t.res, t.seq, t.run = l.title, l.stmt, l.res, w.resSeq, run
 			t.shows, t.cut = nil, 0
@@ -444,7 +462,8 @@ func (w *Workspace) ShowResult(key, title string, r *model.Result) error {
 type ResultTab struct {
 	ID     int    // stable for the tab's life: what ShowResultTab and the rest take
 	Seq    int    // numbers the result on it; moves whenever that result does
-	Title  string // what produced it, one line: a statement's preview, "preview cats", "script x.go"
+	Title  string // what it is called: the user's name (Named), else what produced it — a statement's preview, "preview cats", "script x.go"
+	Named  bool   // Title is the user's (RenameResultTab), not generated
 	Stmt   string // the whole statement, for a tooltip ("" for a script's)
 	Pinned bool
 	// Result is the result the tab shows. Shared: read it, never write it.
@@ -474,7 +493,7 @@ func (w *Workspace) ResultTabs() (tabs []ResultTab, cur int) {
 	tabs = make([]ResultTab, len(s.tabs))
 	shared, _ := s.sharedTab()
 	for i, t := range s.tabs {
-		tabs[i] = ResultTab{ID: t.id, Seq: t.seq, Title: t.title, Stmt: t.stmt, Pinned: t.pinned,
+		tabs[i] = ResultTab{ID: t.id, Seq: t.seq, Title: t.label(), Named: t.name != "", Stmt: t.stmt, Pinned: t.pinned,
 			Result: t.res, Shows: len(t.shows), Shared: t == shared,
 			Writes: t.stmt != "" && db.ChangesRows(t.stmt), RerunOf: t.rerunOf}
 	}
@@ -549,7 +568,33 @@ func (w *Workspace) RerunResultTab(id int) (Start, error) {
 		return Start{}, refuse(Invalid, Warn,
 			"result %d holds a script's results, not a statement's — run the script again to refresh them", i+1)
 	}
-	return w.runLocked([]string{t.stmt}, "rerun "+t.title, t)
+	return w.runLocked([]string{t.stmt}, "rerun "+t.label(), t)
+}
+
+// MaxResultTabName caps a result tab's name, in runes: a strip label, not
+// a note — the strip shortens titles to fit anyway.
+const MaxResultTabName = 60
+
+// RenameResultTab gives result tab id a name of the user's, shown in
+// place of its generated title, or — name blank — takes it away, which
+// brings the generated title back. The name is made one line (any run of
+// whitespace, newlines included, becomes a space) and cut to
+// MaxResultTabName runes. It names the tab's result: a rerun keeps it, and
+// any other run landing in the tab clears it (resultTab.name). Allowed
+// mid-run, as showing a tab is: it changes no result.
+func (w *Workspace) RenameResultTab(id int, name string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	s, i, err := w.tabLocked(id)
+	if err != nil {
+		return err
+	}
+	name = strings.Join(strings.Fields(name), " ")
+	if r := []rune(name); len(r) > MaxResultTabName {
+		name = strings.TrimSpace(string(r[:MaxResultTabName]))
+	}
+	s.tabs[i].name = name
+	return nil
 }
 
 // CloseResultTab closes result tab id, pinned or not. When it was on

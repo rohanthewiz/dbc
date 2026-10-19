@@ -2963,16 +2963,17 @@
   let rtabState = null; // the set last drawn, for the keys and the menus
   function drawResultTabs(d) {
     const box = $("rstrip");
+    if (rtEdit) rtEdit.moving = true; // the detach below is not the user leaving the box
     box.replaceChildren();
     rtabState = d && d.resultTabs && d.resultTabs.length ? d : null;
     box.hidden = !rtabState;
-    if (!rtabState) return;
+    if (!rtabState) { if (rtEdit) rtEdit.cancel(); return; }
     rtabState.resultTabs.forEach((r, i) => {
       const what = r.exec ? dbc.plural(r.affected || 0, "row") + " affected"
         : r.shows ? dbc.plural(r.shows, "result") + " shown" : dbc.plural(r.rows, "row");
       const tip = (r.stmt || r.title) + "\n" + what + (r.pinned ? " · pinned: a run opens a new tab instead of replacing this one" : "") +
         (r.shared ? " · shared with the assistant: it goes with every question on this connection" : "") +
-        "\nclick shows it · ↻ or r reruns it · right-click: rerun, pin, share, close";
+        "\nclick shows it · ↻ or r reruns it · double-click or F2 renames it · right-click: rerun, pin, share, rename, close";
       box.append(el("button", { type: "button", role: "tab", class: "rt" + (r.id === rtabState.resultTab ? " on" : ""),
         "data-rt": String(r.id), "aria-selected": r.id === rtabState.resultTab ? "true" : "false", title: tip },
       el("span", "n", String(i + 1)),
@@ -2989,18 +2990,86 @@
     });
     box.append(el("span", { class: "rcount", title: "result tabs on this connection, and how many it keeps (result_tabs)" },
       rtabState.resultTabs.length + "/" + rtabState.resultTabMax));
+    // a name being typed survives the redraw — a run landing, a share in
+    // another pane: the same edit box goes back in place of its tab's
+    // fresh button, text and caret as they were. Its tab gone (closed,
+    // dropped past the cap), the edit goes with it.
+    if (rtEdit) {
+      const b = box.querySelector('button[data-rt="' + rtEdit.id + '"]');
+      if (b) rtEdit.attach(b); else rtEdit.cancel();
+    }
+  }
+
+  // renameResultTab edits result tab r's name in place, as a query tab's
+  // is: Enter or leaving the box keeps it, Esc does not. The workspace
+  // holds the name (op rename, Workspace.RenameResultTab): it names the
+  // RESULT, so ↻ keeps it and another query landing in the tab clears it.
+  // An empty box takes the name away, and the tab is named after its
+  // query again.
+  //
+  // The box replaces the whole tab button, not just its title: an <input>
+  // inside a <button> is not reliably clickable or editable across
+  // browsers, and the strip's click handler would take a click in it for
+  // "show this tab". drawResultTabs re-attaches it (rtEdit) when the strip
+  // is redrawn mid-edit, setting `moving` first: the box detached, then
+  // put back, is not the user leaving it, should the browser fire a blur.
+  let rtEdit = null; // the edit in progress: { id, moving, attach(button), cancel() }
+  function renameResultTab(r) {
+    // another tab's edit still open (a menu's Rename… reached without
+    // leaving it) is dropped, and its button drawn back first
+    if (rtEdit) { rtEdit.cancel(); drawResultTabs(rtabState); }
+    const b = r && $("rstrip").querySelector('button[data-rt="' + r.id + '"]');
+    if (!b) return;
+    const input = el("input", { class: "rrename", value: r.title, maxlength: "60", spellcheck: "false",
+      "aria-label": "Result tab name", placeholder: "empty: named after its query",
+      title: "Enter keeps the name · Esc leaves it as it was · empty: named after its query again" });
+    const wrap = el("span", { class: "rt on rtedit" }, el("span", "n", b.querySelector(".n").textContent), input);
+    let done = false;
+    const finish = (keep) => {
+      if (done) return;
+      done = true;
+      if (rtEdit === edit) rtEdit = null;
+      const v = input.value.trim();
+      // sent only when it changes what the tab is called; "" takes a
+      // name away (and is a no-op on a tab that had none)
+      if (keep && v !== r.title) resultTabOp("rename", r.id, { name: v });
+      else drawResultTabs(rtabState);
+      dbc.grid.focus();
+    };
+    const edit = rtEdit = {
+      id: r.id,
+      moving: false,
+      attach(btn) {
+        edit.moving = true;
+        btn.replaceWith(wrap);
+        input.focus(); // detached, it lost the focus it had
+        edit.moving = false;
+      },
+      cancel() { done = true; if (rtEdit === edit) rtEdit = null; },
+    };
+    input.addEventListener("keydown", (e) => {
+      // the results pane's keys (r reruns, x closes …) and the page's
+      // (? opens the key list) are letters typed here
+      e.stopPropagation();
+      if (e.key === "Enter") { e.preventDefault(); finish(true); }
+      else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener("blur", () => { if (!edit.moving) finish(true); });
+    rtEdit.attach(b);
+    input.focus();
+    input.select();
   }
 
   // resultTabOp is a click on the strip, its menu, or a key: the workspace
   // does it (POST …/result-tab) and answers with the set as it now is.
-  async function resultTabOp(op, id) {
+  async function resultTabOp(op, id, extra) {
     const t = state.tab;
     if (!t || !t.ws) return;
     const before = dbc.grid.snapshot();
     keepView(t, before);
     let r;
     try {
-      r = await api("POST", dbc.wsPath("/result-tab"), { id, op });
+      r = await api("POST", dbc.wsPath("/result-tab"), Object.assign({ id, op }, extra));
     } catch (e) {
       // a tab gone meanwhile (closed elsewhere, dropped by a run past the
       // cap), a share on a connection without ai_rows: the server has
@@ -3013,7 +3082,7 @@
     drawResultTabs(r);
     drawSets(r.sets);
     if (op === "share" || op === "unshare") { dbc.chat.refresh(); return; } // what the next question sends moved
-    if (op === "pin" || op === "unpin") return; // nothing moved on screen
+    if (op === "pin" || op === "unpin" || op === "rename") return; // nothing moved on screen
     const cur = (r.resultTabs || []).find((x) => x.id === r.resultTab);
     if (!before || !cur || cur.seq !== before.seq) {
       showResultOf(t, r);
@@ -3039,6 +3108,12 @@
     const r = curResultTab();
     if (!r) { log("warn", "no result tab to pin — run a query"); return; }
     resultTabOp(r.pinned ? "unpin" : "pin", r.id);
+  }
+
+  function renameCurrent() {
+    const r = curResultTab();
+    if (!r) { log("warn", "no result tab to rename — run a query"); return; }
+    renameResultTab(r);
   }
 
   function closeCurrent() {
@@ -3145,6 +3220,7 @@
       { label: r.shared ? "✦ Stop sharing with the assistant" : "✦ Share with the assistant", key: "S",
         why: r.shared || rtabState.canShare ? "" : noShare(),
         act: () => resultTabOp(r.shared ? "unshare" : "share", r.id) },
+      { label: "Rename…", key: "F2", act: () => renameResultTab(r) },
       { label: "Close this result tab", key: "x", act: () => resultTabOp("close", r.id) },
       { label: "Close unpinned tabs", why: unpinned ? "" : "every tab is pinned", act: () => resultTabOp("close-unpinned", 0) },
     ];
@@ -3168,6 +3244,13 @@
     if (b.classList.contains("on")) { if (dbc.cmd.showResults) dbc.cmd.showResults(); return; }
     resultTabOp("show", Number(b.dataset.rt));
   });
+  // a double-click renames: its first click has shown the tab, so the
+  // button is looked up again by id in the strip as it now is
+  $("rstrip").addEventListener("dblclick", (e) => {
+    const b = e.target.closest("button[data-rt]");
+    if (!b || e.target.closest("[data-close], [data-rerun]") || !rtabState) return;
+    renameResultTab(rtabState.resultTabs.find((x) => x.id === Number(b.dataset.rt)));
+  });
   $("rstrip").addEventListener("contextmenu", (e) => {
     const b = e.target.closest("button[data-rt]");
     if (!b || !rtabState) return;
@@ -3181,13 +3264,13 @@
   // The strip's keys, anywhere in the results pane — the grid or the plan
   // (both pass keys they do not use up to here), and an exec result's
   // message: { } step, P pins or unpins, r reruns, S shares with the
-  // assistant or stops, x closes. None of them is a key the grid or the
-  // plan view has.
+  // assistant or stops, F2 renames, x closes. None of them is a key the
+  // grid or the plan view has.
   els.results.addEventListener("keydown", (e) => {
     if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.target.closest("input, textarea, select, [contenteditable]")) return;
     const acts = { "{": () => stepResultTab(-1), "}": () => stepResultTab(1), P: togglePin, r: rerunCurrent, x: closeCurrent,
-      S: toggleShare };
+      S: toggleShare, F2: renameCurrent };
     const f = acts[e.key];
     if (f) { e.preventDefault(); f(); }
   });
@@ -4151,6 +4234,7 @@
       ["P · right-click a tab", "pin it: a run then opens a new tab instead of replacing it · rerun, pin, share, close"],
       ["r · ↻", "rerun its query into the same tab, pinned or not (a statement that writes asks first) — ↻ is on the tab on screen"],
       ["S", "share it with the assistant: it goes with every question on the connection (needs ai_rows = true) · again stops"],
+      ["F2 · double-click a tab", "rename it — ↻ keeps the name, another query run into the tab clears it; empty: named after its query again"],
       ["x · × on a tab", "close it"],
       ["switch the connection", "its own result tabs, plan and log come back as they were left"],
     ]],

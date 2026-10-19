@@ -49,6 +49,7 @@ func TestWeb(t *testing.T) {
 		{"switch connections", switchConns},
 		{"result tabs and logs per connection", resultTabsPerConn},
 		{"run all: a tab per statement", runAllTabs},
+		{"rename a result tab", renameResultTab},
 		{"rerun a write asks first", rerunWriteConfirm},
 		{"share a result with the assistant", shareWithAssistant},
 		{"history scoped to the database", historyScope},

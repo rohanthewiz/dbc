@@ -878,6 +878,52 @@ func TestRerunNotesTheResultItReplaced(t *testing.T) {
 	}
 }
 
+// A result tab's name is the user's (RenameResultTab): made one line and
+// capped, kept by a rerun of the tab — the same question — and cleared by
+// any other run landing in the tab, or by a blank name, which brings the
+// generated title back.
+func TestRenameResultTab(t *testing.T) {
+	w := newTestWorkspace(t)
+	run(t, w, "SELECT name FROM cats")
+	id := got(w)
+	title := func() (string, bool) {
+		tabs, cur := w.ResultTabs()
+		return tabs[cur].Title, tabs[cur].Named
+	}
+	if err := w.RenameResultTab(id, "  the\n cats\t names "); err != nil {
+		t.Fatal(err)
+	}
+	if s, named := title(); s != "the cats names" || !named {
+		t.Fatalf("renamed: %q named %v, want %q", s, named, "the cats names")
+	}
+	if ev := rerun(t, w, id); ev.Err != nil || ev.Tag != "rerun the cats names" {
+		t.Fatalf("rerun: %+v", ev)
+	}
+	if s, _ := title(); s != "the cats names" {
+		t.Errorf("after a rerun: %q, want the name kept", s)
+	}
+	if err := w.RenameResultTab(id, " "); err != nil {
+		t.Fatal(err)
+	}
+	if s, named := title(); s != "SELECT name FROM cats" || named {
+		t.Errorf("a blank name: %q named %v, want the generated title back", s, named)
+	}
+
+	if err := w.RenameResultTab(id, strings.Repeat("é", MaxResultTabName+5)); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := title(); s != strings.Repeat("é", MaxResultTabName) {
+		t.Errorf("a long name: %d runes, want %d", len([]rune(s)), MaxResultTabName)
+	}
+	run(t, w, "SELECT 1 AS n") // another question, into the same tab
+	if s, named := title(); got(w) != id || s != "SELECT 1 AS n" || named {
+		t.Errorf("another run into the tab: %q named %v, want the name gone", s, named)
+	}
+	if err := w.RenameResultTab(id+100, "x"); err == nil {
+		t.Error("renaming a tab that is not there: no refusal")
+	}
+}
+
 // A rerun needs no room: at the cap with every tab pinned — where a run is
 // refused — rerunning one of them still lands, in place. A shared tab
 // stays shared, and an app run's tab keeps its tag for a title.

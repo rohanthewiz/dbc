@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-221
+**Next ID:** N-222
 
 ## Open
 
@@ -92,6 +92,14 @@ ten session docs in `ai_docs/claude_sessions/`
   running), **Paste** and **Redo**, and its Undo/Redo dim when there is
   nothing to undo. Port them to the TUI menu if parity is wanted; no one
   has asked.
+- **N-221** · raised `2026-1019-1757-build-badge` · value low
+  Release binaries (`.goreleaser.yml`) are built without
+  `scripts/stamp.sh`, so dbc web's build badge on a released dbc shows the
+  hash and commit time (from the toolchain's VCS info) but no commit
+  subject. goreleaser has no template for the subject; release.yml could
+  run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
+  it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
+  whose head commit is "Release vX.Y.Z" anyway.
 
 ## Validate
 

@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-219
+**Next ID:** N-221
 
 ## Open
 
@@ -101,6 +101,12 @@ ten session docs in `ai_docs/claude_sessions/`
   running), **Paste** and **Redo**, and its Undo/Redo dim when there is
   nothing to undo. Port them to the TUI menu if parity is wanted; no one
   has asked.
+- **N-219** · raised `2026-1019-1305-query-folding-result-tab-rename` · value low
+  Result tabs can be renamed in dbc web only (F2, double-click, the tab's
+  menu → `Workspace.RenameResultTab`). The TUI's strip would show a name
+  (`ResultTab.Title` is the name when `Named`) but has no way to set one.
+  Add a key and a row on its result-tab menu (`tui/resulttabs.go`) if
+  parity is wanted; no one has asked.
 
 ## Validate
 
@@ -322,6 +328,15 @@ and `raised`.
   `readText` may be missing or refused — the row should then log "paste
   with Ctrl+V", never fail silently. Also try a right-click inside the find
   box (Ctrl+F): the browser's own menu should still open there.
+- **N-220** · raised `2026-1019-1305-query-folding-result-tab-rename` · value low
+  The web e2e step "pipeline tabs" fails whenever `DBC_E2E_SHOTS` is set:
+  `pipelines_test.go:775` times out waiting for "the stage panned to the
+  pipeline's end, 12px above the canvas's". It passes without screenshots,
+  and fails the same way on the commit before this session's, so it is the
+  test's, not a product change. Likely a screenshot (`shot`) taken while
+  the lane auto-pan runs stalls its animation frames. Repair the test (no
+  shot mid-drag, or wait out the pan before one) so a screenshot run is
+  usable for visual checks.
 
 ## Roadmap
 

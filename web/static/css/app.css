@@ -400,6 +400,16 @@ body.side-dragging { cursor: col-resize; user-select: none; }
 .diag-note { font-style: normal; white-space: pre; }
 .diag-note.err { color: var(--err); }
 .diag-note.warn { color: var(--warn); }
+/* the gutter's fold arrows, smaller: Monaco draws them at 140% of the
+   margin's font (about 18px at the 13px editor font), large beside 13px
+   line numbers. The .editor-wrap prefix outranks Monaco's own rule, which
+   its loader injects after this sheet and so would win a tie. */
+.editor-wrap .monaco-editor .margin-view-overlays .codicon-folding-collapsed,
+.editor-wrap .monaco-editor .margin-view-overlays .codicon-folding-expanded,
+.editor-wrap .monaco-editor .margin-view-overlays .codicon-folding-manual-collapsed,
+.editor-wrap .monaco-editor .margin-view-overlays .codicon-folding-manual-expanded {
+  font-size: 110%;
+}
 
 /* Positioned and lifted: Monaco's content layer (.lines-content — absolute,
    contain:strict, transformed, and 2^24px square) is clipped on screen

@@ -38,10 +38,6 @@ ten session docs in `ai_docs/claude_sessions/`
 
 ## Open
 
-- **N-172** · raised `2026-1009-0748-pg-dump-cli-tui-web` · value low
-  A dump for MySQL connections with mysqldump, behind the same menu row and
-  dialog (the row is dimmed on MySQL today). No one has asked; worth it only
-  if a MySQL user does.
 - **N-188** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value low
   Report the yaegi mis-store upstream (traefik/yaegi, v0.16.1): a binary or
   unary operator's result assigned straight into an element of a `[]any`
@@ -72,12 +68,6 @@ ten session docs in `ai_docs/claude_sessions/`
   fcb76d1. What remains is to watch #1736. Once a release has the fix, bump
   yaegi, and the failing `TestYaegiStoreComputedBug` is the cue to drop the
   lint and the README paragraph. Value is now low, since it waits on upstream.
-- **N-189** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value low
-  `sql.write mode: upsert` on MySQL. It refuses today: MySQL's
-  `ON DUPLICATE KEY UPDATE` matches any unique key, not the `key` columns
-  named, so the semantics differ from Postgres and SQLite. Worth it only
-  if a MySQL user asks (as N-172); then say the difference in the field's
-  doc, or require that `key` be the table's only unique key.
 - **N-216** · raised `2026-1014-1603-encrypt-saved-passwords` · value low
   Only `connections.toml` encrypts its DSNs (`config/secret.go`). A
   `config.toml` or `dbc.toml` DSN with an inline password stays plain:
@@ -481,6 +471,18 @@ call.
   image moves its data again, as 18 did.
   Updated 2026-10-10 (`/next-list`): still not time. Docker Hub's newest
   19 tag is `19beta4` (2026-10-07); there is no `19`.
+
+- **N-172** · raised `2026-1009-0748-pg-dump-cli-tui-web` · value low
+  A dump for MySQL connections with mysqldump, behind the same menu row and
+  dialog (the row is dimmed on MySQL today). No one has asked; worth it only
+  if a MySQL user does.
+
+- **N-189** · raised `2026-1009-1546-phase-6-plugin-sdk-builtins` · value low
+  `sql.write mode: upsert` on MySQL. It refuses today: MySQL's
+  `ON DUPLICATE KEY UPDATE` matches any unique key, not the `key` columns
+  named, so the semantics differ from Postgres and SQLite. Worth it only
+  if a MySQL user asks (as N-172); then say the difference in the field's
+  doc, or require that `key` be the table's only unique key.
 
 - **N-214** · raised `2026-1014-1603-encrypt-saved-passwords` · value low
   The key that encrypts `connections.toml`'s DSNs sits beside it in

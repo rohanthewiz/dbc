@@ -325,6 +325,8 @@ func testConnEdit(t *testing.T, persistent bool) {
 		// connection, and an ad-hoc one (groups.go)
 		groupsKey: `[{"name":"scr","conn":"scratch","color":0},{"name":"ana","conn":"scratch/analytics","color":1},` +
 			`{"name":"lat","conn":"later","color":2},{"name":"wip","members":["bg"],"color":3}]`,
+		// connections ungrouped by hand, which automatic grouping skips
+		groupsOffKey: `["later","scratch","scratch/analytics"]`,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -418,6 +420,10 @@ func testConnEdit(t *testing.T, persistent bool) {
 		if got := strings.Join(conns, ","); got != "scr=renamed,ana=renamed/analytics,lat=later,wip=" {
 			t.Errorf("groups after the rename: %s", got)
 		}
+	}
+	// ...and so do the ungrouped connections
+	if got, want := lay[groupsOffKey], `["later","renamed","renamed/analytics"]`; got != want {
+		t.Errorf("groupsOff after the rename: %s, want %s", got, want)
 	}
 
 	// refusals: a name in use, a new driver with the DSN kept, the file's

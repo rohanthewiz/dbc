@@ -43,9 +43,14 @@ func stripLine(m *Model) string { return frame(m).Line(m.lay.editor.Y) }
 
 // groupedModel is consoleModel with three tabs: Query 1 on a, Query 2 on
 // the default, Query 3 on the default, Query 3 on screen.
+//
+// Every connection is declined for automatic grouping, as Ungroup would
+// leave it, so these tests start from no groups and make each one by hand;
+// autoModel's tests cover the automatic groups.
 func groupedModel(t *testing.T) *Model {
 	t.Helper()
 	m, _ := consoleModel(t)
+	manualGroups(m)
 	drive(t, m, nil, m.setActive("a"))
 	key(t, m, "alt+t")
 	drive(t, m, nil, m.setActive(config.DemoSQLite))
@@ -54,6 +59,13 @@ func groupedModel(t *testing.T) *Model {
 		t.Fatalf("setup: tabs %s, cur %d", titles(m), m.curTab)
 	}
 	return m
+}
+
+// manualGroups declines automatic grouping on every configured connection.
+func manualGroups(m *Model) {
+	for _, c := range m.cfg.Connections {
+		m.declineAutoGroup(c.Name)
+	}
 }
 
 // A connection group is a rule: made from a tab's menu, it claims every tab
@@ -284,6 +296,7 @@ func TestTabGroupsRestore(t *testing.T) {
 
 	m2, _ := consoleModel(t)
 	m2.cfg.Connections = m.cfg.Connections
+	manualGroups(m2)
 	m2.restoreTabs(saved, 0)
 	m2.restoreGroups(groups)
 	if len(m2.groups) != 2 {
@@ -562,5 +575,161 @@ func TestTabGroupFoldedMembersWhoseConnectFails(t *testing.T) {
 	key(t, m, "alt+1")
 	if line := stripLine(m); !strings.Contains(line, " brk +2 ") || strings.Contains(line, "two") || strings.Contains(line, "three") {
 		t.Fatalf("back on one, strip = %q, want brk folded over both again", line)
+	}
+}
+
+// abbrevConnName: short names kept whole, longer ones cut to the first
+// word's three letters plus later initials, digit runs kept.
+func TestAbbrevConnName(t *testing.T) {
+	for in, want := range map[string]string{
+		"prod":               "prod",
+		"Lite":               "lite",
+		"pg16":               "pg16",
+		"web-1":              "web1",
+		"notes":              "notes",
+		"scratch":            "scr",
+		"reporting-mysql":    "repm",
+		"local-pg":           "locp",
+		"postgres16":         "pos16",
+		"postgres in docker": "posid",
+		"myAppDB":            "myad",
+		"demo-sqlite":        "dems",
+		"db20240101x":        "db202401",
+		"--":                 "conn",
+	} {
+		if got := abbrevConnName(in); got != want {
+			t.Errorf("abbrevConnName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Tabs are grouped by connection on their own: nothing with one tab; at
+// the second, each connection's tabs gather behind an abbreviated chip;
+// a group goes with its connection's last tab, and all of them when one
+// tab is left.
+func TestTabGroupAuto(t *testing.T) {
+	m, _ := consoleModel(t)
+	if len(m.groups) != 0 {
+		t.Fatalf("one tab, groups %+v", m.groups)
+	}
+	key(t, m, "alt+t") // Query 2, on the default too
+	if len(m.groups) != 1 {
+		t.Fatalf("two tabs on %s: groups %+v", config.DemoSQLite, m.groups)
+	}
+	dems := m.groups[0]
+	if dems.name != "dems" || dems.conn != config.DemoSQLite || !dems.auto || len(m.groupMembers(dems)) != 2 {
+		t.Fatalf("auto group = %+v, members %d", dems, len(m.groupMembers(dems)))
+	}
+	if line := stripLine(m); !strings.Contains(line, " dems ─ Query 1 ─ Query 2") {
+		t.Fatalf("strip = %q", line)
+	}
+
+	drive(t, m, nil, m.setActive("a")) // Query 2 moves to a: a group of its own
+	ga := m.groupOf(m.active())
+	if ga == nil || ga.name != "a" || !ga.auto || m.groupOf(m.tabs[0]) != dems {
+		t.Fatalf("after Query 2 moved to a: groups %+v", m.groups)
+	}
+
+	key(t, m, "alt+t") // Query 3 on a: joins a's group, gathered beside it
+	key(t, m, "alt+1")
+	drive(t, m, nil, m.setActive("b")) // Query 1 leaves the demo: dems goes
+	if m.groupByName("dems", nil) != nil || m.groupByName("b", nil) == nil {
+		t.Fatalf("after the demo's last tab moved to b: groups %+v", m.groups)
+	}
+	if len(m.idleGroups()) != 0 {
+		t.Errorf("auto groups idle: %+v", m.idleGroups())
+	}
+
+	key(t, m, "alt+w") // Query 1 (b)
+	key(t, m, "alt+w") // one more: a single tab left
+	if len(m.tabs) != 1 || len(m.groups) != 0 {
+		t.Fatalf("%d tabs, groups %+v", len(m.tabs), m.groups)
+	}
+}
+
+// A tab taken out of its automatic group stays out, and the group stays
+// for the others; Ungroup stops the automatic grouping of that connection
+// for good (saved), until a connection group is made for it by hand.
+func TestTabGroupAutoRemoveAndUngroup(t *testing.T) {
+	m, _ := consoleModel(t)
+	key(t, m, "alt+t")
+	g := m.groupOf(m.active())
+	key(t, m, "alt+g")
+	pickRow(t, m, "Remove from group dems")
+	if m.groupOf(m.active()) != nil || !m.groupLive(g) || m.groupOf(m.tabs[0]) != g {
+		t.Fatalf("after Remove: on-screen tab in %v, groups %+v", m.groupOf(m.active()), m.groups)
+	}
+	key(t, m, "alt+1")
+	key(t, m, "alt+g")
+	pickRow(t, m, "Remove from group dems") // both out: the group stays, a rule with no members
+	if !m.groupLive(g) {
+		t.Fatal("the auto group went while both its tabs were only excluded")
+	}
+
+	key(t, m, "alt+g")
+	pickRow(t, m, "Add to group…")
+	pickRow(t, m, "dems")
+	key(t, m, "alt+g")
+	pickRow(t, m, "Group dems…")
+	pickRow(t, m, "Ungroup")
+	if len(m.groups) != 0 || !m.noAutoGroup[config.DemoSQLite] {
+		t.Fatalf("after Ungroup: groups %+v, declined %v", m.groups, m.noAutoGroup)
+	}
+	key(t, m, "alt+t") // a third tab on the demo: still no group
+	if len(m.groups) != 0 {
+		t.Fatalf("an ungrouped connection was grouped again: %+v", m.groups)
+	}
+	if got := m.savedNoAutoGroup(); !slices.Equal(got, []string{config.DemoSQLite}) {
+		t.Errorf("saved no_auto_group = %v", got)
+	}
+
+	key(t, m, "alt+g")
+	pickRow(t, m, "Add to group…")
+	pickRow(t, m, "New connection group: "+config.DemoSQLite)
+	key(t, m, "enter")
+	if len(m.groups) != 1 || m.groups[0].auto || len(m.noAutoGroup) != 0 {
+		t.Fatalf("a connection group by hand: groups %+v, declined %v", m.groups, m.noAutoGroup)
+	}
+}
+
+// Renaming an automatic group makes it the user's: it keeps the name and
+// stays, as an idle chip, when its connection's last tab moves away.
+func TestTabGroupAutoRename(t *testing.T) {
+	m, _ := consoleModel(t)
+	key(t, m, "alt+t")
+	g := m.groupOf(m.active())
+	m.openGroupMenu(g, 1, 1)
+	pickRow(t, m, "Rename group…")
+	m.modal.(*promptModal).field.SetText("demo")
+	key(t, m, "enter")
+	if g.name != "demo" || g.auto {
+		t.Fatalf("renamed group = %+v", g)
+	}
+	drive(t, m, nil, m.setActive("a"))
+	key(t, m, "alt+1")
+	drive(t, m, nil, m.setActive("a"))
+	if !m.groupLive(g) || !slices.Contains(m.idleGroups(), g) || !strings.Contains(stripLine(m), "[demo]") {
+		t.Fatalf("renamed group after its tabs left: groups %+v, strip %q", m.groups, stripLine(m))
+	}
+}
+
+// A tab on one of a connection's other databases joins that connection's
+// automatic group, and auto survives a save and restore.
+func TestTabGroupAutoBaseAndRestore(t *testing.T) {
+	m, _ := consoleModel(t)
+	m.cfg.Connections = append(m.cfg.Connections,
+		config.Connection{Name: "reporting-pg", Driver: "postgres", DSN: "postgres://localhost/x"})
+	m.restoreTabs([]userdata.LayoutTab{{Title: "one"}, {Title: "two"}}, 0)
+	m.tabs[0].lazy, m.tabs[1].lazy = "reporting-pg", "reporting-pg/analytics"
+	m.autoGroupTabs()
+	g := m.groupByName("repp", nil)
+	if g == nil || g.conn != "reporting-pg" || m.groupOf(m.tabs[1]) != g || m.groupOf(m.tabs[0]) != g {
+		t.Fatalf("groups %+v", m.groups)
+	}
+	saved := m.savedGroups()
+	m.groups = nil
+	m.restoreGroups(saved)
+	if len(m.groups) != 1 || !m.groups[0].auto || m.groups[0].color != g.color {
+		t.Fatalf("restored %+v", m.groups)
 	}
 }

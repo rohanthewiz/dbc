@@ -48,6 +48,22 @@
 //     browser's tab group does (dbc's own choice: ced opens files, not
 //     siblings). A connection group needs no help: the new tab is on the
 //     same connection.
+//   - Tabs are grouped by connection AUTOMATICALLY (dbc's own choice; auto
+//     below): once the strip holds two tabs, a tab on a connection no group
+//     claims gets a connection group on that connection's base, named by
+//     abbrevConn ("reporting-mysql" → "repm"). Such a group is marked auto
+//     and lives only while a tab here is on its connection, so the
+//     connections a session passed through do not pile up as idle chips.
+//     Renaming it is the user claiming it: it loses auto and stays, idle
+//     chip and all, like a group made by hand. Ungroup (or Make ad-hoc) on
+//     a connection group is the user saying "not this connection": the
+//     connection goes into off, saved as the "groupsOff" layout key, and
+//     only a connection group made by hand for it takes it out again. The
+//     TUI does the same (tui/tabgroups.go autoGroupTabs, abbrevConnName).
+//
+//       tabs on   prod     prod     reporting-mysql
+//       strip     [prod][Query 1][Query 2] [repm][Query 3] [+]
+//                  └ kept whole             └ "rep" + "m"
 //   - Where a new tab lands is never a guess (dbc's own choice): the strip's
 //     + wears the colour of the group Alt+T would put the tab in, and says
 //     so in its tooltip; a right-click on + — or a group's own menu ("New
@@ -66,6 +82,10 @@
   const el = dbc.el;
 
   const NAME_MAX = 8;
+  // KEEP is the longest connection name (in letters and digits) abbrevConn
+  // keeps whole; past it the name is abbreviated, so an automatic chip
+  // stays a glance-sized mnemonic with room for uniqueName's digit.
+  const KEEP = 5;
   // COLORS is how many hues the groups cycle through: app.css's --g0 … --g5,
   // one set per theme, each readable under var(--bg) as the chip's text.
   const COLORS = 6;
@@ -74,13 +94,17 @@
   //   tabs()            the query tabs, in strip order
   //   active()          the tab on screen
   //   under(conn, base) conn is base, or one of base's other databases
+  //   base(conn)        the configured connection conn is, or is a database of
   //   activate(t)       show t
 //   newTab(g)         open a query tab in group g (connFor's connection)
   //   close(t)          close t at once (no stateful-session question)
   //   changed()         a group changed: save the groups, redraw the strip
   //   log(level, text)
   function create(host) {
-    let groups = []; // {name, conn, members: Set<key>, exclude: Set<key>, collapsed, color}
+    let groups = []; // {name, conn, members: Set<key>, exclude: Set<key>, collapsed, color, auto}
+    // off is the connections the user ungrouped: auto makes no group for
+    // them, or for their other databases ("groupsOff" in the layout)
+    let off = new Set();
 
     const isConn = (g) => g.conn !== "";
     const live = (g) => groups.includes(g);
@@ -178,6 +202,53 @@
       return groups.length !== n;
     }
 
+    // auto keeps the automatic connection groups in step with the tabs (see
+    // the header); app.js runs it at every redraw, before arrange, since a
+    // tab that switched connection, opened or closed may change them.
+    // Reports whether anything changed, so the caller saves only then.
+    //
+    // Two passes, in this order:
+    //   1. Drop each auto group with no tab here — counting a tab on its
+    //      connection that is in no group: a tab taken out by hand (an
+    //      exclusion) keeps its connection's group alive, or Remove from
+    //      group would see the group dropped and made again around the tab
+    //      at the next redraw. A tab on the connection that resolves to
+    //      another group (ad-hoc, a deeper connection group) does not
+    //      count: the group would show as an idle chip with nothing in it.
+    //      With fewer than two tabs every auto group goes: a lone tab needs
+    //      no chip to tell it from its neighbours.
+    //   2. Give each ungrouped tab's connection a group, unless one already
+    //      claims the connection (the tab was excluded from it by hand) or
+    //      the user ungrouped it (off). The group goes on the BASE
+    //      connection, so "prod/analytics" joins prod's. A name that cannot
+    //      be made unique leaves the tab ungrouped rather than borrowing
+    //      another group's.
+    function auto() {
+      const tabs = host.tabs();
+      if (!groups.length && tabs.length < 2) return false; // the one-tab case
+      const n = groups.length;
+      const alive = (g) => tabs.some((t) => {
+        const o = groupOf(t);
+        return o === g || (!o && !!t.conn && host.under(t.conn, g.conn));
+      });
+      // decided before filtering: alive reads groups through groupOf
+      const dead = new Set(groups.filter((g) => g.auto && (tabs.length < 2 || !alive(g))));
+      groups = groups.filter((g) => !dead.has(g));
+      let changed = groups.length !== n;
+      if (tabs.length < 2) return changed;
+      for (const t of tabs) {
+        if (!t.conn || groupOf(t)) continue;
+        if (groups.some((g) => isConn(g) && host.under(t.conn, g.conn))) continue;
+        if ([...off].some((d) => host.under(t.conn, d))) continue;
+        const base = host.base(t.conn);
+        const name = uniqueName(abbrevConn(base));
+        if (nameProblem(name)) continue;
+        newGroup(name, base).auto = true;
+        changed = true;
+      }
+      return changed;
+    }
+
     // ── what the strip draws ────────────────────────────────────────────
     // chip is the chip drawn in front of tabs[i], or null: the first tab of
     // each group carries it.
@@ -230,6 +301,43 @@
     // "reporting" → "reportin" and "lite-2" → "lite2".
     const nameFrom = (s) => [...s.replace(/[^\p{L}\p{N}]/gu, "")].slice(0, NAME_MAX).join("");
 
+    // abbrevConn is an automatic connection group's name for connection
+    // conn — the TUI's abbrevConnName (tui/tabgroups.go); keep the two in
+    // step. The name is split into words — at anything not a letter or
+    // digit, at a lower→upper case change ("myApp"), between letters and
+    // digits ("pg16") — and lowercased. Five letters and digits or fewer
+    // are kept whole ("prod", "pg16", "web-1" → "web1"); otherwise the
+    // first word gives three letters, each later word its initial, and a
+    // digit run is kept whole, being what usually tells two connections
+    // apart: "reporting-mysql" → "repm", "postgres16" → "pos16",
+    // "postgres in docker" → "posid", "scratch" → "scr". Cut to NAME_MAX;
+    // "conn" when there is nothing to take.
+    function abbrevConn(conn) {
+      const words = [];
+      let cur = "", prev = "";
+      const flush = () => { if (cur) { words.push(cur.toLowerCase()); cur = ""; } };
+      const isDigit = (c) => /\p{N}/u.test(c);
+      for (const c of conn) {
+        if (!/[\p{L}\p{N}]/u.test(c)) { flush(); prev = c; continue; }
+        if (cur && isDigit(c) !== isDigit(prev)) flush(); // a letter↔digit boundary
+        else if (cur && /\p{Lu}/u.test(c) && /\p{Ll}/u.test(prev)) flush(); // camelCase
+        cur += c;
+        prev = c;
+      }
+      flush();
+      const joined = words.join("");
+      if (!joined) return "conn";
+      if ([...joined].length <= KEEP) return joined;
+      const out = [];
+      words.forEach((w, i) => {
+        const r = [...w];
+        if (isDigit(r[0])) out.push(...r);
+        else if (i === 0) out.push(...r.slice(0, 3));
+        else out.push(r[0]);
+      });
+      return out.slice(0, NAME_MAX).join("");
+    }
+
     // uniqueName is base, or base cut short plus a digit when base is taken
     // ("grp" → "grp2"), so the name field's seed is usable as offered.
     function uniqueName(base) {
@@ -249,7 +357,7 @@
     }
 
     function newGroup(name, conn) {
-      const g = { name, conn: conn || "", members: new Set(), exclude: new Set(), collapsed: false, color: nextColor() };
+      const g = { name, conn: conn || "", members: new Set(), exclude: new Set(), collapsed: false, color: nextColor(), auto: false };
       groups.push(g);
       return g;
     }
@@ -297,7 +405,15 @@
     function ungroup(g) {
       if (!live(g)) return;
       groups = groups.filter((x) => x !== g);
-      host.log("info", "ungrouped " + g.name);
+      if (isConn(g)) {
+        // a connection group would otherwise be made again, automatically,
+        // at the next redraw (auto)
+        off.add(g.conn);
+        host.log("info", "ungrouped " + g.name + " — tabs on " + g.conn +
+          " are no longer grouped automatically (Add to group… → New connection group brings it back)");
+      } else {
+        host.log("info", "ungrouped " + g.name);
+      }
       host.changed();
     }
 
@@ -307,7 +423,11 @@
     function makeAdhoc(g) {
       if (!live(g) || !isConn(g)) return;
       const ms = members(g);
+      // the connection is left without a group by the user's choice, as by
+      // Ungroup, so auto must not make it a new one
+      off.add(g.conn);
       g.conn = "";
+      g.auto = false;
       g.exclude = new Set();
       for (const t of ms) g.members.add(t.key);
       dropEmpty();
@@ -339,6 +459,11 @@
         if (!isConn(g)) continue;
         const to = move(g.conn);
         if (to !== g.conn) { g.conn = to; changed = true; }
+      }
+      // an ungrouped connection stays ungrouped under its new name
+      for (const d of [...off]) {
+        const to = move(d);
+        if (to !== d) { off.delete(d); off.add(to); changed = true; }
       }
       return changed;
     }
@@ -435,10 +560,15 @@
         dbc.modal.close();
         if (renaming) {
           if (!live(o.g)) return;
+          // a name the user chose makes the group theirs: it no longer
+          // goes with its connection's last tab
           o.g.name = name;
+          o.g.auto = false;
         } else {
           if (!host.tabs().includes(o.t)) return; // closed while the dialog was up
           const g = newGroup(name, o.conn);
+          // a connection group by hand asks for grouping there again
+          if (o.conn) for (const d of [...off]) if (host.under(d, o.conn)) off.delete(d);
           add(o.t, g);
           host.log("info", o.conn ? "group " + name + ": " + dbc.plural(members(g).length, "tab") + " on " + o.conn
             : "group " + name + ": added " + o.t.title);
@@ -475,9 +605,14 @@
         if (m.length) r.members = m;
         if (x.length) r.exclude = x;
         if (g.collapsed) r.collapsed = true;
+        if (g.auto) r.auto = true;
         return r;
       }));
     }
+
+    // encodeOff is off as the "groupsOff" layout value, sorted for a stable
+    // value.
+    const encodeOff = () => JSON.stringify([...off].sort());
 
     // restore rebuilds the groups from the layout against the tabs this
     // window claimed: keys with no tab here are dropped, and an ad-hoc group
@@ -485,8 +620,13 @@
     // stored for the window that holds them). A value that does not parse,
     // or a name the dialog would refuse, is skipped — groups are a
     // convenience, never a reason for the page not to boot.
-    function restore(value) {
+    function restore(value, offValue) {
       groups = [];
+      off = new Set();
+      try {
+        const xs = JSON.parse(offValue || "[]");
+        if (Array.isArray(xs)) for (const c of xs) if (typeof c === "string" && c) off.add(c);
+      } catch (_) { /* a convenience, as below */ }
       let recs = [];
       try { recs = JSON.parse(value || "[]"); } catch (_) { recs = []; }
       if (!Array.isArray(recs)) return;
@@ -495,14 +635,15 @@
         if (!r || typeof r.name !== "string" || nameProblem(r.name)) continue;
         const keys = (xs) => new Set((Array.isArray(xs) ? xs : []).filter((k) => shown.has(k)));
         const g = { name: r.name, conn: typeof r.conn === "string" ? r.conn : "", members: keys(r.members),
-          exclude: keys(r.exclude), collapsed: !!r.collapsed, color: Number.isInteger(r.color) ? r.color : nextColor() };
+          exclude: keys(r.exclude), collapsed: !!r.collapsed, color: Number.isInteger(r.color) ? r.color : nextColor(),
+          auto: !!r.auto && typeof r.conn === "string" && r.conn !== "" };
         if (!isConn(g) && !g.members.size) continue;
         groups.push(g);
       }
     }
 
     return {
-      groupOf, arrange, forgetTab, chip, idle, hidden, describe, renameConn, encode, restore,
+      groupOf, arrange, auto, forgetTab, chip, idle, hidden, describe, renameConn, encode, encodeOff, restore, abbrevConn,
       tabItems, openGroupMenu, toggle, landing, connFor, ordered,
       // place puts a tab opened into g there by add's rules: out of any
       // ad-hoc group, and let past a deeper connection group that would

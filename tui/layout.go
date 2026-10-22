@@ -670,6 +670,9 @@ func (m *Model) restoreLayout(l userdata.Layout) {
 	m.sideHidden = l.SideHidden
 	m.chat.recentFolded = l.ChatRecentFolded
 	m.savedLayoutTabs, m.savedActiveTab, m.savedLayoutGroups = l.Tabs, l.ActiveTab, l.Groups
+	for _, c := range l.NoAutoGroup {
+		m.declineAutoGroup(c)
+	}
 }
 
 // saveLayout keeps the sizes and the fold for the next run. Saved once, at
@@ -680,6 +683,6 @@ func (m *Model) saveLayout() {
 	_ = userdata.SaveLayout(m.layoutFile, userdata.Layout{
 		SideW: m.sideW, ChatW: m.chatW, LogH: m.logH, EdFrac: m.edFrac, SideHidden: m.sideHidden,
 		ChatRecentFolded: m.chat.recentFolded, Tabs: m.savedTabs(), ActiveTab: m.curTab,
-		Groups: m.savedGroups(),
+		Groups: m.savedGroups(), NoAutoGroup: m.savedNoAutoGroup(),
 	})
 }

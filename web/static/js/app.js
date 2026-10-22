@@ -1888,6 +1888,21 @@
   // connUnder: a connection group on base holds a tab on conn (tabgroups.js).
   const connUnder = (conn, base) => conn === base || derivedConn(conn, base);
 
+  // connBase is the configured connection conn is, or is one of the other
+  // databases of: "prod" for "prod/analytics". An automatic tab group goes
+  // on the base (tabgroups.js auto), as the Connections list draws a
+  // connection's databases under it. A name with no row of its own and no
+  // row it is derived from (a connection being removed) is its own base.
+  function connBase(conn) {
+    let best = "";
+    for (const b of els.conns.querySelectorAll(".conn-item")) {
+      const name = b.dataset.conn || "";
+      if (name === conn) return conn;
+      if (name.length > best.length && derivedConn(conn, name)) best = name;
+    }
+    return best || conn;
+  }
+
   Object.assign(dbc.cmd, {
     run, stop, history, preview, editorState, scripts, help, newTab, pickTab, connect, disconnect, refresh, connRenamed,
     save: () => saveNow(state.tab), check: () => checkNow(state.tab), openScript,
@@ -3713,6 +3728,7 @@
     tabs: () => tabs,
     active: () => state.tab,
     under: connUnder,
+    base: connBase,
     activate: (t) => activate(t),
     newTab: (g) => newTab(g),
     close: (t) => reallyClose(t),
@@ -3723,7 +3739,7 @@
   // saveGroups writes the groups whole, as the "groups" layout key (see
   // web/groups.go for its shape and the merge across windows).
   function saveGroups() {
-    saveLayout({ groups: groups.encode() });
+    saveLayout({ groups: groups.encode(), groupsOff: groups.encodeOff() });
   }
 
   function renderTabs() {
@@ -3733,6 +3749,10 @@
     // tabgroups.js), here at every redraw — a tab that switched onto a
     // grouped connection, say, moves in beside its group. Only an actual
     // move is saved.
+    // The automatic connection groups first (tabgroups.js auto): a tab
+    // that just landed on a connection gets its group, and is gathered
+    // beside it by the arrange below, on this same redraw.
+    if (groups.auto()) saveGroups();
     const arranged = groups.arrange(tabs);
     if (arranged !== tabs) { tabs = arranged; saveOrder(); }
     const plus = $("qnew");
@@ -4400,7 +4420,7 @@
       savedPlans = layout.plans || "";
       // the groups, against the tabs this window claimed; the first
       // renderTabs gathers each group's tabs together
-      groups.restore(layout.groups);
+      groups.restore(layout.groups, layout.groupsOff);
       activeAtBoot = tabs.find((t) => t.key === layout.tab) || tabs[0];
 
       for (const t of tabs) {

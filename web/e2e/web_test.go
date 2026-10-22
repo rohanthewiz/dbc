@@ -1699,11 +1699,13 @@ func codeHighlight(t *testing.T, _ *env, p *rod.Page) {
 	}
 }
 
-// tabGroups: tabs grouped by hand (ad-hoc) and by connection, gathered
-// behind their chip, folded by a click on it, and kept across a reload
-// (tabgroups.js, web/groups.go). It starts where consolesPerDatabase left
-// the window — Query 1 on lite, on screen; Renamed tab on lite2 — and
-// leaves no group behind.
+// tabGroups: tabs grouped by connection automatically, then by hand
+// (ad-hoc) and by connection, gathered behind their chip, folded by a
+// click on it, and kept across a reload (tabgroups.js, web/groups.go). It
+// starts where consolesPerDatabase left the window — Query 1 on lite, on
+// screen; Renamed tab on lite2 — and leaves no group behind: lite and
+// lite2 end ungrouped by hand, so the steps after it see no automatic
+// groups either.
 func tabGroups(t *testing.T, _ *env, p *rod.Page) {
 	// strip is the strip as drawn: a chip as [text], a tab as its title
 	strip := func(want string) {
@@ -1744,7 +1746,28 @@ func tabGroups(t *testing.T, _ *env, p *rod.Page) {
 		return tabSelector(t, p, title)
 	}
 
+	// Two tabs on two connections: each connection has an automatic group,
+	// named from the connection (short names are kept whole).
+	strip("[lite],Query 1,[lite2],Renamed tab")
+	// A rename makes the group the user's: saved without auto.
+	at(`#qtabs .qchip[data-group="lite2"]`, proto.InputMouseButtonRight)
+	menuPick(t, p, "Rename group…")
+	name("two")
+	strip("[lite],Query 1,[two],Renamed tab")
+	waitFor(t, p, "the renamed group saved as the user's", `async () => {
+	  const gs = JSON.parse(((await (await fetch("/api/v1/layout")).json()).data || {}).groups || "[]");
+	  const by = (n) => gs.find((g) => g.name === n) || {};
+	  return gs.length === 2 && by("lite").auto === true && by("two").conn === "lite2" && !by("two").auto;
+	}`)
+	// Ungroup stops the automatic grouping of that connection, and says so
+	// in the layout, so the rest of this step starts from no groups.
+	at(`#qtabs .qchip[data-group="lite"]`, proto.InputMouseButtonRight)
+	menuPick(t, p, "Ungroup")
+	at(`#qtabs .qchip[data-group="two"]`, proto.InputMouseButtonRight)
+	menuPick(t, p, "Ungroup")
 	strip("Query 1,Renamed tab")
+	waitFor(t, p, "lite and lite2 saved as ungrouped", `async () =>
+	  ((await (await fetch("/api/v1/layout")).json()).data || {}).groupsOff === '["lite","lite2"]'`)
 
 	// A tab brought on screen and left straight away keeps its own
 	// connection (N-120). activate shows a tab before its workspace

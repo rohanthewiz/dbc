@@ -35,6 +35,10 @@ type Layout struct {
 	// Groups are the query tabs' groups (tui/tabgroups.go). Empty from an
 	// older dbc, or when none was made.
 	Groups []LayoutTabGroup `json:"groups,omitempty"`
+
+	// NoAutoGroup is the connections whose tabs are not grouped
+	// automatically: the user ungrouped their connection group.
+	NoAutoGroup []string `json:"no_auto_group,omitempty"`
 }
 
 // LayoutTab is one saved query tab: what it is called, the connection it
@@ -62,6 +66,9 @@ type LayoutTabGroup struct {
 	// Color indexes the TUI's group hues, kept so a group keeps its colour
 	// across restarts.
 	Color int `json:"color"`
+	// Auto marks a connection group dbc made itself, under a name it
+	// abbreviated from the connection's; it goes when its last tab does.
+	Auto bool `json:"auto,omitempty"`
 }
 
 // LayoutFile is where the TUI's layout persists, beside the schema picks.

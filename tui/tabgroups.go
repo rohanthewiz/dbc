@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -62,9 +63,30 @@ import (
 //   - Names are letters and digits, unique case-insensitively, at most
 //     eight — the web's limit rather than ced's four: the TUI's strip holds
 //     at most nine tabs (maxTabs), against ced's every open file.
+//   - Tabs are grouped by connection AUTOMATICALLY (autoGroupTabs): once
+//     the strip holds two tabs, a tab on a connection no group claims gets
+//     a connection group on that connection's base, named by
+//     abbrevConnName ("reporting-mysql" → "repm"). Such a group is marked
+//     auto and lives only while a tab here is on its connection, so the
+//     connections a session passed through do not pile up as idle chips.
+//     Renaming it is the user claiming it: it loses auto and stays, idle
+//     chip and all, like a group made by hand. Ungroup (or Make ad-hoc) on
+//     a connection group is the user saying "not this connection": the
+//     connection goes into noAutoGroup, saved with the layout, and only a
+//     connection group made by hand for it takes it out again.
+//
+//	tabs on   prod      prod      reporting-mysql
+//	strip     ╭─ prod ─Query 1─Query 2─ repm ─Query 3─ + ─╮
+//	             └ auto: kept whole       └ auto: "rep" + "m"
 
 // groupNameMax is the longest group name, in runes (see the header).
 const groupNameMax = 8
+
+// autoNameKeep is the longest connection name (in letters and digits)
+// abbrevConnName keeps whole: "prod", "lite", "pg16", "notes". Past it the
+// name is abbreviated, so an automatic chip stays a glance-sized mnemonic
+// and leaves room in the eight for uniqueGroupName's digit.
+const autoNameKeep = 5
 
 // tabGroup is one live group.
 type tabGroup struct {
@@ -81,6 +103,10 @@ type tabGroup struct {
 	// color indexes groupHues; assigned at creation so it stays put while
 	// other groups come and go.
 	color int
+	// auto marks a connection group autoGroupTabs made, under the name it
+	// chose: it goes when no tab here is on its connection. A rename
+	// clears it (see the header).
+	auto bool
 }
 
 func (g *tabGroup) isConn() bool { return g.conn != "" }
@@ -278,6 +304,111 @@ func (m *Model) dropEmptyGroups() {
 	m.groups = slices.DeleteFunc(m.groups, func(g *tabGroup) bool { return !g.isConn() && len(g.members) == 0 })
 }
 
+// autoGroupTabs keeps the automatic connection groups in step with the
+// tabs (see the header). Update runs it after every message, before
+// arrangeTabs, since any message can move a tab onto a connection — a
+// connect landing, a new tab, a close. It is cheap: at most nine tabs,
+// a handful of groups.
+//
+// Two passes, in this order:
+//
+//  1. Drop each auto group with no tab here — counting a tab on its
+//     connection that is in no group: a tab taken out by hand (an
+//     exclusion) still keeps its connection's group alive, or Remove from
+//     group would see the group dropped and rebuilt around the tab on the
+//     very next message. With
+//     fewer than two tabs every auto group goes: a lone tab needs no chip
+//     to tell it from its neighbours, and the strip stays hidden with one
+//     tab and no groups, as it always was.
+//  2. Give each ungrouped tab's connection a group, unless one already
+//     claims the connection (the tab was excluded from it by hand) or the
+//     user ungrouped it (noAutoGroup). The group goes on the BASE
+//     connection, so "prod/analytics" joins prod's, as the Connections
+//     pane draws its databases under prod. A name that cannot be made
+//     unique (ten groups starting alike) leaves the tab ungrouped rather
+//     than borrowing another group's name.
+func (m *Model) autoGroupTabs() {
+	if len(m.groups) == 0 && len(m.tabs) < 2 {
+		return // the common one-tab case: nothing to drop, nothing to make
+	}
+	conns := make([]string, len(m.tabs))
+	for i, t := range m.tabs {
+		conns[i] = m.tabConn(t)
+	}
+	// alive: some tab is in g, or is on g's connection in no group at all
+	// (excluded by hand). A tab on the connection that resolves to another
+	// group — an ad-hoc one, a deeper connection group — does not count:
+	// g would draw as an idle chip with nothing in it.
+	alive := func(g *tabGroup) bool {
+		for i, t := range m.tabs {
+			if o := m.groupFor(t.key, conns[i]); o == g || (o == nil && m.connUnder(conns[i], g.conn)) {
+				return true
+			}
+		}
+		return false
+	}
+	// decided before deleting: alive reads m.groups, which DeleteFunc
+	// shifts in place as it goes
+	dead := map[*tabGroup]bool{}
+	for _, g := range m.groups {
+		dead[g] = g.auto && (len(m.tabs) < 2 || !alive(g))
+	}
+	m.groups = slices.DeleteFunc(m.groups, func(g *tabGroup) bool { return dead[g] })
+	if len(m.tabs) < 2 {
+		return
+	}
+	for i, t := range m.tabs {
+		conn := conns[i]
+		if conn == "" || m.groupFor(t.key, conn) != nil || m.connClaimed(conn) || m.autoDeclined(conn) {
+			continue
+		}
+		base := m.baseOf(conn)
+		name := m.uniqueGroupName(abbrevConnName(base))
+		if m.groupNameProblem(name, nil) != nil {
+			continue
+		}
+		m.newGroup(name, base).auto = true
+	}
+}
+
+// connClaimed reports whether a connection group claims conn — whether or
+// not it has excluded a given tab.
+func (m *Model) connClaimed(conn string) bool {
+	return slices.ContainsFunc(m.groups, func(g *tabGroup) bool { return g.isConn() && m.connUnder(conn, g.conn) })
+}
+
+// autoDeclined reports whether the user ungrouped conn, or the connection
+// it is one of the databases of: ungrouping "prod" stops "prod/analytics"
+// too, the way prod's group claimed it.
+func (m *Model) autoDeclined(conn string) bool {
+	for d := range m.noAutoGroup {
+		if m.connUnder(conn, d) {
+			return true
+		}
+	}
+	return false
+}
+
+// declineAutoGroup records that the user took conn's group away, so
+// autoGroupTabs does not make it again on the next message.
+func (m *Model) declineAutoGroup(conn string) {
+	if m.noAutoGroup == nil {
+		m.noAutoGroup = map[string]bool{}
+	}
+	m.noAutoGroup[conn] = true
+}
+
+// allowAutoGroup undoes declineAutoGroup for conn and its databases: a
+// connection group made by hand is the user asking for grouping there
+// again.
+func (m *Model) allowAutoGroup(conn string) {
+	for d := range m.noAutoGroup {
+		if m.connUnder(d, conn) {
+			delete(m.noAutoGroup, d)
+		}
+	}
+}
+
 // newTabConn is the connection a plain new tab (⌥T, a click on +) starts on:
 // the tab on screen's, as newTab has always taken it — tabAim's, so a tab
 // on screen whose connect failed opens its sibling where it was headed
@@ -454,6 +585,86 @@ func groupNameFrom(s string) string {
 	return string(b)
 }
 
+// abbrevConnName is an automatic connection group's name for connection
+// conn: a mnemonic short enough to read at a glance on the chip. dbc web's
+// abbrevConn (tabgroups.js) is the same rule; keep the two in step.
+//
+// The name is split into words — at anything not a letter or digit, at a
+// lower→upper case change ("myApp"), and between letters and digits
+// ("pg16") — and lowercased. Then:
+//
+//   - five letters and digits or fewer are kept whole: "prod", "pg16",
+//     "Lite" → "lite", "web-1" → "web1";
+//   - otherwise the first word gives its first three letters and every
+//     later word its initial, while a run of digits is kept whole, since a
+//     version or index is usually what tells two connections apart:
+//     "reporting-mysql" → "repm", "local-pg" → "locp", "postgres16" →
+//     "pos16", "postgres in docker" → "posid", "scratch" → "scr";
+//   - cut to groupNameMax.
+//
+// Three letters rather than four: four leave too many unhappy prefixes of
+// common database words, and three read as the usual abbreviations
+// ("pro", "dev", "rep"). A name with no letters or digits gives "conn".
+// The result can clash with another group's name; uniqueGroupName settles
+// that, as for a name the user typed.
+func abbrevConnName(conn string) string {
+	words := connNameWords(conn)
+	joined := strings.Join(words, "")
+	if joined == "" {
+		return "conn"
+	}
+	if utf8.RuneCountInString(joined) <= autoNameKeep {
+		return joined
+	}
+	var b []rune
+	for i, w := range words {
+		r := []rune(w)
+		switch {
+		case unicode.IsDigit(r[0]):
+			b = append(b, r...)
+		case i == 0:
+			b = append(b, r[:min(3, len(r))]...)
+		default:
+			b = append(b, r[0])
+		}
+	}
+	return string(b[:min(groupNameMax, len(b))])
+}
+
+// connNameWords splits a connection name into lowercased words for
+// abbrevConnName (see there for where it splits).
+//
+//	"reporting-mysql" → reporting mysql
+//	"myAppDB"         → my app db
+//	"postgres16"      → postgres 16
+func connNameWords(s string) []string {
+	var words []string
+	var cur []rune
+	flush := func() {
+		if len(cur) > 0 {
+			words = append(words, strings.ToLower(string(cur)))
+			cur = cur[:0]
+		}
+	}
+	var prev rune
+	for _, r := range s {
+		switch {
+		case !unicode.IsLetter(r) && !unicode.IsDigit(r):
+			flush()
+		case len(cur) > 0 && unicode.IsDigit(r) != unicode.IsDigit(prev):
+			flush() // a letter↔digit boundary
+		case len(cur) > 0 && unicode.IsUpper(r) && unicode.IsLower(prev):
+			flush() // camelCase
+		}
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			cur = append(cur, r)
+		}
+		prev = r
+	}
+	flush()
+	return words
+}
+
 // uniqueGroupName is base, or base cut short plus a digit when base is
 // taken ("grp" → "grp2"), so the name prompt's seed is usable as offered.
 func (m *Model) uniqueGroupName(base string) string {
@@ -543,7 +754,15 @@ func (m *Model) ungroup(g *tabGroup) {
 		return
 	}
 	m.groups = slices.DeleteFunc(m.groups, func(x *tabGroup) bool { return x == g })
-	m.logf(logInfo, "ungrouped %s", g.name)
+	if !g.isConn() {
+		m.logf(logInfo, "ungrouped %s", g.name)
+		return
+	}
+	// a connection group would otherwise be made again, automatically, on
+	// the next message (autoGroupTabs)
+	m.declineAutoGroup(g.conn)
+	m.logf(logInfo, "ungrouped %s — tabs on %s are no longer grouped automatically (Add to group… → New connection group brings it back)",
+		g.name, g.conn)
 }
 
 // makeGroupAdhoc turns a connection group into an ad-hoc one holding its
@@ -554,7 +773,10 @@ func (m *Model) makeGroupAdhoc(g *tabGroup) {
 		return
 	}
 	ms := m.groupMembers(g)
-	g.conn = ""
+	// the connection is left without a group by the user's choice, as by
+	// Ungroup, so autoGroupTabs must not make it a new one
+	m.declineAutoGroup(g.conn)
+	g.conn, g.auto = "", false
 	g.exclude = map[int]bool{}
 	for _, t := range ms {
 		g.members[t.key] = true
@@ -630,6 +852,13 @@ func (m *Model) renameGroupConns(rename func(string) (string, bool)) {
 		}
 		if to, ok := rename(g.conn); ok {
 			g.conn = to
+		}
+	}
+	// an ungrouped connection stays ungrouped under its new name
+	for d := range m.noAutoGroup {
+		if to, ok := rename(d); ok {
+			delete(m.noAutoGroup, d)
+			m.noAutoGroup[to] = true
 		}
 	}
 }
@@ -837,7 +1066,9 @@ func (m *Model) promptGroupName(t *queryTab, g *tabGroup, conn string) {
 				if err := m.groupNameProblem(name, g); err != nil {
 					return err
 				}
-				g.name = name
+				// a name the user chose makes the group theirs: it no
+				// longer goes with its connection's last tab
+				g.name, g.auto = name, false
 				return nil
 			})
 		return
@@ -858,6 +1089,9 @@ func (m *Model) promptGroupName(t *queryTab, g *tabGroup, conn string) {
 			return nil // closed while the prompt was up
 		}
 		ng := m.newGroup(name, conn)
+		if conn != "" {
+			m.allowAutoGroup(conn)
+		}
 		m.addToGroup(t, ng)
 		if conn != "" {
 			m.logf(logInfo, "group %s: %s on %s", name, plural(len(m.groupMembers(ng)), "tab"), conn)
@@ -892,8 +1126,19 @@ func (m *Model) savedGroups() []userdata.LayoutTabGroup {
 	out := make([]userdata.LayoutTabGroup, 0, len(m.groups))
 	for _, g := range m.groups {
 		out = append(out, userdata.LayoutTabGroup{Name: g.name, Conn: g.conn, Members: idx(g.members),
-			Exclude: idx(g.exclude), Collapsed: g.collapsed, Color: g.color})
+			Exclude: idx(g.exclude), Collapsed: g.collapsed, Color: g.color, Auto: g.auto})
 	}
+	return out
+}
+
+// savedNoAutoGroup is noAutoGroup for the layout file, sorted for a stable
+// file.
+func (m *Model) savedNoAutoGroup() []string {
+	out := make([]string, 0, len(m.noAutoGroup))
+	for c := range m.noAutoGroup {
+		out = append(out, c)
+	}
+	slices.Sort(out)
 	return out
 }
 
@@ -909,7 +1154,7 @@ func (m *Model) restoreGroups(saved []userdata.LayoutTabGroup) {
 			continue
 		}
 		g := &tabGroup{name: sg.Name, conn: sg.Conn, members: map[int]bool{}, exclude: map[int]bool{},
-			collapsed: sg.Collapsed, color: sg.Color}
+			collapsed: sg.Collapsed, color: sg.Color, auto: sg.Auto && sg.Conn != ""}
 		keys := func(ix []int, into map[int]bool) {
 			for _, i := range ix {
 				if i >= 0 && i < len(m.tabs) {
@@ -924,5 +1169,6 @@ func (m *Model) restoreGroups(saved []userdata.LayoutTabGroup) {
 		}
 		m.groups = append(m.groups, g)
 	}
+	m.autoGroupTabs()
 	m.arrangeTabs()
 }

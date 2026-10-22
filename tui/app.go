@@ -92,6 +92,9 @@ type Model struct {
 	// groups are the query tabs' groups (tabgroups.go), in the order they
 	// were made; which tabs are in each is resolved, never stored on a tab.
 	groups []*tabGroup
+	// noAutoGroup is the connections the user ungrouped: autoGroupTabs
+	// makes no group for them (or their databases). Saved with the layout.
+	noAutoGroup map[string]bool
 	// savedLayoutTabs / savedActiveTab / savedLayoutGroups are the tabs and
 	// groups the last run saved, held from restoreLayout until New can
 	// rebuild them (restoreTabs, restoreGroups).
@@ -440,7 +443,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// (tabgroups.go). Any message can change a tab's group — a connect
 	// landing on a grouped connection, a menu row, a close — so the pass
 	// runs once here rather than at each of them; it returns at once when
-	// there are no groups.
+	// there are no groups. Before it, the automatic connection groups are
+	// brought in step with where the tabs now are, so a tab that just
+	// landed on a new connection is grouped and gathered on this message.
+	m.autoGroupTabs()
 	m.arrangeTabs()
 	if m.quit {
 		return m, tea.Quit

@@ -55,6 +55,13 @@ import (
 // groupsKey is the layout key the page keeps its groups under (app.js).
 const groupsKey = "groups"
 
+// groupsOffKey is the layout key holding the connections the user
+// ungrouped, a JSON array of names: the page makes no automatic connection
+// group for them (tabgroups.js auto). Written whole by the page, like
+// groupsKey, but not merged across windows — a window that ungroups writes
+// its own list, and the honest limit is the one N-109 names for groups.
+const groupsOffKey = "groupsOff"
+
 // tabGroupRec is one group as the layout stores it; the page's encode and
 // decode (tabgroups.js) are the other side of this shape.
 type tabGroupRec struct {
@@ -67,6 +74,10 @@ type tabGroupRec struct {
 	// Color indexes the page's group hues (--g0 … in app.css); it is the
 	// page's, kept so a group keeps its colour across reloads.
 	Color int `json:"color"`
+	// Auto marks a connection group the page made itself, named from its
+	// connection; it goes when its last tab does. Carried here so the merge
+	// (which puts back whole records) keeps it.
+	Auto bool `json:"auto,omitempty"`
 }
 
 // parseGroups reads a "groups" value. "" is no groups; anything that is not
@@ -160,28 +171,54 @@ func mergeTabGroups(given, old string, elsewhere map[string]bool) string {
 // window holds (connRenamed), but a window reads the layout only at boot,
 // so groups saved by a window that has since closed are in no window to be
 // moved. Both landing is harmless: they write the same names.
+//
+// The ungrouped connections (groupsOffKey) move the same way, so a
+// connection the user ungrouped is not grouped again for being renamed.
 func (s *Server) moveGroupConns(from, to string) error {
 	saved, err := s.store.Layout()
 	if err != nil {
 		return err
 	}
-	gs, err := parseGroups(saved[groupsKey])
-	if err != nil || len(gs) == 0 {
-		return nil // nothing the page would read back as groups
-	}
-	moved := false
-	for i, g := range gs {
+	// rename is name after the rename, and whether it moved
+	rename := func(name string) (string, bool) {
 		switch {
-		case g.Conn == "":
-		case g.Conn == from:
-			gs[i].Conn, moved = to, true
-		case derivedFrom(s.cfg, g.Conn, from):
-			gs[i].Conn = config.DerivedName(to, g.Conn[len(from)+len(config.DatabaseSep):])
-			moved = true
+		case name == "":
+		case name == from:
+			return to, true
+		case derivedFrom(s.cfg, name, from):
+			return config.DerivedName(to, name[len(from)+len(config.DatabaseSep):]), true
+		}
+		return name, false
+	}
+	values := map[string]string{}
+	// a value that does not parse is nothing the page would read back,
+	// so it is left as it is
+	if gs, err := parseGroups(saved[groupsKey]); err == nil && len(gs) > 0 {
+		moved := false
+		for i, g := range gs {
+			if n, ok := rename(g.Conn); ok {
+				gs[i].Conn, moved = n, true
+			}
+		}
+		if moved {
+			values[groupsKey] = encodeGroups(gs)
 		}
 	}
-	if !moved {
+	var off []string
+	if v := saved[groupsOffKey]; strings.TrimSpace(v) != "" && json.Unmarshal([]byte(v), &off) == nil {
+		moved := false
+		for i, c := range off {
+			if n, ok := rename(c); ok {
+				off[i], moved = n, true
+			}
+		}
+		if moved {
+			b, _ := json.Marshal(off) // strings: cannot fail
+			values[groupsOffKey] = string(b)
+		}
+	}
+	if len(values) == 0 {
 		return nil
 	}
-	return s.store.SetLayout(map[string]string{groupsKey: encodeGroups(gs)})
+	return s.store.SetLayout(values)
 }

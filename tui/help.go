@@ -72,6 +72,7 @@ var keyGroups = []keyGroup{
 		{"right-click a tab", "rename, close, new tab, its group, its consoles"},
 		{"● · • · ◆", "running · finished in the background · may hold a transaction"},
 		{"⌥G", "tab groups: add the tab to one, remove it, each group's menu"},
+		{"automatic groups", "2+ tabs: one per connection, named short (repm) · rename keeps it · ungroup stops it"},
 		{"click · right-click a group's chip", "fold or unfold it · its menu (new tab in it, rename, ungroup…)"},
 		{"[name] · right-click +", "a connection group with no tab: click opens one · a new tab in any group"},
 	}},

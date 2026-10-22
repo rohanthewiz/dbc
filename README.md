@@ -1199,6 +1199,19 @@ on screen is never folded away).
 - An **ad-hoc group** is a hand-picked set; a new tab opened from one of its
   tabs joins it.
 
+Tabs are **grouped by connection automatically**: once there are two tabs,
+each connection with a tab on it gets a connection group, named with a short
+abbreviation of the connection's name. Names of five letters or digits or
+fewer are kept whole (`prod`, `pg16`). Longer ones take the first word's first
+three letters and each later word's initial, keeping any number whole
+(`reporting-mysql` → `repm`, `local-pg` → `locp`, `postgres16` → `pos16`). An
+automatic group goes away when no tab is left on its connection, and all of
+them go when one tab is left. **Rename** it (its chip's menu → *Rename
+group…*) to keep it: a renamed group stays, like one made by hand.
+**Ungroup** (or *Make ad-hoc group*) turns automatic grouping off for that
+connection, and it stays off across restarts. *Add to group… → New
+connection group* turns it back on.
+
 Right-click a tab (or press `⌥G`) → *Add to group…* to start one, or to move
 the tab into an existing one. Click a group's chip to fold or unfold it;
 right-click it for its menu: a new tab in the group (on the group's
@@ -1387,6 +1400,12 @@ left going in the background marks its tab (● running, • done) and names its
 log lines.
 
 **Tab groups** gather tabs behind a short coloured chip, as ced's do.
+With two or more tabs, the tabs are grouped by connection automatically,
+each group named with an abbreviation of its connection's name
+(`reporting-mysql` → `repm`; see the TUI's [Tab groups](#tab-groups) for
+the rule). Rename an automatic group to keep it after its last tab leaves
+the connection. Ungroup it to stop grouping that connection's tabs, until
+you make a connection group for it by hand.
 Right-click a tab → *Add to group…* to start one: an **ad-hoc** group
 holds the tabs you put in it (a tab opened from one joins it), and a
 **connection** group holds every tab on its connection or on one of its

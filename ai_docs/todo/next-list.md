@@ -90,14 +90,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-222** · raised `2026-1022-1322-new-query-console-from-conn` · value low
-  TUI parity for dbc web's connection-menu **New query console**
-  (`conns.js` → `dbc.cmd.newConsoleTab`). It opens a new query tab on the
-  right-clicked connection, showing a NEW, empty console of its database
-  rather than the first unshown one. The TUI's connections menu
-  (`tui/connform.go`) has no such row; with query tabs, the TUI equivalent
-  would open a tab on that connection and give it the next free console
-  name. Nobody has asked for it in the TUI.
 
 ## Validate
 
@@ -542,6 +534,15 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-222** · raised `2026-1022-1322-new-query-console-from-conn` · value low
+  TUI parity for dbc web's connection-menu **New query console**
+  (`conns.js` → `dbc.cmd.newConsoleTab`). It opens a new query tab on the
+  right-clicked connection, showing a NEW, empty console of its database
+  rather than the first unshown one. The TUI's connections menu
+  (`tui/connform.go`) has no such row; with query tabs, the TUI equivalent
+  would open a tab on that connection and give it the next free console
+  name. Nobody has asked for it in the TUI.
+  closed 2026-10-22, `2026-1022-1336-n222-tui-new-query-console`: the TUI's connections menu has **New query console on <conn>** on every row (`connMenuItems`). It opens a tab on that connection through `newConsoleTab`, which is `openNewTab(nil, conn, fresh=true)`; `newTabIn` now wraps `openNewTab` too. `openTabConsole(conn, fresh)` then takes the next free console name instead of reusing an unshown one. With 9 tabs the row is dimmed and gives `tabsFullWhy`. The README covers it for the TUI and web. Test: `TestNewQueryConsoleFromConnMenu`, which fails with `fresh` off; `go test ./...` and the TUI e2e suite pass.
 - **N-211** · raised `2026-1014-1547-failed-connects-groups-conn-clicks` · value high
   `dbc tutorial` is missing its workspace's `dbc.toml`. The `.gitignore`
   rule `dbc.toml` (meant for the repo root's) also matches

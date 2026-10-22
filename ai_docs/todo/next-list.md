@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-222
+**Next ID:** N-223
 
 ## Open
 
@@ -90,6 +90,14 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
+- **N-222** · raised `2026-1022-1322-new-query-console-from-conn` · value low
+  TUI parity for dbc web's connection-menu **New query console**
+  (`conns.js` → `dbc.cmd.newConsoleTab`). It opens a new query tab on the
+  right-clicked connection, showing a NEW, empty console of its database
+  rather than the first unshown one. The TUI's connections menu
+  (`tui/connform.go`) has no such row; with query tabs, the TUI equivalent
+  would open a tab on that connection and give it the next free console
+  name. Nobody has asked for it in the TUI.
 
 ## Validate
 

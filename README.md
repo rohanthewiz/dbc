@@ -330,7 +330,7 @@ with no database picker.
 | anywhere | click | focuses that pane — the keyboard follows the mouse |
 | toolbar | click | Run, Stop, Explain, Copy ▾, Export, History, Scripts, Tables, Assistant; `● conn ▾` switches connection |
 | connections | click | connects |
-| connections | right-click (or the toolbar's `● conn ▾`) | **Disconnect** the active connection, **Refresh** it (read its databases, schemas and tables again, for what another client created or dropped — the session and any open transaction stay), then the list to connect to; on a row, **Edit…** and **Remove…** for a connection added in dbc (below), and **Stop container** on one Postgres in Docker made; **Dump database…** on a Postgres one ([below](#dumping-a-database)); **Add a connection…**; **Postgres in Docker…** ([below](#postgres-in-docker)) |
+| connections | right-click (or the toolbar's `● conn ▾`) | **Disconnect** the active connection, **Refresh** it (read its databases, schemas and tables again, for what another client created or dropped — the session and any open transaction stay), then the list to connect to; on a row, **New query console on** it (a new query tab on that connection with a new, empty console; the tab you are in keeps its connection), **Edit…** and **Remove…** for a connection added in dbc (below), and **Stop container** on one Postgres in Docker made; **Dump database…** on a Postgres one ([below](#dumping-a-database)); **Add a connection…**; **Postgres in Docker…** ([below](#postgres-in-docker)) |
 | tables | click `⛁ db ▾` / `◫ schema ▾` | *(Postgres; MySQL has `⛁ db` only)* pick another of the server's databases / another schema, from a list you can type into |
 | tables | click / double-click / right-click | select / preview the first 100 rows / show columns, diagram it, diagram all tables, copy the ERD as Mermaid, insert name, copy name |
 | tables | `c` on the selected table | show its columns: its `information_schema.columns` rows (name, type, nullable, default, length) in the grid, ready to copy |
@@ -1076,7 +1076,8 @@ its consoles, and a derived `<conn>/<database>` has its own. A connect that
 fails leaves the console where it was.
 
 `⌥N` (`Alt+N`) opens a new console of the database, `⌥C` (`Alt+C`) moves to
-its next one, and the editor's right-click menu lists them all; the Query
+its next one, **New query console on** in a connection's right-click menu
+opens a new query tab on that connection with a new, empty console, and the editor's right-click menu lists them all; the Query
 pane's title names the one you are in. The same menu renames the console in
 the editor (**Rename console…**: a name of letters, digits, `.`, `-` and `_`,
 not one the database already has; the text, caret and undo stay) and deletes
@@ -1405,7 +1406,9 @@ its title. When the tab's connection lands on another database, the tab
 saves its console and shows one of the new database's that no other tab of
 the window is showing, or a new one, so two tabs on one database get two
 consoles. `Alt+N` gives the tab a new console of its database, `Alt+C` moves
-to the next one, and right-clicking the tab lists the database's consoles
+to the next one, **New query console** in a connection's right-click menu
+opens a new tab on that connection with a new, empty console (the tab you
+are in stays where it is), and right-clicking the tab lists the database's consoles
 (and which tab shows each) with new, rename and delete. A rename or a delete
 reaches every window; tabs showing a deleted console move to another. Saves
 are checked against the file: if it changed since this tab loaded it (another

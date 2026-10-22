@@ -329,12 +329,46 @@ func (m *Model) newTab() tea.Cmd { return m.newTabIn(nil) }
 // g's connection (connFor) rather than the tab on screen's, so it lands
 // where it was asked to. With g nil it is a plain ⌥T, and a tab opened from
 // a tab in an ad-hoc group joins that group (tabgroups.go).
-func (m *Model) newTabIn(g *tabGroup) tea.Cmd {
+func (m *Model) newTabIn(g *tabGroup) tea.Cmd { return m.openNewTab(g, "", false) }
+
+// newConsoleTab is the connections menu's "New query console" (dbc web's
+// row of the same name): a tab on connection conn, whichever connection
+// the tab on screen is on, showing a NEW console of conn's database. A
+// plain new tab takes the first console no tab shows, text and all; asked
+// for as "new", it should be an empty editor, not a leftover console. The
+// tab on screen keeps its connection and any transaction, as with ⌥T.
+// Group joining is a plain new tab's (joinNewTab), as in dbc web.
+func (m *Model) newConsoleTab(conn string) tea.Cmd { return m.openNewTab(nil, conn, true) }
+
+// tabsFullWhy is why no tab can be opened now, "" when one can — for the
+// log line of a refused open and a menu row that would open one.
+func (m *Model) tabsFullWhy() string {
 	if len(m.tabs) >= maxTabs {
-		m.logf(logWarn, "%d tabs is the most — close one first (⌥W)", maxTabs)
+		return fmt.Sprintf("%d tabs is the most — close one first (⌥W)", maxTabs)
+	}
+	return ""
+}
+
+// openNewTab opens a query tab and connects it: into group g (nil for
+// none), on connection onConn ("" for the one newTabConn / connFor pick),
+// with a fresh console when fresh (see newConsoleTab) rather than the first
+// one no other tab shows.
+func (m *Model) openNewTab(g *tabGroup, onConn string, fresh bool) tea.Cmd {
+	if why := m.tabsFullWhy(); why != "" {
+		m.log(logWarn, why)
 		return nil
 	}
 	conn := m.newTabConn()
+	if onConn != "" {
+		// the menu row was on the list a moment ago; a connection removed
+		// since (another dbc editing connections.toml) would only fail to
+		// connect, and land the tab on nothing
+		if _, ok := m.cfg.ConnByName(onConn); !ok {
+			m.logf(logWarn, "%s is no longer a connection", onConn)
+			return nil
+		}
+		conn = onConn
+	}
 	if g != nil {
 		conn = m.connFor(g, conn)
 		// a connection group outlives its connection being removed; a tab
@@ -364,7 +398,7 @@ func (m *Model) newTabIn(g *tabGroup) tea.Cmd {
 	m.focus = focusEditor
 	// the console first, so the connect's landing (switchConsole) finds
 	// the editor already on this database and swaps nothing
-	m.openTabConsole(conn)
+	m.openTabConsole(conn, fresh)
 	// unconnected until the connect lands — it may not (aim keeps where
 	// the tab was headed) — and for good when there is nothing to dial
 	t.unconnected = true
@@ -574,18 +608,22 @@ func (m *Model) consoleShownElsewhere(d userdata.ConsoleDB, name string) *queryT
 }
 
 // openTabConsole puts a console of conn's database in the active tab's
-// (empty) editor: the first one no other tab shows, else a new one.
-func (m *Model) openTabConsole(conn string) {
+// (empty) editor: the first one no other tab shows, else a new one — or,
+// fresh, a new one whatever is free (newConsoleTab). A new one's name
+// counts the other tabs' consoles too, which may have no file yet.
+func (m *Model) openTabConsole(conn string, fresh bool) {
 	d, flat, ok := m.consoleOf(conn)
 	if !ok {
 		return
 	}
 	names := userdata.ListConsoles(m.consoleDir, d, flat)
 	name := ""
-	for _, n := range names {
-		if m.consoleShownElsewhere(d, n) == nil {
-			name = n
-			break
+	if !fresh {
+		for _, n := range names {
+			if m.consoleShownElsewhere(d, n) == nil {
+				name = n
+				break
+			}
 		}
 	}
 	if name == "" {

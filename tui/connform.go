@@ -968,13 +968,17 @@ func (m *Model) connRemovedFromTabs(name string) {
 }
 
 // connMenuItems are the connections menu's rows for the connection target
-// (the row right-clicked; "" when none): edit and remove, live only for one
-// added here, Dump database… (dump.go), then add — by the form, or by
-// starting Postgres in Docker (pgdocker.go), which adds the connection
-// itself.
+// (the row right-clicked; "" when none): New query console (a new tab on
+// it, tabs.go newConsoleTab), edit and remove, live only for one added
+// here, Dump database… (dump.go), then add — by the form, or by starting
+// Postgres in Docker (pgdocker.go), which adds the connection itself.
 func (m *Model) connMenuItems(target string, x, y int) []menuItem {
 	items := []menuItem{heading("connections")}
 	if target != "" {
+		// on every row, the one the tab is on too: a second console
+		// beside the first, in a tab of its own
+		items = append(items, menuItem{label: "New query console on " + target, why: m.tabsFullWhy(),
+			act: func(m *Model) tea.Cmd { return m.newConsoleTab(target) }})
 		editWhy, removeWhy := "", ""
 		if cn, ok := m.cfg.ConnByName(target); ok && !cn.Web {
 			editWhy = m.connEditor().FileRefusal(target, "change").Error()

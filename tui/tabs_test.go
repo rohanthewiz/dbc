@@ -370,3 +370,46 @@ func TestTabTickChainsDoNotPileUp(t *testing.T) {
 		t.Fatal("a tick from an earlier visit re-armed itself")
 	}
 }
+
+// The connections menu's "New query console on <conn>" (N-222, as dbc
+// web's row) opens a tab on that connection, not the tab on screen's, with
+// a NEW console of its database: b already has a console no tab shows,
+// with text in it, which a plain ⌥T would reuse. The tab it was picked
+// from stays on its connection. With the strip full, the row says why not.
+func TestNewQueryConsoleFromConnMenu(t *testing.T) {
+	m, _ := consoleModel(t)
+	demo := m.ws.Active()
+	drive(t, m, nil, m.setActive("b"))
+	m.editor.SetText("SELECT 'left on b'")
+	bConsole, bDB := m.consoleName, m.consoleDB
+	drive(t, m, nil, m.setActive(demo)) // b's console saved, shown by no tab
+	if text, _ := userdata.LoadConsole(userdata.ConsolePath(m.consoleDir, bDB, bConsole)); text != "SELECT 'left on b'" {
+		t.Fatalf("b's console holds %q — the check below would prove nothing", text)
+	}
+
+	x, y := connRowAt(t, m, "b")
+	rightClick(t, m, x, y)
+	pickMenu(t, m, "New query console on b")
+	if len(m.tabs) != 2 || m.curTab != 1 {
+		t.Fatalf("tabs %d, cur %d — want a second tab on screen", len(m.tabs), m.curTab)
+	}
+	if m.ws.Active() != "b" {
+		t.Errorf("new tab on %q, want b", m.ws.Active())
+	}
+	if m.consoleDB != bDB || m.consoleName == bConsole || m.editor.Text() != "" {
+		t.Errorf("new tab's console %q of %v, editor %q — want a new, empty console of b (not %q)",
+			m.consoleName, m.consoleDB, m.editor.Text(), bConsole)
+	}
+	if m.tabs[0].ws.Active() != demo {
+		t.Errorf("the first tab moved to %q, want it left on %q", m.tabs[0].ws.Active(), demo)
+	}
+
+	for len(m.tabs) < maxTabs {
+		key(t, m, "alt+t")
+	}
+	x, y = connRowAt(t, m, "b")
+	rightClick(t, m, x, y)
+	if why := menuRow(t, m, "New query console on b").why; !strings.Contains(why, "tabs is the most") {
+		t.Errorf("with %d tabs the row's why is %q", maxTabs, why)
+	}
+}

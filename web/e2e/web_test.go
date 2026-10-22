@@ -66,6 +66,7 @@ func TestWeb(t *testing.T) {
 		{"sidebar fold keys", sidebarFoldKeys},
 		{"other tabs' connections", otherTabsConns},
 		{"consoles per database", consolesPerDatabase},
+		{"new query console from a connection", newConsoleFromConn},
 		{"code blocks highlighted", codeHighlight},
 		{"tab groups", tabGroups},
 		{"fold the recent conversations", foldRecentChats},

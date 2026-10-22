@@ -779,6 +779,10 @@
       on || dialing
         ? { label: "Disconnect", act: () => dbc.cmd.disconnect() }
         : { label: "Connect", act: () => dbc.cmd.connect(name) },
+      // a new tab rather than this one, so whatever this tab is on (and
+      // any transaction it holds) is left alone; offered on every row,
+      // the active one included — a second console beside the first
+      { label: "New query console", act: () => dbc.cmd.newConsoleTab(name) },
       on
         ? { label: "Refresh", act: () => dbc.cmd.refresh() }
         : { label: "Refresh", why: dialing ? "still connecting to " + name + " — its schemas are being read now"

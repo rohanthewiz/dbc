@@ -1894,6 +1894,9 @@
     runs: (id) => runsKit.open(id),
     closeTab: () => closeTab(state.tab),
     newConsole: () => newConsole(state.tab),
+    // newConsoleTab is the connection list's "New query console": a new
+    // query tab on connection name, showing a new console of its database
+    newConsoleTab: (name) => newTab(null, { conn: name, fresh: true }),
     nextConsole: () => nextConsole(state.tab),
     exportMenu: () => dbc.grid.exportMenu(),
   });
@@ -2398,7 +2401,12 @@
       const text = t.console ? "" : textOf(t);
       const seed = text.trim() !== "" ? text : "";
       const used = tabs.filter((o) => o !== t && o.console && sameDB(o.cdb, ref)).map((o) => o.console);
-      let name = seed ? "" : ref.names.find((n) => !used.includes(n));
+      // a tab opened as a new console (newConsoleTab) skips the reuse of
+      // an unshown console and takes the next free name; the flag is spent
+      // here, so a later connect elsewhere follows the usual rule
+      const fresh = !!t.fresh;
+      delete t.fresh;
+      let name = seed || fresh ? "" : ref.names.find((n) => !used.includes(n));
       if (!name) name = nextConsoleName(ref.names.concat(used));
       return showConsole(t, ref, name, seed).then((shown) => {
         if (shown && t === state.tab) log("info", "console: " + ref.label + " · " + name);
@@ -4019,7 +4027,14 @@
   // group g (the group menu, the + button's right-click), in g, on g's
   // connection (tabgroups.js connFor). Its title is the lowest "Query N"
   // not in use; its first save claims it for this window.
-  function newTab(g) {
+  //
+  // opts, from the connection list's "New query console" (newConsoleTab):
+  //   conn   the connection to open it on, over the ones above
+  //   fresh  its console is a NEW one of that database, not the first one
+  //          no tab here shows (followConsole) — asked for by name, "new"
+  //          should mean an empty editor, not yesterday's leftover console
+  function newTab(g, opts) {
+    opts = opts || {};
     // a connection group outlives its connection being removed; a tab
     // opened there would connect to another (activate falls back to a
     // connection the list has) and land outside the group it was opened
@@ -4032,7 +4047,10 @@
     let n = 1;
     while (used.has("Query " + n)) n++;
     const here = newTabConn();
-    const t = { key: newKey(), title: "Query " + n, conn: g ? groups.connFor(g, here) : here, buffer: "", ws: "" };
+    const t = { key: newKey(), title: "Query " + n, conn: opts.conn || (g ? groups.connFor(g, here) : here), buffer: "", ws: "" };
+    // not saved with the tab (tabBody): it only steers the first console
+    // pick, which happens once the connect below lands
+    if (opts.fresh) t.fresh = true;
     // Beside the tab on screen; into a group, after its last tab — where
     // the redraw's arrange would gather it anyway, and a connection group
     // with no tab here gets it beside the tab on screen.

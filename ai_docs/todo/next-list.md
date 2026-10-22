@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-223
+**Next ID:** N-224
 
 ## Open
 
@@ -320,6 +320,15 @@ and `raised`.
   the lane auto-pan runs stalls its animation frames. Repair the test (no
   shot mid-drag, or wait out the pan before one) so a screenshot run is
   usable for visual checks.
+- **N-223** · raised `2026-1022-1450-auto-tab-groups-per-connection` · value low
+  Hand-check automatic tab groups per connection in a real terminal (and
+  inside cats) and in a real browser. Open a second tab, then move tabs
+  across connections with long names (`reporting-mysql` → `repm`). Each
+  connection's chip should appear at the second tab, and go when its last
+  tab leaves or one tab is left. A renamed group should stay as an idle
+  chip. Ungroup should keep a connection ungrouped across a TUI restart
+  and a page reload, and *New connection group* should turn it back on.
+  Also judge whether the abbreviations read well on real connection names.
 
 ## Roadmap
 
@@ -396,6 +405,13 @@ call.
   leaves another window's members under the old name. Only matters with
   two windows grouping at once; fix would be page-side deltas or a
   per-group stamp.
+  Updated `2026-1022-1450-auto-tab-groups-per-connection`: automatic
+  connection groups make this more frequent. A window drops every auto group
+  none of its own tabs is on, so its next write removes the other window's
+  auto groups from the store. That window writes them back on its own next
+  save, and makes them again (same name) on a reload, so little is lost. The
+  new `groupsOff` key (connections the user ungrouped) is written whole by
+  each window and not merged, so the same limit applies to it.
 
 - **N-117** · raised `2026-1005-1450-tui-web-parity` · value low
   A light/dark switch in the TUI. dbc web has one; the TUI takes the cats

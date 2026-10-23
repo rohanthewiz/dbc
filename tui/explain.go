@@ -139,6 +139,8 @@ func (m *Model) planKey(k tea.KeyPressMsg) tea.Cmd {
 	case "c", "menu":
 		m.openPlanMenu(v.area.X+2, v.area.Y+3)
 		return nil
+	case "A":
+		return m.sendPlanToChat(askPlanQuestion)
 	}
 	// { } P r x: the connection's result tabs, as from the grid
 	if cmd, used := m.resultTabKey(k); used {
@@ -176,6 +178,8 @@ func (m *Model) planClick(x, y, n int) tea.Cmd {
 		return m.copyPlanText()
 	case chipResults:
 		m.resTab = tabResults
+	case chipChat:
+		return m.sendPlanToChat(askPlanQuestion)
 	case chipCopySQL:
 		return m.insightSQL(false)
 	case chipInsertSQL:
@@ -231,7 +235,7 @@ func (m *Model) openPlanMenu(x, y int) {
 			return nil
 		}},
 		menuItem{label: "✦ Ask the assistant about this step", key: "^A", act: func(m *Model) tea.Cmd {
-			return m.askAbout(fmt.Sprintf("In this plan, what is the %q step doing, and is it a problem?", n.Title()))
+			return m.sendPlanToChat(fmt.Sprintf("In this plan, what is the %q step doing, and is it a problem?", n.Title()))
 		}},
 		heading("plan"),
 		menuItem{label: "Copy plan as text", key: "y", act: func(m *Model) tea.Cmd { return m.copyPlanText() }},
@@ -244,9 +248,16 @@ func (m *Model) openPlanMenu(x, y int) {
 		menuItem{label: "Copy as Mermaid chart", act: func(m *Model) tea.Cmd {
 			return m.copyString(p.Mermaid(), "the plan as a Mermaid chart")
 		}},
-		menuItem{label: "✦ Ask the assistant about this plan", key: "^A", act: func(m *Model) tea.Cmd {
-			return m.askAbout("Explain this query plan: where does the time go, and what would you change?")
+		menuItem{label: "✦ Send to the chat — ask about this plan", key: "A", act: func(m *Model) tea.Cmd {
+			return m.sendPlanToChat(askPlanQuestion)
 		}},
+	)
+	if m.ws.PlanShared() {
+		items = append(items, menuItem{label: "✦ Stop sending the plan with questions", act: func(m *Model) tea.Cmd {
+			return m.unsharePlan()
+		}})
+	}
+	items = append(items,
 		heading(""),
 		menuItem{label: "▦ Back to the results", key: "p", act: func(m *Model) tea.Cmd { m.resTab = tabResults; return nil }},
 	)
@@ -256,6 +267,45 @@ func (m *Model) openPlanMenu(x, y int) {
 // ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
+
+// askPlanQuestion is the question "✦ Send to chat" drafts about the whole
+// plan — dbc web's too.
+const askPlanQuestion = "Explain this query plan: where does the time go, and what would you change?"
+
+// sendPlanToChat is "✦ Send to chat" (A, the ✦ Chat chip, the menu's ask
+// rows): share the plan with the assistant (workspace.SharePlan) and draft
+// question in the composer — drafted, not sent, so the user can add to it,
+// as every ✦ ask row does.
+//
+// Sharing is what makes it a send rather than a hope: without it the plan
+// goes only while the caret is on the statement it explains, so a plan
+// detected in a typed EXPLAIN's result, or one whose statement the user
+// has since moved off to write the fix, would reach the model as nothing.
+// It stays shared — follow-up questions, and the plan of the next explain
+// of it, go too — until stopped from the plan menu.
+func (m *Model) sendPlanToChat(question string) tea.Cmd {
+	was := m.ws.PlanShared()
+	if err := m.ws.SharePlan(true); err != nil {
+		m.refused(err)
+		return nil
+	}
+	if !was {
+		m.logf(logInfo, "sent the plan to the assistant — it goes with every question on %s until you stop (the plan menu)",
+			m.ws.Active())
+	}
+	return m.askAbout(question)
+}
+
+// unsharePlan stops sending the plan with every question. It still goes
+// with a question about the statement it explains, as any plan does.
+func (m *Model) unsharePlan() tea.Cmd {
+	if err := m.ws.SharePlan(false); err != nil {
+		m.refused(err)
+		return nil
+	}
+	m.log(logInfo, "stopped sending the plan to the assistant — it goes only with questions about its own statement")
+	return nil
+}
 
 // copyPlanText copies the plan as the text tree, findings included — the
 // form that pastes readably into a ticket or a chat.

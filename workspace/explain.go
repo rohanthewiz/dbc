@@ -3,6 +3,7 @@ package workspace
 import (
 	"strings"
 
+	"github.com/rohanthewiz/dbc/ai"
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/explain"
 )
@@ -108,29 +109,81 @@ func (w *Workspace) landExplain(ev *ExplainDone, gen int) {
 	if ev.Stmt == set.lastStmt {
 		set.lastErr = ""
 	}
-	set.plan = ev.Plan
+	set.plan, set.planStmt = ev.Plan, ev.Stmt
 }
 
-// planForChatLocked is the plan text the assistant gets with a question —
-// only when the plan is of the statement being asked about, so a question
-// about a new query is not answered from an old one's plan.
-func (w *Workspace) planForChatLocked(query string) string {
-	var p *explain.Plan
-	if s := w.activeSetLocked(); s != nil {
-		p = s.plan
+// SharePlan shares the active connection's plan with the assistant, or
+// stops sharing it — ShareResultTab's counterpart for the plan pane. By
+// default a plan goes with a question only when the statement under the
+// caret is the one it explains (planForChatLocked); a shared plan goes
+// with every question asked on the connection, framed as shared and with
+// its own statement (ai.Context PlanShared, PlanFrom), so moving the caret
+// to write the fix — or asking from a script tab — keeps it in view.
+//
+// Unlike a result, a plan needs no ai_rows: it is the database's
+// strategy (table and index names, estimates, timings), not its rows,
+// and goes on every connection already. Sharing needs a plan; unsharing
+// always works.
+func (w *Workspace) SharePlan(share bool) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	s := w.activeSetLocked()
+	if !share {
+		if s != nil {
+			s.planShared = false
+		}
+		return nil
 	}
-	if p == nil || p.Statement == "" {
-		return ""
+	if s == nil || s.plan == nil {
+		return refuse(Nothing, Warn, "no plan to send — Ctrl+X explains the statement under the caret")
+	}
+	s.planShared = true
+	return nil
+}
+
+// PlanShared reports whether the active connection's plan is shared with
+// the assistant (SharePlan) — for a UI to mark the plan and offer to stop.
+func (w *Workspace) PlanShared() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	s := w.activeSetLocked()
+	return s != nil && s.planShared && s.plan != nil
+}
+
+// planForChatLocked puts the plan the assistant gets with a question into
+// ctx. A shared plan (SharePlan) always goes, with its statement when that
+// is not query; otherwise the plan goes only when it is of query, the
+// statement being asked about, so a question about a new query is not
+// answered from an old one's plan.
+//
+// query is the SQL in question ("" for none). A script or pipeline tab
+// passes "", since its source is not a statement: only a shared plan goes
+// from there, and always with its statement.
+func (w *Workspace) planForChatLocked(ctx *ai.Context, query string) {
+	s := w.activeSetLocked()
+	if s == nil || s.plan == nil {
+		return
+	}
+	p := s.plan
+	// the statement the plan is of: an explain's own, or the EXPLAIN the
+	// user typed when the plan was detected in its result
+	stmt := p.Statement
+	if stmt == "" {
+		stmt = s.planStmt
 	}
 	norm := func(s string) string {
 		s, _, _ = explain.Strip(strings.TrimSuffix(strings.TrimSpace(s), ";"))
 		return strings.ToLower(strings.Join(strings.Fields(s), " "))
 	}
-	if norm(p.Statement) != norm(query) {
-		return ""
+	same := stmt != "" && query != "" && norm(stmt) == norm(query)
+	if !same && !s.planShared {
+		return
 	}
 	if w.planChatFor != p {
 		w.planChat, w.planChatFor = p.Text(explain.TextOptions{Width: 110, Insights: true}), p
 	}
-	return w.planChat
+	ctx.Plan, ctx.PlanShared = w.planChat, s.planShared
+	if !same {
+		ctx.PlanFrom = stmt
+	}
 }

@@ -1586,3 +1586,83 @@ func TestScriptRelistsAfterItsDDL(t *testing.T) {
 		t.Error("the script's table is not listed after the relist")
 	}
 }
+
+// A plan sent to the chat (SharePlan) goes with every question, framed with
+// its own statement when the caret is elsewhere — the gap an unshared plan
+// has, which goes only while the caret is on the statement it explains.
+// Sharing needs a plan; unsharing restores the caret rule.
+func TestSharedPlanGoesWithEveryQuestion(t *testing.T) {
+	w := newTestWorkspace(t)
+	if err := w.SharePlan(true); err == nil {
+		t.Fatal("sharing with no plan should be refused")
+	}
+	const q = "SELECT name FROM cats WHERE age > 3"
+	st, err := w.Explain(q, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev := st.Job().(*ExplainDone); ev.Err != nil {
+		t.Fatal(ev.Err)
+	}
+
+	// unshared: the caret's statement decides
+	if ctx, _ := w.ChatContext("", Editor{Text: q}); ctx.Plan == "" || ctx.PlanShared || ctx.PlanFrom != "" {
+		t.Errorf("caret on the explained statement: plan %q shared %v from %q", ctx.Plan, ctx.PlanShared, ctx.PlanFrom)
+	}
+	if ctx, _ := w.ChatContext("", Editor{Text: "SELECT 1"}); ctx.Plan != "" {
+		t.Error("an unshared plan should not go with another statement's question")
+	}
+
+	if err := w.SharePlan(true); err != nil || !w.PlanShared() {
+		t.Fatalf("share: %v, shared %v", err, w.PlanShared())
+	}
+	ctx, _ := w.ChatContext("", Editor{Text: "SELECT 1"})
+	if ctx.Plan == "" || !ctx.PlanShared || ctx.PlanFrom != q {
+		t.Errorf("shared, caret elsewhere: plan %q shared %v from %q", ctx.Plan, ctx.PlanShared, ctx.PlanFrom)
+	}
+	ctx, _ = w.ChatContext("", Editor{Text: q})
+	if !ctx.PlanShared || ctx.PlanFrom != "" {
+		t.Errorf("shared, caret on it: shared %v from %q (want no from)", ctx.PlanShared, ctx.PlanFrom)
+	}
+	// from a script tab too, with its statement: the source is Go
+	ctx, _ = w.ScriptChatContext("", "x.go", "package main")
+	if ctx.Plan == "" || ctx.PlanFrom != q {
+		t.Errorf("script tab: plan %q from %q", ctx.Plan, ctx.PlanFrom)
+	}
+
+	// the slot is shared: the next explain's plan goes in its place
+	const q2 = "SELECT id FROM cats"
+	st, _ = w.Explain(q2, "", false)
+	st.Job()
+	if ctx, _ = w.ChatContext("", Editor{Text: "SELECT 1"}); ctx.PlanFrom != q2 || !w.PlanShared() {
+		t.Errorf("after explaining again: from %q, shared %v", ctx.PlanFrom, w.PlanShared())
+	}
+
+	if err := w.SharePlan(false); err != nil || w.PlanShared() {
+		t.Fatalf("unshare: %v, shared %v", err, w.PlanShared())
+	}
+	if ctx, _ = w.ChatContext("", Editor{Text: "SELECT 1"}); ctx.Plan != "" {
+		t.Error("unshared, the plan should not go with another statement's question")
+	}
+	if ctx, _ = w.ScriptChatContext("", "x.go", "package main"); ctx.Plan != "" {
+		t.Error("unshared, a script tab gets no plan")
+	}
+}
+
+// A plan detected in a typed EXPLAIN's result goes with a question about
+// that EXPLAIN, and a shared one is framed with its statement (the plan's
+// own, or — for a detected plan with none — the EXPLAIN that was run).
+func TestTypedExplainPlanGoesToTheChat(t *testing.T) {
+	w := newTestWorkspace(t)
+	const q = "EXPLAIN QUERY PLAN SELECT * FROM cats WHERE age > 3"
+	run(t, w, q)
+	if ctx, _ := w.ChatContext("", Editor{Text: q}); ctx.Plan == "" {
+		t.Error("the typed EXPLAIN's plan should go with a question about it")
+	}
+	if err := w.SharePlan(true); err != nil {
+		t.Fatal(err)
+	}
+	if ctx, _ := w.ChatContext("", Editor{Text: "SELECT 1"}); !strings.Contains(ctx.PlanFrom, "SELECT * FROM cats WHERE age > 3") {
+		t.Errorf("shared: from %q, want the explained statement", ctx.PlanFrom)
+	}
+}

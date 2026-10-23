@@ -187,6 +187,17 @@ type resultSet struct {
 	lastScriptPath string
 	lastErr        string
 	plan           *explain.Plan // the last plan: an explain's, or one detected in a result
+	// planStmt is the statement plan is of, as it was run: the explained
+	// one, or the EXPLAIN the user typed for a plan detected in a result
+	// (whose Plan.Statement is "") — what a shared plan is framed with.
+	planStmt string
+	// planShared is the plan shared with the assistant (SharePlan): the
+	// set's plan goes with every question asked on this connection,
+	// whatever the caret is on, until it is unshared. The SLOT is shared,
+	// not one plan: explaining again after adding an index replaces the
+	// plan, and the new one goes — "is it better now?" is the question
+	// that follows, and the plan on screen is the one it is about.
+	planShared bool
 
 	// shared is the tab the user shared with the assistant (ShareResultTab):
 	// its result goes with every question asked on this connection until

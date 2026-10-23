@@ -62,6 +62,11 @@ type planView struct {
 	flameR  Rect
 	visRows int
 
+	// shared mirrors workspace.PlanShared for the draw (the view has no
+	// workspace): the ✦ Chat chip is lit while the plan goes with every
+	// question. The Model sets it each frame before drawing.
+	shared bool
+
 	hoverChip  planChipID
 	hoverNode  int // step under the mouse in the tree or flame graph, -1 none
 	hoverInsig int
@@ -97,6 +102,7 @@ const (
 	chipBrowser = chipMetric + 11
 	chipCopy    = chipMetric + 12
 	chipResults = chipMetric + 13
+	chipChat    = chipMetric + 14
 )
 
 type planChip struct {
@@ -640,7 +646,7 @@ func (v *planView) drawChips(s Surface, st styles) {
 	right := []struct {
 		id    planChipID
 		label string
-	}{{chipResults, "▦ Results"}, {chipCopy, "⧉ Copy"}, {chipBrowser, "↗ Browser"}}
+	}{{chipResults, "▦ Results"}, {chipChat, "✦ Chat"}, {chipCopy, "⧉ Copy"}, {chipBrowser, "↗ Browser"}}
 	if !p.Analyzed && !p.Measured {
 		right = append(right, struct {
 			id    planChipID
@@ -657,7 +663,7 @@ func (v *planView) drawChips(s Surface, st styles) {
 		sty := st.button
 		if v.hoverChip == c.id {
 			sty = st.buttonHover
-		} else if c.id == chipAnalyze {
+		} else if c.id == chipAnalyze || c.id == chipChat && v.shared {
 			sty = st.buttonHot
 		}
 		r := chip(s, rx, 0, " "+c.label+" ", sty)

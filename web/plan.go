@@ -186,6 +186,9 @@ type planOut struct {
 	// Again says whether "explain again" can use the plan's own statement:
 	// a plan detected in a result has none.
 	Again bool `json:"again"`
+	// Shared says the plan goes with every question to the assistant
+	// (workspace.SharePlan) — the page lights ✦ and offers to stop.
+	Shared bool `json:"shared"`
 }
 
 func (s *Server) handlePlan(ctx rweb.Context) error {
@@ -201,9 +204,47 @@ func (s *Server) handlePlan(ctx rweb.Context) error {
 	if err != nil {
 		return fail(ctx, err)
 	}
-	out := planOut{Seq: ps.seq, Doc: doc, Status: workspace.PlanStatus(ps.plan), Again: ps.plan.Statement != ""}
+	out := planOut{Seq: ps.seq, Doc: doc, Status: workspace.PlanStatus(ps.plan), Again: ps.plan.Statement != "",
+		Shared: t.ws.PlanShared()}
 	out.Compare, out.Better = explain.Compare(ps.prev, ps.plan)
 	return ok(ctx, out)
+}
+
+// planShareReq is POST …/plan/share's body.
+type planShareReq struct {
+	Share bool `json:"share"`
+}
+
+// handlePlanShare is POST /api/v1/ws/:id/plan/share {share}: "✦ Send to
+// chat" on the plan, and "stop sending" — workspace.SharePlan, the TUI's
+// A, so the two UIs share a plan on the same terms. It answers whether
+// the plan is shared now; the page drafts the question itself (askAbout),
+// since the composer is the page's. A refusal (no plan yet) is logged too,
+// as a result tab's share refusal is.
+func (s *Server) handlePlanShare(ctx rweb.Context) error {
+	t, err := s.hub.get(ctx.Request().PathParam("id"))
+	if err != nil {
+		return fail(ctx, err)
+	}
+	var req planShareReq
+	if err = decode(ctx, &req); err != nil {
+		return fail(ctx, err)
+	}
+	was := t.ws.PlanShared()
+	if err = t.ws.SharePlan(req.Share); err != nil {
+		if r, isRefusal := asRefusal(err); isRefusal {
+			t.notes([]workspace.Note{r.Note})
+		}
+		return fail(ctx, err)
+	}
+	// logged only on a change: "✦ Send to chat" on a plan already shared
+	// just drafts another question
+	if conn := t.ws.Active(); req.Share && !was {
+		t.logOn(conn, "ok", "sent the plan to the assistant — it goes with every question on "+conn+" until you stop")
+	} else if !req.Share && was {
+		t.logOn(conn, "ok", "stopped sending the plan to the assistant — it goes only with questions about its own statement")
+	}
+	return ok(ctx, map[string]bool{"shared": t.ws.PlanShared()})
 }
 
 // handlePlanText is "copy the plan as text" (y) and "copy the engine's own

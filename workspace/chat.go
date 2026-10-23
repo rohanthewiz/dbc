@@ -71,7 +71,7 @@ func (w *Workspace) ChatContext(question string, ed Editor, views ...GridView) (
 		cur = last.lastStmt
 	}
 	ctx.Query = cur
-	ctx.Plan = w.planForChatLocked(cur)
+	w.planForChatLocked(&ctx, cur)
 	sh, at := w.activeSetLocked().sharedTab()
 	if sh != nil {
 		refs = w.mentionedLocked(&ctx, cur+"\n"+sh.stmt, question)
@@ -121,8 +121,11 @@ func attachShared(ctx *ai.Context, sh *resultTab, at int, query string, views []
 //   - The whole source is "the query" (ctx.Script marks it as Go): a
 //     script is one program, and Pick's statement split would cut it at
 //     the first semicolon into something neither SQL nor Go.
-//   - No plan: plans are of statements the editor explained, and a
-//     script tab explains nothing.
+//   - No plan unless one is shared (SharePlan): plans are of statements
+//     the editor explained, and a script tab explains nothing — but a
+//     plan the user sent to the chat is one they mean to talk about, from
+//     any tab ("how would I change this script's query, given that
+//     plan?"), so it goes, with its statement.
 //   - Tables are still looked for, in the source and the question — the
 //     SQL a script runs is in its string literals, and a table named
 //     there is one the model should see the columns of.
@@ -138,6 +141,7 @@ func (w *Workspace) ScriptChatContext(question, name, source string, views ...Gr
 	defer w.mu.Unlock()
 	ctx = w.chatBaseLocked()
 	ctx.Script, ctx.Query = name, source
+	w.planForChatLocked(&ctx, "") // a shared plan only: the source is Go, not a statement
 	// the connections a script can name, the tab's own (if any) first, as
 	// a new script's template orders them
 	for _, n := range w.cfg.ConnOrder(w.active) {
@@ -176,6 +180,7 @@ func (w *Workspace) ScriptChatContext(question, name, source string, views ...Gr
 //     shows ("" when it did not fail). Without one, the rows on screen go
 //     when they are a preview's (a tab of shown rows, which in this tab's
 //     workspace only this pipeline's previews land in).
+//   - A plan goes only when shared (SharePlan), as from a script tab.
 //
 // The plugin catalog (pipeline.Summary) is not set here: it goes once per
 // conversation, with the sdb API (ai.Context.ScriptAPI), which only the
@@ -185,6 +190,7 @@ func (w *Workspace) PipelineChatContext(question, kind, name, source, runErr str
 	defer w.mu.Unlock()
 	ctx = w.chatBaseLocked()
 	ctx.Pipeline, ctx.PipelineKind, ctx.Query = name, kind, source
+	w.planForChatLocked(&ctx, "") // a shared plan only, as from a script tab
 	for _, n := range w.cfg.ConnOrder(w.active) {
 		cc, _ := w.cfg.ConnByName(n)
 		ctx.ScriptConns = append(ctx.ScriptConns, n+" ("+cc.Driver+")")

@@ -407,6 +407,7 @@ dragging.
 | `P` · `x` | *(results, plan)* Pin the result tab (a run then opens a new one) or unpin it · close it |
 | `r` | *(results, plan)* Rerun the result tab's query into that same tab, pinned or not (a statement that writes asks first); or click its ↻ |
 | `S` | *(results, plan)* Share the result tab with the assistant, or stop sharing it (`s` too; needs `ai_rows` — see [Sharing a result](#ai-assistant)) |
+| `A` | *(plan)* Send the plan to the chat: it goes with every question until stopped from the plan menu, and a question about it is drafted (see [Sending a plan](#ai-assistant)) |
 | `[` / `]` | *(results)* After a script that showed several results (`s.Show`): the previous / next one within its result tab — also a click on its number in "Result 1 · 2 · 3" on the results title |
 | `z` | *(results)* Give the results pane the whole column / give it back |
 | `y` · `x` | *(log)* Copy the connection's log · clear it |
@@ -695,7 +696,9 @@ ANALYZE), and running an EXPLAIN with `Ctrl+R` opens its output in the Plan
 tab too, with the raw rows still in Results.
 
 `y` copies the plan as text, `Y` the engine's own output. The assistant, asked
-about an explained statement, gets its plan and findings too.
+about an explained statement, gets its plan and findings too — and **✦ Chat**
+on the plan (or `A`) sends the plan to the chat whatever the caret is on: see
+[Sending a plan](#ai-assistant).
 
 #### The plan in your browser
 
@@ -935,6 +938,20 @@ connection with `ai_rows = true`; elsewhere the item says which setting
 would allow it. The data rule still holds: at most `ai_context_rows` rows go,
 in that tab's sort order, without the columns hidden in that tab, and if
 `ai_rows` is turned off after sharing only the column names go.
+
+**Sending a plan.** A plan goes with a question on its own only while the
+caret is on the statement it explains. To talk about one after moving on —
+to write the fix, say — send it: **✦ Chat** in the Plan tab's header (dbc
+web: **✦ Send to chat**), `A`, or the plan menu's ✦ rows. The assistant opens
+with a question about the plan drafted, not sent, and the plan goes with
+every question asked on that connection, framed as "shared plan" together
+with the statement it explains, until you stop it: **Stop sending the plan
+with questions** on the plan menu (dbc web: **✕ Stop sending**). It goes from
+a script tab too. While it is sent the Plan tab is marked `✦` and the chip
+says "shared plan". Explaining again replaces what is sent with the new
+plan, so "is it better now?" is asked about the plan on screen. Unlike a
+result, a plan needs no `ai_rows`: it is the database's strategy — table
+and index names, estimates, timings — not its rows.
 
 The assistant can answer but not act: dbc declines every request from the
 agent to run a command or touch a file. SQL in an answer gets `⤓ insert`,
@@ -1557,7 +1574,9 @@ the same data rule — rows only on connections with `ai_rows = true`, in the
 grid's sort order, without its hidden columns — and the same conversation
 archive, so a conversation had in either is offered in both. "✦ Ask" in the
 grid's menu, the value inspector, the editor's right-click menu and the plan
-drafts a question about what you are looking at. Copilot sign-in runs in the
+drafts a question about what you are looking at; the plan's **✦ Send to
+chat** (`A`) also sends the plan with every question until **✕ Stop
+sending**, as the TUI's ✦ Chat does. Copilot sign-in runs in the
 pane: dbc shows the device code, with buttons to copy it and open GitHub's
 page.
 

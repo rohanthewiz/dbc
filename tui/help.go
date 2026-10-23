@@ -127,6 +127,7 @@ var keyGroups = []keyGroup{
 		{"e · a", "explain again (compares) · explain analyze"},
 		{"y · Y", "copy as text · the engine's own output"},
 		{"b · c", "open in the browser · the plan menu (PDF, PNG, JPEG, Mermaid)"},
+		{"A", "send to the chat (✦ Chat): the plan goes with every question, and a question about it is drafted"},
 		{"p", "back to the results"},
 		{"{ · } · P · s · x", "result tabs, as in the grid"},
 	}},

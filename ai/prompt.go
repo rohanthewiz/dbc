@@ -142,6 +142,16 @@ type Context struct {
 	// user's own, from the SQL that is sent anyway.
 	Plan string
 
+	// PlanShared marks a plan the user SHARED with the assistant on purpose
+	// ("✦ Send to chat" on the plan) rather than the one that rides along
+	// because it is Query's own — the plan counterpart of Shared. A shared
+	// plan goes whatever the caret is on, so it is framed as shared, and
+	// PlanFrom is the statement it is the plan of when that is not Query
+	// ("" when it is) — without it the model would read "Its query plan"
+	// as the plan of the SQL above it.
+	PlanShared bool
+	PlanFrom   string
+
 	// Tables are the catalog's tables the query or question mentions. A
 	// table with no Columns is still named in the Note — that is how the
 	// context chip forecasts "schema of cats" before the columns have been
@@ -258,11 +268,26 @@ func Build(question string, ctx Context, first bool) Prompt {
 		}
 	}
 	if pl := strings.TrimSpace(ctx.Plan); pl != "" {
-		sb.WriteString("Its query plan, as dbc summarized it (each step's own share of the time or cost, " +
-			"with dbc's automatic findings after it):\n```\n")
+		const how = "as dbc summarized it (each step's own share of the time or cost, " +
+			"with dbc's automatic findings after it):\n```\n"
+		// "Its" below reads as the plan of the SQL above it, so a shared
+		// plan of some other statement (or with no SQL in question at all)
+		// names its own statement first.
+		hasQuery := strings.TrimSpace(ctx.Query) != ""
+		switch from := strings.TrimSpace(ctx.PlanFrom); {
+		case ctx.PlanShared && from != "":
+			fmt.Fprintf(&sb, "The user shared a query plan with you, of %s:\n```sql\n%s\n```\n"+
+				"That statement's plan, "+how, pick(hasQuery, "a different statement", "this statement"), from)
+		case ctx.PlanShared && hasQuery:
+			sb.WriteString("The user shared its query plan with you, " + how)
+		case ctx.PlanShared:
+			sb.WriteString("The user shared a query plan with you, " + how)
+		default:
+			sb.WriteString("Its query plan, " + how)
+		}
 		sb.WriteString(pl)
 		sb.WriteString("\n```\n\n")
-		sent = append(sent, "plan")
+		sent = append(sent, pick(ctx.PlanShared, "shared plan", "plan"))
 	}
 	if e := strings.TrimSpace(ctx.Err); e != "" {
 		sb.WriteString("Running it failed with:\n```\n")

@@ -375,3 +375,38 @@ func TestPipelineQuestion(t *testing.T) {
 		t.Errorf("a job: note %q, text:\n%s", p.Note, p.Text)
 	}
 }
+
+// A shared plan is framed as shared, and names its own statement when it
+// is not the SQL in question — otherwise "Its query plan" would read as
+// the plan of the query above it.
+func TestBuildSharedPlan(t *testing.T) {
+	plan := "Plan · sqlite\n\nSCAN · cats"
+	p := Build("why?", Context{Query: "SELECT 1", Plan: plan, PlanShared: true,
+		PlanFrom: "SELECT * FROM cats WHERE age > 3"}, false)
+	for _, want := range []string{
+		"The user shared a query plan with you, of a different statement:\n```sql\nSELECT * FROM cats WHERE age > 3\n```",
+		"That statement's plan, as dbc summarized it",
+		"SCAN · cats",
+	} {
+		if !strings.Contains(p.Text, want) {
+			t.Errorf("prompt lacks %q:\n%s", want, p.Text)
+		}
+	}
+	if strings.Contains(p.Text, "Its query plan") {
+		t.Errorf("a plan of another statement must not read as the query's:\n%s", p.Text)
+	}
+	if !strings.Contains(p.Note, "shared plan") {
+		t.Errorf("note = %q", p.Note)
+	}
+
+	// of the query itself: no statement repeated
+	p = Build("why?", Context{Query: "SELECT 1", Plan: plan, PlanShared: true}, false)
+	if !strings.Contains(p.Text, "The user shared its query plan with you") || strings.Contains(p.Text, "different statement") {
+		t.Errorf("shared plan of the query:\n%s", p.Text)
+	}
+	// with no SQL in question at all
+	p = Build("why?", Context{Plan: plan, PlanShared: true, PlanFrom: "SELECT 2"}, false)
+	if !strings.Contains(p.Text, "of this statement:\n```sql\nSELECT 2") {
+		t.Errorf("shared plan, no query:\n%s", p.Text)
+	}
+}

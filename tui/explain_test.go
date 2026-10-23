@@ -432,3 +432,61 @@ func TestPlanContextMenu(t *testing.T) {
 	}
 	findText(t, frame(m), "↗ Open in browser (interactive)")
 }
+
+// The ✦ Chat chip (and A) sends the plan to the chat: it is shared, the
+// plan question is drafted unsent, and the question carries the plan even
+// with the caret off its statement — framed with that statement. The plan
+// menu stops sending it.
+func TestSendPlanToChat(t *testing.T) {
+	f := fakeAssistant(t, nil)
+	m := explainModel(t)
+	explained := m.editor.Text()
+	key(t, m, "ctrl+x")
+	// the user moves on to write something else: an unshared plan would
+	// no longer go
+	m.editor.SetText("SELECT count(*) FROM orders")
+
+	cx, cy := findText(t, frame(m), "✦ Chat")
+	click(t, m, cx, cy)
+	if !m.ws.PlanShared() || !m.chat.open || m.focus != focusChat ||
+		!strings.HasPrefix(m.chat.input.Text(), "Explain this query plan") {
+		t.Fatalf("shared=%v open=%v focus=%v input=%q", m.ws.PlanShared(), m.chat.open, m.focus, m.chat.input.Text())
+	}
+	if !strings.Contains(logText(m), "sent the plan to the assistant") {
+		t.Errorf("log:\n%s", logText(m))
+	}
+	if !strings.Contains(m.planTabLabel(), "✦") {
+		t.Errorf("plan tab = %q, want the ✦ mark", m.planTabLabel())
+	}
+	pumpChat(t, m, func() bool { return m.chat.state == chatReady })
+	if len(f.Prompts()) != 0 {
+		t.Fatal("a drafted question must not be sent until the user sends it")
+	}
+	key(t, m, "enter")
+	pumpChat(t, m, func() bool { return !m.chat.streaming })
+	p := lastPrompt(t, f)
+	for _, want := range []string{"The user shared a query plan with you, of a different statement",
+		explained, "SCAN · orders o", "Question: Explain this query plan"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt is missing %q:\n%s", want, p)
+		}
+	}
+
+	// the plan menu offers to stop; stopped, the plan stays home
+	m.focus = focusGrid
+	key(t, m, "c")
+	mx, my := findText(t, frame(m), "Stop sending the plan with questions")
+	click(t, m, mx, my)
+	if m.ws.PlanShared() {
+		t.Fatal("the menu row should stop sending the plan")
+	}
+	if ctx, _ := m.chatContext("q"); ctx.Plan != "" {
+		t.Error("unshared, the plan should not go with another statement's question")
+	}
+	// A, from the plan, sends it again
+	m.focus = focusGrid
+	key(t, m, "A")
+	if !m.ws.PlanShared() || m.focus != focusChat {
+		t.Errorf("A: shared=%v focus=%v", m.ws.PlanShared(), m.focus)
+	}
+}

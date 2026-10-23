@@ -12,6 +12,8 @@
 //   s, ⤓ Save                                     save or share it: the page, a PDF, a JPEG or PNG,
 //                                                 the Mermaid source
 //   p                                             back to the results (and, from the grid, to the plan)
+//   A, ✦ Send to chat                             send the plan to the assistant: it goes with every
+//                                                 question until ✕ Stop sending, and a question is drafted
 //   ⤓ Insert, beside a finding's Copy             put its SQL at the end of the editor — never run it
 //
 // A new plan replaces the view (destroy, mount); one of the same statement
@@ -103,11 +105,13 @@
           { label: "⧉ Engine", title: "Copy the engine's own output (Y)", act: () => copyPlan("raw") },
           { label: "↗ Page", title: "Open as the standalone page, to keep or send (b)", act: openPage },
           { label: "⤓ Save ▾", id: "save", title: "Save or share the plan: the page, a PDF, a picture, a Mermaid chart (s)", act: saveMenu },
-          { label: "✦ Ask", title: "Ask the assistant where the time goes and what to change", act: askPlan },
+          { label: "✦ Send to chat", id: "chat", title: "Send the plan to the assistant — it goes with every question until you stop — and draft a question about it (A)", act: askPlan },
+          { label: "✕ Stop sending", id: "unshare", title: "Stop sending the plan with every question; it still goes with questions about its own statement", act: unsharePlan },
         ],
-        onAsk: (title) => dbc.cmd.askAbout("In this plan, what is the \"" + title + "\" step doing, and is it a problem?"),
+        onAsk: (title) => sendPlan("In this plan, what is the \"" + title + "\" step doing, and is it a problem?"),
       });
     }
+    markShared(!!p.shared);
     $("plan-tab").hidden = false;
     if (open) showTab("plan");
   }
@@ -136,12 +140,49 @@
       (e) => log("err", "copy failed: " + e.message));
   }
 
-  // askPlan drafts the TUI's plan question in the assistant's composer —
-  // drafted, not sent, so the user can add to it. The plan itself goes
-  // with the question (workspace.ChatContext attaches it when the editor's
-  // statement is the plan's).
+  // askPlan is ✦ Send to chat (A): the TUI's plan question, sent with the
+  // plan.
   function askPlan() {
-    dbc.cmd.askAbout("Explain this query plan: where does the time go, and what would you change?");
+    sendPlan("Explain this query plan: where does the time go, and what would you change?");
+  }
+
+  // sendPlan shares the plan with the assistant (POST …/plan/share, the
+  // TUI's A) and drafts question in the composer — drafted, not sent, so
+  // the user can add to it. Sharing is what makes it a send: unshared, the
+  // plan goes only while the editor's caret is on the statement it
+  // explains (workspace.ChatContext), so a plan from a typed EXPLAIN's
+  // result, or one whose statement the caret has left, would not go. A
+  // refusal (no plan) leaves the composer alone — there is nothing to ask
+  // about — and the server has logged why.
+  async function sendPlan(question) {
+    try {
+      const r = await api("POST", dbc.wsPath("/plan/share"), { share: true });
+      markShared(!!(r && r.shared));
+    } catch (e) {
+      setStatus(e.message, "warn");
+      return;
+    }
+    dbc.cmd.askAbout(question);
+  }
+
+  async function unsharePlan() {
+    try {
+      const r = await api("POST", dbc.wsPath("/plan/share"), { share: false });
+      markShared(!!(r && r.shared));
+      if (dbc.chat) dbc.chat.refresh(); // the chip stops forecasting "shared plan"
+    } catch (e) {
+      setStatus(e.message, "warn");
+    }
+  }
+
+  // markShared shows whether the plan is shared: ✦ Send to chat is lit,
+  // the tab says ✦, and ✕ Stop sending is offered only while it is.
+  function markShared(on) {
+    const chat = host.querySelector('[data-act="chat"]');
+    const stop = host.querySelector('[data-act="unshare"]');
+    if (chat) chat.classList.toggle("on", on);
+    if (stop) stop.hidden = !on;
+    $("plan-tab").classList.toggle("shared", on);
   }
 
   function openPage() {
@@ -195,7 +236,7 @@
     if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || !keysForView()) return;
     const acts = { e: () => explainAgain(false), a: () => explainAgain(true), y: () => copyPlan("text"),
       Y: () => copyPlan("raw"), m: () => copyPlan("mermaid"), b: openPage, s: () => saveMenu(null),
-      p: () => showTab("results") };
+      p: () => showTab("results"), A: askPlan };
     const f = acts[e.key];
     if (f) { e.preventDefault(); f(); }
   });
@@ -210,6 +251,7 @@
     view = null;
     planSeq = 0;
     again = false;
+    $("plan-tab").classList.remove("shared");
     host.replaceChildren();
     $("plan-tab").hidden = true;
     showTab("results", true);

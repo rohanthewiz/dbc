@@ -379,6 +379,7 @@ func (m *Model) render() (*Canvas, *caret) {
 	}
 	m.drawPane(c, l.results, resTitle, focusGrid, m.st.base, func(s Surface) {
 		if m.resTab == tabPlan && m.planv.plan != nil {
+			m.planv.shared = m.ws.PlanShared() // lights the ✦ Chat chip
 			m.planv.draw(s, m.st, m.focus == focusGrid)
 			return
 		}
@@ -525,6 +526,10 @@ func (m *Model) planTabLabel() string {
 	}
 	if crit, warn := countSev(p); crit+warn > 0 {
 		label += " · " + pick(crit > 0, "✖", "▲") + itoa(crit+warn)
+	}
+	// ✦ marks a plan sent to the assistant, as it marks a shared result tab
+	if m.ws.PlanShared() {
+		label += " ✦"
 	}
 	return label
 }

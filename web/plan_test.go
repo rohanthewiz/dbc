@@ -228,3 +228,35 @@ func TestPlanFiles(t *testing.T) {
 		t.Errorf("mermaid copy = %+v", out)
 	}
 }
+
+// ✦ Send to chat: POST …/plan/share shares the plan (refused with none),
+// GET …/plan says so, the chip's forecast names the shared plan whatever
+// the editor holds, and share:false stops it.
+func TestPlanShare(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	env := e.api("POST", "/api/v1/ws/"+id+"/plan/share", `{"share":true}`, 400)
+	if !strings.Contains(env.Error, "no plan to send") {
+		t.Errorf("error = %q", env.Error)
+	}
+	e.explainAndWait(id, s, explainBody("SELECT * FROM cats WHERE id = 3", false, false))
+	if got := decodeData[map[string]bool](t, e.api("POST", "/api/v1/ws/"+id+"/plan/share", `{"share":true}`, 200)); !got["shared"] {
+		t.Fatalf("share = %v", got)
+	}
+	if out := decodeData[planOut](t, e.api("GET", "/api/v1/ws/"+id+"/plan", "", 200)); !out.Shared {
+		t.Error("GET …/plan should say the plan is shared")
+	}
+	forecast := func() string {
+		b, _ := json.Marshal(chatReq{Editor: runReq{Buffer: "SELECT 1"}})
+		return decodeData[map[string]string](t, e.api("POST", "/api/v1/ws/"+id+"/chat/context", string(b), 200))["note"]
+	}
+	if got := forecast(); !strings.Contains(got, "shared plan") {
+		t.Errorf("forecast = %q, want the shared plan", got)
+	}
+	if got := decodeData[map[string]bool](t, e.api("POST", "/api/v1/ws/"+id+"/plan/share", `{"share":false}`, 200)); got["shared"] {
+		t.Fatalf("unshare = %v", got)
+	}
+	if got := forecast(); strings.Contains(got, "plan") {
+		t.Errorf("forecast = %q, want no plan once unshared", got)
+	}
+}

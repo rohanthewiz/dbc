@@ -378,6 +378,7 @@ func (s *Server) routes() {
 	r.Post("/api/v1/ws/:id/explain", s.handleExplain)
 	r.Get("/api/v1/ws/:id/plan", s.handlePlan)
 	r.Get("/api/v1/ws/:id/plan/text", s.handlePlanText)
+	r.Post("/api/v1/ws/:id/plan/share", s.handlePlanShare)
 	r.Get("/api/v1/ws/:id/plan.html", s.handlePlanPage)
 	r.Get("/api/v1/ws/:id/plan.pdf", s.handlePlanFile(planPDF))
 	r.Get("/api/v1/ws/:id/plan.jpg", s.handlePlanFile(planJPEG))

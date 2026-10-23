@@ -53,6 +53,7 @@ func TestWeb(t *testing.T) {
 		{"rename a result tab", renameResultTab},
 		{"rerun a write asks first", rerunWriteConfirm},
 		{"share a result with the assistant", shareWithAssistant},
+		{"send the plan to the assistant", sendPlanToChat},
 		{"history scoped to the database", historyScope},
 		{"disconnect and reconnect", disconnect},
 		{"refresh a connection", refreshConn},
@@ -912,6 +913,55 @@ func shareWithAssistant(t *testing.T, _ *env, p *rod.Page) {
 	waitFor(t, p, "unpinned", `() => !document.querySelector("#rstrip .pin")`)
 	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite")
+}
+
+// sendPlanToChat: ✦ Send to chat on the plan shares it (the tab says ✦,
+// ✕ Stop sending appears) and drafts the plan question in the composer;
+// with the editor moved on to another statement, the forecast still names
+// the shared plan. ✕ Stop sending undoes it. As in shareWithAssistant the
+// forecast stands for the prompt (the same ai.Build note).
+//
+// dbc.cmd.askAbout is stood in for while the step runs, recording the
+// question: the real one opens the pane, which starts the agent (none is
+// installed here) and leaves a transcript that would take the recent
+// conversations' list away from "fold the recent conversations". That
+// askAbout drafts what it is given is chat.js's own, used by every ✦ ask.
+func sendPlanToChat(t *testing.T, _ *env, p *rod.Page) {
+	waitConnected(t, p, "lite")
+	eval(t, p, `() => { window.e2eAsk = dbc.cmd.askAbout; window.e2eAsked = "";
+	  dbc.cmd.askAbout = (q) => { window.e2eAsked = q; }; }`)
+	defer eval(t, p, `() => { dbc.cmd.askAbout = window.e2eAsk; }`)
+	eval(t, p, `() => { dbc.editor.setText("SELECT name FROM cats WHERE age > 2"); dbc.cmd.explain(false); }`)
+	waitFor(t, p, "the plan on screen", `() => !document.getElementById("plan-tab").hidden &&
+	  !!document.querySelector('#plan [data-act="chat"]')`)
+	if got := evalStr(t, p, `() => [document.getElementById("plan-tab").classList.contains("shared"),
+	  document.querySelector('#plan [data-act="unshare"]').hidden].join("|")`); got != "false|true" {
+		t.Fatalf("before sending (tab ✦|stop hidden) = %q, want false|true", got)
+	}
+
+	clickAt(t, p, `#plan [data-act="chat"]`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "sent: ✦ on the tab, Stop sending offered, the question drafted", `() =>
+	  document.getElementById("plan-tab").classList.contains("shared") &&
+	  !document.querySelector('#plan [data-act="unshare"]').hidden &&
+	  window.e2eAsked.startsWith("Explain this query plan")`)
+
+	eval(t, p, `() => dbc.editor.setText("SELECT 1")`)
+	forecast := func() string {
+		return evalStr(t, p, `async () => (await dbc.api("POST", dbc.wsPath("/chat/context"),
+		  { question: "", attach: true, editor: dbc.cmd.editorState(), view: null, script: "" })).note`)
+	}
+	if note := forecast(); !strings.Contains(note, "shared plan") {
+		t.Errorf("the forecast = %q, want the shared plan with the caret elsewhere", note)
+	}
+
+	clickAt(t, p, `#plan [data-act="unshare"]`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "stopped: no ✦, Stop sending hidden", `() =>
+	  !document.getElementById("plan-tab").classList.contains("shared") &&
+	  document.querySelector('#plan [data-act="unshare"]').hidden`)
+	if note := forecast(); strings.Contains(note, "plan") {
+		t.Errorf("the forecast = %q, want no plan once stopped", note)
+	}
+	eval(t, p, `() => dbc.cmd.showResults()`) // the pane as it was: the grid up
 }
 
 // historyScope: the history opens on the tab's database when it has

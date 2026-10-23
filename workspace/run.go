@@ -596,7 +596,7 @@ func (w *Workspace) landRowsLocked(ev *RunDone, set *resultSet, gen int, rows []
 	// it should be the one beside the grid.
 	cc, _ := w.cfg.ConnByName(last.res.Conn)
 	if p, ok := explain.Detect(last.res, cc.Driver); ok {
-		ev.Plan, set.plan = p, p
+		ev.Plan, set.plan, set.planStmt = p, p, last.stmt
 	}
 	return last.n
 }

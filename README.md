@@ -378,6 +378,7 @@ dragging.
 | `Ctrl+X` | Explain the statement under the caret (or the selected one) — the plan opens in the results pane |
 | `Alt+X` / `Ctrl+Shift+X` | Explain **analyze**: run it and measure every step (a write is rolled back or not run — see below) |
 | `Ctrl+K` | Stop the running query or script, a connect still dialing — or the assistant's answer |
+| `Alt+Shift+F` | Format the selection, or the whole buffer — and unwrap a query pasted from a log line (see [Formatting a query](#formatting-a-query)) |
 | `Ctrl+A` | Open the assistant / move between it and the editor |
 | `Ctrl+E` | Export the result (format picker; file, or clipboard) |
 | `Ctrl+O` | The scripts browser: `Enter` runs, `e` edits in `$VISUAL`/`$EDITOR` (checked when the editor exits), `n` new from a template, `d` duplicate, `r` rename, `Del` trash, `/` filter; the built-in examples and the trash are listed too (its title names the directory) |
@@ -637,6 +638,57 @@ found from `t.id` but not renamed, as a table is not; alias it
 (`o.id AS order_id`) and rename that. A column rename is refused if it
 would change what any other name in the statement refers to. An alias used bare, without a column (`SELECT o FROM orders o`,
 MySQL's `DELETE o FROM …`), is left alone.
+
+### Formatting a query
+
+`Alt+Shift+F` (right-click → **Format SQL**) lays out the selection, or
+the whole buffer when nothing is selected. dbc web does the same with
+`Shift+Alt+F`, and so does Monaco's own Format Document. It is one undo step.
+
+```sql
+UPDATE t
+SET service_account = (string_to_array(name, '_'))[1];
+
+WITH tmp AS (
+  SELECT g.*, ga.location_id AS locationid
+  FROM stg_dim_group g
+  JOIN (
+    SELECT DISTINCT group_location_id, location_id
+    FROM location_group_allocation alloc
+    JOIN dim_location l ON alloc.location = l.location
+  ) ga ON (g.group_location_id = ga.group_location_id)
+)
+UPDATE stg_dim_group s
+SET location_id = tmp.locationid
+FROM tmp
+WHERE tmp.group_location_id = s.group_location_id;
+```
+
+- Each clause starts a line (`SELECT`, `FROM`, each `JOIN`, `WHERE`,
+  `GROUP BY` …), and a blank line separates statements.
+- A clause stays on one line if it fits in 80 columns. Otherwise a list
+  (`SELECT`, `SET`, `GROUP BY`, `VALUES` …) breaks to one item per line, a
+  condition to one `AND` / `OR` per line, and a long `CASE` to one `WHEN`
+  per line.
+- A subquery or a CTE body becomes an indented block, with its `)` back
+  at the left. A two-clause subquery that fits stays inline:
+  `IN (SELECT id FROM u)`. A `CREATE TABLE`'s columns go one per line.
+- Keywords are upper-cased. Identifiers, strings, quoted names and
+  comments are written as they were. Nothing is reordered or dropped.
+
+**A query copied from a log.** Formatting first takes off what a program
+wraps around a query on its way into a log:
+
+- a label in front, such as `SQL query after template replacement:` or
+  `executing:`;
+- the quotes of a string literal, as in `"…"` or a JSON field;
+- escaped `\n` newlines (a `\n` inside a SQL string is left alone).
+
+So a line like this formats in one step into the query above:
+
+```text
+"SQL query after template replacement:\nupdate t set service_account=  (string_to_array(name ,'_'))[1];\n\nwith tmp as\n (\n  select g.*, …"
+```
 
 ### Explaining a query
 
@@ -1547,13 +1599,14 @@ file's connections are changed in the file. The TUI has the same form —
 | `Ctrl+Shift+Enter` | run every statement |
 | `Ctrl+X` (nothing selected) · `Ctrl+Shift+X` | explain · explain analyze |
 | `Ctrl+K` | stop the run (in the assistant: stop the answer) |
+| `Shift+Alt+F` | format the selection, or the whole buffer (see [Formatting a query](#formatting-a-query)) |
 | `Ctrl+P` · `Ctrl+E` · `Ctrl+O` | history · export · scripts |
 | `Ctrl+S` | in a script tab, save the script |
 | `Ctrl+I` | the assistant, and back (`Ctrl+A` stays select-all) |
 | `Ctrl+Space` | suggestions (they also open as you type — see [Completion](#completion)) |
 | `F12` · `Shift+F12` · `F2` | on an alias, a CTE name or a column the query names: go to its declaration · list its uses · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename)) |
 | `Ctrl+Shift+[` · `Ctrl+Shift+]` | fold · unfold at the caret: each statement that spans lines folds to its first line of code (a comment above it stays, as its label), and so does each multi-line `(…)` inside it — a subquery, a CTE body opened on a later line. Also the gutter's arrows (hover the line numbers). The statements are the splitter's, so a folded statement is exactly what `Ctrl+Enter` on it runs. On a Mac `⌘⌥[` · `]` work too |
-| right-click · `Shift+F10` | the editor's menu, the TUI's: **▶ Run** (labelled with what it runs — *statement 2/4*, *selection*), **▶ Run all**, **■ Stop**, **◈ Explain** and explain analyze; cut, copy, paste, select all, undo, redo; history, suggest, ✦ ask; go to definition, usages, rename; fold, unfold, fold the other statements (all but the one clicked), unfold all; Monaco's command palette; the tab's consoles. A row that cannot run now is dim and says why |
+| right-click · `Shift+F10` | the editor's menu, the TUI's: **▶ Run** (labelled with what it runs — *statement 2/4*, *selection*), **▶ Run all**, **■ Stop**, **◈ Explain** and explain analyze; cut, copy, paste, select all, undo, redo; format; history, suggest, ✦ ask; go to definition, usages, rename; fold, unfold, fold the other statements (all but the one clicked), unfold all; Monaco's command palette; the tab's consoles. A row that cannot run now is dim and says why |
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | new tab · close tab · go to tab |
 | `Alt+N` · `Alt+C` | new console · next console of the tab's database |
 | `Alt+R` | every run of a job or a pipeline, drilled into (see [Job tabs and the Runs view](#job-tabs-and-the-runs-view-in-dbc-web)) |

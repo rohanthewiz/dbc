@@ -771,6 +771,36 @@
     for (const l of ["sql", "pgsql", "mysql"]) monaco.languages.registerFoldingRangeProvider(l, provider);
   }
 
+  // ── formatting ─────────────────────────────────────────────────────────
+  // Monaco's Format Document (Shift+Alt+F) and Format Selection, over the
+  // server's layout (/api/v1/format, sqlsplit.FormatSpan) — the TUI's ⌥⇧F,
+  // so a query formats the same in both, and a query pasted from a log line
+  // (quoted, its newlines as \n) unwraps on the way.
+  //
+  // The answer replaces the whole range it was asked about; Monaco then
+  // diffs it down to the lines that changed, so the caret and the undo step
+  // stay as tight as the change. Unchanged, no edit — the undo stack is left
+  // alone. A failed request is no edit either, and says why in the log.
+  function registerFormatting() {
+    const format = async (model, range) => {
+      if (minis.has(model)) return [];
+      let r;
+      try {
+        r = await dbc.api("POST", "/api/v1/format", { buffer: model.getValueInRange(range) });
+      } catch (err) {
+        dbc.log("err", "format failed: " + err.message);
+        return [];
+      }
+      return r && r.changed ? [{ range, text: r.text }] : [];
+    };
+    const doc = { provideDocumentFormattingEdits: (model) => format(model, model.getFullModelRange()) };
+    const sel = { provideDocumentRangeFormattingEdits: (model, range) => format(model, range) };
+    for (const l of ["sql", "pgsql", "mysql"]) {
+      monaco.languages.registerDocumentFormattingEditProvider(l, doc);
+      monaco.languages.registerDocumentRangeFormattingEditProvider(l, sel);
+    }
+  }
+
   // ── loading Monaco ─────────────────────────────────────────────────────
   // The AMD build: loader.js, then vs/editor/editor.main. Its web worker is
   // a same-origin file (static/js/monaco-worker.js) that points the worker
@@ -908,6 +938,16 @@
     ed.addCommand(K.Alt | C.KeyC, () => dbc.cmd.nextConsole());
     for (let n = 1; n <= 9; n++) ed.addCommand(K.Alt | C["Digit" + n], () => dbc.cmd.pickTab(n - 1));
     ed.addCommand(C.F1, () => dbc.cmd.help());
+    // Format: Shift+Alt+F is Monaco's own key on Windows and macOS, but
+    // Linux's is Ctrl+Shift+I — bound here so the key list names one key
+    // everywhere, and so a selection formats just the selection, as the
+    // TUI's ⌥⇧F does (Monaco's Format Document ignores it). Script and
+    // pipeline tabs (Go, dbcjson) have no formatter, so there it does
+    // nothing.
+    ed.addCommand(K.Shift | K.Alt | C.KeyF, () => {
+      const s = ed.getSelection();
+      ed.trigger("dbc", s && !s.isEmpty() ? "editor.action.formatSelection" : "editor.action.formatDocument", null);
+    });
     bind(0, C.KeyO, () => dbc.cmd.scripts());
     // the sidebar fold: on a Mac, Ctrl+B is otherwise Monaco's cursor-left
     // and never reaches the page's own Ctrl+B / ⌘B
@@ -996,6 +1036,7 @@
     registerCompletion();
     registerSymbols();
     registerFolding();
+    registerFormatting();
     ed = monaco.editor.create(host, {
       // The model is made here, not by the editor from a value: a model
       // the editor made itself is disposed when it switches to another

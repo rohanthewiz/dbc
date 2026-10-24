@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-224
+**Next ID:** N-227
 
 ## Open
 
@@ -90,6 +90,10 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
+- **N-226** · raised `2026-1024-1437-sql-format` · value low
+  Format (`sqlsplit.Format`, TUI ⌥⇧F, web Shift+Alt+F) always upper-cases
+  keywords. Offer keeping their case (a config key or a second menu row)
+  if anyone wants lower-case SQL kept lower-case; nobody has asked yet.
 
 ## Validate
 
@@ -329,6 +333,19 @@ and `raised`.
   chip. Ungroup should keep a connection ungrouped across a TUI restart
   and a page reload, and *New connection group* should turn it back on.
   Also judge whether the abbreviations read well on real connection names.
+- **N-224** · raised `2026-1024-1437-sql-format` · value medium
+  Hand-check Format in a real terminal (and inside cats) and a real
+  browser. In the TUI press ⌥⇧F with Option sending Meta (iTerm2,
+  Terminal.app, Ghostty) and confirm it arrives as `alt+shift+f`; the unit
+  test only drives the key message. Paste a real logged query (quoted, `\n`
+  escapes, a label in front) and judge the layout on real queries — long
+  SELECT lists, CASE, window functions, MySQL and SQLite dialect bits.
+- **N-225** · raised `2026-1024-1437-sql-format` · value low
+  The full web e2e (`DBC_E2E=1`) flaked twice in five runs this session,
+  each time in a step that passes alone: once "editor menu" (output lost)
+  and once a nil-pointer panic in "tabs survive a reload"
+  (`web_test.go:107`, 0.14 s in). Find the race in the test and repair it.
+  Not yet checked against the commit before this session.
 
 ## Roadmap
 

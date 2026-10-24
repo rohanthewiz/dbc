@@ -3929,6 +3929,11 @@
       { label: "Undo", key: "Ctrl+Z", why: can.undo ? "" : "nothing to undo", act: trigger("undo") },
       { label: "Redo", key: "Ctrl+Shift+Z", why: can.redo ? "" : "nothing to redo", act: trigger("redo") },
     ];
+    // SQL only (editor.js registerFormatting): the selection when there is
+    // one, as the TUI's row, else the whole buffer
+    const format = sel
+      ? { label: "Format selection", key: "Shift+Alt+F", act: trigger("editor.action.formatSelection") }
+      : { label: "Format SQL", key: "Shift+Alt+F", act: trigger("editor.action.formatDocument") };
     // the language's providers answer these — registerSymbols for SQL,
     // scripts.js for Go — and Monaco says so in place when the caret is
     // on nothing they know ("No definition found"), so they are never
@@ -3984,6 +3989,7 @@
         { label: "◈ Explain " + tag, key: "Ctrl+X", why: runWhy, act: () => dbc.cmd.explain(false) },
         { label: "◈ Explain analyze (runs it, timed)", key: "Ctrl+Shift+X", why: runWhy, act: () => dbc.cmd.explain(true) },
         ...edit,
+        format,
         { head: "" },
         { label: "History…", key: "Ctrl+P", act: history },
         // the right-click put the caret where it was clicked (editor.js
@@ -4197,6 +4203,7 @@
       ["Ctrl+X (nothing selected)", "explain the statement"],
       ["Ctrl+Shift+X · Alt+X", "explain analyze — runs it to time each step"],
       ["Ctrl+K", "stop the run or the connect"],
+      ["Shift+Alt+F", "format the selection, or the whole buffer (unwraps a query pasted from a log line: its quotes and \\n escapes)"],
       ["Ctrl+P", "history of the tab's database (Tab: every database) — insert a past statement"],
       ["Ctrl+E", "export the result"],
       ["Ctrl+O", "scripts, pipelines and jobs — run, edit or start one (see Script tabs, Pipeline tabs, Job tabs)"],

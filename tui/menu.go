@@ -319,6 +319,10 @@ func (m *Model) openEditorMenu(x, y int) {
 	if sel == "" {
 		noSel = "nothing is selected"
 	}
+	fmtWhy := ""
+	if m.editor.Empty() {
+		fmtWhy = "nothing to format — type or paste a query first"
+	}
 	stmts, tag := m.stmtsToRun()
 	runWhy := ""
 	if len(stmts) == 0 {
@@ -358,6 +362,7 @@ func (m *Model) openEditorMenu(x, y int) {
 		}},
 		{label: "Select all", key: "⌥A", act: func(m *Model) tea.Cmd { m.editor.SelectAll(); return nil }},
 		{label: "Undo", key: "^Z", act: func(m *Model) tea.Cmd { m.editor.Undo(); return nil }},
+		{label: formatLabel(sel), key: "⌥⇧F", why: fmtWhy, act: func(m *Model) tea.Cmd { return m.formatQuery() }},
 		heading(""),
 		{label: "History…", key: "^P", act: func(m *Model) tea.Cmd { m.openHistory(); return nil }},
 		// the right-click put the caret where it was clicked, so the

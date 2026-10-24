@@ -595,6 +595,35 @@ func (s *Server) handleFolds(ctx rweb.Context) error {
 	return ok(ctx, out)
 }
 
+// formatReq is a buffer, or the selected piece of one, to lay out.
+type formatReq struct {
+	Buffer string `json:"buffer"`
+}
+
+// formatResp is the laid-out text; changed is false when it is the text as
+// sent, so the page can leave the editor (and its undo stack) alone.
+type formatResp struct {
+	Text    string `json:"text"`
+	Changed bool   `json:"changed"`
+}
+
+// handleFormat lays out SQL with sqlsplit.FormatSpan — the TUI's ⌥⇧F, so
+// a query formats the same in both. The page's Monaco asks for it as the
+// SQL languages' formatting provider (editor.js registerFormatting), for
+// the whole buffer or the selection. Stateless and tab-free, like
+// handleFolds; a buffer past maxBuffer comes back unchanged.
+func (s *Server) handleFormat(ctx rweb.Context) error {
+	var req formatReq
+	if err := decode(ctx, &req); err != nil {
+		return fail(ctx, err)
+	}
+	if len(req.Buffer) > maxBuffer {
+		return ok(ctx, formatResp{Text: req.Buffer})
+	}
+	out := sqlsplit.FormatSpan(req.Buffer)
+	return ok(ctx, formatResp{Text: out, Changed: out != req.Buffer})
+}
+
 // utf16At converts byte offsets into s to UTF-16 offsets in one pass over
 // s, rather than a utf16Len of the prefix per offset: a long console can
 // hold thousands of folds, and that would be quadratic in its size. Each

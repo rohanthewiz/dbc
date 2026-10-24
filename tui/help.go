@@ -47,6 +47,7 @@ var keyGroups = []keyGroup{
 		{"⇧F12", "highlight its uses and list them; Enter goes to one"},
 		{"F2", "rename it everywhere in the statement"},
 		{"^Z · ⌥Z", "undo · redo"},
+		{"⌥⇧F", "format the selection, or the whole buffer (unwraps a query pasted from a log line, quotes and \\n escapes)"},
 		{"⌥N · ⌥C", "new console · next console of the database"},
 		{"right-click", "run, copy, consoles (new, rename, delete), ask the assistant"},
 	}},

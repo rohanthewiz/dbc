@@ -294,6 +294,7 @@ func (s *Server) routes() {
 	r.Get("/api/v1/history", s.handleHistory)
 	r.Post("/api/v1/stmt", s.handleStmt)
 	r.Post("/api/v1/folds", s.handleFolds)
+	r.Post("/api/v1/format", s.handleFormat)
 	r.Post("/api/v1/picks", s.handlePicks)
 	r.Get("/api/v1/chats", s.handleChats)
 	r.Delete("/api/v1/chats/:id", s.handleChatDelete)

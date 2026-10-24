@@ -392,6 +392,23 @@ func TestFolds(t *testing.T) {
 	}
 }
 
+// Format lays out the buffer as the TUI's ⌥⇧F does, keeping the blanks
+// around a selection, and says when there was nothing to change.
+func TestFormat(t *testing.T) {
+	e := newTestEnv(t)
+	ask := func(buf string) formatResp {
+		t.Helper()
+		body, _ := json.Marshal(formatReq{Buffer: buf})
+		return decodeData[formatResp](t, e.api("POST", "/api/v1/format", string(body), 200))
+	}
+	if r := ask("select a,b from t where x=1\n"); r != (formatResp{Text: "SELECT a, b\nFROM t\nWHERE x = 1\n", Changed: true}) {
+		t.Errorf("format = %+v", r)
+	}
+	if r := ask("SELECT 1"); r.Changed || r.Text != "SELECT 1" {
+		t.Errorf("already formatted = %+v", r)
+	}
+}
+
 // The editor's right-click menu asks what Run and Run all would execute,
 // so its labels and dim rows match the run the click starts.
 func TestPicks(t *testing.T) {

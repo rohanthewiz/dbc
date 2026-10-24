@@ -38,6 +38,7 @@ func TestWeb(t *testing.T) {
 		{"run a query", runQuery},
 		{"editor menu", editorMenu},
 		{"statement folding", statementFolding},
+		{"format SQL", formatSQL},
 		{"editor completion", completion},
 		{"go to and rename an alias and a column", aliasRename},
 		{"tables sidebar", tablesSidebar},

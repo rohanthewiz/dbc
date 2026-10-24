@@ -334,7 +334,7 @@ func (m *Model) startupLog() {
 	} else if m.cfg.Path != "" {
 		m.logf(logInfo, "loaded config from %s", m.cfg.Path)
 	}
-	m.log(logMuted, "keys: ^R run · ^⇧R/⌥R run all · ^X explain · ⌥X explain analyze · ^K stop · ^A assistant · ^E export · ^P history · ^O scripts · ^J pipelines & jobs · ⌥J runs · "+
+	m.log(logMuted, "keys: ^R run · ^⇧R/⌥R run all · ^X explain · ⌥X explain analyze · ^K stop · ⌥⇧F format · ^A assistant · ^E export · ^P history · ^O scripts · ^J pipelines & jobs · ⌥J runs · "+
 		"^Space suggest · F12/⇧F12/F2 definition/uses/rename · ⌥T/⌥W/⌥1…9 tabs · ⌥G tab groups · ⌥N/⌥C new/next console · ^T tables · ^L conns · ^B sidebar · F1 keys · x/r disconnect/refresh · a/e add/edit connection · d/s database/schema · Tab focus · y/Y/c copy · t transpose · Enter inspect · -/+ hide/show column · { } P S x result tabs · ^Q quit")
 	m.log(logMuted, "mouse: click to focus · drag to select · right-click for menus · "+
 		"drag borders to resize · hold Shift (⌥ on macOS) to select terminal text")
@@ -624,6 +624,11 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		// as with run-all: Ctrl+Shift+X only where the terminal speaks the
 		// kitty protocol, Alt+X wherever Option/Alt sends Meta
 		return m.explainQuery(true)
+	case "alt+shift+f":
+		// VS Code's Shift+Alt+F, as in dbc web's Monaco. A legacy terminal
+		// sends ESC F, which arrives as this same chord, so it needs no
+		// second spelling as run-all does.
+		return m.formatQuery()
 	case "ctrl+k":
 		if m.focus == focusChat && m.chat.busy() {
 			m.chatStop()

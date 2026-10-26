@@ -80,6 +80,10 @@ func keyFile(savedPath string) string {
 	return strings.TrimSuffix(savedPath, filepath.Ext(savedPath)) + ".key"
 }
 
+// KeyFile is keyFile for callers outside the package (`dbc encrypt` names
+// the key it used).
+func KeyFile(savedPath string) string { return keyFile(savedPath) }
+
 // sealsDSN reports whether a driver's DSNs are encrypted: a database
 // server's, which may hold a password; not sqlite's or bytdb's, a file
 // path. An unknown driver counts as a server, so a typo in it cannot leave
@@ -241,4 +245,107 @@ func sealSaved(path string, list []SavedConn) ([]SavedConn, error) {
 		}
 	}
 	return out, nil
+}
+
+// THE CONFIG FILE. config.toml and dbc.toml are the user's, never written by
+// dbc, so their DSNs are not encrypted behind the user's back the way
+// connections.toml's are. Instead a dsn there may be an envelope the user
+// made with `dbc encrypt` (SealDSN) and pasted in; Load opens it (configKey)
+// with the same key, connections.key, so one key file covers both. The
+// ad-hoc --dsn takes an envelope too (OpenDSN):
+//
+//	dbc encrypt ──SealDSN──► "enc:v1:…" ──(pasted)──► config.toml dsn
+//	                 │                                     │
+//	           connections.key ◄──────configKey────────── Load ──► plain DSN
+//
+// One key rather than a second config.key beside each config file: a
+// dbc.toml lives in a project directory, often a git checkout, which is the
+// last place a key should be made. Keeping it in ~/.config/dbc puts it
+// where connections.key already is, out of every project's tree; the cost
+// is that a dbc.toml with envelopes opens only on the machines that have
+// that key — the same as a connections.toml.
+
+// SealDSN encrypts dsn for a config file's dsn key, with the key beside
+// the saved-connections file at savedPath (SavedFile), making the key if
+// there is none yet. It is what `dbc encrypt` prints.
+//
+// It takes the saved-connections writers' lock (as writeSaved's callers
+// do) because it may make the key: a dbc web writing connections.toml at
+// the same moment must not make a second key that replaces this one, or
+// the other way round — whichever lost, its envelopes would never open.
+func SealDSN(savedPath, dsn string) (string, error) {
+	if savedPath == "" {
+		return "", serr.New("no home directory is known, so there is no connections.key to encrypt with")
+	}
+	if strings.HasPrefix(dsn, encPrefix) {
+		return "", serr.New("that DSN is encrypted already")
+	}
+	if err := os.MkdirAll(filepath.Dir(savedPath), 0o700); err != nil {
+		return "", serr.Wrap(err, "path", savedPath, "op", "mkdir")
+	}
+	lock, err := lockSaved(savedPath)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = lock.Close() }()
+	key, err := loadOrCreateKey(keyFile(savedPath))
+	if err != nil {
+		return "", err
+	}
+	return sealDSN(key, dsn)
+}
+
+// configKey opens the envelopes in one config file's DSNs for Load (and
+// the ad-hoc --dsn, through OpenDSN), reading the key only at the first
+// envelope — most config files hold none, and they must load on a machine
+// with no connections.key at all. It reads, never makes, the key: a key
+// made now could not open an envelope written under another, so a missing
+// one is an error.
+type configKey struct {
+	savedPath string // the saved-connections file, whose key this is
+	key       []byte
+}
+
+// open returns dsn decrypted when it is an envelope, and as is otherwise.
+// what names where the DSN came from, to start the errors with:
+// `connection "pg" in dbc.toml`, or "--dsn".
+//
+// A DSN that does not open fails Load rather than becoming a warning: the
+// connection would otherwise be dialed with the envelope for its DSN, and
+// the driver's error about that would say nothing of the key.
+func (k *configKey) open(what, dsn string) (string, error) {
+	if !strings.HasPrefix(dsn, encPrefix) {
+		return dsn, nil
+	}
+	if k.key == nil {
+		if k.savedPath == "" {
+			return "", serr.New(fmt.Sprintf(
+				"%s has an encrypted DSN, but no home directory is known to find connections.key in", what))
+		}
+		path := keyFile(k.savedPath)
+		key, err := readKey(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return "", serr.New(fmt.Sprintf(
+				"%s has an encrypted DSN, but its key %s is missing: restore the key, "+
+					"or give the plain DSN in its place (dbc encrypt makes a new envelope)", what, path))
+		}
+		if err != nil {
+			return "", err
+		}
+		k.key = key
+	}
+	plain, err := openDSN(k.key, dsn)
+	if err != nil {
+		return "", serr.New(fmt.Sprintf("%s: %v (key %s)", what, err, keyFile(k.savedPath)))
+	}
+	return plain, nil
+}
+
+// OpenDSN is configKey.open for one DSN from outside a config file — the
+// ad-hoc --dsn, so a shell script or a cron line can carry an envelope
+// from `dbc encrypt` instead of the password. what names the source for
+// the errors, as for open. A plain dsn comes back as is, without the key
+// being read.
+func OpenDSN(savedPath, what, dsn string) (string, error) {
+	return (&configKey{savedPath: savedPath}).open(what, dsn)
 }

@@ -365,6 +365,8 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 	}
 	cfg.resolveScripts(cfgDir)
 	seen := make(map[string]bool, len(cfg.Connections))
+	// An "enc:v1:" dsn is one `dbc encrypt` made; see configKey in secret.go.
+	keys := &configKey{savedPath: SavedFile()}
 	for i := range cfg.Connections {
 		cn := &cfg.Connections[i]
 		if seen[cn.Name] {
@@ -372,8 +374,14 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 				"name", cn.Name, "config_path", path)
 		}
 		seen[cn.Name] = true
+		// Opened before ExpandDSN, so an envelope may hold ${VAR}s like any
+		// dsn: what was encrypted is the dsn as it would have been written.
+		dsn, err := keys.open(fmt.Sprintf("connection %q in %s", cn.Name, path), cn.DSN)
+		if err != nil {
+			return nil, err
+		}
 		var warns []string
-		cn.DSN, warns = ExpandDSN(cn.Name, cn.Driver, cn.DSN)
+		cn.DSN, warns = ExpandDSN(cn.Name, cn.Driver, dsn)
 		cfg.Warnings = append(cfg.Warnings, warns...)
 		// A bad TLS setting fails the load, as a duplicate name does, rather
 		// than becoming a warning: carrying on would mean connecting with

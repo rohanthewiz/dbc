@@ -110,6 +110,29 @@ referencing an unset var warns by name at startup (a typo'd `${PGPASS}` will
 not silently become an empty password). Duplicate connection names and a
 `default_connection` that names no connection are rejected at load.
 
+A password that has to sit in the file can be kept there encrypted instead.
+`dbc encrypt` asks for the DSN (it is not shown as you type, and never goes
+on the command line, so it stays out of your shell's history), or reads it
+from stdin, and prints it encrypted:
+
+```sh
+$ dbc encrypt
+DSN (not shown): ********
+enc:v1:Wz3iJ+UYZYhVelPJtHFTSW9cMFf2…
+$ pbpaste | dbc encrypt | pbcopy      # or from the clipboard and back
+```
+
+Paste the line in as the connection's `dsn = "enc:v1:…"`; dbc decrypts it
+when it loads the config, then expands any `${VAR}` in it as usual. The key is
+`~/.config/dbc/connections.key`, the one that already encrypts
+[saved connections](#the-browser-workbench-dbc-web) (made by the first of the
+two to need it), so a `dbc.toml` checked into a project holds no key — and
+opens only on machines that have that key. A missing key or one that does not
+match fails the load, naming the connection, rather than dialing the envelope.
+The ad-hoc `--dsn` takes an envelope too, so a script or a cron line can carry
+one in place of the password (`dbc --driver postgres --dsn 'enc:v1:…' …`); it
+is used as sealed, with no `${VAR}` expansion, as a `--dsn` always is.
+
 ### TLS
 
 Postgres and MySQL connections take TLS settings of their own, spelled the
@@ -1564,6 +1587,9 @@ as you, which can read the key too. Copy both files to move the connections
 to another machine. Lose the key, and those DSNs have to be typed in again.
 A SQLite or bytdb DSN is a file path and stays readable. A plain `dsn` (from
 an older dbc, or written by hand) is encrypted the next time dbc starts.
+The same key opens a config file's `enc:v1:` DSNs (see `dbc encrypt` under
+[Configure connections](#configure-connections)): moving one without the
+other leaves those unreadable too.
 A DSN is never sent back to the browser. Connections that
 an older `dbc web` kept in `web.bytdb` are moved to `connections.toml` the
 first time it starts. Connections added this way show a muted `✎` before their
@@ -2638,7 +2664,7 @@ Everything works without the TUI, for cron jobs and shell pipelines:
 | `-k`, `--keep-going` | go on past a failed statement instead of stopping there |
 | `--config FILE` | config file (default `./dbc.toml`, then `~/.config/dbc/config.toml`) |
 | `--demo bytdb\|sqlite` | which demo starts active when there is no config (also `$DBC_DEMO`) |
-| `--driver NAME --dsn STRING` | a one-off connection that is in no config file |
+| `--driver NAME --dsn STRING` | a one-off connection that is in no config file; the DSN may be an `enc:v1:` one from [`dbc encrypt`](#configure-connections) |
 | `--tls MODE` (`--tls-ca`, `--tls-cert`, `--tls-key FILE`, `--tls-key-password '${VAR}'`) | [TLS](#tls) for the `--dsn` connection, overriding the DSN's own |
 
 `dbc --help` lists them all. Long names take one dash or two (`-dsn` works),

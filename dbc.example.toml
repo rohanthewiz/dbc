@@ -95,6 +95,9 @@ name   = "local-pg"
 driver = "postgres"
 # Env vars are expanded — keep secrets out of the file
 dsn    = "postgres://postgres:${PGPASS}@localhost:5432/mydb?sslmode=disable"
+# ...or, to keep an inline password here, encrypted: `dbc encrypt` prints
+# the line, using the key in ~/.config/dbc/connections.key
+# dsn  = "enc:v1:…"
 # Directory `dbc migrate` reads for this connection (else --dir, else ".")
 migrations = "db/migrate"
 

@@ -163,3 +163,93 @@ func TestKeyFile(t *testing.T) {
 		t.Fatalf("keyFile = %q", got)
 	}
 }
+
+// A config file's dsn may be an envelope from SealDSN (`dbc encrypt`): Load
+// opens it with connections.key and then expands it like any dsn. The key
+// is shared with the saved-connections file, so an envelope made before
+// any connection was saved and one made after open alike.
+func TestLoadOpensConfigEnvelope(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("DBC_TEST_DB", "app")
+	saved := SavedFile()
+
+	env, err := SealDSN(saved, "postgres://app:p@ss@db/${DBC_TEST_DB}")
+	must(t, err)
+	if strings.Contains(env, "p@ss") {
+		t.Fatalf("envelope holds the password: %q", env)
+	}
+	// SealDSN made the key; a later saved connection must reuse it, not
+	// replace it, or the envelope above would stop opening
+	must(t, OpenSaved(saved).Add(SavedConn{Name: "web", Driver: "postgres", DSN: "host=w"}))
+
+	cfg, err := Load(writeConfig(t, `
+[[connection]]
+name = "pg"
+driver = "postgres"
+dsn = "`+env+`"
+
+[[connection]]
+name = "lite"
+driver = "sqlite"
+dsn = "file:lite.db"
+`))
+	must(t, err)
+	// the URL's path is percent-encoded only where needed: "app" stays app
+	if got := cfg.Connections[0].DSN; got != "postgres://app:p@ss@db/app" {
+		t.Fatalf("DSN = %q, want the envelope opened and ${DBC_TEST_DB} expanded", got)
+	}
+	if got := cfg.Connections[1].DSN; got != "file:lite.db" {
+		t.Fatalf("plain DSN = %q", got)
+	}
+	if _, err := SealDSN(saved, env); err == nil {
+		t.Fatal("sealed an envelope a second time")
+	}
+}
+
+// An envelope that cannot be opened fails Load, naming the connection and
+// the key, rather than letting the envelope be dialed as a DSN.
+func TestLoadConfigEnvelopeFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	saved := SavedFile()
+	env, err := SealDSN(saved, "host=db password=x")
+	must(t, err)
+	cfgPath := writeConfig(t, `
+[[connection]]
+name = "pg"
+driver = "postgres"
+dsn = "`+env+`"
+`)
+
+	// another key: GCM's tag check refuses it
+	must(t, os.WriteFile(keyFile(saved), []byte(strings.Repeat("ab", keyLen)+"\n"), 0o600))
+	if _, err := Load(cfgPath); err == nil || !strings.Contains(err.Error(), `"pg"`) ||
+		!strings.Contains(err.Error(), "does not decrypt") {
+		t.Fatalf("load with the wrong key = %v", err)
+	}
+
+	// no key at all: an error that says so, and no key made in its place
+	must(t, os.Remove(keyFile(saved)))
+	if _, err := Load(cfgPath); err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("load without the key = %v", err)
+	}
+	if _, err := os.Stat(keyFile(saved)); !os.IsNotExist(err) {
+		t.Fatalf("Load made a key: %v", err)
+	}
+}
+
+// A config file with no envelope loads without any key, and makes none.
+func TestLoadPlainConfigNeedsNoKey(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	_, err := Load(writeConfig(t, `
+[[connection]]
+name = "pg"
+driver = "postgres"
+dsn = "host=db password=x"
+`))
+	must(t, err)
+	if _, err := os.Stat(keyFile(SavedFile())); !os.IsNotExist(err) {
+		t.Fatalf("a key was made for a config with no envelope: %v", err)
+	}
+}

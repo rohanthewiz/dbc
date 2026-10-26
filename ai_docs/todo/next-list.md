@@ -68,14 +68,6 @@ ten session docs in `ai_docs/claude_sessions/`
   fcb76d1. What remains is to watch #1736. Once a release has the fix, bump
   yaegi, and the failing `TestYaegiStoreComputedBug` is the cue to drop the
   lint and the README paragraph. Value is now low, since it waits on upstream.
-- **N-216** · raised `2026-1014-1603-encrypt-saved-passwords` · value low
-  Only `connections.toml` encrypts its DSNs (`config/secret.go`). A
-  `config.toml` or `dbc.toml` DSN with an inline password stays plain:
-  `Load` does not decrypt an `enc:v1:` value, and there is no command that
-  makes one. A `dbc encrypt` (prints the envelope for a DSN typed or piped
-  in, made with `connections.key`), with `Load` opening `enc:v1:` values
-  through the same `openDSN`, would cover it. Contingent on someone keeping
-  inline passwords in the config file rather than in `${VAR}`s.
 - **N-218** · raised `2026-1014-1945-editor-context-menu` · value low
   dbc web's editor menu (`app.js editorMenu`) has three rows the TUI's
   (`tui/menu.go openEditorMenu`) lacks: **■ Stop** (dim with nothing
@@ -567,6 +559,15 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-216** · raised `2026-1014-1603-encrypt-saved-passwords` · value low
+  Only `connections.toml` encrypts its DSNs (`config/secret.go`). A
+  `config.toml` or `dbc.toml` DSN with an inline password stays plain:
+  `Load` does not decrypt an `enc:v1:` value, and there is no command that
+  makes one. A `dbc encrypt` (prints the envelope for a DSN typed or piped
+  in, made with `connections.key`), with `Load` opening `enc:v1:` values
+  through the same `openDSN`, would cover it. Contingent on someone keeping
+  inline passwords in the config file rather than in `${VAR}`s.
+  closed 2026-10-25, `2026-1025-2227-n216-encrypt-config-dsns`: `dbc encrypt` (`encryptcmd.go`) reads one DSN — a no-echo prompt on a terminal, else stdin; never an argument, so it stays out of shell history — and prints its `enc:v1:` envelope via `config.SealDSN`, which takes the saved-connections writers' lock and makes `connections.key` if none exists. `Load` opens envelopes through `configKey` (`config/secret.go`) with the same key, before `ExpandDSN`, so an envelope may hold `${VAR}`s; it only reads the key, so a missing or wrong key fails the load and names the connection, and a config with no envelope needs no key. README (Configure connections), `dbc.example.toml`, the dbc skill and the cats completions cover it. Tests: `TestLoadOpensConfigEnvelope`, `TestLoadConfigEnvelopeFails`, `TestLoadPlainConfigNeedsNoKey`, `TestReadDSN`; checked in the real binary (sqlite envelope runs, missing key fails, pty prompt does not echo); `go test ./...` passes. Same day, the ad-hoc `--dsn` accepts an envelope too (`addAdHocConn` → `config.OpenDSN`, after the flag checks; not `${VAR}`-expanded, as no `--dsn` is); test `TestAdHocDSNEnvelope`.
 - **N-222** · raised `2026-1022-1322-new-query-console-from-conn` · value low
   TUI parity for dbc web's connection-menu **New query console**
   (`conns.js` → `dbc.cmd.newConsoleTab`). It opens a new query tab on the

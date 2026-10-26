@@ -212,6 +212,7 @@ func newCLI() *cli.Command {
 			dumpCommand(),
 			webCommand(),
 			tutorialCommand(),
+			encryptCommand(),
 			{
 				// A subcommand as well as the --version / -v flag the cli
 				// package adds, since `dbc version` is what people type first.
@@ -730,11 +731,22 @@ func addAdHocConn(cfg *config.Config) error {
 	if err := tlsOpts.Check(); err != nil {
 		return serr.Wrap(err, "op", "--tls flags")
 	}
+	// An "enc:v1:" --dsn is one `dbc encrypt` printed, so a script or a cron
+	// line can carry it instead of the password; it opens with the key the
+	// config file's envelopes use. Last of the checks, so a usage mistake
+	// above is reported without reading the key. Unlike a config file's
+	// envelope, what comes out is not ${VAR}-expanded: a --dsn never is —
+	// the shell expands it, and an envelope's contents are out of its reach
+	// only because the user chose to seal them as they are.
+	dsn, err := config.OpenDSN(config.SavedFile(), "--dsn", flagDSN)
+	if err != nil {
+		return err
+	}
 	// base "": paths typed in the shell are relative to where it stands
 	tlsOpts, warns := config.ExpandTLS(adHocConnName, tlsOpts, "")
 	cfg.Warnings = append(cfg.Warnings, warns...)
 	cfg.Connections = append(cfg.Connections, config.Connection{
-		Name: adHocConnName, Driver: flagDriver, DSN: flagDSN, TLSOpts: tlsOpts,
+		Name: adHocConnName, Driver: flagDriver, DSN: dsn, TLSOpts: tlsOpts,
 	})
 	return nil
 }

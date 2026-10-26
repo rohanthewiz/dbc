@@ -58,6 +58,10 @@ in `~/.config/dbc/connections.toml` and are usable by name too.
   server with the connection's credentials.
 - `${VAR}` in a DSN is expanded from the environment; an unset var warns by
   name.
+- A config file's `dsn = "enc:v1:…"` is decrypted at load with
+  `~/.config/dbc/connections.key` (the key `connections.toml` uses); a
+  missing or wrong key fails the load. `dbc encrypt` makes one. `--dsn`
+  takes one too (decrypted, never `${VAR}`-expanded).
 
 Placeholders follow the driver: `$1` for postgres/bytdb, `?` for
 mysql/sqlite.
@@ -122,6 +126,7 @@ Exit codes: `0` ok, `1` failure, `2` bad usage (incl. unknown connection),
 | `dbc migrate status\|version\|up\|up-by-one\|up-to V\|down\|down-to V\|redo\|create NAME` | goose-compatible migrations; `--dir`, `--allow-missing` | Migrations |
 | `dbc web [--no-open] [--listen ADDR]` | browser workbench on 127.0.0.1:8450 | The browser workbench |
 | `dbc tutorial [init [DIR] \| step N [--run] [--files] [--force] \| check [N]] [--dir D]` | the scripting and ETL tutorial (`docs/scripting-and-etl-tutorial.md`) interactively: `init` makes a workspace (`dbc.toml` with `shop` SQLite + `warehouse` bytdb), `step N --run` writes lesson N's files and runs its commands, `check` verifies the state each lesson leaves (exit 1 on a failure). Lessons live in `tutorial/lessons.go`; `tutorial/workspace/` must match the doc's code blocks (`TestWorkspaceMatchesDoc`) | Scripting in Go |
+| `dbc encrypt` | print the `enc:v1:` envelope of a DSN piped in (or typed at a no-echo prompt) for a config file's `dsn`; never an argument; reads no config | Configure connections |
 | `dbc version` | version | Build |
 
 A relative `path` in a file node (`csv.*`, `jsonl.*`) is in `files_dir`

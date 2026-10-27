@@ -58,6 +58,17 @@ const (
 	// any reachable server, including one across a VPN, and short enough that
 	// a wrong host or a down VPN is reported while the user is still looking.
 	DefaultConnectTimeout = 5 * time.Second
+
+	// DefaultCatalogTimeout bounds the sidebar's table list (catalog_timeout)
+	// — the read a connect, a refresh or a schema pick makes of the
+	// catalog — and the routine list and definitions read beside it. It was
+	// a fixed 10s, which a production database with a large catalog (tens of
+	// thousands of relations, partitions included) behind a VPN could
+	// exceed, leaving the sidebar empty with "context deadline exceeded".
+	// A minute is generous for any catalog worth listing, and costs nothing
+	// on a small one (the budget is a ceiling, not a wait); the connect stays
+	// cancelable throughout (Ctrl+K), so a long budget never traps the user.
+	DefaultCatalogTimeout = time.Minute
 )
 
 // Names of the built-in demo connections. Both are registered when no config
@@ -267,6 +278,13 @@ type Config struct {
 	// wins. Global for the same reason as ConnIdleTimeout.
 	ConnectTimeout time.Duration `toml:"connect_timeout"`
 
+	// CatalogTimeout caps reading the sidebar's table list (and routines);
+	// see DefaultCatalogTimeout. A duration string in the file ("1m"); 0
+	// sets no limit, leaving only a cancel (Ctrl+K) to stop a slow read.
+	// Global, like ConnectTimeout: a statement_timeout on the server still
+	// applies, whichever is shorter.
+	CatalogTimeout time.Duration `toml:"catalog_timeout"`
+
 	// PlanTheme is the palette of the plan pictures the shell and the TUI
 	// draw — `dbc explain -t pdf|jpeg|png` and the TUI's Save as PDF /
 	// JPEG, and the schema diagrams of `dbc erd -t png|jpeg` and the TUI's
@@ -314,7 +332,8 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 	cfg := &Config{MaxRows: defaultMaxRows,
 		MaxDisplayRows: defaultMaxDisplayRows, AIContextRows: DefaultAIContextRows,
 		ResultTabs:      DefaultResultTabs,
-		ConnIdleTimeout: DefaultConnIdleTimeout, ConnectTimeout: DefaultConnectTimeout, PlanTheme: "dark"}
+		ConnIdleTimeout: DefaultConnIdleTimeout, ConnectTimeout: DefaultConnectTimeout,
+		CatalogTimeout: DefaultCatalogTimeout, PlanTheme: "dark"}
 
 	path := explicit
 	if path == "" {
@@ -352,6 +371,7 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 	cfg.checkResultTabs()
 	cfg.checkDuration("conn_idle_timeout", &cfg.ConnIdleTimeout, DefaultConnIdleTimeout)
 	cfg.checkDuration("connect_timeout", &cfg.ConnectTimeout, DefaultConnectTimeout)
+	cfg.checkDuration("catalog_timeout", &cfg.CatalogTimeout, DefaultCatalogTimeout)
 	cfg.checkPlanTheme()
 	if len(cfg.Connections) == 0 {
 		return nil, serr.New("config has no [[connection]] entries", "config_path", path)

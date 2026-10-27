@@ -118,7 +118,7 @@ func (w *Workspace) routinesJobLocked(name string, gen int) Job {
 	w.routineCancel = cancel
 	w.routineGen++
 	rg := w.routineGen
-	schema, mgr := w.schema, w.mgr
+	schema, mgr, budget := w.schema, w.mgr, w.cfg.CatalogTimeout
 	var scope []string // nil: every user schema (Manager.Routines)
 	if schema != "" {
 		scope = []string{schema}
@@ -127,7 +127,7 @@ func (w *Workspace) routinesJobLocked(name string, gen int) Job {
 		defer cancel()
 		// the tables' budget: the read is one pass over pg_proc (or
 		// information_schema.routines), no larger than the table list's
-		rctx, rcancel := context.WithTimeout(ctx, catalogTimeout)
+		rctx, rcancel := withBudget(ctx, budget)
 		routines, err := mgr.Routines(rctx, name, scope)
 		rcancel()
 		w.mu.Lock()
@@ -169,11 +169,11 @@ func (w *Workspace) RoutineDDL(r model.Routine) (Start, error) {
 	case r.Name == "":
 		return Start{}, refuse(Invalid, Warn, "no routine named")
 	}
-	mgr := w.mgr
+	mgr, budget := w.mgr, w.cfg.CatalogTimeout
 	return Start{
 		Notes: []Note{notef(Muted, "reading the definition of %s…", r.QName())},
 		Job: func() Event {
-			ctx, cancel := context.WithTimeout(context.Background(), catalogTimeout)
+			ctx, cancel := withBudget(context.Background(), budget)
 			defer cancel()
 			ev := &RoutineDDL{Conn: name, Routine: r}
 			ev.DDL, ev.Err = mgr.RoutineDDL(ctx, name, r)

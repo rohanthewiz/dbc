@@ -40,7 +40,7 @@ func TablesQuery(driver string) (string, error) {
 		//   - it is a view that calls the privilege functions per row and
 		//     joins several catalogs; on tens of thousands of relations it
 		//     is many times slower than this direct read, and the connect's
-		//     catalogTimeout is a bound on it.
+		//     catalog_timeout is a bound on it.
 		//
 		// It also covers materialized views, which the standard's view
 		// leaves out (the standard has none), without a second branch.

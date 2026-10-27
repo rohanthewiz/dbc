@@ -75,6 +75,7 @@ max_display_rows   = 2000   # rows the results table draws (0 = all)
 result_tabs        = 10     # result tabs per connection, per query tab (1–50; see Result tabs)
 conn_idle_timeout  = "1h"   # close pooled connections idle this long ("0" = never)
 connect_timeout    = "5s"   # give up opening a connection after this ("0" = no limit; Ctrl+K cancels)
+catalog_timeout    = "1m"   # give up reading the sidebar's table list after this ("0" = no limit)
 default_connection = "local-pg"
 
 [[connection]]

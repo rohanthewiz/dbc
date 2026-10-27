@@ -62,6 +62,13 @@ conn_idle_timeout = "1h"
 # way, Ctrl+K (or Ctrl+C) abandons a connect that is taking too long.
 connect_timeout = "5s"
 
+# How long the sidebar's table list (and its routines) may take to read after
+# a connect, a refresh or a schema pick. A production database with a very
+# large catalog, reached over a VPN, can need more than the default; past the
+# budget the connection still works but the sidebar says "tables list
+# unavailable". "0" sets no limit; Ctrl+K still abandons the read.
+catalog_timeout = "1m"
+
 # Palette of the pictures drawn outside the browser — plans (`dbc explain -t
 # pdf|jpeg|png`, the TUI's Save as PDF / JPEG) and schema diagrams (`dbc erd
 # -t png|jpeg`, the TUI's Diagram menu items): "dark" (dbc's own) or "light"

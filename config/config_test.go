@@ -212,6 +212,9 @@ func TestDemoTimeouts(t *testing.T) {
 	if cfg.ConnectTimeout != DefaultConnectTimeout {
 		t.Errorf("demo ConnectTimeout = %s, want %s", cfg.ConnectTimeout, DefaultConnectTimeout)
 	}
+	if cfg.CatalogTimeout != DefaultCatalogTimeout {
+		t.Errorf("demo CatalogTimeout = %s, want %s", cfg.CatalogTimeout, DefaultCatalogTimeout)
+	}
 }
 
 func TestLoadConnectTimeout(t *testing.T) {
@@ -251,6 +254,45 @@ dsn = "a.db"
 	}
 	if _, err := Load(writeConfig(t, `connect_timeout = "soon"`+conn)); err == nil {
 		t.Error("an unparseable connect_timeout loaded without error")
+	}
+}
+
+// catalog_timeout reads as connect_timeout does: a duration string, "0" for
+// no limit, and a bare integer (nanoseconds to the decoder) or a negative
+// value replaced by the default with a warning.
+func TestLoadCatalogTimeout(t *testing.T) {
+	conn := `
+[[connection]]
+name = "db"
+driver = "sqlite"
+dsn = "a.db"
+`
+	cases := []struct {
+		name     string
+		body     string
+		want     time.Duration
+		wantWarn bool
+	}{
+		{"absent", conn, DefaultCatalogTimeout, false},
+		{"set", `catalog_timeout = "2m"` + conn, 2 * time.Minute, false},
+		{"no limit", `catalog_timeout = "0"` + conn, 0, false},
+		{"bare seconds", "catalog_timeout = 60" + conn, DefaultCatalogTimeout, true},
+		{"negative", `catalog_timeout = "-1s"` + conn, DefaultCatalogTimeout, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, c.body))
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if cfg.CatalogTimeout != c.want {
+				t.Errorf("CatalogTimeout = %s, want %s", cfg.CatalogTimeout, c.want)
+			}
+			warned := strings.Contains(strings.Join(cfg.Warnings, "\n"), "catalog_timeout")
+			if warned != c.wantWarn {
+				t.Errorf("warned = %v, want %v (warnings: %q)", warned, c.wantWarn, cfg.Warnings)
+			}
+		})
 	}
 }
 

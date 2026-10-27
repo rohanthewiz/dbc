@@ -12,13 +12,27 @@ import (
 	"github.com/rohanthewiz/dbc/model"
 )
 
-// catalogTimeout bounds the sidebar's table list — a connect's, or a schema
-// pick's: a huge catalog must not hold the connect open.
-const catalogTimeout = 10 * time.Second
+// The sidebar's table list — a connect's, or a schema pick's — is bounded
+// by the config's catalog_timeout (config.DefaultCatalogTimeout), so a huge
+// catalog cannot hold the connect open forever. It used to be a fixed 10s
+// here; a big production catalog over a VPN outgrew that, and the budget
+// that fits one database is not the one that fits another, hence a setting.
+// withBudget applies it.
+
+// withBudget is ctx bounded by d, or merely cancelable when d is 0 (the
+// config's "no limit"): the callers defer the cancel either way, so both
+// shapes return one. The budget is read from the config under mu, by the
+// caller, and handed in — a job runs after mu is released.
+func withBudget(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if d > 0 {
+		return context.WithTimeout(ctx, d)
+	}
+	return context.WithCancel(ctx)
+}
 
 // The budgets of the two short lists a connect reads before the tables on a
 // db.Navigable driver. Each read has its own, rather than all three sharing
-// catalogTimeout: on a big production database a slow schema summary used
+// the catalog budget: on a big production database a slow schema summary used
 // to spend the whole budget, and the table list after it then failed at
 // once on a context already past its deadline — the sidebar empty, and the
 // log blaming the table list for the summary's time.
@@ -88,7 +102,7 @@ func (w *Workspace) Connect(name string) Start {
 // long one — the server's databases, this database's schemas, and the
 // tables of the one schema pick names — so a connect to a big server costs
 // what its sidebar shows, not what the server holds. Each has its own
-// budget (navListTimeout, schemaSummaryTimeout, catalogTimeout), and a
+// budget (navListTimeout, schemaSummaryTimeout, catalog_timeout), and a
 // schema list too slow to count its tables falls back to their names
 // (listSchemas). Elsewhere it is the
 // whole table list, as it always was — after, on MySQL, the server's
@@ -150,7 +164,7 @@ func (w *Workspace) connectLocked(name string, pick SchemaPick, kind connectKind
 	gen := w.connGen
 	w.connCancel, w.connName = cancel, name
 
-	mgr := w.mgr
+	mgr, budget := w.mgr, w.cfg.CatalogTimeout
 	job := func() Event {
 		defer cancel() // releases the context; the landing may already have
 		ev := &Connected{Name: name}
@@ -167,7 +181,7 @@ func (w *Workspace) connectLocked(name string, pick SchemaPick, kind connectKind
 			schemas, notes, serr := listSchemas(ctx, mgr, name)
 			ev.Schemas = schemas
 			ev.Notes = append(ev.Notes, notes...)
-			tctx, tcancel := context.WithTimeout(ctx, catalogTimeout)
+			tctx, tcancel := withBudget(ctx, budget)
 			ev.Catalog, ev.Schema, notes = loadTables(tctx, ctx, mgr, name, driver, schemas, serr, pick)
 			ev.Notes = append(ev.Notes, notes...)
 			tcancel()
@@ -590,10 +604,11 @@ func (w *Workspace) PickSchema(pick SchemaPick) (Start, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	w.schemaCancel, w.schemaPick = cancel, pick
 	schemas, mgr, driver := w.schemas, w.mgr, cc.Driver
+	budget := w.cfg.CatalogTimeout
 
 	job := func() Event {
 		defer cancel()
-		tctx, tcancel := context.WithTimeout(ctx, catalogTimeout)
+		tctx, tcancel := withBudget(ctx, budget)
 		cat, schema, notes := loadTables(tctx, ctx, mgr, name, driver, schemas, nil, pick)
 		tcancel()
 		w.mu.Lock()

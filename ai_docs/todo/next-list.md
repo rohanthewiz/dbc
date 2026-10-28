@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-227
+**Next ID:** N-230
 
 ## Open
 
@@ -68,6 +68,8 @@ ten session docs in `ai_docs/claude_sessions/`
   fcb76d1. What remains is to watch #1736. Once a release has the fix, bump
   yaegi, and the failing `TestYaegiStoreComputedBug` is the cue to drop the
   lint and the README paragraph. Value is now low, since it waits on upstream.
+  Updated 2026-10-27 (`/next-list`): #1736 is still open (last activity
+  2026-10-11), and dbc is still on yaegi v0.16.1.
 - **N-218** · raised `2026-1014-1945-editor-context-menu` · value low
   dbc web's editor menu (`app.js editorMenu`) has three rows the TUI's
   (`tui/menu.go openEditorMenu`) lacks: **■ Stop** (dim with nothing
@@ -86,6 +88,19 @@ ten session docs in `ai_docs/claude_sessions/`
   Format (`sqlsplit.Format`, TUI ⌥⇧F, web Shift+Alt+F) always upper-cases
   keywords. Offer keeping their case (a config key or a second menu row)
   if anyone wants lower-case SQL kept lower-case; nobody has asked yet.
+- **N-228** · raised `2026-1027-1934-live-snippets` · value low
+  Live snippets are reached by their exact name then Tab, or from Alt+S;
+  the completion popup does not list them. Offer them there (a row per
+  snippet whose name the word prefixes, marked as a snippet, picking it
+  expands as Tab does) if names turn out hard to remember. Both UIs would
+  need it: `sqlcomplete` results in the TUI, a completion item that runs
+  the expand in Monaco. Nobody has asked yet.
+- **N-229** · raised `2026-1027-1934-live-snippets` · value low
+  Snippets expand only in SQL documents: the TUI's editor, and query tabs
+  in dbc web (`editor.js updateSnipCtx` skips a fixed-language document,
+  so not script or pipeline tabs). Go snippets for script tabs would need
+  a language field on a snippet (`userdata.Snippet`), so a SQL name does
+  not fire in Go and the reverse. Nobody has asked.
 
 ## Validate
 
@@ -174,6 +189,12 @@ and `raised`.
   Updated 2026-10-10 (`/next-list`): the sidebar can now also list a
   schema's routines (`85952ae`, 2026-10-08), one more catalog read on a big
   catalog. While on ProdDr, check that a schema's Routines list loads too.
+  Updated 2026-10-27 (`/next-list`): the budget is no longer a fixed 10s.
+  Commit `5f4ad40` (2026-10-27, no session doc) made it the config's
+  `catalog_timeout`, default 1m, with "0" for no limit (Ctrl+K still
+  cancels). It bounds the table list, the routine list and the
+  definitions. On ProdDr, note whether the default 1m is enough, or what
+  value it takes.
 - **N-115** · raised `2026-1005-1450-tui-web-parity` · value low
   Drive the TUI's parity pieces by hand in real terminals (iTerm2,
   Terminal.app, Ghostty, kitty, a cats pane): whether F12 / ⇧F12 / F2 and
@@ -338,6 +359,26 @@ and `raised`.
   and once a nil-pointer panic in "tabs survive a reload"
   (`web_test.go:107`, 0.14 s in). Find the race in the test and repair it.
   Not yet checked against the commit before this session.
+  Updated `2026-1027-1934-live-snippets` (`/next-list`): one full run that
+  session (with the new "live snippets" step) passed every step, "editor
+  menu" and "tabs survive a reload" included. One clean run says little
+  about a flake that hit two times in five.
+- **N-227** · raised `2026-1027-1934-live-snippets` · value medium
+  Hand-check live snippets in a real terminal (and inside cats) and in a
+  real browser and `dbc.app`. The unit tests, the TUI pty e2e step and the
+  web e2e step "live snippets" pass. Not seen by a person:
+  - The TUI's ⌥S arriving with Option as Meta (iTerm2, Terminal.app,
+    Ghostty).
+  - The stop marks reading clearly: the current stop lit and underlined,
+    the later ones underlined, under a cats theme as well as the built-in
+    dark one.
+  - The dialog's preview and its ⇲ and ⚠ glyphs.
+  - In Safari and WKWebView: Alt+S, and the dialog's Alt+N, Alt+E and
+    Alt+D. These match on `e.code`, since a Mac's Option types a
+    character.
+  - Two dbc processes at once: a snippet saved in dbc web expanding in a
+    running TUI, which re-reads `snippets.bytdb` when its stat changes.
+  - Whether the five starters are worth keeping as they are.
 
 ## Roadmap
 

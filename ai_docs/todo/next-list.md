@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-230
+**Next ID:** N-235
 
 ## Open
 
@@ -101,6 +101,32 @@ ten session docs in `ai_docs/claude_sessions/`
   so not script or pipeline tabs). Go snippets for script tabs would need
   a language field on a snippet (`userdata.Snippet`), so a SQL name does
   not fire in Go and the reverse. Nobody has asked.
+- **N-230** · raised `2026-1028-1242-query-designer` · value low
+  The query designer is dbc web only. A TUI view would need its own way to
+  show the canvas: cards and edges in cells, or a form with a list of
+  tables and joins. The rules, SQL, story and plan painting are in the
+  pure `designer` package, so only the drawing and editing are new.
+  Nobody has asked.
+- **N-231** · raised `2026-1028-1242-query-designer` · value low
+  A design writes SQL, but SQL can't be opened as a design. Importing a
+  query (tables, FK-shaped joins, columns, simple filters, sorts, limit)
+  would let the guide and the story judge an existing query. A statement
+  the designer can't express (a CTE, a window, a subquery that isn't
+  EXISTS) would be refused with the reason. `sqlsplit`'s scanner is a
+  start; a real parse is the work. Nobody has asked.
+- **N-232** · raised `2026-1028-1242-query-designer` · value low
+  A design lives only in its tab (`tabs.design` in `web.bytdb`), so
+  closing the tab loses it. ⇪ Query keeps the SQL, but not the design.
+  Named designs that outlive a tab (a list to reopen from, or a file
+  beside saved queries) would cover it. Contingent on designs being
+  reused.
+- **N-233** · raised `2026-1028-1242-query-designer` · value low
+  The designer's contains, starts with and ends with filters write plain
+  LIKE. That is case-sensitive on Postgres, case-insensitive on SQLite for
+  ASCII only, and set by the collation on MySQL. An "ignore case" toggle
+  could write ILIKE on Postgres and `lower(col) LIKE lower(…)` elsewhere.
+  The index rule would then need to name an expression or trigram index.
+  Nobody has asked.
 
 ## Validate
 
@@ -379,6 +405,21 @@ and `raised`.
   - Two dbc processes at once: a snippet saved in dbc web expanding in a
     running TUI, which re-reads `snippets.bytdb` when its stat changes.
   - Whether the five starters are worth keeping as they are.
+- **N-234** · raised `2026-1028-1242-query-designer` · value medium
+  Hand-check the query designer by a person. Only rod-driven Chrome has run
+  it: the e2e step "query designer", and screenshots reviewed in the
+  session. Checks:
+  - Safari, Firefox and `dbc.app` (WKWebView): dragging cards and
+    columns, panning with a trackpad, and Alt+D (Option types a character
+    on a Mac).
+  - The light and dark themes.
+  - A real Postgres or MySQL database with large tables:
+    - Do the index rules (10K "big", 100K "huge") help, or are they noise?
+    - Do the plan badges and the full-scan count match EXPLAIN as run by
+      hand?
+    - Does the catalog read stay quick on a big catalog?
+  - Whether the story and the guide's wording read well to someone who
+    did not write them.
 
 ## Roadmap
 

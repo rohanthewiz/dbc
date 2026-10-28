@@ -612,6 +612,15 @@ button.primary { border-color: var(--accent); }
 .hlist li:hover { background: var(--panel2); }
 .hlist li.cur { background: var(--sel); }
 .hwhen { color: var(--muted); flex: none; }
+/* the snippets dialog (snippets.js): the history picker's list, a mark
+   column (⇲ uses the selection, ⚠ does not parse), the body of the row
+   under the cursor below it, and the edit form */
+.snlist .snmark { width: 1ch; flex: none; color: var(--accent); }
+.snlist .hconn { min-width: 12ch; }
+.snprev { max-height: 22vh; margin: 0; white-space: pre; }
+.snform { padding: 10px 12px; overflow: auto; }
+.snform .ifield > textarea.code { min-height: 14em; }
+.snerr { color: var(--err); font-size: 12px; min-height: 1.2em; }
 .hconn { color: var(--accent); flex: none; }
 .hsql { overflow: hidden; text-overflow: ellipsis; }
 

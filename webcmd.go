@@ -86,8 +86,9 @@ func webAction(ctx context.Context, cmd *cli.Command) error {
 		Secret: flagSecret,
 		Store:  store,
 		// the file setup merged: the browser's adds, edits and removals go there
-		Conns:   config.OpenSaved(config.SavedFile()),
-		History: userdata.LoadHistory(userdata.HistoryFile()),
+		Conns:    config.OpenSaved(config.SavedFile()),
+		History:  userdata.LoadHistory(userdata.HistoryFile()),
+		Snippets: userdata.OpenSnippets(userdata.SnippetsFile()),
 		// the TUI's archive, so a conversation had in either is offered in both
 		ChatsDir: userdata.ChatsDir(),
 		// the TUI's consoles: a query tab and the terminal share each

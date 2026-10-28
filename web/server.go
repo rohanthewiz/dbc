@@ -80,6 +80,10 @@ type Options struct {
 	// file, so a query run in either shows up in both. nil keeps it in
 	// memory.
 	History *userdata.History
+	// Snippets is the live snippets store — the TUI's file
+	// (userdata.SnippetsFile), so a snippet saved in either expands in
+	// both. nil keeps them in memory, seeded with the starters.
+	Snippets *userdata.Snippets
 	// Ready, when set, is called once the server is listening, with the
 	// login URL (the secret in it) — to print it and open a browser.
 	Ready func(loginURL string)
@@ -112,6 +116,7 @@ type Server struct {
 	opt   Options
 	store *Store
 	saved *config.SavedStore // connections added in the browser
+	snips *userdata.Snippets // live snippets (snippets.go)
 	auth  *auth
 	hub   *hub
 	rw    *rweb.Server
@@ -178,6 +183,9 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) (*Server, error) {
 	if opt.History == nil {
 		opt.History = userdata.LoadHistory("")
 	}
+	if opt.Snippets == nil {
+		opt.Snippets = userdata.OpenSnippets("")
+	}
 	if opt.Logf == nil {
 		opt.Logf = func(string, ...any) {}
 	}
@@ -193,7 +201,7 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) (*Server, error) {
 	}
 	mgr.SetMemoryPool(memPoolTabs)
 
-	s := &Server{cfg: cfg, mgr: mgr, opt: opt, store: opt.Store, saved: opt.Conns, auth: a,
+	s := &Server{cfg: cfg, mgr: mgr, opt: opt, store: opt.Store, saved: opt.Conns, snips: opt.Snippets, auth: a,
 		ready: make(chan struct{}, 1), ver: assetVersion()}
 	s.connCompl = workspace.NewConnCompletions(cfg, mgr)
 	s.jobs = jobs.New(cfg, mgr, jobs.Options{Sink: s.onJob, RunsDir: cfg.RunsDir, RunsKeep: cfg.RunsKeep})
@@ -295,6 +303,11 @@ func (s *Server) routes() {
 	r.Post("/api/v1/stmt", s.handleStmt)
 	r.Post("/api/v1/folds", s.handleFolds)
 	r.Post("/api/v1/format", s.handleFormat)
+	r.Get("/api/v1/snippets", s.handleSnippets)
+	r.Post("/api/v1/snippets", s.handleSnippetNew)
+	r.Put("/api/v1/snippets/:name", s.handleSnippetSave)
+	r.Delete("/api/v1/snippets/:name", s.handleSnippetDelete)
+	r.Post("/api/v1/snippets/:name/expand", s.handleSnippetExpand)
 	r.Post("/api/v1/picks", s.handlePicks)
 	r.Get("/api/v1/chats", s.handleChats)
 	r.Delete("/api/v1/chats/:id", s.handleChatDelete)

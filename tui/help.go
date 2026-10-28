@@ -48,6 +48,8 @@ var keyGroups = []keyGroup{
 		{"F2", "rename it everywhere in the statement"},
 		{"^Z · ⌥Z", "undo · redo"},
 		{"⌥⇧F", "format the selection, or the whole buffer (unwraps a query pasted from a log line, quotes and \\n escapes)"},
+		{"name Tab", "expand the snippet of that name; then Tab / ⇧Tab step through its fields, Esc ends"},
+		{"⌥S", "snippets — insert one (a $SELECTION$ snippet wraps the selection), new, edit, delete"},
 		{"⌥N · ⌥C", "new console · next console of the database"},
 		{"right-click", "run, copy, consoles (new, rename, delete), ask the assistant"},
 	}},

@@ -226,6 +226,29 @@ func TestTUI(t *testing.T) {
 		userPlugins(t, e, u)
 	})
 
+	step(t, "a snippet's name then Tab expands it; Tab steps its stops, a stop used twice mirrors; ⌥S lists them", func() {
+		// a tab of its own: an empty editor, nothing earlier steps rely on
+		u.key('t', uv.ModAlt)
+		u.waitFor("Type SQL here")
+		u.click("Type SQL here", 0)
+		// typed a key at a time: the completion popup opens on "cn", and
+		// Tab on the whole name still expands rather than picks
+		u.typeText("cnt")
+		u.key(uv.KeyTab)
+		u.waitFor("SELECT column, count(*) AS n", "FROM table", "GROUP BY column", "Tab next field")
+		// words with no completions, so no popup claims the next Tab
+		u.typeText("qq")
+		u.key(uv.KeyTab)
+		u.typeText("xy")
+		u.waitFor("SELECT xy, count(*) AS n", "FROM qq", "GROUP BY xy")
+		u.key(uv.KeyTab) // past the last stop: the session is over
+		u.key(uv.KeyTab) // and Tab is the focus key again
+		u.key('s', uv.ModAlt)
+		u.waitFor("Snippets", "wrap the selection in a CTE", "Enter insert")
+		u.key(uv.KeyEscape)
+		u.waitGone("Enter insert")
+	})
+
 	step(t, "Ctrl+Q quits", func() {
 		u.quit()
 	})

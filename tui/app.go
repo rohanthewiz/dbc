@@ -47,6 +47,11 @@ type Model struct {
 	// memory-only under Options.NoPersist.
 	saved *config.SavedStore
 
+	// snips is the live snippets store (snippets.go), shared with dbc web
+	// through its file; memory-only, seeded with the starters, under
+	// Options.NoPersist.
+	snips *userdata.Snippets
+
 	w, h int
 	lay  layout
 
@@ -267,8 +272,10 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Model {
 
 	hist := userdata.LoadHistory("")
 	m.saved = config.OpenSaved("")
+	m.snips = userdata.OpenSnippets("")
 	if !opt.NoPersist {
 		m.saved = config.OpenSaved(config.SavedFile())
+		m.snips = userdata.OpenSnippets(userdata.SnippetsFile())
 		hist = userdata.LoadHistory(userdata.HistoryFile())
 		m.chat.dir = userdata.ChatsDir()
 		m.loadPicks(userdata.PicksFile())
@@ -334,7 +341,7 @@ func (m *Model) startupLog() {
 	} else if m.cfg.Path != "" {
 		m.logf(logInfo, "loaded config from %s", m.cfg.Path)
 	}
-	m.log(logMuted, "keys: ^R run · ^⇧R/⌥R run all · ^X explain · ⌥X explain analyze · ^K stop · ⌥⇧F format · ^A assistant · ^E export · ^P history · ^O scripts · ^J pipelines & jobs · ⌥J runs · "+
+	m.log(logMuted, "keys: ^R run · ^⇧R/⌥R run all · ^X explain · ⌥X explain analyze · ^K stop · ⌥⇧F format · ⌥S snippets (name+Tab expands) · ^A assistant · ^E export · ^P history · ^O scripts · ^J pipelines & jobs · ⌥J runs · "+
 		"^Space suggest · F12/⇧F12/F2 definition/uses/rename · ⌥T/⌥W/⌥1…9 tabs · ⌥G tab groups · ⌥N/⌥C new/next console · ^T tables · ^L conns · ^B sidebar · F1 keys · x/r disconnect/refresh · a/e add/edit connection · d/s database/schema · Tab focus · y/Y/c copy · t transpose · Enter inspect · -/+ hide/show column · { } P S x result tabs · ^Q quit")
 	m.log(logMuted, "mouse: click to focus · drag to select · right-click for menus · "+
 		"drag borders to resize · hold Shift (⌥ on macOS) to select terminal text")
@@ -439,6 +446,10 @@ func (m *Model) shutdown() {
 // Update routes one message.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmd := m.route(msg)
+	// A live snippet follows the buffer whatever changed it — a key, a
+	// paste, a completion's pick, a click away (snippets.go) — so it is
+	// brought in step once here, after any message, not at each of them.
+	m.editor.snipSync()
 	// Tab groups are contiguous because the strip itself is reordered
 	// (tabgroups.go). Any message can change a tab's group — a connect
 	// landing on a grouped connection, a menu row, a close — so the pass
@@ -598,6 +609,12 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		return cmd
 	}
 
+	// a snippet's name before the caret, or a live snippet's stops, take
+	// Tab ahead of the popup and the focus cycle (snippets.go says when)
+	if cmd, used := m.snippetKey(k); used {
+		return cmd
+	}
+
 	// the completion popup sits on the editor: its keys come before the
 	// app's chords (Tab picks rather than moving focus), the rest go on
 	if m.complLive() != nil {
@@ -629,6 +646,9 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		// sends ESC F, which arrives as this same chord, so it needs no
 		// second spelling as run-all does.
 		return m.formatQuery()
+	case "alt+s":
+		m.openSnippets()
+		return nil
 	case "ctrl+k":
 		if m.focus == focusChat && m.chat.busy() {
 			m.chatStop()

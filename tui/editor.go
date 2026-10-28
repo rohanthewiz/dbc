@@ -74,6 +74,10 @@ type editor struct {
 	// since (Touched) — see Model.chatContext, which yields a script's
 	// context to the editor's statement once it has.
 	stamp editorStamp
+
+	// snip is the live snippet being filled in (snippets.go): its tab
+	// stops, drawn boxed, which Tab steps through. nil when none is.
+	snip *snipSession
 }
 
 // editorStamp is an editor's edit version and caret at one moment; the
@@ -145,6 +149,7 @@ func (e *editor) SetText(s string) {
 	e.top, e.left, e.goal = 0, 0, 0
 	e.undo, e.redo = nil, nil
 	e.version++
+	e.snip = nil // its stops were offsets into the text just replaced
 }
 
 // editorView is all SetText throws away besides the text: the caret, the
@@ -187,6 +192,7 @@ func (e *editor) Restore(v editorView, text string) {
 	e.undo, e.redo = v.undo, v.redo
 	e.lastKind = editOther // what is typed next starts its own undo step
 	e.version++
+	e.snip = nil // another buffer: the stops were offsets into this one's
 	if normalize(text, e.single) == v.text {
 		return
 	}
@@ -851,6 +857,17 @@ func (e *editor) Draw(s Surface, st styles, bg Style, curStmt [2]int, follow boo
 	for _, mk := range e.liveMarks() {
 		marks = append(marks, markPos{e.posAt(mk.from), e.posAt(mk.to), mk.def})
 	}
+	// a live snippet's stops: the one being filled is lit and underlined,
+	// the others only underlined, so the fields still to come are visible
+	// at a glance (an empty stop has no cells, and the caret shows it)
+	var stops []markPos
+	if sn := e.liveSnip(); sn != nil {
+		for i, st := range sn.stops {
+			for _, sp := range st.Spans {
+				stops = append(stops, markPos{e.posAt(sp.From), e.posAt(sp.To), i == sn.cur})
+			}
+		}
+	}
 
 	for y := 0; y < s.H(); y++ {
 		row := e.top + y
@@ -879,6 +896,14 @@ func (e *editor) Draw(s Surface, st styles, bg Style, curStmt [2]int, follow boo
 					cs = cs.WithBg(st.hover.Bg).Underline()
 					if mk.def {
 						cs = cs.Bold()
+					}
+				}
+			}
+			for _, sp := range stops {
+				if inRange(pos{row, i}, sp.a, sp.b) {
+					cs = cs.Underline()
+					if sp.def { // the current stop
+						cs = cs.WithBg(st.hover.Bg)
 					}
 				}
 			}

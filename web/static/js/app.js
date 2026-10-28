@@ -1135,6 +1135,10 @@
         onConsolesChanged(d);
       } else if (ev.type === "scripts") {
         scriptKit.onEvent(d);
+      } else if (ev.type === "snippets") {
+        // a snippet saved or deleted, in this window or another: the list
+        // the editor's Tab expands from, and an open dialog, follow it
+        dbc.snippets.onEvent(d);
       } else if (ev.type === "pipelines" || ev.type === "jobs" || ev.type.startsWith("job.")) {
         // a pipeline or job saved, renamed, trashed (any window); a run's
         // progress, lines and end (any window's runs: the canvas of the
@@ -1933,6 +1937,9 @@
       if (e.code === "KeyC") { e.preventDefault(); nextConsole(state.tab); return; }
       // the Runs view: every run of a job or a pipeline (runs.js)
       if (e.code === "KeyR") { e.preventDefault(); runsKit.open(); return; }
+      // the snippets dialog (snippets.js); Monaco binds it too, for focus
+      // in the editor
+      if (e.code === "KeyS") { e.preventDefault(); dbc.snippets.open(); return; }
       const n = /^Digit([1-9])$/.exec(e.code);
       if (n) { e.preventDefault(); pickTab(+n[1] - 1); return; }
     }
@@ -3934,6 +3941,9 @@
     const format = sel
       ? { label: "Format selection", key: "Shift+Alt+F", act: trigger("editor.action.formatSelection") }
       : { label: "Format SQL", key: "Shift+Alt+F", act: trigger("editor.action.formatDocument") };
+    // with a selection, the dialog's pick wraps it ($SELECTION$): the row
+    // says so, as the TUI's
+    const snippets = { label: sel ? "Surround with snippet…" : "Insert snippet…", key: "Alt+S", act: () => dbc.snippets.open() };
     // the language's providers answer these — registerSymbols for SQL,
     // scripts.js for Go — and Monaco says so in place when the caret is
     // on nothing they know ("No definition found"), so they are never
@@ -3990,6 +4000,7 @@
         { label: "◈ Explain analyze (runs it, timed)", key: "Ctrl+Shift+X", why: runWhy, act: () => dbc.cmd.explain(true) },
         ...edit,
         format,
+        snippets,
         { head: "" },
         { label: "History…", key: "Ctrl+P", act: history },
         // the right-click put the caret where it was clicked (editor.js
@@ -4204,6 +4215,8 @@
       ["Ctrl+Shift+X · Alt+X", "explain analyze — runs it to time each step"],
       ["Ctrl+K", "stop the run or the connect"],
       ["Shift+Alt+F", "format the selection, or the whole buffer (unwraps a query pasted from a log line: its quotes and \\n escapes)"],
+      ["name Tab", "expand the snippet of that name; then Tab / Shift+Tab step through its fields, Esc ends"],
+      ["Alt+S", "snippets — insert one (a $SELECTION$ snippet wraps the selection), new, edit, delete"],
       ["Ctrl+P", "history of the tab's database (Tab: every database) — insert a past statement"],
       ["Ctrl+E", "export the result"],
       ["Ctrl+O", "scripts, pipelines and jobs — run, edit or start one (see Script tabs, Pipeline tabs, Job tabs)"],

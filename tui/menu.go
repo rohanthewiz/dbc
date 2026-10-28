@@ -363,6 +363,9 @@ func (m *Model) openEditorMenu(x, y int) {
 		{label: "Select all", key: "⌥A", act: func(m *Model) tea.Cmd { m.editor.SelectAll(); return nil }},
 		{label: "Undo", key: "^Z", act: func(m *Model) tea.Cmd { m.editor.Undo(); return nil }},
 		{label: formatLabel(sel), key: "⌥⇧F", why: fmtWhy, act: func(m *Model) tea.Cmd { return m.formatQuery() }},
+		// with a selection the dialog's pick wraps it ($SELECTION$), so the
+		// row says what it will do
+		{label: snippetLabel(sel), key: "⌥S", act: func(m *Model) tea.Cmd { m.openSnippets(); return nil }},
 		heading(""),
 		{label: "History…", key: "^P", act: func(m *Model) tea.Cmd { m.openHistory(); return nil }},
 		// the right-click put the caret where it was clicked, so the

@@ -85,6 +85,9 @@
   const fixed = new Map();
   const readyFns = []; // ready(fn) callbacks waiting for Monaco
   let scriptCtx = null; // the dbcScript context key, once Monaco is up
+  // dbcSnippetWord: the word the caret ends names a snippet, in a SQL
+  // document, so Tab expands it (registerSnippets); once Monaco is up
+  let snipCtx = null;
   let warmed = "";   // the connection completions were last warmed for
   let lastNote = ""; // the last completion note logged, so it is logged once
   // minis: the models of the small editors mini() makes (a pipeline
@@ -248,10 +251,24 @@
       if (d.view) ed.restoreViewState(d.view);
       ta.value = ed.getValue();
       scriptCtx.set(go);
+      updateSnipCtx();
       scheduleMark();
     },
     // isScript: the document on screen is a script's (Go)
     isScript: () => fixed.get(docKey) === "go",
+    // insertSnippet is the snippets dialog's pick (snippets.js): the
+    // snippet called name in place of the selection — its $SELECTION$ —
+    // or at the caret
+    insertSnippet(name) {
+      if (!ed) {
+        expandPlain(name);
+        return;
+      }
+      expandSnippet(name, ed.getSelection(), true);
+    },
+    // snippetsChanged re-reads whether Tab would expand the word at the
+    // caret, after the list of snippets changed (snippets.js)
+    snippetsChanged: () => updateSnipCtx(),
     // setMarkers puts a check's diagnostics (script.Diag: line, col,
     // severity, msg) on key's document as Monaco markers — squiggles, the
     // hover's message, F8 to walk them. A document not open (or the plain
@@ -801,6 +818,95 @@
     }
   }
 
+  // ── live snippets ──────────────────────────────────────────────────────
+  // A snippet's name then Tab expands it, in a query tab's SQL — the TUI's
+  // rule (tui/snippets.go). The server expands it (POST …/expand, package
+  // snippet: the indentation, a multi-line selection's layout, the stops)
+  // and answers in Monaco's snippet syntax, which Monaco's own snippet
+  // controller inserts: it selects each stop's default, steps the stops on
+  // Tab / Shift+Tab, mirrors a stop used twice, and leaves on Esc. So the
+  // two UIs agree on the text, and Monaco does what Monaco already does.
+  //
+  // Tab is claimed only through the dbcSnippetWord context key, set as the
+  // caret moves: when it is false Tab is Monaco's (indent, the suggestion
+  // pick, the next stop of a snippet already in progress). When it is true
+  // it beats the suggestion widget's Tab, as in the TUI: a word that is a
+  // snippet's name is the word meant.
+  const wordCh = /[\p{L}\p{N}_]/u;
+
+  // snippetWord is the word the caret ends, when Tab could expand it: no
+  // selection, the caret at the word's end, and no "." before it (o.sel
+  // is a column, not a snippet). Its range is what the snippet replaces.
+  function snippetWord() {
+    const sel = ed.getSelection();
+    if (!sel || !sel.isEmpty()) return null;
+    const p = sel.getPosition();
+    const line = ed.getModel().getLineContent(p.lineNumber);
+    const end = p.column - 1;
+    let start = end;
+    while (start > 0 && wordCh.test(line[start - 1])) start--;
+    if (start === end || (end < line.length && wordCh.test(line[end])) || (start > 0 && line[start - 1] === ".")) return null;
+    return { word: line.slice(start, end), range: new monaco.Range(p.lineNumber, start + 1, p.lineNumber, end + 1) };
+  }
+
+  function updateSnipCtx() {
+    if (!snipCtx) return;
+    const w = !fixed.get(docKey) && dbc.snippets ? snippetWord() : null;
+    snipCtx.set(!!(w && dbc.snippets.has(w.word)));
+  }
+
+  // expandSnippet asks the server for the snippet's expansion at range and
+  // inserts it there. wrap: the range is a selection for $SELECTION$ (the
+  // dialog's pick); a typed name is replaced, never wrapped.
+  //
+  // The answer is awaited, so the buffer may have moved on meanwhile (a
+  // fast typist, a tab switch): then nothing is inserted rather than
+  // something in the wrong place, and the log says so.
+  async function expandSnippet(name, range, wrap) {
+    const model = ed.getModel();
+    const ver = model.getAlternativeVersionId();
+    const line = model.getLineContent(range.startLineNumber);
+    const req = {
+      selection: wrap ? model.getValueInRange(range) : "",
+      selPrefix: line.slice(0, range.startColumn - 1),
+      indent: /^[ \t]*/.exec(line)[0],
+    };
+    let r;
+    try {
+      r = await dbc.api("POST", "/api/v1/snippets/" + encodeURIComponent(name) + "/expand", req);
+    } catch (err) {
+      dbc.log("err", "snippet " + name + ": " + err.message);
+      return;
+    }
+    if (ed.getModel() !== model || model.getAlternativeVersionId() !== ver) {
+      dbc.log("warn", "snippet " + name + ": the text changed while it was being expanded — try again");
+      return;
+    }
+    ed.focus();
+    ed.setSelection(range);
+    // adjustWhitespace off: the server indented it already (snippet.Context)
+    ed.getContribution("snippetController2").insert(r.snippet,
+      { adjustWhitespace: false, undoStopBefore: true, undoStopAfter: true });
+    dbc.log("info", r.stops
+      ? "snippet " + name + " · Tab next field · Shift+Tab back · Esc done"
+      : "snippet " + name + " inserted · Ctrl+Z takes it back");
+  }
+
+  // expandPlain is the plain textarea's insert, before Monaco is up (or
+  // without it): the expansion's text, with no stops to step through.
+  async function expandPlain(name) {
+    const v = ta.value, a = ta.selectionStart, b = ta.selectionEnd;
+    const ls = v.lastIndexOf("\n", a - 1) + 1;
+    const line = v.slice(ls, (v.indexOf("\n", a) + 1 || v.length + 1) - 1);
+    try {
+      const r = await dbc.api("POST", "/api/v1/snippets/" + encodeURIComponent(name) + "/expand",
+        { selection: v.slice(a, b), selPrefix: v.slice(ls, a), indent: /^[ \t]*/.exec(line)[0] });
+      api.insert(r.text);
+    } catch (err) {
+      dbc.log("err", "snippet " + name + ": " + err.message);
+    }
+  }
+
   // ── loading Monaco ─────────────────────────────────────────────────────
   // The AMD build: loader.js, then vs/editor/editor.main. Its web worker is
   // a same-origin file (static/js/monaco-worker.js) that points the worker
@@ -938,6 +1044,14 @@
     ed.addCommand(K.Alt | C.KeyC, () => dbc.cmd.nextConsole());
     for (let n = 1; n <= 9; n++) ed.addCommand(K.Alt | C["Digit" + n], () => dbc.cmd.pickTab(n - 1));
     ed.addCommand(C.F1, () => dbc.cmd.help());
+    // snippets: the name before the caret then Tab (see "live snippets"),
+    // and Alt+S, the dialog — the TUI's ⌥S. Not in a snippet already being
+    // filled: there Tab is Monaco's, to the next stop.
+    ed.addCommand(C.Tab, () => {
+      const w = snippetWord();
+      if (w) expandSnippet(w.word, w.range, false);
+    }, "dbcSnippetWord && !inSnippetMode");
+    ed.addCommand(K.Alt | C.KeyS, () => dbc.snippets && dbc.snippets.open());
     // Format: Shift+Alt+F is Monaco's own key on Windows and macOS, but
     // Linux's is Ctrl+Shift+I — bound here so the key list names one key
     // everywhere, and so a selection formats just the selection, as the
@@ -1085,6 +1199,7 @@
     });
     decos = ed.createDecorationsCollection();
     scriptCtx = ed.createContextKey("dbcScript", api.isScript());
+    snipCtx = ed.createContextKey("dbcSnippetWord", false);
     if (docKey) docs.set(docKey, { model: ed.getModel(), view: null });
     // keep the caret where it was in the textarea
     const pos = ed.getModel().getPositionAt(ta.selectionStart);
@@ -1094,6 +1209,7 @@
       changed();
     });
     ed.onDidChangeCursorPosition(scheduleMark);
+    ed.onDidChangeCursorPosition(updateSnipCtx);
     bindKeys();
     bindMenu();
     const hadFocus = document.activeElement === ta;

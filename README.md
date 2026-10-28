@@ -403,6 +403,7 @@ dragging.
 | `Alt+X` / `Ctrl+Shift+X` | Explain **analyze**: run it and measure every step (a write is rolled back or not run — see below) |
 | `Ctrl+K` | Stop the running query or script, a connect still dialing — or the assistant's answer |
 | `Alt+Shift+F` | Format the selection, or the whole buffer — and unwrap a query pasted from a log line (see [Formatting a query](#formatting-a-query)) |
+| *name* `Tab` · `Alt+S` | *(editor)* Expand the snippet of that name · the snippets dialog: insert one (wrapping the selection), new, edit, delete (see [Live snippets](#live-snippets)) |
 | `Ctrl+A` | Open the assistant / move between it and the editor |
 | `Ctrl+E` | Export the result (format picker; file, or clipboard) |
 | `Ctrl+O` | The scripts browser: `Enter` runs, `e` edits in `$VISUAL`/`$EDITOR` (checked when the editor exits), `n` new from a template, `d` duplicate, `r` rename, `Del` trash, `/` filter; the built-in examples and the trash are listed too (its title names the directory) |
@@ -713,6 +714,69 @@ So a line like this formats in one step into the query above:
 ```text
 "SQL query after template replacement:\nupdate t set service_account=  (string_to_array(name ,'_'))[1];\n\nwith tmp as\n (\n  select g.*, …"
 ```
+
+### Live snippets
+
+A snippet is a saved piece of SQL with fields to fill in. Type its name
+and press `Tab` to insert it. Or press `Alt+S` (right-click → **Insert
+snippet…**) to pick one from a list, which is also where you add, edit
+and delete them. The same snippets work in the TUI and in dbc web.
+
+```text
+cnt⇥        →   SELECT column, count(*) AS n
+                FROM ▒table▒                 ← the first field, selected
+                GROUP BY column
+                ORDER BY n DESC
+```
+
+Type over the selected field, then press `Tab` for the next one
+(`Shift+Tab` goes back). A field used twice, like `column` above, is
+filled in both places as you type. `Tab` after the last field puts the
+caret at the end, and `Esc` stops early. While you are filling fields,
+the TUI underlines the fields still to come.
+
+**Writing a body.** Everything is literal SQL except these:
+
+| In the body | Means |
+|---|---|
+| `$VAR1$`, `$VAR2$`, … | A field. `Tab` visits fields by number, not by position, and a number used twice is one field that appears twice |
+| `$VAR1:id$` | A field with default text, inserted already selected: type to replace it, or `Tab` to keep it |
+| `$SELECTION$` | The text that was selected when the snippet was picked |
+| `$END$` | Where the caret goes after the last field (otherwise, the end of the snippet) |
+| `$$` | A literal `$`. Any other `$` is already literal, so `$1` parameters need no escaping, but a `$$` dollar quote must be written `$$$$` |
+
+The snippet's lines after the first take the indentation of the line it
+is inserted on.
+
+**Wrapping a selection.** Select some SQL, press `Alt+S` (the menu row
+reads **Surround with snippet…**), and pick a snippet that uses
+`$SELECTION$`; the list marks those with `⇲`. A selection of several lines
+keeps its own relative indentation under the field. Typing a name and
+pressing `Tab` never wraps anything, because typing replaces the
+selection.
+
+**Starter snippets.** A new store comes with five snippets, which you can
+edit or delete like your own. Deleted starters are not brought back.
+
+- `sel`: a `SELECT … FROM … WHERE … LIMIT`
+- `cnt`: rows per value
+- `cte`: wrap the selection in a CTE
+- `countof`: count the rows the selection returns
+- `upd`: an `UPDATE` inside `BEGIN`, ending on a reminder to `COMMIT` or `ROLLBACK`
+
+**Where they are kept.** In `~/.config/dbc/snippets.bytdb`, shared by
+every dbc on the machine, so a snippet saved in dbc web expands in the
+TUI and the other way round. A name is letters, digits and `_`, since it
+is typed as one word. A body that doesn't parse (an unclosed `$VAR1`, two
+`$END$`s) is refused when you save, with the reason.
+
+Snippets expand in the SQL editor only, not in script or pipeline tabs.
+`Tab` claims the key only when the word just before the caret (with no
+`.` in front of it) is a snippet's name. Otherwise `Tab` does what it
+always did: it moves the focus in the TUI and indents in dbc web. When
+the word is a snippet's name, expanding wins over picking a suggestion
+from the completion list. While you are filling a field, the list's
+`Tab` still picks, and the next `Tab` moves on.
 
 ### Explaining a query
 
@@ -1627,13 +1691,14 @@ file's connections are changed in the file. The TUI has the same form —
 | `Ctrl+X` (nothing selected) · `Ctrl+Shift+X` | explain · explain analyze |
 | `Ctrl+K` | stop the run (in the assistant: stop the answer) |
 | `Shift+Alt+F` | format the selection, or the whole buffer (see [Formatting a query](#formatting-a-query)) |
+| *name* `Tab` · `Alt+S` | in a query tab: expand the snippet of that name · the snippets dialog (see [Live snippets](#live-snippets)) |
 | `Ctrl+P` · `Ctrl+E` · `Ctrl+O` | history · export · scripts |
 | `Ctrl+S` | in a script tab, save the script |
 | `Ctrl+I` | the assistant, and back (`Ctrl+A` stays select-all) |
 | `Ctrl+Space` | suggestions (they also open as you type — see [Completion](#completion)) |
 | `F12` · `Shift+F12` · `F2` | on an alias, a CTE name or a column the query names: go to its declaration · list its uses · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename)) |
 | `Ctrl+Shift+[` · `Ctrl+Shift+]` | fold · unfold at the caret: each statement that spans lines folds to its first line of code (a comment above it stays, as its label), and so does each multi-line `(…)` inside it — a subquery, a CTE body opened on a later line. Also the gutter's arrows (hover the line numbers). The statements are the splitter's, so a folded statement is exactly what `Ctrl+Enter` on it runs. On a Mac `⌘⌥[` · `]` work too |
-| right-click · `Shift+F10` | the editor's menu, the TUI's: **▶ Run** (labelled with what it runs — *statement 2/4*, *selection*), **▶ Run all**, **■ Stop**, **◈ Explain** and explain analyze; cut, copy, paste, select all, undo, redo; format; history, suggest, ✦ ask; go to definition, usages, rename; fold, unfold, fold the other statements (all but the one clicked), unfold all; Monaco's command palette; the tab's consoles. A row that cannot run now is dim and says why |
+| right-click · `Shift+F10` | the editor's menu, the TUI's: **▶ Run** (labelled with what it runs — *statement 2/4*, *selection*), **▶ Run all**, **■ Stop**, **◈ Explain** and explain analyze; cut, copy, paste, select all, undo, redo; format; insert (or surround with) a snippet; history, suggest, ✦ ask; go to definition, usages, rename; fold, unfold, fold the other statements (all but the one clicked), unfold all; Monaco's command palette; the tab's consoles. A row that cannot run now is dim and says why |
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | new tab · close tab · go to tab |
 | `Alt+N` · `Alt+C` | new console · next console of the tab's database |
 | `Alt+R` | every run of a job or a pipeline, drilled into (see [Job tabs and the Runs view](#job-tabs-and-the-runs-view-in-dbc-web)) |

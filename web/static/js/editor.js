@@ -1052,6 +1052,9 @@
       if (w) expandSnippet(w.word, w.range, false);
     }, "dbcSnippetWord && !inSnippetMode");
     ed.addCommand(K.Alt | C.KeyS, () => dbc.snippets && dbc.snippets.open());
+    // a new design tab (app.js newDesign): page-wide too, bound here so a
+    // Mac's Option+D does not type "∂" into the editor first
+    ed.addCommand(K.Alt | C.KeyD, () => dbc.cmd.newDesign && dbc.cmd.newDesign());
     // Format: Shift+Alt+F is Monaco's own key on Windows and macOS, but
     // Linux's is Ctrl+Shift+I — bound here so the key list names one key
     // everywhere, and so a selection formats just the selection, as the

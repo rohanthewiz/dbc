@@ -190,6 +190,10 @@ type Workspace struct {
 	// again
 	complScoped map[string]bool
 
+	// design is the query designer's catalog cache (design.go), under
+	// its own lock
+	design designState
+
 	// the run slot — one run at a time
 	busy   bool
 	runGen int // bumped per run; a late outcome from an older run is dropped

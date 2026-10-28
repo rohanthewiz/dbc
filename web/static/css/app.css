@@ -1389,3 +1389,149 @@ body.insp-dragging { cursor: col-resize; user-select: none; }
 .rvline .t { color: var(--muted); margin-right: 8px; }
 .rvline .err { color: var(--err); }
 .jruns .rvlog { max-height: 240px; }
+
+/* ── design tabs ───────────────────────────────────────────────────────────
+   A design tab lays the query designer's canvas (#qd, designer.js) over the
+   editor, as a pipeline tab does, with the same bar | palette | canvas |
+   inspector shape (the .pipe, .pbody, .ppal, .pcanvas, .pinsp classes) and
+   the same inspector edge. Under it the editor holds the design's SQL,
+   hidden by visibility so Monaco keeps its layout and takes no keys. */
+/* a canvas wants room: at least most of the window, whatever height the
+   splitter left a query tab's editor (a drag can still make it taller) */
+.app.design-mode .editor-wrap { min-height: max(340px, 56vh); }
+.app.design-mode .editor-wrap .monaco, .app.design-mode #editor { visibility: hidden; }
+.app.design-mode #run-all { display: none; }
+
+.qdbar .qdconn { color: var(--muted); font-size: 12px; }
+.qdhealth { display: inline-flex; gap: 8px; border: 1px solid var(--line); background: var(--bg); border-radius: 10px; }
+.qdhealth .qdok { color: var(--accent); }
+.qds-error { color: var(--err); font-weight: 600; }
+.qds-warn { color: var(--warn); font-weight: 600; }
+.qds-info { color: var(--muted); }
+.qdplan { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+
+.qditem .pl { margin-left: auto; flex: none; }
+
+/* the canvas: cards, the edges under them, a label at each edge's middle */
+.qdedges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.qde { fill: none; stroke: var(--muted); stroke-width: 1.6; }
+.qde.fans { stroke: var(--warn); }
+.qde.k-exists, .qde.k-notexists { stroke-dasharray: 6 4; }
+.qde.k-summary { stroke-dasharray: 2 3; stroke-width: 2.2; }
+.qde.loop { stroke-dasharray: 3 3; opacity: .7; }
+.qde.sel, .qde.hot { stroke: var(--accent); stroke-width: 2.6; }
+.qde.live { stroke: var(--accent); stroke-dasharray: 5 4; }
+.qdjl { position: absolute; transform: translate(-50%, -50%); z-index: 2; padding: 0 6px; line-height: 18px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--panel2); color: var(--fg);
+  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; cursor: pointer; }
+.qdjl.fans { border-color: var(--warn); color: var(--warn); }
+.qdjl.sel, .qdjl.hot { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.qdhint { position: absolute; left: 50%; top: 38%; transform: translate(-50%, -50%); max-width: 460px; padding: 16px 20px;
+  border: 1px dashed var(--line); border-radius: 8px; background: color-mix(in srgb, var(--panel) 85%, transparent);
+  color: var(--muted); line-height: 1.5; pointer-events: none; }
+.qdhint > div + div { margin-top: 6px; }
+.qdhint-t { color: var(--fg); font-weight: 600; font-size: 14px; }
+
+.qdcard { position: absolute; z-index: 1; border: 1px solid var(--line); border-radius: 6px; background: var(--panel2);
+  box-shadow: 0 2px 8px color-mix(in srgb, #000 18%, transparent); font-size: 12px; }
+.qdcard.r-main { border-top: 3px solid var(--accent); }
+.qdcard.r-exists, .qdcard.r-notexists { border-style: dashed; }
+.qdcard.r-summary { border-style: dotted; border-width: 2px; }
+.qdcard.r-cross, .qdcard.missing { border-color: var(--err); }
+.qdcard.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.qdcard.hot { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 55%, transparent); }
+.qdcard.lifted { z-index: 3; opacity: .94; box-shadow: 0 8px 22px color-mix(in srgb, #000 32%, transparent); }
+.qdch { display: flex; align-items: baseline; gap: 6px; padding: 5px 6px 5px 8px; border-bottom: 1px solid var(--line);
+  cursor: grab; user-select: none; }
+.qdcard.lifted .qdch { cursor: grabbing; }
+.qdstar { color: var(--accent); }
+.qdal { font-weight: 700; }
+.qdtn { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 auto; }
+.qdrows { color: var(--muted); font-size: 11px; flex: none; }
+.qdlc { color: var(--warn); font-size: 11px; flex: none; }
+.qdmb { border: 0; background: none; padding: 0 4px; color: var(--muted); flex: none; }
+.qdmb:hover { color: var(--accent); }
+.qdrole { padding: 2px 8px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.qdrole.g { color: var(--accent); }
+.qdrole.rep { color: var(--warn); }
+.qdrole.t { font-style: italic; }
+.qdrole.bad { color: var(--err); }
+.qdpb { padding: 1px 8px; font-size: 11px; color: var(--accent); border-bottom: 1px solid var(--line); }
+.qdpb.full { color: var(--muted); }
+.qdpb.full.big { color: var(--warn); font-weight: 600; }
+/* positioned, so a row's offsetTop is within the list (designer.js anchor) */
+.qdcols { position: relative; max-height: 280px; overflow: auto; padding: 2px 0; }
+.qdc { display: grid; grid-template-columns: 16px 14px minmax(0, 1fr) auto auto; align-items: center; gap: 4px;
+  padding: 0 6px; line-height: 20px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; cursor: pointer; user-select: none; }
+.qdc:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.qdc.drop { outline: 2px solid var(--accent); outline-offset: -2px; }
+.qdc input { margin: 0; }
+.qdk { color: var(--muted); text-align: center; }
+.qdcn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qdct { color: var(--muted); font-size: 10px; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qdcm { display: flex; gap: 2px; color: var(--muted); font-size: 11px; }
+.qdcm .qdix { color: var(--accent); }
+
+/* the side: Query · Guide · Story · SQL */
+.qdside { padding-top: 0; }
+.qdtabs { position: sticky; top: 0; z-index: 1; display: flex; gap: 2px; margin: 0 -10px 6px; padding: 6px 10px 0;
+  background: var(--panel); border-bottom: 1px solid var(--line); }
+.qdtabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 3px 8px; color: var(--muted); }
+.qdtabs button.on { color: var(--fg); border-bottom-color: var(--accent); }
+.qdtabs button.warn { color: var(--warn); }
+.qdtabs button.bad { color: var(--err); }
+.qdsect { margin-bottom: 10px; }
+.qdlist { display: flex; flex-direction: column; gap: 3px; }
+.qdrow { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.qdrow.hot, .qdfil.hot { background: var(--sel); border-radius: 3px; }
+.qdrow.bad { box-shadow: inset 3px 0 0 var(--err); padding-left: 5px; }
+.qdref { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qdside select, .qdside input[type="text"] { font: inherit; font-size: 12px; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 3px; padding: 1px 4px; }
+.qdside input[type="text"]:focus, .qdside select:focus { outline: 1px solid var(--accent); }
+.qdas { width: 90px; }
+.qdval { flex: 1 1 90px; min-width: 70px; }
+.qdnum { width: 64px; }
+.qdand, .qdlab { color: var(--muted); font-size: 12px; }
+.qdsm { font-size: 11px; padding: 0 6px; line-height: 1.6; }
+.qdsm.primary { border-color: var(--accent); color: var(--accent); }
+.qdsm.on { border-color: var(--accent); }
+.qdadd { margin-top: 4px; }
+.qdfil { display: flex; flex-direction: column; gap: 3px; padding: 4px; border: 1px solid var(--line); border-radius: 4px; }
+.qdfil.bad { border-color: var(--err); }
+.qdopts { color: var(--muted); font-size: 11px; }
+.qdck { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; }
+.qdrowsb { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; font-size: 12px; }
+.qdinsp { margin: 4px 0 10px; padding: 6px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); border-radius: 5px; }
+.qdinsp > * + * { margin-top: 4px; }
+.qdinsp .qdih { text-transform: none; letter-spacing: 0; font-size: 11px; }
+.qdkinds { display: flex; flex-direction: column; gap: 3px; }
+.qdkind { display: grid; grid-template-columns: 22px 1fr; grid-template-areas: "g n" "g w"; text-align: left; padding: 3px 6px;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--bg); }
+.qdkind.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.qdkg { grid-area: g; font-size: 15px; color: var(--accent); }
+.qdkn { grid-area: n; font-weight: 600; font-size: 12px; }
+.qdkw { grid-area: w; color: var(--muted); font-size: 11px; line-height: 1.35; }
+.qdfacts { color: var(--muted); font-size: 11px; line-height: 1.4; }
+
+.qdl { margin: 6px 0; padding: 6px 8px; border-left: 3px solid var(--muted); border-radius: 4px; background: var(--panel2); cursor: pointer; }
+.qdl.sev-error { border-left-color: var(--err); }
+.qdl.sev-warn { border-left-color: var(--warn); }
+.qdlt { font-weight: 600; font-size: 12px; }
+.qdl.sev-error .qdlt { color: var(--err); }
+.qdl.sev-warn .qdlt { color: var(--warn); }
+.qdlw { margin-top: 3px; font-size: 12px; line-height: 1.45; color: var(--fg); opacity: .88; }
+.qdfix { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.qdl code, .qdstory code { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--bg); padding: 0 3px; border-radius: 3px; }
+.qdbanner { margin: 6px 0; padding: 6px 8px; border-radius: 4px; font-size: 12px; line-height: 1.45; }
+.qdbanner.good { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--fg); }
+.qdbanner.bad { background: color-mix(in srgb, var(--err) 16%, transparent); color: var(--fg); }
+.qdwarnt { color: var(--warn); font-size: 12px; }
+.qdgoodt { color: var(--accent); font-size: 12px; }
+.qdstory { margin: 4px 0; padding-left: 20px; line-height: 1.5; font-size: 12.5px; }
+.qdstory li + li { margin-top: 5px; }
+.qdsql { margin: 6px 0; padding: 8px; overflow: auto; white-space: pre; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--bg); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.qdsql .hl-k { color: var(--accent); font-weight: 700; }
+.qdsql .hl-s, .qdsql .hl-n { color: var(--warn); }
+.qdsql .hl-c { color: var(--muted); font-style: italic; }

@@ -74,6 +74,12 @@ type Tab struct {
 	// (jobs.go) on its DAG canvas, saved only when asked. "" for any other
 	// tab; never set with Script or Pipeline.
 	Job string `json:"job"`
+	// Design makes it a design tab: the query designer's design
+	// (designer.Design) as JSON, edited on a canvas over the editor. It is
+	// still a query tab — it connects, runs and explains — whose editor
+	// holds the SQL the design writes (Buffer keeps a copy). "" for any
+	// other tab.
+	Design string `json:"design"`
 }
 
 // SavedConn is a row of the conns table, where dbc web kept connections
@@ -130,6 +136,8 @@ var storeSchema = []string{
 	`ALTER TABLE tabs ADD COLUMN IF NOT EXISTS pipeline TEXT NOT NULL DEFAULT ''`,
 	// a job tab's job name (Tab.Job), likewise
 	`ALTER TABLE tabs ADD COLUMN IF NOT EXISTS job TEXT NOT NULL DEFAULT ''`,
+	// a design tab's design (Tab.Design), likewise
+	`ALTER TABLE tabs ADD COLUMN IF NOT EXISTS design TEXT NOT NULL DEFAULT ''`,
 	`CREATE TABLE IF NOT EXISTS conns (
 		name    TEXT PRIMARY KEY,
 		driver  TEXT NOT NULL,
@@ -281,7 +289,7 @@ func (s *Store) Tabs() ([]Tab, error) {
 	ctx, cancel := opCtx()
 	defer cancel()
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, title, conn, buffer, updated, console, script, pipeline, job FROM tabs ORDER BY id`)
+		`SELECT id, title, conn, buffer, updated, console, script, pipeline, job, design FROM tabs ORDER BY id`)
 	if err != nil {
 		return nil, serr.Wrap(err, "op", "list tabs")
 	}
@@ -289,7 +297,7 @@ func (s *Store) Tabs() ([]Tab, error) {
 	var out []Tab
 	for rows.Next() {
 		var t Tab
-		if err = rows.Scan(&t.ID, &t.Title, &t.Conn, &t.Buffer, &t.Updated, &t.Console, &t.Script, &t.Pipeline, &t.Job); err != nil {
+		if err = rows.Scan(&t.ID, &t.Title, &t.Conn, &t.Buffer, &t.Updated, &t.Console, &t.Script, &t.Pipeline, &t.Job, &t.Design); err != nil {
 			return nil, serr.Wrap(err, "op", "scan tab")
 		}
 		out = append(out, t)
@@ -313,12 +321,13 @@ func (s *Store) SaveTab(t Tab) error {
 	// one row now (see storeSchema), so one statement: the transaction the
 	// two-table write needed is gone with tab_consoles
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO tabs (id, title, conn, buffer, updated, console, script, pipeline, job) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO tabs (id, title, conn, buffer, updated, console, script, pipeline, job, design) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (id) DO UPDATE SET
 			title = EXCLUDED.title, conn = EXCLUDED.conn,
 			buffer = EXCLUDED.buffer, updated = EXCLUDED.updated,
-			console = EXCLUDED.console, script = EXCLUDED.script, pipeline = EXCLUDED.pipeline, job = EXCLUDED.job`,
-		t.ID, t.Title, t.Conn, t.Buffer, t.Updated, t.Console, t.Script, t.Pipeline, t.Job)
+			console = EXCLUDED.console, script = EXCLUDED.script, pipeline = EXCLUDED.pipeline, job = EXCLUDED.job,
+			design = EXCLUDED.design`,
+		t.ID, t.Title, t.Conn, t.Buffer, t.Updated, t.Console, t.Script, t.Pipeline, t.Job, t.Design)
 	return wrap(err, "op", "save tab", "tab", t.ID)
 }
 

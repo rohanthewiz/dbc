@@ -1527,7 +1527,9 @@ data rules behave the same in both. Beside query tabs it has
 [pipeline tabs](#pipeline-tabs-in-dbc-web), which draw pipelines on a
 canvas and preview and run them, and
 [job tabs](#job-tabs-and-the-runs-view-in-dbc-web), which draw jobs — DAGs
-of pipelines — beside the **Runs** view (`Alt+R`), every run drilled into.
+of pipelines — beside the **Runs** view (`Alt+R`), every run drilled into,
+and [design tabs](#the-query-designer), where a query is built on a canvas
+and checked for correctness and speed as it grows.
 
 **Layout.** A draggable bar separates every pair of neighbouring sections:
 the sidebar and the work column, Connections and Tables, the editor and the
@@ -1702,6 +1704,7 @@ file's connections are changed in the file. The TUI has the same form —
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | new tab · close tab · go to tab |
 | `Alt+N` · `Alt+C` | new console · next console of the tab's database |
 | `Alt+R` | every run of a job or a pipeline, drilled into (see [Job tabs and the Runs view](#job-tabs-and-the-runs-view-in-dbc-web)) |
+| `Alt+D` | a new design tab: [the query designer](#the-query-designer) |
 | `{` · `}` · `P` · `r` · `S` · `x` | in the results: previous · next result tab · pin · rerun its query into it · share with the assistant · close |
 | `F2` · double-click a result tab | rename it (↻ keeps the name, another query run into the tab clears it; an empty name gives back its query's) |
 | `F1` or `?` | every key |
@@ -1735,6 +1738,109 @@ log and `s.Show` results the grid as they happen. See
 
 `Ctrl+C` in the terminal stops the server; every tab's run is stopped and
 its session released — anything left open is rolled back.
+
+### The query designer
+
+**◇ Design** (`Alt+D`), or a table's right-click **Design a query from
+it**, opens a design tab: a query built on a canvas rather than typed.
+Tables come from the list on its left, with the tables one foreign key
+from the design listed first. A click adds one, and a drag places it.
+A table added is **joined by its foreign key** to what is already there,
+and the edge says what the join does to the rows: `⋈ 1:N` is one customer
+to many orders. A join can also be drawn by hand, by dragging a column
+onto another table's column. Tick columns to show them. Click a column
+for its menu: aggregates, *filter on it*, *sort by it*.
+
+It is still a query tab. The SQL the design writes is the tab's editor
+text, so `Ctrl+Enter` runs it into the grid, `Ctrl+X` explains it, and the
+assistant and the history see it. **⇪ Query** opens it in a query tab, to
+edit by hand. The design is saved with the tab.
+
+**What it gets right by construction.** The SQL is regenerated from the
+design on every edit and is never edited directly, so the design rules out
+the usual hand-written slips:
+
+- GROUP BY is exactly the plain columns whenever something is aggregated.
+- A filter on an aggregate goes to HAVING.
+- "Any of" filter groups are parenthesized.
+- A value is checked against its column's type.
+- A LIKE value's own `%` and `_` are escaped.
+- Date filters are written as ranges an index can serve
+  (`d >= '2024-01-01' AND d < '2025-01-01'`, never `EXTRACT(year …)`).
+- "Count of orders" means the right thing through the joins:
+  `count(DISTINCT o.id)` where a join repeats orders, and `count(o.id)`
+  after a left join, where `count(*)` would count a missing order as one.
+
+**Join kinds beyond SQL's four.** A join's label opens its inspector:
+
+| kind | written as | for |
+|---|---|---|
+| ⋈ inner · ⟕ left · ⟗ full | `JOIN` · `LEFT JOIN` · `FULL JOIN` | the usual |
+| ∃ has any | `WHERE EXISTS (…)` | "customers who ordered" — each customer once, however many orders; the table's filters go inside |
+| ∄ has none | `WHERE NOT EXISTS (…)` | "customers who never ordered" — and unlike `NOT IN`, a NULL cannot empty it |
+| Σ summarize | `LEFT JOIN (SELECT key, sum(…) … GROUP BY key)` | a child's totals beside its parent without repeating the parent's rows; a count with no children is 0 |
+
+**The guide** checks the design as it changes, and every finding says
+what the database will do and why that matters. Many findings come with a
+fix you can apply (`Ctrl+Z` on the canvas takes it back) or a `CREATE INDEX`
+to copy; dbc never runs one for you.
+
+- *Is it right?*
+  - **Fan-out**: `sum(o.total)` after joining payments adds each order's
+    total once per payment. The fix summarizes payments, or tests for them
+    instead of joining.
+  - **Two one-to-many branches** that multiply each other (the chasm trap).
+  - **A one-to-many join used only to filter**, which repeats rows. The
+    fix is *has any*.
+  - **A WHERE filter that silently turns a left join into an inner one.**
+    The fix makes it inner, or moves the filter into the join.
+  - **The hand-written anti-join**, `LEFT JOIN … IS NULL`. The fix is
+    *has none*.
+  - **Tables nothing joins**: every row pairs with every row. The fix finds
+    the shortest path of foreign keys between them, bridge tables included.
+  - **A limit without a sort**, or a sort that leaves ties for the limit to
+    cut through. The fix adds the key as a tie-breaker.
+  - **`<>` dropping NULLs**, **`BETWEEN` a day on a timestamp** missing
+    most of the last day, **joined columns of different types**, and
+    **joins on no key**.
+- *Is it fast?*
+  - **A big table read whole to filter it**, with the index to make.
+    Equality columns go first, then the range.
+  - **A join to a big table with no index on its columns.** Postgres never
+    indexes a foreign key's columns by itself.
+  - **A leading-wildcard LIKE.** On Postgres the fix is a trigram index.
+  - **A top-N with no index in that order.**
+  - **A deep OFFSET**, where keyset paging is the alternative.
+  - **"Any of" across columns**, and **a result that is a whole big
+    table**.
+
+These rules speak only on evidence. Index rules need the engine's index
+list, which bytdb lacks. Size rules need its row estimates, which SQLite and
+bytdb lack. On such engines those rules stay quiet rather than guess.
+
+**The engine's own view.** When the design is valid, dbc asks the engine to
+plan it. This is EXPLAIN without ANALYZE, so the statement is planned and
+never run. Each card shows how the plan reads that table (*full scan
+~1.2M* or *index orders_pkey*), the bar shows the estimated rows and
+cost, and the explain package's findings join the guide. The plan is
+written from the design, never taken from the request, so the route cannot
+be used to EXPLAIN ANALYZE, that is to run, anything else.
+
+**The story** (its own tab) tells the query back in plain words, from the
+same plan the SQL is written from:
+
+> Start from `customers` (`c`). Join each `c` row to its `orders` (`o`) —
+> possibly many each, so from here on there is a row per `o`; `c` rows with
+> none are left out. Summarize `payments` (`p`) per `o` first — the total of
+> `p.amount` — and attach it as one row per `o`, so nothing is repeated.
+
+The cards say the same at a glance: ★ is the table the query starts from,
+◆ is "each result row is one of these", × is "its rows repeat", and ⚡
+marks a column an index starts with.
+
+The rules, the SQL and the story live in the `designer` package (pure Go,
+tested without a database). The page only draws and edits; it decides
+nothing about the query.
 
 ### As a macOS app
 

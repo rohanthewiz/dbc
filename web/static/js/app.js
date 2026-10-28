@@ -59,6 +59,10 @@
   // connects, and its runs are the server's engine's (see "pipeline tabs").
   // job: set, it is a JOB TAB — a DAG of pipelines (jobs.js) on the same
   // kind of canvas, with its runs a face of the tab (see "job tabs").
+  // design: set, it is a DESIGN TAB — a query tab whose editor is the
+  // query designer's canvas (designer.js); the editor document holds the
+  // SQL the design writes, so it runs and explains as any query tab
+  // (see "design tabs").
   let tabs = [];
   const tabOf = (ws) => tabs.find((t) => t.ws && t.ws === ws);
 
@@ -1101,6 +1105,7 @@
       { label: "Preview rows", key: "Enter", act: () => preview(name) },
       { label: "Show columns", key: "c", act: () => columns(name) },
       { label: "Diagram around it (ERD)", key: "e", act: () => dbc.erd.open(name) },
+      { label: "Design a query from it", key: "Alt+D", act: () => newDesign(name) },
       { label: "Insert the name at the caret", act: () => dbc.editor.insert(name) },
       { label: "Copy name", act: () => dbc.clip.copyText(name, "the table name") },
       ...(side.hasRoutines ? [{ label: "Show routines", act: () => setRoutines(true) }] : []),
@@ -1237,6 +1242,9 @@
         }
         showLogOf(t);
         followConsole(t, d.console);
+        // a design reads its connection's catalog: on a switch, and again
+        // after a run's DDL (a relist), which may have made an index
+        if (t.design) designKit.connChanged(t, !!(d.changed || d.relisted));
         dbc.chat.refresh(); // another catalog: other tables' schema
         break;
       case "counts":
@@ -1426,6 +1434,7 @@
       if (prev.script) scriptKit.flush(); // its draft, now rather than in 400 ms
       if (prev.pipeline) pipeKit.hide();
       if (prev.job) jobKit.hide();
+      if (prev.design) designKit.hide();
       const pc = cons.get(docOf(prev));
       if (pc) pc.text = prev.buffer; // what a textarea editor reopens it with
       prev.grid = dbc.grid.snapshot();
@@ -1464,6 +1473,10 @@
       // the job's canvas, the same way
       try { await jobKit.show(t.job); } catch (err) { log("err", "could not read " + t.job + ": " + err.message); }
       if (state.tab !== t) return;
+    } else if (t.design) {
+      // the designer's canvas over the editor, which holds the design's SQL
+      dbc.editor.useDoc(docOf(t), t.buffer || "");
+      designKit.show(t);
     } else {
       const c = cons.get(docOf(t));
       dbc.editor.useDoc(docOf(t), c ? c.text : t.buffer || "");
@@ -1571,6 +1584,7 @@
     drawSets(st.sets);
     if (dbc.cmd.onState) dbc.cmd.onState(Object.assign({}, st, { openPlan: fresh && t.planOpen }));
     dbc.chat.onState(st);
+    if (t.design && st.connected) designKit.connChanged(t, false);
     renderTabs();
   }
 
@@ -1686,6 +1700,10 @@
     if (state.tab && state.tab.script) { runScriptTab(state.tab); return; }
     if (state.tab && state.tab.pipeline) { pipeKit.run(state.tab.pipeline, ""); return; }
     if (state.tab && state.tab.job) { jobKit.run(state.tab.job); return; }
+    if (state.tab && state.tab.design && !designKit.valid(state.tab)) {
+      setStatus("the design has errors to fix first — see its Guide", "warn");
+      return;
+    }
     try {
       await api("POST", dbc.wsPath("/run"), Object.assign(editorState(), { all }));
     } catch (e) {
@@ -1940,6 +1958,8 @@
       // the snippets dialog (snippets.js); Monaco binds it too, for focus
       // in the editor
       if (e.code === "KeyS") { e.preventDefault(); dbc.snippets.open(); return; }
+      // a new design tab: the query designer (designer.js)
+      if (e.code === "KeyD") { e.preventDefault(); newDesign(""); return; }
       const n = /^Digit([1-9])$/.exec(e.code);
       if (n) { e.preventDefault(); pickTab(+n[1] - 1); return; }
     }
@@ -1981,7 +2001,9 @@
     } else if (k === "x" && (e.shiftKey || !dbc.editor.selection())) {
       // explain; with a selection and no Shift it is cut, as ever (the
       // plain editor's path — Monaco binds these itself, see editor.js)
-      if (!dbc.editor.hasFocus() || (state.tab && (state.tab.script || state.tab.pipeline || state.tab.job))) return;
+      const design = state.tab && state.tab.design;
+      if ((!dbc.editor.hasFocus() && !design) || (state.tab && (state.tab.script || state.tab.pipeline || state.tab.job))) return;
+      if (design && typing(e.target)) return; // a field of the designer's: its own cut
       e.preventDefault();
       dbc.cmd.explain(e.shiftKey);
     }
@@ -2313,7 +2335,7 @@
   // docOf is the editor document a tab shows: its script's, its console's,
   // else its own
   const docOf = (t) => (t.script ? "s:" + t.script : t.pipeline ? "p:" + t.pipeline : t.job ? "j:" + t.job :
-    t.console && t.cdb ? ckey(t.cdb, t.console) : t.key);
+    t.design ? "d:" + t.key : t.console && t.cdb ? ckey(t.cdb, t.console) : t.key);
 
   // textOf is a tab's text: its document's, wherever that is
   function textOf(t) {
@@ -2413,7 +2435,7 @@
   // the console it has). Chained per tab, so two connects in a row swap in
   // order.
   function followConsole(t, ref) {
-    if (!ref || t.script || t.pipeline || t.job) return; // a script, pipeline or job tab shows its file, never a console
+    if (!ref || t.script || t.pipeline || t.job || t.design) return; // a script, pipeline, job or design tab shows its own text, never a console
     if (t.console && sameDB(t.cdb, ref)) {
       t.cdb.names = ref.names; // the freshest list
       return;
@@ -2747,6 +2769,73 @@
     renderTabs();
   }
 
+  // ── design tabs ────────────────────────────────────────────────────────
+  // A design tab is a query tab whose editor is the query designer's
+  // canvas (designer.js; the rules, the SQL and the story are package
+  // designer's, served by web/design.go). It connects, runs and explains
+  // as any query tab: its editor document ("d:<key>") holds the SQL the
+  // design writes, kept there on every analysis — so ▶ Run, ◈ Explain,
+  // the history and the assistant need nothing of their own here.
+  //
+  //   topbar   ◇ Design (Alt+D) opens one; a table's right-click
+  //            "Design a query from it" opens one on that table
+  //   editor   the canvas (.design-mode hides the editor under it)
+  //   results  the grid and the plan, as for a query tab
+  //   saved    t.design (JSON) with the tab, the SQL as its buffer
+  //
+  // Run is refused while the design has errors: its SQL is not the
+  // query the user is building until they are fixed.
+  const designKit = dbc.designer.create({
+    // the design (or its SQL) changed: the editor's document follows, and
+    // the tab is saved
+    changed: (t, sql) => {
+      t.buffer = sql;
+      if (t === state.tab) {
+        if (dbc.editor.text() !== sql) dbc.editor.setText(sql);
+      } else dbc.editor.replaceDoc(docOf(t), sql);
+      scheduleDesignSave(t);
+    },
+    saved: (t) => scheduleDesignSave(t),
+    status: (text, level) => setStatus(text, level),
+    openQuery: (sql) => newTab(null, { buffer: sql }),
+    run: () => run(false),
+    explain: () => dbc.cmd.explain(false),
+  });
+
+  // a design's saves are debounced on their own timer: a card dragged
+  // across the canvas is one save, not one per pixel
+  let designSaveTimer = 0;
+  function scheduleDesignSave(t) {
+    clearTimeout(designSaveTimer);
+    designSaveTimer = setTimeout(() => { if (tabs.includes(t)) saveTab(t); }, 500);
+  }
+
+  // parseDesign reads a saved tab's design; one that does not parse (the
+  // server refuses those, but a store is a file) opens as a plain query
+  // tab on its SQL rather than not at all
+  function parseDesign(text) {
+    if (!text) return null;
+    try { return JSON.parse(text); } catch (_) { return null; }
+  }
+
+  // newDesign opens a design tab beside the tab on screen, on its
+  // connection; label, when given, is a sidebar table to start from (added
+  // once the tab's catalog has been read)
+  function newDesign(label) {
+    const used = new Set(tabs.map((t) => t.title));
+    let n = 1;
+    while (used.has("Design " + n)) n++;
+    const t = { key: newKey(), title: "Design " + n, conn: newTabConn(), buffer: "", ws: "", design: designKit.emptyDesign(),
+      pendingAdd: label || "" };
+    tabs.splice(tabs.indexOf(state.tab) + 1, 0, t);
+    if (groups.joinNew(state.tab, t)) saveGroups();
+    saveOrder();
+    saveTab(t);
+    activate(t);
+  }
+  dbc.cmd.newDesign = () => newDesign("");
+  $("design-btn").addEventListener("click", () => newDesign(""));
+
   // ── the Runs view ──────────────────────────────────────────────────────
   // Every run of a job or a pipeline, and a run page drilling into one
   // (runs.js): Alt+R and ◷ Runs open it as a dialog; a job tab shows it as
@@ -2830,6 +2919,7 @@
   // pipeline or job tab's canvas — whose hidden editor must not take keys
   // meant for the canvas (it holds the file's JSON) — or a job tab's runs.
   function focusWork(t) {
+    if (t && t.design) { designKit.focus(); return; }
     if (t && t.pipeline && !pipeKit.json(t.pipeline)) {
       const c = document.querySelector("#pipe .pcanvas");
       if (c) c.focus({ preventScroll: true });
@@ -2857,6 +2947,7 @@
     els.app.classList.toggle("job-mode", job);
     if (!job) els.app.classList.remove("job-runs"); // the job kit sets it while its run page is up
     els.app.classList.toggle("pipe-json", pipe && (job ? jobKit.json(t.job) : pipeKit.json(t.pipeline)));
+    els.app.classList.toggle("design-mode", !!(t && t.design));
     els.run.title = pipe ? "Save the " + what + ", then run it (Ctrl+Enter)" :
       on ? "Save the script, then run it (Ctrl+Enter)" : "Run the statement under the caret (Ctrl+Enter)";
     els.check.title = pipe ? "Check the " + what + " without running it, and list what is wrong (marked on the canvas as you edit)" :
@@ -3574,6 +3665,9 @@
     if (t.script) return { title: t.title, conn: "", buffer: "", console: "", script: t.script };
     if (t.pipeline) return { title: t.title, conn: "", buffer: "", console: "", pipeline: t.pipeline };
     if (t.job) return { title: t.title, conn: "", buffer: "", console: "", job: t.job };
+    // a design tab: its design, and its SQL as the buffer (what a dbc
+    // without the designer would open the tab on)
+    if (t.design) return { title: t.title, conn: t.conn || "", buffer: t.buffer || "", console: "", design: JSON.stringify(t.design) };
     const active = t === state.tab;
     return { title: t.title, conn: t.conn || "",
       buffer: active ? dbc.editor.text() : textOf(t), console: t.console || "" };
@@ -3783,13 +3877,14 @@
       if (t.stateful) marks.append(el("span", { class: "qstate", title: "its session may hold a transaction, SET values or temp tables" }, "◆"));
       if (t.lost) marks.append(el("span", { class: "qlost", title: "open in another browser tab of dbc web — not saved here" }, "⊘"));
       const b = el("div", { class: "qtab" + (t === state.tab ? " on" : "") + (t.lost ? " lost" : "") +
-          (t.script ? " script" : "") + (t.pipeline ? " pipeline" : "") + (t.job ? " job" : "") + (g ? " grp g" + groups.color(g) : ""), role: "tab", tabindex: "-1",
+          (t.script ? " script" : "") + (t.pipeline ? " pipeline" : "") + (t.job ? " job" : "") + (t.design ? " design" : "") + (g ? " grp g" + groups.color(g) : ""), role: "tab", tabindex: "-1",
         "aria-selected": t === state.tab ? "true" : "false", "data-key": t.key,
-        title: (t.script ? (scriptKit.isPlugin(t.script) ? "plugin file " : "script ") : t.pipeline ? "pipeline " : t.job ? "job " : "") + t.title + (i < 9 ? " (Alt+" + (i + 1) + ")" : "") +
+        title: (t.script ? (scriptKit.isPlugin(t.script) ? "plugin file " : "script ") : t.pipeline ? "pipeline " : t.job ? "job " : t.design ? "query design " : "") + t.title + (i < 9 ? " (Alt+" + (i + 1) + ")" : "") +
           (t.console ? " — console " + t.cdb.label + " · " + t.console : "") + (g ? " — group " + g.name : "") +
           (t.script ? " — double-click renames the script" : t.pipeline ? " — double-click renames the pipeline" :
             t.job ? " — double-click renames the job" : " — double-click renames") },
-      t.script ? el("span", "qgo", scriptKit.isPlugin(t.script) ? "◈" : "▷") : t.pipeline ? el("span", "qgo", "⛓") : t.job ? el("span", "qgo", "⧉") : null,
+      t.script ? el("span", "qgo", scriptKit.isPlugin(t.script) ? "◈" : "▷") : t.pipeline ? el("span", "qgo", "⛓") : t.job ? el("span", "qgo", "⧉") :
+        t.design ? el("span", "qgo", "◇") : null,
       // the console's name stays off the tab — it crowds the strip and
       // reads as noise beside the title; the tooltip above still names it,
       // and Alt+C's menu lists a database's consoles by name
@@ -3872,7 +3967,8 @@
         act: () => closeTab(t) },
       { head: "" },
       { label: "New query tab", key: "Alt+T", act: newTab },
-    ].concat(groups.tabItems(t, x, y), consoleItems(t));
+      { label: "New design tab", key: "Alt+D", act: () => newDesign("") },
+    ].concat(groups.tabItems(t, x, y), t.design ? [] : consoleItems(t));
     // the database's consoles as they are now — another window or the
     // TUI may have added one — but the menu does not wait long for them
     if (!t.cdb) { dbc.menu.open(x, y, items()); return; }
@@ -4070,6 +4166,8 @@
   //   fresh  its console is a NEW one of that database, not the first one
   //          no tab here shows (followConsole) — asked for by name, "new"
   //          should mean an empty editor, not yesterday's leftover console
+  //   buffer its text (a design's ⇪ Query: the SQL, to edit by hand). Its
+  //          console then starts from it: see followConsole
   function newTab(g, opts) {
     opts = opts || {};
     // a connection group outlives its connection being removed; a tab
@@ -4084,7 +4182,7 @@
     let n = 1;
     while (used.has("Query " + n)) n++;
     const here = newTabConn();
-    const t = { key: newKey(), title: "Query " + n, conn: opts.conn || (g ? groups.connFor(g, here) : here), buffer: "", ws: "" };
+    const t = { key: newKey(), title: "Query " + n, conn: opts.conn || (g ? groups.connFor(g, here) : here), buffer: opts.buffer || "", ws: "" };
     // not saved with the tab (tabBody): it only steers the first console
     // pick, which happens once the connect below lands
     if (opts.fresh) t.fresh = true;
@@ -4143,6 +4241,7 @@
     if (t.script) scriptKit.forget(t.script, t.discard);
     if (t.pipeline) pipeKit.forget(t.pipeline, t.discard);
     if (t.job) jobKit.forget(t.job, t.discard);
+    if (t.design) designKit.forget(t);
     if (t.ws) api("DELETE", "/api/v1/ws/" + t.ws).catch(() => { /* already gone */ });
     // a lost tab's saved copy is the other window's: closing it here
     // leaves that alone
@@ -4249,6 +4348,16 @@
       ["Ctrl+Space · s. · sdb.", "the sdb API: methods, fields and their docs; connection names inside a connection argument"],
       ["click a connection", "put its name in at the caret"],
       ["Result 1 · 2 · 3", "on the results bar: each result the script showed"],
+    ]],
+    ["Design tabs (Alt+D · ◇ Design)", [
+      ["click · drag a table", "from the list on the left: onto the canvas, joined by its foreign keys (related tables are listed first)"],
+      ["tick a column · click a column", "show it in the result · its menu: aggregates, filter on it, sort by it"],
+      ["drag a column onto another table's", "join on those columns; click the join's label to change its kind — inner, left, full, has any, has none, summarize"],
+      ["Guide", "what is wrong or slow, why, and fixes to apply (Ctrl+Z takes one back) — and the engine's own plan"],
+      ["Story · SQL", "the query in plain words · the statement it writes"],
+      ["Ctrl+Enter · Ctrl+X", "run it into the grid · explain it"],
+      ["drag the background · wheel · Ctrl+wheel · f", "pan · pan · zoom · fit"],
+      ["Delete · Ctrl+Z · Ctrl+Shift+Z", "remove the selected table or join · undo · redo"],
     ]],
     ["Pipeline tabs", [
       ["Ctrl+O → Pipelines", "open one, copy an example, or start a new one (the browser's + New)"],
@@ -4407,7 +4516,7 @@
         const t = byKey.get(k);
         return { key: t.id, title: (t.script && plugTitle(t.script)) || t.pipeline || t.job || t.title || "Query", conn: t.conn, buffer: t.buffer, ws: "", planOpen: plans.has(t.id),
           cdb: t.console && t.consoleDb ? t.consoleDb : null, console: t.console && t.consoleDb ? t.console : "",
-          script: t.script || "", pipeline: t.pipeline || "", job: t.job || "" };
+          script: t.script || "", pipeline: t.pipeline || "", job: t.job || "", design: parseDesign(t.design) };
       });
       // each tab's console, read before any is shown; one that cannot be
       // read leaves its tab on the buffer saved with it, and the tab's

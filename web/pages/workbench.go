@@ -34,7 +34,8 @@ type Workbench struct {
 //	┌ topbar: dbc · connection · [session state] · ▶ Run ▶▶ Run all ◈ Explain ■ Stop ⟲ History ▷ Scripts ◷ Runs ✦ ◐ ┐
 //	  (a script tab: dbc · ▷ name.go ● · ▶ Run ✓ Check ⤓ Save ■ Stop ⟲ History ▷ Scripts ✦ ◐)
 //	  (a pipeline tab: the same with ⛓ name.json ●, and its canvas in the editor's place;
-//	   a job tab: ⧉ name.json ●, its DAG canvas — or its runs — in the editor's place)
+//	   a job tab: ⧉ name.json ●, its DAG canvas — or its runs — in the editor's place;
+//	   a design tab ◇: a query tab with the query designer's canvas in the editor's place)
 //	├ sidebar ──────┬ [Query 1][Query 2 ●][+]   query tabs ────────────────┬┬ assistant (Ctrl+I) ──────┤
 //	│               ├ editor (textarea, upgraded to Monaco) ────────────────┤│                          │
 //	│ Connections   ├ ═ splitter (drag; the height is saved) ═══════════════┤│ ✦ Copilot · model ▾  ⟲ ✕ │
@@ -97,6 +98,8 @@ func (p Workbench) Render() string {
 						// a job tab's canvas (jobs.js) — the same kind of box,
 						// with its runs as a second face
 						b.DivClass("pipe", "id", "jobp", "hidden", "hidden").R(),
+						// a design tab's canvas (designer.js), the same way
+						b.DivClass("pipe qd", "id", "qd", "hidden", "hidden").R(),
 					),
 					b.DivClass("splitter", "id", "splitter", "role", "separator",
 						"aria-orientation", "horizontal", "title", "Drag to resize the editor (double-click to reset)").R(),
@@ -212,6 +215,9 @@ func (p Workbench) topbar(b *element.Builder) any {
 			b.Button("id", "save-btn", "type", "button", "title", "Save the script (Ctrl+S) — Run saves first too").T("⤓ Save"),
 			b.Button("id", "explain-btn", "type", "button",
 				"title", "Explain the statement under the caret (Ctrl+X with nothing selected; Ctrl+Shift+X analyzes)").T("◈ Explain"),
+			// a new design tab: the query designer (designer.js, web/design.go)
+			b.Button("id", "design-btn", "type", "button",
+				"title", "Design a query on a canvas — checked for correctness and speed as you build it (Alt+D)").T("◇ Design"),
 			b.Button("id", "stop", "type", "button", "disabled", "disabled", "title", "Stop the run or connect (Ctrl+K)").T("■ Stop"),
 			b.Button("id", "history-btn", "type", "button", "title", "Past statements, here and in the TUI (Ctrl+P)").T("⟲ History"),
 			b.Button("id", "scripts-btn", "type", "button", "title", "Go scripts, pipelines and jobs: run, edit, start one (Ctrl+O)").T("▷ Scripts"),
@@ -419,7 +425,7 @@ func (p Workbench) chat(b *element.Builder) any {
 
 // scripts are the workbench's modules, in load order: core first (the
 // shared API, log and state), app last (boot, which uses all the others).
-var scripts = []string{"core.js", "ui.js", "editor.js", "grid.js", "plan.js", "planview.js", "erdview.js", "hl.js", "chat.js", "conns.js", "tabgroups.js", "drafts.js", "snippets.js", "scripts.js", "stage.js", "pipelines.js", "runs.js", "jobs.js", "app.js"}
+var scripts = []string{"core.js", "ui.js", "editor.js", "grid.js", "plan.js", "planview.js", "erdview.js", "hl.js", "chat.js", "conns.js", "tabgroups.js", "drafts.js", "snippets.js", "scripts.js", "stage.js", "pipelines.js", "runs.js", "jobs.js", "designer.js", "app.js"}
 
 // head is the <head> every page shares: the theme as CSS variables, the
 // stylesheet, and the script (deferred, so it runs once the DOM is parsed).

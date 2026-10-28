@@ -1,12 +1,14 @@
 package web
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/rohanthewiz/rweb"
 
 	"github.com/rohanthewiz/dbc/config"
+	"github.com/rohanthewiz/dbc/designer"
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/userdata"
 	"github.com/rohanthewiz/dbc/workspace"
@@ -89,6 +91,10 @@ type savedTab struct {
 // on every keystroke pause.
 const maxBuffer = 4 << 20
 
+// maxDesign bounds a design tab's design. A design is a few dozen tables at
+// the most, a few KB; a megabyte is a design gone wrong, not a big one.
+const maxDesign = 1 << 20
+
 // handleSaveTab is PUT /api/v1/tabs/:id?win=<window>. The window is the
 // claim check (claims.go): a tab another live window holds is refused with
 // a 409, so two browser tabs cannot overwrite each other's text.
@@ -136,6 +142,21 @@ func (s *Server) saveTab(winID string, t Tab) error {
 	}
 	if files > 1 {
 		return badRequest("a tab edits one file: a script, a pipeline or a job")
+	}
+	// a design tab's design is checked to be one: the page parses it at
+	// boot, and a design that does not parse would come back as an empty
+	// canvas — the user's work gone without a word
+	if t.Design != "" {
+		if files > 0 {
+			return badRequest("a design tab edits no file")
+		}
+		if len(t.Design) > maxDesign {
+			return badRequest("the design is %d KB; designs save up to %d KB", len(t.Design)>>10, maxDesign>>10)
+		}
+		var d designer.Design
+		if err := json.Unmarshal([]byte(t.Design), &d); err != nil {
+			return badRequest("not a design: %v", err)
+		}
 	}
 	if err := s.hub.claimOne(winID, t.ID); err != nil {
 		return err

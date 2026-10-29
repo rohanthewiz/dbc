@@ -180,6 +180,16 @@ func TestLiveDesigner(t *testing.T) {
 		k.Filters = []designer.Filter{{Ref: ref(o, "ref", ""), Op: designer.OpContains, Values: []string{"50%_"}}}
 		check("escaped LIKE", k, "10")
 
+		// ignoring case: ILIKE on Postgres, lower() LIKE lower() on MySQL —
+		// the same rows on both, where a plain LIKE's case rule differs
+		// (case-sensitive on Postgres, the column's _ci collation on MySQL)
+		k.Sorts = []designer.Sort{{Ref: ref(o, "id", "")}}
+		k.Filters = []designer.Filter{{Ref: ref(o, "ref", ""), Op: designer.OpEnds, Values: []string{"OFF"}, IgnoreCase: true}}
+		check("ends with, ignoring case", k, "10 11")
+		k.Filters[0] = designer.Filter{Ref: ref(o, "ref", ""), Op: designer.OpContains, Values: []string{"50%_OFF"}, IgnoreCase: true}
+		check("escaped, ignoring case", k, "10")
+		k.Sorts = nil
+
 		// customers per country, counted once each through their orders
 		g := k
 		g.Columns = []designer.Output{{Ref: ref(c, "country", "")}, {Ref: ref(c, "", designer.AggCount)}}
@@ -195,6 +205,34 @@ func TestLiveDesigner(t *testing.T) {
 		k.Sorts = []designer.Sort{{Ref: ref(o, "id", "")}}
 		k.Offset = 1
 		check("offset and last days", k, "")
+
+		// a query written by hand, opened as a design: the design's own
+		// statement returns the rows the hand-written one does
+		for _, q := range []string{
+			`SELECT c.name, sum(o.total) AS spent FROM qd_customers c JOIN qd_orders o ON o.customer_id = c.id
+			  WHERE o.ref LIKE '%off' GROUP BY c.name ORDER BY c.name`,
+			`SELECT c.name FROM qd_customers c WHERE c.id IN (SELECT customer_id FROM qd_orders WHERE total > 60)`,
+			`SELECT c.name, o.id FROM qd_orders o RIGHT JOIN qd_customers c ON c.id = o.customer_id ORDER BY c.name, o.id`,
+			`SELECT c.name FROM qd_customers c LEFT JOIN qd_orders o ON o.customer_id = c.id
+			  AND o.created_at >= '2024-01-01' AND o.created_at < '2025-01-01' WHERE o.id IS NULL ORDER BY 1`,
+			`SELECT country, count(*) FROM qd_customers c, qd_orders o WHERE o.customer_id = c.id
+			  AND (o.total BETWEEN 10 AND 30 OR o.ref IS NULL) GROUP BY country HAVING count(*) >= 1 ORDER BY 2 DESC, 1`,
+			`SELECT o.id FROM qd_orders o WHERE NOT EXISTS (SELECT 1 FROM qd_payments p WHERE p.order_id = o.id) ORDER BY o.id`,
+		} {
+			cat, err := w.DesignCatalog(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d, _, err := designer.Import(q, cat)
+			if err != nil {
+				t.Errorf("%s: import refused: %v\n%s", e.driver, err, q)
+				continue
+			}
+			a := analyze(d)
+			if want, got := rows(q), rows(a.SQL); got != want {
+				t.Errorf("%s: imported, it returns %q, the query %q\n%s\n→\n%s", e.driver, got, want, q, a.SQL)
+			}
+		}
 
 		// the plan, painted on the tables
 		a = analyze(s)

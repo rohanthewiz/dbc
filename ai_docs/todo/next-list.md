@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-235
+**Next ID:** N-238
 
 ## Open
 
@@ -107,26 +107,37 @@ ten session docs in `ai_docs/claude_sessions/`
   tables and joins. The rules, SQL, story and plan painting are in the
   pure `designer` package, so only the drawing and editing are new.
   Nobody has asked.
-- **N-231** · raised `2026-1028-1242-query-designer` · value low
-  A design writes SQL, but SQL can't be opened as a design. Importing a
-  query (tables, FK-shaped joins, columns, simple filters, sorts, limit)
-  would let the guide and the story judge an existing query. A statement
-  the designer can't express (a CTE, a window, a subquery that isn't
-  EXISTS) would be refused with the reason. `sqlsplit`'s scanner is a
-  start; a real parse is the work. Nobody has asked.
-- **N-232** · raised `2026-1028-1242-query-designer` · value low
-  A design lives only in its tab (`tabs.design` in `web.bytdb`), so
-  closing the tab loses it. ⇪ Query keeps the SQL, but not the design.
-  Named designs that outlive a tab (a list to reopen from, or a file
-  beside saved queries) would cover it. Contingent on designs being
-  reused.
-- **N-233** · raised `2026-1028-1242-query-designer` · value low
-  The designer's contains, starts with and ends with filters write plain
-  LIKE. That is case-sensitive on Postgres, case-insensitive on SQLite for
-  ASCII only, and set by the collation on MySQL. An "ignore case" toggle
-  could write ILIKE on Postgres and `lower(col) LIKE lower(…)` elsewhere.
-  The index rule would then need to name an expression or trigram index.
-  Nobody has asked.
+- **N-235** · raised `2026-1029-1718-n231-n232-n233-designer-import-saved-icase` · value medium
+  sqlsplit's scanner honors a backslash before a quote in every dialect
+  (`skipQuoted`, MySQL's rule), so a Postgres string ending in a backslash
+  runs on past its quote — and the designer writes exactly one, `ESCAPE
+  '\'`, for any LIKE whose value holds `%`, `_` or `\`. With that SQL in a
+  query tab (⇪ Query, or typed) beside another statement, Split sees one
+  statement where there are two (checked: `… ESCAPE '\'\n AND x = 'a';
+  SELECT 2` splits as one), so Ctrl+Enter runs both, and the editor colors
+  what follows as a string. The cheap fix is in the generator: on Postgres
+  and SQLite write `ESCAPE '!'` (escaping `!` itself), which no scanner
+  misreads; bytdb accepts only `\` and MySQL's `'\\'` scans correctly, so
+  both keep theirs. The import already reads any one-character ESCAPE. A
+  dialect-aware split is the deeper fix, but the editor has no dialect.
+- **N-236** · raised `2026-1029-1718-n231-n232-n233-designer-import-saved-icase` · value medium
+  The designer treats *starts with* as served by a b-tree index on the
+  column (`lint.go sargable`) and its fix is a plain `CREATE INDEX … (col)`.
+  On Postgres that index serves `LIKE 'abc%'` only under the C collation;
+  in any other (the usual `en_US.UTF-8`) it needs `text_pattern_ops` (or
+  `COLLATE "C"`), so the advice is wrong and the ⚡ mark over-promises. The
+  fix: on Postgres, count a b-tree for a prefix only when its operator
+  class is a pattern one (the index listing would need `indclass`), and
+  suggest `CREATE INDEX … (col text_pattern_ops)` for a starts-with.
+  Nobody has bumped into it yet.
+- **N-237** · raised `2026-1029-1718-n231-n232-n233-designer-import-saved-icase` · value low
+  Opening SQL as a design refuses a derived table, so the designer's own
+  *summarize* join (`LEFT JOIN (SELECT key, sum(…) … GROUP BY key) s ON …`)
+  cannot be read back: ⇪ Query, then ◇ Open as a design, round-trips every
+  other shape (`TestImportRoundTrip`) but not that one. Reading it means
+  matching the derived table's select list to aggregates of one table and
+  mapping `s.sum_x`, `COALESCE(s.count, 0)` and the re-aggregated forms
+  back to refs. Contingent on summarized designs being edited by hand.
 
 ## Validate
 
@@ -641,6 +652,30 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-233** · raised `2026-1028-1242-query-designer` · value low
+  The designer's contains, starts with and ends with filters write plain
+  LIKE. That is case-sensitive on Postgres, case-insensitive on SQLite for
+  ASCII only, and set by the collation on MySQL. An "ignore case" toggle
+  could write ILIKE on Postgres and `lower(col) LIKE lower(…)` elsewhere.
+  The index rule would then need to name an expression or trigram index.
+  Nobody has asked.
+
+  closed 2026-10-29, `2026-1029-1718-n231-n232-n233-designer-import-saved-icase`: a filter's **ignore case** (`Filter.IgnoreCase`, the filter row's checkbox on contains, starts with and ends with) writes `ILIKE` on Postgres and bytdb and `lower(x) LIKE lower(v)` on MySQL and SQLite, with the escape kept (`sql.go like`); the story says "ignoring case", and on SQLite "the case of A–Z". The index rules follow (`lint.go ruleContains`): a folded starts-with no longer counts as served by a b-tree (`filterCols`), and a new rule, `ignore-case-like`, says so on a big table. On Postgres its fix is a trigram index; on MySQL it is an index on `lower(x)` or, for a `_ci` column, matching case ("Match case instead" is offered everywhere). A listed GIN or GiST index on the column is taken for a trigram one, which now quiets `leading-wildcard` too (`Catalog.trigram`); on MySQL an expression index the listing cannot name keeps the rule quiet (`Catalog.exprIndex`). Tests: `TestIgnoreCase`; `TestLiveDesigner` runs ends-with and escaped contains ignoring case on Postgres 17 and MySQL 8.4 to the same rows.
+- **N-232** · raised `2026-1028-1242-query-designer` · value low
+  A design lives only in its tab (`tabs.design` in `web.bytdb`), so
+  closing the tab loses it. ⇪ Query keeps the SQL, but not the design.
+  Named designs that outlive a tab (a list to reopen from, or a file
+  beside saved queries) would cover it. Contingent on designs being
+  reused.
+  closed 2026-10-29, `2026-1029-1718-n231-n232-n233-designer-import-saved-icase`: **saved designs**, a `designs` table in `web.bytdb` (`Store.SaveDesign`, `Designs`, `DeleteDesign`; routes in `web/designs.go`, the name in the body since rweb hands path params over undecoded). **⤓ Save as…** in the designer's bar (and the tab menu) names a design; the tab takes the name as its title and keeps it (`Tab.DesignName`, `DesignRev`), and every save of the tab writes the named design too, as a console's text is written. Each save names the revision it was read as, so a save over a design another window changed or deleted is refused (409/404) and the tab lets go of the name, keeping its copy (`app.js designNameLost`). **⤒ Open…** / `Alt+Shift+D` lists them (filter, SQL preview, Enter opens on the design's connection, `Alt+D` deletes); renaming the tab renames the design. Closing a design kept only in its tab now asks (Save as… and close · Close without saving · Keep it open). A design's save timer is now per tab. Tests: `TestSaveDesignStore` (file and memory stores), `TestDesignsAPI`, and e2e step "query designer" part 6 (ask on close, save as, close silently, Alt+Shift+D reopens).
+- **N-231** · raised `2026-1028-1242-query-designer` · value low
+  A design writes SQL, but SQL can't be opened as a design. Importing a
+  query (tables, FK-shaped joins, columns, simple filters, sorts, limit)
+  would let the guide and the story judge an existing query. A statement
+  the designer can't express (a CTE, a window, a subquery that isn't
+  EXISTS) would be refused with the reason. `sqlsplit`'s scanner is a
+  start; a real parse is the work. Nobody has asked.
+  closed 2026-10-29, `2026-1029-1718-n231-n232-n233-designer-import-saved-icase`: **◇ Open as a design** (a query tab's editor menu) opens the statement Run would pick as a design (`designer.Import`, `POST …/design/import`). A dialect-aware lexer and a small recursive-descent parser (`designer/importparse.go`) feed a binder (`designer/import.go`) that maps one SELECT onto a design against the catalog: tables (case-folded, default schema first), JOIN/LEFT/RIGHT/FULL/CROSS/comma with ON pairs or USING, ON filters kept in the join, columns, `*`, aggregates, DISTINCT, filters of a column against values (incl. OR groups, BETWEEN, IN, IS NULL, LIKE/ILIKE/`lower()` shapes), HAVING, ORDER BY (ordinals and output names), LIMIT/OFFSET/FETCH and MySQL's `LIMIT m, n`. It reads some spellings in the designer's terms, each with a note: EXISTS/NOT EXISTS → has any/has none, `x IN (SELECT …)` → has any, `a.x = b.y` in WHERE → an inner join, adjacent `>= a AND < b` on dates → range/year/day, the engines' "last N days" → in the last N days, `(x op v OR x IS NULL)` → or empty, GROUP BY without an aggregate → DISTINCT. Anything else is refused with the reason and its line: CTEs, set operations, windows, derived tables, CASE, functions of a column, column-vs-column comparisons, `NOT IN (SELECT …)`, parameters, and a RIGHT/FULL JOIN the breadth-first FROM would reorder (checked against `plan`). Joins get their foreign key's name; tables are laid out by depth and the view fits on first show. It does not use sqlsplit's scanner, which honors `\'` in every dialect and misread the generator's own Postgres `ESCAPE '\'` (raised as N-235). Tests: `TestImportRoundTrip` (every design shape the generator writes, read back to the same SQL on all four dialects), `TestImportHandWritten`, `TestImportRefuses` (22 refusals and the line), `TestDesignImportRoute` (SQLite, the imported SQL run to the hand-written rows), `TestLiveDesigner` (six hand-written queries and their imported designs return the same rows on Postgres 17 and MySQL 8.4), e2e step part 7.
 - **N-216** · raised `2026-1014-1603-encrypt-saved-passwords` · value low
   Only `connections.toml` encrypts its DSNs (`config/secret.go`). A
   `config.toml` or `dbc.toml` DSN with an inline password stays plain:

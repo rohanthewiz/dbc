@@ -20,6 +20,11 @@ import (
 //  4. A column dragged onto another card's joins them by hand; the join's
 //     label opens its inspector, a kind changes the SQL, Ctrl+Z undoes it.
 //  5. The story tells the query; a reload brings the design back.
+//  6. Closing a design kept only in its tab asks; ⤓ Save as… names it, a
+//     named one closes without asking, and Alt+Shift+D reopens it.
+//  7. A query tab's statement opens as a design (the editor menu's
+//     "◇ Open as a design"), its LIKE told to ignore case; a CTE is
+//     refused in the status bar.
 func queryDesigner(t *testing.T, e *env, p *rod.Page) {
 	e.dbc(t, "lite", `DROP TABLE IF EXISTS qd_notes; DROP TABLE IF EXISTS payments; DROP TABLE IF EXISTS orders; DROP TABLE IF EXISTS customers;
 CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL, country TEXT);
@@ -127,20 +132,96 @@ INSERT INTO payments VALUES (100, 10, 20), (101, 10, 30), (102, 11, 70)`)
 	waitFor(t, p, "the design back", `() => !!dbc.state.tab.design && document.querySelectorAll("#qd .qdcard").length === 4 &&
 	  dbc.editor.text().includes("JOIN qd_notes qn")`)
 
-	// leave the window as the next steps expect it: the design tab, and
-	// the query tab opened for it, closed. The strip redraws once the
-	// neighbour that comes on screen has loaded, so it is waited for.
-	chord(t, p, modAlt, "w", "KeyW", 87)
 	gone := func(what, key string) {
 		t.Helper()
 		waitFor(t, p, what+" off the strip", `(k) => !document.querySelector('#qtabs .qtab[data-key="' + k + '"]')`, key)
 	}
-	gone("the design tab", design)
+	// button clicks the button labelled label by script, looked up at the
+	// moment of the click: the designer's bar is redrawn on every
+	// analysis, and rod's MustClick on a handle it detached waits forever
+	button := func(sel, label string) {
+		t.Helper()
+		waitFor(t, p, "the button "+label, `(sel, label) => { const b = [...document.querySelectorAll(sel)].find((x) => x.textContent === label);
+		  if (!b) return false; b.click(); return true; }`, sel, label)
+	}
+
+	// 6. kept only in its tab, closing it asks first; saved under a name
+	// (⤓ Save as…) the tab takes the name, the design is listed, and the
+	// tab closes without a word — then Alt+Shift+D brings it back
+	chord(t, p, modAlt, "w", "KeyW", 87)
+	waitFor(t, p, "the close question", `() => /kept only in this tab/.test(document.querySelector(".modal")?.textContent || "")`)
+	button(".modal button", "Keep it open")
+	waitFor(t, p, "the question gone, the tab kept", `(k) => !document.querySelector(".modal") && dbc.state.tab.key === k`, design)
+	button("#qd .qdbar button", "⤓ Save as…")
+	waitFor(t, p, "the name prompt", `() => document.querySelector(".modal input.gname")?.value === "Design 1"`)
+	eval(t, p, `() => { const i = document.querySelector(".modal input.gname"); i.value = "Totals by customer"; i.dispatchEvent(new Event("input")); }`)
+	button(".modal button", "Save")
+	waitFor(t, p, "the tab named", `() => document.querySelector("#qtabs .qtab.on .qt").textContent === "Totals by customer" &&
+	  !!document.querySelector("#qd .qdbar .qdsaved")`)
+	waitFor(t, p, "the design listed", `async () => {
+	  const r = await (await fetch("/api/v1/designs")).json();
+	  return (r.data.designs || []).some((d) => d.name === "Totals by customer" && d.tables.includes("qd_notes"));
+	}`)
+	shot(t, p, "designer-5-saved")
+	chord(t, p, modAlt, "w", "KeyW", 87)
+	gone("the named design tab", design)
+	if eval(t, p, `() => dbc.modal.isOpen()`).(bool) {
+		t.Fatal("closing a saved design asked a question")
+	}
+	chord(t, p, modAlt|modShift, "D", "KeyD", 68)
+	waitFor(t, p, "the saved designs", `() => [...document.querySelectorAll(".modal .hlist li .hconn")].some((x) => x.textContent === "Totals by customer")`)
+	shot(t, p, "designer-6-open")
+	chord(t, p, 0, "Enter", "Enter", 13)
+	waitFor(t, p, "the design reopened", `() => !!dbc.state.tab.design && dbc.state.tab.designName === "Totals by customer" &&
+	  document.querySelectorAll("#qd .qdcard").length === 4 && dbc.editor.text().includes("JOIN qd_notes qn")`)
+	chord(t, p, modAlt, "w", "KeyW", 87)
+	waitFor(t, p, "the reopened tab closed", `() => !dbc.state.tab.design && !dbc.modal.isOpen()`)
+
+	// 7. a hand-written query opened as a design: the statement under the
+	// caret, on the canvas, judged; "ignore case" on its LIKE; a statement
+	// the designer cannot say is refused in words
+	clickAt(t, p, `#qtabs .qtab[data-key="`+mine+`"]`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "our query tab on screen", `(k) => dbc.state.tab.key === k && !!dbc.state.ws`, mine)
+	openAsDesign := func(sql string) {
+		t.Helper()
+		eval(t, p, `(sql) => { dbc.editor.setText(sql); const ed = monaco.editor.getEditors()[0];
+		  ed.setPosition({ lineNumber: 1, column: 1 }); ed.focus(); }`, sql)
+		pt, _ := eval(t, p, `() => { const ed = monaco.editor.getEditors()[0];
+		  const v = ed.getScrolledVisiblePosition({ lineNumber: 1, column: 3 });
+		  const r = ed.getDomNode().getBoundingClientRect();
+		  return [r.left + v.left + 2, r.top + v.top + v.height / 2]; }`).([]any)
+		p.Mouse.MustMoveTo(pt[0].(float64), pt[1].(float64))
+		if err := p.Mouse.Click(proto.InputMouseButtonRight, 1); err != nil {
+			t.Fatalf("right-click: %v", err)
+		}
+		waitFor(t, p, "the editor menu", `() => !!document.querySelector(".menu")`)
+		menuPick(t, p, "◇ Open as a design")
+	}
+	openAsDesign("SELECT c.name, sum(o.total) AS spent\nFROM customers c JOIN orders o ON o.customer_id = c.id\n" +
+		"JOIN payments p ON p.order_id = o.id\nWHERE c.name LIKE '%n%'\nGROUP BY c.name")
+	waitFor(t, p, "the query on the canvas", `() => !!dbc.state.tab.design && document.querySelectorAll("#qd .qdcard").length === 3 &&
+	  !!document.querySelector("#qd .qdhealth .qds-warn")`)
+	imported := evalStr(t, p, `() => dbc.state.tab.key`)
+	clickAt(t, p, "#qd .qdtabs button", proto.InputMouseButtonLeft) // Query
+	clickAt(t, p, `#qd .qdfil input[data-k="f0icase"]`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "ignoring case", `() => dbc.editor.text().includes("lower(c.name) LIKE lower('%n%')")`)
+	shot(t, p, "designer-7-imported")
+	chord(t, p, modAlt, "w", "KeyW", 87)
+	waitFor(t, p, "the close question", `() => /kept only in this tab/.test(document.querySelector(".modal")?.textContent || "")`)
+	button(".modal button", "Close without saving")
+	gone("the imported design tab", imported)
 	clickAt(t, p, `#qtabs .qtab[data-key="`+mine+`"]`, proto.InputMouseButtonLeft)
 	waitFor(t, p, "our query tab on screen", `(k) => dbc.state.tab.key === k`, mine)
+	openAsDesign("WITH x AS (SELECT 1 AS n) SELECT n FROM x")
+	waitFor(t, p, "the refusal", `() => /not opened as a design — a WITH clause/.test(document.getElementById("status").textContent) &&
+	  !dbc.state.tab.design`)
+
+	// leave the window as the next steps expect it: the query tab opened
+	// for this step, closed. The strip redraws once the neighbour that
+	// comes on screen has loaded, so it is waited for.
 	chord(t, p, modAlt, "w", "KeyW", 87)
 	gone("our query tab", mine)
-	if strip := evalStr(t, p, `() => [...document.querySelectorAll("#qtabs .qtab .qt")].map((x) => x.textContent).join(",")`); strings.Contains(strip, "Design 1") {
-		t.Fatalf("the design tab is still on the strip: %s", strip)
+	if strip := evalStr(t, p, `() => [...document.querySelectorAll("#qtabs .qtab .qt")].map((x) => x.textContent).join(",")`); strings.Contains(strip, "Design 1") || strings.Contains(strip, "Totals by customer") {
+		t.Fatalf("a design tab is still on the strip: %s", strip)
 	}
 }

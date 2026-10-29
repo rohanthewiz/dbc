@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strconv"
 
 	"github.com/rohanthewiz/rweb"
 
 	"github.com/rohanthewiz/dbc/designer"
+	"github.com/rohanthewiz/dbc/workspace"
 )
 
 // The query designer in the browser: a design tab (designer.js) edits a
@@ -24,6 +26,11 @@ import (
 //	POST …/design/plan {design}       ─► designer.PlanView: the engine's
 //	                                     EXPLAIN (estimates only), painted
 //	                                     onto the tables
+//	POST …/design/import {buffer, caret, selection}
+//	                                  ─► {analysis, notes}: the statement
+//	                                     a run would pick, read as a design
+//	                                     (designer.Import) — or a 400 with
+//	                                     why the designer cannot express it
 //
 // Every call reads the tab's ACTIVE connection's catalog (cached in the
 // workspace, workspace/design.go), on the pool and outside the run slot:
@@ -142,6 +149,57 @@ func (s *Server) handleDesignPlan(ctx rweb.Context) error {
 		return fail(ctx, err)
 	}
 	return ok(ctx, designer.PaintPlan(p, a.Design))
+}
+
+// handleDesignImport opens a query tab's statement as a design. The
+// statement is the one Ctrl+Enter would run (workspace.Pick: the
+// selection, else the statement under the caret), so "open as a design"
+// and "run" never disagree about which query is meant. It is read against
+// the catalog's tables, then analyzed with the indexes of the tables it
+// named — two catalog reads, both cached.
+func (s *Server) handleDesignImport(ctx rweb.Context) error {
+	t, err := s.hub.get(ctx.Request().PathParam("id"))
+	if err != nil {
+		return fail(ctx, err)
+	}
+	var req runReq
+	if err = decode(ctx, &req); err != nil {
+		return fail(ctx, err)
+	}
+	if len(req.Buffer) > maxBuffer {
+		return fail(ctx, badRequest("the editor holds %d MB; a design is opened from up to %d MB", len(req.Buffer)>>20, maxBuffer>>20))
+	}
+	stmts, _ := workspace.Pick(workspace.Editor{Text: req.Buffer, Caret: byteOffset(req.Buffer, req.Caret), Selection: req.Selection})
+	switch len(stmts) {
+	case 0:
+		return fail(ctx, badRequest("nothing to open — type a query first"))
+	case 1:
+	default:
+		return fail(ctx, badRequest("the selection holds %d statements: select one to open as a design", len(stmts)))
+	}
+	cat, err := t.ws.DesignCatalog(context.Background(), nil)
+	if err != nil {
+		return fail(ctx, err)
+	}
+	d, notes, err := designer.Import(stmts[0], cat)
+	var ie *designer.ImportError
+	if errors.As(err, &ie) {
+		where := ""
+		if ie.Line > 1 {
+			where = "line " + strconv.Itoa(ie.Line) + " of the statement: "
+		}
+		return fail(ctx, badRequest("%s%s", where, ie.Reason))
+	}
+	if err != nil {
+		return fail(ctx, err)
+	}
+	if cat, err = t.ws.DesignCatalog(context.Background(), designKeys(d)); err != nil {
+		return fail(ctx, err)
+	}
+	if notes == nil {
+		notes = []string{}
+	}
+	return ok(ctx, map[string]any{"analysis": designer.Analyze(d, cat), "catalog": facts(cat), "notes": notes})
 }
 
 // paletteTable is one table of the palette.

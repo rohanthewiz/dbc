@@ -372,7 +372,7 @@ func (g *gen) cond(f *Filter, i int, x string) string {
 	case OpNotNull:
 		c = x + " IS NOT NULL"
 	case OpContains, OpStarts, OpEnds:
-		c = g.like(x, f.Op, vals[0])
+		c = g.like(x, f.Op, vals[0], f.IgnoreCase)
 	case OpYear:
 		y, err := strconv.Atoi(strings.TrimSpace(vals[0]))
 		if err != nil || y < 1 || y > 9998 {
@@ -419,7 +419,23 @@ func arityWords(n int) string {
 // are escaped (and the escape character itself), with ESCAPE '\' written
 // out: SQLite has no default escape, and spelling it makes the statement
 // mean the same on every engine.
-func (g *gen) like(x, op, v string) string {
+//
+// icase asks for letters to match whatever their case:
+//
+//	postgres, bytdb   x ILIKE 'pat'                 the engine's own operator,
+//	                                                which a trigram index serves
+//	mysql, sqlite     lower(x) LIKE lower('pat')    both sides folded by the
+//	                                                engine, so its lower() and
+//	                                                its LIKE agree on what a
+//	                                                letter is
+//
+// The pattern is lowered by the engine rather than here: Go's ToLower
+// folds all of Unicode, SQLite's lower() only A–Z, and a pattern folded
+// further than the column could never match it. On MySQL lower() is
+// redundant for a column whose collation already ignores case (the
+// default …_ci), but it is right for a _bin or _cs one, which the
+// designer cannot tell apart; ruleContains points the trade-off out.
+func (g *gen) like(x, op, v string, icase bool) string {
 	esc := strings.ContainsAny(v, `%_\`)
 	if esc {
 		v = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(v)
@@ -432,7 +448,15 @@ func (g *gen) like(x, op, v string) string {
 	case OpEnds:
 		v = "%" + v
 	}
-	c := x + " LIKE " + g.dia.lit(v)
+	var c string
+	switch {
+	case !icase:
+		c = x + " LIKE " + g.dia.lit(v)
+	case g.dia.ilike:
+		c = x + " ILIKE " + g.dia.lit(v)
+	default:
+		c = "lower(" + x + ") LIKE lower(" + g.dia.lit(v) + ")"
+	}
 	if esc {
 		c += " ESCAPE " + g.dia.lit(`\`)
 	}

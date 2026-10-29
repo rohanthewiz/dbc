@@ -109,6 +109,14 @@ func (t *teller) filterWords(f *Filter) string {
 	default:
 		w += " " + v(0)
 	}
+	if f.folds() {
+		// SQLite's LIKE and lower() both know only A–Z: é and É stay apart
+		if t.g.dia.name == "sqlite" {
+			w += ", ignoring the case of A–Z (SQLite folds no other letters)"
+		} else {
+			w += ", ignoring case"
+		}
+	}
 	if f.OrNull {
 		w += ", or is empty"
 	}

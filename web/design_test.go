@@ -172,3 +172,48 @@ func TestDesignRoutes(t *testing.T) {
 		t.Fatalf("saved design = %q", saved)
 	}
 }
+
+// TestDesignImportRoute: a query tab's statement under the caret opened as
+// a design, on SQLite — the one Run would pick, its notes, its analysis
+// with the inflated sum seen, and the designed statement running to the
+// rows the hand-written one gives; then a refusal in words.
+func TestDesignImportRoute(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	e.api("POST", "/api/v1/ws/"+id+"/run", runBody(shopDDL, 0, true), 200)
+	s.await(t, "run")
+	path := "/api/v1/ws/" + id + "/design/import"
+	// two statements; the caret (0) is in the first
+	buf := "SELECT c.name, sum(o.total) total\nFROM customers c, orders o\nWHERE o.customer_id = c.id\nGROUP BY c.name ORDER BY 1;\nSELECT 1;"
+	type imported struct {
+		Analysis designer.Analysis
+		Notes    []string
+	}
+	got := decodeData[imported](t, e.api("POST", path, runBody(buf, 0, false), 200))
+	a := got.Analysis
+	if !a.Valid || len(a.Design.Joins) != 1 || a.Design.Joins[0].FK == "" || len(got.Notes) == 0 {
+		t.Fatalf("analysis = %+v\nnotes %q", a, got.Notes)
+	}
+	e.api("POST", "/api/v1/ws/"+id+"/run", runBody(a.SQL, 0, false), 200)
+	ev, logs := s.await(t, "run")
+	if r := decodeData[runEvent](t, testEnvelope{Data: ev.Data}); !r.OK || !r.HasResult {
+		t.Fatalf("the imported statement failed: %+v\n%s\nlogs %q", r, a.SQL, logs)
+	}
+	res := decodeData[resultPage](t, e.api("GET", "/api/v1/ws/"+id+"/result?from=0&count=10", "", 200))
+	var rows []string
+	for _, r := range res.Cells {
+		rows = append(rows, *r[0]+"|"+*r[1])
+	}
+	if strings.Join(rows, " ") != "Ana|120 Bo|20" {
+		t.Fatalf("rows = %q\n%s", rows, a.SQL)
+	}
+
+	// refusals: what a design cannot say, and why, with its line
+	env := e.api("POST", path, runBody("SELECT id\nFROM orders\nWHERE total > (SELECT avg(total) FROM orders)", 0, false), 400)
+	if !strings.Contains(env.Error, "line 3 of the statement") || !strings.Contains(env.Error, "not with an expression") {
+		t.Fatalf("refusal = %q", env.Error)
+	}
+	if env = e.api("POST", path, runBody("  ", 0, false), 400); !strings.Contains(env.Error, "nothing to open") {
+		t.Fatalf("empty = %q", env.Error)
+	}
+}

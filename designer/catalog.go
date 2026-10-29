@@ -121,6 +121,35 @@ func (c *Catalog) leads(et *erd.Table, cols ...string) (Index, bool) {
 	return Index{}, false
 }
 
+// trigram reports whether a listed GIN or GiST index of the table has col
+// among its key columns, taken for a pg_trgm one: those serve LIKE and
+// ILIKE with any wildcard. The listing carries no operator class, so this
+// is a guess — but one the rules lean on only to stay QUIET, never to claim
+// a speed-up, and a GIN index on a text column is a trigram one far more
+// often than not. Any column of a multi-column GIN index can be searched on
+// its own, so the position does not matter.
+func (c *Catalog) trigram(et *erd.Table, col string) bool {
+	if c == nil || !c.IndexesKnown {
+		return false
+	}
+	return slices.ContainsFunc(c.indexes(et), func(x Index) bool {
+		return !x.Partial && (x.Method == "gin" || x.Method == "gist") && slices.Contains(x.Cols, col)
+	})
+}
+
+// exprIndex reports whether some listed index of the table starts with an
+// expression ("" in the listing, which does not say which). Such an index
+// may be the lower(x) a rule would suggest, so the rule says nothing rather
+// than suggest a second one. Unknown indexes count as one: the same silence.
+func (c *Catalog) exprIndex(et *erd.Table) bool {
+	if c == nil || !c.IndexesKnown {
+		return true
+	}
+	return slices.ContainsFunc(c.indexes(et), func(x Index) bool {
+		return !x.Partial && len(x.Cols) > 0 && x.Cols[0] == ""
+	})
+}
+
 // unique reports whether cols identify at most one row of the table: they
 // cover its primary key or one of its unique keys (or unique indexes). A
 // superset of a key is a key too — (id, name) is unique if id is.
@@ -244,6 +273,7 @@ type dialect struct {
 	// as an escape, so a literal's backslashes are doubled there
 	backslash bool
 	fullJoin  bool // FULL OUTER JOIN is spoken (not by MySQL)
+	ilike     bool // ILIKE is spoken (Postgres, and bytdb after it)
 }
 
 // dialectOf maps a configured driver to its dialect. An unknown driver gets
@@ -255,9 +285,9 @@ func dialectOf(driver string) dialect {
 	case "sqlite", "sqlite3":
 		return dialect{name: "sqlite", fullJoin: true}
 	case "bytdb":
-		return dialect{name: "bytdb", fold: true, fullJoin: true}
+		return dialect{name: "bytdb", fold: true, fullJoin: true, ilike: true}
 	}
-	return dialect{name: "postgres", fold: true, fullJoin: true}
+	return dialect{name: "postgres", fold: true, fullJoin: true, ilike: true}
 }
 
 // reserved are words a name must be quoted to be read as a name rather than

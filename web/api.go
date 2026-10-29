@@ -158,6 +158,16 @@ func (s *Server) saveTab(winID string, t Tab) error {
 			return badRequest("not a design: %v", err)
 		}
 	}
+	// the saved design a design tab keeps (designs.go): only a design tab
+	// keeps one, and by a name a save of it would take
+	if t.DesignName != "" {
+		if t.Design == "" {
+			return badRequest("only a design tab keeps a saved design")
+		}
+		if err := validDesignName(t.DesignName); err != nil {
+			return err
+		}
+	}
 	if err := s.hub.claimOne(winID, t.ID); err != nil {
 		return err
 	}

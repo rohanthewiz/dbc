@@ -70,10 +70,18 @@
     "": Object.keys(OPS),
   };
   const ARITY = { null: 0, notnull: 0, between: 2, range: 2, in: -1, notin: -1 };
+  const LIKE_OPS = ["contains", "starts", "ends"]; // the ops "ignore case" applies to (designer.likeOp)
   const SEV = { error: "✕", warn: "⚠", info: "ⓘ" };
   const CARD_W = 232;
 
   const emptyDesign = () => ({ tables: [], joins: [], columns: [], filters: [], sorts: [] });
+  const LISTS = ["tables", "joins", "columns", "filters", "sorts"];
+  // filled gives a design every list, as the page draws it: one the server
+  // made (an imported query, designer.Import) writes an empty list as null
+  function filled(d) {
+    for (const k of LISTS) d[k] = d[k] || [];
+    return d;
+  }
 
   // rough is a row count as the cards say it
   function rough(n) {
@@ -103,7 +111,7 @@
       let s = states.get(t.key);
       if (!s) {
         s = {
-          design: t.design || emptyDesign(), analysis: null, facts: null, plan: null, planNote: "",
+          design: filled(t.design || emptyDesign()), analysis: null, facts: null, plan: null, planNote: "",
           hist: [], fut: [], gen: 0, sel: null, pane: "query", hot: null, view: null, err: "",
           editing: false,
         };
@@ -180,7 +188,7 @@
         const p = pos.get(x.id);
         if (p) { x.x = p.x; x.y = p.y; }
       }
-      for (const k of ["tables", "joins", "columns", "filters", "sorts"]) d[k] = d[k] || [];
+      filled(d);
       s.design = d;
       t.design = d;
       s.analysis = r.analysis;
@@ -457,6 +465,13 @@
       const b = dom.bar;
       b.replaceChildren();
       b.append(el("span", "pname", "◇ Design"), el("span", "qdconn", cur.conn || "not connected"));
+      // kept under a name (web/designs.go), or only in this tab
+      if (cur.designName) {
+        b.append(el("span", { class: "qdsaved", title: "Kept as the saved design “" + cur.designName + "”: every change is saved " +
+          "there, so closing the tab loses nothing — Alt+Shift+D lists the saved designs" }, "✓ saved"));
+      } else if ((s.design.tables || []).length) {
+        b.append(el("span", { class: "qdunsaved", title: "Kept only in this tab: closing it loses the design — ⤓ Save as… keeps it under a name" }, "in this tab only"));
+      }
       const n = { error: 0, warn: 0, info: 0 };
       for (const l of (a && a.lints) || []) n[l.sev]++;
       const health = el("button", { type: "button", class: "qdhealth", title: "The guide: what the designer found, and fixes" });
@@ -489,6 +504,9 @@
       btn("⊡", "Fit the tables in view (f)", fit);
       btn("⟳", "Read the catalog again — after creating an index, say", () => { palettes.clear(); loadPalette(cur, true); scheduleAnalyze(cur, 0, true); });
       btn("⇪ Query", "Open the SQL in a new query tab, to edit by hand", () => a && a.sql && hooks.openQuery(a.sql), !(a && a.sql));
+      btn("⤓ Save as…", cur.designName ? "Save a copy under another name, which this tab then keeps" :
+        "Keep the design under a name, so it outlives the tab", () => hooks.saveAs(cur));
+      btn("⤒ Open…", "The saved designs: open one in a tab, or delete one (Alt+Shift+D)", () => pickSaved());
     }
 
     // ── the palette ────────────────────────────────────────────────────
@@ -1071,6 +1089,7 @@
       line.append(select(ops.map((o) => [o, OPS[o]]), f.op, "f" + i + "op", (v) => edit(cur, (dd) => {
         const x = dd.filters[i];
         x.op = v;
+        if (!LIKE_OPS.includes(v)) delete x.ignoreCase; // only a LIKE has a case rule to change
         const n = ARITY[v] === undefined ? 1 : ARITY[v];
         if (n === 0) x.values = [];
         else if (n === 2) x.values = [x.values[0] || "", x.values[1] || ""];
@@ -1105,7 +1124,11 @@
         r.append(vals);
       }
       const opts = el("div", "qdrow qdopts");
-      opts.append(select([["", "all of these"], ["A", "any of A"], ["B", "any of B"], ["C", "any of C"]], f.group || "", "f" + i + "grp",
+      // any-of groups: A to C, and any other letter the design already
+      // has (an imported query's fourth OR group is D)
+      const grps = ["A", "B", "C"];
+      for (const x of s.design.filters || []) if (x.group && !grps.includes(x.group)) grps.push(x.group);
+      opts.append(select([["", "all of these"]].concat(grps.map((g) => [g, "any of " + g])), f.group || "", "f" + i + "grp",
         (v) => edit(cur, (dd) => { dd.filters[i].group = v; }), "Filters in the same group: any one of them is enough (OR); groups and the rest: all (AND)"));
       const v = viewOf(s, f.table);
       const c = v && v.cols.find((x) => x.name === f.column);
@@ -1114,6 +1137,14 @@
         ck.checked = !!f.orNull;
         ck.addEventListener("change", () => edit(cur, (dd) => { dd.filters[i].orNull = ck.checked; }));
         opts.append(el("label", { class: "qdck", title: "Also keep rows where it is empty (NULL fails every comparison)" }, ck, " or empty"));
+      }
+      if (LIKE_OPS.includes(f.op) && !f.agg) {
+        const ck = el("input", { type: "checkbox", "data-k": "f" + i + "icase" });
+        ck.checked = !!f.ignoreCase;
+        ck.addEventListener("change", () => edit(cur, (dd) => { dd.filters[i].ignoreCase = ck.checked; }));
+        opts.append(el("label", { class: "qdck", title: "Match letters whatever their case: ILIKE on Postgres, " +
+          "lower(…) LIKE lower(…) elsewhere. Unticked, the engine's own rule applies (Postgres: case matters; " +
+          "SQLite: A–Z ignored; MySQL: the column's collation)" }, ck, " ignore case"));
       }
       if (v && v.role === "joined" && !f.agg) {
         const ck = el("input", { type: "checkbox", "data-k": "f" + i + "inJoin" });
@@ -1331,6 +1362,105 @@
       drawSide();
     }
 
+    // ── saved designs ──────────────────────────────────────────────────
+    // pickSaved is the saved designs dialog (Alt+Shift+D, the bar's
+    // ⤒ Open…, the tab menu): the designs kept under a name
+    // (web/designs.go), filtered by name, connection or table as you type.
+    // Enter opens one (hooks.openSaved: the tab here that keeps it, else a
+    // new design tab), Alt+D deletes one after asking. sel puts the cursor
+    // on that name. An open dialog follows a save or delete in any window
+    // (savedChanged, on the "designs" event).
+    let savedRedraw = null;
+    async function pickSaved(sel) {
+      let list;
+      try { list = (await api("GET", "/api/v1/designs")).designs || []; } catch (err) { log("err", "saved designs: " + err.message); return; }
+      const input = el("input", { type: "search", class: "hfilter", placeholder: "type to filter by name, connection or table",
+        "aria-label": "Filter saved designs", spellcheck: "false", autocomplete: "off" });
+      const ul = el("ul", { class: "hlist snlist", role: "listbox" });
+      const preview = el("pre", "ival snprev");
+      const count = el("span", "hint");
+      let shown = [], pos = 0;
+      const line = (d) => (d.conn || "no connection") + " · " + (d.tables.length ? d.tables.join(", ") : "no tables");
+      function draw() {
+        const q = input.value.trim().toLowerCase();
+        shown = list.filter((d) => !q || d.name.toLowerCase().includes(q) || line(d).toLowerCase().includes(q));
+        if (sel) {
+          const i = shown.findIndex((d) => d.name === sel);
+          if (i >= 0) pos = i;
+          sel = "";
+        }
+        pos = Math.max(0, Math.min(pos, shown.length - 1));
+        ul.replaceChildren();
+        shown.forEach((d, i) => {
+          ul.append(el("li", { class: i === pos ? "pos" : "", role: "option", "data-i": String(i), title: d.name },
+            el("span", "hconn", d.name), el("span", "hsql", line(d)),
+            el("span", "hint", d.updated ? new Date(d.updated).toLocaleString() : "")));
+        });
+        const d = shown[pos];
+        preview.textContent = d ? d.sql || "(no SQL yet)" : "";
+        preview.hidden = !d;
+        count.textContent = !list.length ? "none yet — ⤓ Save as… in a design tab keeps its design here"
+          : shown.length ? "↑↓ pick · Enter opens · Alt+D delete · Esc closes" : "no saved design matches";
+        const c = ul.children[pos];
+        if (c) c.scrollIntoView({ block: "nearest" });
+      }
+      function pick(i) {
+        const d = shown[i];
+        if (!d) return;
+        savedRedraw = null;
+        dbc.modal.close();
+        hooks.openSaved(d);
+      }
+      input.addEventListener("input", () => { pos = 0; draw(); });
+      ul.addEventListener("click", (e) => { const li = e.target.closest("li[data-i]"); if (li) { pos = +li.dataset.i; draw(); input.focus(); } });
+      ul.addEventListener("dblclick", (e) => { const li = e.target.closest("li[data-i]"); if (li) pick(+li.dataset.i); });
+      savedRedraw = async () => {
+        try { list = (await api("GET", "/api/v1/designs")).designs || []; } catch (_) { return; }
+        const was = shown[pos];
+        if (was) sel = was.name;
+        if (savedRedraw) draw();
+      };
+      dbc.modal.open({
+        title: "Saved designs", cls: "wide", focus: input,
+        body: el("div", "history", input, ul, preview), foot: el("div", "mfoot", count),
+        onKey: (e) => {
+          if (e.key === "ArrowDown") { pos = Math.min(pos + 1, shown.length - 1); draw(); return true; }
+          if (e.key === "ArrowUp") { pos = Math.max(pos - 1, 0); draw(); return true; }
+          if (e.key === "Enter") { pick(pos); return true; }
+          // Alt and e.code: on a Mac Alt+D types "∂"
+          if (e.altKey && !e.ctrlKey && !e.metaKey && e.code === "KeyD" && shown[pos]) { confirmDelete(shown[pos].name); return true; }
+          return false;
+        },
+        onClose: () => { savedRedraw = null; },
+      });
+      draw();
+    }
+
+    // confirmDelete asks before deleting a saved design: a delete cannot be
+    // undone. A tab that keeps it keeps its own copy, and lets go of the
+    // name at its next save (app.js designNameLost).
+    function confirmDelete(name) {
+      savedRedraw = null;
+      const yes = el("button", { type: "button", class: "primary" }, "Delete " + name);
+      const no = el("button", { type: "button" }, "Keep it");
+      yes.addEventListener("click", async () => {
+        try {
+          await api("POST", "/api/v1/designs/delete", { name });
+          log("ok", "deleted the saved design " + name);
+        } catch (err) {
+          log("err", "saved designs: " + err.message);
+        }
+        pickSaved();
+      });
+      no.addEventListener("click", () => pickSaved(name));
+      dbc.modal.open({
+        title: "Delete the saved design " + name + "?", focus: no,
+        body: el("div", "confirm", el("p", null, "It is deleted for every window. A tab showing it keeps its own copy, " +
+          "which is then kept only in that tab.")),
+        foot: el("div", "mfoot", yes, no),
+      });
+    }
+
     // ── the kit ────────────────────────────────────────────────────────
     async function addByLabel(t, label) {
       const p = paletteOf(t);
@@ -1346,8 +1476,14 @@
         cur = t;
         const s = st(t);
         dom.root.hidden = false;
+        // a design that arrives whole (opened from a query, a saved one,
+        // a reload) has no view yet: fitted, rather than shown from the
+        // corner with its far tables under the side pane. Asked before
+        // set, whose onChange records the view it sets.
+        const unseen = !s.view;
         stg.set(s.view || { tx: 0, ty: 0, k: 1 });
         drawAll();
+        if (unseen && s.design.tables.length > 1) fit();
         // never analyzed, or edited since (a field typed in just before
         // the tab was left: its debounce then asked for the other tab)
         if (!s.analysis || s.analyzed !== s.gen) scheduleAnalyze(t, 0);
@@ -1371,6 +1507,14 @@
       valid: (t) => { const s = states.get(t.key); return !!(s && s.analysis && s.analysis.valid); },
       focus() { if (dom) dom.canvas.focus({ preventScroll: true }); },
       forget(t) { states.delete(t.key); },
+      // redraw the bar: the tab's saved name changed (app.js)
+      named(t) { if (t === cur && dom) drawBar(); },
+      // tables: how many tables tab t's design has (an empty design is
+      // not worth asking about when its tab closes)
+      tables: (t) => ((states.get(t.key) || {}).design || t.design || emptyDesign()).tables.length,
+      pickSaved,
+      // savedChanged: a saved design was saved or deleted, in any window
+      savedChanged() { if (savedRedraw) savedRedraw(); },
       emptyDesign,
     };
   }

@@ -832,10 +832,13 @@ var sargable = map[string]bool{
 var equality = map[string]bool{OpEq: true, OpIn: true, OpNull: true}
 
 // filterCols are a node's sargable filter columns, equalities first, in the
-// order added; filters in OR groups are left out (ruleOrColumns).
+// order added; filters in OR groups are left out (ruleOrColumns). A
+// starts-with that ignores case is left out too: ILIKE and lower(x) are not
+// in the column's own order, so an index on x cannot serve them
+// (ruleContains speaks for those).
 func (l *linter) filterCols(n *node) (eq, rng []string) {
 	for i, f := range l.d.Filters {
-		if f.Table != n.t.ID || f.Agg != AggNone || f.Group != "" || !sargable[f.Op] || f.OrNull {
+		if f.Table != n.t.ID || f.Agg != AggNone || f.Group != "" || !sargable[f.Op] || f.OrNull || f.folds() {
 			continue
 		}
 		if p := l.g.placeOf(&l.d.Filters[i]); p.kind == "having" {
@@ -951,30 +954,89 @@ func (l *linter) ruleJoinIndex() {
 	}
 }
 
+// ruleContains: a LIKE that no ordinary index serves, on a big table. Two
+// shapes, two rules:
+//
+//	leading-wildcard   contains, ends with: the pattern starts with %, so
+//	                   there is no prefix to look up
+//	ignore-case-like   starts with, ignoring case: ILIKE and lower(x) are
+//	                   not in the column's own order, so an index on x
+//	                   cannot find the prefix either
+//
+// Either way every row is read and matched. What can serve one:
+//
+//	postgres  a trigram index (pg_trgm, GIN or GiST), for LIKE and ILIKE
+//	          with any wildcard. A listed GIN or GiST index on the column
+//	          is taken for one, and the rule stays quiet (Catalog.trigram).
+//	mysql     an index on lower(x) (8.0.13+), for a starts-with ignoring
+//	          case — or no lower() at all, when the column's collation
+//	          already ignores case. An index on an expression the listing
+//	          cannot name may be that one, so it keeps the rule quiet.
+//	          Nothing serves a leading wildcard.
+//	others    nothing; the fixes change the filter instead.
 func (l *linter) ruleContains() {
-	for i, f := range l.d.Filters {
-		if f.Op != OpContains && f.Op != OpEnds || f.Agg != AggNone {
+	for i := range l.d.Filters {
+		f := &l.d.Filters[i]
+		lead := f.Op == OpContains || f.Op == OpEnds
+		if !lead && !f.folds() || f.Agg != AggNone {
 			continue
 		}
 		n := l.tr.nodes[f.Table]
 		if n == nil || n.et == nil || !l.cat.big(n.et, bigTable) {
 			continue
 		}
-		why := "a pattern that does not start with fixed text cannot use an ordinary index, so each of " +
-			name(n) + "'s " + l.sizeWords(n) + " is read and matched."
-		x := newLint("leading-wildcard", SevWarn, areaPerf, "\""+opWords[f.Op]+"\" reads every row of "+n.alias, why)
+		dia := l.g.dia.name
+		if dia == "postgres" && l.cat.trigram(n.et, f.Column) {
+			continue
+		}
+		if !lead && dia == "mysql" && l.cat.exprIndex(n.et) {
+			continue
+		}
+		rule, title := "leading-wildcard", "\""+opWords[f.Op]+"\""
+		why := "a pattern that does not start with fixed text cannot use an ordinary index"
+		if f.folds() {
+			title += " ignoring case"
+		}
+		if !lead {
+			rule = "ignore-case-like"
+			why = "ignoring case, the match is on " + l.foldedWords(n, f.Column) + ", which an ordinary index on " +
+				f.Column + " does not keep in order"
+		}
+		why += ", so each of " + name(n) + "'s " + l.sizeWords(n) + " is read and matched."
+		x := newLint(rule, SevWarn, areaPerf, title+" reads every row of "+n.alias, why)
 		x.Filter = i
-		if l.g.dia.name == "postgres" {
-			x.Why += " On Postgres a trigram index (pg_trgm) serves contains and ends-with."
+		switch {
+		case dia == "postgres":
+			x.Why += " On Postgres a trigram index (pg_trgm) serves contains, ends with and ILIKE."
 			idx := safeName(n.t.Name + "_" + f.Column + "_trgm_idx")
 			x.Fixes = []Fix{{Label: "Copy a trigram index", SQL: "CREATE EXTENSION IF NOT EXISTS pg_trgm;\nCREATE INDEX " +
 				idx + " ON " + l.g.tableRef(n) + " USING gin (" + l.g.dia.ident(f.Column) + " gin_trgm_ops);"}}
+		case dia == "mysql" && !lead:
+			// MySQL wants a functional key part in its own parentheses
+			x.Why += " MySQL's default collations (…_ci) already ignore case: if this column's does, match case " +
+				"instead — the plain LIKE still ignores it, and an index on " + f.Column + " serves it. Otherwise " +
+				"an index on lower(" + f.Column + ") (MySQL 8.0.13+) does."
+			idx := safeName(n.t.Name + "_" + f.Column + "_lower_idx")
+			x.Fixes = []Fix{{Label: "Copy an index on lower(" + f.Column + ")", SQL: "CREATE INDEX " + l.g.dia.ident(idx) +
+				" ON " + l.g.tableRef(n) + " ((lower(" + l.g.dia.ident(f.Column) + ")));"}}
 		}
 		if f.Op == OpContains {
 			x.Fixes = append(x.Fixes, Fix{Label: "Use starts with instead", Design: l.edit(func(d *Design) { d.Filters[i].Op = OpStarts })})
 		}
+		if !lead {
+			x.Fixes = append(x.Fixes, Fix{Label: "Match case instead", Design: l.edit(func(d *Design) { d.Filters[i].IgnoreCase = false })})
+		}
 		l.add(x)
 	}
+}
+
+// foldedWords is what an ignore-case LIKE compares, as the dialect writes
+// it: `x ILIKE …` or `lower(x)`.
+func (l *linter) foldedWords(n *node, col string) string {
+	if l.g.dia.ilike {
+		return code(n.alias+"."+col) + " via ILIKE"
+	}
+	return code("lower(" + n.alias + "." + col + ")")
 }
 
 // ruleSortIndex: top-N by a column of a big table with no index in that

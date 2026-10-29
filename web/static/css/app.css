@@ -1403,6 +1403,9 @@ body.insp-dragging { cursor: col-resize; user-select: none; }
 .app.design-mode #run-all { display: none; }
 
 .qdbar .qdconn { color: var(--muted); font-size: 12px; }
+/* whether the design is kept under a name (✓ saved) or only in its tab */
+.qdbar .qdsaved { color: var(--accent); font-size: 12px; }
+.qdbar .qdunsaved { color: var(--muted); font-size: 12px; font-style: italic; }
 .qdhealth { display: inline-flex; gap: 8px; border: 1px solid var(--line); background: var(--bg); border-radius: 10px; }
 .qdhealth .qdok { color: var(--accent); }
 .qds-error { color: var(--err); font-weight: 600; }

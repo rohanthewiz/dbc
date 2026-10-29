@@ -1704,7 +1704,7 @@ file's connections are changed in the file. The TUI has the same form —
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | new tab · close tab · go to tab |
 | `Alt+N` · `Alt+C` | new console · next console of the tab's database |
 | `Alt+R` | every run of a job or a pipeline, drilled into (see [Job tabs and the Runs view](#job-tabs-and-the-runs-view-in-dbc-web)) |
-| `Alt+D` | a new design tab: [the query designer](#the-query-designer) |
+| `Alt+D` · `Alt+Shift+D` | a new design tab: [the query designer](#the-query-designer) · the saved designs, to reopen one |
 | `{` · `}` · `P` · `r` · `S` · `x` | in the results: previous · next result tab · pin · rerun its query into it · share with the assistant · close |
 | `F2` · double-click a result tab | rename it (↻ keeps the name, another query run into the tab clears it; an empty name gives back its query's) |
 | `F1` or `?` | every key |
@@ -1756,6 +1756,33 @@ text, so `Ctrl+Enter` runs it into the grid, `Ctrl+X` explains it, and the
 assistant and the history see it. **⇪ Query** opens it in a query tab, to
 edit by hand. The design is saved with the tab.
 
+**Saved designs.** A design kept only in its tab goes when the tab closes,
+so closing one asks first. **⤓ Save as…** keeps it under a name instead.
+The tab takes that name as its title, and every change is saved there as
+you go, with no Ctrl+S to forget. **⤒ Open…** (`Alt+Shift+D`, or the tab
+menu) lists the saved designs, with the connection, tables and SQL of
+each. Enter opens one, on the connection it was designed on, and `Alt+D`
+deletes one. Renaming the tab renames the design. Saved designs are kept
+in `web.bytdb`, beside the tabs. If another window saves over or deletes
+the design a tab keeps, that tab's next save is refused rather than
+overwriting it. The tab then keeps its copy, unnamed, and the log says so.
+
+**Opening a query as a design.** Right-click in a query tab and pick
+**◇ Open as a design**. The statement Run would run (the selection, or
+the statement under the caret) opens on the canvas in a new design tab,
+where the guide and the story judge it. The import is faithful or it
+refuses: the design it opens writes a statement that returns the same
+rows. Some spellings are read in the designer's own terms, and the log
+says so: `[NOT] EXISTS` over one table becomes *has any* or *has none*,
+`x IN (SELECT …)` becomes *has any*, `a.x = b.y` in WHERE becomes a join,
+`>= a AND < b` on dates becomes a range, year or day, and a GROUP BY with
+no aggregate becomes DISTINCT. Anything a design cannot express is
+refused, with the reason and its line. That covers CTEs, UNIONs, window
+functions, derived tables, CASE, functions of a column, a column compared
+with an expression, `NOT IN (SELECT …)` (a single NULL empties it, which
+*has none* would not), and a RIGHT or FULL JOIN the designer would have
+to reorder.
+
 **What it gets right by construction.** The SQL is regenerated from the
 design on every edit and is never edited directly, so the design rules out
 the usual hand-written slips:
@@ -1765,6 +1792,11 @@ the usual hand-written slips:
 - "Any of" filter groups are parenthesized.
 - A value is checked against its column's type.
 - A LIKE value's own `%` and `_` are escaped.
+- *Contains*, *starts with* and *ends with* can **ignore case**, which
+  means the same on every engine: `ILIKE` on Postgres and bytdb,
+  `lower(x) LIKE lower(…)` on MySQL and SQLite. Unticked, a plain `LIKE`
+  follows the engine's own rule: case matters on Postgres, SQLite ignores
+  A–Z, and MySQL goes by the column's collation.
 - Date filters are written as ranges an index can serve
   (`d >= '2024-01-01' AND d < '2025-01-01'`, never `EXTRACT(year …)`).
 - "Count of orders" means the right thing through the joins:
@@ -1808,7 +1840,12 @@ to copy; dbc never runs one for you.
     Equality columns go first, then the range.
   - **A join to a big table with no index on its columns.** Postgres never
     indexes a foreign key's columns by itself.
-  - **A leading-wildcard LIKE.** On Postgres the fix is a trigram index.
+  - **A leading-wildcard LIKE**, or a *starts with* that ignores case,
+    which an index on the column cannot serve either. On Postgres the fix
+    is a trigram index, and the rule is quiet when a GIN or GiST index
+    already covers the column. On MySQL the fix is an index on
+    `lower(x)`, or matching case when the column's collation already
+    ignores it.
   - **A top-N with no index in that order.**
   - **A deep OFFSET**, where keyset paging is the alternative.
   - **"Any of" across columns**, and **a result that is a whole big

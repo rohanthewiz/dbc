@@ -353,6 +353,82 @@ func TestFiltersAreWrittenSafely(t *testing.T) {
 	wantSQL(t, Analyze(d, cat), "SELECT o.id\nFROM orders o\nWHERE o.created_at >= '2026-10-21 09:30:00'")
 }
 
+// TestIgnoreCase: contains, starts with and ends with can ignore case,
+// written in each engine's own way, and the index rules follow — an
+// ordinary index on the column no longer serves a starts-with.
+func TestIgnoreCase(t *testing.T) {
+	cat := shopCat()
+	d := build(t, cat, "orders")
+	d.Columns = outs(col(d, "o", "id"))
+	d.Filters = []Filter{
+		{Ref: col(d, "o", "ref"), Op: OpContains, Values: []string{"50%"}, IgnoreCase: true},
+		{Ref: col(d, "o", "ref"), Op: OpStarts, Values: []string{"AB"}, IgnoreCase: true},
+		// not a LIKE: the flag has nothing to do
+		{Ref: col(d, "o", "status"), Op: OpEq, Values: []string{"Open"}, IgnoreCase: true},
+	}
+	wantSQL(t, Analyze(d, cat), "SELECT o.id\nFROM orders o\nWHERE o.ref ILIKE '%50\\%%' ESCAPE '\\'\n"+
+		"  AND o.ref ILIKE 'AB%'\n  AND o.status = 'Open'")
+	cat.Driver = "bytdb"
+	if a := Analyze(d, cat); !strings.Contains(a.SQL, "o.ref ILIKE 'AB%'") {
+		t.Fatalf("bytdb: %s", a.SQL)
+	}
+	// MySQL and SQLite: both sides lowered by the engine, the escape kept
+	cat.Driver = "mysql"
+	wantSQL(t, Analyze(d, cat), "SELECT o.id\nFROM orders o\nWHERE lower(o.ref) LIKE lower('%50\\\\%%') ESCAPE '\\\\'\n"+
+		"  AND lower(o.ref) LIKE lower('AB%')\n  AND o.status = 'Open'")
+	cat.Driver = "sqlite"
+	a := Analyze(d, cat)
+	if !strings.Contains(a.SQL, "lower(o.ref) LIKE lower('AB%')") {
+		t.Fatalf("sqlite: %s", a.SQL)
+	}
+	if !slices.ContainsFunc(a.Story, func(s string) bool { return strings.Contains(s, "starts with `AB`, ignoring the case of A–Z") }) {
+		t.Fatalf("sqlite story: %q", a.Story)
+	}
+
+	// the rules, on a big Postgres table with an index on ref
+	cat.Driver, cat.IndexesKnown = "postgres", true
+	cat.Rows = map[TableKey]int64{{"public", "orders"}: 2_000_000}
+	cat.Indexes = map[TableKey][]Index{{"public", "orders"}: {{Name: "o_ref", Cols: []string{"ref"}}}}
+	d.Filters = []Filter{{Ref: col(d, "o", "ref"), Op: OpStarts, Values: []string{"AB"}}}
+	if a = Analyze(d, cat); lintOf(a, "ignore-case-like") != nil || lintOf(a, "filter-no-index") != nil {
+		t.Fatalf("plain starts with, indexed: %v", rules(a))
+	}
+	d.Filters[0].IgnoreCase = true
+	a = Analyze(d, cat)
+	l := lintOf(a, "ignore-case-like")
+	if l == nil || !strings.Contains(l.Fixes[0].SQL, "gin_trgm_ops") || lintOf(a, "filter-no-index") != nil {
+		t.Fatalf("folded starts with: %v %+v", rules(a), l)
+	}
+	if back := fixOf(t, l, "Match case"); back.Filters[0].IgnoreCase {
+		t.Fatal("the fix still ignores case")
+	}
+	// a GIN index on the column is taken for a trigram one: quiet, and
+	// for contains too
+	cat.Indexes[TableKey{"public", "orders"}] = append(cat.Indexes[TableKey{"public", "orders"}],
+		Index{Name: "o_ref_trgm", Cols: []string{"ref"}, Method: "gin"})
+	if a = Analyze(d, cat); lintOf(a, "ignore-case-like") != nil {
+		t.Fatalf("with a trigram index: %v", rules(a))
+	}
+	d.Filters[0].Op = OpContains
+	if a = Analyze(d, cat); lintOf(a, "leading-wildcard") != nil {
+		t.Fatalf("contains with a trigram index: %v", rules(a))
+	}
+
+	// MySQL: the functional index, and silence beside an expression index
+	// the listing cannot name
+	cat.Driver = "mysql"
+	cat.Indexes = map[TableKey][]Index{{"public", "orders"}: {{Name: "o_ref", Cols: []string{"ref"}}}}
+	d.Filters[0].Op = OpStarts
+	l = lintOf(Analyze(d, cat), "ignore-case-like")
+	if l == nil || l.Fixes[0].SQL != "CREATE INDEX orders_ref_lower_idx ON orders ((lower(ref)));" || !strings.Contains(l.Why, "…_ci") {
+		t.Fatalf("mysql: %+v", l)
+	}
+	cat.Indexes[TableKey{"public", "orders"}] = append(cat.Indexes[TableKey{"public", "orders"}], Index{Name: "o_lower", Cols: []string{""}})
+	if a = Analyze(d, cat); lintOf(a, "ignore-case-like") != nil {
+		t.Fatalf("mysql with an expression index: %v", rules(a))
+	}
+}
+
 func TestBadValues(t *testing.T) {
 	cat := shopCat()
 	d := build(t, cat, "orders")

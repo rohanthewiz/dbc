@@ -180,7 +180,23 @@ type Filter struct {
 	// only customers with a 2024 order" (in WHERE, which turns the left
 	// join back into an inner one).
 	InJoin bool `json:"inJoin,omitempty"`
+	// IgnoreCase makes contains, starts with and ends with match letters
+	// whatever their case; other operators ignore it. A plain LIKE's case
+	// rule is the engine's own — case-sensitive on Postgres, A–Z-blind on
+	// SQLite, the column's collation on MySQL — so without it the same
+	// design can match different rows per engine. With it, Postgres and
+	// bytdb write ILIKE and the others lower(x) LIKE lower(v) (sql.go like).
+	// Either way an ordinary index on the column no longer serves a
+	// starts-with (lint.go ruleContains says so, and what would).
+	IgnoreCase bool `json:"ignoreCase,omitempty"`
 }
+
+// likeOp reports whether op is written as a LIKE pattern: the operators
+// IgnoreCase applies to.
+func likeOp(op string) bool { return op == OpContains || op == OpStarts || op == OpEnds }
+
+// folds reports whether the filter is a LIKE written to ignore case.
+func (f *Filter) folds() bool { return f.IgnoreCase && likeOp(f.Op) }
 
 // The filter operators. Most are what they say; the designer's own are the
 // date ones, which are written as RANGES (`d >= '2024-01-01' AND d <

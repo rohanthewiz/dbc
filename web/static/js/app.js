@@ -1140,6 +1140,8 @@
         onConsolesChanged(d);
       } else if (ev.type === "scripts") {
         scriptKit.onEvent(d);
+      } else if (ev.type === "designs") {
+        designKit.savedChanged();
       } else if (ev.type === "snippets") {
         // a snippet saved or deleted, in this window or another: the list
         // the editor's Tab expands from, and an open dialog, follow it
@@ -1958,8 +1960,9 @@
       // the snippets dialog (snippets.js); Monaco binds it too, for focus
       // in the editor
       if (e.code === "KeyS") { e.preventDefault(); dbc.snippets.open(); return; }
-      // a new design tab: the query designer (designer.js)
-      if (e.code === "KeyD") { e.preventDefault(); newDesign(""); return; }
+      // a new design tab: the query designer (designer.js); with Shift,
+      // the saved designs to reopen one
+      if (e.code === "KeyD") { e.preventDefault(); if (e.shiftKey) designKit.pickSaved(); else newDesign(""); return; }
       const n = /^Digit([1-9])$/.exec(e.code);
       if (n) { e.preventDefault(); pickTab(+n[1] - 1); return; }
     }
@@ -2781,10 +2784,23 @@
   //            "Design a query from it" opens one on that table
   //   editor   the canvas (.design-mode hides the editor under it)
   //   results  the grid and the plan, as for a query tab
-  //   saved    t.design (JSON) with the tab, the SQL as its buffer
+  //   saved    t.design (JSON) with the tab, the SQL as its buffer; and,
+  //            once named (⤓ Save as…), under that name as well
+  //            (t.designName, web/designs.go), so it outlives the tab
   //
   // Run is refused while the design has errors: its SQL is not the
   // query the user is building until they are fixed.
+  //
+  // A NAMED design is saved there on every save of its tab, as a console
+  // is: there is no Ctrl+S to forget. Each save names the revision it was
+  // made from (t.designRev, kept with the tab across reloads), so a save
+  // over a design another window changed or deleted is refused — and the
+  // tab then lets go of the name, keeping its own copy (designNameLost),
+  // rather than overwrite work it has not seen.
+  //
+  //   edit ─500ms─► saveNamed (POST /api/v1/designs, rev) ─► t.designRev
+  //                     │ 409/404: designNameLost              │
+  //                     └──────────────► saveTab (design, name, rev)
   const designKit = dbc.designer.create({
     // the design (or its SQL) changed: the editor's document follows, and
     // the tab is saved
@@ -2798,16 +2814,132 @@
     saved: (t) => scheduleDesignSave(t),
     status: (text, level) => setStatus(text, level),
     openQuery: (sql) => newTab(null, { buffer: sql }),
+    saveAs: (t) => saveDesignAs(t),
+    openSaved: (d) => openSavedDesign(d),
     run: () => run(false),
     explain: () => dbc.cmd.explain(false),
   });
 
   // a design's saves are debounced on their own timer: a card dragged
-  // across the canvas is one save, not one per pixel
-  let designSaveTimer = 0;
+  // across the canvas is one save, not one per pixel. The timer is the
+  // tab's own, so an edit in a second design tab within the pause does not
+  // cancel the first one's save (its saved design would miss it: switching
+  // tabs saves the tab, not the name).
   function scheduleDesignSave(t) {
-    clearTimeout(designSaveTimer);
-    designSaveTimer = setTimeout(() => { if (tabs.includes(t)) saveTab(t); }, 500);
+    clearTimeout(t.designSaveTimer);
+    t.designSaveTimer = setTimeout(() => flushDesignSave(t), 500);
+  }
+  async function flushDesignSave(t) {
+    clearTimeout(t.designSaveTimer);
+    t.designSaveTimer = 0;
+    if (!tabs.includes(t)) return;
+    if (t.designName) await saveNamed(t);
+    saveTab(t); // after: it keeps the revision saveNamed got back
+  }
+
+  // saveNamed writes a design tab's design to the saved design it keeps.
+  // One save at a time per tab: each is made from the revision the last
+  // returned, so two in flight would refuse each other — an edit during
+  // one is saved when it lands (namedAgain).
+  async function saveNamed(t) {
+    if (!t.designName) return;
+    if (t.namedBusy) { t.namedAgain = true; return; }
+    t.namedBusy = true;
+    try {
+      const r = await api("POST", "/api/v1/designs", { old: t.designName, rev: t.designRev || "", name: t.designName,
+        conn: t.conn || "", design: JSON.stringify(t.design), sql: t.buffer || "" });
+      t.designRev = r.rev;
+    } catch (err) {
+      if (err.status === 409 || err.status === 404) designNameLost(t, err);
+      else log("err", "the saved design " + t.designName + " was not saved: " + err.message + " — the next change tries again");
+    } finally {
+      t.namedBusy = false;
+      if (t.namedAgain) { t.namedAgain = false; if (t.designName) saveNamed(t).then(() => saveTab(t)); }
+    }
+  }
+
+  // designNameLost lets go of the saved design a tab kept, when a save of
+  // it was refused: another window saved over it (409), or deleted or
+  // renamed it (404). The tab's design stays — in the tab only, as any
+  // unnamed design — and the message says how to keep it.
+  function designNameLost(t, err) {
+    log("warn", "“" + t.designName + "” was not saved from " + t.title + ": " + err.message +
+      ". The tab keeps its copy, now only in the tab — ⤓ Save as… keeps it under a name, ⤒ Open… shows the saved one");
+    t.designName = "";
+    t.designRev = "";
+    designKit.named(t);
+    if (t === state.tab) setStatus("this design is now kept only in its tab — see the log", "warn");
+  }
+
+  // saveDesignAs keeps tab t's design under a name the user gives — the
+  // tab's title to start with — and ties the tab to it: the tab takes the
+  // name as its title, and its saves go there from now on. A name already
+  // taken is refused under the field (opening that one is ⤒ Open…), so a
+  // saved design is never replaced by accident. On a tab that already
+  // keeps one, it is Save As: a copy under the new name, which the tab
+  // keeps instead; the old one stays as last saved.
+  function saveDesignAs(t, then) {
+    if (!t || !t.design) return;
+    const input = el("input", { class: "gname", value: t.designName ? t.designName + " copy" : t.title, maxlength: "40",
+      "aria-label": "Design name", spellcheck: "false", autocomplete: "off" });
+    const why = el("p", "gwhy");
+    const okBtn = el("button", { type: "button", class: "primary" }, "Save");
+    const cancel = el("button", { type: "button" }, "Cancel");
+    const submit = async () => {
+      const name = input.value.trim();
+      if (!name) { why.textContent = "a design needs a name"; input.focus(); return; }
+      clearTimeout(t.designSaveTimer); // the save below writes everything a pending one would
+      let r;
+      try {
+        r = await api("POST", "/api/v1/designs", { old: "", rev: "", name, conn: t.conn || "",
+          design: JSON.stringify(t.design), sql: t.buffer || "" });
+      } catch (err) {
+        why.textContent = err.message;
+        input.focus();
+        return;
+      }
+      dbc.modal.close();
+      t.designName = r.name;
+      t.designRev = r.rev;
+      t.title = r.name;
+      saveTab(t);
+      renderTabs();
+      designKit.named(t);
+      log("ok", "saved the design as “" + r.name + "” — its changes are kept there as you go; ⤒ Open… (Alt+Shift+D) reopens it");
+      if (then) then();
+    };
+    okBtn.addEventListener("click", submit);
+    cancel.addEventListener("click", () => dbc.modal.close());
+    input.addEventListener("input", () => { why.textContent = ""; });
+    dbc.modal.open({
+      title: t.designName ? "Save “" + t.designName + "” as…" : "Save the design as…", focus: input,
+      body: el("div", "gprompt", el("p", "hint", "Saved designs outlive their tab: ⤒ Open… (Alt+Shift+D) lists them · up to 40 characters"), input, why),
+      foot: el("div", "mfoot", okBtn, cancel),
+      onKey: (e) => {
+        if (e.key !== "Enter") return false;
+        submit();
+        return true;
+      },
+    });
+    input.select();
+  }
+
+  // openSavedDesign opens a saved design (designer.js pickSaved): the tab
+  // here that already keeps it, or a new design tab on its connection —
+  // the window's own when that connection is gone — tied to it.
+  function openSavedDesign(d) {
+    const have = tabs.find((x) => x.designName === d.name);
+    if (have) { activate(have); return; }
+    const design = parseDesign(d.design);
+    if (!design) { log("err", "the saved design " + d.name + " does not parse; it cannot be opened"); return; }
+    const conn = d.conn && connItem(d.conn) ? d.conn : newTabConn();
+    if (d.conn && conn !== d.conn) log("warn", d.name + " was designed on " + d.conn + ", which is not a connection here — it opens on " + (conn || "none"));
+    const t = { key: newKey(), title: d.name, conn, buffer: d.sql || "", ws: "", design, designName: d.name, designRev: d.rev };
+    tabs.splice(tabs.indexOf(state.tab) + 1, 0, t);
+    if (groups.joinNew(state.tab, t)) saveGroups();
+    saveOrder();
+    saveTab(t);
+    activate(t);
   }
 
   // parseDesign reads a saved tab's design; one that does not parse (the
@@ -2820,13 +2952,15 @@
 
   // newDesign opens a design tab beside the tab on screen, on its
   // connection; label, when given, is a sidebar table to start from (added
-  // once the tab's catalog has been read)
-  function newDesign(label) {
+  // once the tab's catalog has been read). opts.design starts it on a
+  // design (designFromQuery), opts.conn on that connection.
+  function newDesign(label, opts) {
+    opts = opts || {};
     const used = new Set(tabs.map((t) => t.title));
     let n = 1;
     while (used.has("Design " + n)) n++;
-    const t = { key: newKey(), title: "Design " + n, conn: newTabConn(), buffer: "", ws: "", design: designKit.emptyDesign(),
-      pendingAdd: label || "" };
+    const t = { key: newKey(), title: "Design " + n, conn: opts.conn || newTabConn(), buffer: opts.sql || "", ws: "",
+      design: opts.design || designKit.emptyDesign(), pendingAdd: label || "" };
     tabs.splice(tabs.indexOf(state.tab) + 1, 0, t);
     if (groups.joinNew(state.tab, t)) saveGroups();
     saveOrder();
@@ -2834,6 +2968,29 @@
     activate(t);
   }
   dbc.cmd.newDesign = () => newDesign("");
+  dbc.cmd.savedDesigns = () => designKit.pickSaved();
+
+  // designFromQuery opens query tab t's statement — the one Ctrl+Enter
+  // would run: the selection, else the statement under the caret — as a
+  // design (designer.Import, web/design.go), in a new design tab beside it
+  // on its connection, where the guide and the story judge it. What was
+  // read in the designer's own terms goes to the log; a statement the
+  // designer cannot express stays as it is, and the status bar says why.
+  async function designFromQuery(t) {
+    if (!t || t.design || t.script || t.pipeline || t.job) return;
+    if (!t.ws) { setStatus("connect the tab first: the design reads its connection's tables", "warn"); return; }
+    let r;
+    try {
+      r = await api("POST", "/api/v1/ws/" + t.ws + "/design/import", editorState());
+    } catch (err) {
+      setStatus("not opened as a design — " + err.message, "warn");
+      log("warn", "not opened as a design: " + err.message);
+      return;
+    }
+    for (const n of r.notes || []) log("info", "opened as a design: " + n);
+    newDesign("", { design: r.analysis.design, conn: t.conn, sql: r.analysis.sql });
+    log("ok", "opened the query as a design — its Guide judges it, its Story tells it");
+  }
   $("design-btn").addEventListener("click", () => newDesign(""));
 
   // ── the Runs view ──────────────────────────────────────────────────────
@@ -3667,7 +3824,10 @@
     if (t.job) return { title: t.title, conn: "", buffer: "", console: "", job: t.job };
     // a design tab: its design, and its SQL as the buffer (what a dbc
     // without the designer would open the tab on)
-    if (t.design) return { title: t.title, conn: t.conn || "", buffer: t.buffer || "", console: "", design: JSON.stringify(t.design) };
+    if (t.design) {
+      return { title: t.title, conn: t.conn || "", buffer: t.buffer || "", console: "", design: JSON.stringify(t.design),
+        designName: t.designName || "", designRev: t.designRev || "" };
+    }
     const active = t === state.tab;
     return { title: t.title, conn: t.conn || "",
       buffer: active ? dbc.editor.text() : textOf(t), console: t.console || "" };
@@ -3968,7 +4128,9 @@
       { head: "" },
       { label: "New query tab", key: "Alt+T", act: newTab },
       { label: "New design tab", key: "Alt+D", act: () => newDesign("") },
-    ].concat(groups.tabItems(t, x, y), t.design ? [] : consoleItems(t));
+      { label: "Open a saved design…", key: "Alt+Shift+D", act: () => designKit.pickSaved() },
+    ].concat(t.design ? [{ label: t.designName ? "Save the design as… (a copy)" : "Save the design as…", act: () => saveDesignAs(t) }] : [],
+      groups.tabItems(t, x, y), t.design ? [] : consoleItems(t));
     // the database's consoles as they are now — another window or the
     // TUI may have added one — but the menu does not wait long for them
     if (!t.cdb) { dbc.menu.open(x, y, items()); return; }
@@ -4103,6 +4265,7 @@
         // bindMenu), so the suggestions are for that spot
         suggest,
         { label: "✦ Ask the assistant about this query", why: runWhy, act: () => dbc.cmd.askAbout("Explain this query.") },
+        { label: "◇ Open as a design", why: runWhy || (t.ws ? "" : "the tab is not connected"), act: () => designFromQuery(t) },
         ...symbols,
         // Monaco's fold commands over the server's ranges (editor.js
         // registerFolding). Fold takes the innermost range at the caret —
@@ -4213,6 +4376,7 @@
     if (t.script && scriptKit.dirty(t.script)) { closeDirtyScript(t); return; }
     if (t.pipeline && pipeKit.dirty(t.pipeline)) { closeDirtyScript(t); return; }
     if (t.job && jobKit.dirty(t.job)) { closeDirtyScript(t); return; }
+    if (t.design && !t.designName && designKit.tables(t) > 0 && !t.discard) { closeUnsavedDesign(t); return; }
     if (!t.stateful) { reallyClose(t); return; }
     const yes = el("button", { type: "button", class: "primary" }, "Close and release");
     const no = el("button", { type: "button" }, "Keep it");
@@ -4226,9 +4390,36 @@
     });
   }
 
+  // closeUnsavedDesign asks before closing a design kept only in its tab:
+  // closing it is the end of the design (⇪ Query would keep the SQL, not
+  // the design).
+  function closeUnsavedDesign(t) {
+    const save = el("button", { type: "button", class: "primary" }, "Save as… and close");
+    const drop = el("button", { type: "button" }, "Close without saving");
+    const keep = el("button", { type: "button" }, "Keep it open");
+    // once saved it closes as any named design does (its last save
+    // written first, in reallyClose)
+    save.addEventListener("click", () => { dbc.modal.close(); saveDesignAs(t, () => closeTab(t)); });
+    drop.addEventListener("click", () => { dbc.modal.close(); t.discard = true; closeTab(t); });
+    keep.addEventListener("click", () => dbc.modal.close());
+    dbc.modal.open({
+      title: "Close " + t.title + "?", focus: keep,
+      body: el("div", "confirm", el("p", null, t.title + "'s design is kept only in this tab, so closing it loses the design. " +
+        "Saved under a name, it can be reopened from ⤒ Open… (Alt+Shift+D).")),
+      foot: el("div", "mfoot", save, drop, keep),
+    });
+  }
+
   async function reallyClose(t) {
     const i = tabs.indexOf(t);
     if (i < 0) return;
+    // a named design's pending save is written now: the tab's own copy
+    // goes with the tab, the saved one must not miss the last edit
+    if (t.design && t.designSaveTimer) {
+      clearTimeout(t.designSaveTimer);
+      t.designSaveTimer = 0;
+      if (t.designName) saveNamed(t);
+    }
     tabs.splice(i, 1);
     if (groups.forgetTab(t)) saveGroups();
     if (t === state.tab) activate(tabs[Math.min(i, tabs.length - 1)]);
@@ -4267,6 +4458,7 @@
       done = true;
       renaming = null;
       const v = input.value.trim();
+      if (keep && v && v !== t.title && t.designName) { renameDesign(t, v); return; }
       if (keep && v && v !== t.title) { t.title = v; saveTab(t); }
       renderTabs();
       if (t === state.tab) dbc.editor.focus();
@@ -4277,6 +4469,26 @@
       else if (e.key === "Escape") { e.preventDefault(); finish(false); }
     });
     input.addEventListener("blur", () => finish(true));
+  }
+
+  // renameDesign renames a named design tab and the saved design with it:
+  // its title is the design's name. A name taken, or the design changed
+  // elsewhere, keeps the old title and says why.
+  async function renameDesign(t, name) {
+    clearTimeout(t.designSaveTimer); // the save below carries any pending edit
+    try {
+      const r = await api("POST", "/api/v1/designs", { old: t.designName, rev: t.designRev || "", name, conn: t.conn || "",
+        design: JSON.stringify(t.design), sql: t.buffer || "" });
+      t.designName = r.name;
+      t.designRev = r.rev;
+      t.title = r.name;
+      saveTab(t);
+    } catch (err) {
+      if (err.status === 404) designNameLost(t, err);
+      else log("warn", "not renamed: " + err.message);
+    }
+    renderTabs();
+    designKit.named(t);
   }
 
   // saveOrder writes the strip's order — and the plans key with it, so a
@@ -4358,6 +4570,8 @@
       ["Ctrl+Enter · Ctrl+X", "run it into the grid · explain it"],
       ["drag the background · wheel · Ctrl+wheel · f", "pan · pan · zoom · fit"],
       ["Delete · Ctrl+Z · Ctrl+Shift+Z", "remove the selected table or join · undo · redo"],
+      ["⤓ Save as… · Alt+Shift+D", "keep the design under a name, saved as you go, so it outlives its tab · the saved designs: open one, Alt+D deletes"],
+      ["right-click a query → ◇ Open as a design", "the statement Run would run, on the canvas for the guide to judge — what a design cannot say is refused, with why"],
     ]],
     ["Pipeline tabs", [
       ["Ctrl+O → Pipelines", "open one, copy an example, or start a new one (the browser's + New)"],
@@ -4516,7 +4730,8 @@
         const t = byKey.get(k);
         return { key: t.id, title: (t.script && plugTitle(t.script)) || t.pipeline || t.job || t.title || "Query", conn: t.conn, buffer: t.buffer, ws: "", planOpen: plans.has(t.id),
           cdb: t.console && t.consoleDb ? t.consoleDb : null, console: t.console && t.consoleDb ? t.console : "",
-          script: t.script || "", pipeline: t.pipeline || "", job: t.job || "", design: parseDesign(t.design) };
+          script: t.script || "", pipeline: t.pipeline || "", job: t.job || "", design: parseDesign(t.design),
+          designName: t.designName || "", designRev: t.designRev || "" };
       });
       // each tab's console, read before any is shown; one that cannot be
       // read leaves its tab on the buffer saved with it, and the tab's

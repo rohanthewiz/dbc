@@ -2,7 +2,9 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"maps"
 	"os"
@@ -43,10 +45,11 @@ type Store struct {
 	db   *sql.DB // nil: memory only; holds bytdb's file lock while open
 	path string
 
-	mu     sync.Mutex
-	tabs   map[string]Tab
-	layout map[string]string
-	conns  map[string]SavedConn
+	mu      sync.Mutex
+	tabs    map[string]Tab
+	layout  map[string]string
+	conns   map[string]SavedConn
+	designs map[string]SavedDesign
 }
 
 // Tab is one query tab as the browser left it.
@@ -80,6 +83,15 @@ type Tab struct {
 	// holds the SQL the design writes (Buffer keeps a copy). "" for any
 	// other tab.
 	Design string `json:"design"`
+	// DesignName ties a design tab to the saved design of that name
+	// (designs.go): each save of the tab's design is written there too, so
+	// it outlives the tab. "" for a design kept only in its tab.
+	// DesignRev is the saved design's revision this tab's copy was last
+	// written as or read from (SavedDesign.Rev) — kept with the tab, so a
+	// save after a reload still knows whether another window changed the
+	// design since.
+	DesignName string `json:"designName"`
+	DesignRev  string `json:"designRev"`
 }
 
 // SavedConn is a row of the conns table, where dbc web kept connections
@@ -138,6 +150,17 @@ var storeSchema = []string{
 	`ALTER TABLE tabs ADD COLUMN IF NOT EXISTS job TEXT NOT NULL DEFAULT ''`,
 	// a design tab's design (Tab.Design), likewise
 	`ALTER TABLE tabs ADD COLUMN IF NOT EXISTS design TEXT NOT NULL DEFAULT ''`,
+	// the saved design a design tab keeps (Tab.DesignName, DesignRev)
+	`ALTER TABLE tabs ADD COLUMN IF NOT EXISTS design_name TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE tabs ADD COLUMN IF NOT EXISTS design_rev TEXT NOT NULL DEFAULT ''`,
+	// saved designs (SavedDesign), by name
+	`CREATE TABLE IF NOT EXISTS designs (
+		name    TEXT PRIMARY KEY,
+		conn    TEXT NOT NULL,
+		design  TEXT NOT NULL,
+		sql     TEXT NOT NULL,
+		updated TIMESTAMPTZ NOT NULL
+	)`,
 	`CREATE TABLE IF NOT EXISTS conns (
 		name    TEXT PRIMARY KEY,
 		driver  TEXT NOT NULL,
@@ -153,7 +176,7 @@ var storeSchema = []string{
 // store AND the error, so the caller can warn and carry on.
 func OpenStore(path string) (*Store, error) {
 	st := &Store{path: path, tabs: map[string]Tab{}, layout: map[string]string{},
-		conns: map[string]SavedConn{}}
+		conns: map[string]SavedConn{}, designs: map[string]SavedDesign{}}
 	if path == "" {
 		return st, nil
 	}
@@ -289,7 +312,7 @@ func (s *Store) Tabs() ([]Tab, error) {
 	ctx, cancel := opCtx()
 	defer cancel()
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, title, conn, buffer, updated, console, script, pipeline, job, design FROM tabs ORDER BY id`)
+		`SELECT id, title, conn, buffer, updated, console, script, pipeline, job, design, design_name, design_rev FROM tabs ORDER BY id`)
 	if err != nil {
 		return nil, serr.Wrap(err, "op", "list tabs")
 	}
@@ -297,7 +320,8 @@ func (s *Store) Tabs() ([]Tab, error) {
 	var out []Tab
 	for rows.Next() {
 		var t Tab
-		if err = rows.Scan(&t.ID, &t.Title, &t.Conn, &t.Buffer, &t.Updated, &t.Console, &t.Script, &t.Pipeline, &t.Job, &t.Design); err != nil {
+		if err = rows.Scan(&t.ID, &t.Title, &t.Conn, &t.Buffer, &t.Updated, &t.Console, &t.Script, &t.Pipeline, &t.Job, &t.Design,
+			&t.DesignName, &t.DesignRev); err != nil {
 			return nil, serr.Wrap(err, "op", "scan tab")
 		}
 		out = append(out, t)
@@ -321,13 +345,14 @@ func (s *Store) SaveTab(t Tab) error {
 	// one row now (see storeSchema), so one statement: the transaction the
 	// two-table write needed is gone with tab_consoles
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO tabs (id, title, conn, buffer, updated, console, script, pipeline, job, design) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO tabs (id, title, conn, buffer, updated, console, script, pipeline, job, design, design_name, design_rev)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (id) DO UPDATE SET
 			title = EXCLUDED.title, conn = EXCLUDED.conn,
 			buffer = EXCLUDED.buffer, updated = EXCLUDED.updated,
 			console = EXCLUDED.console, script = EXCLUDED.script, pipeline = EXCLUDED.pipeline, job = EXCLUDED.job,
-			design = EXCLUDED.design`,
-		t.ID, t.Title, t.Conn, t.Buffer, t.Updated, t.Console, t.Script, t.Pipeline, t.Job, t.Design)
+			design = EXCLUDED.design, design_name = EXCLUDED.design_name, design_rev = EXCLUDED.design_rev`,
+		t.ID, t.Title, t.Conn, t.Buffer, t.Updated, t.Console, t.Script, t.Pipeline, t.Job, t.Design, t.DesignName, t.DesignRev)
 	return wrap(err, "op", "save tab", "tab", t.ID)
 }
 
@@ -562,6 +587,173 @@ func (s *Store) DeleteConn(name string) error {
 	defer cancel()
 	_, err := s.db.ExecContext(ctx, `DELETE FROM conns WHERE name = $1`, name)
 	return wrap(err, "op", "delete conn", "name", name)
+}
+
+// SavedDesign is a query design kept under a name (designs.go), so it
+// outlives the tab it was made in. Design is designer.Design as JSON, the
+// same text a design tab saves; SQL is what it wrote when last saved, for
+// the list to preview without analyzing every design against a catalog.
+type SavedDesign struct {
+	Name    string    `json:"name"`
+	Conn    string    `json:"conn"` // the connection it was designed on
+	Design  string    `json:"design"`
+	SQL     string    `json:"sql"`
+	Updated time.Time `json:"updated"`
+}
+
+// Rev is the design's revision: a hash of what a save writes, so any save
+// that changes it changes the revision, with no counter to keep in step
+// (userdata's textRev, for the files). The name is not in it — a rename is
+// told by the name itself.
+func (d SavedDesign) Rev() string {
+	sum := sha256.Sum256([]byte(d.Conn + "\x00" + d.Design + "\x00" + d.SQL))
+	return hex.EncodeToString(sum[:8])
+}
+
+// The refusals of a design save, each a 409 or 404 with these words
+// (designs.go).
+var (
+	errDesignExists  = errors.New("a saved design by that name already exists")
+	errDesignChanged = errors.New("the saved design was changed since this tab read it — by another window, or another tab")
+	errNoDesign      = errors.New("no saved design by that name")
+)
+
+// Designs lists the saved designs by name.
+func (s *Store) Designs() ([]SavedDesign, error) {
+	if s.db == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		out := slices.Collect(maps.Values(s.designs))
+		slices.SortFunc(out, func(a, b SavedDesign) int { return strings.Compare(a.Name, b.Name) })
+		return out, nil
+	}
+	ctx, cancel := opCtx()
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, `SELECT name, conn, design, sql, updated FROM designs ORDER BY name`)
+	if err != nil {
+		return nil, serr.Wrap(err, "op", "list designs")
+	}
+	defer rows.Close()
+	var out []SavedDesign
+	for rows.Next() {
+		var d SavedDesign
+		if err = rows.Scan(&d.Name, &d.Conn, &d.Design, &d.SQL, &d.Updated); err != nil {
+			return nil, serr.Wrap(err, "op", "scan design")
+		}
+		out = append(out, d)
+	}
+	return out, wrap(rows.Err(), "op", "list designs")
+}
+
+// SaveDesign writes d under d.Name in place of the design called old — ""
+// makes a new one — and returns it as stored. rev is the revision the
+// caller's copy was made from (Rev), checked against the stored one so a
+// save never quietly overwrites a change it has not seen:
+//
+//	old     d.Name      stored under old    result
+//	──────  ──────────  ──────────────────  ─────────────────────────────
+//	""      free        —                   created
+//	""      taken       —                   errDesignExists
+//	"a"     "a"         rev matches         saved over a
+//	"a"     "b" (free)  rev matches         renamed to b, and saved
+//	"a"     "b" taken   —                   errDesignExists
+//	"a"     any         rev differs         errDesignChanged
+//	"a"     any         nothing             errNoDesign (deleted elsewhere)
+//
+// The check and the write are one transaction (one lock in memory), so two
+// windows saving at once cannot both pass the check.
+func (s *Store) SaveDesign(old, rev string, d SavedDesign) (SavedDesign, error) {
+	d.Updated = time.Now().UTC()
+	// check is the table above, given what is stored under old and d.Name
+	check := func(cur *SavedDesign, taken bool) error {
+		if old != "" {
+			if cur == nil {
+				return errNoDesign
+			}
+			if cur.Rev() != rev {
+				return errDesignChanged
+			}
+		}
+		if taken && d.Name != old {
+			return errDesignExists
+		}
+		return nil
+	}
+	if s.db == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		var cur *SavedDesign
+		if c, ok := s.designs[old]; ok && old != "" {
+			cur = &c
+		}
+		_, taken := s.designs[d.Name]
+		if err := check(cur, taken); err != nil {
+			return SavedDesign{}, err
+		}
+		if old != "" {
+			delete(s.designs, old)
+		}
+		s.designs[d.Name] = d
+		return d, nil
+	}
+	ctx, cancel := opCtx()
+	defer cancel()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return SavedDesign{}, serr.Wrap(err, "op", "save design")
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op after Commit
+	read := func(name string) (*SavedDesign, error) {
+		c := SavedDesign{Name: name}
+		err := tx.QueryRowContext(ctx, `SELECT conn, design, sql, updated FROM designs WHERE name = $1`, name).
+			Scan(&c.Conn, &c.Design, &c.SQL, &c.Updated)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return &c, err
+	}
+	var cur *SavedDesign
+	if old != "" {
+		if cur, err = read(old); err != nil {
+			return SavedDesign{}, serr.Wrap(err, "op", "save design", "name", old)
+		}
+	}
+	other, err := read(d.Name)
+	if err != nil {
+		return SavedDesign{}, serr.Wrap(err, "op", "save design", "name", d.Name)
+	}
+	if err = check(cur, other != nil); err != nil {
+		return SavedDesign{}, err
+	}
+	if old != "" && old != d.Name {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM designs WHERE name = $1`, old); err != nil {
+			return SavedDesign{}, serr.Wrap(err, "op", "rename design", "name", old)
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO designs (name, conn, design, sql, updated) VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (name) DO UPDATE SET
+			conn = EXCLUDED.conn, design = EXCLUDED.design, sql = EXCLUDED.sql, updated = EXCLUDED.updated`,
+		d.Name, d.Conn, d.Design, d.SQL, d.Updated); err != nil {
+		return SavedDesign{}, serr.Wrap(err, "op", "save design", "name", d.Name)
+	}
+	return d, wrap(tx.Commit(), "op", "save design", "name", d.Name)
+}
+
+// DeleteDesign forgets a saved design. A missing one is success: the caller
+// wanted it gone. A tab still tied to it keeps its own copy, and its next
+// save says the design is gone (errNoDesign).
+func (s *Store) DeleteDesign(name string) error {
+	if s.db == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.designs, name)
+		return nil
+	}
+	ctx, cancel := opCtx()
+	defer cancel()
+	_, err := s.db.ExecContext(ctx, `DELETE FROM designs WHERE name = $1`, name)
+	return wrap(err, "op", "delete design", "name", name)
 }
 
 // opCtx bounds one store operation. The store is a local file, so this is a

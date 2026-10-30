@@ -1474,6 +1474,7 @@ body.insp-dragging { cursor: col-resize; user-select: none; }
 .qdct { color: var(--muted); font-size: 10px; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .qdcm { display: flex; gap: 2px; color: var(--muted); font-size: 11px; }
 .qdcm .qdix { color: var(--accent); }
+.qdcm .qdix.part { opacity: .5; }
 
 /* the side: Query · Guide · Story · SQL */
 .qdside { padding-top: 0; }

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/designer"
 )
 
@@ -266,5 +267,119 @@ func TestLiveDesigner(t *testing.T) {
 		if v.Tables[c].Op == "" || v.Tables[o].Op == "" {
 			t.Errorf("plan not painted: %+v", v.Tables)
 		}
+
+		// a starts-with and the indexes that can serve it. MySQL's b-tree
+		// finds a prefix in any collation, so a plain index is all of it
+		k.Filters = []designer.Filter{{Ref: ref(o, "ref", ""), Op: designer.OpStarts, Values: []string{"r1999"}}}
+		k.Sorts, k.Offset = nil, 0
+		refCard := func() designer.ColView {
+			t.Helper()
+			w.ForgetDesignCatalog()
+			for _, tv := range analyze(k).Tables {
+				for _, cv := range tv.Cols {
+					if tv.ID == o && cv.Name == "ref" {
+						return cv
+					}
+				}
+			}
+			t.Fatal("no qd_orders.ref on the card")
+			return designer.ColView{}
+		}
+		if e.driver == "mysql" {
+			obsExec(t, obs, `CREATE INDEX qd_orders_ref_plain ON qd_orders (ref)`)
+			if cv := refCard(); !cv.Indexed || cv.NoPrefix || cv.NoRange {
+				t.Errorf("mysql, a plain index on ref: %+v", cv)
+			}
+			return
+		}
+		livePrefixIndex(t, w, obs, k, o, analyze, refCard)
 	})
+}
+
+// livePrefixIndex: on Postgres a b-tree finds a starts-with only in byte
+// order (a pattern class, or a C-ordered collation). The designer's
+// listing reads each key column's class and collation; this checks that
+// what it concludes is what the planner does — on whatever collation the
+// server's database has — and that the index it suggests runs and serves.
+//
+// qd_orders is grown past the designer's size threshold (bigTable) first,
+// so the index rule speaks; the planner is held off the sequential scan
+// (a session's enable_seqscan) so a usable index always shows as an Index
+// Cond, and an unusable one never does.
+func livePrefixIndex(t *testing.T, w *Workspace, obs *db.Manager, k designer.Design, o string,
+	analyze func(designer.Design) *designer.Analysis, refCard func() designer.ColView) {
+	ctx := context.Background()
+	obsExec(t, obs,
+		`INSERT INTO qd_orders SELECT g, 1, g, 'r' || g, '2024-01-01' FROM generate_series(1000, 21000) g`,
+		`ANALYZE qd_orders`)
+	sess, err := obs.Session(ctx, "live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	if _, err := sess.Run(ctx, `SET enable_seqscan = off`); err != nil {
+		t.Fatal(err)
+	}
+	indexCond := func(where string) bool {
+		t.Helper()
+		res, err := sess.Run(ctx, `EXPLAIN (COSTS OFF) SELECT id FROM qd_orders WHERE `+where)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range res.Rows {
+			if strings.Contains(r[0], "Index Cond") && strings.Contains(r[0], "ref") {
+				return true
+			}
+		}
+		return false
+	}
+	lint := func(rule string) *designer.Lint {
+		t.Helper()
+		w.ForgetDesignCatalog()
+		a := analyze(k)
+		for i := range a.Lints {
+			if a.Lints[i].Rule == rule {
+				return &a.Lints[i]
+			}
+		}
+		return nil
+	}
+
+	// no index on ref: the rule speaks, and its fix is a pattern index
+	l := lint("filter-no-index")
+	if l == nil || len(l.Fixes) == 0 || !strings.Contains(l.Fixes[0].SQL, "(ref text_pattern_ops)") {
+		t.Fatalf("no index: %+v", l)
+	}
+	obsExec(t, obs, l.Fixes[0].SQL)
+	if l := lint("filter-no-index"); l != nil {
+		t.Errorf("after its own fix: %+v", l)
+	}
+	if cv := refCard(); !cv.Indexed || cv.NoPrefix || !cv.NoRange {
+		t.Errorf("the pattern index's card: %+v", cv)
+	}
+	if !indexCond(`ref LIKE 'r1999%'`) || indexCond(`ref >= 'r5'`) {
+		t.Errorf("the pattern index should find the prefix and not the range")
+	}
+
+	// a plain index in the database's own collation: the card says
+	// whether it finds a prefix, and the planner must agree
+	obsExec(t, obs, `DROP INDEX qd_orders_ref_idx`, `CREATE INDEX qd_orders_ref_plain ON qd_orders (ref)`)
+	cv := refCard()
+	if !cv.Indexed || cv.NoRange {
+		t.Errorf("the plain index's card: %+v", cv)
+	}
+	if uses := indexCond(`ref LIKE 'r1999%'`); uses == cv.NoPrefix {
+		t.Errorf("the card says NoPrefix=%v, the planner uses the plain index for a prefix: %v", cv.NoPrefix, uses)
+	}
+	if l := lint("filter-no-index"); (l != nil) != cv.NoPrefix {
+		t.Errorf("NoPrefix=%v but the rule %+v", cv.NoPrefix, l)
+	}
+	// and under COLLATE "C" a plain index finds it, whatever the database's
+	obsExec(t, obs, `DROP INDEX qd_orders_ref_plain`, `CREATE INDEX qd_orders_ref_c ON qd_orders (ref COLLATE "C")`)
+	if cv := refCard(); cv.NoPrefix || cv.NoRange || !indexCond(`ref LIKE 'r1999%'`) {
+		t.Errorf("a C-collated index: %+v", cv)
+	}
+	if l := lint("filter-no-index"); l != nil {
+		t.Errorf("a C-collated index: %+v", l)
+	}
 }

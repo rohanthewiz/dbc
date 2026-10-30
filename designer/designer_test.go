@@ -488,10 +488,12 @@ func TestIgnoreCase(t *testing.T) {
 		t.Fatalf("sqlite story: %q", a.Story)
 	}
 
-	// the rules, on a big Postgres table with an index on ref
+	// the rules, on a big Postgres table with an index on ref — a pattern
+	// one: a plain b-tree finds no prefix in Postgres's usual collation
+	// (TestPrefixIndex)
 	cat.Driver, cat.IndexesKnown = "postgres", true
 	cat.Rows = map[TableKey]int64{{"public", "orders"}: 2_000_000}
-	cat.Indexes = map[TableKey][]Index{{"public", "orders"}: {{Name: "o_ref", Cols: []string{"ref"}}}}
+	cat.Indexes = map[TableKey][]Index{{"public", "orders"}: {{Name: "o_ref", Cols: []string{"ref"}, Order: []string{orderPattern}}}}
 	d.Filters = []Filter{{Ref: col(d, "o", "ref"), Op: OpStarts, Values: []string{"AB"}}}
 	if a = Analyze(d, cat); lintOf(a, "ignore-case-like") != nil || lintOf(a, "filter-no-index") != nil {
 		t.Fatalf("plain starts with, indexed: %v", rules(a))
@@ -529,6 +531,140 @@ func TestIgnoreCase(t *testing.T) {
 	cat.Indexes[TableKey{"public", "orders"}] = append(cat.Indexes[TableKey{"public", "orders"}], Index{Name: "o_lower", Cols: []string{""}})
 	if a = Analyze(d, cat); lintOf(a, "ignore-case-like") != nil {
 		t.Fatalf("mysql with an expression index: %v", rules(a))
+	}
+}
+
+// On Postgres a b-tree serves a starts-with only in byte order: a pattern
+// class (text_pattern_ops), or a C-ordered collation. In any other — the
+// usual en_US.UTF-8 — a plain index on the column finds = and ranges but
+// no prefix, so the rule speaks and suggests a pattern index; and a
+// pattern index, in turn, finds no range and serves no sort.
+func TestPrefixIndex(t *testing.T) {
+	cat := shopCat()
+	cat.IndexesKnown = true
+	cat.Rows = map[TableKey]int64{{"public", "orders"}: 2_000_000}
+	k := TableKey{"public", "orders"}
+	d := build(t, cat, "orders")
+	d.Columns = outs(col(d, "o", "id"))
+	d.Filters = []Filter{{Ref: col(d, "o", "ref"), Op: OpStarts, Values: []string{"AB"}}}
+	refCol := func(a *Analysis) ColView {
+		t.Helper()
+		for _, c := range a.Tables[0].Cols {
+			if c.Name == "ref" {
+				return c
+			}
+		}
+		t.Fatal("no ref column")
+		return ColView{}
+	}
+
+	// a plain index in a linguistic collation: it starts with ref, but
+	// cannot find the prefix
+	cat.Indexes = map[TableKey][]Index{k: {{Name: "o_ref", Cols: []string{"ref"}}}}
+	a := Analyze(d, cat)
+	l := lintOf(a, "filter-no-index")
+	if l == nil || l.Fixes[0].SQL != "CREATE INDEX orders_ref_idx ON orders (ref text_pattern_ops);" {
+		t.Fatalf("plain index: %v %+v", rules(a), l)
+	}
+	for _, w := range []string{"o_ref, which starts with ref, cannot find a starts-with: it keeps the collation's order",
+		"An index on (ref text_pattern_ops) lets",
+		"not <, BETWEEN or a sort", "CONCURRENTLY"} {
+		if !strings.Contains(l.Why, w) {
+			t.Errorf("why lacks %q: %s", w, l.Why)
+		}
+	}
+	if c := refCol(a); !c.Indexed || !c.NoPrefix || c.NoRange {
+		t.Fatalf("plain index card: %+v", c)
+	}
+	// the fix's index, as the listing reads it back, quiets the rule
+	cat.Indexes[k] = append(cat.Indexes[k], Index{Name: "orders_ref_idx", Cols: []string{"ref"}, Order: []string{orderPattern}})
+	if a = Analyze(d, cat); lintOf(a, "filter-no-index") != nil {
+		t.Fatalf("with the pattern index: %v", rules(a))
+	}
+	if c := refCol(a); c.NoPrefix || c.NoRange {
+		t.Fatalf("plain and pattern card: %+v", c)
+	}
+	// under a C collation the plain index finds the prefix itself
+	cat.Indexes[k] = []Index{{Name: "o_ref", Cols: []string{"ref"}, Order: []string{orderC}}}
+	if a = Analyze(d, cat); lintOf(a, "filter-no-index") != nil {
+		t.Fatalf("C collation: %v", rules(a))
+	}
+	if c := refCol(a); c.NoPrefix || c.NoRange {
+		t.Fatalf("C collation card: %+v", c)
+	}
+	// so does a trigram (GIN) or an SP-GiST index; a hash one does not
+	for _, m := range []string{"gin", "spgist"} {
+		cat.Indexes[k] = []Index{{Name: "o_ref_x", Cols: []string{"ref"}, Method: m}}
+		if a = Analyze(d, cat); lintOf(a, "filter-no-index") != nil {
+			t.Fatalf("%s: %v", m, rules(a))
+		}
+	}
+	cat.Indexes[k] = []Index{{Name: "o_ref_h", Cols: []string{"ref"}, Method: "hash"}}
+	a = Analyze(d, cat)
+	if l = lintOf(a, "filter-no-index"); l == nil || !strings.Contains(l.Why, "o_ref_h, which starts with ref, is a hash index") {
+		t.Fatalf("hash: %v %+v", rules(a), l)
+	}
+	if c := refCol(a); !c.Indexed || !c.NoPrefix || !c.NoRange {
+		t.Fatalf("hash card: %+v", c)
+	}
+
+	// an equality goes first, the starts-with last in its pattern class
+	cat.Indexes[k] = nil
+	d.Filters = append(d.Filters, Filter{Ref: col(d, "o", "status"), Op: OpEq, Values: []string{"open"}})
+	l = lintOf(Analyze(d, cat), "filter-no-index")
+	if l == nil || l.Fixes[0].SQL != "CREATE INDEX orders_status_ref_idx ON orders (status, ref text_pattern_ops);" ||
+		!strings.Contains(l.Why, "equalities first, then the starts-with") {
+		t.Fatalf("status and prefix: %+v", l)
+	}
+	// a range on the same column wants the collation's order: plain
+	d.Filters = []Filter{d.Filters[0], {Ref: col(d, "o", "ref"), Op: OpLt, Values: []string{"M"}}}
+	if l = lintOf(Analyze(d, cat), "filter-no-index"); l == nil || l.Fixes[0].SQL != "CREATE INDEX orders_ref_idx ON orders (ref);" {
+		t.Fatalf("prefix and range: %+v", l)
+	}
+
+	// a pattern index finds no range, and serves no sort
+	cat.Indexes[k] = []Index{{Name: "o_ref_p", Cols: []string{"ref"}, Order: []string{orderPattern}}}
+	d.Filters = []Filter{{Ref: col(d, "o", "ref"), Op: OpGe, Values: []string{"M"}}}
+	a = Analyze(d, cat)
+	if l = lintOf(a, "filter-no-index"); l == nil || !strings.Contains(l.Why, "o_ref_p, which starts with ref, cannot find a range") ||
+		l.Fixes[0].SQL != "CREATE INDEX orders_ref_idx ON orders (ref);" {
+		t.Fatalf("range on a pattern index: %v %+v", rules(a), l)
+	}
+	if c := refCol(a); !c.Indexed || c.NoPrefix || !c.NoRange {
+		t.Fatalf("pattern card: %+v", c)
+	}
+	d.Filters = nil
+	d.Sorts = []Sort{{Ref: col(d, "o", "ref")}}
+	d.Limit = 20
+	if a = Analyze(d, cat); lintOf(a, "sort-no-index") == nil {
+		t.Fatalf("sort on a pattern index: %v", rules(a))
+	}
+	cat.Indexes[k][0].Order = nil
+	if a = Analyze(d, cat); lintOf(a, "sort-no-index") != nil {
+		t.Fatalf("sort on a plain index: %v", rules(a))
+	}
+
+	// MySQL's b-tree finds a prefix in any collation: as before
+	cat.Driver = "mysql"
+	d.Sorts, d.Limit = nil, 0
+	d.Filters = []Filter{{Ref: col(d, "o", "ref"), Op: OpStarts, Values: []string{"AB"}}}
+	if a = Analyze(d, cat); lintOf(a, "filter-no-index") != nil {
+		t.Fatalf("mysql: %v", rules(a))
+	}
+	if c := refCol(a); !c.Indexed || c.NoPrefix || c.NoRange {
+		t.Fatalf("mysql card: %+v", c)
+	}
+	cat.Indexes[k] = nil
+	if l = lintOf(Analyze(d, cat), "filter-no-index"); l == nil || l.Fixes[0].SQL != "CREATE INDEX orders_ref_idx ON orders (ref);" {
+		t.Fatalf("mysql fix: %+v", l)
+	}
+
+	// char(n) takes its own pattern class
+	for typ, want := range map[string]string{"text": "text_pattern_ops", "character varying(40)": "text_pattern_ops",
+		"character(3)": "bpchar_pattern_ops", "bpchar": "bpchar_pattern_ops", "CHAR(2)": "bpchar_pattern_ops"} {
+		if got := patternOps(typ); got != want {
+			t.Errorf("patternOps(%q) = %s, want %s", typ, got, want)
+		}
 	}
 }
 

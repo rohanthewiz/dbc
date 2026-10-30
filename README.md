@@ -1842,7 +1842,11 @@ to copy; dbc never runs one for you.
     **joins on no key**.
 - *Is it fast?*
   - **A big table read whole to filter it**, with the index to make.
-    Equality columns go first, then the range.
+    Equality columns go first, then the range. On Postgres a *starts with*
+    needs an index in byte order: an ordinary index finds it only under
+    the C collation, so in any other (the usual `en_US.UTF-8`) the index
+    to make is `(col text_pattern_ops)`. That index cannot serve a range
+    or a sort on the column, and the rules count it that way.
   - **A join to a big table with no index on its columns.** Postgres never
     indexes a foreign key's columns by itself.
   - **A leading-wildcard LIKE**, or a *starts with* that ignores case,
@@ -1878,7 +1882,10 @@ same plan the SQL is written from:
 
 The cards say the same at a glance: ★ is the table the query starts from,
 ◆ is "each result row is one of these", × is "its rows repeat", and ⚡
-marks a column an index starts with.
+marks a column an index starts with. A dimmed ⚡ means that index serves
+only some filters. On Postgres, an ordinary index cannot serve a *starts
+with* and a `text_pattern_ops` index cannot serve a range. Its tooltip
+says which filters it serves.
 
 The rules, the SQL and the story live in the `designer` package (pure Go,
 tested without a database). The page only draws and edits; it decides

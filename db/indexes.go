@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -16,11 +17,12 @@ import (
 // with status", "orders.customer_id has no index, so each customer's
 // orders are found by reading all of orders".
 //
-// Every engine's query returns the same eight columns, one row per KEY
+// Every engine's query returns the same nine columns, one row per KEY
 // column of each index, in key order:
 //
 //	schema, table, index, kind (p primary | u unique | i other),
-//	partial ('partial' or ''), method (btree, hash, gin…), position, column
+//	partial ('partial' or ''), method (btree, hash, gin…), position, column,
+//	order (Postgres only; '' elsewhere — see OrderPattern)
 //
 // An expression column (an index on lower(email)) comes back as "" — it
 // has a position in the key, but no column a plain filter could use, so a
@@ -44,7 +46,32 @@ type Index struct {
 	Partial bool
 	Method  string   // btree, hash, gin, gist, brin, FULLTEXT…; lower-case
 	Cols    []string // key columns in order; "" for an expression
+	// Order is, per key column (parallel to Cols), how a Postgres b-tree
+	// keeps it: OrderPattern, OrderC or "" (see OrderPattern). nil when
+	// every one is "" — always so on the other engines.
+	Order []string
 }
+
+// The order a Postgres b-tree keeps a text key column in, which decides
+// whether it can serve a prefix (LIKE 'abc%'). The planner turns a prefix
+// into a range (>= 'abc' AND < 'abd') only on an index whose order is
+// byte order, since only there do the values starting with 'abc' sit side
+// by side:
+//
+//	OrderPattern  a *_pattern_ops class (text_pattern_ops…): byte order
+//	              whatever the collation. Serves = and a prefix, but not
+//	              <, BETWEEN or ORDER BY, which want the collation's order.
+//	OrderC        the default class under a C-ordered collation (C or
+//	              POSIX, or the builtin provider's): byte order, and the
+//	              collation's too, so it serves all of them.
+//	""            anything else: the default class under a linguistic
+//	              collation (en_US.UTF-8, an ICU one), where "ab-c" may
+//	              sort between "abc" and "abd". Serves = and ranges, never
+//	              a prefix. Also a column with no collation (an integer).
+const (
+	OrderPattern = "pattern"
+	OrderC       = "c"
+)
 
 // IndexesQuery returns the statement listing the indexes of tables, in the
 // shape described at the top of this file. bytdb gets none: its catalog
@@ -69,17 +96,40 @@ func IndexesQuery(driver string, tables []TableRef) (string, error) {
 		for i, t := range tables {
 			pairs[i] = fmt.Sprintf("(n.nspname = %s AND t.relname = %s)", sqlLit(t.Schema, false), sqlLit(t.Name, false))
 		}
+		//
+		// The order column (OrderPattern) reads each key column's operator
+		// class and collation: indclass and indcollation are oidvectors
+		// with one entry per KEY column, unnested beside indkey (which also
+		// holds the INCLUDE columns; the shorter arrays pad with NULL, and
+		// those rows are cut by indnkeyatts anyway). Whether a collation
+		// orders like C is Postgres's own test (lc_collate_is_c): a libc
+		// collation named C or POSIX, or a builtin one (Postgres 17+, all
+		// code point order). The database default ('d') is whatever the
+		// database was created with: datlocprovider (Postgres 15+) says
+		// ICU (never C) or builtin (always), and otherwise datcollate is
+		// the libc locale. datlocprovider is read through to_jsonb so the
+		// statement still runs on Postgres 11–14, where it is no column.
 		return `SELECT n.nspname, t.relname, i.relname,
        CASE WHEN x.indisprimary THEN 'p' WHEN x.indisunique THEN 'u' ELSE 'i' END,
        CASE WHEN x.indpred IS NULL THEN '' ELSE 'partial' END,
-       am.amname, k.ord, COALESCE(a.attname, '')
+       am.amname, k.ord, COALESCE(a.attname, ''),
+       CASE WHEN oc.opcname IN ('text_pattern_ops', 'varchar_pattern_ops', 'bpchar_pattern_ops') THEN 'pattern'
+            WHEN co.collprovider = 'b' OR co.collcollate IN ('C', 'POSIX') THEN 'c'
+            WHEN co.collprovider = 'd' AND db.c THEN 'c'
+            ELSE '' END
 FROM pg_catalog.pg_index x
 JOIN pg_catalog.pg_class t ON t.oid = x.indrelid
 JOIN pg_catalog.pg_class i ON i.oid = x.indexrelid
 JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
 JOIN pg_catalog.pg_am am ON am.oid = i.relam
-CROSS JOIN LATERAL unnest(x.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)
+CROSS JOIN LATERAL unnest(x.indkey::int2[], x.indclass::oid[], x.indcollation::oid[])
+  WITH ORDINALITY AS k(attnum, opc, coll, ord)
 LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum AND k.attnum > 0
+LEFT JOIN pg_catalog.pg_opclass oc ON oc.oid = k.opc
+LEFT JOIN pg_catalog.pg_collation co ON co.oid = k.coll
+CROSS JOIN (SELECT CASE to_jsonb(d) ->> 'datlocprovider' WHEN 'b' THEN true WHEN 'i' THEN false
+                   ELSE d.datcollate IN ('C', 'POSIX') END AS c
+            FROM pg_catalog.pg_database d WHERE d.datname = current_database()) db
 WHERE x.indisvalid AND k.ord <= x.indnkeyatts AND (` + strings.Join(pairs, " OR ") + `)
 ORDER BY 1, 2, 3, 7`, nil
 	case "mysql":
@@ -87,7 +137,7 @@ ORDER BY 1, 2, 3, 7`, nil
 		// a functional key part (8.0.13+). MySQL has no partial indexes.
 		return `SELECT table_schema, table_name, index_name,
        CASE WHEN index_name = 'PRIMARY' THEN 'p' WHEN non_unique = 0 THEN 'u' ELSE 'i' END,
-       '', LOWER(index_type), seq_in_index, COALESCE(column_name, '')
+       '', LOWER(index_type), seq_in_index, COALESCE(column_name, ''), ''
 FROM information_schema.statistics
 WHERE table_schema = DATABASE() AND table_name IN (` + nameList(tables, true) + `)
 ORDER BY 1, 2, 3, 7`, nil
@@ -101,7 +151,7 @@ ORDER BY 1, 2, 3, 7`, nil
 		return `SELECT 'main', m.name, il.name,
        CASE WHEN il.origin = 'pk' THEN 'p' WHEN il."unique" THEN 'u' ELSE 'i' END,
        CASE WHEN il.partial THEN 'partial' ELSE '' END,
-       'btree', ii.seqno + 1, COALESCE(ii.name, '')
+       'btree', ii.seqno + 1, COALESCE(ii.name, ''), ''
 FROM sqlite_master m JOIN pragma_index_list(m.name) il JOIN pragma_index_info(il.name) ii
 WHERE m.type = 'table' AND m.name IN (` + nameList(tables, false) + `)
 ORDER BY 1, 2, 3, 7`, nil
@@ -112,7 +162,8 @@ ORDER BY 1, 2, 3, 7`, nil
 }
 
 // BuildIndexes turns IndexesQuery's rows into indexes, in the order the
-// rows came (by schema, table, index). Rows of another shape are skipped.
+// rows came (by schema, table, index). Rows of another shape are skipped;
+// a row without the order column (the eight-column shape) reads as "".
 func BuildIndexes(rows [][]string) []Index {
 	var out []Index
 	for _, r := range rows {
@@ -134,11 +185,26 @@ func BuildIndexes(rows [][]string) []Index {
 		}
 		// positions are 1-based and arrive in order; a gap (a row the
 		// driver could not read) is padded as an expression, so a later
-		// column is never taken for a leading one
-		for len(out[last].Cols) < pos-1 {
-			out[last].Cols = append(out[last].Cols, "")
+		// column is never taken for a leading one. Order is kept in step
+		// with Cols, so Order[i] is always Cols[i]'s.
+		x := &out[last]
+		for len(x.Cols) < pos-1 {
+			x.Cols = append(x.Cols, "")
+			x.Order = append(x.Order, "")
 		}
-		out[last].Cols = append(out[last].Cols, r[7])
+		x.Cols = append(x.Cols, r[7])
+		ord := ""
+		if len(r) > 8 {
+			ord = r[8]
+		}
+		x.Order = append(x.Order, ord)
+	}
+	// an all-"" Order says nothing Cols does not: drop it, so the other
+	// engines' indexes (and most Postgres ones) carry none
+	for i := range out {
+		if !slices.ContainsFunc(out[i].Order, func(o string) bool { return o != "" }) {
+			out[i].Order = nil
+		}
 	}
 	return out
 }

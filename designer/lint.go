@@ -836,7 +836,12 @@ var equality = map[string]bool{OpEq: true, OpIn: true, OpNull: true}
 // starts-with that ignores case is left out too: ILIKE and lower(x) are not
 // in the column's own order, so an index on x cannot serve them
 // (ruleContains speaks for those).
-func (l *linter) filterCols(n *node) (eq, rng []string) {
+//
+// needs says, per column, which kinds of filter it has: a range column may
+// be only a starts-with, which on Postgres a plain b-tree cannot serve
+// (Catalog.finds).
+func (l *linter) filterCols(n *node) (eq, rng []string, needs map[string]need) {
+	needs = map[string]need{}
 	for i, f := range l.d.Filters {
 		if f.Table != n.t.ID || f.Agg != AggNone || f.Group != "" || !sargable[f.Op] || f.OrNull || f.folds() {
 			continue
@@ -844,20 +849,33 @@ func (l *linter) filterCols(n *node) (eq, rng []string) {
 		if p := l.g.placeOf(&l.d.Filters[i]); p.kind == "having" {
 			continue
 		}
-		if equality[f.Op] {
+		nd := needs[f.Column]
+		switch {
+		case equality[f.Op]:
+			nd.eq = true
 			if !slices.Contains(eq, f.Column) {
 				eq = append(eq, f.Column)
 			}
-		} else if !slices.Contains(rng, f.Column) {
-			rng = append(rng, f.Column)
+		default:
+			if f.Op == OpStarts {
+				nd.prefix = true
+			} else {
+				nd.rng = true
+			}
+			if !slices.Contains(rng, f.Column) {
+				rng = append(rng, f.Column)
+			}
 		}
+		needs[f.Column] = nd
 	}
-	return eq, rng
+	return eq, rng, needs
 }
 
 // createIndex writes the CREATE INDEX a finding suggests. The name follows
 // Postgres's own convention (table_cols_idx), cut to its 63-byte limit.
-func (l *linter) createIndex(n *node, cols []string) string {
+// ops are the columns' operator classes, by position ("" or none: the
+// type's default).
+func (l *linter) createIndex(n *node, cols []string, ops ...string) string {
 	nm := n.t.Name + "_" + strings.Join(cols, "_") + "_idx"
 	if len(nm) > 63 {
 		nm = nm[:63]
@@ -865,8 +883,23 @@ func (l *linter) createIndex(n *node, cols []string) string {
 	quoted := make([]string, len(cols))
 	for i, c := range cols {
 		quoted[i] = l.g.dia.ident(c)
+		if i < len(ops) && ops[i] != "" {
+			quoted[i] += " " + ops[i]
+		}
 	}
 	return "CREATE INDEX " + l.g.dia.ident(safeName(nm)) + " ON " + l.g.tableRef(n) + " (" + strings.Join(quoted, ", ") + ");"
+}
+
+// patternOps is the pattern operator class for a text column of type typ:
+// bpchar_pattern_ops for char(n), which text_pattern_ops does not accept
+// (char(n) reaches text only through a cast that trims it); text_pattern_ops
+// for text and varchar, which is binary-coercible to text.
+func patternOps(typ string) string {
+	t := strings.ToLower(strings.TrimSpace(typ))
+	if t == "character" || t == "char" || t == "bpchar" || strings.HasPrefix(t, "character(") || strings.HasPrefix(t, "char(") {
+		return "bpchar_pattern_ops"
+	}
+	return "text_pattern_ops"
 }
 
 func (l *linter) sizeWords(n *node) string {
@@ -874,6 +907,22 @@ func (l *linter) sizeWords(n *node) string {
 	return "about " + roughCount(r) + " rows"
 }
 
+// ruleFilterIndex: a big table filtered on columns no index can find rows
+// by. Some index must start with a filtered column AND serve that
+// column's kind of filter (Catalog.finds): on Postgres a b-tree in a
+// linguistic collation starts with the column yet cannot find a prefix,
+// and a pattern one cannot find a range. The fix it writes:
+//
+//	the equalities, then one range column  (status, created_at)
+//	… that range only a starts-with, on    (status, ref text_pattern_ops)
+//	Postgres: a pattern class, the one
+//	b-tree that finds a prefix in any
+//	collation
+//
+// A plain index would also find the prefix under a C collation, but with
+// no index on the column the listing cannot say what the collation is;
+// the pattern one is right under any, at the cost of serving no range or
+// sort on that column — the why says so.
 func (l *linter) ruleFilterIndex() {
 	if l.cat == nil || !l.cat.IndexesKnown {
 		return
@@ -882,28 +931,84 @@ func (l *linter) ruleFilterIndex() {
 		if n.et == nil || n.et.View || !l.cat.big(n.et, bigTable) {
 			continue
 		}
-		eq, rng := l.filterCols(n)
+		eq, rng, needs := l.filterCols(n)
 		cols := append(slices.Clone(eq), rng...)
 		if len(cols) == 0 {
 			continue
 		}
-		if _, ok := l.cat.leads(n.et, cols...); ok {
+		if slices.ContainsFunc(cols, func(c string) bool { return l.cat.finds(n.et, c, needs[c]) }) {
 			continue
 		}
 		// the index to suggest: the equalities, then one range column —
 		// the order in which a b-tree can use them all
 		want := slices.Clone(eq)
+		var ops []string
+		lastWord := "the range"
 		if len(rng) > 0 {
 			want = append(want, rng[0])
+			if nd := needs[rng[0]]; l.cat.pg() && nd.prefix && !nd.rng {
+				typ := ""
+				if c := n.et.Col(rng[0]); c != nil {
+					typ = c.Type
+				}
+				ops = make([]string, len(want))
+				ops[len(want)-1] = patternOps(typ)
+				lastWord = "the starts-with"
+			}
 		}
-		x := newLint("filter-no-index", SevWarn, areaPerf, n.alias+" is read whole to filter it",
-			name(n)+" has "+l.sizeWords(n)+", and no index starts with "+strings.Join(cols, " or ")+
-				", so finding the matching rows means reading every one. An index on ("+strings.Join(want, ", ")+
-				") — equalities first, then the range — lets the engine go straight to them."+pgConcurrently(l.g.dia))
+		shown := slices.Clone(want)
+		for i, o := range ops {
+			if o != "" {
+				shown[i] += " " + o
+			}
+		}
+		why := name(n) + " has " + l.sizeWords(n) + ", and " + l.unserved(n, cols, needs) +
+			", so finding the matching rows means reading every one. An index on (" + strings.Join(shown, ", ") + ")"
+		if len(want) > 1 {
+			why += " — equalities first, then " + lastWord + " —"
+		}
+		why += " lets the engine go straight to them."
+		if len(ops) > 0 {
+			why += " " + ops[len(ops)-1] + " keeps " + rng[0] + " in byte order, which a prefix needs unless the " +
+				"collation is C; it serves = on " + rng[0] + " too, but not <, BETWEEN or a sort, which want the " +
+				"collation's order."
+		}
+		x := newLint("filter-no-index", SevWarn, areaPerf, n.alias+" is read whole to filter it", why+pgConcurrently(l.g.dia))
 		x.Tables = []string{n.t.ID}
-		x.Fixes = []Fix{{Label: "Copy CREATE INDEX", SQL: l.createIndex(n, want)}}
+		x.Fixes = []Fix{{Label: "Copy CREATE INDEX", SQL: l.createIndex(n, want, ops...)}}
 		l.add(x)
 	}
+}
+
+// unserved says why no index finds the rows of a filter on cols: no index
+// starts with them, or the ones that do cannot serve what is asked —
+// each named, with the reason (the cases Catalog.finds tells apart).
+func (l *linter) unserved(n *node, cols []string, needs map[string]need) string {
+	var none, parts []string
+	for _, c := range cols {
+		x, ok := l.cat.leads(n.et, c)
+		if !ok {
+			none = append(none, c)
+			continue
+		}
+		nd := needs[c]
+		switch {
+		case x.Method == "hash":
+			parts = append(parts, x.Name+", which starts with "+c+", is a hash index: it finds = only")
+		case x.order(0) == orderPattern:
+			parts = append(parts, x.Name+", which starts with "+c+", cannot find a range: its pattern class "+
+				"keeps byte order, not the collation's")
+		case nd.prefix:
+			parts = append(parts, x.Name+", which starts with "+c+", cannot find a starts-with: it keeps the "+
+				"collation's order, where values with the same start need not sit together")
+		default:
+			parts = append(parts, x.Name+", which starts with "+c+", cannot serve its filter")
+		}
+	}
+	if len(none) > 0 {
+		parts = append([]string{"no index starts with " + strings.Join(none, " or ")}, parts...)
+	}
+	return strings.Join(parts, "; ")
 }
 
 func pgConcurrently(d dialect) string {
@@ -929,7 +1034,7 @@ func (l *linter) ruleJoinIndex() {
 			continue
 		}
 		sev := SevInfo
-		peq, prng := l.filterCols(c.parent)
+		peq, prng, _ := l.filterCols(c.parent)
 		narrowed := len(peq)+len(prng) > 0 || l.d.Limit > 0
 		if l.cat.big(c.et, hugeTable) && (narrowed || c.via.Kind.tests()) {
 			sev = SevWarn
@@ -1056,15 +1161,17 @@ func (l *linter) ruleSortIndex() {
 		}
 		sorted = append(sorted, s.Column)
 	}
-	eq, _ := l.filterCols(m)
+	eq, _, _ := l.filterCols(m)
 	want := append(slices.Clone(eq), sorted...)
 	for _, x := range l.cat.indexes(m.et) {
-		if !x.Partial && len(x.Cols) >= len(want) && slices.Equal(x.Cols[:len(want)], want) {
+		// an index on the equalities followed by the sort serves it; so does
+		// one on the sort alone when there are no equalities. Either way the
+		// sorted key columns must be kept in their own order (Index.sorts):
+		// a pattern one, or a hash index, holds no order a sort can read
+		if !x.Partial && len(x.Cols) >= len(want) && slices.Equal(x.Cols[:len(want)], want) && x.sorts(len(eq), len(want)) {
 			return
 		}
-		// an index on the equalities followed by the sort serves it; so does
-		// one on the sort alone when there are no equalities
-		if len(eq) == 0 && len(x.Cols) >= len(sorted) && slices.Equal(x.Cols[:len(sorted)], sorted) {
+		if len(eq) == 0 && len(x.Cols) >= len(sorted) && slices.Equal(x.Cols[:len(sorted)], sorted) && x.sorts(0, len(sorted)) {
 			return
 		}
 	}

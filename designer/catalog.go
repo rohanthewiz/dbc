@@ -39,6 +39,46 @@ type Index struct {
 	Primary bool     `json:"primary,omitempty"`
 	Partial bool     `json:"partial,omitempty"`
 	Method  string   `json:"method,omitempty"`
+	// Order is how a Postgres b-tree keeps each key column, parallel to
+	// Cols: orderPattern, orderC or "" (all "" when nil, and always on the
+	// other engines). It decides whether the column serves a starts-with.
+	Order []string `json:"order,omitempty"`
+}
+
+// The Order values, as the db package's listing spells them
+// (db.OrderPattern, db.OrderC, where what each serves is set out):
+//
+//	orderPattern  text_pattern_ops & co: byte order — = and a prefix, no
+//	              range or sort
+//	orderC        a C-ordered collation: byte order that is also the
+//	              collation's — all of them
+//	""            a linguistic collation's order — = and ranges, no prefix
+const (
+	orderPattern = "pattern"
+	orderC       = "c"
+)
+
+// order is key column i's Order ("" past its end, or with none listed).
+func (x Index) order(i int) string {
+	if i < len(x.Order) {
+		return x.Order[i]
+	}
+	return ""
+}
+
+// sorts reports whether the index keeps key columns [from, to) in each
+// column's own order, so that ORDER BY them can be read off it: a b-tree,
+// and none of them a pattern class (byte order, not the collation's).
+func (x Index) sorts(from, to int) bool {
+	if x.Method != "" && x.Method != "btree" {
+		return false
+	}
+	for i := from; i < to; i++ {
+		if x.order(i) == orderPattern {
+			return false
+		}
+	}
+	return true
 }
 
 // Size thresholds, in rows, matching the explain package's: below bigTable a
@@ -119,6 +159,65 @@ func (c *Catalog) leads(et *erd.Table, cols ...string) (Index, bool) {
 		}
 	}
 	return Index{}, false
+}
+
+// need is what one column's filters ask of an index that starts with it:
+// an equality (=, IN, IS NULL), a range (<, BETWEEN, a date range), a
+// prefix (a starts-with: LIKE 'abc%'). One of them served is enough — the
+// index finds those rows, and the others are checked on the rows found.
+type need struct{ eq, rng, prefix bool }
+
+// pg reports whether the catalog is a Postgres connection's, the engine
+// whose b-tree serves a prefix only in byte order. An unknown driver is
+// written for as Postgres (dialectOf), so it is judged as one too.
+func (c *Catalog) pg() bool { return c != nil && dialectOf(c.Driver).name == "postgres" }
+
+// finds reports whether some usable index of the table starts with col and
+// can find the rows col's filters ask for: leads, asked per kind of
+// filter. What a leading key column serves, by method:
+//
+//	btree    an equality always; a range unless it is a pattern class; a
+//	         prefix, on Postgres, only in byte order — a pattern class or
+//	         a C collation (orderPattern, orderC). Postgres turns LIKE
+//	         'abc%' into >= 'abc' AND < 'abd', which finds the right rows
+//	         only where they sit side by side; under en_US "ab-c" sorts
+//	         between "abc" and "abd". Elsewhere a prefix is served as
+//	         before: MySQL's b-tree finds one in any collation (SQLite's
+//	         case-blind LIKE wants a NOCASE index, which the listing does
+//	         not tell apart, so it is counted too)
+//	hash     an equality only
+//	spgist   a prefix, on Postgres: text_ops finds one in any collation
+//	         (and is the only built-in SP-GiST class for text)
+//
+// A trigram index (Catalog.trigram) serves a prefix on Postgres too, with
+// col anywhere in it. Partial indexes never count, as in leads.
+func (c *Catalog) finds(et *erd.Table, col string, nd need) bool {
+	if col == "" {
+		return false
+	}
+	pg := c.pg()
+	if nd.prefix && pg && c.trigram(et, col) {
+		return true
+	}
+	for _, x := range c.indexes(et) {
+		if x.Partial || len(x.Cols) == 0 || x.Cols[0] != col {
+			continue
+		}
+		var eq, rng, prefix bool
+		switch x.Method {
+		case "", "btree":
+			o := x.order(0)
+			eq, rng, prefix = true, o != orderPattern, !pg || o != ""
+		case "hash":
+			eq = true
+		case "spgist":
+			prefix = pg
+		}
+		if nd.eq && eq || nd.rng && rng || nd.prefix && prefix {
+			return true
+		}
+	}
+	return false
 }
 
 // trigram reports whether a listed GIN or GiST index of the table has col

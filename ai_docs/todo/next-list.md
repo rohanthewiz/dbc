@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-240
+**Next ID:** N-241
 
 ## Open
 
@@ -101,16 +101,6 @@ ten session docs in `ai_docs/claude_sessions/`
   so not script or pipeline tabs). Go snippets for script tabs would need
   a language field on a snippet (`userdata.Snippet`), so a SQL name does
   not fire in Go and the reverse. Nobody has asked.
-- **N-236** · raised `2026-1029-1718-n231-n232-n233-designer-import-saved-icase` · value medium
-  The designer treats *starts with* as served by a b-tree index on the
-  column (`lint.go sargable`) and its fix is a plain `CREATE INDEX … (col)`.
-  On Postgres that index serves `LIKE 'abc%'` only under the C collation;
-  in any other (the usual `en_US.UTF-8`) it needs `text_pattern_ops` (or
-  `COLLATE "C"`), so the advice is wrong and the ⚡ mark over-promises. The
-  fix: on Postgres, count a b-tree for a prefix only when its operator
-  class is a pattern one (the index listing would need `indclass`), and
-  suggest `CREATE INDEX … (col text_pattern_ops)` for a starts-with.
-  Nobody has bumped into it yet.
 - **N-238** · raised `2026-1029-1920-n235-like-escape-split` · value low
   sqlsplit's scanner still honors `\'` in every dialect (`skipQuoted`,
   MySQL's rule), so on Postgres, SQLite and bytdb any string literal ending
@@ -133,6 +123,17 @@ ten session docs in `ai_docs/claude_sessions/`
   the tables read into the result, as the comment there says; the import
   could then read that `o.*` back (it refuses `*` over a summary today).
   Contingent on someone running a summary with no columns ticked.
+- **N-240** · raised `2026-1030-1553-n236-pg-prefix-index-opclass` · value low
+  On SQLite the designer still counts a plain index as serving a
+  *starts with* (`catalog.go finds`: a prefix is served off Postgres). But
+  SQLite's LIKE ignores the case of A–Z by default (`case_sensitive_like`
+  off), so it uses only an index with `COLLATE NOCASE` for `LIKE 'ab%'`;
+  a plain (BINARY) one is never used (`EXPLAIN QUERY PLAN`: SCAN). The
+  size rules never speak on SQLite (no row estimates), so what shows is
+  the ⚡ over-promising. The fix: read each key column's collation in the
+  SQLite listing (`pragma_index_xinfo`'s `coll`, keys only) into
+  `Index.Order`, count a prefix only on a NOCASE one, and say so in the ⚡
+  title. Nobody has bumped into it.
 
 ## Validate
 
@@ -654,6 +655,17 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-236** · raised `2026-1029-1718-n231-n232-n233-designer-import-saved-icase` · value medium
+  The designer treats *starts with* as served by a b-tree index on the
+  column (`lint.go sargable`) and its fix is a plain `CREATE INDEX … (col)`.
+  On Postgres that index serves `LIKE 'abc%'` only under the C collation;
+  in any other (the usual `en_US.UTF-8`) it needs `text_pattern_ops` (or
+  `COLLATE "C"`), so the advice is wrong and the ⚡ mark over-promises. The
+  fix: on Postgres, count a b-tree for a prefix only when its operator
+  class is a pattern one (the index listing would need `indclass`), and
+  suggest `CREATE INDEX … (col text_pattern_ops)` for a starts-with.
+  Nobody has bumped into it yet.
+  closed 2026-10-30, `2026-1030-1553-n236-pg-prefix-index-opclass`: the Postgres index listing reads each key column's operator class and collation (`db/indexes.go`, a ninth column: `pattern` for a `*_pattern_ops` class, `c` for a C-ordered collation — libc C/POSIX, any builtin one, or the database default by `datlocprovider`/`datcollate`, read through `to_jsonb` so Postgres 11–14 still run it — else `''`), carried as `Index.Order`. `Catalog.finds` asks per kind of filter: a b-tree serves = always, a range unless pattern, a prefix on Postgres only when pattern or `c`; hash serves = only; SP-GiST and a trigram index serve a prefix. `ruleFilterIndex` uses it, names an index that starts with the column but cannot serve it and why (`unserved`), and for a column filtered only by a starts-with writes `(col text_pattern_ops)` (`bpchar_pattern_ops` for char(n)). The reverse is counted too: a pattern index serves no range, and no sort (`Index.sorts`, `ruleSortIndex`). The card's ⚡ is dimmed with a title saying which filters its index serves (`ColView.NoPrefix`, `NoRange`). README updated. Tests: `TestPrefixIndex`, `TestBuildIndexes`, `TestIndexesQueryOrderColumn`; `TestLiveDesigner` grows `qd_orders` to 20k rows, runs the rule's own fix, and checks the rule, the card and EXPLAIN agree for the pattern, plain and `COLLATE "C"` indexes — passed on Postgres 17 under en_US.utf8, a C database, a builtin C.UTF-8 one and an ICU one with `datcollate` C, and on MySQL 8.4. The same over-promise on SQLite (a plain index serves no case-blind LIKE) raised as N-240.
 - **N-237** · raised `2026-1029-1718-n231-n232-n233-designer-import-saved-icase` · value low
   Opening SQL as a design refuses a derived table, so the designer's own
   *summarize* join (`LEFT JOIN (SELECT key, sum(…) … GROUP BY key) s ON …`)

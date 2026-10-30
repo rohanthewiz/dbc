@@ -1,6 +1,7 @@
 package designer
 
 import (
+	"database/sql"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/rohanthewiz/dbc/erd"
 	"github.com/rohanthewiz/dbc/explain"
+	"github.com/rohanthewiz/dbc/sqlsplit"
+	_ "modernc.org/sqlite"
 )
 
 // shop is the fixture schema, a small store:
@@ -325,7 +328,7 @@ func TestFiltersAreWrittenSafely(t *testing.T) {
 	}
 	a := Analyze(d, cat)
 	wantSQL(t, a, "SELECT o.id\nFROM orders o\nWHERE o.created_at >= '2024-01-01' AND o.created_at < '2025-01-01'\n"+
-		`  AND o.ref LIKE '%50\%\_o''k%' ESCAPE '\'`+"\n"+
+		`  AND o.ref LIKE '%50\%\_o''k%'`+"\n"+
 		"  AND (o.status = 'a' OR (o.total BETWEEN 1 AND 2))\n"+
 		"  AND (o.status <> 'void' OR o.status IS NULL)\n"+
 		"  AND o.created_at >= '2024-02-29' AND o.created_at < '2024-03-01'\n"+
@@ -353,6 +356,106 @@ func TestFiltersAreWrittenSafely(t *testing.T) {
 	wantSQL(t, Analyze(d, cat), "SELECT o.id\nFROM orders o\nWHERE o.created_at >= '2026-10-21 09:30:00'")
 }
 
+// TestLikeEscapeScans: each engine's escaped LIKE, exactly, and the
+// statement still ending where it does for sqlsplit's scanner. That scanner
+// honors \' in every dialect, so an ESCAPE '\' on Postgres or SQLite read
+// as an open string and ran on into the next statement: Split saw one
+// where there were two.
+func TestLikeEscapeScans(t *testing.T) {
+	cat := shopCat()
+	d := build(t, cat, "orders")
+	d.Columns = outs(col(d, "o", "id"))
+	d.Filters = []Filter{
+		{Ref: col(d, "o", "ref"), Op: OpContains, Values: []string{`5!0%_\`}},
+		{Ref: col(d, "o", "status"), Op: OpEq, Values: []string{"a"}},
+	}
+	for _, c := range []struct{ driver, like string }{
+		{"postgres", `o.ref LIKE '%5!0\%\_\\%'`},
+		{"bytdb", `o.ref LIKE '%5!0\%\_\\%'`},
+		{"mysql", `o.ref LIKE '%5!0\\%\\_\\\\%' ESCAPE '\\'`},
+		{"sqlite", `o.ref LIKE '%5!!0!%!_\%' ESCAPE '!'`},
+	} {
+		cat.Driver = c.driver
+		sql := Analyze(d, cat).SQL
+		if want := "WHERE " + c.like + "\n  AND o.status = 'a'"; !strings.HasSuffix(sql, want) {
+			t.Errorf("%s:\n%s\n\nwant it to end\n%s", c.driver, sql, want)
+		}
+		stmts := sqlsplit.Split(sql + ";\nSELECT 2")
+		if len(stmts) != 2 || stmts[0].Text != sql || stmts[1].Text != "SELECT 2" {
+			t.Errorf("%s: split as %d statements: %+v", c.driver, len(stmts), stmts)
+		}
+	}
+
+	// the escape character alone is escaped only where a clause names it:
+	// SQLite's ! is plain text without ESCAPE '!', and so is its \
+	cat.Driver = "sqlite"
+	d.Filters = []Filter{{Ref: col(d, "o", "ref"), Op: OpStarts, Values: []string{`a!\b`}}}
+	wantSQL(t, Analyze(d, cat), "SELECT o.id\nFROM orders o\nWHERE o.ref LIKE 'a!!\\b%' ESCAPE '!'")
+	d.Filters[0].Values = []string{`a\b`}
+	wantSQL(t, Analyze(d, cat), "SELECT o.id\nFROM orders o\nWHERE o.ref LIKE 'a\\b%'")
+}
+
+// TestLikeEscapeRunsOnSQLite: SQLite itself runs the patterns written with
+// ESCAPE '!', and each matches its value literally — % and _ as
+// themselves, the ! escape and the \ (no escape there) too — the rows Go's
+// own contains, starts with and ends with pick.
+func TestLikeEscapeRunsOnSQLite(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// one connection: each :memory: connection is a database of its own
+	db.SetMaxOpenConns(1)
+	refs := []string{`50%`, `50x`, `a_b`, `axb`, `x!y`, `x!!y`, `xy`, `p\q`, `p\\q`, `!%`, `%!`, `\`, `ab\`, `ab`}
+	if _, err := db.Exec(`CREATE TABLE orders (id INTEGER PRIMARY KEY, ref TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	for i, r := range refs {
+		if _, err := db.Exec(`INSERT INTO orders VALUES (?, ?)`, i, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cat := shopCat()
+	cat.Driver = "sqlite"
+	d := build(t, cat, "orders")
+	d.Columns = outs(col(d, "o", "id"))
+	matches := map[string]func(s, v string) bool{
+		OpContains: strings.Contains, OpStarts: strings.HasPrefix, OpEnds: strings.HasSuffix,
+	}
+	for _, v := range []string{`50%`, `_`, `!`, `!!`, `\`, `!%`, `b\`, `x!y`} {
+		for op, match := range matches {
+			for _, icase := range []bool{false, true} {
+				d.Filters = []Filter{{Ref: col(d, "o", "ref"), Op: op, Values: []string{v}, IgnoreCase: icase}}
+				q := Analyze(d, cat).SQL
+				rows, err := db.Query(q)
+				if err != nil {
+					t.Fatalf("%s\n%s", err, q)
+				}
+				var got, want []int
+				for rows.Next() {
+					var id int
+					if err := rows.Scan(&id); err != nil {
+						t.Fatal(err)
+					}
+					got = append(got, id)
+				}
+				rows.Close()
+				slices.Sort(got)
+				for i, r := range refs {
+					if match(r, v) {
+						want = append(want, i)
+					}
+				}
+				if !slices.Equal(got, want) {
+					t.Errorf("%s %q: rows %v, want %v\n%s", op, v, got, want, q)
+				}
+			}
+		}
+	}
+}
+
 // TestIgnoreCase: contains, starts with and ends with can ignore case,
 // written in each engine's own way, and the index rules follow — an
 // ordinary index on the column no longer serves a starts-with.
@@ -366,7 +469,7 @@ func TestIgnoreCase(t *testing.T) {
 		// not a LIKE: the flag has nothing to do
 		{Ref: col(d, "o", "status"), Op: OpEq, Values: []string{"Open"}, IgnoreCase: true},
 	}
-	wantSQL(t, Analyze(d, cat), "SELECT o.id\nFROM orders o\nWHERE o.ref ILIKE '%50\\%%' ESCAPE '\\'\n"+
+	wantSQL(t, Analyze(d, cat), "SELECT o.id\nFROM orders o\nWHERE o.ref ILIKE '%50\\%%'\n"+
 		"  AND o.ref ILIKE 'AB%'\n  AND o.status = 'Open'")
 	cat.Driver = "bytdb"
 	if a := Analyze(d, cat); !strings.Contains(a.SQL, "o.ref ILIKE 'AB%'") {

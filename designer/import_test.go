@@ -46,6 +46,8 @@ func TestImportRoundTrip(t *testing.T) {
 	d.Filters = []Filter{
 		{Ref: col(d, "o", "created_at"), Op: OpYear, Values: []string{"2024"}},
 		{Ref: col(d, "o", "ref"), Op: OpContains, Values: []string{"50%_o'k"}},
+		// each engine's escape character in a value, and a backslash
+		{Ref: col(d, "o", "ref"), Op: OpEnds, Values: []string{`x!\y`}},
 		{Ref: col(d, "o", "status"), Op: OpEq, Values: []string{"a"}, Group: "A"},
 		{Ref: col(d, "o", "total"), Op: OpBetween, Values: []string{"1", "2"}, Group: "A"},
 		{Ref: col(d, "o", "status"), Op: OpNe, Values: []string{"void"}, OrNull: true},

@@ -1092,8 +1092,8 @@ func (b *binder) value(e *ex) (string, error) {
 
 // like binds [I]LIKE as contains, starts with or ends with — the only
 // patterns the designer writes: fixed text with % at one end or both. The
-// escape is ESCAPE's, else the engine's default (\ on Postgres and MySQL;
-// SQLite has none). lower(x) LIKE lower(v) and ILIKE ignore case.
+// escape is ESCAPE's, else the engine's default (\ on Postgres, MySQL and
+// bytdb; SQLite has none). lower(x) LIKE lower(v) and ILIKE ignore case.
 func (b *binder) like(c *ex, subj func(*ex) (Ref, error)) (Filter, error) {
 	if c.not {
 		return Filter{}, b.fail(c.pos, "NOT LIKE: the designer's patterns keep what matches — write it as an any-of of the other values, or open it in a query tab")

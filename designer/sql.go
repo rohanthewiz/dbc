@@ -416,9 +416,8 @@ func arityWords(n int) string {
 }
 
 // like writes a LIKE for contains, starts or ends. The value's own % and _
-// are escaped (and the escape character itself), with ESCAPE '\' written
-// out: SQLite has no default escape, and spelling it makes the statement
-// mean the same on every engine.
+// are escaped (and the escape character itself), with the escape that
+// likeEscape picks for the engine.
 //
 // icase asks for letters to match whatever their case:
 //
@@ -436,9 +435,10 @@ func arityWords(n int) string {
 // default …_ci), but it is right for a _bin or _cs one, which the
 // designer cannot tell apart; ruleContains points the trade-off out.
 func (g *gen) like(x, op, v string, icase bool) string {
-	esc := strings.ContainsAny(v, `%_\`)
+	e, clause := g.likeEscape()
+	esc := strings.ContainsAny(v, "%_"+e)
 	if esc {
-		v = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(v)
+		v = strings.NewReplacer(e, e+e, "%", e+"%", "_", e+"_").Replace(v)
 	}
 	switch op {
 	case OpContains:
@@ -457,10 +457,39 @@ func (g *gen) like(x, op, v string, icase bool) string {
 	default:
 		c = "lower(" + x + ") LIKE lower(" + g.dia.lit(v) + ")"
 	}
-	if esc {
-		c += " ESCAPE " + g.dia.lit(`\`)
+	if esc && clause {
+		c += " ESCAPE " + g.dia.lit(e)
 	}
 	return c
+}
+
+// likeEscape is the character a LIKE pattern escapes its own %, _ and
+// itself with, and whether an ESCAPE clause names it (else it is the
+// engine's default):
+//
+//	postgres, bytdb   \   no clause: backslash is the default escape, and
+//	                      the only one bytdb takes
+//	mysql             \   ESCAPE '\\', the literal's backslash doubled
+//	sqlite            !   ESCAPE '!': SQLite has no default escape
+//
+// The one spelling to avoid is ESCAPE '\' on an engine whose strings keep
+// backslashes as they are. sqlsplit's scanner, which Split, Run's choice of
+// statement and the editor's colors all rest on, honors a backslash before
+// a quote in every dialect (MySQL's rule), so it reads the literal '\' as
+// an open string that swallows whatever follows, the next statement
+// included. A backslash the pattern escapes itself always comes paired
+// (\\, \%, \_) and scans as it should. On SQLite a value's own backslash is
+// written single, so an ends-with value ending in one still leaves a lone
+// backslash before the quote, as any SQLite literal ending in one does:
+// only a split that knows the dialect reads that right.
+func (g *gen) likeEscape() (e string, clause bool) {
+	switch g.dia.name {
+	case "mysql":
+		return `\`, true
+	case "sqlite":
+		return "!", true
+	}
+	return `\`, false
 }
 
 // daysAgo is the instant n days before now, in the engine's own terms so the

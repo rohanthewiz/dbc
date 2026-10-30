@@ -188,6 +188,18 @@ func TestLiveDesigner(t *testing.T) {
 		check("ends with, ignoring case", k, "10 11")
 		k.Filters[0] = designer.Filter{Ref: ref(o, "ref", ""), Op: designer.OpContains, Values: []string{"50%_OFF"}, IgnoreCase: true}
 		check("escaped, ignoring case", k, "10")
+
+		// a backslash in the value, matched as itself: Postgres reads the
+		// pattern's \\ by its default escape, with no ESCAPE clause, MySQL
+		// by its ESCAPE '\\'
+		lit := `'p\q'`
+		if e.driver == "mysql" {
+			lit = `'p\\q'`
+		}
+		obsExec(t, obs, `UPDATE qd_orders SET ref = `+lit+` WHERE id = 12`)
+		k.Filters[0] = designer.Filter{Ref: ref(o, "ref", ""), Op: designer.OpContains, Values: []string{`p\q`}}
+		check("a backslash, escaped", k, "12")
+		obsExec(t, obs, `UPDATE qd_orders SET ref = NULL WHERE id = 12`)
 		k.Sorts = nil
 
 		// customers per country, counted once each through their orders

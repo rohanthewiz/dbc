@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-238
+**Next ID:** N-239
 
 ## Open
 
@@ -101,25 +101,6 @@ ten session docs in `ai_docs/claude_sessions/`
   so not script or pipeline tabs). Go snippets for script tabs would need
   a language field on a snippet (`userdata.Snippet`), so a SQL name does
   not fire in Go and the reverse. Nobody has asked.
-- **N-230** · raised `2026-1028-1242-query-designer` · value low
-  The query designer is dbc web only. A TUI view would need its own way to
-  show the canvas: cards and edges in cells, or a form with a list of
-  tables and joins. The rules, SQL, story and plan painting are in the
-  pure `designer` package, so only the drawing and editing are new.
-  Nobody has asked.
-- **N-235** · raised `2026-1029-1718-n231-n232-n233-designer-import-saved-icase` · value medium
-  sqlsplit's scanner honors a backslash before a quote in every dialect
-  (`skipQuoted`, MySQL's rule), so a Postgres string ending in a backslash
-  runs on past its quote — and the designer writes exactly one, `ESCAPE
-  '\'`, for any LIKE whose value holds `%`, `_` or `\`. With that SQL in a
-  query tab (⇪ Query, or typed) beside another statement, Split sees one
-  statement where there are two (checked: `… ESCAPE '\'\n AND x = 'a';
-  SELECT 2` splits as one), so Ctrl+Enter runs both, and the editor colors
-  what follows as a string. The cheap fix is in the generator: on Postgres
-  and SQLite write `ESCAPE '!'` (escaping `!` itself), which no scanner
-  misreads; bytdb accepts only `\` and MySQL's `'\\'` scans correctly, so
-  both keep theirs. The import already reads any one-character ESCAPE. A
-  dialect-aware split is the deeper fix, but the editor has no dialect.
 - **N-236** · raised `2026-1029-1718-n231-n232-n233-designer-import-saved-icase` · value medium
   The designer treats *starts with* as served by a b-tree index on the
   column (`lint.go sargable`) and its fix is a plain `CREATE INDEX … (col)`.
@@ -138,6 +119,19 @@ ten session docs in `ai_docs/claude_sessions/`
   matching the derived table's select list to aggregates of one table and
   mapping `s.sum_x`, `COALESCE(s.count, 0)` and the re-aggregated forms
   back to refs. Contingent on summarized designs being edited by hand.
+- **N-238** · raised `2026-1029-1920-n235-like-escape-split` · value low
+  sqlsplit's scanner still honors `\'` in every dialect (`skipQuoted`,
+  MySQL's rule), so on Postgres, SQLite and bytdb any string literal ending
+  in a backslash runs on past its quote. The designer no longer writes one
+  for a LIKE's escape (N-235), but it still writes one for an equality
+  value ending in `\` (`x = 'a\'`) and, on SQLite, for an ends-with value
+  ending in one (`LIKE '%a\' ESCAPE '!'`); typed SQL can hold one anywhere.
+  Split then merges that statement with the next, and the editor colors
+  what follows as a string. The fix is a dialect-aware scan: `skipQuoted`
+  taking the engine's rule (`''` only, except on MySQL), with a driver
+  passed to Split and Lex by their callers (the TUI editor, workspace
+  `pick`, headless `-f`, migrate, pipelines, codehl). Nobody has hit it;
+  it takes a value ending in a backslash.
 
 ## Validate
 
@@ -619,6 +613,13 @@ call.
   Add a key and a row on its result-tab menu (`tui/resulttabs.go`) if
   parity is wanted; no one has asked.
 
+- **N-230** · raised `2026-1028-1242-query-designer` · value low
+  The query designer is dbc web only. A TUI view would need its own way to
+  show the canvas: cards and edges in cells, or a form with a list of
+  tables and joins. The rules, SQL, story and plan painting are in the
+  pure `designer` package, so only the drawing and editing are new.
+  Nobody has asked.
+
 ## Non-goals
 
 - **N-012** · declined `2026-0728-2000-stmt-under-cursor-and-query-cancel` —
@@ -652,6 +653,20 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-235** · raised `2026-1029-1718-n231-n232-n233-designer-import-saved-icase` · value medium
+  sqlsplit's scanner honors a backslash before a quote in every dialect
+  (`skipQuoted`, MySQL's rule), so a Postgres string ending in a backslash
+  runs on past its quote — and the designer writes exactly one, `ESCAPE
+  '\'`, for any LIKE whose value holds `%`, `_` or `\`. With that SQL in a
+  query tab (⇪ Query, or typed) beside another statement, Split sees one
+  statement where there are two (checked: `… ESCAPE '\'\n AND x = 'a';
+  SELECT 2` splits as one), so Ctrl+Enter runs both, and the editor colors
+  what follows as a string. The cheap fix is in the generator: on Postgres
+  and SQLite write `ESCAPE '!'` (escaping `!` itself), which no scanner
+  misreads; bytdb accepts only `\` and MySQL's `'\\'` scans correctly, so
+  both keep theirs. The import already reads any one-character ESCAPE. A
+  dialect-aware split is the deeper fix, but the editor has no dialect.
+  closed 2026-10-29, `2026-1029-1920-n235-like-escape-split`: the generator picks its LIKE escape per engine (`sql.go likeEscape`): Postgres and bytdb escape with `\` and write no ESCAPE clause (backslash is their default, and bytdb's only one), MySQL keeps `ESCAPE '\\'`, SQLite writes `ESCAPE '!'` (escaping `!` itself; its `\` is plain text there). Not `ESCAPE '!'` on Postgres as proposed: there a value's own backslashes would be written single, so an ends-with value ending in one would leave a lone `\` before the quote again, while backslash escaping always pairs them. bytdb could not keep `ESCAPE '\'` either: the scanner misreads it there too. Literals ending in a backslash in general are raised as N-238. Tests: `TestLikeEscapeScans` (each engine's exact LIKE, and it splits from a following `SELECT 2`; fails on Postgres, bytdb and SQLite against the old generator), `TestLikeEscapeRunsOnSQLite` (SQLite runs the `!` patterns for contains/starts/ends, with and without ignore case, against Go's matching), `TestImportRoundTrip` (a value with `!` and `\`), `TestLiveDesigner` (a backslash value matched as itself on Postgres 17 and MySQL 8.4); bytdb's no-clause pattern checked in the real binary (`-f`, the next statement run on its own).
 - **N-233** · raised `2026-1028-1242-query-designer` · value low
   The designer's contains, starts with and ends with filters write plain
   LIKE. That is case-sensitive on Postgres, case-insensitive on SQLite for

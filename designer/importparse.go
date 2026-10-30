@@ -24,9 +24,9 @@ import (
 // scanner (which the editor colors with). That scanner honors a backslash
 // before a quote in every dialect, MySQL's rule, so that a split never
 // cuts a MySQL string short; on Postgres it misreads a string ending in a
-// backslash — and ESCAPE '\', which the generator writes, is one. A design
-// read from a misread string would be a different query, so each dialect's
-// own rules apply here:
+// backslash — such as a hand-written ESCAPE '\' (the generator no longer
+// writes one: likeEscape in sql.go). A design read from a misread string
+// would be a different query, so each dialect's own rules apply here:
 //
 //	            'string'           "name"     `name`   $tag$…$tag$   # comment
 //	postgres    '' only            name       —        string        —

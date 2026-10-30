@@ -208,6 +208,34 @@ func TestDesignImportRoute(t *testing.T) {
 		t.Fatalf("rows = %q\n%s", rows, a.SQL)
 	}
 
+	// a summary written by hand opens as summarize, and its design's
+	// statement returns the same rows on SQLite: a sum NULL and a count 0
+	// for the order with no payment
+	buf = "SELECT o.id, s.paid, COALESCE(s.n, 0) AS n FROM orders o\nLEFT JOIN (SELECT order_id, sum(amount) AS paid, count(*) AS n " +
+		"FROM payments GROUP BY order_id) s ON s.order_id = o.id\nORDER BY o.id"
+	got = decodeData[imported](t, e.api("POST", path, runBody(buf, 0, false), 200))
+	if a = got.Analysis; !a.Valid || len(a.Design.Joins) != 1 || a.Design.Joins[0].Kind != designer.JoinSummary {
+		t.Fatalf("summary analysis = %+v", a)
+	}
+	e.api("POST", "/api/v1/ws/"+id+"/run", runBody(a.SQL, 0, false), 200)
+	if ev, logs = s.await(t, "run"); !decodeData[runEvent](t, testEnvelope{Data: ev.Data}).OK {
+		t.Fatalf("the imported summary failed:\n%s\nlogs %q", a.SQL, logs)
+	}
+	res = decodeData[resultPage](t, e.api("GET", "/api/v1/ws/"+id+"/result?from=0&count=10", "", 200))
+	rows = nil
+	for _, r := range res.Cells {
+		cells := make([]string, len(r))
+		for i, c := range r {
+			if c != nil {
+				cells[i] = *c
+			}
+		}
+		rows = append(rows, strings.Join(cells, "|"))
+	}
+	if strings.Join(rows, " ") != "10|50|2 11|70|1 12||0" {
+		t.Fatalf("summary rows = %q\n%s", rows, a.SQL)
+	}
+
 	// refusals: what a design cannot say, and why, with its line
 	env := e.api("POST", path, runBody("SELECT id\nFROM orders\nWHERE total > (SELECT avg(total) FROM orders)", 0, false), 400)
 	if !strings.Contains(env.Error, "line 3 of the statement") || !strings.Contains(env.Error, "not with an expression") {

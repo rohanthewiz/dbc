@@ -1776,12 +1776,17 @@ rows. Some spellings are read in the designer's own terms, and the log
 says so: `[NOT] EXISTS` over one table becomes *has any* or *has none*,
 `x IN (SELECT …)` becomes *has any*, `a.x = b.y` in WHERE becomes a join,
 `>= a AND < b` on dates becomes a range, year or day, and a GROUP BY with
-no aggregate becomes DISTINCT. Anything a design cannot express is
-refused, with the reason and its line. That covers CTEs, UNIONs, window
-functions, derived tables, CASE, functions of a column, a column compared
-with an expression, `NOT IN (SELECT …)` (a single NULL empties it, which
-*has none* would not), and a RIGHT or FULL JOIN the designer would have
-to reorder.
+no aggregate becomes DISTINCT. A *summarize* join opens back as one, so
+its SQL can be edited by hand and reopened: a
+`LEFT JOIN (SELECT key, aggregates FROM t … GROUP BY key) s ON s.key = …`
+whose GROUP BY is exactly the key it joins on, with its columns read in the
+forms the designer writes them (`s.sum_x` and `COALESCE(s.count, 0)` per
+row, `sum(s.sum_x)` and the like when the query is grouped). Anything a
+design cannot express is refused, with the reason and its line. That
+covers CTEs, UNIONs, window functions, any other derived table, CASE,
+functions of a column, a column compared with an expression,
+`NOT IN (SELECT …)` (a single NULL empties it, which *has none* would
+not), and a RIGHT or FULL JOIN the designer would have to reorder.
 
 **What it gets right by construction.** The SQL is regenerated from the
 design on every edit and is never edited directly, so the design rules out

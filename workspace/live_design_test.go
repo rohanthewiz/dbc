@@ -230,6 +230,16 @@ func TestLiveDesigner(t *testing.T) {
 			`SELECT country, count(*) FROM qd_customers c, qd_orders o WHERE o.customer_id = c.id
 			  AND (o.total BETWEEN 10 AND 30 OR o.ref IS NULL) GROUP BY country HAVING count(*) >= 1 ORDER BY 2 DESC, 1`,
 			`SELECT o.id FROM qd_orders o WHERE NOT EXISTS (SELECT 1 FROM qd_payments p WHERE p.order_id = o.id) ORDER BY o.id`,
+			// summaries, as the designer writes them but named by hand:
+			// per order, and re-aggregated per customer
+			`SELECT o.id, s.paid, COALESCE(s.n, 0) AS n FROM qd_orders o
+			  LEFT JOIN (SELECT order_id, sum(amount) AS paid, count(*) AS n FROM qd_payments WHERE amount > 0 GROUP BY order_id) s
+			  ON s.order_id = o.id WHERE (s.paid > 10 OR s.paid IS NULL) ORDER BY o.id`,
+			`SELECT c.name, count(*) AS orders, COALESCE(sum(s.n), 0) AS payments, sum(s.paid) AS paid,
+			  sum(s.paid) * 1.0 / NULLIF(sum(s.cnt), 0) AS avg_paid
+			  FROM qd_customers c LEFT JOIN qd_orders o ON o.customer_id = c.id
+			  LEFT JOIN (SELECT order_id, sum(amount) AS paid, count(amount) AS cnt, count(*) AS n FROM qd_payments GROUP BY order_id) s
+			  ON s.order_id = o.id GROUP BY c.name ORDER BY c.name`,
 		} {
 			cat, err := w.DesignCatalog(ctx, nil)
 			if err != nil {

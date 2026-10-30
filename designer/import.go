@@ -27,7 +27,9 @@ import (
 //	                           ON col = col, USING; filters of a column
 //	                           against values (= <> < <= > >= BETWEEN IN
 //	                           LIKE ILIKE IS NULL), OR groups, HAVING,
-//	                           ORDER BY, LIMIT / OFFSET / FETCH
+//	                           ORDER BY, LIMIT / OFFSET / FETCH; a summary,
+//	                           LEFT JOIN (SELECT key, aggregates … GROUP BY
+//	                           key) s ON s.key = …, as summaryItem says
 //	read in the designer's     [NOT] EXISTS (one table)  → has any / has none
 //	terms (a note says so)     x IN (SELECT y FROM t …)  → has any
 //	                           a.x = b.y in WHERE        → an inner join
@@ -36,10 +38,10 @@ import (
 //	                           (x op v OR x IS NULL)     → "or empty"
 //	                           lower(x) LIKE lower(v)    → ignore case
 //	                           GROUP BY, no aggregate    → DISTINCT
-//	refused, with why          CTEs, set operations, derived tables, window
-//	                           functions, CASE, functions of a column, a
-//	                           column compared with a column or an
-//	                           expression, NOT IN (SELECT …), parameters…
+//	refused, with why          CTEs, set operations, other derived tables,
+//	                           window functions, CASE, functions of a
+//	                           column, a column compared with a column or
+//	                           an expression, NOT IN (SELECT …), parameters…
 //
 // The pipeline:
 //
@@ -101,7 +103,7 @@ func importStmt(text string, cat *Catalog) (Design, []string, error) {
 		return Design{}, nil, err
 	}
 	b := &binder{cat: cat, dia: dia, sql: text, opt: map[string]bool{}, using: map[string]string{},
-		ids: map[string]bool{}, jids: map[string]bool{}}
+		ids: map[string]bool{}, jids: map[string]bool{}, sums: map[string]bool{}}
 	if comment {
 		b.note("comments are not kept: the designer writes its own SQL")
 	}
@@ -121,6 +123,22 @@ type bound struct {
 	quoted bool   // that name was quoted: matched exactly
 	alias  bool   // it has an alias (so schema.table.column cannot name it)
 	pos    int
+	// sum is set for a derived table read as a summary (summaryItem): its
+	// columns are the derived table's, not et's, and et is nil. id is
+	// then the summarized table's, as the canvas has it.
+	sum *summed
+}
+
+// colName is x's column called name, as the statement may name it: one of
+// its table's, or for a summary one of the derived table's. "" when none.
+func (x *bound) colName(name string, quoted bool) string {
+	if x.sum != nil {
+		if c := x.sum.col(name, quoted); c != nil {
+			return c.name
+		}
+		return ""
+	}
+	return colOf(x.et, name, quoted)
 }
 
 // binder maps the AST onto a design.
@@ -142,6 +160,11 @@ type binder struct {
 	ids     map[string]bool
 	jids    map[string]bool
 	outs    []outRef // the select list as read, for GROUP BY, HAVING and ORDER BY
+	// sums are the summarized tables' IDs; sumUses each read of a
+	// summary's column, checked once the whole statement is read
+	// (summaryForms)
+	sums    map[string]bool
+	sumUses []sumUse
 }
 
 // outRef is one output as read: its ref and the name it goes by.
@@ -218,6 +241,9 @@ func (b *binder) bind(s *sel) error {
 		b.d.Filters = append(b.d.Filters, fs...)
 	}
 	if err := b.orderBy(s); err != nil {
+		return err
+	}
+	if err := b.summaryForms(); err != nil {
 		return err
 	}
 	// LIMIT ALL, -1 and MySQL's 2^64-1 were read as none (-1): the
@@ -317,6 +343,9 @@ func (b *binder) addTable(it fromItem) (*bound, error) {
 
 // fromItem binds one FROM table and its join.
 func (b *binder) fromItem(it fromItem) error {
+	if it.sub != nil {
+		return b.summaryItem(it)
+	}
 	x, err := b.addTable(it)
 	if err != nil {
 		return err
@@ -436,7 +465,10 @@ func (b *binder) usingJoin(it fromItem, x *bound, earlier []*bound, kind JoinKin
 		}
 		var hits []*bound
 		for _, o := range earlier {
-			if colOf(o.et, c, false) != "" {
+			if o.colName(c, false) != "" {
+				if o.sum != nil {
+					return b.fail(it.usingPos, "USING ("+c+") with the summary `"+o.name+"`'s column: write the ON")
+				}
 				hits = append(hits, o)
 			}
 		}
@@ -481,17 +513,32 @@ func colOf(et *erd.Table, name string, quoted bool) string {
 	return ""
 }
 
-// column binds a column reference, innermost level first: a bare name to
-// the one table of the nearest level that has it, a qualified one to the
-// table so named. levels[0] is the innermost scope.
+// column binds a column reference to a table's column. A summary's column
+// is not one: it is read only where the generator writes one (summaryRef).
 func (b *binder) column(e *ex, levels [][]*bound) (Ref, error) {
+	x, c, err := b.colRef(e, levels)
+	if err != nil {
+		return Ref{}, err
+	}
+	if x.sum != nil {
+		return Ref{}, b.fail(e.pos, b.text(e)+" is a column of the summary `"+x.name+"`: a summary is joined to its parent "+
+			"alone, and its aggregates are read only in the select list, a filter or a sort")
+	}
+	return Ref{Table: x.id, Column: c}, nil
+}
+
+// colRef binds a column reference, innermost level first: a bare name to
+// the one table of the nearest level that has it, a qualified one to the
+// table so named. levels[0] is the innermost scope. It returns the table
+// and the column's own name there (for a summary, the derived table's).
+func (b *binder) colRef(e *ex, levels [][]*bound) (*bound, string, error) {
 	n := len(e.parts)
 	name, quoted := e.parts[n-1], e.quoted[n-1]
 	if n == 1 {
 		for li, sc := range levels {
 			var hits []*bound
 			for _, x := range sc {
-				if colOf(x.et, name, quoted) != "" {
+				if x.colName(name, quoted) != "" {
 					hits = append(hits, x)
 				}
 			}
@@ -508,7 +555,7 @@ func (b *binder) column(e *ex, levels [][]*bound) (Ref, error) {
 			}
 			switch len(hits) {
 			case 1:
-				return Ref{Table: hits[0].id, Column: colOf(hits[0].et, name, quoted)}, nil
+				return hits[0], hits[0].colName(name, quoted), nil
 			case 0:
 				continue
 			}
@@ -516,9 +563,9 @@ func (b *binder) column(e *ex, levels [][]*bound) (Ref, error) {
 			for _, x := range hits {
 				names = append(names, x.name)
 			}
-			return Ref{}, b.fail(e.pos, "`"+name+"` is a column of "+strings.Join(names, " and ")+": say which")
+			return nil, "", b.fail(e.pos, "`"+name+"` is a column of "+strings.Join(names, " and ")+": say which")
 		}
-		return Ref{}, b.fail(e.pos, "no column `"+name+"` in the query's tables")
+		return nil, "", b.fail(e.pos, "no column `"+name+"` in the query's tables")
 	}
 	var x *bound
 	for _, sc := range levels {
@@ -538,13 +585,16 @@ func (b *binder) column(e *ex, levels [][]*bound) (Ref, error) {
 		}
 	}
 	if x == nil {
-		return Ref{}, b.fail(e.pos, "no table `"+strings.Join(e.parts[:n-1], ".")+"` in the query for "+b.text(e))
+		return nil, "", b.fail(e.pos, "no table `"+strings.Join(e.parts[:n-1], ".")+"` in the query for "+b.text(e))
 	}
-	c := colOf(x.et, name, quoted)
-	if c == "" {
-		return Ref{}, b.fail(e.pos, "`"+x.et.Name+"` has no column `"+name+"`")
+	c := x.colName(name, quoted)
+	switch {
+	case c == "" && x.sum != nil:
+		return nil, "", b.fail(e.pos, "the summary `"+x.name+"` has no column `"+name+"`")
+	case c == "":
+		return nil, "", b.fail(e.pos, "`"+x.et.Name+"` has no column `"+name+"`")
 	}
-	return Ref{Table: x.id, Column: c}, nil
+	return x, c, nil
 }
 
 // aggOf maps a call to an aggregate.
@@ -565,8 +615,18 @@ func (b *binder) subject(e *ex, levels [][]*bound, agg, outs bool) (Ref, error) 
 				}
 			}
 		}
+		if r, ok, err := b.summaryRef(e, levels, agg); ok || err != nil {
+			return r, err
+		}
 		return b.column(e, levels)
+	case "arith":
+		if r, ok, err := b.summaryRef(e, levels, agg); ok || err != nil {
+			return r, err
+		}
 	case "call":
+		if r, ok, err := b.summaryRef(e, levels, agg); ok || err != nil {
+			return r, err
+		}
 		a, ok := aggOf[e.val]
 		if !ok {
 			return Ref{}, b.fail(e.pos, b.text(e)+": the designer shows columns and their aggregates, not other functions of them")
@@ -611,6 +671,19 @@ func (b *binder) subject(e *ex, levels [][]*bound, agg, outs bool) (Ref, error) 
 
 func (b *binder) selectList(s *sel) error {
 	levels := [][]*bound{b.scope}
+	// a summary's * would be the derived table's columns as written, but
+	// the generator writes those from the aggregates asked of it
+	for _, it := range s.items {
+		if it.e.op != "star" {
+			continue
+		}
+		for _, x := range b.scope {
+			if x.sum != nil && (len(it.e.parts) == 0 || lookup([]*bound{x}, it.e.parts[len(it.e.parts)-1], it.e.quoted[len(it.e.quoted)-1]) != nil) {
+				return b.fail(it.e.pos, b.text(it.e)+" over the summary `"+x.name+"`: list the columns — the designer writes a "+
+					"summary's own from the aggregates asked of it")
+			}
+		}
+	}
 	// every item a star covering the FROM tables once each, in order: no
 	// columns at all, which the generator writes back as * (or a.*, b.*)
 	stars := len(s.items) > 0
@@ -681,6 +754,12 @@ func (b *binder) selectList(s *sel) error {
 		name := it.alias
 		if name == "" && r.Agg == AggNone {
 			name = r.Column
+		}
+		if name == "" && it.e.op == "col" && b.sums[r.Table] {
+			// p.paid shows as paid; the generator would name it sum_amount
+			if _, c, err := b.colRef(it.e, levels); err == nil {
+				name, o.Alias = c, c
+			}
 		}
 		if it.alias != "" && !(r.Agg == AggNone && strings.EqualFold(it.alias, r.Column)) {
 			o.Alias = it.alias
@@ -838,7 +917,8 @@ func (b *binder) cond(c *ex, levels [][]*bound, cx condCtx) ([]Filter, error) {
 			if m.op != "isnull" || m.not || o.op == "isnull" || m.kids[0].op != "col" {
 				continue
 			}
-			r, err := b.column(m.kids[0], levels)
+			// subject, not column: a summary's column (p.sum_amount) is one too
+			r, err := b.subject(m.kids[0], levels, cx.agg, false)
 			if err != nil {
 				return nil, err
 			}
@@ -1375,6 +1455,415 @@ func (b *binder) exists(c *ex, s *sel, in *ex, not bool, levels [][]*bound) ([]F
 	return b.mergeRanges(fs), nil
 }
 
+// ── summaries ──────────────────────────────────────────────────────────
+
+// summed is a derived table read as a summarized join: its columns, each a
+// key it is grouped (and joined) by, or an aggregate of its one table.
+type summed struct {
+	cols []sumCol
+}
+
+// sumCol is one column of a summary, by the name the derived table gives
+// it: key, a column of the table it is grouped by; else agg of col ("" for
+// count(*)). An aggregate given no name is kept with name "", which
+// nothing outside can name.
+type sumCol struct {
+	name string
+	key  string
+	agg  Agg
+	col  string
+}
+
+// col is the summary's column called name, or nil. A derived table's
+// column is named by an alias, which the engines fold as they fold any
+// unquoted name, so a name not quoted matches case-blind.
+func (s *summed) col(name string, quoted bool) *sumCol {
+	for i := range s.cols {
+		c := &s.cols[i]
+		if c.name != "" && (c.name == name || !quoted && strings.EqualFold(c.name, name)) {
+			return c
+		}
+	}
+	return nil
+}
+
+// sumUse is one read of a summary's column: where, and whether in its
+// grouped (re-aggregated) form.
+type sumUse struct {
+	e       *ex
+	grouped bool
+	parent  string // the summary's parent, as the statement calls it
+}
+
+// summaryItem binds a derived table in FROM as the designer's summarized
+// join (sql.go summarySelect), the one derived table the generator writes:
+//
+//	LEFT JOIN (
+//	    SELECT p.order_id, sum(p.amount) AS sum_amount, count(*) AS count
+//	    FROM payments p                    one table
+//	    WHERE p.amount > 0                 its filters, kept on it
+//	    GROUP BY p.order_id                its key, exactly
+//	) p ON p.order_id = o.id               the key, with one earlier table
+//
+// Anything else a derived table can compute is refused. Two parts carry
+// the meaning, so both are held to the generator's shape:
+//
+//   - LEFT JOIN: a summary keeps the rows of the parent that have none
+//     (their sum NULL, their count 0). An inner join drops them.
+//   - Grouped by exactly the columns it is joined on: then each parent
+//     row meets at most one summary row, so attaching it repeats nothing,
+//     which is the point of a summary. Grouped by more, a parent would
+//     meet one row per extra value. Joined on fewer, likewise.
+//
+// The derived table's alias becomes the canvas table's, since it is what
+// the outer statement calls it; the generator gives both the same.
+func (b *binder) summaryItem(it fromItem) error {
+	s := it.sub
+	switch {
+	case it.join == "":
+		return b.fail(it.pos, "a derived table first in FROM: the designer reads one as a summary of a table per row of "+
+			"another — start FROM that table, and LEFT JOIN the summary to it")
+	case it.join != "left":
+		return b.fail(it.pos, "a derived table joined other than by LEFT JOIN: the designer reads one as a summary, which "+
+			"keeps the rows that have none — write LEFT JOIN")
+	case it.using != nil:
+		return b.fail(it.usingPos, "USING on a summary: write the ON")
+	case len(s.from) != 1 || s.from[0].sub != nil:
+		return b.fail(s.pos, "a derived table over more than one table: the designer summarizes one table — join "+
+			"the others outside it")
+	case len(s.groupBy) == 0:
+		return b.fail(s.pos, "a derived table with no GROUP BY: the designer reads one as a summary per key — group it "+
+			"by the columns it is joined on")
+	case s.having != nil:
+		return b.fail(s.having.pos, "HAVING inside a summary: it drops whole groups, which then show as having none — "+
+			"filter the summarized rows inside (WHERE), or the totals outside")
+	case s.limit >= 0 || s.offset > 0:
+		return b.fail(s.pos, "LIMIT or OFFSET inside a summary: it keeps some groups and drops the others")
+	}
+	if len(s.orderBy) > 0 {
+		b.note("ORDER BY inside a summary orders nothing outside it: it is not kept")
+	}
+	// DISTINCT is kept by no note: a row per group is distinct already
+
+	t, err := b.addTable(s.from[0])
+	if err != nil {
+		return err
+	}
+	inner := [][]*bound{{t}}
+	tb := b.d.table(t.id)
+	tb.Alias = ""
+	if validAlias(it.alias) {
+		tb.Alias = it.alias
+	} else {
+		b.note("the alias `" + it.alias + "` is not a plain name, so the designer gives the summary of " + t.et.Name + " one of its own")
+	}
+	x := &bound{id: t.id, name: it.alias, alias: true, pos: it.pos, sum: &summed{}}
+	if lookup(b.scope, x.name, false) != nil {
+		return b.fail(it.pos, "`"+x.name+"` names two tables: give one an alias")
+	}
+
+	// its columns: keys and aggregates of its table
+	for _, si := range s.items {
+		e := si.e
+		var c sumCol
+		switch e.op {
+		case "col":
+			r, err := b.column(e, inner)
+			if err != nil {
+				return err
+			}
+			c = sumCol{name: r.Column, key: r.Column}
+		case "call":
+			r, err := b.subject(e, inner, true, false)
+			if err != nil {
+				return err
+			}
+			c = sumCol{agg: r.Agg, col: r.Column}
+		default:
+			return b.fail(e.pos, b.text(e)+" in a summary: the designer's summaries show their key and aggregates of the table")
+		}
+		if si.alias != "" {
+			c.name = si.alias
+		}
+		if c.name != "" && x.sum.col(c.name, false) != nil {
+			return b.fail(e.pos, "the summary `"+x.name+"` has two columns called `"+c.name+"`")
+		}
+		x.sum.cols = append(x.sum.cols, c)
+	}
+
+	// its key: exactly what it is grouped by, and every key shown grouped
+	var keys []string
+	for _, g := range s.groupBy {
+		var key string
+		switch g.op {
+		case "col":
+			r, err := b.column(g, inner)
+			if err != nil {
+				return err
+			}
+			key = r.Column
+		case "num":
+			k, err := strconv.Atoi(g.val)
+			if err != nil || k < 1 || k > len(x.sum.cols) || x.sum.cols[k-1].key == "" {
+				return b.fail(g.pos, "GROUP BY "+g.val+" in a summary: not one of its key columns")
+			}
+			key = x.sum.cols[k-1].key
+		default:
+			return b.fail(g.pos, "a summary grouped by "+b.text(g)+": the designer groups one by the columns it joins on")
+		}
+		if !slices.Contains(keys, key) {
+			keys = append(keys, key)
+		}
+	}
+	for _, c := range x.sum.cols {
+		if c.key != "" && !slices.Contains(keys, c.key) {
+			return b.fail(s.pos, "the summary shows `"+c.key+"` but is not grouped by it")
+		}
+	}
+
+	// the ON: each key paired with a column of one earlier table, nothing else
+	b.opt[x.id] = true
+	b.scope = append(b.scope, x)
+	levels := [][]*bound{b.scope}
+	var parent *bound
+	var pairs []Pair
+	joined := map[string]bool{}
+	for _, c := range conjuncts(it.on) {
+		if isConstTrue(c) {
+			continue
+		}
+		if c.op != "cmp" || c.val != "=" || c.kids[0].op != "col" || c.kids[1].op != "col" {
+			return b.fail(c.pos, b.text(c)+" in the summary's ON: the designer joins a summary on its key alone — filter the "+
+				"summarized rows inside it, or its totals in WHERE")
+		}
+		l, lc, err := b.colRef(c.kids[0], levels)
+		if err != nil {
+			return err
+		}
+		r, rc, err := b.colRef(c.kids[1], levels)
+		if err != nil {
+			return err
+		}
+		if l == x {
+			l, lc, r, rc = r, rc, l, lc
+		}
+		switch {
+		case r != x || l == x:
+			return b.fail(c.pos, b.text(c)+" in the summary's ON: the designer joins a summary on its key, with a table before it")
+		case l.sum != nil:
+			return b.fail(c.pos, b.text(c)+": a summary joined to another summary — the designer summarizes a table per row of a table")
+		case parent != nil && l != parent:
+			return b.fail(c.pos, "the summary `"+x.name+"` joined to two tables: the designer summarizes per row of one")
+		}
+		k := x.sum.col(rc, true)
+		if k.key == "" {
+			return b.fail(c.pos, b.text(c)+" joins on the summary's aggregate: the designer joins a summary on its key")
+		}
+		parent = l
+		if !joined[k.key] {
+			joined[k.key] = true
+			pairs = append(pairs, Pair{L: lc, R: k.key})
+		}
+	}
+	if parent == nil {
+		return b.fail(it.pos, "the summary `"+x.name+"` is joined on no key = column: the designer joins a summary on its key")
+	}
+	for _, k := range keys {
+		if !joined[k] {
+			return b.fail(it.pos, "the summary `"+x.name+"` is grouped by `"+k+"` but not joined on it: each `"+parent.name+
+				"` would meet one of its rows per "+k+" — join on every column it is grouped by, or group by fewer")
+		}
+	}
+	j := Join{ID: freshID("j", b.jids), Left: parent.id, Right: x.id, Kind: JoinSummary, On: pairs}
+	b.jids[j.ID] = true
+	b.d.Joins = append(b.d.Joins, j)
+	b.sums[x.id] = true
+
+	// its filters, on its table, in its own WHERE
+	var fs []Filter
+	for _, k := range conjuncts(s.where) {
+		if isConstTrue(k) {
+			continue
+		}
+		got, err := b.cond(k, inner, condCtx{only: t.id, where: "the summary"})
+		if err != nil {
+			return err
+		}
+		fs = append(fs, got...)
+	}
+	b.d.Filters = append(b.d.Filters, b.mergeRanges(fs)...)
+	return nil
+}
+
+// summaryRef reads e as a summary's aggregate, in the forms the generator
+// writes one (sql.go summaryExpr) — ok false when e is not about a
+// summary's column at all, so the caller reads it as anything else:
+//
+//	                 not grouped              grouped
+//	sum(x)           s.sum_x                  sum(s.sum_x)
+//	count(x)/(*)     COALESCE(s.count_x, 0)   COALESCE(sum(s.count_x), 0)
+//	min/max(x)       s.min_x                  min(s.min_x)
+//	avg(x)           s.avg_x                  sum(s.sum_x) * 1.0 / NULLIF(sum(s.count_x), 0)
+//	count(DISTINCT)  s.count_distinct_x       — (no form)
+//
+// Which form fits depends on the whole statement, not known yet: each read
+// is kept (sumUses) for summaryForms. A summary's column written another
+// way is refused, with the form that is meant: those are the spellings
+// that give a parent with no rows (no summary row) its right value, and
+// that re-aggregate per group without weighing parents wrongly.
+func (b *binder) summaryRef(e *ex, levels [][]*bound, agg bool) (Ref, bool, error) {
+	// asCol: e as a summary's column, or nil
+	asCol := func(e *ex) (*bound, *sumCol) {
+		if e == nil || e.op != "col" {
+			return nil, nil
+		}
+		x, c, err := b.colRef(e, levels)
+		if err != nil || x.sum == nil {
+			return nil, nil
+		}
+		return x, x.sum.col(c, true)
+	}
+	// sumOf: e as sum(<a summary's column>)
+	sumOf := func(e *ex) (*bound, *sumCol) {
+		if e == nil || e.op != "call" || e.val != "sum" || e.distinct || e.star || len(e.kids) != 1 {
+			return nil, nil
+		}
+		return asCol(e.kids[0])
+	}
+	num := func(e *ex, v float64) bool {
+		f, err := strconv.ParseFloat(e.val, 64)
+		return e.op == "num" && err == nil && f == v
+	}
+	// mentions: e names a summary's column anywhere
+	var mentions func(e *ex) bool
+	mentions = func(e *ex) bool {
+		if x, _ := asCol(e); x != nil {
+			return true
+		}
+		return e != nil && slices.ContainsFunc(e.kids, mentions)
+	}
+	use := func(x *bound, c *sumCol, a Agg, grouped bool) (Ref, bool, error) {
+		if grouped && !agg {
+			return Ref{}, false, b.fail(e.pos, "an aggregate in WHERE ("+b.text(e)+"): a condition on groups belongs in HAVING")
+		}
+		parent := ""
+		for _, j := range b.d.Joins {
+			if j.Right == x.id {
+				for _, p := range b.scope {
+					if p.id == j.Left {
+						parent = p.name
+					}
+				}
+			}
+		}
+		b.sumUses = append(b.sumUses, sumUse{e: e, grouped: grouped, parent: parent})
+		return Ref{Table: x.id, Column: c.col, Agg: a}, true, nil
+	}
+	refuse := func(why string) (Ref, bool, error) { return Ref{}, false, b.fail(e.pos, b.text(e)+": "+why) }
+
+	switch e.op {
+	case "col":
+		x, c := asCol(e)
+		switch {
+		case x == nil:
+			return Ref{}, false, nil
+		case c.key != "":
+			return refuse("the summary's key, which is its parent's column where it matches and NULL where it does not — show the parent's own")
+		case c.agg == AggCount:
+			return refuse("a count with no COALESCE: where there are none there is no summary row, so it is NULL — the designer " +
+				"writes COALESCE(" + strings.Trim(b.text(e), "`") + ", 0), which is 0")
+		}
+		return use(x, c, c.agg, false)
+	case "call":
+		if e.val == "coalesce" && len(e.kids) == 2 && num(e.kids[1], 0) {
+			if x, c := asCol(e.kids[0]); x != nil {
+				if c.agg != AggCount {
+					return refuse("COALESCE of a summary's " + string(c.agg) + ": the designer's is NULL where there are none, as SQL's " +
+						string(c.agg) + " of no rows is")
+				}
+				return use(x, c, AggCount, false)
+			}
+			if x, c := sumOf(e.kids[0]); x != nil {
+				if c.agg != AggCount {
+					return refuse("COALESCE of a summary's re-aggregated " + string(c.agg) + ": the designer's is NULL where there are none")
+				}
+				return use(x, c, AggCount, true)
+			}
+		}
+		if outer, ok := aggOf[e.val]; ok && len(e.kids) == 1 && !e.star {
+			x, c := asCol(e.kids[0])
+			if x == nil {
+				break
+			}
+			switch {
+			case e.distinct || c.key != "":
+			case outer == AggSum && c.agg == AggSum, outer == AggMin && c.agg == AggMin, outer == AggMax && c.agg == AggMax:
+				return use(x, c, c.agg, true)
+			case outer == AggSum && c.agg == AggCount:
+				return refuse("a sum of counts with no COALESCE: it is NULL for a group with none — the designer writes COALESCE(" +
+					strings.Trim(b.text(e), "`") + ", 0)")
+			case c.agg == AggAvg:
+				return refuse("an average re-aggregated: a parent with one row would weigh as much as one with a thousand — the " +
+					"designer writes sum(s.sum_x) * 1.0 / NULLIF(sum(s.count_x), 0), from a sum and a count of x in the summary")
+			case c.agg == AggCountDistinct:
+				return refuse("distinct counts per row cannot be added up across a group: one value may be counted under two of them")
+			}
+			return refuse("the designer re-aggregates a summary's sum and count with sum, its min with min and its max with max")
+		}
+	case "arith":
+		// sum(s.sum_x) * 1.0 / NULLIF(sum(s.count_x), 0): the average of x per group
+		if e.val == "/" && e.kids[0].op == "arith" && e.kids[0].val == "*" {
+			m, z := e.kids[0], e.kids[1]
+			sx, sc := sumOf(m.kids[0])
+			one := m.kids[1]
+			if sx == nil {
+				sx, sc = sumOf(m.kids[1])
+				one = m.kids[0]
+			}
+			if sx != nil && num(one, 1) && strings.ContainsAny(one.val, ".eE") &&
+				z.op == "call" && z.val == "nullif" && len(z.kids) == 2 && num(z.kids[1], 0) {
+				if cx, cc := sumOf(z.kids[0]); cx == sx && sc.agg == AggSum && cc.agg == AggCount && cc.col == sc.col && sc.col != "" {
+					return use(sx, sc, AggAvg, true)
+				}
+			}
+		}
+	}
+	if mentions(e) {
+		return refuse("the designer reads a summary's columns as it writes them: s.sum_x, s.min_x, s.max_x, s.avg_x or " +
+			"COALESCE(s.count, 0) per row; sum(s.sum_x), min(s.min_x), max(s.max_x), COALESCE(sum(s.count), 0) or " +
+			"sum(s.sum_x) * 1.0 / NULLIF(sum(s.count_x), 0) per group")
+	}
+	return Ref{}, false, nil
+}
+
+// summaryForms checks each summary column read against the statement as
+// the generator will write it (sql.go isGrouped): grouped when it shows,
+// filters or sorts by an aggregate of a table not summarized, or count(*);
+// then every summary column is re-aggregated, else each is read per row.
+// The other mix is a statement the designer cannot write: a summary's
+// value per row inside groups, or groups of nothing but re-aggregated
+// summaries (the generator would group by nothing, and so not at all).
+func (b *binder) summaryForms() error {
+	if len(b.sumUses) == 0 {
+		return nil
+	}
+	other := func(r Ref) bool { return r.Agg != AggNone && !b.sums[r.Table] }
+	grouped := slices.ContainsFunc(b.d.Columns, func(o Output) bool { return other(o.Ref) }) ||
+		slices.ContainsFunc(b.d.Filters, func(f Filter) bool { return other(f.Ref) }) ||
+		slices.ContainsFunc(b.d.Sorts, func(s Sort) bool { return other(s.Ref) })
+	for _, u := range b.sumUses {
+		switch {
+		case u.grouped && !grouped:
+			return b.fail(u.e.pos, b.text(u.e)+" re-aggregates a summary, but nothing else is aggregated: the designer then "+
+				"shows a summary's value per `"+u.parent+"`, and groups only for another table's aggregate or count(*)")
+		case !u.grouped && grouped:
+			return b.fail(u.e.pos, b.text(u.e)+" is a summary's value per `"+u.parent+"`, but the query is grouped: the "+
+				"designer re-aggregates it per group (sum of a sum, min of a min, COALESCE(sum(…), 0) of a count)")
+		}
+	}
+	return nil
+}
+
 // ── GROUP BY, ORDER BY ─────────────────────────────────────────────────
 
 // aggregated reports whether the statement aggregates anywhere.
@@ -1482,7 +1971,7 @@ func (b *binder) orderBy(s *sel) error {
 				return b.fail(e.pos, "ORDER BY "+e.val+": there is no output column "+e.val)
 			}
 			r = b.outs[k-1].ref
-		case "col", "call":
+		case "col", "call", "arith":
 			var err error
 			if r, err = b.subject(e, levels, true, true); err != nil {
 				return err
@@ -1549,7 +2038,9 @@ func (b *binder) place() error {
 			}
 		}
 		for _, x := range b.scope {
-			want = append(want, x.id)
+			if x.sum == nil { // a summary is a leaf the tree puts back where it was
+				want = append(want, x.id)
+			}
 		}
 		if !slices.Equal(got, want) {
 			return b.fail(b.rightAt, "the designer writes the joins out from the first table, step by step, which would move "+

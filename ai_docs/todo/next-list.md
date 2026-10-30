@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-239
+**Next ID:** N-240
 
 ## Open
 
@@ -111,14 +111,6 @@ ten session docs in `ai_docs/claude_sessions/`
   class is a pattern one (the index listing would need `indclass`), and
   suggest `CREATE INDEX … (col text_pattern_ops)` for a starts-with.
   Nobody has bumped into it yet.
-- **N-237** · raised `2026-1029-1718-n231-n232-n233-designer-import-saved-icase` · value low
-  Opening SQL as a design refuses a derived table, so the designer's own
-  *summarize* join (`LEFT JOIN (SELECT key, sum(…) … GROUP BY key) s ON …`)
-  cannot be read back: ⇪ Query, then ◇ Open as a design, round-trips every
-  other shape (`TestImportRoundTrip`) but not that one. Reading it means
-  matching the derived table's select list to aggregates of one table and
-  mapping `s.sum_x`, `COALESCE(s.count, 0)` and the re-aggregated forms
-  back to refs. Contingent on summarized designs being edited by hand.
 - **N-238** · raised `2026-1029-1920-n235-like-escape-split` · value low
   sqlsplit's scanner still honors `\'` in every dialect (`skipQuoted`,
   MySQL's rule), so on Postgres, SQLite and bytdb any string literal ending
@@ -132,6 +124,15 @@ ten session docs in `ai_docs/claude_sessions/`
   passed to Split and Lex by their callers (the TUI editor, workspace
   `pick`, headless `-f`, migrate, pipelines, codehl). Nobody has hit it;
   it takes a value ending in a backslash.
+- **N-239** · raised `2026-1029-1937-n237-import-summary-join` · value low
+  A design with a summary and nothing ticked writes `SELECT *` (`sql.go
+  selectList`: the stars skip the summary, and a single star is written
+  as `*`), so the result also shows the summary's own columns: its key
+  and the `count` the generator puts in an empty derived table. Writing
+  the parent's `o.*` whenever a summary is on the canvas would show only
+  the tables read into the result, as the comment there says; the import
+  could then read that `o.*` back (it refuses `*` over a summary today).
+  Contingent on someone running a summary with no columns ticked.
 
 ## Validate
 
@@ -653,6 +654,15 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-237** · raised `2026-1029-1718-n231-n232-n233-designer-import-saved-icase` · value low
+  Opening SQL as a design refuses a derived table, so the designer's own
+  *summarize* join (`LEFT JOIN (SELECT key, sum(…) … GROUP BY key) s ON …`)
+  cannot be read back: ⇪ Query, then ◇ Open as a design, round-trips every
+  other shape (`TestImportRoundTrip`) but not that one. Reading it means
+  matching the derived table's select list to aggregates of one table and
+  mapping `s.sum_x`, `COALESCE(s.count, 0)` and the re-aggregated forms
+  back to refs. Contingent on summarized designs being edited by hand.
+  closed 2026-10-29, `2026-1029-1937-n237-import-summary-join`: a derived table in FROM is parsed (`importparse.go parseFrom`, `fromItem.sub`) and bound as a summary when it is the generator's shape (`import.go summaryItem`): LEFT JOIN, one table with its filters inside, grouped by exactly the key columns it is joined on with one earlier table, and nothing else in its ON; the derived alias becomes the canvas table's. The outer statement's summary columns are read in the generator's forms (`summaryRef`): `s.sum_x`, `s.min_x`, `s.max_x`, `s.avg_x`, `s.count_distinct_x` and `COALESCE(s.count, 0)` per row; `sum(s.sum_x)`, `min`, `max`, `COALESCE(sum(s.count), 0)` and `sum(s.sum_x) * 1.0 / NULLIF(sum(s.count_x), 0)` per group, with `summaryForms` refusing a form that does not match how the generator will group. Hand-made names are kept as output aliases. Everything else is refused with the fix: an inner join, no GROUP BY, grouped by more than joined on, HAVING/LIMIT inside, two tables inside, `*` over a summary, a summary column in another join, a bare count, COALESCE of a sum, an average of averages, a form that does not match the grouping. Column lookup split into `colRef` and `column` so a summary's columns are never read as a table's. README's import paragraph updated. Tests: `TestImportRoundTrip` (three summary designs on all four dialects), `TestImportHandWritten` (two), `TestImportRefuses` (19 summary cases), `TestLiveDesigner` (two hand-written summaries, same rows as their designs on Postgres 17 and MySQL 8.4), `TestDesignImportRoute` (the route on SQLite, rows checked). The no-columns summary's `SELECT *` raised as N-239.
 - **N-235** · raised `2026-1029-1718-n231-n232-n233-designer-import-saved-icase` · value medium
   sqlsplit's scanner honors a backslash before a quote in every dialect
   (`skipQuoted`, MySQL's rule), so a Postgres string ending in a backslash

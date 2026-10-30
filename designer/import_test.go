@@ -101,6 +101,39 @@ func TestImportRoundTrip(t *testing.T) {
 	// nothing ticked over two tables: a.*, b.*
 	designs = append(designs, build(t, cat, "orders", "payments"))
 
+	// summaries (a derived table per child): every aggregate per row, a
+	// filter inside, filters and a sort on the totals in WHERE
+	d = build(t, cat, "orders", "payments")
+	d.Joins[0].Kind = JoinSummary
+	d.Columns = outs(col(d, "o", "id"), agg(d, AggSum, "p", "amount"), agg(d, AggCount, "p", ""),
+		agg(d, AggCount, "p", "amount"), agg(d, AggMin, "p", "paid_on"), agg(d, AggMax, "p", "amount"),
+		agg(d, AggAvg, "p", "amount"), agg(d, AggCountDistinct, "p", "paid_on"))
+	d.Filters = []Filter{
+		{Ref: col(d, "p", "amount"), Op: OpGt, Values: []string{"0"}},
+		{Ref: agg(d, AggSum, "p", "amount"), Op: OpGt, Values: []string{"10"}, OrNull: true},
+		{Ref: agg(d, AggCount, "p", ""), Op: OpGe, Values: []string{"1"}},
+	}
+	d.Sorts = []Sort{{Ref: agg(d, AggSum, "p", "amount"), Desc: true}, {Ref: col(d, "o", "id")}}
+	designs = append(designs, d)
+
+	// grouped outside too: each re-aggregated, avg from its parts, a
+	// HAVING on a total
+	d = build(t, cat, "customers", "orders", "payments")
+	d.Joins[1].Kind = JoinSummary
+	d.Columns = outs(col(d, "c", "country"), agg(d, AggAvg, "p", "amount"), agg(d, AggCount, "p", ""),
+		agg(d, AggSum, "p", "amount"), agg(d, AggMin, "p", "amount"), agg(d, AggMax, "p", "paid_on"), Ref{Agg: AggCount})
+	d.Filters = []Filter{{Ref: agg(d, AggSum, "p", "amount"), Op: OpGt, Values: []string{"100"}}}
+	d.Sorts = []Sort{{Ref: agg(d, AggCount, "p", ""), Desc: true}, {Ref: agg(d, AggAvg, "p", "amount")}}
+	designs = append(designs, d)
+
+	// two children summarized under one parent; one asked for nothing,
+	// so its derived table holds the count the generator puts there
+	d = build(t, cat, "orders", "payments", "order_lines")
+	d.Joins[0].Kind, d.Joins[1].Kind = JoinSummary, JoinSummary
+	d.Columns = outs(col(d, "o", "id"), agg(d, AggSum, "p", "amount"))
+	d.Filters = []Filter{{Ref: col(d, "ol", "qty"), Op: OpGt, Values: []string{"1"}}}
+	designs = append(designs, d)
+
 	for _, driver := range []string{"postgres", "mysql", "sqlite", "bytdb"} {
 		cat.Driver = driver
 		for i, d := range designs {
@@ -185,6 +218,41 @@ func TestImportHandWritten(t *testing.T) {
 	if d.Filters[0].Op != OpLastDays || d.Filters[0].Values[0] != "14" || d.Limit != 0 || d.Offset != 3 || len(d.Columns) != 0 {
 		t.Fatalf("sqlite: %+v", d)
 	}
+
+	// a summary written by hand: its own names for the derived table and
+	// its columns, a bare key, GROUP BY 1, an ordering inside that orders
+	// nothing; read as summarize, and written back in the designer's terms
+	cat.Driver = "postgres"
+	d, notes = importOK(t, cat, `SELECT o.id, s.paid, COALESCE(s.n, 0) AS payments
+		FROM orders o
+		LEFT OUTER JOIN (
+		  SELECT order_id, sum(amount) AS paid, count(*) AS n
+		  FROM payments
+		  WHERE paid_on >= '2024-01-01' AND paid_on < '2025-01-01'
+		  GROUP BY 1
+		  ORDER BY 1
+		) AS s ON o.id = s.order_id
+		WHERE s.paid > 10
+		ORDER BY paid DESC`)
+	if j := d.Joins[0]; j.Kind != JoinSummary || j.FK != "payments_order_id_fkey" || d.Tables[1].Alias != "s" ||
+		!strings.Contains(strings.Join(notes, "\n"), "ORDER BY inside a summary") {
+		t.Fatalf("summary: %+v %+v %q", d.Joins, d.Tables, notes)
+	}
+	a = Analyze(d, cat)
+	wantSQL(t, a, "SELECT o.id, s.sum_amount AS paid, COALESCE(s.count, 0) AS payments\nFROM orders o\nLEFT JOIN (\n"+
+		"    SELECT s.order_id, sum(s.amount) AS sum_amount, count(*) AS count\n    FROM payments s\n"+
+		"    WHERE s.paid_on >= '2024-01-01' AND s.paid_on < '2025-01-01'\n    GROUP BY s.order_id\n) s ON s.order_id = o.id\n"+
+		"WHERE s.sum_amount > 10\nORDER BY s.sum_amount DESC")
+
+	// grouped outside, so the summary re-aggregated: orders and payments
+	// per customer, counted without the payments multiplying the orders
+	d, _ = importOK(t, cat, `select c.name, count(*) as orders, coalesce(sum(t.cnt), 0) as payments
+		from customers c join orders o on o.customer_id = c.id
+		left join (select pay.order_id, count(*) cnt from payments pay group by pay.order_id) t on t.order_id = o.id
+		group by c.name`)
+	if a = Analyze(d, cat); !a.Valid || !a.Grouped || d.Columns[2].Ref != (Ref{Table: d.Tables[2].ID, Agg: AggCount}) {
+		t.Fatalf("grouped summary: %v %+v\n%s", rules(a), d.Columns, a.SQL)
+	}
 }
 
 // TestImportRefuses: what a design cannot say is refused, with the reason
@@ -195,7 +263,7 @@ func TestImportRefuses(t *testing.T) {
 		{"WITH x AS (SELECT 1) SELECT * FROM x", "WITH clause"},
 		{"SELECT id FROM orders UNION SELECT id FROM payments", "UNION"},
 		{"SELECT id, row_number() OVER (ORDER BY id) FROM orders", "window function"},
-		{"SELECT * FROM (SELECT id FROM orders) s", "derived table"},
+		{"SELECT * FROM (SELECT id FROM orders) s", "derived table first in FROM"},
 		{"SELECT CASE WHEN total > 5 THEN 1 END FROM orders", "CASE"},
 		{"SELECT upper(name) FROM customers", "not other functions"},
 		{"SELECT id FROM orders WHERE id NOT IN (SELECT order_id FROM payments)", "NOT IN (SELECT"},
@@ -217,6 +285,37 @@ func TestImportRefuses(t *testing.T) {
 			"RIGHT or FULL JOIN"},
 	}
 	for _, c := range cases {
+		refused(t, cat, c.sql, c.want)
+	}
+
+	// derived tables: only the summary the generator writes, and its
+	// columns only in the forms it writes them
+	const pay = "(SELECT order_id, sum(amount) AS s, count(*) AS n, avg(amount) AS a FROM payments GROUP BY order_id) p"
+	for _, c := range []struct{ sql, want string }{
+		{"SELECT o.id FROM orders o JOIN " + pay + " ON p.order_id = o.id", "LEFT JOIN"},
+		{"SELECT o.id FROM orders o LEFT JOIN (SELECT order_id, amount FROM payments) p ON p.order_id = o.id", "no GROUP BY"},
+		{"SELECT o.id FROM orders o LEFT JOIN (SELECT order_id, paid_on, sum(amount) AS s FROM payments GROUP BY order_id, paid_on) p " +
+			"ON p.order_id = o.id", "not joined on it"},
+		{"SELECT o.id FROM orders o LEFT JOIN (SELECT order_id, sum(amount) AS s FROM payments GROUP BY order_id HAVING sum(amount) > 5) p " +
+			"ON p.order_id = o.id", "HAVING inside a summary"},
+		{"SELECT o.id FROM orders o LEFT JOIN (SELECT p.order_id, sum(ol.amount) AS s FROM payments p JOIN order_lines ol " +
+			"ON ol.order_id = p.order_id GROUP BY p.order_id) x ON x.order_id = o.id", "more than one table"},
+		{"SELECT o.id FROM orders o LEFT JOIN (SELECT order_id, sum(amount) AS s FROM payments GROUP BY order_id) ON order_id = o.id", "no alias"},
+		{"SELECT o.id, p.n FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id", "COALESCE(p.n, 0)"},
+		{"SELECT o.id, COALESCE(p.s, 0) FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id", "COALESCE of a summary's sum"},
+		{"SELECT p.order_id FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id", "the summary's key"},
+		{"SELECT * FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id", "over the summary"},
+		{"SELECT o.id FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id AND p.s > 5", "in the summary's ON"},
+		{"SELECT o.id FROM orders o LEFT JOIN " + pay + " ON p.s = o.total", "aggregate"},
+		{"SELECT o.id FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id JOIN order_lines ol ON ol.order_id = p.order_id",
+			"is a column of the summary"},
+		{"SELECT o.status, sum(p.s) FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id GROUP BY o.status", "nothing else is aggregated"},
+		{"SELECT o.status, count(*), p.s FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id GROUP BY o.status", "the query is grouped"},
+		{"SELECT o.status, count(*), avg(p.a) FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id GROUP BY o.status", "average re-aggregated"},
+		{"SELECT o.status, count(*), sum(p.n) FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id GROUP BY o.status", "no COALESCE"},
+		{"SELECT o.id FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id WHERE sum(p.s) > 5", "aggregate in WHERE"},
+		{"SELECT o.id, p.s + 1 FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id", "as it writes them"},
+	} {
 		refused(t, cat, c.sql, c.want)
 	}
 	// where: the line of what was refused, in the buffer given

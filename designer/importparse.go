@@ -13,7 +13,8 @@ import (
 //	stmt    SELECT [DISTINCT] item, … FROM from [WHERE e] [GROUP BY e, …]
 //	        [HAVING e] [ORDER BY e [ASC|DESC], …] [LIMIT …] [OFFSET …]
 //	        [FETCH FIRST n ROWS ONLY] [;]
-//	from    table [[AS] alias] { join table [[AS] alias] [ON e | USING (c, …)] | , table … }
+//	from    table [[AS] alias] { join item [ON e | USING (c, …)] | , table … }
+//	item    table [[AS] alias] | (SELECT …) [AS] alias
 //	join    [INNER] JOIN | LEFT [OUTER] JOIN | RIGHT [OUTER] JOIN | FULL [OUTER] JOIN | CROSS JOIN
 //	e       OR < AND < NOT < comparison, IS [NOT] NULL, [NOT] BETWEEN, [NOT] IN,
 //	        [NOT] LIKE/ILIKE [ESCAPE s] < || + - < * / % < unary - < ::type < primary
@@ -254,6 +255,7 @@ type fromItem struct {
 	pos          int
 	schema, name string
 	quoted       bool   // the name was quoted: matched exactly
+	sub          *sel   // a derived table, (SELECT …) alias, in place of a name
 	alias        string // "" none
 	join         string // "" (the first), "inner", "left", "right", "full", "cross", "comma"
 	on           *ex
@@ -652,33 +654,49 @@ func (p *parser) parseFrom(s *sel) error {
 		if p.is("lateral") {
 			return p.fail(p.peek().pos, "LATERAL: the designer's tables are plain tables")
 		}
-		if p.isPunct("(") {
-			if p.peekN(1).kind == tWord && p.peekN(1).val == "select" {
-				return p.fail(p.peek().pos, "a subquery in FROM (a derived table): the designer's tables are tables and views — "+
-					"save the subquery as a view, or open it on its own")
-			}
-			return p.fail(p.peek().pos, "joins in parentheses: write them one after another")
-		}
 		it := fromItem{pos: p.peek().pos, join: join}
-		name, quoted, err := p.nameNext("a table")
-		if err != nil {
-			return err
-		}
-		it.name, it.quoted = name, quoted
-		if p.punct(".") {
-			it.schema = it.name
-			if it.name, it.quoted, err = p.nameNext("a table after the schema"); err != nil {
+		var err error
+		if p.isPunct("(") {
+			if p.peekN(1).kind != tWord || p.peekN(1).val != "select" {
+				return p.fail(p.peek().pos, "joins in parentheses: write them one after another")
+			}
+			// a derived table: read whole for the binder, which takes the
+			// one the generator writes (a summary, import.go summaryItem)
+			// and refuses the rest
+			p.next()
+			if it.sub, err = p.parseSelect(); err != nil {
 				return err
 			}
-			if p.isPunct(".") {
-				return p.fail(p.peek().pos, "a table named with its database too: name it by schema and table")
+			if err := p.expectPunct(")", ") closing the derived table"); err != nil {
+				return err
 			}
-		}
-		if p.isPunct("(") {
-			return p.fail(it.pos, "a function in FROM (`"+it.name+"(…)`): the designer's tables are tables and views")
-		}
-		if it.alias, err = p.aliasNext(); err != nil {
-			return err
+			if it.alias, err = p.aliasNext(); err != nil {
+				return err
+			}
+			if it.alias == "" {
+				return p.fail(it.pos, "a derived table with no alias: name it (`) s`), as Postgres and MySQL require")
+			}
+		} else {
+			name, quoted, err := p.nameNext("a table")
+			if err != nil {
+				return err
+			}
+			it.name, it.quoted = name, quoted
+			if p.punct(".") {
+				it.schema = it.name
+				if it.name, it.quoted, err = p.nameNext("a table after the schema"); err != nil {
+					return err
+				}
+				if p.isPunct(".") {
+					return p.fail(p.peek().pos, "a table named with its database too: name it by schema and table")
+				}
+			}
+			if p.isPunct("(") {
+				return p.fail(it.pos, "a function in FROM (`"+it.name+"(…)`): the designer's tables are tables and views")
+			}
+			if it.alias, err = p.aliasNext(); err != nil {
+				return err
+			}
 		}
 		if p.isPunct("(") {
 			return p.fail(p.peek().pos, "column aliases on a table (`t(a, b)`): use the table's own column names")

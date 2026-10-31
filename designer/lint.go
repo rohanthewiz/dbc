@@ -911,18 +911,23 @@ func (l *linter) sizeWords(n *node) string {
 // by. Some index must start with a filtered column AND serve that
 // column's kind of filter (Catalog.finds): on Postgres a b-tree in a
 // linguistic collation starts with the column yet cannot find a prefix,
-// and a pattern one cannot find a range. The fix it writes:
+// and a pattern one cannot find a range; on SQLite a b-tree finds a
+// prefix only in NOCASE. The fix it writes:
 //
 //	the equalities, then one range column  (status, created_at)
 //	… that range only a starts-with, on    (status, ref text_pattern_ops)
 //	Postgres: a pattern class, the one
 //	b-tree that finds a prefix in any
 //	collation
+//	… on SQLite: the case-blind order its  (status, ref COLLATE NOCASE)
+//	LIKE matches in
 //
 // A plain index would also find the prefix under a C collation, but with
 // no index on the column the listing cannot say what the collation is;
 // the pattern one is right under any, at the cost of serving no range or
-// sort on that column — the why says so.
+// sort on that column — the why says so. SQLite has no row estimates, so
+// in practice the rule never speaks there; the fix is still the one its
+// planner would use, should it.
 func (l *linter) ruleFilterIndex() {
 	if l.cat == nil || !l.cat.IndexesKnown {
 		return
@@ -946,13 +951,19 @@ func (l *linter) ruleFilterIndex() {
 		lastWord := "the range"
 		if len(rng) > 0 {
 			want = append(want, rng[0])
-			if nd := needs[rng[0]]; l.cat.pg() && nd.prefix && !nd.rng {
-				typ := ""
-				if c := n.et.Col(rng[0]); c != nil {
-					typ = c.Type
-				}
+			if nd := needs[rng[0]]; (l.cat.pg() || l.cat.sqlite()) && nd.prefix && !nd.rng {
 				ops = make([]string, len(want))
-				ops[len(want)-1] = patternOps(typ)
+				if l.cat.sqlite() {
+					// a key column's own COLLATE, which createIndex
+					// writes after the name as it does a class
+					ops[len(want)-1] = "COLLATE NOCASE"
+				} else {
+					typ := ""
+					if c := n.et.Col(rng[0]); c != nil {
+						typ = c.Type
+					}
+					ops[len(want)-1] = patternOps(typ)
+				}
 				lastWord = "the starts-with"
 			}
 		}
@@ -968,7 +979,15 @@ func (l *linter) ruleFilterIndex() {
 			why += " — equalities first, then " + lastWord + " —"
 		}
 		why += " lets the engine go straight to them."
-		if len(ops) > 0 {
+		switch {
+		case len(ops) > 0 && l.cat.sqlite():
+			// a NOCASE key on a column in its own collation (BINARY, as
+			// a rule) serves the LIKE alone: = and a sort compare in the
+			// column's collation, and the planner skips the index for them
+			why += " COLLATE NOCASE keeps " + rng[0] + " in the order SQLite's LIKE matches in, which ignores the " +
+				"case of A–Z; = and a sort on " + rng[0] + " compare in its own collation, so unless it is NOCASE " +
+				"itself they want an index without it."
+		case len(ops) > 0:
 			why += " " + ops[len(ops)-1] + " keeps " + rng[0] + " in byte order, which a prefix needs unless the " +
 				"collation is C; it serves = on " + rng[0] + " too, but not <, BETWEEN or a sort, which want the " +
 				"collation's order."
@@ -998,6 +1017,9 @@ func (l *linter) unserved(n *node, cols []string, needs map[string]need) string 
 		case x.order(0) == orderPattern:
 			parts = append(parts, x.Name+", which starts with "+c+", cannot find a range: its pattern class "+
 				"keeps byte order, not the collation's")
+		case nd.prefix && l.cat.sqlite():
+			parts = append(parts, x.Name+", which starts with "+c+", cannot find a starts-with: SQLite's LIKE "+
+				"ignores the case of A–Z, and only an index in COLLATE NOCASE keeps that order")
 		case nd.prefix:
 			parts = append(parts, x.Name+", which starts with "+c+", cannot find a starts-with: it keeps the "+
 				"collation's order, where values with the same start need not sit together")

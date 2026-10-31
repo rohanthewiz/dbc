@@ -594,7 +594,9 @@ func TestIgnoreCase(t *testing.T) {
 // class (text_pattern_ops), or a C-ordered collation. In any other — the
 // usual en_US.UTF-8 — a plain index on the column finds = and ranges but
 // no prefix, so the rule speaks and suggests a pattern index; and a
-// pattern index, in turn, finds no range and serves no sort.
+// pattern index, in turn, finds no range and serves no sort. On SQLite
+// only a COLLATE NOCASE one serves it (its LIKE ignores case); on MySQL
+// any.
 func TestPrefixIndex(t *testing.T) {
 	cat := shopCat()
 	cat.IndexesKnown = true
@@ -714,6 +716,59 @@ func TestPrefixIndex(t *testing.T) {
 	if l = lintOf(Analyze(d, cat), "filter-no-index"); l == nil || l.Fixes[0].SQL != "CREATE INDEX orders_ref_idx ON orders (ref);" {
 		t.Fatalf("mysql fix: %+v", l)
 	}
+
+	// SQLite's LIKE ignores the case of A–Z, so only a NOCASE b-tree
+	// finds a prefix: a plain (BINARY) one is scanned past. The size
+	// rules need row estimates SQLite never has, but given one the rule
+	// speaks, and with the fix SQLite's planner uses
+	cat.Driver = "sqlite"
+	cat.Indexes[k] = []Index{{Name: "o_ref", Cols: []string{"ref"}}}
+	a = Analyze(d, cat)
+	l = lintOf(a, "filter-no-index")
+	if l == nil || l.Fixes[0].SQL != "CREATE INDEX orders_ref_idx ON orders (ref COLLATE NOCASE);" {
+		t.Fatalf("sqlite, plain index: %v %+v", rules(a), l)
+	}
+	for _, w := range []string{"o_ref, which starts with ref, cannot find a starts-with: SQLite's LIKE ignores the case of A–Z",
+		"An index on (ref COLLATE NOCASE) lets", "unless it is NOCASE itself"} {
+		if !strings.Contains(l.Why, w) {
+			t.Errorf("sqlite why lacks %q: %s", w, l.Why)
+		}
+	}
+	for _, w := range []string{"text_pattern_ops", "CONCURRENTLY", "byte order"} {
+		if strings.Contains(l.Why, w) {
+			t.Errorf("sqlite why says %q: %s", w, l.Why)
+		}
+	}
+	if c := refCol(a); !c.Indexed || !c.NoPrefix || c.NoRange {
+		t.Fatalf("sqlite plain index card: %+v", c)
+	}
+	// the fix's index as the listing reads it back (a NOCASE key)
+	cat.Indexes[k] = append(cat.Indexes[k], Index{Name: "orders_ref_idx", Cols: []string{"ref"}, Order: []string{orderNocase}})
+	if a = Analyze(d, cat); lintOf(a, "filter-no-index") != nil {
+		t.Fatalf("sqlite with the NOCASE index: %v", rules(a))
+	}
+	if c := refCol(a); c.NoPrefix || c.NoRange {
+		t.Fatalf("sqlite plain and NOCASE card: %+v", c)
+	}
+	// a Postgres order means nothing on SQLite: a C one is no NOCASE one
+	cat.Indexes[k] = []Index{{Name: "o_ref", Cols: []string{"ref"}, Order: []string{orderC}}}
+	if c := refCol(Analyze(d, cat)); !c.NoPrefix {
+		t.Fatalf("sqlite, a C order: %+v", c)
+	}
+	// an equality first, then the starts-with in NOCASE; a range on the
+	// same column wants the column's own order, so a plain index
+	cat.Indexes[k] = nil
+	d.Filters = []Filter{d.Filters[0], {Ref: col(d, "o", "status"), Op: OpEq, Values: []string{"open"}}}
+	l = lintOf(Analyze(d, cat), "filter-no-index")
+	if l == nil || l.Fixes[0].SQL != "CREATE INDEX orders_status_ref_idx ON orders (status, ref COLLATE NOCASE);" ||
+		!strings.Contains(l.Why, "equalities first, then the starts-with") {
+		t.Fatalf("sqlite status and prefix: %+v", l)
+	}
+	d.Filters = []Filter{d.Filters[0], {Ref: col(d, "o", "ref"), Op: OpLt, Values: []string{"M"}}}
+	if l = lintOf(Analyze(d, cat), "filter-no-index"); l == nil || l.Fixes[0].SQL != "CREATE INDEX orders_ref_idx ON orders (ref);" {
+		t.Fatalf("sqlite prefix and range: %+v", l)
+	}
+	d.Filters = d.Filters[:1]
 
 	// char(n) takes its own pattern class
 	for typ, want := range map[string]string{"text": "text_pattern_ops", "character varying(40)": "text_pattern_ops",

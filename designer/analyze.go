@@ -58,7 +58,8 @@ type ColView struct {
 	// NoPrefix and NoRange narrow Indexed when the indexes are listed:
 	// none of those indexes can serve a starts-with on it (NoPrefix: a
 	// text column on Postgres whose b-trees keep a linguistic collation's
-	// order), or a range (NoRange: each is a pattern class, or hash).
+	// order, or on SQLite whose b-trees are not COLLATE NOCASE), or a
+	// range (NoRange: each is a pattern class, or hash).
 	// Catalog.finds is the test; the page words the ⚡'s title from them.
 	NoPrefix bool `json:"noPrefix,omitempty"`
 	NoRange  bool `json:"noRange,omitempty"`

@@ -22,7 +22,7 @@ import (
 //
 //	schema, table, index, kind (p primary | u unique | i other),
 //	partial ('partial' or ''), method (btree, hash, gin…), position, column,
-//	order (Postgres only; '' elsewhere — see OrderPattern)
+//	order (Postgres and SQLite; '' on MySQL — see OrderPattern, OrderNocase)
 //
 // An expression column (an index on lower(email)) comes back as "" — it
 // has a position in the key, but no column a plain filter could use, so a
@@ -46,9 +46,10 @@ type Index struct {
 	Partial bool
 	Method  string   // btree, hash, gin, gist, brin, FULLTEXT…; lower-case
 	Cols    []string // key columns in order; "" for an expression
-	// Order is, per key column (parallel to Cols), how a Postgres b-tree
-	// keeps it: OrderPattern, OrderC or "" (see OrderPattern). nil when
-	// every one is "" — always so on the other engines.
+	// Order is, per key column (parallel to Cols), how the b-tree keeps
+	// it: on Postgres OrderPattern, OrderC or "" (see OrderPattern), on
+	// SQLite OrderNocase or "" (see OrderNocase). nil when every one is ""
+	// — always so on MySQL.
 	Order []string
 }
 
@@ -72,6 +73,25 @@ const (
 	OrderPattern = "pattern"
 	OrderC       = "c"
 )
+
+// OrderNocase is a SQLite key column kept in the NOCASE collation, the one
+// order in which SQLite can serve a prefix. Its LIKE ignores the case of
+// A–Z (PRAGMA case_sensitive_like is off by default, deprecated, and never
+// turned on by dbc), so it rewrites LIKE 'ab%' into a range only on an
+// index whose order ignores that case too, and finds "AB…", "Ab…" and
+// "ab…" side by side:
+//
+//	CREATE INDEX o_ref    ON orders (ref)                 BINARY: SCAN orders
+//	CREATE INDEX o_ref_nc ON orders (ref COLLATE NOCASE)  SEARCH … (ref>? AND ref<?)
+//
+// A key column takes its column's declared collation unless the index
+// names one, so an index on a column declared COLLATE NOCASE is one too.
+// Other collations (BINARY, RTRIM) are listed as "": = and ranges, no
+// prefix. The listing does not compare the key's collation with the
+// column's — a NOCASE key on a BINARY column serves the LIKE but not
+// ref = 'x' or ORDER BY ref, which compare in the column's own collation —
+// so like Postgres's OrderC it is read as serving those too.
+const OrderNocase = "nocase"
 
 // IndexesQuery returns the statement listing the indexes of tables, in the
 // shape described at the top of this file. bytdb gets none: its catalog
@@ -146,14 +166,23 @@ ORDER BY 1, 2, 3, 7`, nil
 		// index ('c' CREATE INDEX, 'u' a UNIQUE constraint's). A rowid
 		// table's INTEGER PRIMARY KEY has no index of its own — the rowid
 		// is the key — so it is not listed here; the designer takes the
-		// primary key from the schema's keys as well. index_info's name is
+		// primary key from the schema's keys as well. index_xinfo's name is
 		// NULL for an expression.
+		//
+		// index_xinfo rather than index_info for its coll, the collation
+		// each column is kept in (OrderNocase). It also lists the columns
+		// past the key — the rowid, or a WITHOUT ROWID table's primary
+		// key — with key = 0; those find nothing, as INCLUDE columns on
+		// Postgres, so they are cut. The key columns' seqno run 0..n-1, as
+		// in index_info. A collation name is matched without case (SQLite
+		// reads COLLATE nocase as NOCASE).
 		return `SELECT 'main', m.name, il.name,
        CASE WHEN il.origin = 'pk' THEN 'p' WHEN il."unique" THEN 'u' ELSE 'i' END,
        CASE WHEN il.partial THEN 'partial' ELSE '' END,
-       'btree', ii.seqno + 1, COALESCE(ii.name, ''), ''
-FROM sqlite_master m JOIN pragma_index_list(m.name) il JOIN pragma_index_info(il.name) ii
-WHERE m.type = 'table' AND m.name IN (` + nameList(tables, false) + `)
+       'btree', ii.seqno + 1, COALESCE(ii.name, ''),
+       CASE WHEN upper(ii.coll) = 'NOCASE' THEN 'nocase' ELSE '' END
+FROM sqlite_master m JOIN pragma_index_list(m.name) il JOIN pragma_index_xinfo(il.name) ii
+WHERE m.type = 'table' AND ii."key" AND m.name IN (` + nameList(tables, false) + `)
 ORDER BY 1, 2, 3, 7`, nil
 	case bytdbdrv.DriverName:
 		return "", nil

@@ -31,6 +31,8 @@ CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL, country TEXT
 CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id), total NUMERIC NOT NULL);
 CREATE TABLE payments (id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id), amount NUMERIC NOT NULL);
 CREATE TABLE qd_notes (id INTEGER PRIMARY KEY, order_ref INTEGER, body TEXT);
+CREATE INDEX customers_name ON customers (name);
+CREATE INDEX customers_country ON customers (country COLLATE NOCASE);
 INSERT INTO customers VALUES (1, 'Ana', 'NZ'), (2, 'Bo', 'AU');
 INSERT INTO orders VALUES (10, 1, 50), (11, 1, 70), (12, 2, 20);
 INSERT INTO payments VALUES (100, 10, 20), (101, 10, 30), (102, 11, 70)`)
@@ -52,6 +54,20 @@ INSERT INTO payments VALUES (100, 10, 20), (101, 10, 30), (102, 11, 70)`)
 	waitFor(t, p, "the palette", `() => !!document.querySelector('#qd .qditem[data-label="customers"]')`)
 	clickAt(t, p, `#qd .qditem[data-label="customers"]`, proto.InputMouseButtonLeft)
 	waitFor(t, p, "customers on the canvas", `() => !!document.querySelector('#qd .qdcard[data-alias="c"] .qdc[data-col="name"]')`)
+	// the ⚡ on SQLite (N-240): its LIKE ignores the case of A–Z, so a
+	// plain (BINARY) index serves no starts-with — dimmed, with the NOCASE
+	// index to add beside it — while a COLLATE NOCASE one serves them all
+	ix := func(col string) string {
+		return evalStr(t, p, `() => { const x = document.querySelector('#qd .qdcard[data-alias="c"] .qdc[data-col="`+col+`"] .qdix');
+		  return x ? x.className + " | " + x.title : "none"; }`)
+	}
+	if got := ix("name"); !strings.Contains(got, "qdix part") ||
+		!strings.Contains(got, "not starts with — SQLite's LIKE ignores the case of A–Z, so a starts-with needs an index on (name COLLATE NOCASE), beside this one") {
+		t.Fatalf("a plain index's ⚡ on SQLite: %q", got)
+	}
+	if got := ix("country"); got != "qdix | an index starts with it: a filter on it can use the index" {
+		t.Fatalf("a NOCASE index's ⚡ on SQLite: %q", got)
+	}
 	clickAt(t, p, `#qd .qditem[data-label="orders"]`, proto.InputMouseButtonLeft)
 	waitFor(t, p, "orders joined, one to many", `() => [...document.querySelectorAll("#qd .qdjl")].some((l) => l.textContent === "⋈ 1:N")`)
 	clickAt(t, p, `#qd .qditem[data-label="payments"]`, proto.InputMouseButtonLeft)

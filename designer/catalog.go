@@ -39,23 +39,30 @@ type Index struct {
 	Primary bool     `json:"primary,omitempty"`
 	Partial bool     `json:"partial,omitempty"`
 	Method  string   `json:"method,omitempty"`
-	// Order is how a Postgres b-tree keeps each key column, parallel to
-	// Cols: orderPattern, orderC or "" (all "" when nil, and always on the
-	// other engines). It decides whether the column serves a starts-with.
+	// Order is how the b-tree keeps each key column, parallel to Cols:
+	// orderPattern, orderC or "" on Postgres, orderNocase or "" on SQLite
+	// (all "" when nil, and always on MySQL). It decides whether the
+	// column serves a starts-with.
 	Order []string `json:"order,omitempty"`
 }
 
 // The Order values, as the db package's listing spells them
-// (db.OrderPattern, db.OrderC, where what each serves is set out):
+// (db.OrderPattern, db.OrderC, db.OrderNocase, where what each serves is
+// set out):
 //
-//	orderPattern  text_pattern_ops & co: byte order — = and a prefix, no
-//	              range or sort
-//	orderC        a C-ordered collation: byte order that is also the
-//	              collation's — all of them
-//	""            a linguistic collation's order — = and ranges, no prefix
+//	orderPattern  Postgres, text_pattern_ops & co: byte order — = and a
+//	              prefix, no range or sort
+//	orderC        Postgres, a C-ordered collation: byte order that is also
+//	              the collation's — all of them
+//	orderNocase   SQLite, COLLATE NOCASE: the case-blind order its LIKE
+//	              matches in — a prefix, and (read as the column's own
+//	              collation) = and ranges
+//	""            a linguistic collation's order on Postgres, BINARY or
+//	              RTRIM on SQLite — = and ranges, no prefix
 const (
 	orderPattern = "pattern"
 	orderC       = "c"
+	orderNocase  = "nocase"
 )
 
 // order is key column i's Order ("" past its end, or with none listed).
@@ -172,19 +179,40 @@ type need struct{ eq, rng, prefix bool }
 // written for as Postgres (dialectOf), so it is judged as one too.
 func (c *Catalog) pg() bool { return c != nil && dialectOf(c.Driver).name == "postgres" }
 
+// sqlite reports whether the catalog is a SQLite connection's, the engine
+// whose b-tree serves its case-blind LIKE prefix only in NOCASE order.
+func (c *Catalog) sqlite() bool { return c != nil && dialectOf(c.Driver).name == "sqlite" }
+
+// btreePrefix reports whether a b-tree key column kept in order o can find
+// a prefix (LIKE 'abc%'), on this catalog's engine:
+//
+//	postgres  only in byte order (orderPattern, orderC): the planner turns
+//	          the prefix into >= 'abc' AND < 'abd', which finds the right
+//	          rows only where they sit side by side; under en_US "ab-c"
+//	          sorts between "abc" and "abd"
+//	sqlite    only in NOCASE (orderNocase): its LIKE ignores the case of
+//	          A–Z, so the range must too — a BINARY index keeps "ABx"
+//	          and "abx" far apart, and the planner scans past it
+//	mysql     in any collation: its LIKE matches in the column's own,
+//	          the order the index keeps
+func (c *Catalog) btreePrefix(o string) bool {
+	switch {
+	case c.pg():
+		return o == orderPattern || o == orderC
+	case c.sqlite():
+		return o == orderNocase
+	}
+	return true
+}
+
 // finds reports whether some usable index of the table starts with col and
 // can find the rows col's filters ask for: leads, asked per kind of
 // filter. What a leading key column serves, by method:
 //
 //	btree    an equality always; a range unless it is a pattern class; a
-//	         prefix, on Postgres, only in byte order — a pattern class or
-//	         a C collation (orderPattern, orderC). Postgres turns LIKE
-//	         'abc%' into >= 'abc' AND < 'abd', which finds the right rows
-//	         only where they sit side by side; under en_US "ab-c" sorts
-//	         between "abc" and "abd". Elsewhere a prefix is served as
-//	         before: MySQL's b-tree finds one in any collation (SQLite's
-//	         case-blind LIKE wants a NOCASE index, which the listing does
-//	         not tell apart, so it is counted too)
+//	         prefix only in the order the engine's LIKE needs
+//	         (btreePrefix): byte order on Postgres (a pattern class or a
+//	         C collation), NOCASE on SQLite, any on MySQL
 //	hash     an equality only
 //	spgist   a prefix, on Postgres: text_ops finds one in any collation
 //	         (and is the only built-in SP-GiST class for text)
@@ -207,7 +235,7 @@ func (c *Catalog) finds(et *erd.Table, col string, nd need) bool {
 		switch x.Method {
 		case "", "btree":
 			o := x.order(0)
-			eq, rng, prefix = true, o != orderPattern, !pg || o != ""
+			eq, rng, prefix = true, o != orderPattern, c.btreePrefix(o)
 		case "hash":
 			eq = true
 		case "spgist":

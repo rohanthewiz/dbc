@@ -674,7 +674,7 @@
         r.append(el("span", "qdcn", col.name));
         r.append(el("span", "qdct", col.type + (col.nullable ? "?" : "")));
         const marks = el("span", "qdcm");
-        if (col.indexed) marks.append(el("span", { class: "qdix" + (col.noPrefix || col.noRange ? " part" : ""), title: indexTitle(col) }, "⚡"));
+        if (col.indexed) marks.append(el("span", { class: "qdix" + (col.noPrefix || col.noRange ? " part" : ""), title: indexTitle(col, s.analysis && s.analysis.dialect) }, "⚡"));
         if (aggd.has(col.name)) marks.append(el("span", { title: "aggregated in the result" }, "Σ"));
         if (filtered.has(col.name)) marks.append(el("span", { title: "filtered" }, "⏷"));
         if (sorted.has(col.name)) marks.append(el("span", { title: "sorted" }, sorted.get(col.name) ? "↓" : "↑"));
@@ -692,15 +692,26 @@
     // indexTitle words the ⚡: which filters on the column its indexes can
     // serve. On Postgres a b-tree finds a starts-with only in byte order (a
     // pattern class, or a C collation), and a pattern one finds no range;
-    // a hash index finds = only (ColView.NoPrefix, NoRange).
-    function indexTitle(col) {
+    // on SQLite only in COLLATE NOCASE, since its LIKE ignores the case of
+    // A–Z; a hash index finds = only (ColView.NoPrefix, NoRange). dialect
+    // is the analysis's (postgres, sqlite…), which picks the hint.
+    //
+    // The SQLite hint says to keep the plain index: a NOCASE one on a
+    // column in its own (BINARY) collation serves the LIKE alone, not =,
+    // ranges or a sort, so replacing the one with the other trades them.
+    function indexTitle(col, dialect) {
       if (!col.noPrefix && !col.noRange) return "an index starts with it: a filter on it can use the index";
       const can = ["=", "IN"], cannot = [];
       (col.noRange ? cannot : can).push("ranges");
       if (col.fam === "text") (col.noPrefix ? cannot : can).push("starts with");
       const and = (xs) => xs.length > 1 ? xs.slice(0, -1).join(", ") + " and " + xs[xs.length - 1] : xs[0];
       let t = "an index starts with it: " + and(can) + " can use it, not " + cannot.join(" or ");
-      if (col.noPrefix && !col.noRange) t += " — in this collation a starts-with needs a text_pattern_ops index";
+      if (col.noPrefix && !col.noRange) {
+        t += dialect === "sqlite"
+          ? " — SQLite's LIKE ignores the case of A–Z, so a starts-with needs an index on (" + col.name +
+            " COLLATE NOCASE), beside this one for = and ranges"
+          : " — in this collation a starts-with needs a text_pattern_ops index";
+      }
       return t;
     }
 

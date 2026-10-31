@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-242
+**Next ID:** N-243
 
 ## Open
 
@@ -101,17 +101,6 @@ ten session docs in `ai_docs/claude_sessions/`
   so not script or pipeline tabs). Go snippets for script tabs would need
   a language field on a snippet (`userdata.Snippet`), so a SQL name does
   not fire in Go and the reverse. Nobody has asked.
-- **N-240** · raised `2026-1030-1553-n236-pg-prefix-index-opclass` · value low
-  On SQLite the designer still counts a plain index as serving a
-  *starts with* (`catalog.go finds`: a prefix is served off Postgres). But
-  SQLite's LIKE ignores the case of A–Z by default (`case_sensitive_like`
-  off), so it uses only an index with `COLLATE NOCASE` for `LIKE 'ab%'`;
-  a plain (BINARY) one is never used (`EXPLAIN QUERY PLAN`: SCAN). The
-  size rules never speak on SQLite (no row estimates), so what shows is
-  the ⚡ over-promising. The fix: read each key column's collation in the
-  SQLite listing (`pragma_index_xinfo`'s `coll`, keys only) into
-  `Index.Order`, count a prefix only on a NOCASE one, and say so in the ⚡
-  title. Nobody has bumped into it.
 - **N-241** · raised `2026-1031-0158-n238-dialect-aware-scan` · value low
   On MySQL, `"…"` is a string under the default `sql_mode` (no
   `ANSI_QUOTES`), and a backslash escapes in it as in `'…'`. sqlsplit
@@ -123,6 +112,21 @@ ten session docs in `ai_docs/claude_sessions/`
   wrong under `ANSI_QUOTES`, which dbc cannot see from the text — a
   per-connection setting, or a probe of `@@sql_mode` at connect. Nobody
   has hit it; it takes a double-quoted MySQL string holding `\"`.
+- **N-242** · raised `2026-1031-1735-n240-sqlite-nocase-prefix` · value low
+  An index whose key collation is not the column's own serves none of the
+  column's =, ranges or sorts (they compare in the column's collation), yet
+  the designer counts them (`catalog.go finds`, `Index.sorts`, `leads`).
+  On SQLite an index on `(ref COLLATE NOCASE)` over a plain `ref TEXT`
+  serves only the case-blind LIKE (`EXPLAIN QUERY PLAN`: `ref = 'x'` SCAN,
+  `ORDER BY ref` a temp b-tree), so with it alone the ⚡ shows fully lit;
+  the ⚡ title's "beside this one" steers away from replacing the plain
+  index. Postgres probably has the same gap for an explicit `COLLATE "C"`
+  index on an `en_US` column (`OrderC` is counted for ranges and sorts;
+  unchecked). The fix needs each key column's own collation: on Postgres
+  `pg_attribute.attcollation`; SQLite has no pragma for it, so parse the
+  CREATE TABLE, or probe — `SELECT count(*) FROM (SELECT ref FROM t WHERE 0
+  UNION SELECT 'a' UNION SELECT 'A')` is 1 only under NOCASE (a compound
+  compares in its leftmost term's collation). Nobody has hit it.
 
 ## Validate
 
@@ -647,6 +651,18 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-240** · raised `2026-1030-1553-n236-pg-prefix-index-opclass` · value low
+  On SQLite the designer still counts a plain index as serving a
+  *starts with* (`catalog.go finds`: a prefix is served off Postgres). But
+  SQLite's LIKE ignores the case of A–Z by default (`case_sensitive_like`
+  off), so it uses only an index with `COLLATE NOCASE` for `LIKE 'ab%'`;
+  a plain (BINARY) one is never used (`EXPLAIN QUERY PLAN`: SCAN). The
+  size rules never speak on SQLite (no row estimates), so what shows is
+  the ⚡ over-promising. The fix: read each key column's collation in the
+  SQLite listing (`pragma_index_xinfo`'s `coll`, keys only) into
+  `Index.Order`, count a prefix only on a NOCASE one, and say so in the ⚡
+  title. Nobody has bumped into it.
+  closed 2026-10-31, `2026-1031-1735-n240-sqlite-nocase-prefix`: the SQLite listing reads `pragma_index_xinfo` (key columns only, by its `key`, so the rowid and a WITHOUT ROWID table's trailing primary key are cut) and writes `nocase` for a NOCASE key column — named in the index, inherited from a column declared NOCASE, the name in any case — carried as `Index.Order` (`db.OrderNocase`). `Catalog.btreePrefix` says per engine which b-tree order serves a prefix: byte order on Postgres (as before), NOCASE on SQLite, any on MySQL; `finds` asks it. On SQLite `ruleFilterIndex` writes `(…, ref COLLATE NOCASE)` and says why (`unserved`, the why), though it needs row estimates SQLite never has. The ⚡ title on SQLite: "SQLite's LIKE ignores the case of A–Z, so a starts-with needs an index on (ref COLLATE NOCASE), beside this one for = and ranges". README updated. Tests: `TestIndexesOnSqlite` (new: the listing on a real SQLite), `TestIndexesQueryOrderColumn`, `TestPrefixIndex` (SQLite cases), `TestDesignerSQLitePrefixIndex` (new, workspace: the card against `EXPLAIN QUERY PLAN` of the designer's own SQL on modernc, the rule's fix run as written, an escaped prefix, a NOCASE column), the `web/e2e` designer step (the ⚡ class and title on a SQLite card). Each half fails its tests when reverted alone. The reverse over-promise — a NOCASE key on a BINARY column counted for =, ranges and sorts — raised as N-242.
 - **N-239** · raised `2026-1029-1937-n237-import-summary-join` · value low
   A design with a summary and nothing ticked writes `SELECT *` (`sql.go
   selectList`: the stars skip the summary, and a single star is written

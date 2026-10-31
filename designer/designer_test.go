@@ -264,6 +264,16 @@ func TestSummaryJoin(t *testing.T) {
 		"    SELECT p.order_id, sum(p.amount) AS sum_amount, count(p.amount) AS count_amount, count(*) AS count\n"+
 		"    FROM payments p\n    GROUP BY p.order_id\n) p ON p.order_id = o.id\nGROUP BY o.status")
 
+	// nothing ticked: the parent's own star, not *, which would show the
+	// summary's key and the count put in its derived table as well
+	d.Columns = nil
+	a = Analyze(d, cat)
+	wantSQL(t, a, "SELECT o.*\nFROM orders o\nLEFT JOIN (\n    SELECT p.order_id, count(*) AS count\n    FROM payments p\n"+
+		"    GROUP BY p.order_id\n) p ON p.order_id = o.id")
+	if !a.Valid || lintOf(a, "select-all") == nil {
+		t.Fatalf("nothing ticked: valid %v %v", a.Valid, rules(a))
+	}
+
 	// a plain column of a summarized table cannot be shown
 	d.Columns = outs(col(d, "p", "amount"))
 	if a = Analyze(d, cat); a.Valid || lintOf(a, "invalid") == nil {

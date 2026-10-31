@@ -675,20 +675,33 @@ func (b *binder) subject(e *ex, levels [][]*bound, agg, outs bool) (Ref, error) 
 func (b *binder) selectList(s *sel) error {
 	levels := [][]*bound{b.scope}
 	// a summary's * would be the derived table's columns as written, but
-	// the generator writes those from the aggregates asked of it
+	// the generator writes those from the aggregates asked of it. The
+	// other tables' stars say the same without them, so the refusal
+	// names those (o.*, or o.*, c.*) as the way to write it.
+	var others []string
+	for _, x := range b.scope {
+		if x.sum == nil {
+			others = append(others, b.dia.ident(x.name)+".*")
+		}
+	}
 	for _, it := range s.items {
 		if it.e.op != "star" {
 			continue
 		}
 		for _, x := range b.scope {
 			if x.sum != nil && (len(it.e.parts) == 0 || lookup([]*bound{x}, it.e.parts[len(it.e.parts)-1], it.e.quoted[len(it.e.quoted)-1]) != nil) {
-				return b.fail(it.e.pos, b.text(it.e)+" over the summary `"+x.name+"`: list the columns — the designer writes a "+
-					"summary's own from the aggregates asked of it")
+				return b.fail(it.e.pos, b.text(it.e)+" over the summary `"+x.name+"`: write "+strings.Join(others, ", ")+
+					" for the other tables' columns, or list the columns — the designer writes a summary's own from the "+
+					"aggregates asked of it")
 			}
 		}
 	}
 	// every item a star covering the FROM tables once each, in order: no
-	// columns at all, which the generator writes back as * (or a.*, b.*)
+	// columns at all, which the generator writes back as * (or a.*, b.*).
+	// A summary is not one of them: the generator never writes its star,
+	// and with one in FROM writes even a single table's as o.*, which
+	// the refusal above has already kept from showing the summary's
+	// columns.
 	stars := len(s.items) > 0
 	var covered []string
 	for _, it := range s.items {
@@ -698,7 +711,7 @@ func (b *binder) selectList(s *sel) error {
 		}
 		if len(it.e.parts) == 0 {
 			for _, x := range b.scope {
-				covered = append(covered, x.id)
+				covered = append(covered, x.id) // no summary here: refused above
 			}
 			continue
 		}
@@ -710,15 +723,20 @@ func (b *binder) selectList(s *sel) error {
 	}
 	var all []string
 	for _, x := range b.scope {
-		all = append(all, x.id)
+		if x.sum == nil {
+			all = append(all, x.id)
+		}
 	}
 	if stars && slices.Equal(covered, all) {
 		if len(b.using) > 0 {
 			return b.fail(s.pos, "* with JOIN … USING: USING shows its column once, the designer's ON shows each table's — list the columns")
 		}
 		// no outputs, but ORDER BY 1 and the like still name the columns
-		// the * shows
+		// the stars show — a summary's not among them (and its et is nil)
 		for _, x := range b.scope {
+			if x.sum != nil {
+				continue
+			}
 			for _, c := range x.et.Cols {
 				b.outs = append(b.outs, outRef{ref: Ref{Table: x.id, Column: c.Name}, name: c.Name})
 			}

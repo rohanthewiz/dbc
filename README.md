@@ -1781,7 +1781,11 @@ its SQL can be edited by hand and reopened: a
 `LEFT JOIN (SELECT key, aggregates FROM t … GROUP BY key) s ON s.key = …`
 whose GROUP BY is exactly the key it joins on, with its columns read in the
 forms the designer writes them (`s.sum_x` and `COALESCE(s.count, 0)` per
-row, `sum(s.sum_x)` and the like when the query is grouped). Anything a
+row, `sum(s.sum_x)` and the like when the query is grouped). With no
+columns ticked, a design with a summary writes the other tables' stars
+(`o.*`), never `*`, which would show the summary's key and count as well.
+Those stars open back as no columns ticked, and a `*` over a summary is
+refused. Anything a
 design cannot express is refused, with the reason and its line. That
 covers CTEs, UNIONs, window functions, any other derived table, CASE,
 functions of a column, a column compared with an expression,

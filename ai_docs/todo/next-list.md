@@ -101,15 +101,6 @@ ten session docs in `ai_docs/claude_sessions/`
   so not script or pipeline tabs). Go snippets for script tabs would need
   a language field on a snippet (`userdata.Snippet`), so a SQL name does
   not fire in Go and the reverse. Nobody has asked.
-- **N-239** · raised `2026-1029-1937-n237-import-summary-join` · value low
-  A design with a summary and nothing ticked writes `SELECT *` (`sql.go
-  selectList`: the stars skip the summary, and a single star is written
-  as `*`), so the result also shows the summary's own columns: its key
-  and the `count` the generator puts in an empty derived table. Writing
-  the parent's `o.*` whenever a summary is on the canvas would show only
-  the tables read into the result, as the comment there says; the import
-  could then read that `o.*` back (it refuses `*` over a summary today).
-  Contingent on someone running a summary with no columns ticked.
 - **N-240** · raised `2026-1030-1553-n236-pg-prefix-index-opclass` · value low
   On SQLite the designer still counts a plain index as serving a
   *starts with* (`catalog.go finds`: a prefix is served off Postgres). But
@@ -319,6 +310,9 @@ and `raised`.
   wait looks too tight for the full suite's parallel load. Make the wait
   follow the reports it expects rather than a fixed window, or lengthen
   it, and run the full suite a few times to see it hold.
+  Updated `2026-1031-0204-n239-summary-no-columns-stars`: failed again the
+  same way in a full `go test ./...` (5.17 s; idle, idle, working), with
+  `tui` untouched by the session, and passed in three runs alone.
 
 - **N-212** · raised `2026-1014-1547-failed-connects-groups-conn-clicks` · value low
   Hand-check a first connect that fails, with a real Postgres in Docker
@@ -653,6 +647,16 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-239** · raised `2026-1029-1937-n237-import-summary-join` · value low
+  A design with a summary and nothing ticked writes `SELECT *` (`sql.go
+  selectList`: the stars skip the summary, and a single star is written
+  as `*`), so the result also shows the summary's own columns: its key
+  and the `count` the generator puts in an empty derived table. Writing
+  the parent's `o.*` whenever a summary is on the canvas would show only
+  the tables read into the result, as the comment there says; the import
+  could then read that `o.*` back (it refuses `*` over a summary today).
+  Contingent on someone running a summary with no columns ticked.
+  closed 2026-10-31, `2026-1031-0204-n239-summary-no-columns-stars`: with nothing ticked and a summary on the canvas, the generator writes the other tables' stars even for one table (`sql.go selectList`: `o.*`, never `*`); `*` stays for designs without a summary. The import reads stars covering every FROM table but the summary as nothing ticked (`import.go selectList`; it read `o.*` as each of o's columns before, so the design wrote other SQL), and `ORDER BY 1` against them counts those tables' columns alone. `*` and `p.*` over a summary are still refused, the reason now naming the stars to write (`write o.* for the other tables' columns`). README's import paragraph says so. Tests: `TestSummaryJoin` (the `o.*` statement), `TestImportRoundTrip` (one and two tables beside a summary, nothing ticked, all four dialects), `TestImportHandWritten` (`o.*` with `ORDER BY 1 DESC`), `TestImportRefuses` (`*`, `p.*`, `o.*, p.*`, the message), `TestLiveDesigner` (a hand-written `o.*` over a summary, same rows as its design on Postgres 17 and MySQL 8.4; against the old generator it shows the summary's `order_id|count` on every row). Each half fails its tests when reverted alone.
 - **N-238** · raised `2026-1029-1920-n235-like-escape-split` · value low
   sqlsplit's scanner still honors `\'` in every dialect (`skipQuoted`,
   MySQL's rule), so on Postgres, SQLite and bytdb any string literal ending

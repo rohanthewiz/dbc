@@ -15,6 +15,7 @@ import (
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/pipeline"
 	"github.com/rohanthewiz/dbc/sdb/sdbapi"
+	"github.com/rohanthewiz/dbc/sqlsplit"
 	"github.com/rohanthewiz/dbc/userdata"
 	"github.com/rohanthewiz/dbc/workspace"
 )
@@ -127,6 +128,9 @@ type chatPane struct {
 	signURL   string      // where to enter it
 
 	input *editor
+	// dialect is the active connection's, as of the last draw: what an
+	// answer's ```sql block is colored as (codeKinds)
+	dialect sqlsplit.Dialect
 
 	// the conversation archive — see chatarchive.go
 	dir          string              // where conversations are saved; "" keeps them in memory only
@@ -1002,7 +1006,8 @@ func (m *Model) drawChat(c *Canvas, r Rect) *caret {
 	cx, cy, ok := p.input.Draw(inputS, st, st.raised, [2]int{}, true)
 	p.sendBtn = chip(in, W-7, composerY+inH-1, " ⏎ send", pick(p.input.Empty(), st.button.Dim(), st.buttonHot))
 
-	// transcript
+	// transcript, its SQL colored as the active connection reads strings
+	p.dialect = m.ws.Dialect()
 	rows := p.layoutRows(st, W-1)
 	p.total = len(rows)
 	th := p.transcript.H
@@ -1223,7 +1228,7 @@ func (p *chatPane) agentRows(st styles, text string, w int) []chatRow {
 			// wrapped part then picks its colors by its byte offset into
 			// body, which works because wrap only splits — its parts
 			// concatenate back to the line exactly.
-			kinds := codeKinds(lang, body)
+			kinds := codeKinds(lang, body, p.dialect)
 			off := 0
 			for _, cl := range code {
 				at := off
@@ -1283,8 +1288,11 @@ func codeHeader(st styles, lang, body string, w int) chatRow {
 // language codehl does not highlight. A flat per-byte table (rather than
 // walking the span list alongside the wrapped parts) keeps codeSegs a plain
 // lookup; code blocks are small, so the table is too.
-func codeKinds(lang, body string) []codehl.Kind {
-	spans := codehl.Lex(lang, body)
+//
+// d is the active connection's dialect, for a SQL block whose tag names no
+// engine (codehl.LexDialect).
+func codeKinds(lang, body string, d sqlsplit.Dialect) []codehl.Kind {
+	spans := codehl.LexDialect(lang, body, d)
 	if spans == nil {
 		return nil
 	}

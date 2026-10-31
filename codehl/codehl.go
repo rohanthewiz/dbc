@@ -10,9 +10,10 @@
 // construct it does not know (a JS regex literal, a Go struct tag) is merely
 // uncolored or colored as its nearest lexical cousin, never an error.
 //
-// SQL is not lexed here: it delegates to sqlsplit.Lex, the scanner the editor
-// colors with, so a statement looks the same in an answer as it will once
-// inserted into the editor. Shell has a scanner of its own too (lexShell):
+// SQL is not lexed here: it delegates to sqlsplit's Lex, the scanner the
+// editor colors with, so a statement looks the same in an answer as it will
+// once inserted into the editor — read as the same engine (LexDialect), since
+// where a string ends is the engine's rule. Shell has a scanner of its own too (lexShell):
 // its quoting, $variables, word-bound comments and heredocs fit none of the
 // C-family switches.
 //
@@ -81,7 +82,19 @@ func Lang(tag string) string {
 
 // Lex classifies src as the language its fence tag names. It returns nil
 // for a language it does not highlight, which callers draw as plain text.
-func Lex(tag, src string) []Span {
+// A SQL block whose tag names no engine is read as sqlsplit.Generic: Lex is
+// LexDialect for a caller with no connection to name.
+func Lex(tag, src string) []Span { return LexDialect(tag, src, sqlsplit.Generic) }
+
+// LexDialect is Lex with conn the dialect of the connection the answer is
+// about. A SQL block is read as the engine its tag names (```postgresql,
+// ```mysql, ```sqlite: sqlsplit.DialectOf), or as conn when the tag names
+// none (```sql, or no tag) — which is most blocks, the preamble asking for
+// ```sql, and the SQL in them written for the connection the question was
+// asked on. The engine decides where a string ends: 'a\' closes at its
+// quote on Postgres and not on MySQL, and everything after it is colored
+// by that.
+func LexDialect(tag, src string, conn sqlsplit.Dialect) []Span {
 	lang := Lang(tag)
 	switch {
 	case lang == "sql" && strings.TrimSpace(tag) == "" && looksJSON(src):
@@ -91,7 +104,11 @@ func Lex(tag, src string) []Span {
 		// offer ⤓ insert on an untagged block, as they decide by tag.
 		lang = "json"
 	case lang == "sql":
-		return lexSQL(src)
+		d := sqlsplit.DialectOf(tag)
+		if d == sqlsplit.Generic {
+			d = conn
+		}
+		return lexSQL(src, d)
 	case lang == "shell":
 		return lexShell(src)
 	}
@@ -133,10 +150,11 @@ func looksJSON(src string) bool {
 	return t != "" && (t[0] == '{' || t[0] == '[')
 }
 
-// lexSQL translates sqlsplit's tokens one for one; TokText never appears in
-// its output, but is mapped anyway so a new kind there degrades to plain.
-func lexSQL(src string) []Span {
-	toks := sqlsplit.Lex(src)
+// lexSQL translates sqlsplit's tokens, read as d, one for one; TokText never
+// appears in its output, but is mapped anyway so a new kind there degrades
+// to plain.
+func lexSQL(src string, d sqlsplit.Dialect) []Span {
+	toks := d.Lex(src)
 	out := make([]Span, 0, len(toks))
 	for _, t := range toks {
 		k := Text

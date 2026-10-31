@@ -506,7 +506,7 @@
     const text = ed.getValue();
     let r;
     try {
-      r = await dbc.api("POST", "/api/v1/stmt", { buffer: text, caret: api.caret() });
+      r = await dbc.api("POST", "/api/v1/stmt", { buffer: text, caret: api.caret(), driver: dbc.state.driver });
     } catch (_) { return; }
     if (seq !== markSeq || !ed || ed.getValue() !== text) return; // stale
     const m = ed.getModel();
@@ -770,7 +770,7 @@
         if (minis.has(model)) return [];
         let r;
         try {
-          r = await dbc.api("POST", "/api/v1/folds", { buffer: model.getValue() });
+          r = await dbc.api("POST", "/api/v1/folds", { buffer: model.getValue(), driver: dbc.state.driver });
         } catch (_) {
           return null;
         }
@@ -803,7 +803,7 @@
       if (minis.has(model)) return [];
       let r;
       try {
-        r = await dbc.api("POST", "/api/v1/format", { buffer: model.getValueInRange(range) });
+        r = await dbc.api("POST", "/api/v1/format", { buffer: model.getValueInRange(range), driver: dbc.state.driver });
       } catch (err) {
         dbc.log("err", "format failed: " + err.message);
         return [];

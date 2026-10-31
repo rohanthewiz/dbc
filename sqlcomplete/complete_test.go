@@ -349,3 +349,18 @@ func TestMatchQuality(t *testing.T) {
 		}
 	}
 }
+
+// TestCompleteAfterBackslashString is N-238 in the editor: a string ending
+// in a backslash closes at its quote on Postgres, so the caret after it is
+// in code and is offered the statement's columns; on MySQL the \' is an
+// escaped quote, the caret is still inside the string, and nothing is
+// offered — each as the engine itself reads the text.
+func TestCompleteAfterBackslashString(t *testing.T) {
+	buf := `SELECT * FROM orders o WHERE o.status = 'a\' AND o.▮`
+	if _, ok := find(at(t, "postgres", buf), "created_at"); !ok {
+		t.Errorf("postgres: no created_at after 'a\\' — read as still inside the string")
+	}
+	if r := at(t, "mysql", buf); len(r.Items) != 0 {
+		t.Errorf("mysql: %d items inside the string, want none", len(r.Items))
+	}
+}

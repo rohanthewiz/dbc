@@ -40,7 +40,9 @@ func (t tok) isName() bool { return t.kind == tWord || t.kind == tQuoted }
 // and parameters are found by sqlsplit.Lex — the scanner the splitter and the
 // highlighter use, so all three agree on where a string ends — and the text
 // between them is cut into words and punctuation here. Comments are dropped.
-func tokenize(buf string, start, end int) []tok {
+// sd is the engine's reading of strings, as the splitter's and the
+// highlighter's.
+func tokenize(buf string, start, end int, sd sqlsplit.Dialect) []tok {
 	stmt := buf[start:end]
 	var out []tok
 	depth := 0
@@ -81,7 +83,7 @@ func tokenize(buf string, start, end int) []tok {
 		}
 	}
 	at := 0
-	for _, lt := range sqlsplit.Lex(stmt) {
+	for _, lt := range sd.Lex(stmt) {
 		if lt.Kind == sqlsplit.TokKeyword {
 			continue // a word like any other here
 		}

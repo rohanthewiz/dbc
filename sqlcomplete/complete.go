@@ -137,10 +137,16 @@ type Request struct {
 func Complete(req Request) Result {
 	buf, caret := req.Buffer, min(max(req.Caret, 0), len(req.Buffer))
 	d := dialectFor(req.Driver)
+	// sd is the engine's reading of strings, which is not d's business: d
+	// is the vocabulary (Postgres's for an unknown driver), sd where a
+	// string ends (Generic for one) — the splitter's and the editor's
+	// reading, so completion is off inside exactly what the editor colors
+	// as a string
+	sd := sqlsplit.DialectOf(req.Driver)
 	res := Result{From: caret, To: caret}
 
-	start, end := stmtWindow(buf, caret)
-	if insideLiteral(buf[start:end], caret-start) {
+	start, end := stmtWindow(buf, caret, sd)
+	if insideLiteral(buf[start:end], caret-start, sd) {
 		return res
 	}
 
@@ -155,7 +161,7 @@ func Complete(req Request) Result {
 	}
 	res.From, res.Prefix = from, buf[from:caret]
 
-	toks := tokenize(buf, start, end)
+	toks := tokenize(buf, start, end, sd)
 	// The word under the caret is what is being typed, not a name the
 	// statement uses: leaving it out keeps "FROM ord▮" from adding a table
 	// "ord" to the scope and "SELECT o▮" from finding an alias "o".
@@ -235,8 +241,9 @@ func (c *completer) index() {
 // space after the statement's last word (the splitter trims that off). A
 // caret past a statement's semicolon, or before the first word of the next,
 // starts a statement of its own: the window then begins at the caret's word.
-func stmtWindow(buf string, caret int) (start, end int) {
-	stmts := sqlsplit.Split(buf)
+// sd is the engine's reading of strings, as the run's split.
+func stmtWindow(buf string, caret int, sd sqlsplit.Dialect) (start, end int) {
+	stmts := sd.Split(buf)
 	i := sqlsplit.IndexAt(stmts, caret)
 	if i < 0 {
 		return 0, len(buf)
@@ -260,9 +267,10 @@ func stmtWindow(buf string, caret int) (start, end int) {
 // insideLiteral reports whether offset (into stmt) is inside a string, a
 // comment or a quoted identifier, where nothing is suggested. The end of a
 // line comment counts as inside it (the comment runs to the newline), as does
-// the end of an unterminated string or quoted name.
-func insideLiteral(stmt string, offset int) bool {
-	for _, t := range sqlsplit.Lex(stmt) {
+// the end of an unterminated string or quoted name. sd is the engine's
+// reading of strings.
+func insideLiteral(stmt string, offset int, sd sqlsplit.Dialect) bool {
+	for _, t := range sd.Lex(stmt) {
 		if t.Start >= offset {
 			break
 		}

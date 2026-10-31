@@ -132,10 +132,11 @@ type Edit struct {
 }
 
 // Resolve finds the symbol under caret (a byte offset into buf) in the
-// statement around it. It never fails: anything it cannot place is a zero
-// Symbol.
-func Resolve(buf string, caret int) Symbol {
-	r, k := newResolver(buf, caret)
+// statement around it, buf read as sd's engine reads strings (the run's
+// splitting and the editor's coloring). It never fails: anything it cannot
+// place is a zero Symbol.
+func Resolve(buf string, caret int, sd sqlsplit.Dialect) Symbol {
+	r, k := newResolver(buf, caret, sd)
 	if r == nil {
 		return Symbol{}
 	}
@@ -148,7 +149,7 @@ func Resolve(buf string, caret int) Symbol {
 // sentence for the user: nothing renamable is under the caret, the symbol
 // is a table (or a table's column), or the name is taken in the same query.
 func Rename(buf string, caret int, name, driver string) ([]Edit, error) {
-	r, k := newResolver(buf, caret)
+	r, k := newResolver(buf, caret, sqlsplit.DialectOf(driver))
 	var sym Symbol
 	if r != nil {
 		sym = r.symbolAt(k)
@@ -281,11 +282,12 @@ type resolver struct {
 }
 
 // newResolver reads the statement around caret, and the index of the name
-// token under it; nil when the caret is not on a name.
-func newResolver(buf string, caret int) (*resolver, int) {
+// token under it; nil when the caret is not on a name. sd is the engine's
+// reading of strings.
+func newResolver(buf string, caret int, sd sqlsplit.Dialect) (*resolver, int) {
 	caret = min(max(caret, 0), len(buf))
-	start, end := stmtWindow(buf, caret)
-	toks := tokenize(buf, start, end)
+	start, end := stmtWindow(buf, caret, sd)
+	toks := tokenize(buf, start, end, sd)
 	k := -1
 	for i, t := range toks {
 		if t.isName() && t.start <= caret && caret <= t.end {

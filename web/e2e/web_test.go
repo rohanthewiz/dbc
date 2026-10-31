@@ -37,6 +37,7 @@ func TestWeb(t *testing.T) {
 		{"build badge", buildBadge},
 		{"run a query", runQuery},
 		{"editor menu", editorMenu},
+		{"a string ending in a backslash splits as the engine reads it", backslashSplit},
 		{"statement folding", statementFolding},
 		{"format SQL", formatSQL},
 		{"live snippets", liveSnippets},

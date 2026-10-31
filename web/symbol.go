@@ -54,7 +54,8 @@ func (c *utf16Counter) span(s sqlcomplete.Span) sqlcomplete.Span {
 // nothing the resolver knows is a symbol with no kind, not an error: the
 // editor just has nothing to jump to.
 func (s *Server) handleSymbol(ctx rweb.Context) error {
-	if _, err := s.hub.get(ctx.Request().PathParam("id")); err != nil {
+	t, err := s.hub.get(ctx.Request().PathParam("id"))
+	if err != nil {
 		return fail(ctx, err)
 	}
 	var req symbolReq
@@ -64,7 +65,7 @@ func (s *Server) handleSymbol(ctx rweb.Context) error {
 	if len(req.Buffer) > maxBuffer {
 		return ok(ctx, sqlcomplete.Symbol{Uses: []sqlcomplete.Span{}})
 	}
-	sym := sqlcomplete.Resolve(req.Buffer, byteOffset(req.Buffer, req.Caret))
+	sym := sqlcomplete.Resolve(req.Buffer, byteOffset(req.Buffer, req.Caret), t.ws.Dialect())
 	c := &utf16Counter{s: req.Buffer}
 	uses := make([]sqlcomplete.Span, len(sym.Uses))
 	for i, u := range sym.Uses {

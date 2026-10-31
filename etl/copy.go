@@ -171,13 +171,14 @@ func copySource(e Engine, table string, opt CopyOptions) (query, dest string, er
 		// "…; -- done" ends in a comment, not the semicolon. The splitter
 		// knows strings, quoted names, comments and dollar quotes, so it
 		// finds the real one; it also catches two statements, which no
-		// wrapper can hold.
-		stmts := sqlsplit.Split(opt.Query)
+		// wrapper can hold. It reads strings as the source engine does,
+		// so a Postgres 'a\' ends at its quote.
+		stmts := e.Dialect().Split(opt.Query)
 		switch len(stmts) {
 		case 0:
 			return "", "", serr.New("etl: Query has no statement in it")
 		case 1:
-			if err := returnsRows(stmts[0].Text); err != nil {
+			if err := returnsRows(stmts[0].Text, e.Dialect()); err != nil {
 				return "", "", err
 			}
 			return stmts[0].Text, opt.To, nil
@@ -220,10 +221,11 @@ var writeVerbs = map[string]bool{
 // only in the main statement — not in a string, a comment, or a CTE body,
 // whose RETURNING feeds the statement rather than its output. What it
 // cannot see (a CALL, a DO block) the column checks in describe and
-// copyRows catch, before any row is loaded.
-func returnsRows(query string) error {
-	v := sqlsplit.Verbs(query)
-	if writeVerbs[v.Main] && !sqlsplit.HasKeyword(query[v.MainAt:], "returning") {
+// copyRows catch, before any row is loaded. d is the source engine's
+// reading of strings, as the split's.
+func returnsRows(query string, d sqlsplit.Dialect) error {
+	v := d.Verbs(query)
+	if writeVerbs[v.Main] && !d.HasKeyword(query[v.MainAt:], "returning") {
 		return serr.New("etl: Query is "+strings.ToUpper(v.Main)+" without RETURNING, so it has no rows to copy",
 			"hint", "add RETURNING and the columns to load")
 	}

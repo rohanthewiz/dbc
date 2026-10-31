@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/rohanthewiz/dbc/config"
+	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
 var memSeq atomic.Int64
@@ -379,10 +380,10 @@ func TestIsQueryIsReadWith(t *testing.T) {
 		{"UPDATE t SET a = 1", false, false},
 	}
 	for _, c := range cases {
-		if got := isQuery(c.stmt); got != c.query {
+		if got := isQuery(c.stmt, sqlsplit.Generic); got != c.query {
 			t.Errorf("isQuery(%q) = %v, want %v", c.stmt, got, c.query)
 		}
-		if got := isRead(c.stmt); got != c.read {
+		if got := isRead(c.stmt, sqlsplit.Generic); got != c.read {
 			t.Errorf("isRead(%q) = %v, want %v", c.stmt, got, c.read)
 		}
 	}

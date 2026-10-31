@@ -245,7 +245,8 @@ func (s *sqlWrite) Open(e *Env, cols []Col) error {
 		names[i], types[i] = col.Name, col.DBType
 	}
 	var setup []string
-	for _, st := range sqlsplit.Split(s.setup) {
+	// split as the sink's engine reads strings: the setup runs there
+	for _, st := range c.Engine.Dialect().Split(s.setup) {
 		setup = append(setup, st.Text)
 	}
 	if s.create {
@@ -321,8 +322,17 @@ type sqlExec struct {
 }
 
 func (a *sqlExec) Run(e *Env) (Stats, error) {
+	// The statements are split as conn's engine reads strings, so a
+	// Postgres 'a\' ends at its quote and the statement after it runs on
+	// its own. The engine comes from the host's ETLConn, which opens the
+	// pool Exec would open anyway; when it cannot say (an unknown conn),
+	// Generic splits and the first Exec reports the real error.
+	d := sqlsplit.Generic
+	if c, err := e.S.ETLConn(a.conn); err == nil {
+		d = c.Engine.Dialect()
+	}
 	var total int64
-	for _, st := range sqlsplit.Split(a.sql) {
+	for _, st := range d.Split(a.sql) {
 		n, err := e.S.Exec(a.conn, st.Text)
 		if err != nil {
 			return Stats{}, err

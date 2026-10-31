@@ -510,7 +510,7 @@
   function onDDL(d) {
     setStatus("ready on " + state.active);
     const r = d.routine, ddl = d.ddl;
-    const pre = el("pre", "ival", dbc.hl("sql", ddl));
+    const pre = el("pre", "ival", dbc.hl("sql", ddl, state.driver));
     const cp = el("button", { type: "button", class: "primary" }, "⧉ Copy");
     const ins = el("button", { type: "button", title: "Put the DDL in the editor at the caret" }, "↳ Insert into editor");
     const doCopy = () => dbc.clip.copyText(ddl, "the DDL of " + r.qname);
@@ -4177,7 +4177,7 @@
     const seq = ++menuSeq;
     const sql = !t.script && !t.pipeline && !t.job;
     const [p] = await Promise.all([
-      sql ? api("POST", "/api/v1/picks", editorState()).catch(() => null) : null,
+      sql ? api("POST", "/api/v1/picks", Object.assign(editorState(), { driver: state.driver })).catch(() => null) : null,
       sql && t.cdb ? refreshNames(t.cdb) : null,
     ]);
     if (seq !== menuSeq || t !== state.tab) return;

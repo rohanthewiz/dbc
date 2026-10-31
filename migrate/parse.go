@@ -58,8 +58,9 @@ var fileName = regexp.MustCompile(`^(\d+)(?:_(.*))?\.sql$`)
 // look like migrations and subdirectories are ignored, so a stash of ad-hoc
 // SQL beside the migrations does not break the run. Two files sharing a
 // version is an error: with one applied and the other not, status would be a
-// lie.
-func Load(dir string) ([]Migration, error) {
+// lie. Each file is split into statements as d's engine reads strings
+// (ParseFile).
+func Load(dir string, d Dialect) ([]Migration, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, serr.Wrap(err, "migrations_dir", dir)
@@ -84,7 +85,7 @@ func Load(dir string) ([]Migration, error) {
 		}
 		seen[v] = e.Name()
 
-		mig, err := ParseFile(filepath.Join(dir, e.Name()))
+		mig, err := ParseFile(filepath.Join(dir, e.Name()), d)
 		if err != nil {
 			return nil, err
 		}
@@ -96,15 +97,17 @@ func Load(dir string) ([]Migration, error) {
 }
 
 // ParseFile parses one migration file. Version is left to the caller, which
-// has the file name.
-func ParseFile(path string) (Migration, error) {
+// has the file name. d is the engine the file is for: where a string ends
+// is its rule, and so where a free part's statements end — a Postgres
+// 'C:\' closes at its quote, a MySQL one does not.
+func ParseFile(path string, d Dialect) (Migration, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return Migration{}, serr.Wrap(err, "file", path)
 	}
 	defer f.Close()
 
-	m, err := parse(bufio.NewReader(f))
+	m, err := parse(bufio.NewReader(f), d.split)
 	if err != nil {
 		return Migration{}, serr.Wrap(err, "file", path)
 	}
@@ -128,7 +131,9 @@ type part struct {
 //	none ──Up──▶ up ──Down──▶ down
 //	         │              │
 //	  StatementBegin/End toggles verbatim inside either section
-func parse(r *bufio.Reader) (Migration, error) {
+//
+// sd is the engine's reading of strings, for splitting the free parts.
+func parse(r *bufio.Reader, sd sqlsplit.Dialect) (Migration, error) {
 	var m Migration
 	section := "" // "", "up", "down"
 	var parts []*part
@@ -156,7 +161,7 @@ func parse(r *bufio.Reader) (Migration, error) {
 				}
 				continue
 			}
-			for _, st := range sqlsplit.Split(p.text.String()) {
+			for _, st := range sd.Split(p.text.String()) {
 				stmts = append(stmts, st.Text)
 			}
 		}

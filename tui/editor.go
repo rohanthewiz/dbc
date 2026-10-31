@@ -51,6 +51,11 @@ type editor struct {
 	// the dots drawn rather than onto the hidden text's own widths.
 	mask rune
 
+	// dialect is the engine the SQL is colored as (setDialect): where a
+	// string ends is its rule, and the coloring must end it where the run's
+	// splitter does (workspace.Pick takes the same dialect).
+	dialect sqlsplit.Dialect
+
 	undo, redo []snapshot
 	lastKind   editKind  // what the previous edit was, for coalescing typing
 	lastAt     time.Time // when it happened
@@ -935,15 +940,25 @@ func (e *editor) Draw(s Surface, st styles, bg Style, curStmt [2]int, follow boo
 
 func inRange(p, a, b pos) bool { return !p.before(a) && p.before(b) }
 
-// highlight returns a style per rune per line, from sqlsplit's lexer. It is
-// cached against the edit version: the frame redraws on every mouse motion,
-// and relexing an unchanged buffer each time would be waste.
+// setDialect sets the engine the buffer is colored as. A change drops the
+// cached highlight, which is keyed on the edit version alone: switching a
+// tab from MySQL to Postgres changes where 'a\' ends without an edit.
+func (e *editor) setDialect(d sqlsplit.Dialect) {
+	if d != e.dialect {
+		e.dialect, e.hl = d, nil
+	}
+}
+
+// highlight returns a style per rune per line, from sqlsplit's lexer read
+// as the editor's dialect. It is cached against the edit version (and
+// dropped by setDialect): the frame redraws on every mouse motion, and
+// relexing an unchanged buffer each time would be waste.
 func (e *editor) highlight(st styles) [][]Style {
 	if e.hl != nil && e.hlVer == e.version {
 		return e.hl
 	}
 	text := e.Text()
-	toks := sqlsplit.Lex(text)
+	toks := e.dialect.Lex(text)
 	out := make([][]Style, len(e.lines))
 	ti := 0
 	off := 0

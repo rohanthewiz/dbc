@@ -6,6 +6,11 @@
 // semicolon: single-quoted strings, double-quoted and backquoted identifiers,
 // line and (nestable) block comments, and PostgreSQL dollar-quoted bodies.
 // Anything else is opaque — it is a splitter, not a parser.
+//
+// Where a string ends depends on the engine (a backslash escapes on MySQL,
+// not on Postgres, SQLite or bytdb), so every scan runs under a Dialect: a
+// caller that knows its connection scans as DialectOf(driver) does, and the
+// package-level functions are the Generic dialect's — see dialect.go.
 package sqlsplit
 
 import "strings"
@@ -62,11 +67,16 @@ type chunk struct {
 	hasCode    bool // saw something outside whitespace and comments
 }
 
-// Split returns the runnable statements in sql, in buffer order. Spans that
-// hold only whitespace or comments are dropped.
-func Split(sql string) []Stmt {
+// Split returns the runnable statements in sql, in buffer order, read as
+// the Generic dialect (Dialect.Split).
+func Split(sql string) []Stmt { return Generic.Split(sql) }
+
+// Split returns the runnable statements in sql, in buffer order, its
+// strings read as d's engine reads them. Spans that hold only whitespace or
+// comments are dropped.
+func (d Dialect) Split(sql string) []Stmt {
 	var out []Stmt
-	for _, c := range scan(sql) {
+	for _, c := range scan(sql, d) {
 		if !c.hasCode {
 			continue
 		}
@@ -222,7 +232,14 @@ var withMainVerbs = map[string]bool{
 // A '(' at depth 0 right after a ')' is neither a column list (which follows
 // a name) nor a CTE body (which follows AS): it is a parenthesized main
 // statement, `WITH x AS (…) (SELECT …)`, and its verb is read inside it.
-func Verbs(sql string) StmtVerbs {
+//
+// The package-level Verbs reads strings as the Generic dialect does.
+func Verbs(sql string) StmtVerbs { return Generic.Verbs(sql) }
+
+// Verbs is the package-level Verbs with sql's strings read as d's engine
+// reads them, so a string ending in a backslash on Postgres cannot hide the
+// main verb or a CTE's past its closing quote.
+func (d Dialect) Verbs(sql string) StmtVerbs {
 	at := keywordAt(sql, 0)
 	kw := wordAt(sql, at)
 	if kw != "with" {
@@ -248,7 +265,7 @@ func Verbs(sql string) StmtVerbs {
 			i = skipBlockComment(sql, i)
 			continue
 		case c == '\'', c == '"', c == '`':
-			i = skipQuoted(sql, i, c)
+			i = skipQuoted(sql, i, c, d)
 		case c == '$':
 			if tag, ok := dollarTag(sql, i); ok {
 				i = skipDollarQuoted(sql, i, tag)
@@ -264,7 +281,7 @@ func Verbs(sql string) StmtVerbs {
 				case afterClose:
 					// a parenthesized main statement; a nested WITH in it
 					// has its own CTE list, so read it the same way
-					inner := Verbs(sql[i:])
+					inner := d.Verbs(sql[i:])
 					v.Main, v.MainAt = inner.Main, i+inner.MainAt
 					v.CTEs = append(v.CTEs, inner.CTEs...)
 					return v
@@ -411,7 +428,15 @@ func wordAt(sql string, i int) string {
 // is lexical like the rest of the package — a keyword used unquoted as an
 // identifier would still count, which the dialects dbc speaks mostly forbid
 // for reserved words anyway.
-func HasKeyword(sql, word string) bool {
+//
+// The package-level HasKeyword reads strings as the Generic dialect does.
+func HasKeyword(sql, word string) bool { return Generic.HasKeyword(sql, word) }
+
+// HasKeyword is the package-level HasKeyword with sql's strings read as d's
+// engine reads them: on Postgres, `VALUES ('a\') RETURNING id` has its
+// RETURNING outside the string, where the Generic reading would have the
+// string run on over it.
+func (d Dialect) HasKeyword(sql, word string) bool {
 	i := 0
 	for i < len(sql) {
 		c := sql[i]
@@ -421,7 +446,7 @@ func HasKeyword(sql, word string) bool {
 		case isBlockCommentAt(sql, i):
 			i = skipBlockComment(sql, i)
 		case c == '\'', c == '"', c == '`':
-			i = skipQuoted(sql, i, c)
+			i = skipQuoted(sql, i, c, d)
 		case c == '$':
 			if tag, ok := dollarTag(sql, i); ok {
 				i = skipDollarQuoted(sql, i, tag)
@@ -453,7 +478,9 @@ func HasKeyword(sql, word string) bool {
 	return false
 }
 
-func scan(sql string) []chunk {
+// scan cuts sql into semicolon-delimited chunks, its strings read as d's
+// engine reads them.
+func scan(sql string, d Dialect) []chunk {
 	var (
 		out     []chunk
 		start   int
@@ -468,7 +495,7 @@ func scan(sql string) []chunk {
 		case isBlockCommentAt(sql, i):
 			i = skipBlockComment(sql, i)
 		case c == '\'', c == '"', c == '`':
-			i = skipQuoted(sql, i, c)
+			i = skipQuoted(sql, i, c, d)
 			hasCode = true
 		case c == '$':
 			if tag, ok := dollarTag(sql, i); ok {
@@ -567,13 +594,16 @@ func skipBlockComment(s string, i int) int {
 }
 
 // skipQuoted consumes a quoted run starting at the opening quote. A doubled
-// quote is an embedded quote in every dialect we speak; a backslash escape is
-// MySQL's default and is honored inside single quotes, which costs us only
-// PostgreSQL strings that end in a literal backslash.
-func skipQuoted(s string, i int, q byte) int {
+// quote is an embedded quote in every dialect we speak. A backslash escapes
+// the byte after it only where d's engine says so (backslashEscapes): in
+// every '…' on MySQL and Generic, in an E'…' on Postgres and bytdb, nowhere
+// on SQLite — so 'a\' ends at its quote on Postgres and runs on past it on
+// MySQL, as each engine reads it.
+func skipQuoted(s string, i int, q byte, d Dialect) int {
+	esc := d.backslashEscapes(s, i, q)
 	for i++; i < len(s); i++ {
 		switch {
-		case s[i] == '\\' && q == '\'' && i+1 < len(s):
+		case esc && s[i] == '\\' && i+1 < len(s):
 			i++
 		case s[i] == q:
 			if i+1 < len(s) && s[i+1] == q {

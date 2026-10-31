@@ -75,7 +75,10 @@ func Import(sql string, cat *Catalog) (Design, []string, error) {
 	if cat == nil || cat.Schema == nil {
 		return Design{}, nil, &ImportError{Reason: "the connection's tables are not known yet", At: -1}
 	}
-	stmts := sqlsplit.Split(sql)
+	// split as the engine reads strings, as lexSQL then reads them: on
+	// Postgres `x = 'a\'` ends at its quote, and what follows a ; after
+	// it is a second statement, not more of the string
+	stmts := sqlsplit.DialectOf(cat.Driver).Split(sql)
 	switch {
 	case len(stmts) == 0:
 		return Design{}, nil, &ImportError{Reason: "there is no statement here", At: -1}

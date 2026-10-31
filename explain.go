@@ -14,7 +14,6 @@ import (
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/explain"
 	"github.com/rohanthewiz/dbc/export"
-	"github.com/rohanthewiz/dbc/sqlsplit"
 	"github.com/rohanthewiz/dbc/theme"
 	"github.com/rohanthewiz/dbc/tui"
 )
@@ -130,7 +129,14 @@ func explainAction(ctx context.Context, cmd *cli.Command) error {
 	if !ok {
 		usage(`usage: dbc explain [-a] [-c conn] ["SQL" | -f file]`)
 	}
-	stmts := sqlsplit.Split(sql)
+	// The config comes first: how many statements the SQL holds depends
+	// on where its strings end, which is the connection's engine's rule
+	// (connDialect) — 'a\'; SELECT 2 is two statements on Postgres and
+	// one on MySQL.
+	cfg, mgr := setup(demoForRun)
+	defer mgr.Close()
+	warnConfig(cfg)
+	stmts := connDialect(cfg).Split(sql)
 	switch len(stmts) {
 	case 0:
 		usage("nothing to explain — the SQL holds no statement")
@@ -138,10 +144,6 @@ func explainAction(ctx context.Context, cmd *cli.Command) error {
 	default:
 		usage(fmt.Sprintf("explain takes one statement; this SQL holds %d", len(stmts)))
 	}
-
-	cfg, mgr := setup(demoForRun)
-	defer mgr.Close()
-	warnConfig(cfg)
 	p := explainHeadless(cfg, mgr, stmts[0].Text)
 
 	// the plan's notes are part of every rendering (the text's header, the

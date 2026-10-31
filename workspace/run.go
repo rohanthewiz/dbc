@@ -41,9 +41,10 @@ import (
 // RunEditor is Ctrl+R (all false) or Ctrl+Shift+R (all true) on what the
 // editor holds.
 func (w *Workspace) RunEditor(ed Editor, all bool) (Start, error) {
-	stmts, tag := Pick(ed)
+	d := w.Dialect()
+	stmts, tag := Pick(ed, d)
 	if all {
-		stmts, tag = PickAll(ed.Text)
+		stmts, tag = PickAll(ed.Text, d)
 	}
 	return w.RunStmts(stmts, tag)
 }

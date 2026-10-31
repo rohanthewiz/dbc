@@ -325,7 +325,7 @@ func (d *ddlModal) draw(m *Model, s Surface) *caret {
 	body.Fill(m.st.chatCode)
 	d.view = body.Rect()
 	text := body.Sub(Rect{1, 0, body.W() - 2, body.H()}) // a cell of padding each side
-	kinds := codeKinds("sql", d.shown)
+	kinds := codeKinds("sql", d.shown, m.ws.Dialect())
 	rows := d.lines(text.W())
 	d.top = max(0, min(d.top, len(rows)-text.H()))
 	for y := 0; y < text.H() && d.top+y < len(rows); y++ {

@@ -507,7 +507,7 @@ func warnConfig(cfg *config.Config) {
 // note on stderr says so.
 func runQueryHeadless(cfg *config.Config, mgr *db.Manager, sql string, f export.Format) {
 	conn := pickConn(cfg)
-	stmts := sqlsplit.Split(sql)
+	stmts := connDialect(cfg).Split(sql)
 	if len(stmts) == 0 {
 		usage("nothing to run — the SQL holds no statement")
 	}
@@ -697,6 +697,16 @@ func pickConn(cfg *config.Config) string {
 		usage("multiple connections configured — pick one with -c <name>")
 	}
 	return conn
+}
+
+// connDialect is how the connection a headless command runs on (pickConn)
+// reads SQL — where its strings end (sqlsplit.Dialect) — for splitting the
+// SQL it was given: the statements -f runs are the ones the engine would
+// see, a 'a\' on Postgres closing at its quote. A connection missing from
+// the config (pickConn's name, which the run then reports) is Generic.
+func connDialect(cfg *config.Config) sqlsplit.Dialect {
+	cc, _ := cfg.ConnByName(pickConn(cfg))
+	return sqlsplit.DialectOf(cc.Driver)
 }
 
 // adHocConnName is the connection --dsn registers under.

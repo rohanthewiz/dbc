@@ -3,6 +3,8 @@ package sqlcomplete
 import (
 	"strings"
 	"testing"
+
+	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
 // resolveAt resolves buf at the ▮ marker, and returns the buffer without it.
@@ -13,7 +15,7 @@ func resolveAt(t *testing.T, buf string) (Symbol, string) {
 		t.Fatal("no ▮ in buffer")
 	}
 	buf = buf[:i] + buf[i+len("▮"):]
-	return Resolve(buf, i), buf
+	return Resolve(buf, i, sqlsplit.Generic), buf
 }
 
 // bracket marks each span of buf with [ ], so a test reads the uses as

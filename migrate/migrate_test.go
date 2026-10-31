@@ -12,11 +12,13 @@ import (
 	bytdbdrv "github.com/rohanthewiz/bytdb/stdlib"
 	"github.com/rohanthewiz/serr"
 	_ "modernc.org/sqlite"
+
+	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
 func mustParse(t *testing.T, src string) Migration {
 	t.Helper()
-	m, err := parse(bufio.NewReader(strings.NewReader(src)))
+	m, err := parse(bufio.NewReader(strings.NewReader(src)), sqlsplit.Generic)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -97,7 +99,7 @@ func TestParseErrors(t *testing.T) {
 		"duplicate up":     "-- +goose Up\nSELECT 1;\n-- +goose Up\n",
 	}
 	for name, src := range cases {
-		if _, err := parse(bufio.NewReader(strings.NewReader(src))); err == nil {
+		if _, err := parse(bufio.NewReader(strings.NewReader(src)), sqlsplit.Generic); err == nil {
 			t.Errorf("%s: expected an error", name)
 		}
 	}
@@ -150,7 +152,7 @@ func TestLoadOrdersAndSkipsDecoys(t *testing.T) {
 	dir := writeMigrations(t, map[string]string{
 		"20_b.sql": migB, "10_a.sql": migA, "5_no_name_ok.sql": migC, "notes.txt": "x",
 	})
-	migs, err := Load(dir)
+	migs, err := Load(dir, Dialect{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +163,7 @@ func TestLoadOrdersAndSkipsDecoys(t *testing.T) {
 
 func TestLoadRejectsDuplicateVersion(t *testing.T) {
 	dir := writeMigrations(t, map[string]string{"10_a.sql": migA, "10_b.sql": migB})
-	if _, err := Load(dir); err == nil {
+	if _, err := Load(dir, Dialect{}); err == nil {
 		t.Fatal("expected duplicate version error")
 	}
 }
@@ -192,6 +194,48 @@ func tableExists(t *testing.T, dbh *sql.DB, name string) bool {
 	t.Helper()
 	_, err := dbh.Exec("SELECT count(*) FROM " + name)
 	return err == nil
+}
+
+// TestSplitsAsTheEngine is N-238 for migrations: a file's free part is cut
+// into statements as its engine reads strings. A seed row ending in a
+// backslash closes at its quote on SQLite and bytdb (a backslash is plain
+// text there), so the CREATE after it is a statement of its own and both
+// run — read by MySQL's rule, the two merged into one statement the engine
+// refused, and the migration failed.
+func TestSplitsAsTheEngine(t *testing.T) {
+	const mig = "-- +goose Up\nCREATE TABLE p (id INTEGER PRIMARY KEY, v TEXT);\nINSERT INTO p (id, v) VALUES (1, 'C:\\');\n" +
+		"CREATE TABLE q (id INTEGER PRIMARY KEY);\n" +
+		"-- +goose Down\nDROP TABLE q;\nDROP TABLE p;\n"
+	dir := writeMigrations(t, map[string]string{"10_p.sql": mig})
+	if migs, err := Load(dir, MySQL); err != nil || len(migs[0].Up) != 2 {
+		t.Fatalf("mysql: Up = %q (%v), want the INSERT and the CREATE after it as one run-on statement", migs[0].Up, err)
+	}
+	ctx := context.Background()
+	for name, dbh := range engines(t) {
+		t.Run(name, func(t *testing.T) {
+			d, err := DialectFor(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m, err := New(dbh, d, dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if up := m.Migrations()[0].Up; len(up) != 3 {
+				t.Fatalf("Up = %q, want 3 statements", up)
+			}
+			if _, err := m.Up(ctx); err != nil {
+				t.Fatalf("up: %v", err)
+			}
+			var v string
+			if err := dbh.QueryRow("SELECT v FROM p").Scan(&v); err != nil || v != `C:\` {
+				t.Errorf("seeded v = %q (%v), want C:\\", v, err)
+			}
+			if !tableExists(t, dbh, "q") {
+				t.Error("the CREATE after the backslash value did not run")
+			}
+		})
+	}
 }
 
 func TestUpDownStatusAcrossEngines(t *testing.T) {
@@ -368,7 +412,7 @@ func TestCreate(t *testing.T) {
 	if !strings.HasSuffix(path, "_add_users_table_.sql") {
 		t.Errorf("path = %s", path)
 	}
-	m, err := ParseFile(path)
+	m, err := ParseFile(path, Dialect{})
 	if err != nil {
 		t.Fatalf("new file does not parse: %v", err)
 	}

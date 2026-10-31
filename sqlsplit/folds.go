@@ -43,15 +43,22 @@ type Fold struct {
 // given for a line, so each statement's fold comes before its blocks':
 // folding the query wins over folding its first block. A block that opens
 // on a later line ("FROM (" under "SELECT *") keeps a fold of its own.
-func Folds(sql string) []Fold {
-	stmts := Split(sql)
+//
+// The package-level Folds reads strings as the Generic dialect does.
+func Folds(sql string) []Fold { return Generic.Folds(sql) }
+
+// Folds is the package-level Folds with sql's strings read as d's engine
+// reads them: the statements and the brackets of d.Split and d.Lex, so a
+// fold hides the statement d's Ctrl+Enter runs.
+func (d Dialect) Folds(sql string) []Fold {
+	stmts := d.Split(sql)
 	if len(stmts) == 0 {
 		return nil
 	}
 	// The spans no bracket can live in, in buffer order, for a cursor that
 	// only moves forward across the statements below.
 	var opaque []Token
-	for _, t := range Lex(sql) {
+	for _, t := range d.Lex(sql) {
 		switch t.Kind {
 		case TokString, TokIdent, TokComment:
 			opaque = append(opaque, t)

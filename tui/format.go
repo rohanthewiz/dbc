@@ -32,7 +32,9 @@ func (m *Model) formatQuery() tea.Cmd {
 		m.log(logWarn, "format: nothing to format — type or paste a query first")
 		return nil
 	}
-	out := sqlsplit.FormatSpan(sel)
+	// read as the connection's engine reads strings, as the run would
+	d := m.ws.Dialect()
+	out := d.FormatSpan(sel)
 	if out == sel {
 		m.logf(logInfo, "format: %s is already formatted", what)
 		return nil
@@ -40,7 +42,7 @@ func (m *Model) formatQuery() tea.Cmd {
 
 	cursor := -1 // after the formatted text: Replace's default
 	if from == 0 && to == len(text) {
-		before, after := sqlsplit.Split(text), sqlsplit.Split(out)
+		before, after := d.Split(text), d.Split(out)
 		cursor = 0
 		if i := sqlsplit.IndexAt(before, e.Caret()); i >= 0 && len(before) == len(after) {
 			cursor = after[i].CodeStart

@@ -16,6 +16,7 @@ import (
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/model"
+	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
 // These tests exercise the workspace's rules directly, with no UI: start a
@@ -92,19 +93,19 @@ func TestPick(t *testing.T) {
 		{"empty", Editor{Text: "  \n"}, nil, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, tag := Pick(tc.ed)
+			got, tag := Pick(tc.ed, sqlsplit.Generic)
 			if strings.Join(got, "|") != strings.Join(tc.want, "|") || tag != tc.tag {
 				t.Errorf("Pick = %q, %q; want %q, %q", got, tag, tc.want, tc.tag)
 			}
 		})
 	}
-	if all, tag := PickAll(text); len(all) != 3 || tag != "all 3 statements" {
+	if all, tag := PickAll(text, sqlsplit.Generic); len(all) != 3 || tag != "all 3 statements" {
 		t.Errorf("PickAll = %q, %q", all, tag)
 	}
-	if r := StmtRange(text, 17); r[0] != 15 || r[1] <= r[0] {
+	if r := StmtRange(text, 17, sqlsplit.Generic); r[0] != 15 || r[1] <= r[0] {
 		t.Errorf("StmtRange = %v, want the second statement's range", r)
 	}
-	if r := StmtRange("SELECT 1", 3); r != [2]int{} {
+	if r := StmtRange("SELECT 1", 3, sqlsplit.Generic); r != [2]int{} {
 		t.Errorf("StmtRange of one statement = %v, want none", r)
 	}
 }
@@ -118,7 +119,7 @@ func TestPickTrailingComment(t *testing.T) {
 		"---\n" +
 		"DO $$\nBEGIN\n  RAISE NOTICE 'hi';\nEND $$;"
 	eol := strings.IndexByte(text, '\n')
-	got, tag := Pick(Editor{Text: text, Caret: eol})
+	got, tag := Pick(Editor{Text: text, Caret: eol}, sqlsplit.Generic)
 	if strings.Join(got, "|") != "select max(ts) from t" || tag != "statement 1/2" {
 		t.Errorf("caret at the end of the commented line: Pick = %q, %q; want the select", got, tag)
 	}
@@ -127,12 +128,12 @@ func TestPickTrailingComment(t *testing.T) {
 	// which still picks the DO block
 	do := strings.Index(text, "DO $$")
 	for _, caret := range []int{strings.Index(text, "RAISE"), eol + 2} {
-		r := StmtRange(text, caret)
+		r := StmtRange(text, caret, sqlsplit.Generic)
 		if r[0] != do || text[r[1]-len("END $$"):r[1]] != "END $$" {
 			t.Errorf("caret %d: StmtRange of the DO block = %v (%q), want it to start at the DO, past the --- header", caret, r, text[r[0]:r[1]])
 		}
 	}
-	if r := StmtRange(text, eol); r[1] > eol || r[0] != 0 {
+	if r := StmtRange(text, eol, sqlsplit.Generic); r[1] > eol || r[0] != 0 {
 		t.Errorf("StmtRange at the trailing comment = %v, want the select's line only", r)
 	}
 }
@@ -143,15 +144,67 @@ func TestPickTrailingComment(t *testing.T) {
 func TestPickDetachedComments(t *testing.T) {
 	text := "-- CREATE SCHEMA IF NOT EXISTS lymbic_stg;\n---\n\n\nselect * from lymbic_stg.jobs;"
 	for _, caret := range []int{0, strings.Index(text, "---"), strings.Index(text, "from")} {
-		got, tag := Pick(Editor{Text: text, Caret: caret})
+		got, tag := Pick(Editor{Text: text, Caret: caret}, sqlsplit.Generic)
 		if strings.Join(got, "|") != "select * from lymbic_stg.jobs" || tag != "query" {
 			t.Errorf("caret %d: Pick = %q, %q; want the select alone", caret, got, tag)
 		}
 	}
 	// without the blank line the comments head the query and run with it
 	text = "-- all jobs\nselect * from jobs;"
-	if got, _ := Pick(Editor{Text: text, Caret: len(text)}); strings.Join(got, "|") != "-- all jobs\nselect * from jobs" {
+	if got, _ := Pick(Editor{Text: text, Caret: len(text)}, sqlsplit.Generic); strings.Join(got, "|") != "-- all jobs\nselect * from jobs" {
 		t.Errorf("Pick with a touching comment = %q, want the comment kept", got)
+	}
+}
+
+// TestPickDialect is N-238: where a string ends is the engine's rule, so
+// the caret picks per dialect. 'a\' is a whole string on Postgres (a
+// backslash is plain text there), so the statement after it is one of its
+// own; on MySQL the \' is an escaped quote and the two are one run-on
+// statement, as MySQL itself would read them.
+func TestPickDialect(t *testing.T) {
+	text := "SELECT 'a\\';\nSELECT 2;"
+	caret := len(text)
+	got, tag := Pick(Editor{Text: text, Caret: caret}, sqlsplit.Postgres)
+	if strings.Join(got, "|") != "SELECT 2" || tag != "statement 2/2" {
+		t.Errorf("postgres: Pick = %q, %q; want the second statement", got, tag)
+	}
+	if all, _ := PickAll(text, sqlsplit.Postgres); len(all) != 2 {
+		t.Errorf("postgres: PickAll = %q, want 2 statements", all)
+	}
+	if r := StmtRange(text, caret, sqlsplit.Postgres); text[r[0]:r[1]] != "SELECT 2" {
+		t.Errorf("postgres: StmtRange = %q, want the second statement", text[r[0]:r[1]])
+	}
+	if got, tag := Pick(Editor{Text: text, Caret: caret}, sqlsplit.MySQL); len(got) != 1 || tag != "query" {
+		t.Errorf("mysql: Pick = %q, %q; want the one run-on statement", got, tag)
+	}
+}
+
+// TestRunEditorDialect runs N-238's case on a real engine: the workspace
+// reads the buffer as its active connection's dialect (SQLite here, where a
+// backslash is plain text), so the caret after 'a\' picks the statement
+// SQLite would run, and Run all runs both — read by MySQL's rule they
+// merged into one statement SQLite refused.
+func TestRunEditorDialect(t *testing.T) {
+	w := newTestWorkspace(t)
+	if d := w.Dialect(); d != sqlsplit.SQLite {
+		t.Fatalf("Dialect of a sqlite connection = %v", d)
+	}
+	text := "SELECT 'a\\' AS v;\nSELECT 2 AS n;"
+	st, err := w.RunEditor(Editor{Text: text, Caret: len(text)}, false)
+	if err != nil {
+		t.Fatalf("RunEditor: %v", err)
+	}
+	ev := st.Job().(*RunDone)
+	if ev.Err != nil || strings.Join(ev.Stmts, "|") != "SELECT 2 AS n" ||
+		ev.Result == nil || ev.Result.Rows[0][0] != "2" {
+		t.Fatalf("caret on the second: ran %q, err %v, result %+v; want SELECT 2 alone", ev.Stmts, ev.Err, ev.Result)
+	}
+	st, err = w.RunEditor(Editor{Text: text}, true)
+	if err != nil {
+		t.Fatalf("RunEditor all: %v", err)
+	}
+	if ev = st.Job().(*RunDone); ev.Err != nil || len(ev.Stmts) != 2 || ev.Tabs != 2 {
+		t.Fatalf("run all: ran %q in %d tabs, err %v; want both statements", ev.Stmts, ev.Tabs, ev.Err)
 	}
 }
 

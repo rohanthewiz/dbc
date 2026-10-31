@@ -1353,7 +1353,7 @@
       const sql = (a && a.sql) || "";
       if (a && !a.valid && sql) pane.append(el("div", "qdbanner bad", "Fix the errors in the guide before running it."));
       const pre = el("pre", "qdsql");
-      pre.append(sql ? dbc.hl("sql", sql) : "");
+      pre.append(sql ? dbc.hl("sql", sql, dbc.state.driver) : "");
       const acts = el("div", "qdrow");
       const run = small("primary", "▶ Run", "Run it into the grid below (Ctrl+Enter)");
       run.disabled = !(a && a.valid);

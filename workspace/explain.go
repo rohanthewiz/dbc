@@ -20,7 +20,7 @@ import (
 // ExplainEditor is Ctrl+X (estimate) and Alt+X (analyze): explain the
 // statement under the caret, or the selected one.
 func (w *Workspace) ExplainEditor(ed Editor, analyze bool) (Start, error) {
-	stmts, where := Pick(ed)
+	stmts, where := Pick(ed, w.Dialect())
 	switch {
 	case len(stmts) == 0:
 		return Start{}, refuse(Nothing, Warn, "nothing to explain — type a query first")

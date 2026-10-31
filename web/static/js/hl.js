@@ -1,7 +1,10 @@
 // dbc web — syntax highlighting for the code blocks in the assistant's
 // answers: SQL, Go, Python, JavaScript, JSON and shell.
 //
-//   dbc.hl(lang, code) → DocumentFragment of text nodes and <span class="hl-k">…
+//   dbc.hl(lang, code, driver) → DocumentFragment of text nodes and <span class="hl-k">…
+//
+// driver is the connection's (dbc.state.driver), for a SQL block whose tag
+// names no engine — codehl.LexDialect's conn; omitted, it is Generic's.
 //
 // THIS IS codehl/codehl.go (and shell.go) IN JAVASCRIPT, rule for rule: the TUI and the
 // page draw the same answer, so they should color it the same. The keyword
@@ -186,19 +189,40 @@
     return out;
   }
 
-  // lexSQL follows sqlsplit.Lex: -- and nested /* */ comments, '…' strings
-  // (doubled '' and MySQL's backslash escapes), "…"/`…` quoted identifiers
-  // (i), $tag$ bodies, and $1 ? :name parameters (p) — but not ::casts.
-  // Words are ASCII only there, so they are here.
-  function lexSQL(s) {
+  // dialectOf is sqlsplit.DialectOf: the engine a driver name or a fence tag
+  // names — "postgres", "mysql", "sqlite", "bytdb" — or "" (Generic) for
+  // anything else ("", "sql").
+  function dialectOf(name) {
+    const n = (name || "").trim().toLowerCase();
+    if (/^(postgres|postgresql|pg|pgx|psql|pgsql|plpgsql)$/.test(n)) return "postgres";
+    if (n === "mysql" || n === "mariadb") return "mysql";
+    if (n === "sqlite" || n === "sqlite3") return "sqlite";
+    if (n === "bytdb") return "bytdb";
+    return "";
+  }
+
+  // lexSQL follows sqlsplit's Dialect.Lex, read as dialect d: -- and nested
+  // /* */ comments, '…' strings (doubled '', and a backslash escape where
+  // d's engine has one), "…"/`…` quoted identifiers (i), $tag$ bodies, and
+  // $1 ? :name parameters (p) — but not ::casts. Words are ASCII only
+  // there, so they are here.
+  function lexSQL(s, d) {
     const out = [];
     const emit = (a, b, k) => { if (b > a) out.push([a, b, k]); };
     const isWord = (c) => c !== undefined && (c === "_" || isAlpha(c) || isDigit(c));
+    // escapes is sqlsplit's backslashEscapes, for the quote at i: only a
+    // '…' string has them — every one on MySQL and Generic, an E'…' (E
+    // standing as a token) on Postgres and bytdb, none on SQLite
+    const escapes = (i) => {
+      if (s[i] !== "'") return false;
+      if (d === "postgres" || d === "bytdb") return (s[i - 1] === "E" || s[i - 1] === "e") && !isWord(s[i - 2]);
+      return d !== "sqlite";
+    };
     const quoted = (i) => { // '' (or "", ``) inside is the quote doubled
-      const q = s[i];
+      const q = s[i], esc = escapes(i);
       let j = i + 1;
       while (j < s.length) {
-        if (s[j] === "\\" && q === "'" && j + 1 < s.length) { j += 2; continue; }
+        if (esc && s[j] === "\\" && j + 1 < s.length) { j += 2; continue; }
         if (s[j] === q) { if (s[j + 1] === q) { j += 2; continue; } return j + 1; }
         j++;
       }
@@ -353,13 +377,15 @@
 
   // dbc.hl draws code as text nodes with <span class="hl-…"> around each
   // classified run; an unhighlighted language comes back as one text node.
-  dbc.hl = function (tag, code) {
+  dbc.hl = function (tag, code, driver) {
     const frag = document.createDocumentFragment();
     let l = lang(tag);
     // untagged and opening with { or [ is JSON, not SQL (codehl.Lex): only
     // the colors change, ⤓ insert is still offered by tag
     if (l === "sql" && !(tag || "").trim() && /^\s*[{[]/.test(code)) l = "json";
-    const spans = l === "sql" ? lexSQL(code) : l === "shell" ? lexShell(code)
+    // SQL is read as the engine its tag names, else as the connection's
+    // (codehl.LexDialect): where a string ends is the engine's rule
+    const spans = l === "sql" ? lexSQL(code, dialectOf(tag) || dialectOf(driver)) : l === "shell" ? lexShell(code)
       : SPECS[l] ? lexC(SPECS[l], kw[l], code) : [];
     let at = 0;
     for (const [a, b, k] of spans) {

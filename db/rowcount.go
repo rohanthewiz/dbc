@@ -377,8 +377,10 @@ var sessionVerbs = map[string]bool{
 // the session (sessionVerbs). It errs toward yes — an UPDATE changes no
 // count, a CREATE INDEX none either — since being wrong that way costs one
 // recount, and the other way a stale number in the sidebar.
+//
+// It reads strings as sqlsplit.Generic, as IsRead does.
 func ChangesRows(stmt string) bool {
-	return !isRead(stmt) && !sessionVerbs[sqlsplit.Verbs(stmt).Main]
+	return !isRead(stmt, sqlsplit.Generic) && !sessionVerbs[sqlsplit.Verbs(stmt).Main]
 }
 
 // RowCounts returns the row count of each of tables on the named

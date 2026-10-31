@@ -72,7 +72,7 @@ func (s *Session) explain(ctx context.Context, stmt string, opt ExplainOptions) 
 	}
 	cc, _ := s.m.cfg.ConnByName(s.name)
 	engine := explain.Engine(cc.Driver)
-	read := isRead(stmt)
+	read := isRead(stmt, sqlsplit.DialectOf(cc.Driver))
 
 	var notes []string
 	if opt.Analyze && !read && engine != explain.Postgres {
@@ -290,8 +290,10 @@ func (s *Session) pgTxStatus() byte {
 }
 
 // hasParams reports whether stmt holds a bind parameter ($1, ?, :name).
+// Its one caller is the Postgres explain, so stmt is read as Postgres
+// reads strings: a $1 after a 'a\' is outside the string.
 func hasParams(stmt string) bool {
-	for _, t := range sqlsplit.Lex(stmt) {
+	for _, t := range sqlsplit.Postgres.Lex(stmt) {
 		if t.Kind == sqlsplit.TokParam {
 			return true
 		}
@@ -401,7 +403,7 @@ func (s *Session) explainBytdb(ctx context.Context, stmt string) (*explain.Plan,
 // statement's, not the first row's) and counted, but none is kept: this is a
 // stopwatch, not a query, and max_rows does not apply.
 func (s *Session) measure(ctx context.Context, stmt string, p *explain.Plan) error {
-	if !isRead(stmt) {
+	if !isRead(stmt, s.m.dialect(s.name)) {
 		return nil
 	}
 	start := time.Now()

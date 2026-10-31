@@ -235,6 +235,18 @@ func TestBytdbReturning(t *testing.T) {
 		t.Errorf("update: exec=%v rows=%v, want [[8]]", res.IsExec, res.Rows)
 	}
 
+	// N-238: a value ending in a backslash ends at its quote on bytdb (a
+	// backslash is plain text in its '…'), so the RETURNING after it is a
+	// clause and the rows come back; read by MySQL's rule the string ran
+	// on over it, and the run, an Exec, dropped them
+	res, err = mgr.Run("bd", `INSERT INTO cats VALUES (4, 'C:\', 2) RETURNING name`)
+	if err != nil {
+		t.Fatalf("insert returning a backslash value: %v", err)
+	}
+	if res.IsExec || len(res.Rows) != 1 || res.Rows[0][0] != `C:\` {
+		t.Errorf("backslash value: exec=%v rows=%v, want [[C:\\]]", res.IsExec, res.Rows)
+	}
+
 	// the word inside a string literal is data, not a clause
 	res, err = mgr.Run("bd", "INSERT INTO cats VALUES (3, 'returning', 1)")
 	if err != nil {

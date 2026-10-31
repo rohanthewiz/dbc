@@ -3,6 +3,7 @@ package designer
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -358,9 +359,11 @@ func TestFiltersAreWrittenSafely(t *testing.T) {
 
 // TestLikeEscapeScans: each engine's escaped LIKE, exactly, and the
 // statement still ending where it does for sqlsplit's scanner. That scanner
-// honors \' in every dialect, so an ESCAPE '\' on Postgres or SQLite read
-// as an open string and ran on into the next statement: Split saw one
-// where there were two.
+// once honored \' in every dialect, so an ESCAPE '\' on Postgres or SQLite
+// read as an open string and ran on into the next statement: Split saw one
+// where there were two. It reads each engine's rule now (N-238), and the
+// split here is the engine's, as the editor's and the run's are; the
+// Generic split is checked too, since the LIKEs were written to survive it.
 func TestLikeEscapeScans(t *testing.T) {
 	cat := shopCat()
 	d := build(t, cat, "orders")
@@ -380,9 +383,11 @@ func TestLikeEscapeScans(t *testing.T) {
 		if want := "WHERE " + c.like + "\n  AND o.status = 'a'"; !strings.HasSuffix(sql, want) {
 			t.Errorf("%s:\n%s\n\nwant it to end\n%s", c.driver, sql, want)
 		}
-		stmts := sqlsplit.Split(sql + ";\nSELECT 2")
-		if len(stmts) != 2 || stmts[0].Text != sql || stmts[1].Text != "SELECT 2" {
-			t.Errorf("%s: split as %d statements: %+v", c.driver, len(stmts), stmts)
+		for _, sd := range []sqlsplit.Dialect{sqlsplit.DialectOf(c.driver), sqlsplit.Generic} {
+			stmts := sd.Split(sql + ";\nSELECT 2")
+			if len(stmts) != 2 || stmts[0].Text != sql || stmts[1].Text != "SELECT 2" {
+				t.Errorf("%s (%v split): split as %d statements: %+v", c.driver, sd, len(stmts), stmts)
+			}
 		}
 	}
 
@@ -393,6 +398,47 @@ func TestLikeEscapeScans(t *testing.T) {
 	wantSQL(t, Analyze(d, cat), "SELECT o.id\nFROM orders o\nWHERE o.ref LIKE 'a!!\\b%' ESCAPE '!'")
 	d.Filters[0].Values = []string{`a\b`}
 	wantSQL(t, Analyze(d, cat), "SELECT o.id\nFROM orders o\nWHERE o.ref LIKE 'a\\b%'")
+}
+
+// TestBackslashValuesSplit is N-238's own cases: a value ending in a
+// backslash is written as a literal ending in one — `= 'a\'` on every
+// engine but MySQL (which doubles it), and on SQLite an ends-with's
+// `LIKE '%a\' ESCAPE '!'` too. The engine reads each whole, and so does its
+// dialect's split: the statement after it is one of its own, where the
+// Generic split (MySQL's rule) ran the literal on into it. Opening such a
+// buffer as a design sees the two statements, as running it does.
+func TestBackslashValuesSplit(t *testing.T) {
+	cat := shopCat()
+	d := build(t, cat, "orders")
+	d.Columns = outs(col(d, "o", "id"))
+	for _, c := range []struct{ driver, op, value, where string }{
+		{"postgres", OpEq, `a\`, `o.ref = 'a\'`},
+		{"bytdb", OpEq, `a\`, `o.ref = 'a\'`},
+		{"sqlite", OpEq, `a\`, `o.ref = 'a\'`},
+		{"mysql", OpEq, `a\`, `o.ref = 'a\\'`},
+		// SQLite's ends-with, with an ESCAPE clause (the value has a %) and
+		// without one (it has nothing to escape)
+		{"sqlite", OpEnds, `5%\`, `o.ref LIKE '%5!%\' ESCAPE '!'`},
+		{"sqlite", OpEnds, `a\`, `o.ref LIKE '%a\'`},
+	} {
+		cat.Driver = c.driver
+		d.Filters = []Filter{{Ref: col(d, "o", "ref"), Op: c.op, Values: []string{c.value}}}
+		sql := Analyze(d, cat).SQL
+		if want := "WHERE " + c.where; !strings.HasSuffix(sql, want) {
+			t.Errorf("%s %s:\n%s\n\nwant it to end\n%s", c.driver, c.op, sql, want)
+		}
+		stmts := sqlsplit.DialectOf(c.driver).Split(sql + ";\nSELECT 2")
+		if len(stmts) != 2 || stmts[0].Text != sql || stmts[1].Text != "SELECT 2" {
+			t.Errorf("%s %s: split as %d statements: %+v", c.driver, c.op, len(stmts), stmts)
+		}
+	}
+
+	cat.Driver = "postgres"
+	_, _, err := Import("SELECT o.id FROM orders o WHERE o.ref = 'a\\';\nSELECT 2", cat)
+	var ie *ImportError
+	if !errors.As(err, &ie) || !strings.HasPrefix(ie.Reason, "more than one statement") || ie.Line != 2 {
+		t.Errorf("Import of two statements on postgres: %v, want more than one statement at line 2", err)
+	}
 }
 
 // TestLikeEscapeRunsOnSQLite: SQLite itself runs the patterns written with

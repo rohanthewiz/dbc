@@ -580,6 +580,10 @@ type runReq struct {
 	Caret     int    `json:"caret"`
 	Selection string `json:"selection"`
 	All       bool   `json:"all"`
+	// Driver is the page's state.driver, read by handlePicks alone (as
+	// stmtReq's): a run splits as its workspace's connection reads strings
+	// (Workspace.Dialect), whatever the page says.
+	Driver string `json:"driver"`
 }
 
 // handleRun is Ctrl+Enter / Ctrl+Shift+Enter. Busy → 409 with the TUI's

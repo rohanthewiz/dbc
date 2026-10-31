@@ -26,6 +26,8 @@ import (
 	"strings"
 
 	"github.com/rohanthewiz/serr"
+
+	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
 // Engine is a destination/source SQL dialect: how identifiers are quoted,
@@ -54,6 +56,10 @@ func (e Engine) String() string {
 	}
 	return "unknown"
 }
+
+// Dialect is how e reads SQL — where its strings end — for splitting and
+// classifying the SQL a transfer is given (sqlsplit.Dialect).
+func (e Engine) Dialect() sqlsplit.Dialect { return sqlsplit.DialectOf(e.String()) }
 
 // EngineOf maps a canonical database/sql driver name — what db.Driver
 // returns: pgx, mysql, sqlite, bytdb — to its Engine.

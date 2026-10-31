@@ -64,6 +64,7 @@ import (
 	"github.com/rohanthewiz/dbc/explain"
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/sdb"
+	"github.com/rohanthewiz/dbc/sqlsplit"
 	"github.com/rohanthewiz/dbc/userdata"
 )
 
@@ -265,6 +266,25 @@ func (w *Workspace) Active() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.active
+}
+
+// Dialect is how the active connection's engine reads SQL — where its
+// strings end (sqlsplit.Dialect) — for the splitting and coloring a UI does
+// around a run: Pick, PickAll and StmtRange take it, and an editor colors
+// with its Lex, so the statement a UI marks is the one a run takes. It
+// follows Active, landed or not: the buffer is written for the connection
+// the UI shows, and a connect that has yet to land runs nothing anyway.
+// Generic when the active connection is not in the config.
+func (w *Workspace) Dialect() sqlsplit.Dialect {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.dialectLocked()
+}
+
+// dialectLocked is Dialect with w.mu held.
+func (w *Workspace) dialectLocked() sqlsplit.Dialect {
+	cc, _ := w.cfg.ConnByName(w.active)
+	return sqlsplit.DialectOf(cc.Driver)
 }
 
 // Connected reports whether the workspace is on its active connection: a

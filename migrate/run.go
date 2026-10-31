@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/rohanthewiz/serr"
+
+	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
 // VersionTable is the bookkeeping table. The name and columns are goose's,
@@ -17,7 +19,9 @@ import (
 const VersionTable = "goose_db_version"
 
 // Dialect is the little that differs per engine: how to spell the version
-// table, how to spell a placeholder, and whether DDL may run in a transaction.
+// table, how to spell a placeholder, whether DDL may run in a transaction,
+// and where a string ends when a file is split into statements. The zero
+// Dialect has no version table, but it still splits — as Generic does.
 type Dialect struct {
 	Name        string
 	createTable string
@@ -25,6 +29,10 @@ type Dialect struct {
 	// noTx forces every migration outside a transaction. bytdb executes DDL
 	// outside transaction blocks, so wrapping would only make the run fail.
 	noTx bool
+	// split is the engine's reading of strings, for cutting a file's free
+	// parts into statements (Load): on Postgres a seed row's 'C:\' ends at
+	// its quote, and the statement after it is applied on its own.
+	split sqlsplit.Dialect
 }
 
 var (
@@ -33,14 +41,14 @@ var (
 
 	// Postgres: the exact DDL goose uses, minus the now() default which is
 	// not needed since tstamp is always written explicitly.
-	Postgres = Dialect{Name: "postgres", placeholder: pgPlaceholder,
+	Postgres = Dialect{Name: "postgres", placeholder: pgPlaceholder, split: sqlsplit.Postgres,
 		createTable: `CREATE TABLE ` + VersionTable + ` (
 	id serial NOT NULL PRIMARY KEY,
 	version_id bigint NOT NULL,
 	is_applied boolean NOT NULL,
 	tstamp timestamp NULL DEFAULT now()
 )`}
-	MySQL = Dialect{Name: "mysql", placeholder: qPlaceholder,
+	MySQL = Dialect{Name: "mysql", placeholder: qPlaceholder, split: sqlsplit.MySQL,
 		createTable: `CREATE TABLE ` + VersionTable + ` (
 	id serial NOT NULL,
 	version_id bigint NOT NULL,
@@ -48,7 +56,7 @@ var (
 	tstamp timestamp NULL DEFAULT now(),
 	PRIMARY KEY (id)
 )`}
-	SQLite = Dialect{Name: "sqlite", placeholder: qPlaceholder,
+	SQLite = Dialect{Name: "sqlite", placeholder: qPlaceholder, split: sqlsplit.SQLite,
 		createTable: `CREATE TABLE ` + VersionTable + ` (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	version_id INTEGER NOT NULL,
@@ -56,7 +64,7 @@ var (
 	tstamp TIMESTAMP DEFAULT (datetime('now'))
 )`}
 	// bytdb speaks the Postgres dialect but runs DDL outside transactions.
-	BytDB = Dialect{Name: "bytdb", placeholder: pgPlaceholder, noTx: true,
+	BytDB = Dialect{Name: "bytdb", placeholder: pgPlaceholder, noTx: true, split: sqlsplit.Bytdb,
 		createTable: `CREATE TABLE ` + VersionTable + ` (
 	id bigserial PRIMARY KEY,
 	version_id bigint NOT NULL,
@@ -104,9 +112,10 @@ type Migrator struct {
 	Log func(string)
 }
 
-// New builds a Migrator over dbh for the migrations in dir.
+// New builds a Migrator over dbh for the migrations in dir, split as d's
+// engine reads them.
 func New(dbh *sql.DB, d Dialect, dir string) (*Migrator, error) {
-	migs, err := Load(dir)
+	migs, err := Load(dir, d)
 	if err != nil {
 		return nil, err
 	}

@@ -140,19 +140,23 @@ func migrationsDir(cfg *config.Config, conn string) string {
 // openMigrator loads the migration files and opens the connection, failing
 // with the file problem first: a bad migration file should not need a
 // reachable database to be reported.
+//
+// The dialect is resolved before the files are read — a config lookup,
+// not a connect — because the files are split into statements as the
+// connection's engine reads strings.
 func openMigrator(mgr *db.Manager, cfg *config.Config, conn, dir string) *migrate.Migrator {
-	migs, err := migrate.Load(dir)
+	cc, _ := cfg.ConnByName(conn)
+	d, err := migrate.DialectFor(cc.Driver)
+	if err != nil {
+		fail(err, "conn "+conn)
+	}
+	migs, err := migrate.Load(dir, d)
 	if err != nil {
 		fail(err, "could not load migrations")
 	}
 	if len(migs) == 0 {
 		fmt.Fprintf(os.Stderr, "no migrations found in %s\n", dir)
 		os.Exit(2)
-	}
-	cc, _ := cfg.ConnByName(conn)
-	d, err := migrate.DialectFor(cc.Driver)
-	if err != nil {
-		fail(err, "conn "+conn)
 	}
 	dbh, err := mgr.DB(conn)
 	if err != nil {

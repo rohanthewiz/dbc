@@ -169,7 +169,7 @@ func (s *Server) handleDesignImport(ctx rweb.Context) error {
 	if len(req.Buffer) > maxBuffer {
 		return fail(ctx, badRequest("the editor holds %d MB; a design is opened from up to %d MB", len(req.Buffer)>>20, maxBuffer>>20))
 	}
-	stmts, _ := workspace.Pick(workspace.Editor{Text: req.Buffer, Caret: byteOffset(req.Buffer, req.Caret), Selection: req.Selection})
+	stmts, _ := workspace.Pick(workspace.Editor{Text: req.Buffer, Caret: byteOffset(req.Buffer, req.Caret), Selection: req.Selection}, t.ws.Dialect())
 	switch len(stmts) {
 	case 0:
 		return fail(ctx, badRequest("nothing to open — type a query first"))

@@ -356,6 +356,9 @@ func (m *Model) render() (*Canvas, *caret) {
 	}
 
 	m.drawPane(c, l.editor, m.editorTitle(), focusEditor, m.st.base, func(s Surface) {
+		// colored as the connection's engine reads strings, as the
+		// marker's statement (currentStmtRange) is split
+		m.editor.setDialect(m.ws.Dialect())
 		x, y, ok := m.editor.Draw(s, m.st, m.st.base, m.currentStmtRange(), m.drag.follow)
 		m.drag.follow = false
 		if ok && m.focus == focusEditor && m.modal == nil && m.menu == nil {

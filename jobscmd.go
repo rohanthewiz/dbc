@@ -687,7 +687,8 @@ var runsTables = []string{
 // (with no in-memory mode, so a temp file, removed before the results are
 // written out).
 func runsSQL(cfg *config.Config, e *jobs.Engine, filter userdata.RunFilter, sql string, f export.Format) {
-	stmts := sqlsplit.Split(sql)
+	// split as the engine the records are loaded into reads strings
+	stmts := sqlsplit.Bytdb.Split(sql)
 	if len(stmts) == 0 {
 		usage("--sql holds no statement")
 	}

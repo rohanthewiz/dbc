@@ -136,7 +136,7 @@ func (m *Model) symbolKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 
 // symbolAtCaret resolves the name under the editor's caret.
 func (m *Model) symbolAtCaret() sqlcomplete.Symbol {
-	return sqlcomplete.Resolve(m.editor.Text(), m.editor.Caret())
+	return sqlcomplete.Resolve(m.editor.Text(), m.editor.Caret(), m.ws.Dialect())
 }
 
 // symbolWhat names a symbol for the log: "alias o", "CTE totals".

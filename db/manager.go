@@ -548,8 +548,11 @@ var returningVerbs = map[string]bool{
 // UPDATE …` is a write. A CTE body is checked too because Postgres lets one
 // write: `WITH d AS (DELETE … RETURNING *) SELECT count(*) FROM d` returns
 // rows like a SELECT, yet it deleted them.
-func isRead(stmt string) bool {
-	v := sqlsplit.Verbs(stmt)
+//
+// d is the engine's reading of strings (sqlsplit.Dialect), so a Postgres
+// 'a\' in one CTE cannot hide the DELETE in the next past its quote.
+func isRead(stmt string, d sqlsplit.Dialect) bool {
+	v := d.Verbs(stmt)
 	if !queryVerbs[v.Main] {
 		return false
 	}
@@ -563,8 +566,10 @@ func isRead(stmt string) bool {
 
 // IsRead is isRead for other packages: whether running stmt could change
 // anything. The TUI asks it before an EXPLAIN ANALYZE, to say what will
-// happen before it does.
-func IsRead(stmt string) bool { return isRead(stmt) }
+// happen before it does. It reads strings as sqlsplit.Generic: what decides
+// is a verb, and a backslash-ended string ahead of one is the only text
+// another engine's rule would read otherwise.
+func IsRead(stmt string) bool { return isRead(stmt, sqlsplit.Generic) }
 
 // sqliteCountVerbs are the statements SQLite's changes() counts: "only
 // changes made directly by the INSERT, UPDATE or DELETE statement" (REPLACE
@@ -578,8 +583,8 @@ var sqliteCountVerbs = map[string]bool{"insert": true, "update": true, "delete":
 // For any other statement the count is the previous write's, so run
 // reports 0. Other engines report their own count for DDL (MySQL's CREATE
 // TABLE … SELECT, Postgres's CREATE TABLE AS give the rows they copied),
-// so the rule is SQLite's only.
-func sqliteCounts(stmt string) bool { return sqliteCountVerbs[sqlsplit.Verbs(stmt).Main] }
+// so the rule is SQLite's only — and so is the reading of strings.
+func sqliteCounts(stmt string) bool { return sqliteCountVerbs[sqlsplit.SQLite.Verbs(stmt).Main] }
 
 // isQuery reports whether a statement returns rows, and so must run as a
 // Query rather than an Exec. That is every statement whose main verb is a
@@ -599,12 +604,23 @@ func sqliteCounts(stmt string) bool { return sqliteCountVerbs[sqlsplit.Verbs(stm
 // the driver objects — was rejected: drivers do not object (they run the
 // write and discard the rows), and retrying a write that already ran would
 // run it twice.
-func isQuery(stmt string) bool {
-	v := sqlsplit.Verbs(stmt)
+//
+// d is the engine's reading of strings: on Postgres `INSERT … VALUES ('a\')
+// RETURNING id` has its RETURNING outside the string, where MySQL's rule
+// would have the string run on over it — and the run, an Exec, drop the ids.
+func isQuery(stmt string, d sqlsplit.Dialect) bool {
+	v := d.Verbs(stmt)
 	if queryVerbs[v.Main] {
 		return true
 	}
-	return returningVerbs[v.Main] && sqlsplit.HasKeyword(stmt[v.MainAt:], "returning")
+	return returningVerbs[v.Main] && d.HasKeyword(stmt[v.MainAt:], "returning")
+}
+
+// dialect is how the named connection's engine reads SQL (sqlsplit.Dialect);
+// Generic for a name the config does not hold.
+func (m *Manager) dialect(name string) sqlsplit.Dialect {
+	drv, _ := m.DriverOf(name)
+	return sqlsplit.DialectOf(drv)
 }
 
 // Run executes a statement on the named connection, without cancellation.
@@ -641,7 +657,7 @@ func (m *Manager) run(ctx context.Context, ex execQuerier, name, stmt string, ar
 	}
 	start := time.Now()
 
-	if !isQuery(stmt) {
+	if !isQuery(stmt, m.dialect(name)) {
 		res, err := ex.ExecContext(ctx, stmt, args...)
 		if err != nil {
 			return nil, wrapRunErr(ctx, err, name)
@@ -792,7 +808,7 @@ func (s *Session) Run(ctx context.Context, stmt string, args ...any) (*model.Res
 	// Keyed off the statement, not res.IsExec: an INSERT … RETURNING comes
 	// back as rows, yet it is a write like any other Exec — inside a BEGIN it
 	// is part of the transaction the session must not silently lose.
-	if err == nil && !isRead(stmt) {
+	if err == nil && !isRead(stmt, s.m.dialect(s.name)) {
 		s.stateful = true
 	}
 	return res, err

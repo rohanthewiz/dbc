@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-241
+**Next ID:** N-242
 
 ## Open
 
@@ -101,19 +101,6 @@ ten session docs in `ai_docs/claude_sessions/`
   so not script or pipeline tabs). Go snippets for script tabs would need
   a language field on a snippet (`userdata.Snippet`), so a SQL name does
   not fire in Go and the reverse. Nobody has asked.
-- **N-238** · raised `2026-1029-1920-n235-like-escape-split` · value low
-  sqlsplit's scanner still honors `\'` in every dialect (`skipQuoted`,
-  MySQL's rule), so on Postgres, SQLite and bytdb any string literal ending
-  in a backslash runs on past its quote. The designer no longer writes one
-  for a LIKE's escape (N-235), but it still writes one for an equality
-  value ending in `\` (`x = 'a\'`) and, on SQLite, for an ends-with value
-  ending in one (`LIKE '%a\' ESCAPE '!'`); typed SQL can hold one anywhere.
-  Split then merges that statement with the next, and the editor colors
-  what follows as a string. The fix is a dialect-aware scan: `skipQuoted`
-  taking the engine's rule (`''` only, except on MySQL), with a driver
-  passed to Split and Lex by their callers (the TUI editor, workspace
-  `pick`, headless `-f`, migrate, pipelines, codehl). Nobody has hit it;
-  it takes a value ending in a backslash.
 - **N-239** · raised `2026-1029-1937-n237-import-summary-join` · value low
   A design with a summary and nothing ticked writes `SELECT *` (`sql.go
   selectList`: the stars skip the summary, and a single star is written
@@ -134,6 +121,17 @@ ten session docs in `ai_docs/claude_sessions/`
   SQLite listing (`pragma_index_xinfo`'s `coll`, keys only) into
   `Index.Order`, count a prefix only on a NOCASE one, and say so in the ⚡
   title. Nobody has bumped into it.
+- **N-241** · raised `2026-1031-0158-n238-dialect-aware-scan` · value low
+  On MySQL, `"…"` is a string under the default `sql_mode` (no
+  `ANSI_QUOTES`), and a backslash escapes in it as in `'…'`. sqlsplit
+  reads every `"…"` as a quoted name (`backslashEscapes` answers no for
+  any quote but `'`; `Lex` colors it `TokIdent`), so on MySQL
+  `SELECT "a\"; b"` splits at the `;` inside the string, and a `"…"`
+  string is drawn as a name. The fix would give the MySQL dialect
+  backslash escapes in `"…"` too (and a string's color), but that is
+  wrong under `ANSI_QUOTES`, which dbc cannot see from the text — a
+  per-connection setting, or a probe of `@@sql_mode` at connect. Nobody
+  has hit it; it takes a double-quoted MySQL string holding `\"`.
 
 ## Validate
 
@@ -655,6 +653,20 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-238** · raised `2026-1029-1920-n235-like-escape-split` · value low
+  sqlsplit's scanner still honors `\'` in every dialect (`skipQuoted`,
+  MySQL's rule), so on Postgres, SQLite and bytdb any string literal ending
+  in a backslash runs on past its quote. The designer no longer writes one
+  for a LIKE's escape (N-235), but it still writes one for an equality
+  value ending in `\` (`x = 'a\'`) and, on SQLite, for an ends-with value
+  ending in one (`LIKE '%a\' ESCAPE '!'`); typed SQL can hold one anywhere.
+  Split then merges that statement with the next, and the editor colors
+  what follows as a string. The fix is a dialect-aware scan: `skipQuoted`
+  taking the engine's rule (`''` only, except on MySQL), with a driver
+  passed to Split and Lex by their callers (the TUI editor, workspace
+  `pick`, headless `-f`, migrate, pipelines, codehl). Nobody has hit it;
+  it takes a value ending in a backslash.
+  closed 2026-10-31, `2026-1031-0158-n238-dialect-aware-scan`: `sqlsplit.Dialect` (`dialect.go`) — Generic (the zero value, the old rule: `\` escapes in every `'…'`), Postgres and bytdb (`''` only, `\` escapes in an `E'…'` standing as a token), MySQL (`\` everywhere), SQLite (`''` only); `DialectOf` reads config, canonical and fence-tag names. `skipQuoted` takes it, and `Split`, `Lex`, `HasKeyword`, `Verbs`, `Folds`, `Format`, `FormatSpan` are its methods; the package-level functions stay as Generic's, so a caller with no engine reads SQL as before. Generic over the strict rule for an unknown engine because it misreads only a string ending in a backslash, where the strict rule would misread every MySQL `'it\'s'`. Callers now pass their engine: `workspace.Pick`/`PickAll`/`StmtRange` take one (`Workspace.Dialect`, the active connection's), so the TUI's marker, menu and run, the TUI editor's coloring (`editor.setDialect`, which drops the cached highlight), ⌥⇧F and F12/F2 all agree; dbc web's `/stmt`, `/folds`, `/format`, `/picks` read a `driver` the page sends (`dbc.state.driver`), its run, design import and symbol lookup the tab's workspace; headless `-f` and `explain` (`connDialect`; explain now loads the config before counting statements), `runs --sql` (bytdb), migrate (`migrate.Dialect` carries its scan; `Load`/`ParseFile` take it, and the dialect is resolved before the files are read), `sql.exec`/`sql.write` setup (the conn's `etl.Engine.Dialect`), `sdb` DDL logging, `etl.Copy`'s Query check, `designer.Import`, `sqlcomplete` (Complete, Rename, `Resolve` now takes a dialect), and db's run path (`isQuery` — a Postgres/bytdb `INSERT … VALUES ('a\') RETURNING` ran as an Exec and dropped its rows — `isRead` for the session's stateful flag and explain). codehl's `LexDialect` reads a SQL block as its fence tag's engine, else the connection's; hl.js mirrors it (`dbc.hl(tag, code, driver)`). Left on Generic, as they read keywords or comments ahead of any string, or are best-effort: `txControl`, `db.IsRead`/`ChangesRows`, db's and explain's `sqlWords`, `explain.skipLeadingComments`, sqlcomplete's `quotedName`. Tests: `TestDialectSplit` and the other `sqlsplit/dialect_test.go` cases (per engine: split, Lex agreeing with Split, RETURNING, folds, format, `E'…'`, a word ending in e), `TestPickDialect`, `TestRunEditorDialect` (SQLite runs the caret's statement and Run all runs both), `TestBackslashValuesSplit` (the designer's `= 'a\'` per engine and SQLite's ends-with split from a following statement; Import sees two statements), `TestSplitsAsTheEngine` (a migration seeding `'C:\'` then a CREATE applies on SQLite and bytdb), `TestBytdbReturning` (the backslash value comes back as a row; fails with the old reading), `TestCompleteAfterBackslashString`, `TestHighlightFollowsDialect`, `TestLexDialect`, and web e2e `backslashSplit` (on SQLite the marker sits on line 2, the menu says Run statement 2/2, Run runs it; fails when the page omits the driver); hl.js checked under node. Real binary: `-f` of `SELECT 'a\' AS v; SELECT 2 AS n` gives both results on the SQLite and bytdb demos (before: SQLite returned only `n`, bytdb a syntax error), and `explain` of it says it holds 2 statements (before: a SQLite plan-parse error).
 - **N-236** · raised `2026-1029-1718-n231-n232-n233-designer-import-saved-icase` · value medium
   The designer treats *starts with* as served by a b-tree index on the
   column (`lint.go sargable`) and its fix is a plain `CREATE INDEX … (col)`.

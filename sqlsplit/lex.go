@@ -38,10 +38,16 @@ type Token struct {
 	Kind       TokenKind
 }
 
-// Lex classifies every non-text span of sql. Spans not covered by a token
-// are TokText; returning only the interesting ones keeps the slice short for
-// the per-frame redraw that calls this.
-func Lex(sql string) []Token {
+// Lex classifies every non-text span of sql, read as the Generic dialect
+// (Dialect.Lex).
+func Lex(sql string) []Token { return Generic.Lex(sql) }
+
+// Lex classifies every non-text span of sql, its strings read as d's engine
+// reads them — the reading d.Split gives, so an editor that colors with one
+// and runs with the other draws the statement it runs. Spans not covered by
+// a token are TokText; returning only the interesting ones keeps the slice
+// short for the per-frame redraw that calls this.
+func (d Dialect) Lex(sql string) []Token {
 	var out []Token
 	emit := func(start, end int, k TokenKind) {
 		if end > start {
@@ -66,11 +72,11 @@ func Lex(sql string) []Token {
 			emit(i, j, TokComment)
 			i = j
 		case c == '\'':
-			j := skipQuoted(sql, i, c)
+			j := skipQuoted(sql, i, c, d)
 			emit(i, j, TokString)
 			i = j
 		case c == '"', c == '`':
-			j := skipQuoted(sql, i, c)
+			j := skipQuoted(sql, i, c, d)
 			emit(i, j, TokIdent)
 			i = j
 		case c == '$':

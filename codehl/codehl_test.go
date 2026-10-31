@@ -3,6 +3,8 @@ package codehl
 import (
 	"strings"
 	"testing"
+
+	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
 // classes renders src with each span's text tagged by its kind, so a test
@@ -94,6 +96,39 @@ func TestLang(t *testing.T) {
 	} {
 		if got := Lang(tag); got != want {
 			t.Errorf("Lang(%q) = %q, want %q", tag, got, want)
+		}
+	}
+}
+
+// TestLexDialect: a SQL block is read as the engine its fence tag names,
+// else as the connection's (N-238). Where 'a\' ends is that engine's rule:
+// at its quote on Postgres, SQLite and bytdb, not on MySQL — and the
+// SELECT after it is a keyword only where it ends.
+func TestLexDialect(t *testing.T) {
+	src := "SELECT 'a\\';\nSELECT 2"
+	second := strings.LastIndex(src, "SELECT")
+	keyword := func(spans []Span) bool {
+		for _, s := range spans {
+			if s.Start == second && s.Kind == Keyword {
+				return true
+			}
+		}
+		return false
+	}
+	for _, c := range []struct {
+		tag  string
+		conn sqlsplit.Dialect
+		want bool
+	}{
+		{"sql", sqlsplit.Postgres, true},     // ```sql: the connection's engine
+		{"", sqlsplit.SQLite, true},          // untagged: the same
+		{"sql", sqlsplit.MySQL, false},       // MySQL reads \' as a quote
+		{"sql", sqlsplit.Generic, false},     // no engine anywhere: Lex's reading
+		{"postgresql", sqlsplit.MySQL, true}, // the tag's engine wins
+		{"mysql", sqlsplit.Postgres, false},
+	} {
+		if got := keyword(LexDialect(c.tag, src, c.conn)); got != c.want {
+			t.Errorf("tag %q on %v: second SELECT a keyword = %v, want %v", c.tag, c.conn, got, c.want)
 		}
 	}
 }

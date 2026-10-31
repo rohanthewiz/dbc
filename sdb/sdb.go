@@ -127,9 +127,14 @@ func (s *S) LogDDL() *S {
 // noted before the statement runs, so a failed one counts too: costing a
 // sidebar one needless relist, where the other way round (a multi-statement
 // Exec that failed after its CREATE) would leave it stale.
+//
+// The split reads strings as conn's engine does (an unknown conn, which the
+// run itself reports, is Generic), so a CREATE after a Postgres 'a\' is
+// still seen as a statement of its own.
 func (s *S) logDDL(conn, stmt string) bool {
 	logged := false
-	for _, st := range sqlsplit.Split(stmt) {
+	drv, _ := s.mgr.DriverOf(conn)
+	for _, st := range sqlsplit.DialectOf(drv).Split(stmt) {
 		if sqlsplit.ChangesCatalog(st.Text) {
 			s.noteCatalog(conn)
 		}

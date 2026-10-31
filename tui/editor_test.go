@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
 func edit(text string) *editor {
@@ -172,5 +174,23 @@ func TestEditorDrawScrollsToCaretAndReportsIt(t *testing.T) {
 	x, y, ok := e.Draw(c.Sub(Rect{0, 0, 20, 5}), st, st.base, [2]int{}, true)
 	if !ok || y != 4 || c.Line(4)[x-4:x] != "last" {
 		t.Errorf("caret at (%d,%d) ok=%v; bottom line %q", x, y, ok, c.Line(4))
+	}
+}
+
+// TestHighlightFollowsDialect is N-238 in the TUI editor: where a string
+// ends is the connection's engine's rule, so the same buffer colors
+// differently by dialect — and a switch of connection, which changes no
+// text, must still drop the highlight cached against the edit version.
+func TestHighlightFollowsDialect(t *testing.T) {
+	st := newStyles(themeDefault())
+	e := edit("SELECT 'a\\';\nSELECT 2")
+	e.sqlMode = true
+	e.setDialect(sqlsplit.MySQL)
+	if got := e.highlight(st)[1][0]; got != st.synString {
+		t.Errorf("mysql: line 2's SELECT is %v, want the string style ('a\\' runs on there)", got)
+	}
+	e.setDialect(sqlsplit.Postgres)
+	if got := e.highlight(st)[1][0]; got != st.synKeyword {
+		t.Errorf("postgres: line 2's SELECT is %v, want the keyword style ('a\\' ends at its quote)", got)
 	}
 }

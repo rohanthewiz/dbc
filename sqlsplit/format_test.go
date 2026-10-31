@@ -129,7 +129,7 @@ func TestFormatKeepsTokensAndSettles(t *testing.T) {
 
 func tokenTexts(sql string) []string {
 	var out []string
-	for _, t := range fmtLex(sql) {
+	for _, t := range fmtLex(sql, Generic) {
 		s := t.text
 		if t.kind == ftKeyword {
 			s = strings.ToUpper(s)

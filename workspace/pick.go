@@ -23,9 +23,15 @@ type Editor struct {
 // the status bar and log: "query" when the buffer holds one statement,
 // "statement 2/4" when the caret picked one of several, "selection" or
 // "selection (3 statements)".
-func Pick(ed Editor) (stmts []string, tag string) {
+//
+// d is the engine the statements will run on (Workspace.Dialect), which
+// decides where a string ends: 'a\' closes at its quote on Postgres and
+// does not on MySQL, and the statement after it is a statement of its own
+// only where it closes. Pick, PickAll and StmtRange all take it, so what a
+// UI marks and labels is what the run takes.
+func Pick(ed Editor, d sqlsplit.Dialect) (stmts []string, tag string) {
 	if strings.TrimSpace(ed.Selection) != "" {
-		for _, p := range sqlsplit.Split(ed.Selection) {
+		for _, p := range d.Split(ed.Selection) {
 			stmts = append(stmts, p.Text)
 		}
 		switch len(stmts) {
@@ -36,7 +42,7 @@ func Pick(ed Editor) (stmts []string, tag string) {
 		}
 		return stmts, fmt.Sprintf("selection (%d statements)", len(stmts))
 	}
-	all := sqlsplit.Split(ed.Text)
+	all := d.Split(ed.Text)
 	if len(all) == 0 {
 		return nil, ""
 	}
@@ -49,9 +55,10 @@ func Pick(ed Editor) (stmts []string, tag string) {
 
 // PickAll is what Ctrl+Shift+R executes: every statement in the buffer,
 // whatever the caret or selection says. A one-statement buffer is tagged
-// "query", as Pick tags it, since "all" of one says nothing more.
-func PickAll(text string) (stmts []string, tag string) {
-	for _, p := range sqlsplit.Split(text) {
+// "query", as Pick tags it, since "all" of one says nothing more. d is the
+// engine's reading of strings, as for Pick.
+func PickAll(text string, d sqlsplit.Dialect) (stmts []string, tag string) {
+	for _, p := range d.Split(text) {
 		stmts = append(stmts, p.Text)
 	}
 	switch len(stmts) {
@@ -73,8 +80,9 @@ func PickAll(text string) (stmts []string, tag string) {
 // the caret picks is unchanged, so a caret on such a comment still marks
 // (and Ctrl+R still runs) the statement below, with the marker starting
 // under the caret — as a caret on a blank line between statements does.
-func StmtRange(text string, caret int) [2]int {
-	all := sqlsplit.Split(text)
+// d is the engine's reading of strings, as for Pick.
+func StmtRange(text string, caret int, d sqlsplit.Dialect) [2]int {
+	all := d.Split(text)
 	if len(all) < 2 {
 		return [2]int{}
 	}

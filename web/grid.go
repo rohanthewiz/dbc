@@ -547,6 +547,11 @@ func (s *Server) handleColumns(ctx rweb.Context) error {
 type stmtReq struct {
 	Buffer string `json:"buffer"`
 	Caret  int    `json:"caret"`
+	// Driver is the active connection's (the page's state.driver): the
+	// engine whose rule decides where a string ends (sqlsplit.DialectOf),
+	// so the marked statement and the folds are the ones the run splits —
+	// the run reads it off its workspace (Workspace.Dialect). "" is Generic.
+	Driver string `json:"driver"`
 }
 
 // handleStmt is the statement under the caret, for the editor's marker —
@@ -563,7 +568,7 @@ func (s *Server) handleStmt(ctx rweb.Context) error {
 	if len(req.Buffer) > maxBuffer {
 		return ok(ctx, [2]int{})
 	}
-	r := workspace.StmtRange(req.Buffer, byteOffset(req.Buffer, req.Caret))
+	r := workspace.StmtRange(req.Buffer, byteOffset(req.Buffer, req.Caret), sqlsplit.DialectOf(req.Driver))
 	return ok(ctx, [2]int{utf16Len(req.Buffer[:r[0]]), utf16Len(req.Buffer[:r[1]])})
 }
 
@@ -575,7 +580,7 @@ func (s *Server) handleStmt(ctx rweb.Context) error {
 // statement Ctrl+Enter runs. Stateless and tab-free, like handlePicks; a
 // buffer past maxBuffer folds nothing.
 func (s *Server) handleFolds(ctx rweb.Context) error {
-	var req stmtReq // only Buffer is read
+	var req stmtReq // Buffer and Driver are read
 	if err := decode(ctx, &req); err != nil {
 		return fail(ctx, err)
 	}
@@ -583,7 +588,7 @@ func (s *Server) handleFolds(ctx rweb.Context) error {
 	if len(req.Buffer) > maxBuffer {
 		return ok(ctx, out)
 	}
-	folds := sqlsplit.Folds(req.Buffer)
+	folds := sqlsplit.DialectOf(req.Driver).Folds(req.Buffer)
 	offs := make([]int, 0, 2*len(folds))
 	for _, f := range folds {
 		offs = append(offs, f.Start, f.End)
@@ -595,9 +600,11 @@ func (s *Server) handleFolds(ctx rweb.Context) error {
 	return ok(ctx, out)
 }
 
-// formatReq is a buffer, or the selected piece of one, to lay out.
+// formatReq is a buffer, or the selected piece of one, to lay out, and
+// the driver whose engine reads its strings (stmtReq's Driver).
 type formatReq struct {
 	Buffer string `json:"buffer"`
+	Driver string `json:"driver"`
 }
 
 // formatResp is the laid-out text; changed is false when it is the text as
@@ -620,7 +627,7 @@ func (s *Server) handleFormat(ctx rweb.Context) error {
 	if len(req.Buffer) > maxBuffer {
 		return ok(ctx, formatResp{Text: req.Buffer})
 	}
-	out := sqlsplit.FormatSpan(req.Buffer)
+	out := sqlsplit.DialectOf(req.Driver).FormatSpan(req.Buffer)
 	return ok(ctx, formatResp{Text: out, Changed: out != req.Buffer})
 }
 
@@ -684,8 +691,9 @@ func (s *Server) handlePicks(ctx rweb.Context) error {
 		return ok(ctx, picksResp{})
 	}
 	ed := workspace.Editor{Text: req.Buffer, Caret: byteOffset(req.Buffer, req.Caret), Selection: req.Selection}
-	stmts, tag := workspace.Pick(ed)
-	all, allTag := workspace.PickAll(req.Buffer)
+	d := sqlsplit.DialectOf(req.Driver)
+	stmts, tag := workspace.Pick(ed, d)
+	all, allTag := workspace.PickAll(req.Buffer, d)
 	return ok(ctx, picksResp{Tag: tag, N: len(stmts), AllTag: allTag, All: len(all),
 		Same: len(all) > 0 && slices.Equal(stmts, all)})
 }

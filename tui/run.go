@@ -234,20 +234,22 @@ func (m *Model) sessionReleased(ev *workspace.SessionReleased) tea.Cmd {
 // Picking statements
 // ---------------------------------------------------------------------------
 
-// stmtsToRun is what Ctrl+R executes: see workspace.Pick.
+// stmtsToRun is what Ctrl+R executes: see workspace.Pick. Each of these
+// splits as the active connection's engine reads strings (Dialect), which
+// is how the run itself splits (Workspace.RunEditor).
 func (m *Model) stmtsToRun() (stmts []string, tag string) {
-	return workspace.Pick(m.editorState())
+	return workspace.Pick(m.editorState(), m.ws.Dialect())
 }
 
 // currentStmtRange is the byte range of the statement under the caret, for
 // the editor's gutter marker.
 func (m *Model) currentStmtRange() [2]int {
-	return workspace.StmtRange(m.editor.Text(), m.editor.Caret())
+	return workspace.StmtRange(m.editor.Text(), m.editor.Caret(), m.ws.Dialect())
 }
 
 // allStmts is what Ctrl+Shift+R executes: see workspace.PickAll.
 func (m *Model) allStmts() (stmts []string, tag string) {
-	return workspace.PickAll(m.editor.Text())
+	return workspace.PickAll(m.editor.Text(), m.ws.Dialect())
 }
 
 // ---------------------------------------------------------------------------

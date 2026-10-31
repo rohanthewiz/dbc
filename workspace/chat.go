@@ -63,7 +63,7 @@ func (w *Workspace) ChatContext(question string, ed Editor, views ...GridView) (
 	defer w.mu.Unlock()
 	ctx = w.chatBaseLocked()
 	cur := ""
-	if stmts, _ := Pick(ed); len(stmts) > 0 {
+	if stmts, _ := Pick(ed, w.dialectLocked()); len(stmts) > 0 {
 		cur = stmts[len(stmts)-1]
 	}
 	last := w.lastLocked()

@@ -45,9 +45,16 @@ import (
 // keyword list keeps its case, so identifiers (which Postgres folds and
 // MySQL may not) are never rewritten; nor is a keyword written as part of a
 // dotted name (t.key).
-func Format(sql string) string {
-	sql = Unwrap(sql)
-	nodes := fmtParse(fmtLex(sql))
+//
+// The package-level Format reads strings as the Generic dialect does.
+func Format(sql string) string { return Generic.Format(sql) }
+
+// Format is the package-level Format with sql's strings read as d's engine
+// reads them, so a string ending in a backslash on Postgres is not laid out
+// as running on over the clauses after it.
+func (d Dialect) Format(sql string) string {
+	sql = unwrap(sql, d)
+	nodes := fmtParse(fmtLex(sql, d))
 	w := &fmtWriter{}
 	for i, st := range fmtStatements(nodes) {
 		if i > 0 {
@@ -65,14 +72,19 @@ func Format(sql string) string {
 // FormatSpan is Format for a piece of an editor's buffer — a selection, or
 // the whole text: the blanks around it are kept, so a selection of whole
 // lines keeps its last newline and the text after it stays on its own line.
-// Blank or not, a span with no code comes back as it was.
-func FormatSpan(s string) string {
+// Blank or not, a span with no code comes back as it was. It reads strings
+// as the Generic dialect does.
+func FormatSpan(s string) string { return Generic.FormatSpan(s) }
+
+// FormatSpan is the package-level FormatSpan with s's strings read as d's
+// engine reads them (Dialect.Format).
+func (d Dialect) FormatSpan(s string) string {
 	body := strings.TrimSpace(s)
 	if body == "" {
 		return s
 	}
 	lead := s[:strings.Index(s, body)]
-	return lead + Format(body) + s[len(lead)+len(body):]
+	return lead + d.Format(body) + s[len(lead)+len(body):]
 }
 
 const (
@@ -97,8 +109,12 @@ const (
 //     one after a colon, or one starting a line.
 //
 // Each is decided conservatively — text that is already plain SQL comes back
-// unchanged (trimmed), so Format can always run it first.
-func Unwrap(s string) string {
+// unchanged (trimmed), so Format can always run it first. It reads the SQL's
+// own strings as the Generic dialect does.
+func Unwrap(s string) string { return unwrap(s, Generic) }
+
+// unwrap is Unwrap with the SQL's own strings read as d's engine reads them.
+func unwrap(s string, d Dialect) string {
 	t := strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n"))
 	if n := len(t); n >= 2 && (t[0] == '"' || t[0] == '\'') && t[n-1] == t[0] && hasEscape(t[1:n-1]) {
 		// a statement is never just a string literal, so a quoted text
@@ -109,10 +125,10 @@ func Unwrap(s string) string {
 		} else {
 			t = unescape(t[1 : n-1])
 		}
-	} else if !strings.Contains(t, "\n") && escapedNewlineInCode(t) {
+	} else if !strings.Contains(t, "\n") && escapedNewlineInCode(t, d) {
 		t = unescape(t)
 	}
-	return strings.TrimSpace(stripLead(strings.TrimSpace(t)))
+	return strings.TrimSpace(stripLead(strings.TrimSpace(t), d))
 }
 
 // hasEscape reports whether s holds one of the escapes that mark it as the
@@ -126,11 +142,11 @@ func hasEscape(s string) bool {
 // single-quoted SQL string. Comments are not skipped: with its newlines
 // escaped, a -- comment would seem to run to the end of the text and hide
 // the very escapes being looked for.
-func escapedNewlineInCode(s string) bool {
+func escapedNewlineInCode(s string, d Dialect) bool {
 	for i := 0; i < len(s); i++ {
 		switch {
 		case s[i] == '\'':
-			i = skipQuoted(s, i, '\'') - 1
+			i = skipQuoted(s, i, '\'', d) - 1
 		case s[i] == '\\' && i+1 < len(s) && s[i+1] == 'n':
 			return true
 		}
@@ -193,8 +209,8 @@ var stmtWords = map[string]bool{
 // Text that starts with anything else is cut at the first statement word
 // that follows a colon or begins a line; with none, it is left alone, as it
 // may be a statement Format has no word for.
-func stripLead(s string) string {
-	toks := fmtLex(s)
+func stripLead(s string, d Dialect) string {
+	toks := fmtLex(s, d)
 	if len(toks) == 0 {
 		return s
 	}
@@ -289,8 +305,8 @@ var fmtOps = []string{
 }
 
 // fmtLex cuts sql into tokens, dropping whitespace but noting it on the
-// token it preceded.
-func fmtLex(sql string) []ftok {
+// token it preceded. Strings are read as d's engine reads them.
+func fmtLex(sql string, d Dialect) []ftok {
 	var out []ftok
 	space, nl := false, false
 	add := func(k ftKind, start, end int) {
@@ -327,11 +343,11 @@ func fmtLex(sql string) []ftok {
 			add(ftBlockComment, i, j)
 			i = j
 		case c == '\'':
-			j := skipQuoted(sql, i, c)
+			j := skipQuoted(sql, i, c, d)
 			add(ftString, i, j)
 			i = j
 		case c == '"', c == '`':
-			j := skipQuoted(sql, i, c)
+			j := skipQuoted(sql, i, c, d)
 			add(ftIdent, i, j)
 			i = j
 		case c == '$':
@@ -392,7 +408,7 @@ func fmtLex(sql string) []ftok {
 			}
 			// E'…', N'…', X'…', B'…': a prefixed string is one token
 			if j-i == 1 && j < len(sql) && sql[j] == '\'' && strings.ContainsRune("eEnNxXbB", rune(c)) {
-				k := skipQuoted(sql, j, '\'')
+				k := skipQuoted(sql, j, '\'', d)
 				add(ftString, i, k)
 				i = k
 				continue

@@ -8,6 +8,7 @@ import (
 
 // Format cleans up and lays out a SQL buffer: one clause per line, nested
 // queries indented in blocks, keywords upper-cased, spacing normalized.
+// FormatWith writes the keywords lower-case, or as they were, instead.
 //
 // It first undoes the damage a query picks up on its way out of a program
 // (Unwrap): a log line's prose in front of it, and the string-literal
@@ -52,9 +53,18 @@ func Format(sql string) string { return Generic.Format(sql) }
 // Format is the package-level Format with sql's strings read as d's engine
 // reads them, so a string ending in a backslash on Postgres is not laid out
 // as running on over the clauses after it.
-func (d Dialect) Format(sql string) string {
+func (d Dialect) Format(sql string) string { return d.FormatWith(sql, FormatOptions{}) }
+
+// FormatWith is d.Format with the choices in o. The zero FormatOptions is
+// Format's own output, so Format is FormatWith with none made.
+func (d Dialect) FormatWith(sql string, o FormatOptions) string {
 	sql = unwrap(sql, d)
-	nodes := fmtParse(fmtLex(sql, d))
+	// The case is set on the token stream, before the tree is built over it:
+	// layout reads only a token's kind and its lower-case form, never the
+	// written text, so the choice changes the words and nothing about where
+	// the lines break — keywords are ASCII, so their width is the same in
+	// any case.
+	nodes := fmtParse(o.Keywords.apply(fmtLex(sql, d)))
 	w := &fmtWriter{}
 	for i, st := range fmtStatements(nodes) {
 		if i > 0 {
@@ -78,13 +88,104 @@ func FormatSpan(s string) string { return Generic.FormatSpan(s) }
 
 // FormatSpan is the package-level FormatSpan with s's strings read as d's
 // engine reads them (Dialect.Format).
-func (d Dialect) FormatSpan(s string) string {
+func (d Dialect) FormatSpan(s string) string { return d.FormatSpanWith(s, FormatOptions{}) }
+
+// FormatSpanWith is d.FormatSpan with the choices in o (FormatWith). The
+// editors call it with the user's options from the config
+// (config.Config.FormatOptions).
+func (d Dialect) FormatSpanWith(s string, o FormatOptions) string {
 	body := strings.TrimSpace(s)
 	if body == "" {
 		return s
 	}
 	lead := s[:strings.Index(s, body)]
-	return lead + d.Format(body) + s[len(lead)+len(body):]
+	return lead + d.FormatWith(body, o) + s[len(lead)+len(body):]
+}
+
+// FormatOptions are the choices Format leaves to its caller. Each field's
+// zero value is Format's long-standing behavior, so FormatOptions{} formats
+// exactly as Format does, and a field added later changes nothing for a
+// caller that does not set it.
+type FormatOptions struct {
+	// Keywords is the case keywords are written in: upper (the zero value),
+	// lower, or as they were in the input.
+	Keywords KeywordCase
+}
+
+// KeywordCase is how Format writes a keyword — a word on its keyword list
+// (fmtKeywords: SELECT, FROM, JOIN, AND …). Only those words are touched,
+// in any case: identifiers, strings, quoted names, comments, and a keyword
+// used as part of a dotted name (t.key) are always written as they were.
+//
+//	input: Select a, T.Key From t where b = 1 And c
+//
+//	UpperKeywords        LowerKeywords        KeepKeywords
+//	SELECT a, T.Key      select a, T.Key      Select a, T.Key
+//	FROM t               from t               From t
+//	WHERE b = 1 AND c    where b = 1 and c    where b = 1 And c
+//
+// (T.Key keeps its case in all three: a keyword in a dotted name is a name.)
+//
+// Upper is the default because it is what most SQL style guides and the
+// highlighter's own vocabulary read as "keyword"; lower is for those whose
+// house style is all-lower SQL; keep is for a buffer whose author chose
+// each word's case and wants only the layout changed.
+type KeywordCase uint8
+
+const (
+	UpperKeywords KeywordCase = iota // SELECT … FROM: the zero value, Format's default
+	LowerKeywords                    // select … from
+	KeepKeywords                     // each keyword as the input wrote it
+)
+
+// ParseKeywordCase reads a KeywordCase by its name — "upper", "lower" or
+// "keep", in any case, blanks around it ignored — as the config's
+// format_keywords key writes it. "" is UpperKeywords, the default. Any
+// other text is UpperKeywords too, with ok false, so the caller can warn
+// about the typo while still formatting the default way.
+func ParseKeywordCase(s string) (k KeywordCase, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "upper":
+		return UpperKeywords, true
+	case "lower":
+		return LowerKeywords, true
+	case "keep":
+		return KeepKeywords, true
+	}
+	return UpperKeywords, false
+}
+
+// String is the KeywordCase's name, as ParseKeywordCase reads it back.
+func (k KeywordCase) String() string {
+	switch k {
+	case LowerKeywords:
+		return "lower"
+	case KeepKeywords:
+		return "keep"
+	}
+	return "upper"
+}
+
+// apply writes each keyword token in toks in case k, in place, and returns
+// toks. It runs on fmtLex's output, after the keywords of dotted names have
+// been demoted to words, so those are never re-cased. A KeywordCase outside
+// the three is read as UpperKeywords, the same as String names it.
+func (k KeywordCase) apply(toks []ftok) []ftok {
+	if k == KeepKeywords {
+		return toks // fmtLex keeps the source text: nothing to do
+	}
+	for i := range toks {
+		t := &toks[i]
+		if t.kind != ftKeyword {
+			continue
+		}
+		if k == LowerKeywords {
+			t.text = t.low // fmtLex's lower-case form of the same text
+		} else {
+			t.text = strings.ToUpper(t.text)
+		}
+	}
+	return toks
 }
 
 const (
@@ -255,7 +356,7 @@ type ftKind int
 
 const (
 	ftWord         ftKind = iota // an identifier, or a word off the keyword list
-	ftKeyword                    // a word on the keyword list, written upper-case
+	ftKeyword                    // a word on the keyword list, written in FormatOptions' case
 	ftString                     // '…', E'…', a dollar-quoted body
 	ftIdent                      // "…" or `…`
 	ftNumber                     // 1, 2.5, 1e-3
@@ -275,16 +376,16 @@ const (
 // ftok is one token as the formatter sees it.
 type ftok struct {
 	kind  ftKind
-	text  string // as it is written out: a keyword's upper-cased
+	text  string // as it is written out: a keyword's in FormatOptions' case (KeywordCase.apply)
 	low   string // lower-case text of a word or keyword, for matching
 	start int    // byte offset in the source
 	space bool   // whitespace preceded it in the source
 	nl    bool   // a line break preceded it in the source
 }
 
-// fmtKeywords are the words written upper-case and the ones clauses are
-// found by: the highlighter's vocabulary (so a formatted keyword is a
-// colored one) and the few clause words it leaves out.
+// fmtKeywords are the words whose case Format sets (KeywordCase) and the
+// ones clauses are found by: the highlighter's vocabulary (so a formatted
+// keyword is a colored one) and the few clause words it leaves out.
 var fmtKeywords = func() map[string]bool {
 	m := map[string]bool{}
 	for w := range keywords {
@@ -453,7 +554,11 @@ func fmtLex(sql string, d Dialect) []ftok {
 		}
 	}
 	// A keyword in a dotted name is a name (t.key, key.x), and is left as
-	// written. Upper-casing comes after, so this sees the whole stream.
+	// written: it is demoted to a word, which no KeywordCase touches. This
+	// needs the whole stream (the dot may come after), hence a second pass.
+	// The keywords themselves keep their source text here; their case is
+	// the caller's choice, made after (KeywordCase.apply). stripLead lexes
+	// with this too and reads only kinds, lower-case forms and offsets.
 	for i := range out {
 		t := &out[i]
 		if t.kind != ftKeyword {
@@ -461,9 +566,7 @@ func fmtLex(sql string, d Dialect) []ftok {
 		}
 		if (i > 0 && out[i-1].kind == ftDot) || (i+1 < len(out) && out[i+1].kind == ftDot) {
 			t.kind = ftWord
-			continue
 		}
-		t.text = strings.ToUpper(t.text)
 	}
 	return out
 }

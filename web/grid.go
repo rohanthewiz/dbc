@@ -615,7 +615,10 @@ type formatResp struct {
 }
 
 // handleFormat lays out SQL with sqlsplit.FormatSpan — the TUI's ⌥⇧F, so
-// a query formats the same in both. The page's Monaco asks for it as the
+// a query formats the same in both, keywords in the case format_keywords
+// asks for (config.Config.FormatOptions). The option is read here, server
+// side, rather than sent by the page, so the page needs no setting of its
+// own and the two UIs cannot disagree. The page's Monaco asks for it as the
 // SQL languages' formatting provider (editor.js registerFormatting), for
 // the whole buffer or the selection. Stateless and tab-free, like
 // handleFolds; a buffer past maxBuffer comes back unchanged.
@@ -627,7 +630,7 @@ func (s *Server) handleFormat(ctx rweb.Context) error {
 	if len(req.Buffer) > maxBuffer {
 		return ok(ctx, formatResp{Text: req.Buffer})
 	}
-	out := sqlsplit.DialectOf(req.Driver).FormatSpan(req.Buffer)
+	out := sqlsplit.DialectOf(req.Driver).FormatSpanWith(req.Buffer, s.cfg.FormatOptions())
 	return ok(ctx, formatResp{Text: out, Changed: out != req.Buffer})
 }
 

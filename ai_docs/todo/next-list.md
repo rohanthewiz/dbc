@@ -84,10 +84,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-226** · raised `2026-1024-1437-sql-format` · value low
-  Format (`sqlsplit.Format`, TUI ⌥⇧F, web Shift+Alt+F) always upper-cases
-  keywords. Offer keeping their case (a config key or a second menu row)
-  if anyone wants lower-case SQL kept lower-case; nobody has asked yet.
 - **N-228** · raised `2026-1027-1934-live-snippets` · value low
   Live snippets are reached by their exact name then Tab, or from Alt+S;
   the completion popup does not list them. Offer them there (a row per
@@ -651,6 +647,11 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-226** · raised `2026-1024-1437-sql-format` · value low
+  Format (`sqlsplit.Format`, TUI ⌥⇧F, web Shift+Alt+F) always upper-cases
+  keywords. Offer keeping their case (a config key or a second menu row)
+  if anyone wants lower-case SQL kept lower-case; nobody has asked yet.
+  closed 2026-10-31, `2026-1031-1751-n226-format-keyword-case`: a config key, `format_keywords = "upper" | "lower" | "keep"` (default upper), read by both editors — chosen over a second menu row since the case is a house style, not a per-format pick. `sqlsplit.FormatOptions{Keywords KeywordCase}` with `Dialect.FormatWith`/`FormatSpanWith` (the zero value is the old output, so `Format`/`FormatSpan` are unchanged); `fmtLex` now leaves keywords as written and `KeywordCase.apply` sets the case before the tree is built, so layout is the same in every case and only keywords are touched (identifiers, strings, comments, dotted names like `t.key` never). `ParseKeywordCase`/`String` are the one vocabulary; `config.checkFormatKeywords` warns on a typo and uses upper; `Config.FormatOptions()` (nil-safe) feeds `tui/format.go` and `web/grid.go handleFormat` (server side, so the page needed no change). README and `dbc.example.toml` updated. Tests: `TestFormatKeywordCase`, `TestParseKeywordCase`, `TestFormatKeepsTokensAndSettles` (all three cases; keep changes no token's text), `TestLoadFormatKeywords`, `TestFormatKeywordCaseFromConfig` (TUI), `TestFormat` (web, keep). Checked in a fresh `dbc web` build with `format_keywords = "keep"`.
 - **N-240** · raised `2026-1030-1553-n236-pg-prefix-index-opclass` · value low
   On SQLite the designer still counts a plain index as serving a
   *starts with* (`catalog.go finds`: a prefix is served off Postgres). But

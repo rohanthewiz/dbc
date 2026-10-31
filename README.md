@@ -700,6 +700,10 @@ WHERE tmp.group_location_id = s.group_location_id;
   `IN (SELECT id FROM u)`. A `CREATE TABLE`'s columns go one per line.
 - Keywords are upper-cased. Identifiers, strings, quoted names and
   comments are written as they were. Nothing is reordered or dropped.
+  To keep lower-case SQL lower-case, set `format_keywords = "keep"` in
+  the config (each keyword stays as you typed it), or `"lower"` to
+  lower-case them all. The default is `"upper"`. It applies to the TUI
+  and dbc web alike.
 
 **A query copied from a log.** Formatting first takes off what a program
 wraps around a query on its way into a log:

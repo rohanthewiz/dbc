@@ -3,6 +3,9 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	"github.com/rohanthewiz/dbc/cats"
+	"github.com/rohanthewiz/dbc/config"
 )
 
 // ⌥⇧F formats the whole buffer as one undo step, unwrapping a query pasted
@@ -57,6 +60,34 @@ func TestFormatSelection(t *testing.T) {
 	key(t, m, "alt+shift+f")
 	if got, want := m.editor.Text(), "select 1;\nSELECT a, b\nFROM t;\n"; got != want {
 		t.Errorf("formatted =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// format_keywords reaches ⌥⇧F: with "keep" a lower-case query keeps its
+// case and only the layout changes; with "lower" an upper-case one is
+// lowered. A laid-out buffer in the kept case is "already formatted".
+func TestFormatKeywordCaseFromConfig(t *testing.T) {
+	for _, k := range []string{cats.EnvMarker, cats.EnvPaneID, cats.EnvControlSocket, cats.EnvHookSocket} {
+		t.Setenv(k, "")
+	}
+	cases := []struct{ setting, in, want string }{
+		{"keep", "select a,b From t where x=1", "select a, b\nFrom t\nwhere x = 1"},
+		{"lower", "SELECT a,b FROM t WHERE x=1", "select a, b\nfrom t\nwhere x = 1"},
+	}
+	for _, c := range cases {
+		t.Run(c.setting, func(t *testing.T) {
+			m := newTestModelCfg(t, func(cfg *config.Config) { cfg.FormatKeywords = c.setting })
+			m.focus = focusEditor
+			m.editor.SetText(c.in)
+			key(t, m, "alt+shift+f")
+			if got := m.editor.Text(); got != c.want {
+				t.Fatalf("formatted =\n%s\nwant\n%s", got, c.want)
+			}
+			key(t, m, "alt+shift+f")
+			if m.editor.Text() != c.want || !strings.Contains(logText(m), "already formatted") {
+				t.Errorf("second format: text %q, log %s", m.editor.Text(), logText(m))
+			}
+		})
 	}
 }
 

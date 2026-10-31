@@ -12,6 +12,12 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/rohanthewiz/serr"
+
+	// sqlsplit for its format options (FormatKeywords). It imports nothing
+	// but the standard library, so it can never close a cycle back to
+	// config, and the format_keywords spellings stay in one place
+	// (sqlsplit.ParseKeywordCase) rather than being repeated here.
+	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
 const (
@@ -295,6 +301,16 @@ type Config struct {
 	// A string rather than a theme.Palette so config stays a leaf package.
 	PlanTheme string `toml:"plan_theme"`
 
+	// FormatKeywords is the case Format SQL writes keywords in, in the TUI
+	// (⌥⇧F) and dbc web (Shift+Alt+F) alike: "upper" (the default),
+	// "lower", or "keep" for each keyword as it was typed. Only keywords are
+	// ever re-cased; identifiers, strings and comments keep theirs in any
+	// case. A config key rather than a second Format menu row because it is
+	// a house style — one who writes lower-case SQL wants it kept so every
+	// time, not picked per format. Load normalizes it to one of the three
+	// names, warning on anything else; read it through FormatOptions.
+	FormatKeywords string `toml:"format_keywords"`
+
 	DefaultConnection string `toml:"default_connection"`
 
 	// Connections is written freely while the config is being built (Load,
@@ -333,7 +349,8 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 		MaxDisplayRows: defaultMaxDisplayRows, AIContextRows: DefaultAIContextRows,
 		ResultTabs:      DefaultResultTabs,
 		ConnIdleTimeout: DefaultConnIdleTimeout, ConnectTimeout: DefaultConnectTimeout,
-		CatalogTimeout: DefaultCatalogTimeout, PlanTheme: "dark"}
+		CatalogTimeout: DefaultCatalogTimeout, PlanTheme: "dark",
+		FormatKeywords: sqlsplit.UpperKeywords.String()}
 
 	path := explicit
 	if path == "" {
@@ -373,6 +390,7 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 	cfg.checkDuration("connect_timeout", &cfg.ConnectTimeout, DefaultConnectTimeout)
 	cfg.checkDuration("catalog_timeout", &cfg.CatalogTimeout, DefaultCatalogTimeout)
 	cfg.checkPlanTheme()
+	cfg.checkFormatKeywords()
 	if len(cfg.Connections) == 0 {
 		return nil, serr.New("config has no [[connection]] entries", "config_path", path)
 	}
@@ -484,6 +502,31 @@ func (c *Config) checkPlanTheme() {
 			"plan_theme = %q is not a theme (use \"light\" or \"dark\"); using dark", c.PlanTheme))
 		c.PlanTheme = "dark"
 	}
+}
+
+// checkFormatKeywords normalizes format_keywords to "upper", "lower" or
+// "keep". Anything else formats upper-case, with a warning, for
+// checkPlanTheme's reason: a typo in a cosmetic key is no reason to refuse
+// to start, and the warning names the fix.
+func (c *Config) checkFormatKeywords() {
+	k, ok := sqlsplit.ParseKeywordCase(c.FormatKeywords)
+	if !ok {
+		c.Warnings = append(c.Warnings, fmt.Sprintf(
+			"format_keywords = %q is not a case (use \"upper\", \"lower\" or \"keep\"); using upper",
+			c.FormatKeywords))
+	}
+	c.FormatKeywords = k.String()
+}
+
+// FormatOptions are the options Format SQL runs with, from format_keywords.
+// A nil Config, or one that never went through Load (a test's, an ad-hoc
+// one), gets the defaults: keywords upper-cased, as Format always did.
+func (c *Config) FormatOptions() sqlsplit.FormatOptions {
+	if c == nil {
+		return sqlsplit.FormatOptions{}
+	}
+	k, _ := sqlsplit.ParseKeywordCase(c.FormatKeywords)
+	return sqlsplit.FormatOptions{Keywords: k}
 }
 
 // checkResultTabs keeps result_tabs within 1…MaxResultTabs, saying so when

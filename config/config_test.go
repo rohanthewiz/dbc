@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
 // writeConfig drops a config file in a temp dir and returns its path.
@@ -328,6 +330,50 @@ dsn = "a.db"
 				t.Errorf("warned = %v, want %v (warnings: %q)", warned, c.wantWarn, cfg.Warnings)
 			}
 		})
+	}
+}
+
+// format_keywords is normalized to upper, lower or keep; a typo warns and
+// formats upper-case rather than failing the load. FormatOptions carries
+// it to the formatter, and has the defaults for a Config Load never saw.
+func TestLoadFormatKeywords(t *testing.T) {
+	conn := `
+[[connection]]
+name = "db"
+driver = "sqlite"
+dsn = "a.db"
+`
+	cases := []struct {
+		name, body, want string
+		kc               sqlsplit.KeywordCase
+		wantWarn         bool
+	}{
+		{"absent", conn, "upper", sqlsplit.UpperKeywords, false},
+		{"lower", `format_keywords = "Lower"` + conn, "lower", sqlsplit.LowerKeywords, false},
+		{"keep", `format_keywords = "keep"` + conn, "keep", sqlsplit.KeepKeywords, false},
+		{"typo", `format_keywords = "preserve"` + conn, "upper", sqlsplit.UpperKeywords, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, c.body))
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if cfg.FormatKeywords != c.want {
+				t.Errorf("FormatKeywords = %q, want %q", cfg.FormatKeywords, c.want)
+			}
+			if got := cfg.FormatOptions().Keywords; got != c.kc {
+				t.Errorf("FormatOptions().Keywords = %s, want %s", got, c.kc)
+			}
+			warned := strings.Contains(strings.Join(cfg.Warnings, "\n"), "format_keywords")
+			if warned != c.wantWarn {
+				t.Errorf("warned = %v, want %v (warnings: %q)", warned, c.wantWarn, cfg.Warnings)
+			}
+		})
+	}
+	var none *Config
+	if got := none.FormatOptions(); got != (sqlsplit.FormatOptions{}) {
+		t.Errorf("nil Config's FormatOptions = %+v, want the zero options", got)
 	}
 }
 

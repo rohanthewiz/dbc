@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/userdata"
 )
 
@@ -406,6 +407,21 @@ func TestFormat(t *testing.T) {
 	}
 	if r := ask("SELECT 1"); r.Changed || r.Text != "SELECT 1" {
 		t.Errorf("already formatted = %+v", r)
+	}
+
+	// format_keywords = "keep": the server's config decides the case, so
+	// lower-case SQL stays lower-case with no word from the page
+	keep := newTestEnv(t, func(c *config.Config, _ *Options) { c.FormatKeywords = "keep" })
+	askKeep := func(buf string) formatResp {
+		t.Helper()
+		body, _ := json.Marshal(formatReq{Buffer: buf})
+		return decodeData[formatResp](t, keep.api("POST", "/api/v1/format", string(body), 200))
+	}
+	if r := askKeep("select a,b From t where x=1\n"); r != (formatResp{Text: "select a, b\nFrom t\nwhere x = 1\n", Changed: true}) {
+		t.Errorf("keep format = %+v", r)
+	}
+	if r := askKeep("select 1"); r.Changed || r.Text != "select 1" {
+		t.Errorf("keep, already formatted = %+v", r)
 	}
 }
 

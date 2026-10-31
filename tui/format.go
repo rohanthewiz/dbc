@@ -9,7 +9,8 @@ import (
 )
 
 // formatQuery lays out the selection, or the whole buffer when nothing is
-// selected, with sqlsplit.Format (⌥⇧F, the editor menu's "Format SQL"). It
+// selected, with sqlsplit.Format (⌥⇧F, the editor menu's "Format SQL"),
+// keywords in the case the config's format_keywords asks for. It
 // also unwraps a query pasted from a log line — the label in front, the
 // string-literal quotes and the \n escapes come off — so the paste-then-
 // format round trip is one key.
@@ -32,9 +33,10 @@ func (m *Model) formatQuery() tea.Cmd {
 		m.log(logWarn, "format: nothing to format — type or paste a query first")
 		return nil
 	}
-	// read as the connection's engine reads strings, as the run would
+	// read as the connection's engine reads strings, as the run would, and
+	// written in the user's keyword case (format_keywords)
 	d := m.ws.Dialect()
-	out := d.FormatSpan(sel)
+	out := d.FormatSpanWith(sel, m.cfg.FormatOptions())
 	if out == sel {
 		m.logf(logInfo, "format: %s is already formatted", what)
 		return nil

@@ -124,6 +124,99 @@ func TestFormatKeepsTokensAndSettles(t *testing.T) {
 		if again := Format(out); again != out {
 			t.Errorf("Format is not settled for %q:\nonce\n%s\n\ntwice\n%s", in, out, again)
 		}
+		// The same holds in every keyword case, and keeping the case is
+		// layout alone in the strictest sense: not one token's text differs.
+		for _, k := range []KeywordCase{LowerKeywords, KeepKeywords} {
+			o := FormatOptions{Keywords: k}
+			out := Generic.FormatWith(in, o)
+			if a, b := tokenTexts(in), tokenTexts(out); strings.Join(a, " ") != strings.Join(b, " ") {
+				t.Errorf("%s: tokens changed:\nin  %q\nout %q", k, a, b)
+			}
+			if again := Generic.FormatWith(out, o); again != out {
+				t.Errorf("%s: not settled for %q:\nonce\n%s\n\ntwice\n%s", k, in, out, again)
+			}
+			if k == KeepKeywords {
+				if a, b := rawTokenTexts(in), rawTokenTexts(out); strings.Join(a, " ") != strings.Join(b, " ") {
+					t.Errorf("keep: a token's text changed:\nin  %q\nout %q", a, b)
+				}
+			}
+		}
+	}
+}
+
+// rawTokenTexts is the texts of sql's tokens exactly as written, keywords'
+// case included (tokenTexts upper-cases the keywords so any case compares).
+func rawTokenTexts(sql string) []string {
+	var out []string
+	for _, t := range fmtLex(sql, Generic) {
+		out = append(out, t.text)
+	}
+	return out
+}
+
+// A KeywordCase changes the keywords' case and nothing else: the lines
+// break in the same places, and identifiers, strings, comments and a
+// keyword in a dotted name keep theirs in every case.
+func TestFormatKeywordCase(t *testing.T) {
+	in := "Select a, T.Key, 'Select' From t -- From here\nwhere b = 1 And c"
+	want := map[KeywordCase]string{
+		UpperKeywords: "SELECT a, T.Key, 'Select'\nFROM t -- From here\nWHERE b = 1 AND c",
+		LowerKeywords: "select a, T.Key, 'Select'\nfrom t -- From here\nwhere b = 1 and c",
+		KeepKeywords:  "Select a, T.Key, 'Select'\nFrom t -- From here\nwhere b = 1 And c",
+	}
+	for k, w := range want {
+		if got := Generic.FormatWith(in, FormatOptions{Keywords: k}); got != w {
+			t.Errorf("%s:\ngot\n%s\n\nwant\n%s", k, got, w)
+		}
+	}
+	// the zero options are Format's own output, and so is a case outside
+	// the three
+	if a, b := Format(in), Generic.FormatWith(in, FormatOptions{}); a != b {
+		t.Errorf("Format and FormatWith(zero) differ:\n%s\n\n%s", a, b)
+	}
+	if got := Generic.FormatWith(in, FormatOptions{Keywords: KeywordCase(9)}); got != want[UpperKeywords] {
+		t.Errorf("KeywordCase(9) = %q, want the upper-case layout", got)
+	}
+	// FormatSpanWith keeps the blanks around a span in every case
+	if got := Generic.FormatSpanWith("\n  select 1\n", FormatOptions{Keywords: KeepKeywords}); got != "\n  select 1\n" {
+		t.Errorf("FormatSpanWith keep = %q", got)
+	}
+	// A lower-case buffer that is already laid out is unchanged when its
+	// case is kept or lowered — the editors then say "already formatted"
+	// rather than making an undo step out of nothing.
+	laid := "select a\nfrom t\nwhere b = 1"
+	for _, k := range []KeywordCase{LowerKeywords, KeepKeywords} {
+		if got := Generic.FormatWith(laid, FormatOptions{Keywords: k}); got != laid {
+			t.Errorf("%s changed a laid-out buffer:\n%s", k, got)
+		}
+	}
+}
+
+// ParseKeywordCase reads the config's spellings, and String writes them
+// back; a typo reads as the default with ok false.
+func TestParseKeywordCase(t *testing.T) {
+	cases := []struct {
+		in   string
+		want KeywordCase
+		ok   bool
+	}{
+		{"", UpperKeywords, true},
+		{"upper", UpperKeywords, true},
+		{" Lower ", LowerKeywords, true},
+		{"KEEP", KeepKeywords, true},
+		{"preserve", UpperKeywords, false},
+		{"lowercase", UpperKeywords, false},
+	}
+	for _, c := range cases {
+		got, ok := ParseKeywordCase(c.in)
+		if got != c.want || ok != c.ok {
+			t.Errorf("ParseKeywordCase(%q) = %s, %v; want %s, %v", c.in, got, ok, c.want, c.ok)
+		}
+	}
+	for _, k := range []KeywordCase{UpperKeywords, LowerKeywords, KeepKeywords} {
+		if back, ok := ParseKeywordCase(k.String()); back != k || !ok {
+			t.Errorf("%s does not read back: %s, %v", k, back, ok)
+		}
 	}
 }
 

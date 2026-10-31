@@ -241,6 +241,11 @@ func TestLiveDesigner(t *testing.T) {
 			  FROM qd_customers c LEFT JOIN qd_orders o ON o.customer_id = c.id
 			  LEFT JOIN (SELECT order_id, sum(amount) AS paid, count(amount) AS cnt, count(*) AS n FROM qd_payments GROUP BY order_id) s
 			  ON s.order_id = o.id GROUP BY c.name ORDER BY c.name`,
+			// nothing ticked beside a summary: the design writes o.* too, so
+			// only the orders' own columns, never the summary's key or count
+			`SELECT o.* FROM qd_orders o
+			  LEFT JOIN (SELECT order_id, sum(amount) AS paid FROM qd_payments GROUP BY order_id) s
+			  ON s.order_id = o.id ORDER BY 1`,
 		} {
 			cat, err := w.DesignCatalog(ctx, nil)
 			if err != nil {

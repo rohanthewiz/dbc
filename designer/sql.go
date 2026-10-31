@@ -780,17 +780,26 @@ func (g *gen) selectList() (sel, groupBy []string) {
 		}
 	}
 	if len(sel) == 0 {
-		// nothing ticked: every row of every table read into the result
+		// nothing ticked: every row of every table read into the result.
+		// A summary's derived table is not one of them: its columns are
+		// its key and the aggregates the generator asked of it (the count,
+		// when none was), so a bare * would show those too. With a summary
+		// on the canvas even one table is written as o.*, which the import
+		// reads back as nothing ticked (selectList there).
 		var stars []string
+		summarized := false
 		for _, n := range g.tr.order {
-			if r := n.role(); r == "main" || r == "cross" || r == "joined" {
+			switch n.role() {
+			case "main", "cross", "joined":
 				stars = append(stars, n.alias+".*")
+			case "summary":
+				summarized = true
 			}
 		}
 		switch {
 		case g.grouped:
 			stars = []string{"count(*) AS count"}
-		case len(stars) == 1:
+		case len(stars) == 1 && !summarized:
 			stars = []string{"*"}
 		case len(stars) == 0:
 			stars = []string{"1"}

@@ -134,6 +134,16 @@ func TestImportRoundTrip(t *testing.T) {
 	d.Filters = []Filter{{Ref: col(d, "ol", "qty"), Op: OpGt, Values: []string{"1"}}}
 	designs = append(designs, d)
 
+	// a summary and nothing ticked: o.* (one table) and c.*, o.* (two),
+	// each read back as nothing ticked, not as each of the columns
+	d = build(t, cat, "orders", "payments")
+	d.Joins[0].Kind = JoinSummary
+	designs = append(designs, d)
+	d = build(t, cat, "customers", "orders", "payments")
+	d.Joins[1].Kind = JoinSummary
+	d.Sorts = []Sort{{Ref: col(d, "o", "id")}}
+	designs = append(designs, d)
+
 	for _, driver := range []string{"postgres", "mysql", "sqlite", "bytdb"} {
 		cat.Driver = driver
 		for i, d := range designs {
@@ -253,6 +263,17 @@ func TestImportHandWritten(t *testing.T) {
 	if a = Analyze(d, cat); !a.Valid || !a.Grouped || d.Columns[2].Ref != (Ref{Table: d.Tables[2].ID, Agg: AggCount}) {
 		t.Fatalf("grouped summary: %v %+v\n%s", rules(a), d.Columns, a.SQL)
 	}
+
+	// the parent's star beside a summary is nothing ticked, and ORDER BY 1
+	// is the parent's first column (the summary's key is not among them)
+	d, _ = importOK(t, cat, `SELECT o.* FROM orders o
+		LEFT JOIN (SELECT order_id, sum(amount) AS paid FROM payments GROUP BY order_id) s ON s.order_id = o.id
+		ORDER BY 1 DESC`)
+	if len(d.Columns) != 0 || d.Joins[0].Kind != JoinSummary || d.Sorts[0].Ref != (Ref{Table: d.Tables[0].ID, Column: "id"}) {
+		t.Fatalf("o.* over a summary: cols %+v joins %+v sorts %+v", d.Columns, d.Joins, d.Sorts)
+	}
+	wantSQL(t, Analyze(d, cat), "SELECT o.*\nFROM orders o\nLEFT JOIN (\n    SELECT s.order_id, count(*) AS count\n    FROM payments s\n"+
+		"    GROUP BY s.order_id\n) s ON s.order_id = o.id\nORDER BY o.id DESC")
 }
 
 // TestImportRefuses: what a design cannot say is refused, with the reason
@@ -304,7 +325,11 @@ func TestImportRefuses(t *testing.T) {
 		{"SELECT o.id, p.n FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id", "COALESCE(p.n, 0)"},
 		{"SELECT o.id, COALESCE(p.s, 0) FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id", "COALESCE of a summary's sum"},
 		{"SELECT p.order_id FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id", "the summary's key"},
-		{"SELECT * FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id", "over the summary"},
+		{"SELECT * FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id", "over the summary `p`: write o.* for the other tables'"},
+		{"SELECT p.* FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id", "over the summary"},
+		{"SELECT o.*, p.* FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id", "over the summary"},
+		{"SELECT * FROM customers c JOIN orders o ON o.customer_id = c.id LEFT JOIN " + pay + " ON p.order_id = o.id",
+			"write c.*, o.* for"},
 		{"SELECT o.id FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id AND p.s > 5", "in the summary's ON"},
 		{"SELECT o.id FROM orders o LEFT JOIN " + pay + " ON p.s = o.total", "aggregate"},
 		{"SELECT o.id FROM orders o LEFT JOIN " + pay + " ON p.order_id = o.id JOIN order_lines ol ON ol.order_id = p.order_id",

@@ -55,14 +55,19 @@ type ColView struct {
 	// Indexed: some index starts with it, so a filter on it alone can be
 	// served by an index. Only when indexes are known; keys always count.
 	Indexed bool `json:"indexed,omitempty"`
-	// NoPrefix and NoRange narrow Indexed when the indexes are listed:
-	// none of those indexes can serve a starts-with on it (NoPrefix: a
-	// text column on Postgres whose b-trees keep a linguistic collation's
-	// order, or on SQLite whose b-trees are not COLLATE NOCASE), or a
-	// range (NoRange: each is a pattern class, or hash).
-	// Catalog.finds is the test; the page words the ⚡'s title from them.
+	// NoPrefix, NoRange and NoEq narrow Indexed when the indexes are
+	// listed: none of those indexes can serve a starts-with on it
+	// (NoPrefix: a text column on Postgres whose b-trees keep a linguistic
+	// collation's order, or on SQLite whose b-trees are not COLLATE
+	// NOCASE), a range (NoRange: each is a pattern class, hash, or in
+	// another collation than the column's), or an equality (NoEq: each is
+	// in another collation than the column's — an index on
+	// (ref COLLATE NOCASE) over a plain ref, which serves the starts-with
+	// alone). Catalog.finds is the test; the page words the ⚡'s title
+	// from them.
 	NoPrefix bool `json:"noPrefix,omitempty"`
 	NoRange  bool `json:"noRange,omitempty"`
+	NoEq     bool `json:"noEq,omitempty"`
 }
 
 // JoinView is one edge: its shape and what it does to the rows, in words,
@@ -139,6 +144,7 @@ func tableView(tr *tree, cat *Catalog, n *node) TableView {
 		// only a listed index's class and collation are known: a key
 		// assumed indexed (indexes unknown) is not narrowed by a guess
 		if cv.Indexed && cat.IndexesKnown {
+			cv.NoEq = !cat.finds(n.et, c.Name, need{eq: true})
 			cv.NoRange = !cat.finds(n.et, c.Name, need{rng: true})
 			cv.NoPrefix = familyOf(c.Type) == famText && !cat.finds(n.et, c.Name, need{prefix: true})
 		}

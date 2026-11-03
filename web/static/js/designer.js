@@ -674,7 +674,7 @@
         r.append(el("span", "qdcn", col.name));
         r.append(el("span", "qdct", col.type + (col.nullable ? "?" : "")));
         const marks = el("span", "qdcm");
-        if (col.indexed) marks.append(el("span", { class: "qdix" + (col.noPrefix || col.noRange ? " part" : ""), title: indexTitle(col, s.analysis && s.analysis.dialect) }, "⚡"));
+        if (col.indexed) marks.append(el("span", { class: "qdix" + (col.noPrefix || col.noRange || col.noEq ? " part" : ""), title: indexTitle(col, s.analysis && s.analysis.dialect) }, "⚡"));
         if (aggd.has(col.name)) marks.append(el("span", { title: "aggregated in the result" }, "Σ"));
         if (filtered.has(col.name)) marks.append(el("span", { title: "filtered" }, "⏷"));
         if (sorted.has(col.name)) marks.append(el("span", { title: "sorted" }, sorted.get(col.name) ? "↓" : "↑"));
@@ -693,20 +693,33 @@
     // serve. On Postgres a b-tree finds a starts-with only in byte order (a
     // pattern class, or a C collation), and a pattern one finds no range;
     // on SQLite only in COLLATE NOCASE, since its LIKE ignores the case of
-    // A–Z; a hash index finds = only (ColView.NoPrefix, NoRange). dialect
-    // is the analysis's (postgres, sqlite…), which picks the hint.
+    // A–Z; a hash index finds = only; a key in another collation than the
+    // column's own finds no = or range, which compare in the column's
+    // (ColView.NoPrefix, NoRange, NoEq). dialect is the analysis's
+    // (postgres, sqlite…), which picks the hint.
     //
-    // The SQLite hint says to keep the plain index: a NOCASE one on a
-    // column in its own (BINARY) collation serves the LIKE alone, not =,
-    // ranges or a sort, so replacing the one with the other trades them.
+    // The SQLite starts-with hint says to keep the plain index: a NOCASE
+    // one on a column in its own (BINARY) collation serves the LIKE alone,
+    // not =, ranges or a sort, so replacing the one with the other trades
+    // them. The other-collation hint is that trade seen from the far side:
+    // only such an index, and = and ranges want one without the COLLATE.
     function indexTitle(col, dialect) {
-      if (!col.noPrefix && !col.noRange) return "an index starts with it: a filter on it can use the index";
-      const can = ["=", "IN"], cannot = [];
+      if (!col.noPrefix && !col.noRange && !col.noEq) return "an index starts with it: a filter on it can use the index";
+      const can = [], cannot = [];
+      (col.noEq ? cannot : can).push("=", "IN");
       (col.noRange ? cannot : can).push("ranges");
       if (col.fam === "text") (col.noPrefix ? cannot : can).push("starts with");
-      const and = (xs) => xs.length > 1 ? xs.slice(0, -1).join(", ") + " and " + xs[xs.length - 1] : xs[0];
-      let t = "an index starts with it: " + and(can) + " can use it, not " + cannot.join(" or ");
-      if (col.noPrefix && !col.noRange) {
+      const list = (xs, w) => xs.length > 1 ? xs.slice(0, -1).join(", ") + " " + w + " " + xs[xs.length - 1] : xs[0];
+      if (!can.length) {
+        // nothing served: every listed index keeps it in another collation
+        // and in an order the engine's LIKE cannot use either
+        return "an index starts with it, but keeps it in another collation than its own: no filter on it can use it";
+      }
+      let t = "an index starts with it: " + list(can, "and") + " can use it, not " + list(cannot, "or");
+      if (col.noEq) {
+        t += " — the index keeps it in another collation than its own, and = and ranges compare in its own:" +
+          " they need an index on (" + col.name + ") without the COLLATE";
+      } else if (col.noPrefix && !col.noRange) {
         t += dialect === "sqlite"
           ? " — SQLite's LIKE ignores the case of A–Z, so a starts-with needs an index on (" + col.name +
             " COLLATE NOCASE), beside this one for = and ranges"

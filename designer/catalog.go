@@ -44,6 +44,14 @@ type Index struct {
 	// (all "" when nil, and always on MySQL). It decides whether the
 	// column serves a starts-with.
 	Order []string `json:"order,omitempty"`
+	// Recollated is, per key column (parallel to Cols), whether the index
+	// keeps it in a collation other than the column's own (db.Index's
+	// Recollated): an index on (ref COLLATE NOCASE) over a plain ref on
+	// SQLite, on (ref COLLATE "C") over an en_US column on Postgres. The
+	// column's =, ranges and sorts compare in its own collation, so such a
+	// key serves none of them — only a prefix, if its Order is the one the
+	// engine's LIKE needs. nil when none is.
+	Recollated []bool `json:"recollated,omitempty"`
 }
 
 // The Order values, as the db package's listing spells them
@@ -55,10 +63,13 @@ type Index struct {
 //	orderC        Postgres, a C-ordered collation: byte order that is also
 //	              the collation's — all of them
 //	orderNocase   SQLite, COLLATE NOCASE: the case-blind order its LIKE
-//	              matches in — a prefix, and (read as the column's own
-//	              collation) = and ranges
+//	              matches in — a prefix, and = and ranges
 //	""            a linguistic collation's order on Postgres, BINARY or
 //	              RTRIM on SQLite — = and ranges, no prefix
+//
+// = , ranges and sorts only when the key is in the column's own collation
+// (Recollated false); a recollated key keeps whatever prefix its order
+// serves and nothing else.
 const (
 	orderPattern = "pattern"
 	orderC       = "c"
@@ -73,15 +84,25 @@ func (x Index) order(i int) string {
 	return ""
 }
 
+// recollated reports whether key column i is kept in a collation other
+// than its column's own (false past its end, or with none listed).
+func (x Index) recollated(i int) bool {
+	return i < len(x.Recollated) && x.Recollated[i]
+}
+
 // sorts reports whether the index keeps key columns [from, to) in each
-// column's own order, so that ORDER BY them can be read off it: a b-tree,
-// and none of them a pattern class (byte order, not the collation's).
+// column's own order, so that ORDER BY them can be read off it, after
+// equalities on key columns [0, from): a b-tree, none of [from, to) a
+// pattern class (byte order, not the collation's), and none of [0, to)
+// in another collation than its column's — the equalities compare in the
+// column's own collation too, so a recollated one finds no rows to read
+// in order (a pattern class does serve =, so it may stand before from).
 func (x Index) sorts(from, to int) bool {
 	if x.Method != "" && x.Method != "btree" {
 		return false
 	}
-	for i := from; i < to; i++ {
-		if x.order(i) == orderPattern {
+	for i := 0; i < to; i++ {
+		if x.recollated(i) || i >= from && x.order(i) == orderPattern {
 			return false
 		}
 	}
@@ -156,6 +177,10 @@ func (c *Catalog) indexes(et *erd.Table) []Index {
 // all". A partial index is not counted (it serves only queries whose filter
 // implies its own), nor is a non-btree one for an equality or range (a GIN
 // index on a column serves @> and full-text, not =).
+//
+// A key in another collation than its column's (Index.recollated) still
+// leads: it starts with the column, and may serve a prefix. What it serves
+// is finds' to say, and each caller that needs = asks finds, not this.
 func (c *Catalog) leads(et *erd.Table, cols ...string) (Index, bool) {
 	for _, x := range c.indexes(et) {
 		if x.Partial || (x.Method != "" && x.Method != "btree" && x.Method != "hash") || len(x.Cols) == 0 {
@@ -212,7 +237,12 @@ func (c *Catalog) btreePrefix(o string) bool {
 //	btree    an equality always; a range unless it is a pattern class; a
 //	         prefix only in the order the engine's LIKE needs
 //	         (btreePrefix): byte order on Postgres (a pattern class or a
-//	         C collation), NOCASE on SQLite, any on MySQL
+//	         C collation), NOCASE on SQLite, any on MySQL. A key in another
+//	         collation than the column's (recollated) serves no equality
+//	         or range — they compare in the column's — but keeps its
+//	         prefix: the planner builds the prefix's range in the index's
+//	         own collation (Postgres's like_support, SQLite's LIKE
+//	         optimization), which is why such an index is made at all
 //	hash     an equality only
 //	spgist   a prefix, on Postgres: text_ops finds one in any collation
 //	         (and is the only built-in SP-GiST class for text)
@@ -235,7 +265,8 @@ func (c *Catalog) finds(et *erd.Table, col string, nd need) bool {
 		switch x.Method {
 		case "", "btree":
 			o := x.order(0)
-			eq, rng, prefix = true, o != orderPattern, c.btreePrefix(o)
+			own := !x.recollated(0)
+			eq, rng, prefix = own, own && o != orderPattern, c.btreePrefix(o)
 		case "hash":
 			eq = true
 		case "spgist":

@@ -1014,6 +1014,11 @@ func (l *linter) unserved(n *node, cols []string, needs map[string]need) string 
 		switch {
 		case x.Method == "hash":
 			parts = append(parts, x.Name+", which starts with "+c+", is a hash index: it finds = only")
+		case x.recollated(0):
+			// finds said it serves none of what is asked, so the ask is =
+			// or a range (a prefix this order cannot serve, too)
+			parts = append(parts, x.Name+", which starts with "+c+", keeps it in another collation than "+c+
+				"'s own, so it serves no = or range on it: those compare in "+c+"'s collation")
 		case x.order(0) == orderPattern:
 			parts = append(parts, x.Name+", which starts with "+c+", cannot find a range: its pattern class "+
 				"keeps byte order, not the collation's")
@@ -1052,7 +1057,10 @@ func (l *linter) ruleJoinIndex() {
 			continue
 		}
 		_, cols := edgeCols(c)
-		if _, ok := l.cat.leads(c.et, cols...); ok {
+		// a join compares with =, in the column's own collation: an index
+		// leading with one of cols must serve that (finds), which one in
+		// another collation (Index.recollated) does not
+		if slices.ContainsFunc(cols, func(col string) bool { return l.cat.finds(c.et, col, need{eq: true}) }) {
 			continue
 		}
 		sev := SevInfo
@@ -1062,6 +1070,12 @@ func (l *linter) ruleJoinIndex() {
 			sev = SevWarn
 		}
 		why := name(c) + " has " + l.sizeWords(c) + " and no index starts with " + strings.Join(cols, ", ") + ". "
+		if _, ok := l.cat.leads(c.et, cols...); ok {
+			// one does start with it, but in another collation than the
+			// column's, which the join's = cannot use; unserved names it
+			// (no needs: an equality, which is what a join asks)
+			why = name(c) + " has " + l.sizeWords(c) + ", and " + l.unserved(c, cols, nil) + ". "
+		}
 		if narrowed || c.via.Kind.tests() {
 			why += "Only some " + c.parent.alias + " rows need their matches, but without an index the engine " +
 				"must read all of " + c.alias + " to find them."

@@ -108,31 +108,6 @@ ten session docs in `ai_docs/claude_sessions/`
   wrong under `ANSI_QUOTES`, which dbc cannot see from the text — a
   per-connection setting, or a probe of `@@sql_mode` at connect. Nobody
   has hit it; it takes a double-quoted MySQL string holding `\"`.
-- **N-242** · raised `2026-1031-1735-n240-sqlite-nocase-prefix` · value low
-  An index whose key collation is not the column's own serves none of the
-  column's =, ranges or sorts (they compare in the column's collation), yet
-  the designer counts them (`catalog.go finds`, `Index.sorts`, `leads`).
-  On SQLite an index on `(ref COLLATE NOCASE)` over a plain `ref TEXT`
-  serves only the case-blind LIKE (`EXPLAIN QUERY PLAN`: `ref = 'x'` SCAN,
-  `ORDER BY ref` a temp b-tree), so with it alone the ⚡ shows fully lit;
-  the ⚡ title's "beside this one" steers away from replacing the plain
-  index. Postgres probably has the same gap for an explicit `COLLATE "C"`
-  index on an `en_US` column (`OrderC` is counted for ranges and sorts;
-  unchecked). The fix needs each key column's own collation: on Postgres
-  `pg_attribute.attcollation`; SQLite has no pragma for it, so parse the
-  CREATE TABLE, or probe — `SELECT count(*) FROM (SELECT ref FROM t WHERE 0
-  UNION SELECT 'a' UNION SELECT 'A')` is 1 only under NOCASE (a compound
-  compares in its leftmost term's collation). Nobody has hit it.
-- **N-244** · raised `2026-1103-1604-sidebar-sections-views-routines` · value low
-  View names still come in the one catalog read a connect makes
-  (`db.TablesQuery`), which is how the folded Views header shows a count.
-  The user asked that views and routines not be read until asked for;
-  routines and view DDL now are, view names are not. If that is wanted,
-  read views in a query of their own when the Views section opens, and
-  decide what the other users of the catalog get meanwhile: completion
-  (`TableIndex`), `dbc erd --views`, and the designer all see views
-  through it today. Contingent on the user saying the count-for-free is
-  not enough.
 
 ## Validate
 
@@ -674,12 +649,30 @@ call.
   dbc is on the Docker connection. Declined by the user: it stays refused
   ("disconnect first", the same rule as **Remove…**), so a stop never
   silently rolls back an open transaction.
+- **N-244** · declined 2026-11-03 · raised `2026-1103-1604-sidebar-sections-views-routines`
+  — I we already get them in the first read, no need to filter out
 
 ## Closed
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-242** · raised `2026-1031-1735-n240-sqlite-nocase-prefix` · value low
+  An index whose key collation is not the column's own serves none of the
+  column's =, ranges or sorts (they compare in the column's collation), yet
+  the designer counts them (`catalog.go finds`, `Index.sorts`, `leads`).
+  On SQLite an index on `(ref COLLATE NOCASE)` over a plain `ref TEXT`
+  serves only the case-blind LIKE (`EXPLAIN QUERY PLAN`: `ref = 'x'` SCAN,
+  `ORDER BY ref` a temp b-tree), so with it alone the ⚡ shows fully lit;
+  the ⚡ title's "beside this one" steers away from replacing the plain
+  index. Postgres probably has the same gap for an explicit `COLLATE "C"`
+  index on an `en_US` column (`OrderC` is counted for ranges and sorts;
+  unchecked). The fix needs each key column's own collation: on Postgres
+  `pg_attribute.attcollation`; SQLite has no pragma for it, so parse the
+  CREATE TABLE, or probe — `SELECT count(*) FROM (SELECT ref FROM t WHERE 0
+  UNION SELECT 'a' UNION SELECT 'A')` is 1 only under NOCASE (a compound
+  compares in its leftmost term's collation). Nobody has hit it.
+  closed 2026-11-03, `2026-1103-1726-n242-recollated-index-keys`: the listing gains a tenth column, `recoll`, read into `db.Index.Recollated` (per key column, parallel to `Cols`; nil when none is). Postgres compares the key's collation OID with `pg_attribute.attcollation`, as the planner's `IndexCollMatchesExprColl` does — so even `COLLATE "C"` in a C-default database is foreign to a default-collated column (checked on postgres:17: `=`, `>`, `ORDER BY` all seq-scan/sort; the LIKE uses the index, and so does a `text_pattern_ops` key in another collation). SQLite probes instead of parsing the CREATE TABLE (`db.sqliteRecoll`): the listing's tenth column carries the key's collation name, and `Indexes` asks every key column's own in ONE statement of paired UNION probes ('a'/'A' is 1 row only under NOCASE, 'a'/'a ' only under RTRIM); a key in a custom collation is not judged, and a failed probe leaves every key as its column's (the reading before). The designer: `finds` gives a recollated key no = or range but keeps its prefix (`btreePrefix(order)`); `Index.sorts` refuses one anywhere in `[0, to)`, the equalities before the sort included; `leads` still counts it (it starts with the column), and the join rule now asks `finds(eq)` instead of `leads`, its why naming the index via `unserved` (new case: "keeps it in another collation than ref's own"). The card gains `ColView.NoEq`; the ⚡ dims on it and its title says "starts with can use it, not =, IN or ranges — … they need an index on (ref) without the COLLATE". README updated. Tests: `TestIndexesOnSqlite` (recollated both ways, an RTRIM column, a name with a quote and a dot), `TestBuildIndexes`, `TestIndexesQueryOrderColumn`, `TestSqliteRecoll` (new: one probe per column, a failed probe), `TestRecollatedIndex` (new: card, =, prefix, sort, sort after a recollated equality, join; SQLite NOCASE, Postgres C, Postgres en_US-on-C), `TestDesignerSQLitePrefixIndex` (the NOCASE index alone and a BINARY one on a NOCASE column, against `EXPLAIN QUERY PLAN`), `TestLiveDesigner` (the C-collated step now also checks `=` and a range are not index-served), and the `web/e2e` designer step, whose fixture's `(country COLLATE NOCASE)` on a plain `country` was this very case and expected the fully lit ⚡. The `finds` and `sorts` halves and the Postgres column each fail their tests when reverted alone.
 - **N-226** · raised `2026-1024-1437-sql-format` · value low
   Format (`sqlsplit.Format`, TUI ⌥⇧F, web Shift+Alt+F) always upper-cases
   keywords. Offer keeping their case (a config key or a second menu row)

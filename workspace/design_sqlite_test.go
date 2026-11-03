@@ -172,4 +172,44 @@ func TestDesignerSQLitePrefixIndex(t *testing.T) {
 	if !searched(a.SQL, "code") || rows(a.SQL) != 2 {
 		t.Errorf("the planner does not use the NOCASE column's index:\n%s", a.SQL)
 	}
+
+	// N-242: a key in another collation than its column's own. plan
+	// reports whether SQLite's plan for sql has a line with want in it.
+	plan := func(sql, want string) bool {
+		t.Helper()
+		res, err := mgr.Run(demo, "EXPLAIN QUERY PLAN "+sql)
+		if err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+		for _, r := range res.Rows {
+			if strings.Contains(r[len(r)-1], want) {
+				return true
+			}
+		}
+		return false
+	}
+	// the NOCASE index alone on the BINARY ref: the starts-with only —
+	// = is a SCAN and ORDER BY a temp b-tree, as the card now says
+	exec(`DROP INDEX qd_orders_ref_plain`)
+	a = designer.Analyze(starts("ref", "r1"), catalog())
+	if cv := card(a, "ref"); !cv.Indexed || cv.NoPrefix || !cv.NoRange || !cv.NoEq {
+		t.Errorf("the NOCASE index alone, the card: %+v", cv)
+	}
+	if !searched(a.SQL, "ref") {
+		t.Errorf("the NOCASE index alone does not find the prefix:\n%s", a.SQL)
+	}
+	if plan(`SELECT id FROM qd_orders WHERE ref = 'r1'`, "SEARCH") ||
+		!plan(`SELECT id FROM qd_orders ORDER BY ref`, "TEMP B-TREE FOR ORDER BY") {
+		t.Errorf("the planner serves = or a sort from the NOCASE index on a BINARY column")
+	}
+	// and the reverse: BINARY named on the NOCASE code serves nothing —
+	// not =, which compares in NOCASE, nor the LIKE, which wants NOCASE
+	exec(`DROP INDEX qd_orders_code`, `CREATE INDEX qd_orders_code_bin ON qd_orders (code COLLATE BINARY)`)
+	a = designer.Analyze(starts("code", "c"), catalog())
+	if cv := card(a, "code"); !cv.Indexed || !cv.NoPrefix || !cv.NoRange || !cv.NoEq {
+		t.Errorf("a BINARY index on a NOCASE column, the card: %+v", cv)
+	}
+	if searched(a.SQL, "code") || plan(`SELECT id FROM qd_orders WHERE code = 'c1'`, "SEARCH") {
+		t.Errorf("the planner uses the BINARY index on the NOCASE column")
+	}
 }

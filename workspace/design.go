@@ -133,7 +133,8 @@ func (w *Workspace) DesignCatalog(ctx context.Context, tables []designer.TableKe
 			for _, x := range idx {
 				k := designer.TableKey{Schema: x.Schema, Name: x.Table}
 				c.indexes[k] = append(c.indexes[k], designer.Index{Name: x.Name, Cols: x.Cols,
-					Unique: x.Unique, Primary: x.Primary, Partial: x.Partial, Method: x.Method, Order: x.Order})
+					Unique: x.Unique, Primary: x.Primary, Partial: x.Partial, Method: x.Method, Order: x.Order,
+					Recollated: x.Recollated})
 			}
 		case errors.Is(err, db.ErrNoIndexes):
 			c.idxKnown = false

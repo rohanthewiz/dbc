@@ -56,7 +56,9 @@ INSERT INTO payments VALUES (100, 10, 20), (101, 10, 30), (102, 11, 70)`)
 	waitFor(t, p, "customers on the canvas", `() => !!document.querySelector('#qd .qdcard[data-alias="c"] .qdc[data-col="name"]')`)
 	// the ⚡ on SQLite (N-240): its LIKE ignores the case of A–Z, so a
 	// plain (BINARY) index serves no starts-with — dimmed, with the NOCASE
-	// index to add beside it — while a COLLATE NOCASE one serves them all
+	// index to add beside it — while a COLLATE NOCASE one on the plain
+	// country serves the starts-with alone (N-242): = and ranges compare
+	// in country's own (BINARY) collation, so it is dimmed the other way
 	ix := func(col string) string {
 		return evalStr(t, p, `() => { const x = document.querySelector('#qd .qdcard[data-alias="c"] .qdc[data-col="`+col+`"] .qdix');
 		  return x ? x.className + " | " + x.title : "none"; }`)
@@ -65,7 +67,9 @@ INSERT INTO payments VALUES (100, 10, 20), (101, 10, 30), (102, 11, 70)`)
 		!strings.Contains(got, "not starts with — SQLite's LIKE ignores the case of A–Z, so a starts-with needs an index on (name COLLATE NOCASE), beside this one") {
 		t.Fatalf("a plain index's ⚡ on SQLite: %q", got)
 	}
-	if got := ix("country"); got != "qdix | an index starts with it: a filter on it can use the index" {
+	if got := ix("country"); got != "qdix part | an index starts with it: starts with can use it, not =, IN or ranges"+
+		" — the index keeps it in another collation than its own, and = and ranges compare in its own:"+
+		" they need an index on (country) without the COLLATE" {
 		t.Fatalf("a NOCASE index's ⚡ on SQLite: %q", got)
 	}
 	clickAt(t, p, `#qd .qditem[data-label="orders"]`, proto.InputMouseButtonLeft)

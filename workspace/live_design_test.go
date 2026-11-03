@@ -380,9 +380,16 @@ func livePrefixIndex(t *testing.T, w *Workspace, obs *db.Manager, k designer.Des
 		t.Errorf("NoPrefix=%v but the rule %+v", cv.NoPrefix, l)
 	}
 	// and under COLLATE "C" a plain index finds it, whatever the database's
+	// — but only it (N-242): ref is in the database's default collation,
+	// a different one even where that default is C (the planner compares
+	// the collations' OIDs), so = and ranges compare in another order
+	// than the index keeps, and the planner reads the table for them
 	obsExec(t, obs, `DROP INDEX qd_orders_ref_plain`, `CREATE INDEX qd_orders_ref_c ON qd_orders (ref COLLATE "C")`)
-	if cv := refCard(); cv.NoPrefix || cv.NoRange || !indexCond(`ref LIKE 'r1999%'`) {
+	if cv := refCard(); cv.NoPrefix || !cv.NoRange || !cv.NoEq || !indexCond(`ref LIKE 'r1999%'`) {
 		t.Errorf("a C-collated index: %+v", cv)
+	}
+	if indexCond(`ref = 'r1999'`) || indexCond(`ref >= 'r5'`) {
+		t.Errorf("the planner serves = or a range from a key in another collation than the column's")
 	}
 	if l := lint("filter-no-index"); l != nil {
 		t.Errorf("a C-collated index: %+v", l)

@@ -1073,3 +1073,94 @@ func TestPaintPlan(t *testing.T) {
 		t.Fatalf("plan view %+v", v)
 	}
 }
+
+// TestRecollatedIndex (N-242): an index whose key is in another collation
+// than its column's own — (ref COLLATE NOCASE) over a plain ref on SQLite,
+// (ref COLLATE "C") over an en_US one on Postgres — serves the column's
+// prefix (when its order is the one the LIKE needs) and none of its =,
+// ranges, sorts or joins, which compare in the column's collation. Each
+// claim here is what the planner does: the SQLite half is run against
+// EXPLAIN QUERY PLAN in workspace's TestDesignerSQLitePrefixIndex, the
+// Postgres half in the live designer test.
+func TestRecollatedIndex(t *testing.T) {
+	k := TableKey{"public", "orders"}
+	for _, tc := range []struct {
+		driver, order string
+		prefix        bool // the recollated key's order serves a prefix there
+	}{
+		{"sqlite", orderNocase, true},
+		{"postgres", orderC, true},
+		{"postgres", "", false}, // an en_US key on a C column: nothing
+	} {
+		name := tc.driver + "/" + tc.order
+		cat := shopCat()
+		cat.Driver = tc.driver
+		cat.IndexesKnown = true
+		cat.Rows = map[TableKey]int64{k: 2_000_000, {"public", "customers"}: 50_000}
+		alone := []Index{{Name: "o_ref_x", Cols: []string{"ref"}, Order: []string{tc.order}, Recollated: []bool{true}}}
+		cat.Indexes = map[TableKey][]Index{k: alone}
+		d := build(t, cat, "orders")
+		d.Columns = outs(col(d, "o", "id"))
+		card := func(a *Analysis) ColView {
+			for _, c := range a.Tables[0].Cols {
+				if c.Name == "ref" {
+					return c
+				}
+			}
+			t.Fatal("no ref column")
+			return ColView{}
+		}
+
+		// the ⚡: lit (it starts with ref) but narrowed to what it serves
+		a := Analyze(d, cat)
+		if c := card(a); !c.Indexed || !c.NoEq || !c.NoRange || c.NoPrefix == tc.prefix {
+			t.Errorf("%s: card %+v", name, c)
+		}
+		// an equality is not served, and the why says why
+		d.Filters = []Filter{{Ref: col(d, "o", "ref"), Op: OpEq, Values: []string{"x"}}}
+		l := lintOf(Analyze(d, cat), "filter-no-index")
+		if l == nil || !strings.Contains(l.Why, "o_ref_x, which starts with ref, keeps it in another collation than ref's own") ||
+			l.Fixes[0].SQL != "CREATE INDEX orders_ref_idx ON orders (ref);" {
+			t.Errorf("%s: = %+v", name, l)
+		}
+		// a starts-with is, where the order serves one
+		d.Filters = []Filter{{Ref: col(d, "o", "ref"), Op: OpStarts, Values: []string{"AB"}}}
+		if l := lintOf(Analyze(d, cat), "filter-no-index"); (l == nil) != tc.prefix {
+			t.Errorf("%s: starts-with %+v", name, l)
+		}
+		// no sort is read off it, neither on the key nor after an equality
+		// on a recollated key
+		d.Filters = nil
+		d.Sorts, d.Limit = []Sort{{Ref: col(d, "o", "ref")}}, 20
+		if lintOf(Analyze(d, cat), "sort-no-index") == nil {
+			t.Errorf("%s: sort served", name)
+		}
+		cat.Indexes[k] = []Index{{Name: "o_ref_st", Cols: []string{"ref", "status"}, Recollated: []bool{true, false}}}
+		d.Filters = []Filter{{Ref: col(d, "o", "ref"), Op: OpEq, Values: []string{"x"}}}
+		d.Sorts = []Sort{{Ref: col(d, "o", "status")}}
+		if lintOf(Analyze(d, cat), "sort-no-index") == nil {
+			t.Errorf("%s: sort after a recollated equality served", name)
+		}
+		d.Filters, d.Sorts, d.Limit = nil, nil, 0
+
+		// beside a plain index, all is served again
+		cat.Indexes[k] = append(alone, Index{Name: "o_ref", Cols: []string{"ref"}})
+		if c := card(Analyze(d, cat)); c.NoEq || c.NoRange {
+			t.Errorf("%s: with a plain one too, card %+v", name, c)
+		}
+
+		// a join on a recollated key is no indexed join
+		cat.Indexes = map[TableKey][]Index{k: {{Name: "o_cust_x", Cols: []string{"customer_id"}, Recollated: []bool{true}}}}
+		d = build(t, cat, "customers", "orders")
+		d.Columns = outs(col(d, "c", "name"))
+		d.Filters = []Filter{{Ref: col(d, "c", "id"), Op: OpEq, Values: []string{"1"}}}
+		l = lintOf(Analyze(d, cat), "join-no-index")
+		if l == nil || !strings.Contains(l.Why, "o_cust_x, which starts with customer_id, keeps it in another collation") {
+			t.Errorf("%s: join %+v", name, l)
+		}
+		cat.Indexes[k][0].Recollated = nil
+		if l := lintOf(Analyze(d, cat), "join-no-index"); l != nil {
+			t.Errorf("%s: join on its own collation %+v", name, l)
+		}
+	}
+}

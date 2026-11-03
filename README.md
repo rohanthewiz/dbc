@@ -1858,7 +1858,11 @@ to copy; dbc never runs one for you.
     whose LIKE ignores the case of A–Z, only a `COLLATE NOCASE` index
     serves a *starts with* (an index on a column declared `COLLATE NOCASE`
     is one already). SQLite keeps no row estimates, so there the ⚡ says
-    it rather than this rule.
+    it rather than this rule. An index that keeps a column in another
+    collation than its own, like `(ref COLLATE NOCASE)` on a plain `ref`
+    or `(ref COLLATE "C")` on an `en_US` one, serves only that *starts
+    with*. `=`, ranges, sorts and joins compare in the column's own
+    collation, so they still need an index without the `COLLATE`.
   - **A join to a big table with no index on its columns.** Postgres never
     indexes a foreign key's columns by itself.
   - **A leading-wildcard LIKE**, or a *starts with* that ignores case,
@@ -1897,8 +1901,9 @@ The cards say the same at a glance: ★ is the table the query starts from,
 marks a column an index starts with. A dimmed ⚡ means that index serves
 only some filters. On Postgres, an ordinary index cannot serve a *starts
 with* and a `text_pattern_ops` index cannot serve a range. On SQLite, only
-a `COLLATE NOCASE` index can serve a *starts with*. Its tooltip says which
-filters it serves.
+a `COLLATE NOCASE` index can serve a *starts with*. On either engine, an
+index in another collation than the column's own serves no `=` or range.
+Its tooltip says which filters it serves.
 
 The rules, the SQL and the story live in the `designer` package (pure Go,
 tested without a database). The page only draws and edits; it decides

@@ -17,12 +17,15 @@ import (
 // with status", "orders.customer_id has no index, so each customer's
 // orders are found by reading all of orders".
 //
-// Every engine's query returns the same nine columns, one row per KEY
+// Every engine's query returns the same ten columns, one row per KEY
 // column of each index, in key order:
 //
 //	schema, table, index, kind (p primary | u unique | i other),
 //	partial ('partial' or ''), method (btree, hash, gin…), position, column,
-//	order (Postgres and SQLite; '' on MySQL — see OrderPattern, OrderNocase)
+//	order (Postgres and SQLite; '' on MySQL — see OrderPattern, OrderNocase),
+//	recoll ('recoll' when the key's collation is not its column's own, else
+//	        ''; '' on MySQL; on SQLite the key's collation name, which
+//	        Indexes turns into one or the other — see Recollated)
 //
 // An expression column (an index on lower(email)) comes back as "" — it
 // has a position in the key, but no column a plain filter could use, so a
@@ -51,7 +54,23 @@ type Index struct {
 	// SQLite OrderNocase or "" (see OrderNocase). nil when every one is ""
 	// — always so on MySQL.
 	Order []string
+	// Recollated is, per key column (parallel to Cols), whether the index
+	// keeps it in a collation other than the column's own: an index on
+	// (ref COLLATE NOCASE) over a plain ref TEXT on SQLite, on
+	// (ref COLLATE "C") over an en_US column on Postgres. Such a key serves
+	// none of the column's =, ranges or sorts — those compare in the
+	// column's collation, and both planners use an index only when its
+	// collation is the comparison's (Postgres compares the collation OIDs,
+	// so even a COLLATE "C" key in a C database is foreign to a
+	// default-collated column). It can still serve a prefix, when its
+	// order is the one the engine's LIKE needs (Order). nil when no key
+	// column is — always so on MySQL, whose keys take the column's
+	// collation.
+	Recollated []bool
 }
+
+// recollMark is the listing's tenth column for a recollated key column.
+const recollMark = "recoll"
 
 // The order a Postgres b-tree keeps a text key column in, which decides
 // whether it can serve a prefix (LIKE 'abc%'). The planner turns a prefix
@@ -87,10 +106,9 @@ const (
 // A key column takes its column's declared collation unless the index
 // names one, so an index on a column declared COLLATE NOCASE is one too.
 // Other collations (BINARY, RTRIM) are listed as "": = and ranges, no
-// prefix. The listing does not compare the key's collation with the
-// column's — a NOCASE key on a BINARY column serves the LIKE but not
-// ref = 'x' or ORDER BY ref, which compare in the column's own collation —
-// so like Postgres's OrderC it is read as serving those too.
+// prefix. A NOCASE key on a BINARY column serves the LIKE but not
+// ref = 'x' or ORDER BY ref, which compare in the column's own collation;
+// that is Recollated's to say, as for Postgres's OrderC.
 const OrderNocase = "nocase"
 
 // IndexesQuery returns the statement listing the indexes of tables, in the
@@ -129,6 +147,14 @@ func IndexesQuery(driver string, tables []TableRef) (string, error) {
 		// ICU (never C) or builtin (always), and otherwise datcollate is
 		// the libc locale. datlocprovider is read through to_jsonb so the
 		// statement still runs on Postgres 11–14, where it is no column.
+		//
+		// The recoll column (Recollated) is the planner's own test
+		// (IndexCollMatchesExprColl): the key's collation OID against the
+		// column's attcollation, as OIDs — "C" (950) is not "default"
+		// (100) even in a database whose default is C, and the planner
+		// skips the index for = on it there too. 0 on either side is a
+		// type without collation (an integer); an expression key has no
+		// attribute (a is NULL), so the test is NULL and reads as ''.
 		return `SELECT n.nspname, t.relname, i.relname,
        CASE WHEN x.indisprimary THEN 'p' WHEN x.indisunique THEN 'u' ELSE 'i' END,
        CASE WHEN x.indpred IS NULL THEN '' ELSE 'partial' END,
@@ -136,7 +162,8 @@ func IndexesQuery(driver string, tables []TableRef) (string, error) {
        CASE WHEN oc.opcname IN ('text_pattern_ops', 'varchar_pattern_ops', 'bpchar_pattern_ops') THEN 'pattern'
             WHEN co.collprovider = 'b' OR co.collcollate IN ('C', 'POSIX') THEN 'c'
             WHEN co.collprovider = 'd' AND db.c THEN 'c'
-            ELSE '' END
+            ELSE '' END,
+       CASE WHEN k.coll <> 0 AND a.attcollation <> 0 AND k.coll <> a.attcollation THEN 'recoll' ELSE '' END
 FROM pg_catalog.pg_index x
 JOIN pg_catalog.pg_class t ON t.oid = x.indrelid
 JOIN pg_catalog.pg_class i ON i.oid = x.indexrelid
@@ -157,7 +184,7 @@ ORDER BY 1, 2, 3, 7`, nil
 		// a functional key part (8.0.13+). MySQL has no partial indexes.
 		return `SELECT table_schema, table_name, index_name,
        CASE WHEN index_name = 'PRIMARY' THEN 'p' WHEN non_unique = 0 THEN 'u' ELSE 'i' END,
-       '', LOWER(index_type), seq_in_index, COALESCE(column_name, ''), ''
+       '', LOWER(index_type), seq_in_index, COALESCE(column_name, ''), '', ''
 FROM information_schema.statistics
 WHERE table_schema = DATABASE() AND table_name IN (` + nameList(tables, true) + `)
 ORDER BY 1, 2, 3, 7`, nil
@@ -176,11 +203,17 @@ ORDER BY 1, 2, 3, 7`, nil
 		// Postgres, so they are cut. The key columns' seqno run 0..n-1, as
 		// in index_info. A collation name is matched without case (SQLite
 		// reads COLLATE nocase as NOCASE).
+		//
+		// The tenth column is the key's collation, upper-cased, not yet a
+		// verdict: SQLite keeps no column's collation where a pragma could
+		// read it (table_xinfo has none), so Indexes probes the columns in
+		// a second statement (sqliteRecoll) and puts 'recoll' or '' here.
 		return `SELECT 'main', m.name, il.name,
        CASE WHEN il.origin = 'pk' THEN 'p' WHEN il."unique" THEN 'u' ELSE 'i' END,
        CASE WHEN il.partial THEN 'partial' ELSE '' END,
        'btree', ii.seqno + 1, COALESCE(ii.name, ''),
-       CASE WHEN upper(ii.coll) = 'NOCASE' THEN 'nocase' ELSE '' END
+       CASE WHEN upper(ii.coll) = 'NOCASE' THEN 'nocase' ELSE '' END,
+       COALESCE(upper(ii.coll), '')
 FROM sqlite_master m JOIN pragma_index_list(m.name) il JOIN pragma_index_xinfo(il.name) ii
 WHERE m.type = 'table' AND ii."key" AND m.name IN (` + nameList(tables, false) + `)
 ORDER BY 1, 2, 3, 7`, nil
@@ -220,6 +253,7 @@ func BuildIndexes(rows [][]string) []Index {
 		for len(x.Cols) < pos-1 {
 			x.Cols = append(x.Cols, "")
 			x.Order = append(x.Order, "")
+			x.Recollated = append(x.Recollated, false)
 		}
 		x.Cols = append(x.Cols, r[7])
 		ord := ""
@@ -227,15 +261,107 @@ func BuildIndexes(rows [][]string) []Index {
 			ord = r[8]
 		}
 		x.Order = append(x.Order, ord)
+		// only the mark counts: an unresolved SQLite collation name (a
+		// listing read without Indexes' probe) says nothing about the
+		// column's own, so it reads as the column's, as before the probe
+		x.Recollated = append(x.Recollated, len(r) > 9 && r[9] == recollMark)
 	}
-	// an all-"" Order says nothing Cols does not: drop it, so the other
-	// engines' indexes (and most Postgres ones) carry none
+	// an all-"" Order (all-false Recollated) says nothing Cols does not:
+	// drop it, so the other engines' indexes (and most Postgres ones)
+	// carry none
 	for i := range out {
 		if !slices.ContainsFunc(out[i].Order, func(o string) bool { return o != "" }) {
 			out[i].Order = nil
 		}
+		if !slices.Contains(out[i].Recollated, true) {
+			out[i].Recollated = nil
+		}
 	}
 	return out
+}
+
+// sqliteColls are the built-in SQLite collations the probe can tell apart
+// (sqliteRecoll). A key in any other (one an application registered) is
+// left as its column's: its order cannot be probed for.
+var sqliteColls = []string{"BINARY", "NOCASE", "RTRIM"}
+
+// sqliteRecoll resolves the SQLite listing's tenth column — the key's
+// collation name — into Recollated's mark, by asking SQLite for each key
+// column's own collation. No pragma reads it, and parsing the CREATE TABLE
+// would have to follow SQLite's grammar (a COLLATE in a constraint, a
+// quoted name, a generated column…), so the engine is asked instead, by a
+// compound SELECT: a compound compares its rows in the collation of its
+// leftmost term's column, so
+//
+//	SELECT count(*) FROM (SELECT ref FROM orders WHERE 0 UNION SELECT 'a' UNION SELECT 'A')
+//
+// is 1 only when ref's collation is NOCASE ('a' and 'A' are one row), and
+// the same with 'a' and 'a ' is 1 only under RTRIM; BINARY keeps both
+// pairs apart. WHERE 0 reads no row of the table. Every column asked about
+// goes in one statement (a pair of scalar subqueries each), so the probe
+// is one round trip whatever the number of indexes.
+//
+// probe runs that statement and returns its one row. On any failure the
+// rows are left unresolved, which BuildIndexes reads as "the column's
+// own" — the reading before the probe existed, so a failed probe costs
+// only this check.
+func sqliteRecoll(rows [][]string, probe func(q string) ([]string, error)) {
+	type tc struct{ table, col string }
+	var asked []tc
+	at := map[tc]int{}
+	for _, r := range rows {
+		if len(r) < 10 || r[7] == "" || !slices.Contains(sqliteColls, r[9]) {
+			continue
+		}
+		k := tc{r[1], r[7]}
+		if _, ok := at[k]; !ok {
+			at[k] = len(asked)
+			asked = append(asked, k)
+		}
+	}
+	if len(asked) == 0 {
+		return
+	}
+	terms := make([]string, 0, 2*len(asked))
+	for _, k := range asked {
+		// each name quoted whole (not quoteIdent, which splits on dots for
+		// a schema-qualified name: a column may hold a dot)
+		from := `"` + strings.ReplaceAll(k.col, `"`, `""`) + `" FROM "` + strings.ReplaceAll(k.table, `"`, `""`) + `"`
+		for _, other := range []string{"'A'", "'a '"} {
+			terms = append(terms, "(SELECT count(*) FROM (SELECT "+from+" WHERE 0 UNION SELECT 'a' UNION SELECT "+other+"))")
+		}
+	}
+	got, err := probe("SELECT " + strings.Join(terms, ", "))
+	if err != nil || len(got) != len(terms) {
+		for _, r := range rows {
+			if len(r) >= 10 {
+				r[9] = ""
+			}
+		}
+		return
+	}
+	own := make([]string, len(asked))
+	for i := range asked {
+		switch {
+		case got[2*i] == "1":
+			own[i] = "NOCASE"
+		case got[2*i+1] == "1":
+			own[i] = "RTRIM"
+		default:
+			own[i] = "BINARY"
+		}
+	}
+	for _, r := range rows {
+		if len(r) < 10 {
+			continue
+		}
+		i, ok := at[tc{r[1], r[7]}]
+		if ok && slices.Contains(sqliteColls, r[9]) && r[9] != own[i] {
+			r[9] = recollMark
+		} else {
+			r[9] = ""
+		}
+	}
 }
 
 // Indexes reads the indexes of tables on the named connection. It runs on
@@ -261,6 +387,18 @@ func (m *Manager) Indexes(ctx context.Context, name string, tables []TableRef) (
 	rows, err := stringRows(ctx, dbh, q)
 	if err != nil {
 		return nil, wrapRunErr(ctx, err, name, "op", "read indexes")
+	}
+	if drv, _ := driverFor(cc.Driver); drv == "sqlite" {
+		sqliteRecoll(rows, func(q string) ([]string, error) {
+			got, err := stringRows(ctx, dbh, q)
+			if err != nil {
+				return nil, err
+			}
+			if len(got) != 1 {
+				return nil, errors.New("collation probe gave no row")
+			}
+			return got[0], nil
+		})
 	}
 	return BuildIndexes(rows), nil
 }

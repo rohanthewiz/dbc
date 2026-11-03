@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-243
+**Next ID:** N-246
 
 ## Open
 
@@ -123,6 +123,16 @@ ten session docs in `ai_docs/claude_sessions/`
   CREATE TABLE, or probe — `SELECT count(*) FROM (SELECT ref FROM t WHERE 0
   UNION SELECT 'a' UNION SELECT 'A')` is 1 only under NOCASE (a compound
   compares in its leftmost term's collation). Nobody has hit it.
+- **N-244** · raised `2026-1103-1604-sidebar-sections-views-routines` · value low
+  View names still come in the one catalog read a connect makes
+  (`db.TablesQuery`), which is how the folded Views header shows a count.
+  The user asked that views and routines not be read until asked for;
+  routines and view DDL now are, view names are not. If that is wanted,
+  read views in a query of their own when the Views section opens, and
+  decide what the other users of the catalog get meanwhile: completion
+  (`TableIndex`), `dbc erd --views`, and the designer all see views
+  through it today. Contingent on the user saying the count-for-free is
+  not enough.
 
 ## Validate
 
@@ -186,6 +196,12 @@ and `raised`.
   `2026-1008-1844-tui-tables-find`, "not driven by hand"). Add both to the
   hand check: the routines rows and their DDL preview, and `/` typing,
   Enter and Esc in a real terminal.
+  Updated `2026-1103-1604-sidebar-sections-views-routines`: the Routines mode is gone. The pane is now three
+  foldable sections (Tables open; Views and Routines folded, `t`/`v`/`f`,
+  Enter or one click on a ▾/▸ header) with `D` for a view's DDL. Check
+  those in a real terminal in place of the old mode: the header glyphs and
+  the indented rows, a single click folding, and `/` keeping only headers
+  with a match.
 - **N-104** · raised `2026-1005-1035-sql-consoles-per-database` · value low
   Check consoles by hand on real data. The first `dbc web` start moves the
   real `web.bytdb`'s tab buffers into consoles (`moveTabBuffers`, once,
@@ -419,6 +435,23 @@ and `raised`.
     - Does the catalog read stay quick on a big catalog?
   - Whether the story and the guide's wording read well to someone who
     did not write them.
+- **N-243** · raised `2026-1103-1604-sidebar-sections-views-routines` · value medium
+  Check the new sidebar sections on live servers (Docker was down, so
+  only the unit tests on the SQL text ran): a view's DDL on Postgres (a
+  plain view, a materialized one — `CREATE MATERIALIZED VIEW`, no OR
+  REPLACE — and a mixed-case or spaced name quoted by `pgIdent`) and on
+  MySQL (`SHOW CREATE VIEW`, column 2; a user without SHOW VIEW gets the
+  server's error). Run `db/viewddl_test.go`-style checks under the
+  `live_*` recipe, the rewritten web e2e step `pgRoutines` (Routines
+  header folded, opened by a click, folded again) and
+  `tui.TestLiveRoutinesPanePostgres` with `DBC_LIVE_PG_DSN`.
+- **N-245** · raised `2026-1103-1604-sidebar-sections-views-routines` · value low
+  The full web e2e suite flakes early on: `editor_menu` ("grid info = 3
+  rows, want the count's 1 row") failed twice in a row on the branch and
+  `build_badge` timed out once on a clean `main`; both pass alone
+  (`DBC_E2E_STEPS`) and a third full run passed. Likely a startup race
+  (the grid's result from `run a query` read as the menu run's). Repair
+  the wait in `editormenu_test.go` / `buildbadge_test.go`.
 
 ## Roadmap
 

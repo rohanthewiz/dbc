@@ -146,6 +146,13 @@ type Workspace struct {
 	// list is read only while it is on, so a connect costs no pg_proc
 	// read for a sidebar showing tables. Per workspace, as showCounts is.
 	showRoutines bool
+	// tablesFolded and showViews are the sidebar's other two sections'
+	// folds (sections.go). Their zero values are how a tab starts: Tables
+	// open, Views folded. Neither costs a read either way — tables and
+	// views come in the one catalog read — so they are only a UI's
+	// memory, kept here so each tab has its own, as showRoutines is.
+	tablesFolded bool
+	showViews    bool
 
 	// sets are the results pane's contents, one result set per connection
 	// this workspace has been on — result tabs, the plan, and the last

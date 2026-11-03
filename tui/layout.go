@@ -344,9 +344,6 @@ func (m *Model) render() (*Canvas, *caret) {
 		if m.ws.RowCountsShown() {
 			title += " · rows"
 		}
-		if m.routinesShown() {
-			title = m.routinesTitle() // the pane's other list (routines.go)
-		}
 		m.drawPane(c, l.tables, title, focusTables, m.st.panel, func(s Surface) {
 			// the filter line's caret (tablefind.go)
 			if p := m.drawTablesPane(s); p != nil && m.modal == nil && m.menu == nil {

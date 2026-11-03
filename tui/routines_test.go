@@ -74,10 +74,10 @@ func TestDDLModalLines(t *testing.T) {
 	}
 }
 
-// THE ROUTINES LIST ON A REAL POSTGRES, as a user drives it: f in the
-// Tables pane lists the schema's routines in place of its tables, titled
-// "Routines · n"; Enter on one opens its DDL in the viewer, y copies it,
-// i puts it in the editor; f again brings the tables back.
+// THE ROUTINES SECTION ON A REAL POSTGRES, as a user drives it: folded as
+// the tab starts (nothing read), f unfolds it under the tables with the
+// cursor on its header, "Routines 1"; ↓ Enter on the routine opens its DDL
+// in the viewer, y copies it, i puts it in the editor; f again folds it.
 func TestLiveRoutinesPanePostgres(t *testing.T) {
 	dsn := os.Getenv("DBC_LIVE_PG_DSN")
 	if dsn == "" {
@@ -122,13 +122,20 @@ func TestLiveRoutinesPanePostgres(t *testing.T) {
 		t.Fatalf("schema %q\n%s", m.ws.CatalogSchema(), logText(m))
 	}
 
+	if m.routinesShown() || m.ws.Routines() != nil {
+		t.Fatalf("routines read before they were asked for: %+v", m.ws.Routines())
+	}
 	m.focus = focusTables
 	key(t, m, "f")
-	if !m.routinesShown() || len(m.tables.items) != 1 {
+	if names := tableNames(m); !m.routinesShown() || len(names) != 2 {
 		t.Fatalf("after f: shown %v, rows %+v\n%s", m.routinesShown(), m.tables.items, logText(m))
 	}
+	if s, ok := m.currentSection(); !ok || s != workspace.SectionRoutines {
+		t.Fatalf("cursor on %+v, want the Routines header", m.tables.items[m.tables.cur])
+	}
 	f := frame(m)
-	findText(t, f, "Routines · 1")
+	findText(t, f, "Routines")
+	key(t, m, "down") // off the header, onto the routine
 	// qualified, as the tables are on a many-schema database (and cut to
 	// the narrow pane)
 	findText(t, f, "tui_rt.tui_rt_")
@@ -153,7 +160,7 @@ func TestLiveRoutinesPanePostgres(t *testing.T) {
 
 	m.focus = focusTables
 	key(t, m, "f")
-	if m.routinesShown() || len(m.tables.items) != 1 || m.tables.items[0].data != "tui_rt.only_table" {
+	if names := tableNames(m); m.routinesShown() || len(names) != 1 || names[0].data != "tui_rt.only_table" {
 		t.Errorf("after f again: shown %v, rows %+v", m.routinesShown(), m.tables.items)
 	}
 }

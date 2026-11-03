@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/rohanthewiz/dbc/erd"
+	"github.com/rohanthewiz/dbc/workspace"
 )
 
 // menu is a floating list of actions: every right-click menu, the ⧉ Copy
@@ -414,13 +415,18 @@ func (m *Model) openConnMenu(x, y int, target string) {
 }
 
 // openTableMenu is the tables list's context menu. onRow says the click
-// landed on a table; off one, the table rows stay visible but dim, so the
-// menu reads the same wherever the pane was clicked. The navigator's pickers
-// come last, live wherever the connection has them.
+// landed on a table or view; off one, the table rows stay visible but dim,
+// so the menu reads the same wherever the pane was clicked. On a view,
+// "Show DDL" is live too. The sections' folds follow, then the
+// navigator's pickers, live wherever the connection has them.
 func (m *Model) openTableMenu(x, y int, onRow bool) {
-	if m.routinesShown() {
-		m.openRoutineMenu(x, y, onRow) // the pane lists routines (routines.go)
+	if _, ok := m.currentRoutine(); ok && onRow {
+		m.openRoutineMenu(x, y, onRow) // a routine's row (routines.go)
 		return
+	}
+	noView := "right-click a view for this"
+	if _, ok := m.currentView(); ok && onRow {
+		noView = ""
 	}
 	name, noTable := "", "right-click a table for this"
 	if t, ok := m.currentTable(); ok && onRow {
@@ -438,6 +444,7 @@ func (m *Model) openTableMenu(x, y int, onRow bool) {
 	items := []menuItem{
 		{label: "Preview rows", key: "2×click", why: noTable, act: func(m *Model) tea.Cmd { return m.tablePicked() }},
 		{label: "Show columns", key: "c", why: noTable, act: func(m *Model) tea.Cmd { return m.tableColumns() }},
+		{label: "Show DDL", key: "D", why: noView, act: func(m *Model) tea.Cmd { return m.viewDDLPicked() }},
 		{label: "Diagram around it (ERD)", key: "e", why: noTable, act: func(m *Model) tea.Cmd { return m.tableDiagram() }},
 		{label: "Diagram all tables (ERD)", why: noTables, act: func(m *Model) tea.Cmd { return m.diagram(erd.Selection{}, false) }},
 		{label: "Copy ERD as Mermaid", why: noTables, act: func(m *Model) tea.Cmd { return m.diagram(erd.Selection{}, true) }},
@@ -448,9 +455,13 @@ func (m *Model) openTableMenu(x, y int, onRow bool) {
 		}},
 		{label: "Copy name", why: noTable, act: func(m *Model) tea.Cmd { return m.copyString(name, "the table name") }},
 		{label: countsLabel, key: "#", act: func(m *Model) tea.Cmd { return m.toggleRowCounts() }},
-		{label: "Show routines", key: "f", why: m.noRoutinesWhy(),
+		{label: m.sectionLabel(workspace.SectionTables, "tables"), key: "t",
+			act: func(m *Model) tea.Cmd { return m.toggleSection(workspace.SectionTables) }},
+		{label: m.sectionLabel(workspace.SectionViews, "views"), key: "v",
+			act: func(m *Model) tea.Cmd { return m.toggleSection(workspace.SectionViews) }},
+		{label: m.sectionLabel(workspace.SectionRoutines, "routines"), key: "f", why: m.noRoutinesWhy(),
 			act: func(m *Model) tea.Cmd { return m.toggleRoutines() }},
-		{label: "Find a table…", key: "/", act: func(m *Model) tea.Cmd { m.openTableFind(); return nil }},
+		{label: "Find by name…", key: "/", act: func(m *Model) tea.Cmd { m.openTableFind(); return nil }},
 	}
 	m.openMenu(x, y, append(items, m.navMenuItems()...))
 }

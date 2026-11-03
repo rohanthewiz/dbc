@@ -278,6 +278,17 @@ type RoutineDDL struct {
 	Notes   []Note
 }
 
+// ViewDDL lands a view's definition (Workspace.ViewDDL), as
+// db.Manager.ViewDDL renders it, for a UI to show beside a routine's.
+type ViewDDL struct {
+	Conn  string
+	View  db.TableRef
+	DDL   string // the CREATE statement, ending in ";"; "" when Err is set
+	Err   error
+	Notes []Note
+}
+
+func (*ViewDDL) event()         {}
 func (*SchemaLoaded) event()    {}
 func (*RoutinesLoaded) event()  {}
 func (*RoutineDDL) event()      {}

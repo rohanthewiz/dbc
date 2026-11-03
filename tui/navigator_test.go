@@ -67,12 +67,12 @@ func TestDisconnectFromTheConnectionsPane(t *testing.T) {
 // second row, under Disconnect.
 func TestRefreshFromTheConnectionsPane(t *testing.T) {
 	m := newTestModel(t)
-	if len(m.tables.items) == 0 {
+	if len(tableNames(m)) == 0 {
 		t.Fatalf("tables: %d", len(m.tables.items))
 	}
-	last := len(m.tables.items) - 1
-	m.tables.cur = last
-	was := m.tables.items[last].data.(string)
+	last := len(tableNames(m)) - 1
+	m.tables.cur = nameIndex(m, last)
+	was := tableNames(m)[last].data.(string)
 	// "aaa" sorts first, so every listed table moves down a row
 	if _, err := m.mgr.Run(config.DemoSQLite, "CREATE TABLE aaa_refreshed (id INTEGER)"); err != nil {
 		t.Fatal(err)
@@ -80,8 +80,8 @@ func TestRefreshFromTheConnectionsPane(t *testing.T) {
 
 	m.focus = focusConns
 	key(t, m, "r")
-	if len(m.tables.items) != last+2 || m.tables.items[0].data.(string) != "aaa_refreshed" {
-		t.Fatalf("after r: %d tables, first %+v", len(m.tables.items), m.tables.items[0])
+	if names := tableNames(m); len(names) != last+2 || names[0].data.(string) != "aaa_refreshed" {
+		t.Fatalf("after r: %d tables, first %+v", len(names), m.tables.items)
 	}
 	if it, _ := m.tables.current(); it.data.(string) != was {
 		t.Errorf("cursor on %q, want it kept on %q", it.data, was)
@@ -107,14 +107,14 @@ func TestRefreshFromTheConnectionsPane(t *testing.T) {
 // what the list holds now.
 func TestDDLRunRelistsTheSidebar(t *testing.T) {
 	m := newTestModel(t)
-	last := len(m.tables.items) - 1
-	m.tables.cur = last
-	was := m.tables.items[last].data.(string)
+	last := len(tableNames(m)) - 1
+	m.tables.cur = nameIndex(m, last)
+	was := tableNames(m)[last].data.(string)
 
 	m.editor.SetText("CREATE TABLE aaa_relisted (id INTEGER)")
 	key(t, m, "ctrl+r")
-	if len(m.tables.items) != last+2 || m.tables.items[0].data.(string) != "aaa_relisted" {
-		t.Fatalf("after the CREATE: %d tables, first %+v", len(m.tables.items), m.tables.items[0])
+	if names := tableNames(m); len(names) != last+2 || names[0].data.(string) != "aaa_relisted" {
+		t.Fatalf("after the CREATE: %d tables, first %+v", len(names), m.tables.items)
 	}
 	if it, _ := m.tables.current(); it.data.(string) != was {
 		t.Errorf("cursor on %q, want it kept on %q", it.data, was)
@@ -291,7 +291,7 @@ func TestLiveNavigatorPostgres(t *testing.T) {
 	if it := m.conns.items[m.conns.cur]; it.label != "live" || it.mark != "●" {
 		t.Errorf("connections row marked: %+v", it)
 	}
-	if len(m.tables.items) != 1 || !strings.Contains(m.tables.items[0].label, "only_there") {
+	if names := tableNames(m); len(names) != 1 || !strings.Contains(names[0].label, "only_there") {
 		t.Errorf("tables on %s: %+v", other, m.tables.items)
 	}
 
@@ -397,7 +397,7 @@ func TestLiveNavigatorMySQL(t *testing.T) {
 	if it := m.conns.items[m.conns.cur]; it.label != "live" || it.mark != "●" {
 		t.Errorf("connections row marked: %+v", it)
 	}
-	if len(m.tables.items) != 1 || !strings.Contains(m.tables.items[0].label, "only_there") {
+	if names := tableNames(m); len(names) != 1 || !strings.Contains(names[0].label, "only_there") {
 		t.Errorf("tables on %s: %+v", other, m.tables.items)
 	}
 	findText(t, frame(m), "⛁ "+other)

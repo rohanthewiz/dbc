@@ -73,7 +73,7 @@
     tableFilter: $("table-filter"), tableSchema: $("table-schema"), schemaList: $("schema-list"),
     dbFilter: $("db-filter"), tableDb: $("table-db"), dbList: $("db-list"),
     findFilter: $("find-filter"), tableFind: $("table-find"), findLabel: $("find-label"),
-    modeTables: $("mode-tables"), modeRoutines: $("mode-routines"),
+
     active: $("active-conn"), stateful: $("stateful"), busy: $("busy"),
     run: $("run"), runAll: $("run-all"), stop: $("stop"), history: $("history-btn"), scripts: $("scripts-btn"),
     check: $("check-btn"), save: $("save-btn"), rsets: $("rsets"),
@@ -297,8 +297,21 @@
   // never mistaken for the whole; it counts the schema's tables, not the
   // find's matches — the find box's own accent border marks that
   // narrowing, as the schema box's marks a pick.
+  //
+  // The list is three headed, foldable sections — Tables, Views, Routines
+  // — so all three are in sight at once (the TUI's, tui/sections.go):
+  //
+  //	▾ Tables · 34        li.shead[data-section]: a click or Enter folds it
+  //	  orders             li[data-name]: a table, as before
+  //	▸ Views · 3          folded as a tab starts
+  //	▸ Routines           folded as a tab starts: nothing is read until it opens
+  //
+  // Tables and views both come in the "conn" event's list, so their folds
+  // read nothing (POST /section remembers them for the tab); Routines'
+  // fold is the routines switch, and opening it reads them (routines
+  // below). The find box narrows every open section; a section's header
+  // stays while it has a match.
   function drawTables() {
-    if (side.showRoutines) { drawRoutines(); return; } // the list's other mode
     const pick = schemaPick();
     const inPick = side.navigable || pick === null ? allTables : allTables.filter((t) => t.schema === pick);
     const total = schemaTotal();
@@ -317,137 +330,154 @@
       els.tables.append(el("li", { class: "none", title: why }, why));
       return;
     }
-    if (!inPick.length) {
-      els.tables.append(el("li", "none", "no tables"));
+    if (!state.active) return; // no connection: nothing to list, nor headers for it
+
+    const tables = inPick.filter((t) => !t.view), views = inPick.filter((t) => t.view);
+    let matched = 0;
+    // section draws one section: its header, then — open — its rows (or a
+    // note), narrowed by the find. With a find, a section without a match
+    // is left out, header and all, so a find that matches nothing says so.
+    const section = (key, title, count, open, rows, rowOf, empty) => {
+      const shown = open ? findTables(rows, find) : [];
+      if (find !== "" && !shown.length) return;
+      const head = el("li", { class: "shead", tabindex: "-1", "data-section": key, "aria-expanded": String(open),
+        title: (open ? "Fold " : "Show ") + title.toLowerCase() + " — click or Enter" });
+      head.append(el("span", "caret", open ? "▾" : "▸"), " " + title);
+      if (count !== "") head.append(el("span", "scount", " · " + count));
+      els.tables.append(head);
+      if (!open) return;
+      if (!rows) { els.tables.append(el("li", "none", "loading " + title.toLowerCase() + "…")); return; }
+      if (!rows.length) { els.tables.append(el("li", "none", empty)); return; }
+      for (const r of shown) els.tables.append(rowOf(r));
+      matched += shown.length;
+    };
+    section("tables", "Tables", String(tables.length), !!side.tablesOpen, tables, (t) => tableRow(t, pick), "no tables");
+    section("views", "Views", String(views.length), !!side.viewsOpen, views, (t) => tableRow(t, pick), "no views");
+    if (side.hasRoutines) {
+      const list = side.routines;
+      section("routines", "Routines", list ? String(list.length) : "", routinesOn(), list, routineRow, "no routines");
+    }
+    if (find !== "" && !matched) {
+      els.tables.append(el("li", "none", "no name matches “" + find + "” — Esc clears"));
       return;
     }
-    const shown = findTables(inPick, find);
-    if (!shown.length) {
-      els.tables.append(el("li", "none", "no table matches “" + find + "” — Esc clears"));
-      return;
-    }
-    for (const t of shown) {
-      // tabindex -1: focusable by script and click, but not a Tab stop —
-      // the list has one, its selected row (selectRow), set below
-      const li = el("li", { class: t.view ? "view" : "", tabindex: "-1", "data-name": t.qname });
-      // the schema prefix is muted, and left off altogether while the
-      // list is narrowed to one schema: every row would repeat it.
-      // data-name keeps the qualified name either way — it is what
-      // previews, inserts and copies use
-      const dot = t.qname.lastIndexOf(".");
-      if (dot > 0 && pick === null) li.append(el("span", "schema", t.qname.slice(0, dot + 1)), t.qname.slice(dot + 1));
-      else if (dot > 0) li.append(t.qname.slice(dot + 1));
-      else li.append(t.qname);
-      setRowCount(li, t);
-      els.tables.append(li);
-    }
-    // The first row is the list's Tab stop until another is selected. While
+    // The first name is the list's Tab stop until another is selected. While
     // a find is typed, or the keyboard is in its box (a schema just picked
     // with Tab, its tables landing now), it is also selected: the best
     // match, which Enter in the box previews.
-    const first = els.tables.firstElementChild;
+    const first = els.tables.querySelector("li[data-name]") || els.tables.querySelector("li.shead");
+    if (!first) return;
     first.tabIndex = 0;
     if (find !== "" || document.activeElement === els.tableFind) selectRow(first, false);
   }
 
-  // ── the routines list ──────────────────────────────────────────────────
-  // The heading's Tables · Routines words switch the list between the
-  // schema's tables and its stored functions and procedures — the TUI's f
-  // (tui/routines.go). The switch is the tab's on the server
-  // (Workspace.ShowRoutines), as the rows box is, so it follows whichever
-  // tab is on screen (side.showRoutines), and while it is on every
-  // connect, refresh and schema pick reads the routines again:
+  // tableRow is a table's or a view's row. tabindex -1: focusable by
+  // script and click, but not a Tab stop — the list has one, its selected
+  // row (selectRow). The schema prefix is muted, and left off altogether
+  // while the list is narrowed to one schema: every row would repeat it.
+  // data-name keeps the qualified name either way — it is what previews,
+  // inserts and copies use.
+  function tableRow(t, pick) {
+    const li = el("li", { class: t.view ? "view" : "", tabindex: "-1", "data-name": t.qname });
+    const dot = t.qname.lastIndexOf(".");
+    if (dot > 0 && pick === null) li.append(el("span", "schema", t.qname.slice(0, dot + 1)), t.qname.slice(dot + 1));
+    else if (dot > 0) li.append(t.qname.slice(dot + 1));
+    else li.append(t.qname);
+    if (t.view) li.title = t.qname + " — double-click previews its rows, D shows its DDL, right-click for more";
+    else setRowCount(li, t);
+    return li;
+  }
+
+  // setSection folds or unfolds a section, optimistic as the rows box is:
+  // drawn at once, told to the server after. Routines go through
+  // setRoutines, whose opening is a read.
+  function setSection(key, open) {
+    if (key === "routines") { setRoutines(open); return; }
+    const t = state.tab;
+    if (!t || !t.ws) return;
+    const field = key === "tables" ? "tablesOpen" : "viewsOpen";
+    if (!!side[field] === open) return;
+    side[field] = open;
+    drawTables();
+    reselectSection(key);
+    api("POST", dbc.wsPath("/section"), { section: key, open }).catch((e) => {
+      log("err", e.message);
+      side[field] = !open;
+      if (t === state.tab) drawTables();
+    });
+  }
+
+  // reselectSection puts the selection back on a section's header after a
+  // redraw, so a second Enter folds it back.
+  function reselectSection(key) {
+    const h = els.tables.querySelector('li.shead[data-section="' + key + '"]');
+    if (h) selectRow(h, document.activeElement === els.tables || els.tables.contains(document.activeElement));
+  }
+
+  // sectionOpen reports whether a section is unfolded.
+  const sectionOpen = (key) => key === "routines" ? routinesOn() : key === "tables" ? !!side.tablesOpen : !!side.viewsOpen;
+  const toggleSection = (key) => setSection(key, !sectionOpen(key));
+
+  // ── the routines section ───────────────────────────────────────────────
+  // The list's last section: the schema's stored functions and procedures
+  // — the TUI's f (tui/routines.go). Its fold is the tab's routines switch
+  // on the server (Workspace.ShowRoutines), as the rows box is, so it
+  // follows whichever tab is on screen (side.showRoutines). Folded, as a
+  // tab starts, nothing is read; while it is open every connect, refresh
+  // and schema pick reads the routines again:
   //
-  //	click Routines ─► POST /routines {on} ─► … ─► "routines" (the list)
+  //	open Routines ─► POST /routines {on} ─► … ─► "routines" (the list)
   //	"conn" (a connect, a pick) ─► routines null: "loading…" ─► "routines"
   //	Enter · double-click a routine ─► POST /ddl ─► "ddl" ─► the viewer
   //
-  // The rows are #tables's own, so the find box, the arrows and the
-  // selection serve both modes unchanged; a routine's row carries its
-  // index into side.routines (data-ri) beside the name (data-name), and
-  // the handful of table-only keys (c, e) say so on one.
+  // A routine's row carries its index into side.routines (data-ri) beside
+  // the name (data-name), and the handful of table-only keys (c, e) say so
+  // on one.
   const routinesOn = () => !!side.showRoutines;
 
-  // drawModes lights the heading word of the list shown, offers Routines
-  // only where the driver stores any, and puts the find box and the rows
-  // box in step: counts are a table's, so the box goes with the routines.
+  // drawModes words the find box for the three sections it searches.
   function drawModes() {
-    const on = routinesOn();
-    els.modeRoutines.hidden = !side.hasRoutines && !on;
-    els.modeTables.classList.toggle("on", !on);
-    els.modeRoutines.classList.toggle("on", on);
-    els.modeTables.setAttribute("aria-pressed", String(!on));
-    els.modeRoutines.setAttribute("aria-pressed", String(on));
-    els.rowCountsBox.hidden = on;
-    els.findLabel.textContent = on ? "routine" : "table";
-    els.tableFind.placeholder = on ? "type to find a routine" : "type to find a table";
-    els.tableFind.setAttribute("aria-label", on ? "Find a routine" : "Find a table");
+    els.findLabel.textContent = "name";
+    els.tableFind.placeholder = "type to find a table, view or routine";
+    els.tableFind.setAttribute("aria-label", "Find a table, view or routine");
   }
 
-  // setRoutines switches the list. Optimistic, as the rows box is: the
-  // list says "loading…" at once, and the "routines" event — sent on every
-  // outcome, a failed read included (web/routines.go) — fills it in.
+  // setRoutines folds or unfolds the Routines section. Optimistic, as the
+  // rows box is: opened, the section says "loading…" at once, and the
+  // "routines" event — sent on every outcome, a failed read included
+  // (web/routines.go) — fills it in.
   function setRoutines(on) {
     const t = state.tab;
     if (!t || !t.ws || routinesOn() === on) return;
     side.showRoutines = on;
     side.routines = null;
-    els.tableFind.value = "";
-    drawModes();
     drawTables();
-    els.tables.scrollTop = 0;
+    reselectSection("routines");
     api("POST", dbc.wsPath("/routines"), { on }).catch((e) => {
       log("err", e.message);
       side.showRoutines = !on;
-      if (t === state.tab) { drawModes(); drawTables(); }
+      if (t === state.tab) drawTables();
     });
   }
-  els.modeTables.addEventListener("click", () => setRoutines(false));
-  els.modeRoutines.addEventListener("click", () => setRoutines(true));
 
   // KIND_SHORT is a routine's kind as its row shows it: short, since the
   // sidebar is narrow — the TUI's words (tui/routines.go routineKind).
   const KIND_SHORT = { function: "fn", procedure: "proc", aggregate: "agg", window: "window", trigger: "trigger" };
 
-  // drawRoutines is drawTables for the routines: side.routines narrowed by
-  // the find box (the same matcher: name first, schema.name with a dot).
-  // A null list is one still loading. The schema prefix is muted, and left
-  // off while one schema is listed, as a table's is.
-  function drawRoutines() {
-    const list = side.routines;
-    const find = els.tableFind.value.trim();
-    els.tables.replaceChildren();
-    els.findFilter.classList.toggle("on", find !== "");
-    els.tableCount.textContent = list && list.length ? "· " + list.length : "";
-    if (loadingSchema || !list) {
-      els.tables.append(el("li", "none", "loading routines…"));
-      return;
-    }
-    if (!list.length) {
-      els.tables.append(el("li", "none", "no routines"));
-      return;
-    }
-    const index = new Map(list.map((r, i) => [r, i]));
-    const shown = findTables(list, find);
-    if (!shown.length) {
-      els.tables.append(el("li", "none", "no routine matches “" + find + "” — Esc clears"));
-      return;
-    }
+  // routineRow is a routine's row. The schema prefix is muted, and left
+  // off while one schema is listed, as a table's is; an overload shows its
+  // arguments, which tell it from the others of its name.
+  function routineRow(r) {
+    const li = el("li", { class: "routine", tabindex: "-1", "data-name": r.qname, "data-ri": String(side.routines.indexOf(r)) });
     const one = side.navigable && schemaPick() !== null;
-    for (const r of shown) {
-      const li = el("li", { tabindex: "-1", "data-name": r.qname, "data-ri": String(index.get(r)) });
-      const dot = r.qname.lastIndexOf(".");
-      if (dot > 0 && !one) li.append(el("span", "schema", r.qname.slice(0, dot + 1)), r.qname.slice(dot + 1));
-      else if (dot > 0) li.append(r.qname.slice(dot + 1));
-      else li.append(r.qname);
-      if (r.overloaded) li.append(el("span", "rargs", "(" + r.args + ")"));
-      li.append(el("span", "rkind", " " + (KIND_SHORT[r.kind] || r.kind)));
-      li.title = signature(r) + "\nEnter or double-click shows its DDL, right-click for more";
-      els.tables.append(li);
-    }
-    const first = els.tables.firstElementChild;
-    first.tabIndex = 0;
-    if (find !== "" || document.activeElement === els.tableFind) selectRow(first, false);
+    const dot = r.qname.lastIndexOf(".");
+    if (dot > 0 && !one) li.append(el("span", "schema", r.qname.slice(0, dot + 1)), r.qname.slice(dot + 1));
+    else if (dot > 0) li.append(r.qname.slice(dot + 1));
+    else li.append(r.qname);
+    if (r.overloaded) li.append(el("span", "rargs", "(" + r.args + ")"));
+    li.append(el("span", "rkind", " " + (KIND_SHORT[r.kind] || r.kind)));
+    li.title = signature(r) + "\nEnter or double-click shows its DDL, right-click for more";
+    return li;
   }
 
   // signature is a routine as its tooltip and the viewer's heading show
@@ -466,14 +496,16 @@
     const key = (r) => r.qname + "(" + r.args + ")" + (r.id || "");
     const sel = els.tables.querySelector("li.sel[data-ri]");
     const was = sel && routineOf(sel) ? key(routineOf(sel)) : null;
+    // a header selected — the Routines one, just clicked open — stays so
+    const head = els.tables.querySelector("li.sel.shead");
     const changed = routinesOn() !== !!d.on;
     side.showRoutines = !!d.on;
     side.routines = d.routines;
-    drawModes();
-    if (!changed && !routinesOn()) return; // the tables are up, and stay
+    if (!changed && !routinesOn()) return; // the section is folded, and stays
     const top = els.tables.scrollTop;
     drawTables();
     els.tables.scrollTop = top;
+    if (head) reselectSection(head.dataset.section);
     if (!was) return;
     for (const li of els.tables.querySelectorAll("li[data-ri]")) {
       const r = routineOf(li);
@@ -484,12 +516,27 @@
   // routineOf is the routine a row of the list stands for.
   const routineOf = (li) => (side.routines || [])[Number(li.dataset.ri)];
 
-  // openRow is a row's Enter and double-click: a table's rows previewed,
-  // or a routine's DDL read.
+  // openRow is a row's Enter and double-click: a table's or view's rows
+  // previewed, or a routine's DDL read.
   function openRow(li) {
-    if (!routinesOn()) { preview(li.dataset.name); return; }
+    if (li.dataset.ri === undefined) { preview(li.dataset.name); return; }
     const r = routineOf(li);
     if (r) showDDL(r);
+  }
+
+  // viewOf is the view a row of the list stands for; undefined on a
+  // table's or routine's row.
+  const viewOf = (li) => li.classList.contains("view") ? allTables.find((t) => t.view && t.qname === li.dataset.name) : undefined;
+
+  // showViewDDL asks for a view's definition; it arrives as a "ddl" event
+  // carrying view (onDDL), or a failure as a log line.
+  async function showViewDDL(v) {
+    setStatus("reading the DDL of " + v.qname + "…", "warn");
+    try {
+      await api("POST", dbc.wsPath("/viewddl"), { schema: v.schema, name: v.name });
+    } catch (e) {
+      setStatus(e.message, "err");
+    }
   }
 
   // showDDL asks for a routine's definition; it arrives as a "ddl" event
@@ -509,7 +556,9 @@
   // editor's text is the user's, so nothing there is replaced).
   function onDDL(d) {
     setStatus("ready on " + state.active);
-    const r = d.routine, ddl = d.ddl;
+    // a view's definition carries view; a routine's, routine
+    const r = d.view || d.routine, ddl = d.ddl;
+    const heading = d.view ? "view " + d.view.qname : signature(d.routine);
     const pre = el("pre", "ival", dbc.hl("sql", ddl, state.driver));
     const cp = el("button", { type: "button", class: "primary" }, "⧉ Copy");
     const ins = el("button", { type: "button", title: "Put the DDL in the editor at the caret" }, "↳ Insert into editor");
@@ -524,7 +573,7 @@
     ins.addEventListener("click", doInsert);
     dbc.modal.open({
       title: "DDL · " + r.qname, cls: "wide", focus: cp,
-      body: el("div", "inspect ddl", el("div", "ihead", signature(r)), pre),
+      body: el("div", "inspect ddl", el("div", "ihead", heading), pre),
       foot: el("div", "mfoot", cp, ins, el("span", "hint", "y copies · i inserts · Esc closes")),
       onKey: (e) => {
         if (e.ctrlKey || e.metaKey || e.altKey) return false;
@@ -545,7 +594,7 @@
       { label: "Show DDL", key: "Enter", act: () => showDDL(r) },
       { label: "Insert the name at the caret", act: () => dbc.editor.insert(r.qname) },
       { label: "Copy name", act: () => dbc.clip.copyText(r.qname, "the routine name") },
-      { label: "Show tables", act: () => setRoutines(false) },
+      { label: "Fold routines", act: () => setRoutines(false) },
     ]);
   }
 
@@ -1022,7 +1071,8 @@
       const c = counted.get(t.qname);
       if (c) { t.rows = c.rows; t.rowsHint = c.rowsHint; }
     }
-    const byName = new Map([...els.tables.querySelectorAll("li[data-name]")].map((li) => [li.dataset.name, li]));
+    // tables' rows only: a view is never counted, and a routine may share a table's name
+    const byName = new Map([...els.tables.querySelectorAll("li[data-name]:not([data-ri]):not(.view)")].map((li) => [li.dataset.name, li]));
     for (const t of tables) {
       const li = byName.get(t.qname);
       if (li) setRowCount(li, t);
@@ -1048,6 +1098,9 @@
   }
 
   els.tables.addEventListener("click", (e) => {
+    // a section's header folds on one click, as a disclosure triangle does
+    const head = e.target.closest("li.shead");
+    if (head) { selectRow(head, true); toggleSection(head.dataset.section); return; }
     const li = e.target.closest("li[data-name]");
     if (li) pickTable(li);
   });
@@ -1055,15 +1108,40 @@
     const li = e.target.closest("li[data-name]");
     if (li) openRow(li);
   });
+  // rowStep is the row after (d 1) or before (d -1) li that the arrows
+  // stop on: a name or a section's header, never a note ("no views").
+  function rowStep(li, d) {
+    let n = d > 0 ? li.nextElementSibling : li.previousElementSibling;
+    while (n && n.classList.contains("none")) n = d > 0 ? n.nextElementSibling : n.previousElementSibling;
+    return n;
+  }
+
   els.tables.addEventListener("keydown", (e) => {
+    const head = e.target.closest("li.shead");
+    if (head) {
+      // a header's keys: Enter or Space folds it, the arrows move on
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSection(head.dataset.section); return; }
+      const next = e.key === "ArrowDown" ? rowStep(head, 1) : e.key === "ArrowUp" ? rowStep(head, -1) : null;
+      if (next) { e.preventDefault(); pickTable(next); }
+      return;
+    }
     const li = e.target.closest("li[data-name]");
     if (!li) return;
     let next = null;
     if (e.key === "Enter") { e.preventDefault(); openRow(li); return; }
     // plain c only: a chord with it (⌘C copying a selection) is not ours
-    if ((e.key === "c" || e.key === "e") && !e.ctrlKey && !e.metaKey && !e.altKey && routinesOn()) {
+    if ((e.key === "c" || e.key === "e") && !e.ctrlKey && !e.metaKey && !e.altKey && li.dataset.ri !== undefined) {
       e.preventDefault();
-      log("warn", (e.key === "c" ? "Show columns" : "A diagram") + " is for tables — click Tables above the list");
+      log("warn", (e.key === "c" ? "Show columns" : "A diagram") + " is for tables and views, not routines");
+      return;
+    }
+    // D: a view's definition, as its menu's "Show DDL"
+    if (e.key === "D" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      const v = viewOf(li);
+      if (v) showViewDDL(v);
+      else if (li.dataset.ri !== undefined) showDDL(routineOf(li));
+      else log("warn", "Show DDL is for a view or a routine");
       return;
     }
     if (e.key === "c" && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -1072,8 +1150,8 @@
     if (e.key === "e" && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault(); dbc.erd.open(li.dataset.name); return;
     }
-    if (e.key === "ArrowDown") next = li.nextElementSibling;
-    else if (e.key === "ArrowUp") next = li.previousElementSibling;
+    if (e.key === "ArrowDown") next = rowStep(li, 1);
+    else if (e.key === "ArrowUp") next = rowStep(li, -1);
     if (next) { e.preventDefault(); pickTable(next); return; }
     // Typing on a row finds a table: / goes to the find box, keeping its
     // find, and any other character a table name is made of starts a new
@@ -1093,22 +1171,37 @@
     }
   });
   document.getElementById("erd-all").addEventListener("click", () => dbc.erd.open(""));
+  // foldItems are the menus' rows that fold or show each section, worded
+  // as what picking one does.
+  function foldItems() {
+    const item = (key, word) => ({ label: (sectionOpen(key) ? "Fold " : "Show ") + word, act: () => toggleSection(key) });
+    return [item("tables", "tables"), item("views", "views"), ...(side.hasRoutines ? [item("routines", "routines")] : [])];
+  }
+
   els.tables.addEventListener("contextmenu", (e) => {
+    const head = e.target.closest("li.shead");
+    if (head) {
+      e.preventDefault();
+      selectRow(head, true);
+      dbc.menu.open(e.clientX, e.clientY, foldItems());
+      return;
+    }
     const li = e.target.closest("li[data-name]");
     if (!li) return;
     e.preventDefault();
     pickTable(li);
-    if (routinesOn()) { routineMenu(e.clientX, e.clientY, li); return; }
-    const name = li.dataset.name;
+    if (li.dataset.ri !== undefined) { routineMenu(e.clientX, e.clientY, li); return; }
+    const name = li.dataset.name, view = viewOf(li);
     dbc.menu.open(e.clientX, e.clientY, [
       { head: name },
+      ...(view ? [{ label: "Show DDL", key: "D", act: () => showViewDDL(view) }] : []),
       { label: "Preview rows", key: "Enter", act: () => preview(name) },
       { label: "Show columns", key: "c", act: () => columns(name) },
       { label: "Diagram around it (ERD)", key: "e", act: () => dbc.erd.open(name) },
       { label: "Design a query from it", key: "Alt+D", act: () => newDesign(name) },
       { label: "Insert the name at the caret", act: () => dbc.editor.insert(name) },
-      { label: "Copy name", act: () => dbc.clip.copyText(name, "the table name") },
-      ...(side.hasRoutines ? [{ label: "Show routines", act: () => setRoutines(true) }] : []),
+      { label: "Copy name", act: () => dbc.clip.copyText(name, view ? "the view name" : "the table name") },
+      ...foldItems(),
     ]);
   });
 

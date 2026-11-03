@@ -60,6 +60,7 @@ func TestWeb(t *testing.T) {
 		{"history scoped to the database", historyScope},
 		{"disconnect and reconnect", disconnect},
 		{"refresh a connection", refreshConn},
+		{"sidebar sections: tables, views, routines", sidebarSections},
 		{"connection form fields and DSN", connForm},
 		{"postgres in docker dialog", pgDockerDialog},
 		{"dump database dialog", dumpDialog},
@@ -345,7 +346,7 @@ func findTable(t *testing.T, _ *env, p *rod.Page) {
 	  document.activeElement === document.getElementById("table-find") &&
 	  document.getElementById("table-find").value === "z" &&
 	  !document.querySelector("#tables li[data-name]") &&
-	  document.querySelector("#tables li.none").textContent.startsWith("no table matches") &&
+	  document.querySelector("#tables li.none").textContent.startsWith("no name matches") &&
 	  document.getElementById("find-filter").classList.contains("on")`)
 	// Esc drops the find: every table back, the first selected
 	p.Keyboard.MustType(input.Escape)
@@ -1051,6 +1052,58 @@ func refreshConn(t *testing.T, e *env, p *rod.Page) {
 	refreshed("the dropped table gone", false)
 }
 
+// sidebarSections: the list's three sections on SQLite, which has no
+// Routines one: Tables open, Views folded as a tab starts — a view made by
+// another client is counted in the Views header after a Refresh, but not
+// listed until the header is clicked; D on it opens its definition in the
+// DDL viewer; a click on the Tables header folds the tables; the find
+// keeps a header only while its section has a match.
+func sidebarSections(t *testing.T, e *env, p *rod.Page) {
+	t.Cleanup(func() { e.dbc(t, "lite", "DROP VIEW IF EXISTS e2e_old_cats") })
+	e.dbc(t, "lite", "CREATE VIEW e2e_old_cats AS SELECT * FROM cats WHERE 1 = 1")
+	eval(t, p, `() => { document.getElementById("status").textContent = ""; }`)
+	rightClick(t, p, `#conns .conn-item[data-conn="lite"]`)
+	menuPick(t, p, "Refresh")
+	waitFor(t, p, "the view counted in a folded Views header, not listed", `() => {
+	  const v = document.querySelector('#tables li.shead[data-section="views"]');
+	  return document.getElementById("status").textContent.includes("refreshed") &&
+	    !!v && v.getAttribute("aria-expanded") === "false" && v.textContent.includes("· 1") &&
+	    !document.querySelector('#tables li[data-name="e2e_old_cats"]') &&
+	    !!document.querySelector('#tables li[data-name="cats"]') &&
+	    !document.querySelector('#tables li.shead[data-section="routines"]');
+	}`)
+
+	clickAt(t, p, `#tables li.shead[data-section="views"]`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "the view listed", `() => !!document.querySelector('#tables li.view[data-name="e2e_old_cats"]')`)
+	selectTable(t, p, "e2e_old_cats")
+	eval(t, p, `() => document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "D", bubbles: true }))`)
+	waitFor(t, p, "the view's DDL viewer", `() => {
+	  const m = document.querySelector(".modal .inspect.ddl pre");
+	  return !!m && m.textContent === "CREATE VIEW e2e_old_cats AS SELECT * FROM cats WHERE 1 = 1;" &&
+	    document.querySelector(".modal .ihead").textContent === "view main.e2e_old_cats";
+	}`)
+	p.Keyboard.MustType(input.Escape)
+	waitFor(t, p, "the viewer closed", `() => !dbc.modal.isOpen()`)
+
+	clickAt(t, p, `#tables li.shead[data-section="tables"]`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "the tables folded, the view still listed", `() =>
+	  !document.querySelector('#tables li[data-name="cats"]') &&
+	  !!document.querySelector('#tables li[data-name="e2e_old_cats"]')`)
+	clickAt(t, p, `#tables li.shead[data-section="tables"]`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "the tables back", `() => !!document.querySelector('#tables li[data-name="cats"]')`)
+
+	box := p.MustElement("#table-find")
+	box.MustInput("old_c")
+	waitFor(t, p, "the find: only the Views header and its match", `() =>
+	  [...document.querySelectorAll("#tables li")].map((l) => l.dataset.section || l.dataset.name || "").join() === "views,e2e_old_cats"`)
+	p.Keyboard.MustType(input.Escape)
+	waitFor(t, p, "the find cleared", `() => !!document.querySelector('#tables li[data-name="cats"]')`)
+
+	// back as the steps after expect: Views folded
+	clickAt(t, p, `#tables li.shead[data-section="views"]`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "the views folded", `() => !document.querySelector('#tables li[data-name="e2e_old_cats"]')`)
+}
+
 // connForm: the Add a connection form shows the rows its driver and its
 // "Enter as" call for, and a connection given as fields tests, saves and
 // connects.
@@ -1246,22 +1299,24 @@ func dumpDialog(t *testing.T, e *env, p *rod.Page) {
 	waitFor(t, p, "the log's download line", `() => [...document.querySelectorAll("#log > div")].some((d) => /⤓ downloading pg-\d{8}-\d{4}\.dump/.test(d.textContent))`)
 }
 
-// pgRoutines: on Postgres the heading's Routines word lists the picked
-// schema's functions in place of its tables; Enter on one opens its DDL in
-// a viewer, whose i puts it in the editor; Tables brings the tables back.
-// On SQLite, which stores no routines, the word is not offered. Runs only
-// with DBC_LIVE_PG_DSN.
+// pgRoutines: on Postgres the sidebar's Routines section, folded as a tab
+// starts with nothing read, lists the picked schema's functions once its
+// header is clicked; Enter on one opens its DDL in a viewer, whose i puts
+// it in the editor; a second click on the header folds it. On SQLite,
+// which stores no routines, there is no Routines section. Runs only with
+// DBC_LIVE_PG_DSN.
 func pgRoutines(t *testing.T, e *env, p *rod.Page) {
 	if e.pgDSN == "" {
 		t.Skip("set DBC_LIVE_PG_DSN to check the routines list")
 	}
-	if hidden, _ := eval(t, p, `() => document.getElementById("mode-routines").hidden`).(bool); !hidden {
-		t.Fatal("Routines offered on SQLite")
+	if has, _ := eval(t, p, `() => !!document.querySelector('#tables li.shead[data-section="routines"]')`).(bool); has {
+		t.Fatal("a Routines section on SQLite")
 	}
 	clickAt(t, p, `#conns .conn-item[data-conn="pg"]`, proto.InputMouseButtonLeft)
-	waitFor(t, p, "connected to pg with its schema picker and the Routines word", `() => dbc.state.active === "pg" &&
+	waitFor(t, p, "connected to pg with its schema picker and a folded Routines section", `() => dbc.state.active === "pg" &&
 	  !document.querySelector("#conns .conn-item.connecting") &&
-	  !document.getElementById("table-filter").hidden && !document.getElementById("mode-routines").hidden`)
+	  !document.getElementById("table-filter").hidden &&
+	  document.querySelector('#tables li.shead[data-section="routines"]')?.getAttribute("aria-expanded") === "false"`)
 	box := p.MustElement("#table-schema")
 	box.MustClick()
 	waitFor(t, p, "the schema list", `() => !document.getElementById("schema-list").hidden`)
@@ -1271,15 +1326,15 @@ func pgRoutines(t *testing.T, e *env, p *rod.Page) {
 	  return rows.length >= 1 && rows[0].textContent.includes("e2e_b");
 	}`)
 	p.Keyboard.MustType(input.Enter)
-	waitFor(t, p, "e2e_b's tables", `() =>
-	  [...document.querySelectorAll("#tables li[data-name]")].map((l) => l.dataset.name).join() === "e2e_b.beta"`)
+	waitFor(t, p, "e2e_b's tables, no routine read", `() =>
+	  [...document.querySelectorAll("#tables li[data-name]")].map((l) => l.dataset.name).join() === "e2e_b.beta" &&
+	  !document.querySelector("#tables li[data-ri]")`)
 
-	clickAt(t, p, "#mode-routines", proto.InputMouseButtonLeft)
-	waitFor(t, p, "e2e_b's routines, the find box and heading following", `() =>
+	clickAt(t, p, `#tables li.shead[data-section="routines"]`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "e2e_b's routines under the tables", `() =>
 	  [...document.querySelectorAll("#tables li[data-ri]")].map((l) => l.dataset.name).join() === "e2e_b.twice" &&
-	  document.getElementById("mode-routines").classList.contains("on") &&
-	  document.getElementById("find-label").textContent === "routine" &&
-	  document.getElementById("row-counts-box").hidden`)
+	  !!document.querySelector('#tables li[data-name="e2e_b.beta"]') &&
+	  !document.getElementById("row-counts-box").hidden`)
 	selectTable(t, p, "e2e_b.twice")
 	p.Keyboard.MustType(input.Enter)
 	waitFor(t, p, "the DDL viewer", `() => {
@@ -1294,10 +1349,10 @@ func pgRoutines(t *testing.T, e *env, p *rod.Page) {
 	  !dbc.modal.isOpen() && dbc.editor.text().includes("SELECT n * 2")`)
 	eval(t, p, `(s) => dbc.editor.setText(s)`, was)
 
-	clickAt(t, p, "#mode-tables", proto.InputMouseButtonLeft)
-	waitFor(t, p, "e2e_b's tables again", `() =>
-	  [...document.querySelectorAll("#tables li[data-name]")].map((l) => l.dataset.name).join() === "e2e_b.beta" &&
-	  !document.getElementById("row-counts-box").hidden`)
+	clickAt(t, p, `#tables li.shead[data-section="routines"]`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "the routines folded", `() =>
+	  !document.querySelector("#tables li[data-ri]") &&
+	  !!document.querySelector('#tables li[data-name="e2e_b.beta"]')`)
 
 	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
 	waitConnected(t, p, "lite")

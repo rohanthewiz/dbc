@@ -242,7 +242,15 @@ func (m *Model) mouseClick(msg tea.MouseClickMsg) tea.Cmd {
 		default:
 			if i := m.tables.indexAt(x, y); i >= 0 {
 				m.tables.cur = i
+				// a section's header folds on one click, as a disclosure
+				// triangle does; a row previews (or shows its DDL) on two
+				if s, ok := m.currentSection(); ok && n == 1 {
+					return m.toggleSection(s)
+				}
 				if n == 2 {
+					if _, ok := m.currentSection(); ok {
+						return nil // the first click folded it already
+					}
 					return m.tablePicked()
 				}
 			}

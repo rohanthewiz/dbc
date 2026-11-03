@@ -604,6 +604,13 @@ type sideState struct {
 	ShowRoutines bool         `json:"showRoutines"`
 	HasRoutines  bool         `json:"hasRoutines,omitempty"`
 	Routines     []routineRef `json:"routines"`
+	// TablesOpen and ViewsOpen are the tab's folds of the list's other two
+	// sections (workspace/sections.go; ShowRoutines is the third's). They
+	// read nothing — tables and views are both in Tables — so they are
+	// only the page's memory, kept per tab on the server so a tab switch
+	// or a reload draws them as they were left.
+	TablesOpen bool `json:"tablesOpen"`
+	ViewsOpen  bool `json:"viewsOpen"`
 	// Console is the database the connection is on, as a set of SQL
 	// consoles: the page swaps the tab's console when it changes. nil with
 	// no connection (the tab keeps the console it had) or consoles off.
@@ -649,7 +656,8 @@ func (s *Server) sidebar(ws *workspace.Workspace) sideState {
 // rather than the default's that its Active still names.
 func sidebar(cfg *config.Config, ws *workspace.Workspace) sideState {
 	st := sideState{Tables: tables(ws), Schema: ws.CatalogSchema(), RowCounts: ws.RowCountsShown(),
-		ShowRoutines: ws.RoutinesShown(), Routines: routines(ws)}
+		ShowRoutines: ws.RoutinesShown(), Routines: routines(ws),
+		TablesOpen: ws.SectionOpen(workspace.SectionTables), ViewsOpen: ws.SectionOpen(workspace.SectionViews)}
 	active := ws.Active()
 	cc, ok := cfg.ConnByName(active)
 	if !ok || !ws.Connected() {
@@ -825,6 +833,16 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 			r := ev.Routine
 			t.send("ddl", ddlEvent{Conn: ev.Conn, DDL: ev.DDL, Routine: routineRef{Schema: r.Schema, Name: r.Name,
 				QName: r.QName(), Kind: string(r.Kind), Args: r.Args, Result: r.Result, ID: r.ID}})
+		}
+	case *workspace.ViewDDL:
+		t.notesOn(ev.Conn, ev.Notes)
+		if ev.Err == nil {
+			v := ev.View
+			qname := v.Name
+			if v.Schema != "" {
+				qname = v.Schema + "." + v.Name
+			}
+			t.send("ddl", ddlEvent{Conn: ev.Conn, DDL: ev.DDL, View: &viewRef{Schema: v.Schema, Name: v.Name, QName: qname}})
 		}
 	case *workspace.RowCounts:
 		if ev.Stale {

@@ -171,10 +171,6 @@ func (m *Model) drawTablesPane(s Surface) *caret {
 		empty = "no match"
 	case m.ws.Active() == "":
 		empty = "not connected"
-	case m.routinesShown() && m.ws.Routines() == nil:
-		empty = "loading routines…"
-	case m.routinesShown():
-		empty = "no routines"
 	case m.ws.Catalog() != nil:
 		empty = "no tables"
 	}

@@ -314,8 +314,8 @@ func TestDragSplitterResizes(t *testing.T) {
 func TestTablesSidebarPreview(t *testing.T) {
 	m := newTestModel(t)
 	frame(m)
-	x, y := m.lay.tables.X+3, m.lay.tables.Y+1
-	if !strings.Contains(frame(m).Line(y), "│ cats") {
+	x, y := m.lay.tables.X+3, m.lay.tables.Y+2 // under the Tables header
+	if !strings.Contains(frame(m).Line(y), "│  cats") { // indented under its header
 		t.Fatalf("tables list row = %q", frame(m).Line(y))
 	}
 	click(t, m, x, y)
@@ -333,7 +333,7 @@ func TestTablesSidebarPreview(t *testing.T) {
 func TestTablesSidebarShowColumns(t *testing.T) {
 	m := newTestModel(t)
 	frame(m)
-	click(t, m, m.lay.tables.X+3, m.lay.tables.Y+1) // selects cats, focuses the list
+	click(t, m, m.lay.tables.X+3, m.lay.tables.Y+2) // selects cats (under the header), focuses the list
 	before := m.editor.Text()
 	key(t, m, "c")
 	r := m.ws.LastResult()
@@ -357,8 +357,8 @@ func TestTablesSidebarShowColumns(t *testing.T) {
 // put it. # again takes them away.
 func TestTablesSidebarRowCounts(t *testing.T) {
 	m := newTestModel(t)
-	for _, it := range m.tables.items {
-		if it.sub != "" && it.sub != "view" {
+	for _, it := range tableNames(m) {
+		if it.sub != "" {
 			t.Fatalf("a count before # turned them on: %+v", it)
 		}
 	}
@@ -405,7 +405,7 @@ func TestTablesSidebarRowCounts(t *testing.T) {
 		}
 	}
 	drive(t, m, nil, job(m.ws.Connect(m.ws.Active()).Job))
-	if len(m.tables.items) != 3 || m.tables.items[0].sub != "0" {
+	if names := tableNames(m); len(names) != 3 || names[0].sub != "0" {
 		t.Fatalf("after the reconnect: %+v", m.tables.items)
 	}
 	m.tables.cur = 2
@@ -422,7 +422,7 @@ func TestTablesSidebarRowCounts(t *testing.T) {
 	// # again: off, and the numbers go at once
 	m.focus = focusTables
 	key(t, m, "#")
-	if m.ws.RowCountsShown() || m.tables.items[0].sub != "" {
+	if m.ws.RowCountsShown() || tableNames(m)[0].sub != "" {
 		t.Errorf("after the second #: shown %v, items %+v", m.ws.RowCountsShown(), m.tables.items)
 	}
 }

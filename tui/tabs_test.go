@@ -103,8 +103,8 @@ func TestTabBackgroundDDLRelistsAtOnce(t *testing.T) {
 	}
 
 	key(t, m, "alt+1")
-	if len(m.tables.items) == 0 || m.tables.items[0].data.(string) != "aaa_background" {
-		t.Fatalf("back on tab 1: first table %+v, want aaa_background", m.tables.items[0])
+	if names := tableNames(m); len(names) == 0 || names[0].data.(string) != "aaa_background" {
+		t.Fatalf("back on tab 1: first table %+v, want aaa_background", m.tables.items)
 	}
 }
 

@@ -262,18 +262,15 @@ func (p Workbench) sidebar(b *element.Builder) any {
 			// asked for (db/rowcount.go). app.js ticks it to the tab's
 			// state (sideState.RowCounts) whenever it draws a sidebar.
 			//
-			// The heading's first words switch the list below between
-			// the schema's tables and its stored functions and
-			// procedures (Workspace.ShowRoutines): the pickers above
-			// and the find box serve both, so one list with two modes
-			// rather than a second pane. Routines is shown only on a
-			// driver that stores them (app.js, from side.hasRoutines).
+			// The list below is the schema's catalog in three headed,
+			// foldable sections — Tables, Views, Routines (app.js
+			// drawTables) — so the heading names it all: the pickers
+			// above and the find box serve every section. Routines is a
+			// section only on a driver that stores them, and is read
+			// only once unfolded (Workspace.ShowRoutines).
 			b.H2Class("hrow").R(
 				b.SpanClass("smodes").R(
-					b.ButtonClass("smode on", "id", "mode-tables", "type", "button", "aria-pressed", "true",
-						"title", "List the schema's tables and views").T("Tables"),
-					b.ButtonClass("smode", "id", "mode-routines", "type", "button", "aria-pressed", "false", "hidden", "hidden",
-						"title", "List the schema's stored functions and procedures — Enter or a double-click shows one's DDL").T("Routines"),
+					b.SpanClass("smode on", "title", "The schema's tables, views and routines — click a section's ▾/▸ to fold or show it").T("Catalog"),
 					b.SpanClass("count", "id", "table-count").R(),
 				),
 				b.SpanClass("hbtns").R(
@@ -327,11 +324,11 @@ func (p Workbench) sidebar(b *element.Builder) any {
 			// the tab is on a connection (app.js drawFindBox).
 			b.DivClass("tfilter", "id", "find-filter", "hidden", "hidden").R(
 				b.DivClass("trow").R(
-					b.LabelClass("tlabel", "id", "find-label", "for", "table-find").T("table"),
+					b.LabelClass("tlabel", "id", "find-label", "for", "table-find").T("name"),
 					b.Input("id", "table-find", "type", "search",
-						"aria-label", "Find a table", "aria-controls", "tables",
-						"placeholder", "type to find a table",
-						"title", "Find a table: type part of its name — ↑↓ move, Enter previews its rows, Esc clears",
+						"aria-label", "Find a table, view or routine", "aria-controls", "tables",
+						"placeholder", "type to find a table, view or routine",
+						"title", "Find in the open sections: type part of a name — ↑↓ move, Enter previews its rows, Esc clears",
 						"spellcheck", "false", "autocomplete", "off").R(),
 				),
 			),

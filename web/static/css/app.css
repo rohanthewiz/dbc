@@ -219,7 +219,14 @@ body.row-dragging { cursor: row-resize; user-select: none; }
 #tables li.sel { background: var(--sel); box-shadow: inset 2px 0 var(--accent); outline: none; }
 #tables li .schema { color: var(--muted); }
 #tables li .rows { color: var(--muted); }
-#tables li.view::after { content: " (view)"; color: var(--muted); }
+/* a section's header (Tables, Views, Routines): the list's own voice, not a
+   name's monospace, with its ▾/▸ in the accent so it reads as a control. Its
+   rows are indented a step, so a section's names sit under its header */
+#tables li.shead { font-family: inherit; font-weight: 600; color: var(--muted); padding: 3px 8px 1px; user-select: none; }
+#tables li.shead .caret { color: var(--accent); display: inline-block; width: 1em; }
+#tables li.shead .scount { font-weight: 400; }
+#tables li[data-name] { padding-left: 24px; }
+#tables li.none { padding-left: 24px; }
 #tables li.none { color: var(--muted); cursor: default; font-family: inherit; }
 /* a routine's row: its kind muted after the name, and an overload's
    arguments, which tell it from the others of its name */

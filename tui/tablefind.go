@@ -48,18 +48,53 @@ type tableFind struct {
 
 // matches is the rows of all whose label holds the filter's text,
 // case-insensitively; all of them with no text.
+//
+// The sections' headers (sections.go) are not matched by their words: a
+// header stays while its section has a match below it, so each match is
+// still seen under the section it is in, and goes with a section that has
+// none — a find that matches nothing leaves an empty list, which says
+// "no match". A section's note ("no views") is not a match either. Only
+// the open sections' rows are searched: a folded one's are not listed.
 func (f *tableFind) matches() []listItem {
 	q := strings.ToLower(strings.TrimSpace(f.input.Text()))
 	if q == "" {
 		return f.all
 	}
 	out := make([]listItem, 0, len(f.all))
-	for _, it := range f.all {
-		if strings.Contains(strings.ToLower(it.label), q) {
+	var header *listItem // the section heading the rows now scanned, until its first match
+	for i, it := range f.all {
+		switch {
+		case isSectionHeader(it):
+			header = &f.all[i]
+		case it.head:
+			// a note between the rows: never a match
+		case strings.Contains(strings.ToLower(it.label), q):
+			if header != nil {
+				out = append(out, *header)
+				header = nil
+			}
 			out = append(out, it)
 		}
 	}
 	return out
+}
+
+// isSectionHeader reports whether a row is a section's header.
+func isSectionHeader(it listItem) bool {
+	_, ok := it.data.(sectionRow)
+	return ok
+}
+
+// countNames is how many rows of items name something — a table, view or
+// routine — leaving out the sections' headers and notes.
+func countNames(items []listItem) int {
+	n := 0
+	for _, it := range items {
+		if !it.head && !isSectionHeader(it) {
+			n++
+		}
+	}
+	return n
 }
 
 // active reports whether the filter line is up: being typed in, or holding
@@ -83,12 +118,13 @@ func (m *Model) setTableRows(items []listItem) {
 	m.tables.set(items)
 }
 
-// tableRowsTotal is the number of rows the pane would list unfiltered.
+// tableRowsTotal is the number of names the pane would list unfiltered:
+// the open sections' tables, views and routines, not their headers.
 func (m *Model) tableRowsTotal() int {
 	if m.tfind != nil {
-		return len(m.tfind.all)
+		return countNames(m.tfind.all)
 	}
-	return len(m.tables.items)
+	return countNames(m.tables.items)
 }
 
 // openTableFind is the Tables pane's /: into the filter line, made on the
@@ -107,6 +143,7 @@ func (m *Model) openTableFind() {
 func (m *Model) refilterTables() {
 	m.tables.cur, m.tables.top = 0, 0
 	m.tables.set(m.tfind.matches())
+	m.cursorToFirstName() // past the header the first match is under
 }
 
 // clearTableFind drops the filter: the whole list back, the cursor kept on
@@ -182,11 +219,8 @@ func (m *Model) drawTableFind(s Surface, y int) (Rect, *caret) {
 	st := m.st.raised
 	r.Fill(st)
 	r.Put(1, 0, "⌕", st.WithFg(m.st.accent.Fg))
-	// worded at draw time: f flips the list under an open line
-	m.tfind.input.placeholder = "find a table"
-	if m.routinesShown() {
-		m.tfind.input.placeholder = "find a routine"
-	}
+	// the open sections are searched: tables, views, routines alike
+	m.tfind.input.placeholder = "find by name"
 	cx, cy, ok := m.tfind.input.Draw(r.Sub(Rect{3, 0, max(r.W()-4, 1), 1}), m.st, st, [2]int{}, true)
 	if ok && m.findEditing() {
 		return r.Rect(), &caret{cx, cy}
@@ -194,12 +228,13 @@ func (m *Model) drawTableFind(s Surface, y int) (Rect, *caret) {
 	return r.Rect(), nil
 }
 
-// tablesTitleCount is the Tables pane title's count: "40", or "3 of 40"
-// while the filter narrows the list.
+// tablesTitleCount is the Tables pane title's count of the names listed
+// (headers left out): "40", or "3 of 40" while the filter narrows the
+// list.
 func (m *Model) tablesTitleCount() string {
-	n := len(m.tables.items)
+	n := countNames(m.tables.items)
 	if m.tfind.active() && m.tfind.input.Text() != "" {
-		return fmt.Sprintf("%d of %d", n, len(m.tfind.all))
+		return fmt.Sprintf("%d of %d", n, countNames(m.tfind.all))
 	}
 	return fmt.Sprint(n)
 }

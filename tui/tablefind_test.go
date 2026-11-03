@@ -7,10 +7,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// labels is the tables list's rows, by label.
+// labels is the tables list's names, by label: the sections' headers
+// left out.
 func labels(m *Model) []string {
-	out := make([]string, 0, len(m.tables.items))
-	for _, it := range m.tables.items {
+	out := make([]string, 0, len(tableNames(m)))
+	for _, it := range tableNames(m) {
 		out = append(out, it.label)
 	}
 	return out
@@ -32,7 +33,7 @@ func TestTablesFind(t *testing.T) {
 		}
 	}
 	drive(t, m, nil, job(m.ws.Connect(m.ws.Active()).Job))
-	if n := len(m.tables.items); n != 5 {
+	if n := len(tableNames(m)); n != 5 {
 		t.Fatalf("tables %v", labels(m))
 	}
 
@@ -41,7 +42,7 @@ func TestTablesFind(t *testing.T) {
 	if !m.findEditing() {
 		t.Fatal("/ did not open the filter line")
 	}
-	if c := frame(m); !strings.Contains(c.Text(), "⌕ find a table") {
+	if c := frame(m); !strings.Contains(c.Text(), "⌕ find by name") {
 		t.Errorf("no filter line with its placeholder:\n%s", c.Text())
 	}
 	// d and e are the pane's database picker and diagram keys; ? opens the
@@ -67,7 +68,7 @@ func TestTablesFind(t *testing.T) {
 		t.Fatalf("enter did not preview order_items: %+v", r)
 	}
 	frame(m)
-	if m.findEditing() || len(m.tables.items) != 3 {
+	if m.findEditing() || len(tableNames(m)) != 3 {
 		t.Fatalf("after the preview: editing %v, rows %v", m.findEditing(), labels(m))
 	}
 
@@ -86,7 +87,7 @@ func TestTablesFind(t *testing.T) {
 		t.Fatalf("/ again: editing %v, text %q", m.findEditing(), m.tfind.input.Text())
 	}
 	key(t, m, "esc")
-	if m.tfind != nil || len(m.tables.items) != 5 {
+	if m.tfind != nil || len(tableNames(m)) != 5 {
 		t.Fatalf("esc: filter %v, rows %v", m.tfind, labels(m))
 	}
 	if name, _ := m.currentTable(); name != "order_items" {
@@ -164,7 +165,7 @@ func TestTablesFindAcrossCatalogs(t *testing.T) {
 
 	// the same catalog re-read (a Refresh): filter and cursor stay
 	m.relistTables()
-	if m.tfind == nil || len(m.tables.items) != 2 {
+	if m.tfind == nil || len(tableNames(m)) != 2 {
 		t.Fatalf("relist dropped the filter: %v", labels(m))
 	}
 	if name, _ := m.currentTable(); name != "cats" {
@@ -176,7 +177,7 @@ func TestTablesFindAcrossCatalogs(t *testing.T) {
 	if m.tfind != nil {
 		t.Errorf("a new catalog kept the filter %q", m.tfind.input.Text())
 	}
-	if len(m.tables.items) != 2 || m.tableRowsTotal() != 2 {
+	if len(tableNames(m)) != 2 || m.tableRowsTotal() != 2 {
 		t.Errorf("rows %v", labels(m))
 	}
 }

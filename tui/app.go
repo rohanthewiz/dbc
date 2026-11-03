@@ -502,6 +502,8 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 		return m.rowCountsLanded(msg)
 	case *workspace.RoutinesLoaded:
 		return m.routinesLanded(msg)
+	case *workspace.ViewDDL:
+		return m.viewDDLLanded(msg)
 	case *workspace.RoutineDDL:
 		return m.ddlLanded(msg)
 	case *workspace.SessionReleased:
@@ -759,9 +761,10 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 			return m.tableFindKey(k)
 		}
 		// c ("Show columns"), e (diagram it), d (database), s (schema),
-		// # (row counts) and f (routines in place of tables) are the
-		// tables list's letter keys: the list's own keys are movement and
-		// Enter, so they shadow nothing
+		// # (row counts), D (a view's DDL) and t, v, f (fold the Tables,
+		// Views and Routines sections, sections.go) are the tables list's
+		// letter keys: the list's own keys are movement and Enter, so they
+		// shadow nothing
 		switch k.String() {
 		case "/":
 			m.openTableFind()
@@ -775,6 +778,12 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 			return m.toggleRowCounts()
 		case "f":
 			return m.toggleRoutines()
+		case "t":
+			return m.toggleSection(workspace.SectionTables)
+		case "v":
+			return m.toggleSection(workspace.SectionViews)
+		case "D":
+			return m.viewDDLPicked()
 		case "c":
 			return m.tableColumns()
 		case "e":

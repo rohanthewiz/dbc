@@ -3,6 +3,7 @@ package web
 import (
 	"github.com/rohanthewiz/rweb"
 
+	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/workspace"
 )
@@ -166,9 +167,81 @@ func (s *Server) handleRoutineDDL(ctx rweb.Context) error {
 	return ok(ctx, map[string]any{"loading": true})
 }
 
-// ddlEvent is a routine's definition, for the page's viewer.
+// ddlEvent is a routine's or a view's definition, for the page's viewer:
+// Routine is set for a routine's, View (and a zero Routine) for a view's.
 type ddlEvent struct {
 	Conn    string     `json:"conn"`
 	Routine routineRef `json:"routine"`
+	View    *viewRef   `json:"view,omitempty"`
 	DDL     string     `json:"ddl"`
+}
+
+// viewRef names a view whose definition a "ddl" event carries. QName is
+// schema.name, as the viewer's title shows it.
+type viewRef struct {
+	Schema string `json:"schema"`
+	Name   string `json:"name"`
+	QName  string `json:"qname"`
+}
+
+// sectionReq folds or unfolds one of the sidebar's sections.
+type sectionReq struct {
+	Section string `json:"section"` // tables, views or routines
+	Open    bool   `json:"open"`
+}
+
+// handleSection folds or unfolds a sidebar section (Workspace.OpenSection).
+// Tables and Views read nothing either way: the answer is all there is.
+// Routines are handleRoutines's switch, with its "routines" event.
+func (s *Server) handleSection(ctx rweb.Context) error {
+	t, err := s.hub.get(ctx.Request().PathParam("id"))
+	if err != nil {
+		return fail(ctx, err)
+	}
+	var req sectionReq
+	if err = decode(ctx, &req); err != nil {
+		return fail(ctx, err)
+	}
+	sec, okSec := workspace.ParseSection(req.Section)
+	if !okSec {
+		return fail(ctx, badRequest("unknown section %q — tables, views or routines", req.Section))
+	}
+	loading := false
+	if job := t.ws.OpenSection(sec, req.Open); job != nil {
+		loading = true
+		go func() { s.deliver(t, job()) }()
+	} else if sec == workspace.SectionRoutines {
+		t.send("routines", routinesEventOf(t))
+	}
+	return ok(ctx, map[string]any{"section": string(sec), "open": req.Open, "loading": loading})
+}
+
+// viewDDLReq names a view of the sidebar's list by schema and name.
+type viewDDLReq struct {
+	Schema string `json:"schema"`
+	Name   string `json:"name"`
+}
+
+// handleViewDDL reads a listed view's definition (Workspace.ViewDDL, which
+// checks the view is one the tab lists). It answers at once; the
+// statement arrives as a "ddl" event carrying View, a failure as a log
+// line.
+func (s *Server) handleViewDDL(ctx rweb.Context) error {
+	t, err := s.hub.get(ctx.Request().PathParam("id"))
+	if err != nil {
+		return fail(ctx, err)
+	}
+	var req viewDDLReq
+	if err = decode(ctx, &req); err != nil {
+		return fail(ctx, err)
+	}
+	st, err := t.ws.ViewDDL(db.TableRef{Schema: req.Schema, Name: req.Name, View: true})
+	if err != nil {
+		if rf, isRefusal := asRefusal(err); isRefusal {
+			t.notes([]workspace.Note{rf.Note})
+		}
+		return fail(ctx, err)
+	}
+	s.launch(t, st)
+	return ok(ctx, map[string]any{"loading": true})
 }

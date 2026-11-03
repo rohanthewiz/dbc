@@ -36,3 +36,34 @@ func TestRoutinesSwitchWithoutRoutines(t *testing.T) {
 		t.Errorf("off: %+v", r)
 	}
 }
+
+// The sidebar's sections: Tables open and Views folded as a tab starts,
+// each fold remembered for the tab (the state says so after a POST
+// /section), an unknown section refused; Routines through /section is the
+// routines switch, with its "routines" event. A view's DDL is asked for by
+// name, and a table named as one is refused in words, not read.
+func TestSidebarSections(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	st := decodeData[wsState](t, e.api("GET", "/api/v1/ws/"+id, "", 200))
+	if !st.TablesOpen || st.ViewsOpen || st.ShowRoutines {
+		t.Fatalf("as a tab starts: tables %v, views %v, routines %v", st.TablesOpen, st.ViewsOpen, st.ShowRoutines)
+	}
+
+	e.api("POST", "/api/v1/ws/"+id+"/section", `{"section":"views","open":true}`, 200)
+	e.api("POST", "/api/v1/ws/"+id+"/section", `{"section":"tables","open":false}`, 200)
+	st = decodeData[wsState](t, e.api("GET", "/api/v1/ws/"+id, "", 200))
+	if st.TablesOpen || !st.ViewsOpen {
+		t.Errorf("after the folds: tables %v, views %v", st.TablesOpen, st.ViewsOpen)
+	}
+	e.api("POST", "/api/v1/ws/"+id+"/section", `{"section":"indexes","open":true}`, 400)
+
+	e.api("POST", "/api/v1/ws/"+id+"/section", `{"section":"routines","open":true}`, 200)
+	ev, _ := s.await(t, "routines")
+	if r := decodeData[routinesEvent](t, testEnvelope{Data: ev.Data}); !r.On || r.Routines == nil {
+		t.Errorf("routines through /section: %+v", r)
+	}
+
+	e.api("POST", "/api/v1/ws/"+id+"/viewddl", `{"schema":"main","name":"cats"}`, 400)
+	e.api("POST", "/api/v1/ws/"+id+"/viewddl", `{"schema":"main","name":"nope"}`, 400)
+}

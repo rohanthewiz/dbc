@@ -10,33 +10,40 @@ import (
 	"github.com/rohanthewiz/dbc/workspace"
 )
 
-// The Tables pane's other list: the stored functions and procedures of the
-// schema it lists, and each one's DDL. f flips the pane between the two;
-// the database and schema rows above stay, and pick for both:
+// The Tables pane's Routines section: the stored functions and procedures
+// of the schema it lists, and each one's DDL. It is the last of the pane's
+// three sections (sections.go), folded as a tab starts; f, or Enter or a
+// click on its header, unfolds it — and only then are the routines read:
 //
-//	┌ Tables · 40 ──────────┐   f   ┌ Routines · 3 ─────────┐
-//	│ ◫ sales · 40        ▾ │  ───► │ ◫ sales · 40        ▾ │
-//	│ orders                │  ◄─── │ order_total        fn │
-//	│ …                     │       │ archive          proc │
+//	│ ▾ Tables          34 │   f   │ ▾ Tables          34 │
+//	│  orders              │  ───► │  orders              │
+//	│ ▸ Views            3 │  ◄─── │ ▸ Views            3 │
+//	│ ▸ Routines           │       │ ▾ Routines         2 │
+//	                               │  order_total      fn │
 //
-// The switch is the tab's workspace's (Workspace.ShowRoutines), as the row
-// counts' is, so each tab keeps its own, and while it is on every connect,
-// refresh and schema pick reads the routines again (a *RoutinesLoaded,
-// after the tables have drawn). Enter or a double-click on a routine reads
-// its definition (Workspace.RoutineDDL) into a viewer (ddlModal), from
-// which it can be copied or put in the editor.
+// The fold is the tab's workspace's routines switch
+// (Workspace.ShowRoutines), as the row counts' is, so each tab keeps its
+// own, and while it is open every connect, refresh and schema pick reads
+// the routines again (a *RoutinesLoaded, after the tables have drawn).
+// Enter or a double-click on a routine reads its definition
+// (Workspace.RoutineDDL) into a viewer (ddlModal), from which it can be
+// copied or put in the editor.
 //
-// The list is m.tables itself, its rows holding a model.Routine where a
+// The rows are m.tables's own, a routine's holding a model.Routine where a
 // table's hold its name: one pane, one cursor and one set of mouse paths,
-// with the handful of table-only actions (preview, columns, diagram)
-// refused in words on a routine rather than misread.
+// with the handful of table-only actions (columns, diagram) refused in
+// words on a routine rather than misread.
 
-// routinesShown reports whether the Tables pane lists routines.
+// routinesShown reports whether the Tables pane's Routines section is open.
 func (m *Model) routinesShown() bool { return m.ws.RoutinesShown() }
 
 // toggleRoutines is the Tables pane's f key (and its menu's "Show
-// routines" / "Show tables"). On, the routines are read as a Job and land
-// as a *workspace.RoutinesLoaded; until then the list says "loading…".
+// routines" / "Fold routines", and Enter on the section's header): it
+// unfolds or folds the Routines section. Unfolding reads them as a Job,
+// landing as a *workspace.RoutinesLoaded; until then the section says
+// "loading routines…". The cursor goes to the section's header either
+// way, so the routines are in sight below it and a second f or Enter
+// folds them back.
 func (m *Model) toggleRoutines() tea.Cmd {
 	cc, ok := m.cfg.ConnByName(m.ws.Active())
 	on := !m.routinesShown()
@@ -45,12 +52,12 @@ func (m *Model) toggleRoutines() tea.Cmd {
 		return nil
 	}
 	j := m.ws.ShowRoutines(on)
-	m.tables.cur, m.tables.top = 0, 0 // the other list: start at its top
 	m.fillTables()
+	m.cursorToKey(itemKey(listItem{data: sectionRow(workspace.SectionRoutines)}))
 	if on {
-		m.setStatus("routines — Enter shows one's DDL, f goes back to the tables")
+		m.setStatus("routines — Enter shows one's DDL, f folds them")
 	} else {
-		m.setStatus("tables")
+		m.setStatus("routines folded")
 	}
 	return m.tag(job(j))
 }
@@ -127,11 +134,6 @@ func routineItems(rs []model.Routine, manySchemas bool) []listItem {
 	return items
 }
 
-// fillRoutines is fillTables for the routines list.
-func (m *Model) fillRoutines() {
-	m.setTableRows(routineItems(m.ws.Routines(), len(m.ws.Schemas()) > 1))
-}
-
 // routinesLanded draws the routines a Routines job read, keeping the
 // cursor on the routine it was on (relistTables), since a relist after a
 // run's CREATE FUNCTION lands this way too.
@@ -147,12 +149,15 @@ func (m *Model) routinesLanded(ev *workspace.RoutinesLoaded) tea.Cmd {
 }
 
 // itemKey names a Tables pane row across a re-read, for relistTables: a
-// table by its name, a routine by its oid (Postgres) and signature, so an
-// overload keeps the cursor rather than its neighbour.
+// table or view by its name, a routine by its oid (Postgres) and
+// signature, so an overload keeps the cursor rather than its neighbour,
+// and a section's header by its section.
 func itemKey(it listItem) string {
 	switch d := it.data.(type) {
 	case string:
 		return d
+	case sectionRow:
+		return "\x00section " + string(d)
 	case model.Routine:
 		return "\x00routine " + d.ID + " " + d.QName() + "(" + d.Args + ")"
 	}
@@ -169,8 +174,8 @@ func (m *Model) currentRoutine() (model.Routine, bool) {
 	return r, ok
 }
 
-// currentTable is the table under the Tables pane's cursor: "" with none,
-// or with the routines listed.
+// currentTable is the table or view under the Tables pane's cursor: ""
+// with none, or on a routine or a section's header.
 func (m *Model) currentTable() (string, bool) {
 	it, ok := m.tables.current()
 	if !ok {
@@ -180,14 +185,13 @@ func (m *Model) currentTable() (string, bool) {
 	return name, ok
 }
 
-// tableOnly refuses a table's action (preview, columns, diagram) while
-// the pane lists routines, saying how to get the tables back. It reports
-// whether it did.
+// tableOnly refuses a table's action (columns, diagram) on a routine's
+// row, saying so rather than doing nothing. It reports whether it did.
 func (m *Model) tableOnly(what string) bool {
-	if !m.routinesShown() {
+	if _, ok := m.currentRoutine(); !ok {
 		return false
 	}
-	m.logf(logWarn, "%s is for tables — f lists them again", what)
+	m.logf(logWarn, "%s is for tables and views, not routines", what)
 	return true
 }
 
@@ -218,8 +222,8 @@ func (m *Model) ddlLanded(ev *workspace.RoutineDDL) tea.Cmd {
 	return nil
 }
 
-// openRoutineMenu is the Tables pane's context menu while it lists
-// routines. onRow says the click landed on one.
+// openRoutineMenu is the Tables pane's context menu on a routine's row.
+// onRow says the click landed on one.
 func (m *Model) openRoutineMenu(x, y int, onRow bool) {
 	r, ok := m.currentRoutine()
 	noRoutine := ""
@@ -238,8 +242,8 @@ func (m *Model) openRoutineMenu(x, y int, onRow bool) {
 			return nil
 		}},
 		{label: "Copy name", why: noRoutine, act: func(m *Model) tea.Cmd { return m.copyString(name, "the routine name") }},
-		{label: "Show tables", key: "f", act: func(m *Model) tea.Cmd { return m.toggleRoutines() }},
-		{label: "Find a routine…", key: "/", act: func(m *Model) tea.Cmd { m.openTableFind(); return nil }},
+		{label: "Fold routines", key: "f", act: func(m *Model) tea.Cmd { return m.toggleRoutines() }},
+		{label: "Find by name…", key: "/", act: func(m *Model) tea.Cmd { m.openTableFind(); return nil }},
 	}
 	m.openMenu(x, y, append(items, m.navMenuItems()...))
 }
@@ -248,7 +252,7 @@ func (m *Model) openRoutineMenu(x, y int, onRow bool) {
 // The DDL viewer
 // ---------------------------------------------------------------------------
 
-// ddlModal shows a routine's definition in full, colored as the editor
+// ddlModal shows a routine's or a view's definition in full, colored as the editor
 // colors SQL, with the two things one does with it: copy it, or put it in
 // the editor (at the caret, as the history's recall does — the editor's
 // contents are the user's, so nothing there is replaced).
@@ -260,7 +264,10 @@ func (m *Model) openRoutineMenu(x, y int, onRow bool) {
 // between lines and the colors with it.
 type ddlModal struct {
 	modalBase
-	routine  model.Routine
+	// qname names what is shown, in the title and the log's lines; head is
+	// the line above the text: a routine's signature, or "view <qname>"
+	qname    string
+	head     string
 	ddl      string // as the server rendered it: what is copied and inserted
 	shown    string // the same with tabs expanded, which the canvas would draw as dots
 	top      int
@@ -270,11 +277,30 @@ type ddlModal struct {
 	hoverBtn int // the button under the mouse: 0 copy, 1 insert, -1 none
 }
 
+// newDDLModal is the viewer for a routine: its heading the routine's
+// signature, "function total(o integer) → numeric".
 func newDDLModal(r model.Routine, ddl string) *ddlModal {
-	return &ddlModal{routine: r, ddl: ddl, shown: strings.ReplaceAll(ddl, "\t", "    "), hoverBtn: -1}
+	head := string(r.Kind)
+	if r.Args != "" || r.Kind != model.RoutineProcedure {
+		head += " " + r.Name + "(" + r.Args + ")"
+	}
+	if r.Result != "" {
+		head += " → " + r.Result
+	}
+	return &ddlModal{qname: r.QName(), head: head, ddl: ddl, shown: strings.ReplaceAll(ddl, "\t", "    "), hoverBtn: -1}
 }
 
-func (d *ddlModal) title() string { return "DDL · " + d.routine.QName() }
+// newViewDDLModal is the viewer for a view, the same one a routine's
+// definition opens in.
+func newViewDDLModal(v db.TableRef, ddl string) *ddlModal {
+	qname := v.Name
+	if v.Schema != "" {
+		qname = v.Schema + "." + v.Name
+	}
+	return &ddlModal{qname: qname, head: "view " + qname, ddl: ddl, shown: strings.ReplaceAll(ddl, "\t", "    "), hoverBtn: -1}
+}
+
+func (d *ddlModal) title() string { return "DDL · " + d.qname }
 
 // size fits the dialog to the definition, as the cell inspector does: up
 // to the widest line, within most of the screen, and scrolling past that.
@@ -312,14 +338,7 @@ func (d *ddlModal) lines(w int) []ddlLine {
 
 func (d *ddlModal) draw(m *Model, s Surface) *caret {
 	bg := m.st.panel
-	head := string(d.routine.Kind)
-	if d.routine.Args != "" || d.routine.Kind != model.RoutineProcedure {
-		head += " " + d.routine.Name + "(" + d.routine.Args + ")"
-	}
-	if d.routine.Result != "" {
-		head += " → " + d.routine.Result
-	}
-	s.Put(1, 0, truncate(head, s.W()-2), onBg(m.st.accent, bg).Bold())
+	s.Put(1, 0, truncate(d.head, s.W()-2), onBg(m.st.accent, bg).Bold())
 
 	body := s.Sub(Rect{1, 2, s.W() - 2, s.H() - 4})
 	body.Fill(m.st.chatCode)
@@ -347,7 +366,7 @@ func (d *ddlModal) draw(m *Model, s Surface) *caret {
 }
 
 func (d *ddlModal) copy(m *Model) tea.Cmd {
-	return m.copyString(d.ddl, "the DDL of "+d.routine.QName())
+	return m.copyString(d.ddl, "the DDL of "+d.qname)
 }
 
 // insert puts the definition in the editor at the caret and closes the
@@ -356,7 +375,7 @@ func (d *ddlModal) insert(m *Model) {
 	m.editor.Insert(d.ddl)
 	m.focus = focusEditor
 	m.drag.follow = true
-	m.logf(logOk, "inserted the DDL of %s", d.routine.QName())
+	m.logf(logOk, "inserted the DDL of %s", d.qname)
 }
 
 func (d *ddlModal) key(m *Model, k tea.KeyPressMsg) (tea.Cmd, bool) {
@@ -407,12 +426,3 @@ func (d *ddlModal) hover(m *Model, x, y int) {
 }
 
 func (d *ddlModal) wheel(m *Model, x, y, dy int) { d.top = max(d.top+dy, 0) }
-
-// routinesTitle is the Tables pane's title while it lists routines:
-// "Routines · 3", or "Routines" until they land.
-func (m *Model) routinesTitle() string {
-	if rs := m.ws.Routines(); rs != nil {
-		return "Routines · " + m.tablesTitleCount() // "3 of 12" while filtered
-	}
-	return "Routines"
-}

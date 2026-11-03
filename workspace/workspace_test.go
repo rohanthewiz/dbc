@@ -1719,3 +1719,46 @@ func TestTypedExplainPlanGoesToTheChat(t *testing.T) {
 		t.Errorf("shared: from %q, want the explained statement", ctx.PlanFrom)
 	}
 }
+
+// The sidebar's folds: Tables open, Views and Routines folded as a
+// workspace starts — and nothing read for the routines until theirs opens.
+// Opening Tables or Views makes no Job (they are the catalog's); a view's
+// DDL is read by name, and a table or a name not listed is refused.
+func TestSectionsAndViewDDL(t *testing.T) {
+	w := newTestWorkspace(t)
+	if !w.SectionOpen(SectionTables) || w.SectionOpen(SectionViews) || w.SectionOpen(SectionRoutines) {
+		t.Fatal("a workspace should start with Tables open and the rest folded")
+	}
+	if w.Routines() != nil {
+		t.Errorf("routines read before they were asked for: %+v", w.Routines())
+	}
+	if j := w.OpenSection(SectionViews, true); j != nil || !w.SectionOpen(SectionViews) {
+		t.Errorf("views: job %v, open %v", j != nil, w.SectionOpen(SectionViews))
+	}
+	if j := w.OpenSection(SectionTables, false); j != nil || w.SectionOpen(SectionTables) {
+		t.Errorf("tables: job %v, open %v", j != nil, w.SectionOpen(SectionTables))
+	}
+	if s, ok := ParseSection(" Routines "); !ok || s != SectionRoutines {
+		t.Errorf("ParseSection: %q %v", s, ok)
+	}
+	if _, ok := ParseSection("indexes"); ok {
+		t.Error("ParseSection took an unknown word")
+	}
+
+	run(t, w, "CREATE VIEW old_cats AS SELECT * FROM cats WHERE age > 5")
+	if ev := w.Connect(w.Active()).Job().(*Connected); ev.Err != nil {
+		t.Fatal(ev.Err)
+	}
+	st, err := w.ViewDDL(db.TableRef{Schema: "main", Name: "old_cats", View: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := st.Job().(*ViewDDL)
+	if ev.Err != nil || ev.DDL != "CREATE VIEW old_cats AS SELECT * FROM cats WHERE age > 5;" {
+		t.Errorf("view ddl %q, %v", ev.DDL, ev.Err)
+	}
+	_, err = w.ViewDDL(db.TableRef{Schema: "main", Name: "cats"})
+	refusal(t, err, Invalid)
+	_, err = w.ViewDDL(db.TableRef{Schema: "main", Name: "nope"})
+	refusal(t, err, Invalid)
+}

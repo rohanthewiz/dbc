@@ -19,7 +19,7 @@ func TestTablesSidebarDiagram(t *testing.T) {
 	t.Cleanup(func() { erdDir = prev })
 
 	frame(m)
-	click(t, m, m.lay.tables.X+3, m.lay.tables.Y+1) // selects cats, focuses the list
+	click(t, m, m.lay.tables.X+3, m.lay.tables.Y+2) // selects cats (under the header), focuses the list
 	before := m.editor.Text()
 	key(t, m, "e")
 	if len(openLog) != 1 || !strings.HasPrefix(openLog[0], "file://"+dir) || !strings.HasSuffix(openLog[0], ".png") {

@@ -6,7 +6,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/rohanthewiz/dbc/config"
-	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/workspace"
 )
 
@@ -76,6 +75,20 @@ func (m *Model) refreshTables() {
 		}
 	}
 	m.fillTables()
+	m.cursorToFirstName()
+}
+
+// cursorToFirstName puts the tables cursor on the list's first name — a
+// table, view or routine — rather than the Tables header above it, so
+// Enter on a fresh or just-narrowed list takes its first table, as it did
+// before the sections. A list of headers alone leaves it where it is.
+func (m *Model) cursorToFirstName() {
+	for i, it := range m.tables.items {
+		if !it.head && !isSectionHeader(it) {
+			m.tables.cur = i
+			return
+		}
+	}
 }
 
 // relistTables rebuilds the tables list from a re-read of the same
@@ -89,6 +102,11 @@ func (m *Model) relistTables() {
 		was = itemKey(it) // a table's name, or a routine's signature (routines.go)
 	}
 	m.fillTables()
+	if was == "" {
+		// nothing was under the cursor — the list was empty, as before the
+		// first connect lands — so start on the first table, not a header
+		m.cursorToFirstName()
+	}
 	for i, it := range m.tables.items {
 		if was != "" && itemKey(it) == was {
 			m.tables.cur = i
@@ -109,36 +127,17 @@ func (m *Model) relistTables() {
 // A count — only while the row counts are on (toggleRowCounts) — goes in
 // the row's right-aligned muted slot ("cats      1,234")
 // rather than after the name: a long name is truncated from its end, and
-// the count is what would be cut. Views have no count (see db/rowcount.go)
-// and keep "view" there instead.
+// the count is what would be cut. Views have no count (see db/rowcount.go);
+// they are listed in a section of their own, so need no "view" mark.
 func (m *Model) fillTables() {
-	if m.routinesShown() {
-		m.fillRoutines() // the pane's other list (routines.go)
-		return
-	}
 	r := m.ws.Catalog()
 	if r == nil || len(r.Columns) < 2 {
 		m.setTableRows(nil)
 		return
 	}
-	counts := m.ws.RowCounts()
-	// The index's Display decides qualification, as the web's list and the
-	// assistant do: by the database's schemas, not just the listed ones,
-	// since a list of one schema of many still needs schema.name to work
-	// off the search_path.
-	idx := m.ws.TableIndex()
-	items := make([]listItem, 0, len(r.Rows))
-	for _, ref := range db.TableRefs(r.Rows) {
-		qualified := idx.Display(ref)
-		it := listItem{label: qualified, data: qualified}
-		if ref.View {
-			it.sub, it.muted = "view", true
-		} else if c, ok := counts[ref]; ok {
-			it.sub = c.Short()
-		}
-		items = append(items, it)
-	}
-	m.setTableRows(items) // through the pane's filter (tablefind.go)
+	// three sections — tables, views, routines — each under its header
+	// (sections.go)
+	m.setTableRows(m.catalogItems(r)) // through the pane's filter (tablefind.go)
 }
 
 // toggleRowCounts is the tables list's # key (and its menu's "Show row
@@ -194,9 +193,14 @@ func (m *Model) connPicked() tea.Cmd {
 // the history like a typed one — it is what the user would have typed — but
 // NOT into the editor, whose contents are the user's.
 //
-// With the pane listing routines, the pick is the routine's DDL instead.
+// On a routine the pick is its DDL instead, and on a section's header
+// the pick folds it (sections.go). A view previews as a table does: it is
+// queried as one, and its DDL is the menu's.
 func (m *Model) tablePicked() tea.Cmd {
-	if m.routinesShown() {
+	if s, ok := m.currentSection(); ok {
+		return m.toggleSection(s)
+	}
+	if _, ok := m.currentRoutine(); ok {
 		return m.routinePicked()
 	}
 	name, ok := m.currentTable()

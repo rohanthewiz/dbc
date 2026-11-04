@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/go-rod/rod"
@@ -21,6 +22,8 @@ const modShift = 8
 //     filter finds countof, Enter wraps the selection.
 //  4. The dialog's form makes a snippet (Alt+N, Ctrl+S), whose name then
 //     expands; Alt+D deletes it behind a confirmation.
+//  5. The suggestion list offers a snippet the word begins (N-228), as a
+//     snippet row; picking it expands it there, stops live.
 func liveSnippets(t *testing.T, _ *env, p *rod.Page) {
 	waitConnected(t, p, "lite")
 	waitFor(t, p, "the snippets list", `() => dbc.snippets && dbc.snippets.has("cnt")`)
@@ -112,4 +115,27 @@ func liveSnippets(t *testing.T, _ *env, p *rod.Page) {
 	p.MustElementR(".modal .mfoot button", "^Delete e2e_pick$").MustClick()
 	waitFor(t, p, "e2e_pick gone", `() => !!document.querySelector(".snlist") && !dbc.snippets.has("e2e_pick")`)
 	chord(t, p, 0, "Escape", "Escape", 27)
+
+	// 5. a half-typed name: the snippet is in the suggestions, and its
+	// pick expands it (the row's command, editor.js snipCmd)
+	setCaretEnd("")
+	p.MustInsertText("co")
+	p.MustInsertText("un")
+	eval(t, p, `() => monaco.editor.getEditors()[0].trigger("e2e", "editor.action.triggerSuggest", {})`)
+	waitFor(t, p, "countof among the suggestions", `() => [...document.querySelectorAll(".suggest-widget.visible .monaco-list-row")].some((r) => /countof/.test(r.getAttribute("aria-label") || ""))`)
+	// focus the row by stepping the list (a row's order is Monaco's), then
+	// accept it with Enter
+	for i := 0; i < 20; i++ {
+		if strings.Contains(evalStr(t, p, `() => document.querySelector(".suggest-widget.visible .monaco-list-row.focused")?.getAttribute("aria-label") || ""`), "countof") {
+			break
+		}
+		chord(t, p, 0, "ArrowDown", "ArrowDown", 40)
+	}
+	chord(t, p, 0, "Enter", "Enter", 13)
+	waitFor(t, p, "countof expanded from the list", `(want) => monaco.editor.getEditors()[0].getModel().getValue() === want`,
+		"SELECT count(*)\nFROM (\n    \n) AS t")
+	p.MustInsertText("zz")
+	if got := evalStr(t, p, `() => monaco.editor.getEditors()[0].getModel().getValue()`); got != "SELECT count(*)\nFROM (\n    \n) AS zz" {
+		t.Fatalf("the pick's stop is not live: %q", got)
+	}
 }

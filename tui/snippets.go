@@ -8,6 +8,7 @@ import (
 	"github.com/rohanthewiz/serr"
 
 	"github.com/rohanthewiz/dbc/snippet"
+	"github.com/rohanthewiz/dbc/sqlcomplete"
 	"github.com/rohanthewiz/dbc/userdata"
 )
 
@@ -312,6 +313,40 @@ func (m *Model) expandWord() (tea.Cmd, bool) {
 	}
 	m.compl = nil
 	return nil, m.insertSnippet(sn, from, m.editor.Caret())
+}
+
+// complSnippets is the store's snippets as the completion popup lists them.
+// A store that cannot be read (the file busy past the retry) lists none:
+// the popup is not the place to say so on every keystroke, and Tab on a
+// name — or the dialog — reports it.
+func (m *Model) complSnippets() []sqlcomplete.Snippet {
+	if m.snips == nil {
+		return nil
+	}
+	list, err := m.snips.List()
+	if err != nil {
+		return nil
+	}
+	out := make([]sqlcomplete.Snippet, len(list))
+	for i, sn := range list {
+		out[i] = sqlcomplete.Snippet{Name: sn.Name, Desc: sn.Desc, Body: sn.Body}
+	}
+	return out
+}
+
+// pickSnippet is a snippet row picked in the completion popup: the word
+// [from, to) becomes the snippet called name. It is read again by name, as
+// the list may be a keystroke old — deleted or edited in dbc web since.
+func (m *Model) pickSnippet(name string, from, to int) {
+	sn, found, err := m.snips.Get(name)
+	switch {
+	case err != nil:
+		m.logf(logWarn, "snippets: %s", serr.StringFromErr(err))
+	case !found:
+		m.logf(logWarn, "snippet %s: no longer there — deleted in another window?", name)
+	default:
+		m.insertSnippet(sn, from, to)
+	}
 }
 
 // wordBeforeCaret is the word the caret ends, by the editor's word rule,

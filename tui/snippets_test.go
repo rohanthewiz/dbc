@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/rohanthewiz/dbc/sqlcomplete"
 )
 
 // pasteText puts s in as a paste: one edit, and no completion popup to
@@ -236,5 +238,47 @@ func TestSnippetDialogManages(t *testing.T) {
 		if it.label == "mine" {
 			t.Fatal("the dialog still lists mine")
 		}
+	}
+}
+
+// The completion popup lists a snippet whose name the word begins, marked
+// as one, below the first SQL suggestions; picking it expands it as Tab on
+// the whole name does (N-228).
+func TestSnippetInCompletionPopup(t *testing.T) {
+	m := newTestModel(t)
+	m.focus = focusEditor
+	m.editor.SetText("")
+	typeText(t, m, "coun")
+	p := m.compl
+	if p == nil {
+		t.Fatal("no popup on \"coun\"")
+	}
+	at := -1
+	for i, it := range p.res.Items {
+		if it.Kind == sqlcomplete.KindSnippet && it.Label == "countof" {
+			at = i
+		}
+	}
+	if at < 0 {
+		t.Fatalf("countof is not listed: %v", popupLabels(m))
+	}
+	if at == 0 && len(p.res.Items) > 1 {
+		t.Errorf("the snippet is the first row: %v", popupLabels(m))
+	}
+	if f := frame(m).Text(); !strings.Contains(f, "§ countof") {
+		t.Errorf("the snippet row is not drawn marked:\n%s", f)
+	}
+	for range at {
+		key(t, m, "down")
+	}
+	key(t, m, "tab")
+	if got, want := m.editor.Text(), "SELECT count(*)\nFROM (\n    \n) AS t"; got != want {
+		t.Fatalf("picked =\n%q\nwant\n%q", got, want)
+	}
+	if m.editor.liveSnip() == nil {
+		t.Error("the pick did not start the snippet's stops")
+	}
+	if m.compl != nil {
+		t.Error("the popup stayed open after the pick")
 	}
 }

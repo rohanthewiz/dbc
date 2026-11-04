@@ -8,6 +8,7 @@ import (
 	"github.com/rohanthewiz/serr"
 
 	"github.com/rohanthewiz/dbc/snippet"
+	"github.com/rohanthewiz/dbc/sqlcomplete"
 	"github.com/rohanthewiz/dbc/userdata"
 )
 
@@ -151,6 +152,25 @@ func (s *Server) handleSnippetExpand(ctx rweb.Context) error {
 	}
 	x := snippet.Expand(tpl, snippet.Context{Selection: req.Selection, SelPrefix: req.SelPrefix, Indent: req.Indent})
 	return ok(ctx, snippetExpandResp{Snippet: x.Monaco(), Text: x.Text, Stops: len(x.Stops)})
+}
+
+// complSnippets is the store's snippets as the completion list offers them
+// (handleComplete). None when there is no store or it cannot be read: a
+// completion answer is not where a busy file is reported — Tab on a name,
+// or the dialog, says so.
+func (s *Server) complSnippets() []sqlcomplete.Snippet {
+	if s.snips == nil {
+		return nil
+	}
+	list, err := s.snips.List()
+	if err != nil {
+		return nil
+	}
+	out := make([]sqlcomplete.Snippet, len(list))
+	for i, sn := range list {
+		out[i] = sqlcomplete.Snippet{Name: sn.Name, Desc: sn.Desc, Body: sn.Body}
+	}
+	return out
 }
 
 // snippetErr maps the store's errors onto statuses: a missing snippet is a

@@ -88,6 +88,9 @@
   // dbcSnippetWord: the word the caret ends names a snippet, in a SQL
   // document, so Tab expands it (registerSnippets); once Monaco is up
   let snipCtx = null;
+  // snipCmd: the command a completion list's snippet row runs once picked
+  // (bindKeys), to expand the name it inserted
+  let snipCmd = null;
   let warmed = "";   // the connection completions were last warmed for
   let lastNote = ""; // the last completion note logged, so it is logged once
   // minis: the models of the small editors mini() makes (a pipeline
@@ -616,12 +619,13 @@
       column: K.Field, table: K.Struct, view: K.Interface, schema: K.Module, alias: K.Variable,
       join: K.Reference, keyword: K.Keyword, function: K.Function, type: K.TypeParameter,
       procedure: K.Method, // a stored procedure, which CALL runs
+      snippet: K.Snippet, // a live snippet (N-228); picking it expands it
     })[k] ?? K.Text;
   }
 
   // a table's or a column's documentation is DDL, shown as SQL; a
   // function's is a sentence, shown as text
-  const SQL_DOC = new Set(["table", "view", "column", "join"]);
+  const SQL_DOC = new Set(["table", "view", "column", "join", "snippet"]);
 
   function registerCompletion() {
     const provider = {
@@ -648,7 +652,14 @@
           incomplete: !!r.incomplete,
           suggestions: (r.items || []).map((it) => {
             const sn = snippet(it);
+            // A snippet row inserts its name, then its command expands the
+            // name as Tab would (expandSnippet): the expansion is the
+            // server's, so it cannot be the item's own insert text,
+            // which Monaco needs before the pick.
+            const cmd = it.kind === "snippet" && snipCmd
+              ? { id: snipCmd, title: "expand snippet", arguments: [it.label] } : undefined;
             return {
+              command: cmd,
               label: { label: it.label, description: it.detail || undefined },
               kind: kindOf(it.kind),
               detail: it.detail || undefined,
@@ -1052,6 +1063,17 @@
       if (w) expandSnippet(w.word, w.range, false);
     }, "dbcSnippetWord && !inSnippetMode");
     ed.addCommand(K.Alt | C.KeyS, () => dbc.snippets && dbc.snippets.open());
+    // A snippet row picked in the suggestion list (N-228) has just put its
+    // name before the caret; this expands it there. The name is found by
+    // its length back from the caret rather than by snippetWord, so a pick
+    // made inside a word (text after the caret) expands as well.
+    snipCmd = ed.addCommand(0, (_accessor, name) => {
+      const p = ed.getPosition();
+      if (!p || p.column <= name.length) return;
+      const range = new monaco.Range(p.lineNumber, p.column - name.length, p.lineNumber, p.column);
+      if (ed.getModel().getValueInRange(range) !== name) return;
+      expandSnippet(name, range, false);
+    });
     // a new design tab (app.js newDesign): page-wide too, bound here so a
     // Mac's Option+D does not type "∂" into the editor first
     ed.addCommand(K.Alt | C.KeyD, () => dbc.cmd.newDesign && dbc.cmd.newDesign());

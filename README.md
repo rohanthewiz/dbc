@@ -579,6 +579,7 @@ procedures, read once per connection — and from the dialect's vocabulary:
 | `INSERT INTO t (▮` | `t`'s columns |
 | `::▮` · `CAST(x AS ▮` | type names |
 | after a finished phrase | the clauses that can follow it: `WHERE`, `GROUP BY`, `ILIKE`, `ON CONFLICT` … |
+| a word anywhere | also your [snippets](#live-snippets) whose names begin with it, a few rows down; picking one expands it |
 
 Each column shows its type and keys, and each table its DDL. Postgres gets
 its keywords and its everyday functions with their signatures — aggregates,
@@ -781,6 +782,13 @@ always did: it moves the focus in the TUI and indents in dbc web. When
 the word is a snippet's name, expanding wins over picking a suggestion
 from the completion list. While you are filling a field, the list's
 `Tab` still picks, and the next `Tab` moves on.
+
+**In the completion list.** If you don't remember a name, start typing
+it: the completion list shows the snippets whose names begin with the
+word, marked `§` in the TUI and with the snippet icon in dbc web, and
+picking one expands it just as `Tab` on the full name does. The snippets
+sit a few rows down, after the first SQL suggestions, so `up` then `Tab`
+still picks `UPDATE` rather than the `upd` snippet.
 
 ### Explaining a query
 

@@ -34,6 +34,11 @@ import (
 // goes to the editor as if the popup were not there. A click on a row picks
 // it; a click elsewhere closes it.
 //
+// SNIPPETS whose name the word begins are listed too, marked §, a few rows
+// down so a half-typed keyword's Tab still picks the keyword
+// (sqlcomplete.AddSnippets); picking one expands it, as Tab on the whole
+// name does (snippets.go).
+//
 // THE SCHEMA is the workspace's cache (workspace.Complete). The first
 // request on a connection finds it cold: the popup asks LoadCompletions as a
 // tea.Cmd, off the event loop, and opens when it lands — if the caret is
@@ -94,6 +99,9 @@ func (m *Model) openCompletion(explicit bool) tea.Cmd {
 			return complLoadedMsg{err: ws.LoadCompletions(context.Background())}
 		})
 	}
+	// the user's snippets whose name the word begins (N-228), merged by
+	// the rule dbc web's list follows too (sqlcomplete.AddSnippets)
+	res = sqlcomplete.AddSnippets(res, m.editor.Text(), m.complSnippets())
 	if len(res.Items) == 0 {
 		m.compl = nil
 		if explicit {
@@ -183,6 +191,12 @@ func (m *Model) complPick(i int) tea.Cmd {
 		return nil
 	}
 	it := p.res.Items[i]
+	if it.Kind == sqlcomplete.KindSnippet {
+		// a snippet row expands as Tab on its typed name does: the word
+		// becomes the snippet, its stops live
+		m.pickSnippet(it.Label, p.res.From, p.res.To)
+		return nil
+	}
 	m.editor.Replace(p.res.From, p.res.To, it.Insert, it.Cursor)
 	m.drag.follow = true
 	if strings.HasSuffix(it.Insert, ".") {
@@ -290,7 +304,7 @@ var complGlyph = map[sqlcomplete.Kind]string{
 	sqlcomplete.KindColumn: "·", sqlcomplete.KindTable: "▦", sqlcomplete.KindView: "◫",
 	sqlcomplete.KindSchema: "◆", sqlcomplete.KindAlias: "@", sqlcomplete.KindJoin: "⋈",
 	sqlcomplete.KindKeyword: "k", sqlcomplete.KindFunction: "ƒ", sqlcomplete.KindType: "τ",
-	sqlcomplete.KindProcedure: "λ",
+	sqlcomplete.KindProcedure: "λ", sqlcomplete.KindSnippet: "§",
 }
 
 // draw paints the popup under the word being typed — at (x, y), the caret's

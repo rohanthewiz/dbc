@@ -69,3 +69,30 @@ func TestSnippetsAPI(t *testing.T) {
 		t.Fatal("ours survived its delete")
 	}
 }
+
+// A query tab's completion answer lists the snippets whose name the word
+// begins, as kind "snippet" with the name to insert (N-228); a pipeline
+// field's answer (conn-complete) does not.
+func TestSnippetsInCompletion(t *testing.T) {
+	e := newTestEnv(t)
+	id, _ := e.open()
+	type answer struct {
+		Items []completeItem `json:"items"`
+	}
+	got := decodeData[answer](t, e.api("POST", "/api/v1/ws/"+id+"/complete", `{"buffer":"coun","caret":4}`, 200))
+	found := false
+	for _, it := range got.Items {
+		if it.Kind == "snippet" {
+			found = found || (it.Label == "countof" && it.Insert == "countof")
+		}
+	}
+	if !found {
+		t.Fatalf("countof is not offered: %+v", got.Items)
+	}
+	got = decodeData[answer](t, e.api("POST", "/api/v1/conn-complete", `{"conn":"demo-sqlite","buffer":"coun","caret":4}`, 200))
+	for _, it := range got.Items {
+		if it.Kind == "snippet" {
+			t.Fatalf("a pipeline field was offered a snippet: %+v", it)
+		}
+	}
+}

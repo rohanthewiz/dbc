@@ -67,6 +67,10 @@ func (s *Server) handleComplete(ctx rweb.Context) error {
 		}
 		res, _ = t.ws.Complete(req.Buffer, caret)
 	}
+	// a query tab's list has the user's snippets too (N-228), by the
+	// TUI's rule; a pipeline field (handleConnComplete) is not where a
+	// snippet goes, so that list has none
+	res = sqlcomplete.AddSnippets(res, req.Buffer, s.complSnippets())
 	return ok(ctx, completeAnswer(req.Buffer, res, note))
 }
 

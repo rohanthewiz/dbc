@@ -84,13 +84,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-228** · raised `2026-1027-1934-live-snippets` · value low
-  Live snippets are reached by their exact name then Tab, or from Alt+S;
-  the completion popup does not list them. Offer them there (a row per
-  snippet whose name the word prefixes, marked as a snippet, picking it
-  expands as Tab does) if names turn out hard to remember. Both UIs would
-  need it: `sqlcomplete` results in the TUI, a completion item that runs
-  the expand in Monaco. Nobody has asked yet.
 - **N-229** · raised `2026-1027-1934-live-snippets` · value low
   Snippets expand only in SQL documents: the TUI's editor, and query tabs
   in dbc web (`editor.js updateSnipCtx` skips a fixed-language document,
@@ -657,6 +650,14 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-228** · raised `2026-1027-1934-live-snippets` · value low
+  Live snippets are reached by their exact name then Tab, or from Alt+S;
+  the completion popup does not list them. Offer them there (a row per
+  snippet whose name the word prefixes, marked as a snippet, picking it
+  expands as Tab does) if names turn out hard to remember. Both UIs would
+  need it: `sqlcomplete` results in the TUI, a completion item that runs
+  the expand in Monaco. Nobody has asked yet.
+  closed 2026-11-03: one merge for both UIs, `sqlcomplete.AddSnippets(res, buf, []Snippet)` (new `sqlcomplete/snippets.go`, `KindSnippet`), run by the caller that holds the store — the TUI's `openCompletion` and dbc web's `handleComplete` (not `conn-complete`: a pipeline field is no place for a snippet). A row per snippet whose name the word begins, case-blind, shortest first; none on an empty word, after a `.` (Tab's rule), or for a body that does not parse. The rows go after the first `snippetSlot` (3) SQL items — `up`+Tab still picks UPDATE, not `upd`, yet the rows stay on the popup's first page — with `Sort` keys (`prev+"\x01NNN"`) that keep that place in Monaco's sortText. Detail `snippet · <desc>`, Doc the body. TUI: glyph `§`; `complPick` on a snippet row calls `pickSnippet` (re-reads it by name, then `insertSnippet` over the word), so Enter's "only when it changes the text" rule still holds for an exact name. Monaco: `K.Snippet`, the body shown as SQL, and the item inserts the name then runs `snipCmd` (an `ed.addCommand(0, …)` in `bindKeys`) which expands the name ending at the caret through `expandSnippet`. README (Completion table, Live snippets) and F1 help updated. Tests: `TestAddSnippets`, `TestSnippetInCompletionPopup` (TUI: listed below row 0, drawn `§ countof`, the pick expands with stops live), `TestSnippetsInCompletion` (web: ws `/complete` has it, `conn-complete` does not), and step 5 of the `web/e2e` live-snippets step (pick from Monaco's widget with Enter, expansion and live stop).
 - **N-242** · raised `2026-1031-1735-n240-sqlite-nocase-prefix` · value low
   An index whose key collation is not the column's own serves none of the
   column's =, ranges or sorts (they compare in the column's collation), yet

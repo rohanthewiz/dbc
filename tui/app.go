@@ -55,6 +55,10 @@ type Model struct {
 	w, h int
 	lay  layout
 
+	// pasteInto is the editor the menu's Paste is waiting to fill from an
+	// OSC 52 clipboard read (paste.go); nil when no read is pending.
+	pasteInto *editor
+
 	focus  focusID
 	editor *editor
 	grid   *grid
@@ -528,6 +532,10 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 		return m.tick(msg)
 	case clipDoneMsg:
 		return m.clipDone(msg)
+	case clipReadMsg:
+		return m.pasteRead(msg)
+	case tea.ClipboardMsg:
+		return m.clipboardReply(msg)
 	case driverLogMsg:
 		m.log(logMuted, string(msg))
 		return nil

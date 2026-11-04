@@ -310,6 +310,11 @@ func (e *editor) checkpoint(kind editKind) {
 func (e *editor) Undo() bool { return e.swap(&e.undo, &e.redo) }
 func (e *editor) Redo() bool { return e.swap(&e.redo, &e.undo) }
 
+// CanUndo and CanRedo say whether Undo / Redo would change anything — the
+// editor menu dims those rows otherwise, as dbc web's does.
+func (e *editor) CanUndo() bool { return len(e.undo) > 0 }
+func (e *editor) CanRedo() bool { return len(e.redo) > 0 }
+
 func (e *editor) swap(from, to *[]snapshot) bool {
 	if len(*from) == 0 {
 		return false

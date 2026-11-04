@@ -363,7 +363,7 @@ with no database picker.
 | tables | `f` | *(Postgres, MySQL)* list the schema's functions and procedures in place of its tables, and back |
 | routines | `Enter` / double-click / right-click | show its DDL (`y` copies it, `i` inserts it at the editor's caret) / the same / show DDL, insert name, copy name, show tables |
 | editor | click, drag, double-, triple-click | caret, selection, word, line |
-| editor | right-click | run, copy, cut, select all, undo, history, ask the assistant; go to definition, usages, rename; the consoles |
+| editor | right-click | run, stop, copy, cut, paste, select all, undo, redo (dim when there is nothing to undo or redo), history, ask the assistant; go to definition, usages, rename; the consoles |
 | editor | `Ctrl`+click | go to where the alias or CTE under the pointer is declared |
 | results | click, drag, shift-click | cell, rectangular range, extend |
 | results | row number click | selects the row |

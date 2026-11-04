@@ -100,3 +100,19 @@ func TestCFHTMLOffsets(t *testing.T) {
 		}
 	}
 }
+
+// Read hands back the reader's text, and wraps its failure so the UI can
+// tell "no local clipboard" (try OSC 52) from an empty one.
+func TestRead(t *testing.T) {
+	orig := readText
+	t.Cleanup(func() { readText = orig })
+
+	readText = func() (string, error) { return "select 1", nil }
+	if s, err := Read(); err != nil || s != "select 1" {
+		t.Errorf("Read = %q, %v; want the clipboard's text", s, err)
+	}
+	readText = func() (string, error) { return "", errors.New("no pbpaste") }
+	if _, err := Read(); err == nil {
+		t.Error("Read should report an unreachable clipboard")
+	}
+}

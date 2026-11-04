@@ -324,6 +324,21 @@ func (m *Model) openEditorMenu(x, y int) {
 	if m.editor.Empty() {
 		fmtWhy = "nothing to format — type or paste a query first"
 	}
+	// Undo and Redo dim when their stack is empty, as dbc web's rows do
+	undoWhy, redoWhy := "", ""
+	if !m.editor.CanUndo() {
+		undoWhy = "nothing to undo"
+	}
+	if !m.editor.CanRedo() {
+		redoWhy = "nothing to redo"
+	}
+	// Stop is live while ^K would stop something: a run, or failing that a
+	// connect still dialing (cancelRun → Workspace.Cancel takes both) —
+	// dbc web's "nothing is running or connecting"
+	stopWhy := ""
+	if _, dialing := m.ws.Connecting(); !m.ws.Busy() && !dialing {
+		stopWhy = "nothing is running or connecting"
+	}
 	stmts, tag := m.stmtsToRun()
 	runWhy := ""
 	if len(stmts) == 0 {
@@ -347,6 +362,7 @@ func (m *Model) openEditorMenu(x, y int) {
 			act: func(m *Model) tea.Cmd { return m.runQuery() }},
 		{label: "▶ Run " + allLabel, key: "^⇧R", why: allWhy,
 			act: func(m *Model) tea.Cmd { return m.runAll() }},
+		{label: "■ Stop", key: "^K", why: stopWhy, act: func(m *Model) tea.Cmd { return m.cancelRun() }},
 		{label: "◈ Explain " + orDefault(tag, "statement"), key: "^X", why: runWhy,
 			act: func(m *Model) tea.Cmd { return m.explainQuery(false) }},
 		{label: "◈ Explain analyze (runs it, timed)", key: "⌥X", why: runWhy,
@@ -361,8 +377,12 @@ func (m *Model) openEditorMenu(x, y int) {
 			m.editor.Backspace()
 			return m.copyString(s, "the selection")
 		}},
+		// the clipboard is read for the row (paste.go); the terminal's own
+		// paste key needs no menu, so no key hint
+		{label: "Paste", act: func(m *Model) tea.Cmd { return m.menuPaste() }},
 		{label: "Select all", key: "⌥A", act: func(m *Model) tea.Cmd { m.editor.SelectAll(); return nil }},
-		{label: "Undo", key: "^Z", act: func(m *Model) tea.Cmd { m.editor.Undo(); return nil }},
+		{label: "Undo", key: "^Z", why: undoWhy, act: func(m *Model) tea.Cmd { m.editor.Undo(); return nil }},
+		{label: "Redo", key: "⌥Z", why: redoWhy, act: func(m *Model) tea.Cmd { m.editor.Redo(); return nil }},
 		{label: formatLabel(sel), key: "⌥⇧F", why: fmtWhy, act: func(m *Model) tea.Cmd { return m.formatQuery() }},
 		// with a selection the dialog's pick wraps it ($SELECTION$), so the
 		// row says what it will do

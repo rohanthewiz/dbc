@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -92,6 +93,10 @@ func newTestModelCfg(t *testing.T, tweak func(*config.Config)) *Model {
 	prev := clipWrite
 	clipWrite = func(c clip.Content) (bool, error) { clipLog = append(clipLog, c); return c.HTML != "", nil }
 	t.Cleanup(func() { clipWrite = prev })
+	// nor read it: a Paste test sets its own reader
+	prevRead := clipReader
+	clipReader = func() (string, error) { return "", errors.New("no clipboard in tests") }
+	t.Cleanup(func() { clipReader = prevRead })
 	// nor ever open a browser
 	openLog = nil
 	prevOpen := openURL

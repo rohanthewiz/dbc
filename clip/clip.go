@@ -54,7 +54,24 @@ var errNoRich = errors.New("no HTML clipboard support on this system")
 var (
 	writeRich = platformWriteRich // both flavors at once
 	writeText = clipboard.WriteAll
+	readText  = clipboard.ReadAll
 )
+
+// Read returns the local clipboard's plain-text flavor — what the TUI
+// editor menu's Paste row inserts. Plain text is all a query buffer takes,
+// so atotto's reader (pbpaste, wl-paste / xclip / xsel, the Windows API) is
+// enough; there is no rich counterpart to Write here.
+//
+// As with Write, a non-nil error means the local clipboard was out of
+// reach (SSH, a container, no tool on PATH): the UI may then ask the
+// terminal with OSC 52, which only it can.
+func Read() (string, error) {
+	s, err := readText()
+	if err != nil {
+		return "", serr.Wrap(err, "op", "clipboard-read")
+	}
+	return s, nil
+}
 
 // Write places c on the local system clipboard.
 //

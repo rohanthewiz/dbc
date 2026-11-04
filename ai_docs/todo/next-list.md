@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-246
+**Next ID:** N-247
 
 ## Open
 
@@ -70,12 +70,6 @@ ten session docs in `ai_docs/claude_sessions/`
   lint and the README paragraph. Value is now low, since it waits on upstream.
   Updated 2026-10-27 (`/next-list`): #1736 is still open (last activity
   2026-10-11), and dbc is still on yaegi v0.16.1.
-- **N-218** · raised `2026-1014-1945-editor-context-menu` · value low
-  dbc web's editor menu (`app.js editorMenu`) has three rows the TUI's
-  (`tui/menu.go openEditorMenu`) lacks: **■ Stop** (dim with nothing
-  running), **Paste** and **Redo**, and its Undo/Redo dim when there is
-  nothing to undo. Port them to the TUI menu if parity is wanted; no one
-  has asked.
 - **N-221** · raised `2026-1019-1757-build-badge` · value low
   Release binaries (`.goreleaser.yml`) are built without
   `scripts/stamp.sh`, so dbc web's build badge on a released dbc shows the
@@ -414,6 +408,13 @@ and `raised`.
   (`DBC_E2E_STEPS`) and a third full run passed. Likely a startup race
   (the grid's result from `run a query` read as the menu run's). Repair
   the wait in `editormenu_test.go` / `buildbadge_test.go`.
+- **N-246** · raised `2026-1103-1915-n218-tui-editor-menu-parity` · value low
+  The TUI editor menu's Paste (`tui/paste.go`) has only unit tests, with
+  the clipboard reader stubbed. Check it in the real binary: locally (macOS
+  pbpaste; on Linux wl-paste or xclip), and over SSH, where it falls back
+  to an OSC 52 read. Note which terminals answer that read (kitty and
+  Ghostty ask first; iTerm2 and tmux refuse by default and so never answer,
+  which leaves only the log line).
 
 ## Roadmap
 
@@ -644,6 +645,13 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-218** · raised `2026-1014-1945-editor-context-menu` · value low
+  dbc web's editor menu (`app.js editorMenu`) has three rows the TUI's
+  (`tui/menu.go openEditorMenu`) lacks: **■ Stop** (dim with nothing
+  running), **Paste** and **Redo**, and its Undo/Redo dim when there is
+  nothing to undo. Port them to the TUI menu if parity is wanted; no one
+  has asked.
+  closed 2026-11-03, `2026-1103-1915-n218-tui-editor-menu-parity` (from the cats-todo backlog): all four ported to `openEditorMenu`. **■ Stop** (^K, after Run all as in dbc web's query tab) runs `cancelRun`, and is dim with "nothing is running or connecting" unless `ws.Busy()` or `ws.Connecting()` — the two things `Workspace.Cancel` stops, so the row is wider than the toolbar's Stop button, which follows `Busy` alone. **Redo** (⌥Z) follows Undo; both dim on an empty stack (`editor.CanUndo`/`CanRedo`). **Paste** reads the clipboard itself, since a menu row has no terminal paste key behind it: new `clip.Read` (atotto's `ReadAll`) on a command goroutine (`tui/paste.go`). With no local clipboard (SSH, a container) it falls back to an OSC 52 read (`tea.ReadClipboard`), logged first, since many terminals refuse reads by never answering. The text goes to the editor the menu was opened on (`clipReadMsg.ed`, `Model.pasteInto`), not the one on screen when it lands; an unasked-for `tea.ClipboardMsg` is ignored. The harness stubs `clipReader` to fail, so no test reads the real clipboard. Tests: `TestEditorMenuDimsIdleRows`, `TestEditorMenuUndoRedo`, `TestEditorMenuPasteLocal`, `TestEditorMenuPasteViaTerminal` (the reply lands in the asking tab after a tab switch), `clip.TestRead`. Not checked by hand: raised as N-246.
 - **N-229** · raised `2026-1027-1934-live-snippets` · value low
   Snippets expand only in SQL documents: the TUI's editor, and query tabs
   in dbc web (`editor.js updateSnipCtx` skips a fixed-language document,

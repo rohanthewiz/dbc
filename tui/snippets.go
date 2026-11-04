@@ -16,6 +16,11 @@ import (
 // the syntax, userdata.Snippets the store) expanded at the caret, whose tab
 // stops are then filled in one after another.
 //
+// Only SQL snippets (editorLang) expand here: the store also keeps Go ones,
+// for dbc web's script tabs, and their names typed into a query are just
+// words. The dialog lists them anyway — it is where every snippet is kept —
+// tagged "Go" and dimmed, and refuses to insert one.
+//
 // HOW ONE IS INSERTED. Typing its name and pressing Tab, or picking it in
 // the snippets dialog (⌥S, the editor menu's "Insert snippet…"). Only the
 // dialog can wrap a selection — typing a name would replace it — so a
@@ -46,6 +51,10 @@ import (
 // or a session to step through (which yields to an open popup, so the
 // popup's Tab still picks a table name typed into a stop; the next Tab
 // moves on).
+
+// editorLang is the language of the TUI's one editor, for picking which
+// snippets it expands (userdata.Snippet.For).
+const editorLang = userdata.LangSQL
 
 // snipSession is the live snippet. Its offsets are into the editor's
 // Text() as of ver; snipSync moves them along with each edit inside the
@@ -301,7 +310,7 @@ func (m *Model) expandWord() (tea.Cmd, bool) {
 	if !ok {
 		return nil, false
 	}
-	sn, found, err := m.snips.Get(word)
+	sn, found, err := m.snips.GetFor(word, editorLang)
 	if err != nil {
 		// Tab still does what it did before snippets: the error is said,
 		// not allowed to take the key
@@ -323,7 +332,7 @@ func (m *Model) complSnippets() []sqlcomplete.Snippet {
 	if m.snips == nil {
 		return nil
 	}
-	list, err := m.snips.List()
+	list, err := m.snips.ListFor(editorLang)
 	if err != nil {
 		return nil
 	}
@@ -338,7 +347,7 @@ func (m *Model) complSnippets() []sqlcomplete.Snippet {
 // [from, to) becomes the snippet called name. It is read again by name, as
 // the list may be a keystroke old — deleted or edited in dbc web since.
 func (m *Model) pickSnippet(name string, from, to int) {
-	sn, found, err := m.snips.Get(name)
+	sn, found, err := m.snips.GetFor(name, editorLang)
 	switch {
 	case err != nil:
 		m.logf(logWarn, "snippets: %s", serr.StringFromErr(err))
@@ -415,7 +424,15 @@ func (m *Model) insertSnippet(sn userdata.Snippet, from, to int) bool {
 
 // insertPicked is the snippets dialog's pick: sn in place of the selection
 // (its $SELECTION$), or at the caret.
+//
+// A snippet of another language is refused with where it does expand: the
+// dialog lists every snippet, so it can be picked by mistake.
 func (m *Model) insertPicked(sn userdata.Snippet) {
+	if !sn.For(editorLang) {
+		m.logf(logWarn, "snippet %s is %s — it expands in dbc web's script tabs, not in a query",
+			sn.Name, userdata.LangLabel(sn.Lang))
+		return
+	}
 	_, from, to := m.editor.Selection()
 	m.insertSnippet(sn, from, to)
 }

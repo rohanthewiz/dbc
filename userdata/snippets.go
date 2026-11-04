@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -37,13 +38,64 @@ import (
 //
 // A Snippets made with path "" keeps everything in memory, seeded the same
 // way: tests, and a machine with no home directory.
+//
+// LANGUAGES. A snippet is SQL or Go (Lang). It expands only in a document
+// of its language: the TUI's editor and dbc web's query tabs are SQL, dbc
+// web's script tabs Go — so a Go "iferr" never fires in a query, nor a SQL
+// "sel" in a script. Names stay unique across both languages: the name is
+// the snippet's key everywhere (the store's primary key, the web routes,
+// a rename), and a name meaning two things depending on the tab would make
+// "edit sel" or "delete sel" ambiguous in the dialogs, which list both.
 
 // Snippet is one saved snippet.
 type Snippet struct {
-	Name    string    `json:"name"` // what is typed before Tab; snippet.ValidName
-	Desc    string    `json:"desc"` // one line, shown in the pickers
-	Body    string    `json:"body"` // the template (package snippet)
+	Name string `json:"name"` // what is typed before Tab; snippet.ValidName
+	Desc string `json:"desc"` // one line, shown in the pickers
+	Body string `json:"body"` // the template (package snippet)
+	// Lang is the language of the documents it expands in: LangSQL or
+	// LangGo. "" on a value being saved means SQL (NormLang), so a caller
+	// that predates languages still saves what it always did.
+	Lang    string    `json:"lang"`
 	Updated time.Time `json:"updated"`
+}
+
+// The languages a snippet can be for.
+const (
+	LangSQL = "sql" // the TUI's editor, dbc web's query tabs
+	LangGo  = "go"  // dbc web's script tabs (sdb.S scripts)
+)
+
+// SnippetLangs are the languages in the order the forms offer them.
+var SnippetLangs = []string{LangSQL, LangGo}
+
+// NormLang is lang as the store keeps it: lower case, "" read as SQL (a
+// snippet saved before languages existed, or by a caller that does not
+// say). Any other name is refused rather than stored, since a snippet in
+// a language no document has would never expand anywhere.
+func NormLang(lang string) (string, error) {
+	switch l := strings.ToLower(strings.TrimSpace(lang)); l {
+	case "", LangSQL:
+		return LangSQL, nil
+	case LangGo:
+		return LangGo, nil
+	default:
+		return "", fmt.Errorf("a snippet is for sql or go, not %q", lang)
+	}
+}
+
+// LangLabel is a language as the pickers name it.
+func LangLabel(lang string) string {
+	if lang == LangGo {
+		return "Go"
+	}
+	return "SQL"
+}
+
+// For reports whether sn expands in a document of language lang.
+func (sn Snippet) For(lang string) bool {
+	l, _ := NormLang(sn.Lang)
+	want, _ := NormLang(lang)
+	return l == want
 }
 
 // SnippetsFile is where the snippets live, beside the history and the
@@ -56,34 +108,67 @@ func SnippetsFile() string {
 	return filepath.Join(home, ".config", "dbc", "snippets.bytdb")
 }
 
-// StarterSnippets are written into a new store once, so the feature shows
-// what it does before anyone has written a snippet: stops visited out of
-// place order (sel), a mirrored stop (cnt), $SELECTION$ (cte, countof) and
-// $END$ (upd). They are ordinary rows after that — edited or deleted like
-// any other, and not brought back (the seeded flag, not the rows, says the
-// store was seeded).
+// StarterSnippets are written into a new store once per language, so the
+// feature shows what it does before anyone has written a snippet: stops
+// visited out of place order (sel), a mirrored stop (cnt), $SELECTION$
+// (cte, countof, tx) and $END$ (upd, qry). They are ordinary rows after
+// that — edited or deleted like any other, and not brought back (the
+// seeded flags, not the rows, say the store was seeded).
+//
+// Each language has its own flag (seedKey) so a store made before Go
+// snippets existed — seeded with the SQL starters only — still gets the
+// Go ones, once, the first time a dbc that knows Go opens it.
+//
+// The Go bodies indent with a tab, as gofmt and the script tabs do.
 var StarterSnippets = []Snippet{
-	{Name: "sel", Desc: "select from a table",
+	{Name: "sel", Lang: LangSQL, Desc: "select from a table",
 		Body: "SELECT $VAR2:*$\nFROM $VAR1:table$\nWHERE $VAR3:true$\nLIMIT $VAR4:100$"},
-	{Name: "cnt", Desc: "count rows per value",
+	{Name: "cnt", Lang: LangSQL, Desc: "count rows per value",
 		Body: "SELECT $VAR2:column$, count(*) AS n\nFROM $VAR1:table$\nGROUP BY $VAR2$\nORDER BY n DESC"},
-	{Name: "cte", Desc: "wrap the selection in a CTE",
+	{Name: "cte", Lang: LangSQL, Desc: "wrap the selection in a CTE",
 		Body: "WITH $VAR1:q$ AS (\n    $SELECTION$\n)\nSELECT *\nFROM $VAR1$$END$"},
-	{Name: "countof", Desc: "count the rows the selection returns",
+	{Name: "countof", Lang: LangSQL, Desc: "count the rows the selection returns",
 		Body: "SELECT count(*)\nFROM (\n    $SELECTION$\n) AS $VAR1:t$"},
-	{Name: "upd", Desc: "update rows inside a transaction",
+	{Name: "upd", Lang: LangSQL, Desc: "update rows inside a transaction",
 		Body: "BEGIN;\nUPDATE $VAR1:table$\nSET $VAR2:column$ = $VAR3:value$\nWHERE $VAR4:id = 0$;\n-- check the count, then COMMIT; or ROLLBACK;\n$END$"},
+	{Name: "iferr", Lang: LangGo, Desc: "return a non-nil error",
+		Body: "if $VAR1:err$ != nil {\n\treturn $VAR1$\n}\n$END$"},
+	{Name: "qry", Lang: LangGo, Desc: "query a connection and print each row",
+		Body: "res, err := s.Query(\"$VAR1:conn$\", `$VAR2:SELECT 1$`)\nif err != nil {\n\treturn err\n}\nfor _, row := range res.Rows {\n\ts.Print(\"%v\", row)\n}\n$END$"},
+	{Name: "exec", Lang: LangGo, Desc: "run a statement and print the rows it changed",
+		Body: "n, err := s.Exec(\"$VAR1:conn$\", `$VAR2:UPDATE t SET x = 1$`)\nif err != nil {\n\treturn err\n}\ns.Print(\"%d rows\", n)\n$END$"},
+	{Name: "each", Lang: LangGo, Desc: "run the selection once per connection",
+		Body: "for _, $VAR1:conn$ := range s.Conns() {\n\t$SELECTION$$END$\n}"},
+}
+
+// seedKey is the meta row that marks lang's starters as written. SQL
+// keeps the key it had before languages, "seeded", so a store seeded by
+// an older dbc is not seeded with the SQL starters a second time.
+func seedKey(lang string) string {
+	if lang == LangSQL {
+		return "seeded"
+	}
+	return "seeded_" + lang
 }
 
 // snippetSchema is run on every open: IF NOT EXISTS keeps it idempotent.
-// meta holds the seeded flag; a later setting would go there too.
+// meta holds the seeded flags; a later setting would go there too.
+//
+// lang came after the table did: a new file gets it from the CREATE, and
+// a file made before it from the ALTER, which backfills the rows already
+// there as SQL — all a snippet could be then. An older dbc that writes to
+// a file with the column inserts without it and gets the same default,
+// and its upsert does not name lang, so its edit of a Go snippet keeps
+// the snippet Go.
 var snippetSchema = []string{
 	`CREATE TABLE IF NOT EXISTS snippets (
 		name    TEXT PRIMARY KEY,
 		descr   TEXT NOT NULL,
 		body    TEXT NOT NULL,
-		updated TIMESTAMPTZ NOT NULL
+		updated TIMESTAMPTZ NOT NULL,
+		lang    TEXT NOT NULL DEFAULT 'sql'
 	)`,
+	`ALTER TABLE snippets ADD COLUMN IF NOT EXISTS lang TEXT NOT NULL DEFAULT 'sql'`,
 	`CREATE TABLE IF NOT EXISTS meta (
 		key   TEXT PRIMARY KEY,
 		value TEXT NOT NULL
@@ -164,6 +249,26 @@ func (s *Snippets) Get(name string) (Snippet, bool, error) {
 	return list[i], true, nil
 }
 
+// GetFor is Get for a document of language lang: a snippet of another
+// language is not found, so its name typed in this document is just a
+// word — Tab does what it did before snippets.
+func (s *Snippets) GetFor(name, lang string) (Snippet, bool, error) {
+	sn, found, err := s.Get(name)
+	if err != nil || !found || !sn.For(lang) {
+		return Snippet{}, false, err
+	}
+	return sn, true, nil
+}
+
+// ListFor is List narrowed to the snippets of language lang.
+func (s *Snippets) ListFor(lang string) ([]Snippet, error) {
+	list, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(list, func(sn Snippet) bool { return !sn.For(lang) }), nil
+}
+
 // refresh re-reads the file when its stamp moved. Called with mu held.
 func (s *Snippets) refresh() error {
 	if s.path == "" {
@@ -216,6 +321,11 @@ func (s *Snippets) Save(old string, sn Snippet) error {
 	if err := snippet.ValidName(sn.Name); err != nil {
 		return err
 	}
+	lang, err := NormLang(sn.Lang)
+	if err != nil {
+		return err
+	}
+	sn.Lang = lang
 	if strings.TrimSpace(sn.Body) == "" {
 		return errors.New("the snippet's body is empty")
 	}
@@ -229,7 +339,7 @@ func (s *Snippets) Save(old string, sn Snippet) error {
 	if s.path == "" {
 		return s.saveMem(old, sn)
 	}
-	err := s.withDB(func(ctx context.Context, dbh *sql.DB) error {
+	err = s.withDB(func(ctx context.Context, dbh *sql.DB) error {
 		tx, err := dbh.BeginTx(ctx, nil)
 		if err != nil {
 			return err
@@ -243,9 +353,10 @@ func (s *Snippets) Save(old string, sn Snippet) error {
 				return err
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO snippets (name, descr, body, updated) VALUES ($1, $2, $3, $4)
-			ON CONFLICT (name) DO UPDATE SET descr = excluded.descr, body = excluded.body, updated = excluded.updated`,
-			sn.Name, sn.Desc, sn.Body, sn.Updated); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO snippets (name, descr, body, updated, lang) VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (name) DO UPDATE SET descr = excluded.descr, body = excluded.body,
+				updated = excluded.updated, lang = excluded.lang`,
+			sn.Name, sn.Desc, sn.Body, sn.Updated, sn.Lang); err != nil {
 			return err
 		}
 		return tx.Commit()
@@ -367,12 +478,24 @@ func (s *Snippets) withDB(fn func(ctx context.Context, dbh *sql.DB) error) error
 	return nil
 }
 
-// seedSnippets writes StarterSnippets into a store that was never seeded,
-// and marks it seeded in the same transaction, so a crash between the two
-// cannot seed twice — nor bring back a starter deleted since.
+// seedSnippets writes the starters of each language whose store was never
+// seeded with them (seedKey), and marks it seeded in the same transaction,
+// so a crash between the two cannot seed twice — nor bring back a starter
+// deleted since. ON CONFLICT DO NOTHING keeps a snippet the user already
+// made under a starter's name (a Go starter arriving in an older store).
 func seedSnippets(ctx context.Context, dbh *sql.DB) error {
+	for _, lang := range SnippetLangs {
+		if err := seedLang(ctx, dbh, lang); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func seedLang(ctx context.Context, dbh *sql.DB, lang string) error {
+	key := seedKey(lang)
 	var n int
-	if err := dbh.QueryRowContext(ctx, `SELECT count(*) FROM meta WHERE key = 'seeded'`).Scan(&n); err != nil || n > 0 {
+	if err := dbh.QueryRowContext(ctx, `SELECT count(*) FROM meta WHERE key = $1`, key).Scan(&n); err != nil || n > 0 {
 		return err
 	}
 	tx, err := dbh.BeginTx(ctx, nil)
@@ -382,19 +505,22 @@ func seedSnippets(ctx context.Context, dbh *sql.DB) error {
 	defer func() { _ = tx.Rollback() }()
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	for _, sn := range StarterSnippets {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO snippets (name, descr, body, updated) VALUES ($1, $2, $3, $4)
-			ON CONFLICT (name) DO NOTHING`, sn.Name, sn.Desc, sn.Body, now); err != nil {
+		if sn.Lang != lang {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO snippets (name, descr, body, updated, lang) VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (name) DO NOTHING`, sn.Name, sn.Desc, sn.Body, now, sn.Lang); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO meta (key, value) VALUES ('seeded', '1')`); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO meta (key, value) VALUES ($1, '1')`, key); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func querySnippets(ctx context.Context, dbh *sql.DB) ([]Snippet, error) {
-	rows, err := dbh.QueryContext(ctx, `SELECT name, descr, body, updated FROM snippets ORDER BY name`)
+	rows, err := dbh.QueryContext(ctx, `SELECT name, descr, body, updated, lang FROM snippets ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -402,8 +528,15 @@ func querySnippets(ctx context.Context, dbh *sql.DB) ([]Snippet, error) {
 	var out []Snippet
 	for rows.Next() {
 		var sn Snippet
-		if err := rows.Scan(&sn.Name, &sn.Desc, &sn.Body, &sn.Updated); err != nil {
+		var lang sql.NullString // NOT NULL in the schema; read defensively all the same
+		if err := rows.Scan(&sn.Name, &sn.Desc, &sn.Body, &sn.Updated, &lang); err != nil {
 			return nil, err
+		}
+		// a language this dbc does not know (written by a newer one) is
+		// kept as it is: it is listed, and expands nowhere here
+		sn.Lang = lang.String
+		if l, err := NormLang(lang.String); err == nil {
+			sn.Lang = l
 		}
 		out = append(out, sn)
 	}

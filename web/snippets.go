@@ -21,10 +21,15 @@ import (
 //
 //	GET    /api/v1/snippets               the list, with what the page needs to
 //	                                      decide Tab (names) and draw the picker
-//	POST   /api/v1/snippets               a new one              {name, desc, body}
-//	PUT    /api/v1/snippets/:name         save over :name (rename) {name, desc, body}
+//	POST   /api/v1/snippets               a new one              {name, desc, body, lang}
+//	PUT    /api/v1/snippets/:name         save over :name (rename) {name, desc, body, lang}
 //	DELETE /api/v1/snippets/:name
-//	POST   /api/v1/snippets/:name/expand  {selection, selPrefix, indent} → {snippet, text}
+//	POST   /api/v1/snippets/:name/expand  {selection, selPrefix, indent, lang} → {snippet, text}
+//
+// A snippet is SQL or Go (userdata.Snippet.Lang): a query tab expands the
+// SQL ones, a script tab the Go ones. The page decides Tab from the list's
+// lang, and expand checks it again — the dialog lists every snippet, and
+// a pick of the wrong language should be refused, not typed into the tab.
 //
 // Each change is broadcast as "snippets", so every window's list — and
 // with it which words its Tab expands — follows it.
@@ -45,6 +50,7 @@ type snippetSave struct {
 	Name string `json:"name"`
 	Desc string `json:"desc"`
 	Body string `json:"body"`
+	Lang string `json:"lang"` // "sql" or "go"; "" is SQL (userdata.NormLang)
 }
 
 // snippetExpandReq says where the snippet goes; see snippet.Context.
@@ -52,6 +58,9 @@ type snippetExpandReq struct {
 	Selection string `json:"selection"`
 	SelPrefix string `json:"selPrefix"`
 	Indent    string `json:"indent"`
+	// Lang is the document's language: a snippet of another is refused.
+	// "" is SQL, the only language there was before.
+	Lang string `json:"lang"`
 }
 
 type snippetExpandResp struct {
@@ -109,10 +118,14 @@ func (s *Server) saveSnippet(ctx rweb.Context, old string) error {
 	if strings.TrimSpace(req.Body) == "" {
 		return fail(ctx, badRequest("the snippet's body is empty"))
 	}
+	lang, err := userdata.NormLang(req.Lang)
+	if err != nil {
+		return fail(ctx, badRequest("%v", err))
+	}
 	if _, err := snippet.Parse(req.Body); err != nil {
 		return fail(ctx, badRequest("%v", err))
 	}
-	if err := s.snips.Save(old, userdata.Snippet{Name: req.Name, Desc: req.Desc, Body: req.Body}); err != nil {
+	if err := s.snips.Save(old, userdata.Snippet{Name: req.Name, Desc: req.Desc, Body: req.Body, Lang: lang}); err != nil {
 		return fail(ctx, s.snippetErr(err, req.Name))
 	}
 	s.hub.broadcast("snippets", map[string]string{"op": "saved", "name": req.Name, "old": old})
@@ -146,6 +159,18 @@ func (s *Server) handleSnippetExpand(ctx rweb.Context) error {
 	if !found {
 		return fail(ctx, notFound("no snippet %s", name))
 	}
+	lang, err := userdata.NormLang(req.Lang)
+	if err != nil {
+		return fail(ctx, badRequest("%v", err))
+	}
+	if !sn.For(lang) {
+		where := "a query tab"
+		if sn.Lang == userdata.LangGo {
+			where = "a script tab"
+		}
+		return fail(ctx, badRequest("snippet %s is %s — it expands in %s, not in this %s document",
+			name, userdata.LangLabel(sn.Lang), where, userdata.LangLabel(lang)))
+	}
 	tpl, err := snippet.Parse(sn.Body)
 	if err != nil {
 		return fail(ctx, badRequest("snippet %s does not parse: %v — fix it in the snippets dialog (Alt+S)", name, err))
@@ -154,15 +179,17 @@ func (s *Server) handleSnippetExpand(ctx rweb.Context) error {
 	return ok(ctx, snippetExpandResp{Snippet: x.Monaco(), Text: x.Text, Stops: len(x.Stops)})
 }
 
-// complSnippets is the store's snippets as the completion list offers them
-// (handleComplete). None when there is no store or it cannot be read: a
+// complSnippets is the store's SQL snippets as the completion list offers
+// them (handleComplete, which answers for SQL documents only; a script
+// tab's Go snippets are offered by the page — editor.js snippetSuggestions).
+// None when there is no store or it cannot be read: a
 // completion answer is not where a busy file is reported — Tab on a name,
 // or the dialog, says so.
 func (s *Server) complSnippets() []sqlcomplete.Snippet {
 	if s.snips == nil {
 		return nil
 	}
-	list, err := s.snips.List()
+	list, err := s.snips.ListFor(userdata.LangSQL)
 	if err != nil {
 		return nil
 	}

@@ -355,6 +355,9 @@ func scriptTabs(t *testing.T, e *env, p *rod.Page) {
 		t.Fatalf("restored e2e_renamed.go:\n%s", d)
 	}
 
+	// ── Go snippets expand here, SQL ones do not (N-229) ─────────────────
+	goSnippetsInScript(t, p)
+
 	// ── closing with unsaved changes asks; Discard closes ────────────────
 	setText(scriptsGood + "// more\n")
 	waitFor(t, p, "unsaved again", `() => !!document.querySelector("#qtabs .qtab.script .qdirty")`)

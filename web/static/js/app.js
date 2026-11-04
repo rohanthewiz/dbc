@@ -4318,6 +4318,8 @@
         { label: "Save", key: "Ctrl+S", act: () => saveNow(t) },
         { label: "Check", act: () => checkNow(t) },
         ...edit,
+        // the Go snippets (N-229): the dialog lists them first here
+        snippets,
         { head: "" },
         suggest,
         { label: "✦ Ask the assistant about this script", act: () => dbc.cmd.askAbout("Explain this script.") },
@@ -4619,7 +4621,7 @@
       ["Ctrl+Shift+X · Alt+X", "explain analyze — runs it to time each step"],
       ["Ctrl+K", "stop the run or the connect"],
       ["Shift+Alt+F", "format the selection, or the whole buffer (unwraps a query pasted from a log line: its quotes and \\n escapes)"],
-      ["name Tab", "expand the snippet of that name; then Tab / Shift+Tab step through its fields, Esc ends"],
+      ["name Tab", "expand the snippet of that name — a SQL one in a query tab, a Go one in a script tab; then Tab / Shift+Tab step through its fields, Esc ends"],
       ["Alt+S", "snippets — insert one (a $SELECTION$ snippet wraps the selection), new, edit, delete"],
       ["Ctrl+P", "history of the tab's database (Tab: every database) — insert a past statement"],
       ["Ctrl+E", "export the result"],

@@ -96,3 +96,51 @@ func TestSnippetsInCompletion(t *testing.T) {
 		}
 	}
 }
+
+// Languages over the API (N-229): the list says each snippet's, a save
+// takes one (refusing an unknown), and expand answers only for a document
+// of the snippet's language; the SQL completion answer offers no Go
+// snippet.
+func TestSnippetsLangAPI(t *testing.T) {
+	e := newTestEnv(t)
+	type listed struct {
+		Snippets []snippetRow `json:"snippets"`
+	}
+	rows := map[string]snippetRow{}
+	for _, r := range decodeData[listed](t, e.api("GET", "/api/v1/snippets", "", 200)).Snippets {
+		rows[r.Name] = r
+	}
+	if rows["sel"].Lang != userdata.LangSQL || rows["iferr"].Lang != userdata.LangGo {
+		t.Fatalf("listed langs: sel %q iferr %q", rows["sel"].Lang, rows["iferr"].Lang)
+	}
+
+	save := func(name, lang, b string, want int) {
+		t.Helper()
+		j, _ := json.Marshal(snippetSave{Name: name, Body: b, Lang: lang})
+		e.api("POST", "/api/v1/snippets", string(j), want)
+	}
+	save("gox", "go", "x := $VAR1:1$", 200)
+	save("rs", "rust", "x", 400)
+
+	expand := func(name, lang string, want int) testEnvelope {
+		t.Helper()
+		j, _ := json.Marshal(snippetExpandReq{Lang: lang})
+		return e.api("POST", "/api/v1/snippets/"+name+"/expand", string(j), want)
+	}
+	if x := decodeData[snippetExpandResp](t, expand("gox", "go", 200)); x.Text != "x := 1" {
+		t.Fatalf("go expand = %+v", x)
+	}
+	if env := expand("gox", "", 400); !strings.Contains(env.Error, "script tab") {
+		t.Errorf("Go snippet in SQL: %q", env.Error)
+	}
+	if env := expand("sel", "go", 400); !strings.Contains(env.Error, "query tab") {
+		t.Errorf("SQL snippet in Go: %q", env.Error)
+	}
+	expand("sel", "sql", 200)
+
+	for _, sn := range e.srv.complSnippets() {
+		if sn.Name == "gox" || sn.Name == "iferr" {
+			t.Errorf("the SQL completion offers Go snippet %s", sn.Name)
+		}
+	}
+}

@@ -624,6 +624,10 @@ button.primary { border-color: var(--accent); }
    under the cursor below it, and the edit form */
 .snlist .snmark { width: 1ch; flex: none; color: var(--accent); }
 .snlist .hconn { min-width: 12ch; }
+/* a snippet of another language than the editor's (N-229): listed to be
+   kept, not inserted — dimmed, after the editor's own, tagged on the right */
+.snlist li.snother { opacity: .55; }
+.snlist .snlang { margin-left: auto; flex: none; color: var(--muted); font-size: 11px; }
 .snprev { max-height: 22vh; margin: 0; white-space: pre; }
 .snform { padding: 10px 12px; overflow: auto; }
 .snform .ifield > textarea.code { min-height: 14em; }

@@ -20,6 +20,8 @@ import (
 //	│ ⌕ ct▮                                            + New    │
 //	│ ⇲ cte      wrap the selection in a CTE                     │  ⇲: uses $SELECTION$
 //	│   cnt      count rows per value                            │
+//	│   iferr    return a non-nil error                       Go │  another language:
+//	│                                                            │  dimmed, last, tagged
 //	│ ─────────────────────────────────────────────────────────  │
 //	│ WITH $VAR1:q$ AS (                                         │  the body of the
 //	│     $SELECTION$                                            │  row under the cursor
@@ -64,7 +66,9 @@ func (sd *snippetsModal) load(m *Model) error {
 
 // build lists the snippets the filter matches — a name match before a
 // description match, an exact or prefix one first — with the cursor on sel
-// when given.
+// when given. Within a rank the editor's own language (SQL) comes first:
+// the other language's rows are there to be kept (edited, deleted), not
+// inserted, so they should not stand between the filter and the pick.
 func (sd *snippetsModal) build(sel string) {
 	q := strings.ToLower(strings.TrimSpace(sd.filter.Text()))
 	rank := func(sn userdata.Snippet) int {
@@ -85,12 +89,18 @@ func (sd *snippetsModal) build(sel string) {
 	}
 	var items []listItem
 	nameW := 0
-	for r := 0; r <= 3; r++ {
+	for r := 0; r <= 7; r++ {
+		// r: the filter's rank (0–3) for this editor's language, then the
+		// same four ranks for the rest
+		other := r > 3
 		for _, sn := range sd.all {
-			if rank(sn) != r {
+			if rank(sn) != r%4 || sn.For(editorLang) == other {
 				continue
 			}
 			it := listItem{label: sn.Name, desc: sn.Desc, data: sn}
+			if other {
+				it.sub, it.muted = userdata.LangLabel(sn.Lang), true
+			}
 			if tpl, err := snippet.Parse(sn.Body); err != nil {
 				it.mark, it.desc = "⚠", "does not parse: "+err.Error()
 			} else if tpl.UsesSelection() {
@@ -316,6 +326,7 @@ func (sd *snippetsModal) wheel(m *Model, x, y, dy int) { sd.lst.scroll(dy) }
 //	╭ Edit snippet cnt ─────────────────────────────────────── ✕ ╮
 //	│ Name         [cnt                                        ] │
 //	│ Description  [count rows per value                       ] │
+//	│ Language      SQL   Go                                  ^L │  where it expands
 //	│ Body                                                       │
 //	│ ┊SELECT $VAR2:column$, count(*) AS n                       │
 //	│ ┊FROM $VAR1:table$                                         │
@@ -328,8 +339,13 @@ type snippetForm struct {
 	fields [3]*editor
 	focus  int // which field has the keyboard: name, desc, body
 	errMsg string
+	// lang is the snippet's language (userdata.LangSQL, LangGo): a toggle
+	// rather than a fourth text field, since there are two to choose from;
+	// ^L or a click on a chip switches it
+	lang string
 
 	rects          [3]Rect
+	langBtns       [2]Rect // the SQL and Go chips, in userdata.SnippetLangs order
 	saveBtn, noBtn Rect
 	hoverBtn       int
 }
@@ -343,9 +359,8 @@ const (
 // openSnippetForm opens the form over the snippet called name, or empty
 // for a new one (named suggest, when given).
 func (m *Model) openSnippetForm(name, suggest string) {
-	f := &snippetForm{old: name, hoverBtn: -1}
+	f := &snippetForm{old: name, hoverBtn: -1, lang: editorLang}
 	f.fields = [3]*editor{newEditor(true), newEditor(true), newEditor(false)}
-	f.fields[sfBody].placeholder = "SELECT $VAR2:*$ FROM $VAR1:table$"
 	if name != "" {
 		sn, ok, err := m.snips.Get(name)
 		if err != nil || !ok {
@@ -355,6 +370,7 @@ func (m *Model) openSnippetForm(name, suggest string) {
 		f.fields[sfName].SetText(sn.Name)
 		f.fields[sfDesc].SetText(sn.Desc)
 		f.fields[sfBody].SetText(sn.Body)
+		f.lang = sn.Lang
 		f.focus = sfBody // an edit is usually to the body
 	} else {
 		f.fields[sfName].SetText(suggest)
@@ -362,6 +378,7 @@ func (m *Model) openSnippetForm(name, suggest string) {
 			f.focus = sfDesc
 		}
 	}
+	f.setLang(f.lang) // the placeholder, for the language now known
 	m.openModal(f)
 }
 
@@ -398,6 +415,20 @@ func (f *snippetForm) draw(m *Model, s Surface) *caret {
 	put(sfName, Rect{lw, 0, s.W() - lw - 1, 1}, m.st.raised)
 	s.Put(1, 1, "Description", labelSt(sfDesc))
 	put(sfDesc, Rect{lw, 1, s.W() - lw - 1, 1}, m.st.raised)
+	s.Put(1, 2, "Language", onBg(m.st.muted, bg))
+	x := lw
+	for i, l := range userdata.SnippetLangs {
+		st := m.st.button
+		if l == f.lang {
+			st = m.st.buttonHot
+		}
+		f.langBtns[i] = chip(s, x, 2, " "+userdata.LangLabel(l)+" ", st)
+		x += f.langBtns[i].W + 1
+	}
+	if f.lang == userdata.LangGo {
+		s.Put(x+1, 2, truncate("expands in dbc web's script tabs", max(s.W()-x-6, 0)), onBg(m.st.muted, bg))
+	}
+	s.PutRight(s.W()-1, 2, "^L", onBg(m.st.muted, bg))
 	s.Put(1, 3, "Body", labelSt(sfBody))
 	bodyH := s.H() - 8
 	put(sfBody, Rect{1, 4, s.W() - 2, bodyH}, m.st.raised)
@@ -424,6 +455,9 @@ func (f *snippetForm) key(m *Model, k tea.KeyPressMsg) (tea.Cmd, bool) {
 		return f.back(m, f.old)
 	case "ctrl+s":
 		return f.save(m)
+	case "ctrl+l":
+		f.toggleLang()
+		return nil, false
 	case "tab":
 		f.focus = (f.focus + 1) % len(f.fields)
 		return nil, false
@@ -451,6 +485,7 @@ func (f *snippetForm) save(m *Model) (tea.Cmd, bool) {
 		Name: strings.TrimSpace(f.fields[sfName].Text()),
 		Desc: f.fields[sfDesc].Text(),
 		Body: f.fields[sfBody].Text(),
+		Lang: f.lang,
 	}
 	if err := m.snips.Save(f.old, sn); err != nil {
 		switch {
@@ -467,6 +502,11 @@ func (f *snippetForm) save(m *Model) (tea.Cmd, bool) {
 	verb := "saved"
 	if f.old == "" {
 		verb = "made"
+	}
+	if !sn.For(editorLang) {
+		m.logf(logOk, "%s %s snippet %s — type %s then Tab in a script tab in dbc web", verb,
+			userdata.LangLabel(sn.Lang), sn.Name, sn.Name)
+		return f.back(m, sn.Name)
 	}
 	m.logf(logOk, "%s snippet %s — type %s then Tab in the editor, or pick it here", verb, sn.Name, sn.Name)
 	return f.back(m, sn.Name)
@@ -488,6 +528,12 @@ func (f *snippetForm) click(m *Model, x, y, clicks int, shift bool) (tea.Cmd, bo
 	case f.saveBtn.Contains(x, y):
 		return f.save(m)
 	}
+	for i, r := range f.langBtns {
+		if r.Contains(x, y) {
+			f.setLang(userdata.SnippetLangs[i])
+			return nil, false
+		}
+	}
 	for i, r := range f.rects {
 		if r.Contains(x, y) {
 			f.focus = i
@@ -495,6 +541,31 @@ func (f *snippetForm) click(m *Model, x, y, clicks int, shift bool) (tea.Cmd, bo
 		}
 	}
 	return nil, false
+}
+
+// toggleLang is ^L: the other language.
+func (f *snippetForm) toggleLang() {
+	if f.lang == userdata.LangGo {
+		f.setLang(userdata.LangSQL)
+	} else {
+		f.setLang(userdata.LangGo)
+	}
+}
+
+// setLang sets the language, and with it the body's placeholder, so an
+// empty body shows what a snippet of that language looks like.
+func (f *snippetForm) setLang(l string) {
+	f.lang = l
+	f.errMsg = ""
+	f.fields[sfBody].placeholder = bodyPlaceholder(l)
+}
+
+// bodyPlaceholder is an empty body's hint, in the snippet's language.
+func bodyPlaceholder(lang string) string {
+	if lang == userdata.LangGo {
+		return "res, err := s.Query(\"$VAR1:conn$\", `$VAR2:SELECT 1$`)"
+	}
+	return "SELECT $VAR2:*$ FROM $VAR1:table$"
 }
 
 func (f *snippetForm) drag(m *Model, x, y int) { f.fields[f.focus].Drag(x, y) }

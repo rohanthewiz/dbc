@@ -84,12 +84,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-229** · raised `2026-1027-1934-live-snippets` · value low
-  Snippets expand only in SQL documents: the TUI's editor, and query tabs
-  in dbc web (`editor.js updateSnipCtx` skips a fixed-language document,
-  so not script or pipeline tabs). Go snippets for script tabs would need
-  a language field on a snippet (`userdata.Snippet`), so a SQL name does
-  not fire in Go and the reverse. Nobody has asked.
 - **N-241** · raised `2026-1031-0158-n238-dialect-aware-scan` · value low
   On MySQL, `"…"` is a string under the default `sql_mode` (no
   `ANSI_QUOTES`), and a backslash escapes in it as in `'…'`. sqlsplit
@@ -650,6 +644,13 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-229** · raised `2026-1027-1934-live-snippets` · value low
+  Snippets expand only in SQL documents: the TUI's editor, and query tabs
+  in dbc web (`editor.js updateSnipCtx` skips a fixed-language document,
+  so not script or pipeline tabs). Go snippets for script tabs would need
+  a language field on a snippet (`userdata.Snippet`), so a SQL name does
+  not fire in Go and the reverse. Nobody has asked.
+  closed 2026-11-03, `2026-1103-1901-n229-go-snippets` (from the cats-todo backlog): `userdata.Snippet.Lang` (`LangSQL`, `LangGo`; `NormLang` reads "" as SQL and refuses anything else, `Snippet.For(lang)`, `GetFor`, `ListFor`). The file gains `lang TEXT NOT NULL DEFAULT 'sql'` by `ALTER TABLE … ADD COLUMN IF NOT EXISTS` on every open, which backfills old rows as SQL; an older dbc's insert gets the default and its upsert does not name `lang`, so its edit of a Go snippet stays Go. Names stay unique across languages (the name is the key everywhere: primary key, routes, rename; a name meaning two things would make the dialogs' edit/delete ambiguous). Four Go starters (`iferr`, `qry`, `exec`, `each`), seeded under their own meta flag `seeded_go` (SQL keeps `seeded`), so a store seeded by an older dbc gets them once, `ON CONFLICT DO NOTHING` sparing a user snippet of the same name. TUI: Tab, the popup and `pickSnippet` see SQL only (`editorLang`); the dialog lists every snippet, the other language's after the SQL ones, dimmed and tagged `Go`, and a pick of one is refused with where it expands; the form has a Language row (chips, `^L` toggles; the body's placeholder follows). Web: `editor.js snippetLang()` ("sql" for a query tab, "go" for a script tab, "" for pipeline/job JSON) drives the `dbcSnippetWord` key (`dbc.snippets.has(name, lang)`); `expand` takes `lang` and the server refuses a snippet of another language (400 naming where it expands); `complSnippets` (ws `/complete`) is SQL only, and the Go provider in `scripts.js` offers the Go rows through `editor.js snippetSuggestions` (main editor only, so a pipeline inspector's Go field gets none); the dialog ranks the document's language first, dims the rest with a `.snlang` tag and refuses their pick; the form has a Language select; the script tab's editor menu gained the snippets row. README (Live snippets: SQL and Go, the Go starters; Script tabs; keys table) and the F1 line updated. Tests: `TestSnippetsLang`, `TestStarterSnippetsLangs`, `TestSnippetsOldFile` (an old-schema file: column added, rows SQL, Go starters once, a user `iferr` kept), `TestSnippetsOpenLeavesFile` (the per-open DDL does not rewrite the file, which would make the TUI and web re-read each other on every Tab), `TestSnippetGoNotInSQL`, `TestSnippetFormLang`, `TestSnippetsLangAPI`, and `goSnippetsInScript` in the `web/e2e` script-tabs step (iferr⇥ under a tab indent with the mirror, `sel` not claiming Tab, `qr` → `qry` from the suggestion list, the Go dialog refusing `countof`). Full web e2e green.
 - **N-228** · raised `2026-1027-1934-live-snippets` · value low
   Live snippets are reached by their exact name then Tab, or from Alt+S;
   the completion popup does not list them. Offer them there (a row per

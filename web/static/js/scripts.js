@@ -900,6 +900,8 @@
     //	sdb.CopyOpts{▮ the type's fields
     //	s.Query("▮     the connection names, inside a connection argument
     //	               (sdbapi's connArgs: Copy's src and dst, Query's conn …)
+    //	ife▮           the Go snippets whose name the word begins (a live
+    //	               snippet: picking one expands it, as Tab on the name)
     let sdbAPI = null;
     const apiOnce = () => sdbAPI || (sdbAPI = api("GET", "/api/v1/script-api").catch((err) => { sdbAPI = null; throw err; }));
 
@@ -956,7 +958,10 @@
                 detail: f.type, documentation: f.doc ? { value: f.doc } : undefined, range: rangeBack(word.length) })) };
             }
           }
-          return { suggestions: [] };
+          // a word in code: the Go snippets it begins (N-229), each picked
+          // to expand as Tab on its whole name would — editor.js builds
+          // the rows, as the expand command is the editor's
+          return { suggestions: dbc.editor.snippetSuggestions ? dbc.editor.snippetSuggestions(model, pos) : [] };
         },
       });
 

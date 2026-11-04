@@ -85,8 +85,8 @@
   const fixed = new Map();
   const readyFns = []; // ready(fn) callbacks waiting for Monaco
   let scriptCtx = null; // the dbcScript context key, once Monaco is up
-  // dbcSnippetWord: the word the caret ends names a snippet, in a SQL
-  // document, so Tab expands it (registerSnippets); once Monaco is up
+  // dbcSnippetWord: the word the caret ends names a snippet of the
+  // document's language (snippetLang), so Tab expands it; once Monaco is up
   let snipCtx = null;
   // snipCmd: the command a completion list's snippet row runs once picked
   // (bindKeys), to expand the name it inserted
@@ -259,6 +259,13 @@
     },
     // isScript: the document on screen is a script's (Go)
     isScript: () => fixed.get(docKey) === "go",
+    // snippetLang: the language of the snippets the document on screen
+    // expands — "sql" or "go" — or "" for one that has none (see
+    // snippetLang below)
+    snippetLang: () => snippetLang(),
+    // snippetSuggestions: the Go completion provider's snippet rows
+    // (scripts.js), built here where the expand command lives
+    snippetSuggestions: (model, pos) => snippetSuggestions(model, pos),
     // insertSnippet is the snippets dialog's pick (snippets.js): the
     // snippet called name in place of the selection — its $SELECTION$ —
     // or at the caret
@@ -830,8 +837,10 @@
   }
 
   // ── live snippets ──────────────────────────────────────────────────────
-  // A snippet's name then Tab expands it, in a query tab's SQL — the TUI's
-  // rule (tui/snippets.go). The server expands it (POST …/expand, package
+  // A snippet's name then Tab expands it, in a document of the snippet's
+  // language: a query tab's SQL (the TUI's rule, tui/snippets.go) or a
+  // script tab's Go (N-229). A SQL "sel" typed into a script, or a Go
+  // "iferr" into a query, is just a word. The server expands it (POST …/expand, package
   // snippet: the indentation, a multi-line selection's layout, the stops)
   // and answers in Monaco's snippet syntax, which Monaco's own snippet
   // controller inserts: it selects each stop's default, steps the stops on
@@ -860,10 +869,48 @@
     return { word: line.slice(start, end), range: new monaco.Range(p.lineNumber, start + 1, p.lineNumber, end + 1) };
   }
 
+  // snippetLang is the language of the snippets the document on screen
+  // expands: "sql" for a query tab (no fixed language: SQL in the
+  // connection's dialect), "go" for a script tab, and "" for any other
+  // fixed language — a pipeline's or a job's JSON — which has none.
+  function snippetLang() {
+    const l = fixed.get(docKey);
+    return !l ? "sql" : l === "go" ? "go" : "";
+  }
+
   function updateSnipCtx() {
     if (!snipCtx) return;
-    const w = !fixed.get(docKey) && dbc.snippets ? snippetWord() : null;
-    snipCtx.set(!!(w && dbc.snippets.has(w.word)));
+    const lang = snippetLang();
+    const w = lang && dbc.snippets ? snippetWord() : null;
+    snipCtx.set(!!(w && dbc.snippets.has(w.word, lang)));
+  }
+
+  // snippetSuggestions are the Go completion list's snippet rows: one per
+  // Go snippet whose name begins the word before the caret — SQL's rule
+  // (sqlcomplete.AddSnippets) done here, as the Go provider is the page's
+  // own (scripts.js), not the server's. Picking one runs snipCmd, which
+  // expands the name as Tab would. Only for the main editor's model: the
+  // command acts on that editor, so a pipeline inspector's Go field (a
+  // mini() editor) gets none rather than an expansion somewhere else.
+  function snippetSuggestions(model, pos) {
+    if (!ed || model !== ed.getModel() || !snipCmd || !dbc.snippets) return [];
+    const line = model.getLineContent(pos.lineNumber).slice(0, pos.column - 1);
+    const m = /[\p{L}\p{N}_]+$/u.exec(line);
+    // nothing typed, or after a "." (res.Ro is a field): not a snippet's name
+    if (!m || (m.index > 0 && line[m.index - 1] === ".")) return [];
+    const word = m[0].toLowerCase();
+    const range = new monaco.Range(pos.lineNumber, pos.column - m[0].length, pos.lineNumber, pos.column);
+    return dbc.snippets.list("go")
+      .filter((s) => !s.err && s.name.toLowerCase().startsWith(word))
+      .map((s) => ({
+        label: { label: s.name, description: s.desc ? "snippet · " + s.desc : "snippet" },
+        kind: monaco.languages.CompletionItemKind.Snippet,
+        detail: s.desc ? "snippet · " + s.desc : "snippet",
+        documentation: { value: "```go\n" + s.body + "\n```" },
+        insertText: s.name,
+        range,
+        command: { id: snipCmd, title: "expand snippet", arguments: [s.name] },
+      }));
   }
 
   // expandSnippet asks the server for the snippet's expansion at range and
@@ -881,6 +928,9 @@
       selection: wrap ? model.getValueInRange(range) : "",
       selPrefix: line.slice(0, range.startColumn - 1),
       indent: /^[ \t]*/.exec(line)[0],
+      // the server refuses a snippet of another language (the dialog lists
+      // them all); "" — a JSON document — is refused for every snippet
+      lang: snippetLang() || "none",
     };
     let r;
     try {
@@ -911,7 +961,8 @@
     const line = v.slice(ls, (v.indexOf("\n", a) + 1 || v.length + 1) - 1);
     try {
       const r = await dbc.api("POST", "/api/v1/snippets/" + encodeURIComponent(name) + "/expand",
-        { selection: v.slice(a, b), selPrefix: v.slice(ls, a), indent: /^[ \t]*/.exec(line)[0] });
+        { selection: v.slice(a, b), selPrefix: v.slice(ls, a), indent: /^[ \t]*/.exec(line)[0],
+          lang: snippetLang() || "none" });
       api.insert(r.text);
     } catch (err) {
       dbc.log("err", "snippet " + name + ": " + err.message);

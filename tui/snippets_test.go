@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/rohanthewiz/dbc/sqlcomplete"
+	"github.com/rohanthewiz/dbc/userdata"
 )
 
 // pasteText puts s in as a paste: one edit, and no completion popup to
@@ -280,5 +281,87 @@ func TestSnippetInCompletionPopup(t *testing.T) {
 	}
 	if m.compl != nil {
 		t.Error("the popup stayed open after the pick")
+	}
+}
+
+// A Go snippet's name typed in the (SQL) editor is a word: Tab does not
+// expand it, the popup does not offer it, and the dialog lists it last,
+// tagged and dimmed, refusing to insert it (N-229).
+func TestSnippetGoNotInSQL(t *testing.T) {
+	m := newTestModel(t)
+	m.focus = focusEditor
+	m.editor.SetText("iferr")
+	m.editor.move(pos{0, 5}, false)
+	key(t, m, "tab")
+	if got := m.editor.Text(); got != "iferr" {
+		t.Fatalf("a Go snippet expanded in SQL: %q", got)
+	}
+	for _, sn := range m.complSnippets() {
+		if sn.Name == "iferr" || sn.Name == "qry" {
+			t.Fatalf("the popup offers Go snippet %s", sn.Name)
+		}
+	}
+
+	m.focus = focusEditor
+	m.editor.SetText("")
+	key(t, m, "alt+s")
+	sd, ok := m.modal.(*snippetsModal)
+	if !ok {
+		t.Fatalf("modal %T", m.modal)
+	}
+	sawGo := false
+	for _, it := range sd.lst.items {
+		sn := it.data.(userdata.Snippet)
+		if sn.Lang == userdata.LangGo {
+			sawGo = true
+			if it.sub != "Go" || !it.muted {
+				t.Errorf("Go row %s: sub %q muted %v", it.label, it.sub, it.muted)
+			}
+		} else if sawGo {
+			t.Errorf("SQL row %s after a Go row", it.label)
+		}
+	}
+	if !sawGo {
+		t.Fatal("the dialog lists no Go snippet")
+	}
+	typeText(t, m, "iferr")
+	if sn, _ := sd.current(); sn.Name != "iferr" {
+		t.Fatalf("filter's first row = %q", sn.Name)
+	}
+	key(t, m, "enter")
+	if got := m.editor.Text(); got != "" {
+		t.Fatalf("a Go snippet was inserted into SQL: %q", got)
+	}
+}
+
+// ^L in the form switches the language a snippet is saved under.
+func TestSnippetFormLang(t *testing.T) {
+	m := newTestModel(t)
+	m.focus = focusEditor
+	key(t, m, "alt+s")
+	key(t, m, "ctrl+n")
+	f, ok := m.modal.(*snippetForm)
+	if !ok || f.lang != userdata.LangSQL {
+		t.Fatalf("form %T lang %q", m.modal, f.lang)
+	}
+	typeText(t, m, "gofor")
+	key(t, m, "ctrl+l")
+	if f.lang != userdata.LangGo || !strings.Contains(f.fields[sfBody].placeholder, "s.Query") {
+		t.Fatalf("^L: lang %q placeholder %q", f.lang, f.fields[sfBody].placeholder)
+	}
+	key(t, m, "tab")
+	key(t, m, "tab")
+	pasteText(t, m, "for $VAR1:i$ := range $VAR2$ {\n}")
+	key(t, m, "ctrl+s")
+	if _, ok := m.modal.(*snippetsModal); !ok {
+		t.Fatalf("after save: %T (form error %q)", m.modal, f.errMsg)
+	}
+	if sn, ok, _ := m.snips.GetFor("gofor", userdata.LangGo); !ok || sn.Lang != userdata.LangGo {
+		t.Fatalf("saved as %+v %v", sn, ok)
+	}
+	// editing it opens on its language
+	key(t, m, "ctrl+e")
+	if f := m.modal.(*snippetForm); f.lang != userdata.LangGo {
+		t.Fatalf("edit form lang %q", f.lang)
 	}
 }

@@ -722,8 +722,8 @@ So a line like this formats in one step into the query above:
 
 ### Live snippets
 
-A snippet is a saved piece of SQL with fields to fill in. Type its name
-and press `Tab` to insert it. Or press `Alt+S` (right-click → **Insert
+A snippet is a saved piece of SQL (or, for [script tabs](#script-tabs-in-dbc-web), Go) with
+fields to fill in. Type its name and press `Tab` to insert it. Or press `Alt+S` (right-click → **Insert
 snippet…**) to pick one from a list, which is also where you add, edit
 and delete them. The same snippets work in the TUI and in dbc web.
 
@@ -740,7 +740,7 @@ filled in both places as you type. `Tab` after the last field puts the
 caret at the end, and `Esc` stops early. While you are filling fields,
 the TUI underlines the fields still to come.
 
-**Writing a body.** Everything is literal SQL except these:
+**Writing a body.** Everything is literal text except these:
 
 | In the body | Means |
 |---|---|
@@ -760,14 +760,29 @@ keeps its own relative indentation under the field. Typing a name and
 pressing `Tab` never wraps anything, because typing replaces the
 selection.
 
-**Starter snippets.** A new store comes with five snippets, which you can
-edit or delete like your own. Deleted starters are not brought back.
+**Starter snippets.** A new store comes with five SQL snippets and four
+Go ones, which you can edit or delete like your own. Deleted starters are
+not brought back. (A store made before Go snippets existed gets the Go
+starters once, the first time a newer dbc opens it, skipping any name you
+already use.)
 
 - `sel`: a `SELECT … FROM … WHERE … LIMIT`
 - `cnt`: rows per value
 - `cte`: wrap the selection in a CTE
 - `countof`: count the rows the selection returns
 - `upd`: an `UPDATE` inside `BEGIN`, ending on a reminder to `COMMIT` or `ROLLBACK`
+- Go: `iferr` (`if err != nil { return err }`), `qry` (`s.Query` and a loop
+  printing each row), `exec` (`s.Exec` and the count it changed), `each`
+  (the selection in a loop over `s.Conns()`)
+
+**SQL and Go.** Each snippet has a language, chosen in its form (in the
+TUI, `^L` switches it). A SQL snippet expands in the TUI's editor and in
+dbc web's query tabs, a Go snippet only in dbc web's script tabs, so `sel`
+typed in a script, or `iferr` typed in a query, is just a word. The
+dialog lists every snippet, the current editor's language first; the
+others are dimmed, tagged with their language, and are not inserted when
+picked. Names are unique across both languages, so `sel` can't be both.
+Pipeline and job tabs expand no snippets.
 
 **Where they are kept.** In `~/.config/dbc/snippets.bytdb`, shared by
 every dbc on the machine, so a snippet saved in dbc web expands in the
@@ -775,7 +790,6 @@ TUI and the other way round. A name is letters, digits and `_`, since it
 is typed as one word. A body that doesn't parse (an unclosed `$VAR1`, two
 `$END$`s) is refused when you save, with the reason.
 
-Snippets expand in the SQL editor only, not in script or pipeline tabs.
 `Tab` claims the key only when the word just before the caret (with no
 `.` in front of it) is a snippet's name. Otherwise `Tab` does what it
 always did: it moves the focus in the TUI and indents in dbc web. When
@@ -784,8 +798,8 @@ from the completion list. While you are filling a field, the list's
 `Tab` still picks, and the next `Tab` moves on.
 
 **In the completion list.** If you don't remember a name, start typing
-it: the completion list shows the snippets whose names begin with the
-word, marked `§` in the TUI and with the snippet icon in dbc web, and
+it: the completion list shows the snippets of the editor's language whose
+names begin with the word, marked `§` in the TUI and with the snippet icon in dbc web, and
 picking one expands it just as `Tab` on the full name does. The snippets
 sit a few rows down, after the first SQL suggestions, so `up` then `Tab`
 still picks `UPDATE` rather than the `upd` snippet.
@@ -1705,7 +1719,7 @@ file's connections are changed in the file. The TUI has the same form —
 | `Ctrl+X` (nothing selected) · `Ctrl+Shift+X` | explain · explain analyze |
 | `Ctrl+K` | stop the run (in the assistant: stop the answer) |
 | `Shift+Alt+F` | format the selection, or the whole buffer (see [Formatting a query](#formatting-a-query)) |
-| *name* `Tab` · `Alt+S` | in a query tab: expand the snippet of that name · the snippets dialog (see [Live snippets](#live-snippets)) |
+| *name* `Tab` · `Alt+S` | expand the snippet of that name (SQL in a query tab, Go in a script tab) · the snippets dialog (see [Live snippets](#live-snippets)) |
 | `Ctrl+P` · `Ctrl+E` · `Ctrl+O` | history · export · scripts |
 | `Ctrl+S` | in a script tab, save the script |
 | `Ctrl+I` | the assistant, and back (`Ctrl+A` stays select-all) |
@@ -2086,6 +2100,9 @@ with the grid and the log beside it as for a query.
 - **Completion and hover** for the `sdb` API (`s.`, `sdb.`, the fields of a
   `Result`, `CopyOpts` or `WriteOpts`), with signatures and doc comments,
   and connection names inside a connection argument (`s.Query("…`).
+- **Go snippets.** A [snippet](#live-snippets) saved as Go expands here:
+  type its name and `Tab` (`iferr⇥`, `qry⇥`), or `Alt+S` to pick one. The
+  completion list offers them as you type a word, as in a query tab.
 - A script names its own connections, so a script tab is never connected:
   a click on a connection in the sidebar puts its name in at the caret (in
   the script itself: while the tab is still opening the click only says so,

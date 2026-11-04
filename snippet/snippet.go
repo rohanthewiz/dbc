@@ -1,6 +1,8 @@
 // Package snippet parses and expands live snippets: named templates with
-// tab stops, typed into the SQL editor by name (then Tab) or picked from a
-// list, in the terminal UI and in dbc web alike.
+// tab stops, typed into an editor by name (then Tab) or picked from a
+// list, in the terminal UI and in dbc web alike. The syntax is the same
+// for a SQL snippet and a Go one (userdata.Snippet.Lang decides where a
+// snippet expands; this package does not care what the text is).
 //
 // THE TEMPLATE SYNTAX. Everything is literal text except these:
 //

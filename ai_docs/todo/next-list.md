@@ -78,17 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-241** · raised `2026-1031-0158-n238-dialect-aware-scan` · value low
-  On MySQL, `"…"` is a string under the default `sql_mode` (no
-  `ANSI_QUOTES`), and a backslash escapes in it as in `'…'`. sqlsplit
-  reads every `"…"` as a quoted name (`backslashEscapes` answers no for
-  any quote but `'`; `Lex` colors it `TokIdent`), so on MySQL
-  `SELECT "a\"; b"` splits at the `;` inside the string, and a `"…"`
-  string is drawn as a name. The fix would give the MySQL dialect
-  backslash escapes in `"…"` too (and a string's color), but that is
-  wrong under `ANSI_QUOTES`, which dbc cannot see from the text — a
-  per-connection setting, or a probe of `@@sql_mode` at connect. Nobody
-  has hit it; it takes a double-quoted MySQL string holding `\"`.
 
 ## Validate
 
@@ -609,6 +598,18 @@ call.
   tables and joins. The rules, SQL, story and plan painting are in the
   pure `designer` package, so only the drawing and editing are new.
   Nobody has asked.
+
+- **N-241** · raised `2026-1031-0158-n238-dialect-aware-scan` · value low
+  On MySQL, `"…"` is a string under the default `sql_mode` (no
+  `ANSI_QUOTES`), and a backslash escapes in it as in `'…'`. sqlsplit
+  reads every `"…"` as a quoted name (`backslashEscapes` answers no for
+  any quote but `'`; `Lex` colors it `TokIdent`), so on MySQL
+  `SELECT "a\"; b"` splits at the `;` inside the string, and a `"…"`
+  string is drawn as a name. The fix would give the MySQL dialect
+  backslash escapes in `"…"` too (and a string's color), but that is
+  wrong under `ANSI_QUOTES`, which dbc cannot see from the text — a
+  per-connection setting, or a probe of `@@sql_mode` at connect. Nobody
+  has hit it; it takes a double-quoted MySQL string holding `\"`.
 
 ## Non-goals
 

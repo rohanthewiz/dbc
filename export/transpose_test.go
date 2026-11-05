@@ -49,16 +49,18 @@ func TestTransposeOneRowIsAValueColumn(t *testing.T) {
 	}
 }
 
-// The pasted table draws the names as row headers in the header's colors,
-// still escaped, and a real NULL in its muted italic.
+// The pasted table draws the names as row headers, bold like the header row
+// (no fill: see fragment.go on Teams' dark theme), still escaped, and a real
+// NULL in its muted italic.
 func TestHTMLFragmentTransposedHasRowHeaders(t *testing.T) {
 	out := HTMLFragment(Transpose(mixed(), 1))
 	if n := strings.Count(out, `<th scope="row"`); n != 3 {
 		t.Errorf("want 3 row headers (one per source column), got %d:\n%s", n, out)
 	}
-	if !strings.Contains(out, `background:`+fragHeadBg+`;color:`+fragHeadFg) ||
+	if strings.Contains(out, `background`) ||
+		!strings.Contains(out, `<th scope="row" style="border:1px solid `+fragBorder) ||
 		!strings.Contains(out, `font-weight:600">note</th>`) {
-		t.Errorf("row headers should wear the header's colors:\n%s", out)
+		t.Errorf("row headers should be bold and bordered, with no fill:\n%s", out)
 	}
 	if strings.Count(out, `font-style:italic">NULL</td>`) != 1 {
 		t.Errorf("exactly one real NULL, drawn as such:\n%s", out)

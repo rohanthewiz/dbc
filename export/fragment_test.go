@@ -38,12 +38,27 @@ func TestHTMLFragmentIsSelfStyled(t *testing.T) {
 	if !strings.HasPrefix(out, `<meta charset="utf-8"><table style="`) {
 		t.Errorf("fragment should open with the charset hint and a styled table: %.80s", out)
 	}
-	// every cell pairs a background with a text color, or a dark-mode chat
-	// theme would supply the other and make it unreadable
-	for _, cell := range strings.Split(out, "<td")[1:] {
-		if !strings.Contains(cell, "background:") || !strings.Contains(cell, ";color:") {
-			t.Fatalf("a cell is missing its paired colors: <td%.120s", cell)
+	// No cell may set a surface: Teams keeps a pasted background but
+	// rewrites the text color to its theme's, so in dark-theme Teams any
+	// light fill became white text on white. The only text color allowed is
+	// the mid-gray of a real NULL, which reads in either theme.
+	for _, cell := range strings.Split(out, "<t")[1:] {
+		if strings.HasPrefix(cell, "able") || strings.HasPrefix(cell, "head") ||
+			strings.HasPrefix(cell, "body") || strings.HasPrefix(cell, "r>") {
+			continue
 		}
+		if strings.Contains(cell, "background") {
+			t.Errorf("a cell sets a background, which Teams' dark theme turns unreadable: <t%.120s", cell)
+		}
+		if strings.Contains(cell, "color:") && !strings.Contains(cell, ">NULL</td>") {
+			t.Errorf("a cell sets a text color: <t%.120s", cell)
+		}
+		if !strings.Contains(cell, "border:1px solid "+fragBorder) {
+			t.Errorf("a cell is missing its border: <t%.120s", cell)
+		}
+	}
+	if strings.Contains(out, "font-family") || strings.Contains(out, "font-size") {
+		t.Error("the table should take the message's own font")
 	}
 }
 
@@ -53,7 +68,7 @@ func TestHTMLFragmentCells(t *testing.T) {
 		{"markup is escaped", "&lt;b&gt;bold&lt;/b&gt;"},
 		{"non-ASCII survives", "Café"},
 		{"a newline becomes a line break", "line one<br>line two"},
-		{"a real NULL is muted and italic", "color:" + fragNullFg + ";text-align:left;vertical-align:top;font-style:italic\">NULL</td>"},
+		{"a real NULL is muted and italic", "text-align:left;vertical-align:top;color:" + fragNullFg + ";font-style:italic\">NULL</td>"},
 	}
 	for _, c := range cases {
 		if !strings.Contains(out, c.want) {
@@ -61,7 +76,7 @@ func TestHTMLFragmentCells(t *testing.T) {
 		}
 	}
 	// the string "NULL" in the name column is data, drawn like any other value
-	if !strings.Contains(out, "color:"+fragCellFg+";text-align:left;vertical-align:top\">NULL</td>") {
+	if !strings.Contains(out, "text-align:left;vertical-align:top\">NULL</td>") {
 		t.Error(`the string "NULL" must not be styled as a real NULL`)
 	}
 	if strings.Contains(out, "<b>bold</b>") {

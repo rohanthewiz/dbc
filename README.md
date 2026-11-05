@@ -1020,7 +1020,11 @@ original kept as the attribute's comment.
 Right-click a result (or `⧉ Copy ▾`) and pick **Table for Teams / Outlook /
 Docs (HTML)**: dbc puts a real HTML table on the clipboard, with inline
 styles, so it pastes into Teams, Outlook, Slack or Google Docs as a formatted
-table rather than as markup. Where the table flavor cannot land — a target
+table rather than as markup. The table carries only its borders, padding,
+alignment and a bold header — no fill and no text color — so it takes the
+look of the message it lands in and reads the same in Teams' light and dark
+themes (Teams keeps a pasted background but repaints the text, which would
+turn a light-filled table into white on white). Where the table flavor cannot land — a target
 that pastes only text, or a copy over SSH that goes through the terminal —
 the paste is the same result as an aligned text table, never the HTML
 source (that is `Export → HTML page`). Markdown, CSV, TSV and JSON are one

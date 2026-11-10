@@ -42,9 +42,10 @@ type Reader struct {
 	n       int64
 	err     error
 	closed  bool
-	// holdTx keeps the transaction open past the last row, for Copy: it
-	// commits the read (Close) only after its load has, or rolls it back
-	// (rollback). Next would otherwise commit as the rows run out.
+	// holdTx keeps the transaction open past the last row, for Copy and
+	// ReadOptions.Hold: the read commits (Close) only after its load has,
+	// or rolls back (rollback, Abort). Next would otherwise commit as the
+	// rows run out.
 	holdTx bool
 }
 
@@ -84,6 +85,31 @@ const pgPinOutput = `SELECT set_config('datestyle', 'ISO', true),
 // unwrapped; a read that fails or is canceled rolls them back.
 func Read(ctx context.Context, c Conn, query string, args ...any) (*Reader, error) {
 	return read(ctx, c, query, nil, args...)
+}
+
+// ReadOptions shape a Reader beyond what Read does.
+type ReadOptions struct {
+	// Hold keeps the read's transaction (Postgres) open past its last
+	// row: Next no longer commits as the rows run out, and the caller ends
+	// the read — Close commits it, Abort rolls it back. A caller that
+	// loads the rows somewhere holds the read until that load has
+	// committed, so a query that writes (DELETE … RETURNING, moving rows)
+	// keeps its change only once the rows have arrived — Copy's order,
+	// and a pipeline's sql.read's. Unheld, a short result committed in the
+	// first batch, before the load that was to take it had even opened,
+	// and a load that failed then lost the rows. Off Postgres a read has
+	// no transaction and Hold changes nothing.
+	Hold bool
+}
+
+// ReadWith is Read with opt.
+func ReadWith(ctx context.Context, c Conn, query string, opt ReadOptions, args ...any) (*Reader, error) {
+	rd, err := read(ctx, c, query, nil, args...)
+	if err != nil {
+		return nil, err
+	}
+	rd.holdTx = opt.Hold
+	return rd, nil
 }
 
 // read is Read with setup: statements run in the read's transaction after

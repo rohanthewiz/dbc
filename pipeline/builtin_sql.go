@@ -140,6 +140,14 @@ type sqlRead struct {
 	cols []Col
 }
 
+// Open starts the read, held (etl.ReadOptions.Hold): on Postgres its
+// transaction stays open past the last row and ends at Close, which the
+// runner calls only after every sink has committed — Close(true) commits,
+// Close(false) rolls back. So a query that writes (DELETE … RETURNING:
+// moving rows) keeps its change only once the rows have landed. Read
+// unheld, it committed as its rows ran out — for a result under one
+// batch, before a sink had even opened — and a sink that then failed, or
+// a Stop, lost the rows (N-251).
 func (s *sqlRead) Open(e *Env) error {
 	c, err := e.S.ETLConn(s.conn)
 	if err != nil {
@@ -148,7 +156,7 @@ func (s *sqlRead) Open(e *Env) error {
 	if s.isTable {
 		s.query = tableQuery(c.Engine, s.table, s.columns, s.where, s.order)
 	}
-	rd, err := etl.Read(e.Ctx, c, s.query, s.args...)
+	rd, err := etl.ReadWith(e.Ctx, c, s.query, etl.ReadOptions{Hold: true}, s.args...)
 	if err != nil {
 		return err
 	}

@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-308
+**Next ID:** N-310
 
 ## Open
 
@@ -78,20 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-251** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  A pipeline "move" loses rows when the sink fails.
-  `pipeline/builtin_sql.go:151` opens the source with the public
-  `etl.Read`, so `holdTx` is never set (only `etl/copy.go:261` sets it),
-  and `etl/reader.go:164-171` commits the read as the last row is fetched.
-  `sqlRead.Close(false)` → `Abort` is a no-op by then, against the comment
-  at `pipeline/run.go:582` ("commits only once every load has"). Scenario:
-  `sql.read "DELETE … RETURNING *"` on Postgres into `csv.write` or any
-  non-direct shape; under 1,000 rows (`DefaultBatch`) the DELETE commits
-  before the sink opens, and a sink error or Stop loses the rows. This is
-  the bug closed for `etl.Copy` (the move-rows item in Closed), still in
-  the stream path. Fix: export a held read from `etl` and use it in
-  `sqlRead`. Do N-253 right behind it. Read here; run the live Postgres
-  suite. (RPU plan, phase 1)
 - **N-252** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Preview runs and commits a writing source. `previewShape`
   (`pipeline/run.go:784-838`) only swaps sinks and adds a limit; `stream`
@@ -668,6 +654,19 @@ ten session docs in `ai_docs/claude_sessions/`
   `fmtStatements` take its statements from the scan (`body`), and lay a
   body's statements out indented under its BEGIN, or keep the statement
   as written. Raised while closing N-248.
+- **N-309** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  A script that reads a table with `s.Reader` and loads it back with
+  `s.Writer(…, WriteOpts{Truncate: true})` on the same Postgres database
+  should hang as N-253's pipeline did: the Reader's transaction holds
+  ACCESS SHARE until its rows run out, and the Writer's TRUNCATE, opened
+  before the loop, waits on it forever, on the script's own goroutine
+  (`sdb/etl.go:112,129`: plain `etl.Read`, plain `etl.NewWriter`). N-253
+  gave pipelines the same-database rules through
+  `etl.NewSameDatabaseWriter`; scripts have no held read and no such
+  writer. Fix: in `s.Writer`, when an open Reader of the script shares
+  the Writer's database, take the same-database rules — or document
+  `s.Copy` for a same-table rewrite (it handles it). Traced, not run.
+  Raised while working N-251–N-253.
 
 ## Validate
 
@@ -1035,6 +1034,26 @@ and `raised`.
   and 2 of the RPU plan change sessions, cancel and transactions
   (N-251, N-253, N-270, N-271, N-276); this is what keeps those pinned.
   (RPU plan, phase 5)
+- **N-308** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Three tests fail in a full run, none from a product change, found while
+  running the live suites for N-251–N-253 (each also fails on `e62b012`,
+  before that day's work, except the flake):
+  - `tui.TestLiveNavigatorPostgres` wants 2 sidebar items for a schema of
+    two tables and gets 5: the sidebar's foldable sections (`4d5600c`,
+    2026-11-03) add header rows, and this opt-in test was not updated.
+  - `workspace.TestLiveWorkspaceCompletionRoutines/postgres` wants an
+    overloaded routine's detail to start with its one-argument form;
+    Postgres 17 listed the two-argument one first. Either the catalog
+    read should order overloads, or the test should not depend on it.
+  - `jobs.TestJobFailurePolicies/stop` hung for 10 minutes once under
+    `go test -race ./...` (passes alone, five times under -race): it
+    waits on `cDone`, closed by pipeline c's action, but under the stop
+    policy b can fail before c starts, and c is then canceled without
+    running. Have b fail only once c has started. Fixed in its own commit
+    right after N-252.
+  And `TestLiveDesigner/postgres` failed once when the live packages ran
+  in parallel on the one database (passes alone): run the live suites
+  with `-p 1`, as the live-db-tests note says for a full run.
 
 ## Roadmap
 
@@ -1277,6 +1296,21 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-251** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  A pipeline "move" loses rows when the sink fails.
+  `pipeline/builtin_sql.go:151` opens the source with the public
+  `etl.Read`, so `holdTx` is never set (only `etl/copy.go:261` sets it),
+  and `etl/reader.go:164-171` commits the read as the last row is fetched.
+  `sqlRead.Close(false)` → `Abort` is a no-op by then, against the comment
+  at `pipeline/run.go:582` ("commits only once every load has"). Scenario:
+  `sql.read "DELETE … RETURNING *"` on Postgres into `csv.write` or any
+  non-direct shape; under 1,000 rows (`DefaultBatch`) the DELETE commits
+  before the sink opens, and a sink error or Stop loses the rows. This is
+  the bug closed for `etl.Copy` (the move-rows item in Closed), still in
+  the stream path. Fix: export a held read from `etl` and use it in
+  `sqlRead`. Do N-253 right behind it. Read here; run the live Postgres
+  suite. (RPU plan, phase 1)
+  closed 2026-11-10 (RPU plan, phase 1): `etl.ReadWith(ctx, c, query, etl.ReadOptions{Hold: true}, …)` exports the held read Copy used inside etl: Next no longer commits as the rows run out, Close commits, Abort rolls back. `sqlRead.Open` reads held, so the runner's `source.Close(true)` after every sink's Commit is the commit, as `run.go`'s comment said, and a failure's `Close(false)` is a rollback. Test: `pipeline.TestLivePGMoveKeepsRowsWhenTheSinkFails` in a new opt-in `pipeline/live_pg_test.go` (two pools on `DBC_LIVE_PG_DSN`): a `DELETE … RETURNING` of 10 rows into a sink that fails leaves all 10 in the source (0 on the old code), and into `sql.write` moves them. With this alone, a same-table reload through a transform hangs every time (N-253, the next commit), as the plan said.
 - **N-250** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Completion panics when `.` is the first token of a statement
   (`sqlcomplete/complete.go:357`): `slice bounds out of range [:-1]` at

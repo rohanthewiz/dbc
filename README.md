@@ -2473,6 +2473,11 @@ transform hands back no batch. A fragment
 that is exactly `sql.read` or `sql.table` on Postgres into `sql.write` on
 Postgres, nothing between, runs as `s.Copy`'s direct COPY and says so.
 
+A Postgres source commits **last**, as a copy's does: its read stays open
+until every sink of the fragment has committed, so a `sql.read` of a
+`DELETE … RETURNING` that moves rows keeps them in the source if a sink
+fails or the run is stopped.
+
 A script runs a pipeline by name, or builds one with its own funcs as
 nodes — the one thing the JSON cannot say:
 

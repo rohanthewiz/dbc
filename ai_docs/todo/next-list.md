@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-247
+**Next ID:** N-306
 
 ## Open
 
@@ -78,6 +78,630 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
+- **N-247** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  sqlsplit follows Postgres's comment rules on every dialect
+  (`sqlsplit/sqlsplit.go:490-520,577`, `lex.go:58`). On MySQL `#` is not
+  taken as a comment, so `DELETE FROM t # old; cleanup⏎WHERE id = 1;`
+  splits at the `;` inside it, and the first piece, `DELETE FROM t # old`,
+  deletes every row (reproduced 2026-11-10 with `sqlsplit.MySQL.Split`).
+  An apostrophe in a `#` comment swallows the statements after it into one
+  string. `/*!40101 SET NAMES utf8mb4 */;` counts as no code and is
+  dropped, so a mysqldump loses its conditional statements. Comments nest
+  on MySQL and SQLite, where the server does not nest them, so
+  `/* see /* note */ DELETE …; …` yields no statements. Fix in the shared
+  scanner: `#` to end of line is a comment under the MySQL dialect
+  (`designer/importparse.go:77` already does this), nest only on Postgres
+  and bytdb, and count `/*!` and `/*+` as code on MySQL. Neighbour: N-241.
+  (RPU plan, phase 1)
+- **N-248** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  A compound body splits at its inner `;` (`sqlsplit/sqlsplit.go:507`):
+  SQLite and MySQL `CREATE TRIGGER … BEGIN … END;`, MySQL procedures and
+  functions, Postgres `BEGIN ATOMIC`, `CREATE RULE … DO ALSO (a; b)`.
+  Reproduced 2026-11-10 on a SQLite trigger: the pieces are
+  `CREATE TRIGGER … BEGIN DELETE FROM order_items …` and a bare `END`.
+  With two statements in the body, a caret on a body line picks the inner
+  statement alone; `workspace/pick.go:34` splits a selection the same way,
+  so selecting the text does not help; `--keep-going` would run the body's
+  statements for real. Such objects cannot be created from the editor or
+  `dbc -f`. `DELIMITER` is unknown too. Fix: track `BEGIN…END` and
+  `CASE…END` depth after `CREATE … TRIGGER|PROCEDURE|FUNCTION|EVENT`,
+  track paren depth for `CREATE RULE`, and honour `DELIMITER` on MySQL.
+  (RPU plan, phase 1)
+- **N-249** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  A UTF-8 BOM stays in the first statement (`sqlsplit/sqlsplit.go:77`;
+  nothing strips it on the `main.go:510` file path). The statement is
+  `﻿SELECT 1`, `FirstKeyword` is "", so it is classed as a non-read
+  and the server rejects it. Strip a leading BOM in `Split` or where the
+  file is read. CRLF is fine. Audit, run. (RPU plan, phase 1)
+- **N-250** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Completion panics when `.` is the first token of a statement
+  (`sqlcomplete/complete.go:357`): `slice bounds out of range [:-1]` at
+  `qualifiedRoutines(before[:n-2])`, reproduced 2026-11-10 with the buffer
+  `.`. `prev(2)` returns a zero `tok{}`, whose kind is `tWord` (iota 0,
+  `scope.go:17`), so `isName()` passes. The same for `SELECT 1;.`. The
+  audit traced the TUI's auto-open after a typed `.`
+  (`tui/complete.go:222,240`) to this call on the event loop; in dbc web
+  rweb recovers it as a 500. Fix: guard `n >= 2`, and make the zero tok
+  not a name. (RPU plan, phase 1)
+- **N-251** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  A pipeline "move" loses rows when the sink fails.
+  `pipeline/builtin_sql.go:151` opens the source with the public
+  `etl.Read`, so `holdTx` is never set (only `etl/copy.go:261` sets it),
+  and `etl/reader.go:164-171` commits the read as the last row is fetched.
+  `sqlRead.Close(false)` → `Abort` is a no-op by then, against the comment
+  at `pipeline/run.go:582` ("commits only once every load has"). Scenario:
+  `sql.read "DELETE … RETURNING *"` on Postgres into `csv.write` or any
+  non-direct shape; under 1,000 rows (`DefaultBatch`) the DELETE commits
+  before the sink opens, and a sink error or Stop loses the rows. This is
+  the bug closed for `etl.Copy` (the move-rows item in Closed), still in
+  the stream path. Fix: export a held read from `etl` and use it in
+  `sqlRead`. Do N-253 right behind it. Read here; run the live Postgres
+  suite. (RPU plan, phase 1)
+- **N-252** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Preview runs and commits a writing source. `previewShape`
+  (`pipeline/run.go:784-838`) only swaps sinks and adds a limit; `stream`
+  still ends with `source.Close(true)` (`run.go:584`). Pressing Preview on
+  a `DELETE … RETURNING` source deletes the rows and writes them nowhere,
+  against the README's "writing nothing". Fix: close the source with
+  `ok=false` in a preview, and refuse a write-verb source on engines that
+  have no read transaction to roll back (N-152's engines). Audit, traced.
+  (RPU plan, phase 1)
+- **N-253** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  `sql.write` with `truncate` into a table the same fragment reads hangs
+  on Postgres. `sqlWrite.Open` (`pipeline/builtin_sql.go:271-275`) uses
+  plain `Truncate` → `TRUNCATE` (`etl/writer.go:108-110`); the DELETE swap
+  and `lock_timeout` live only in `etl.Copy` (`etl/copy.go:451-468`).
+  Scenario: `sql.table t → transform → sql.write t truncate`, or a source
+  view over the destination: the reader's open transaction holds ACCESS
+  SHARE and TRUNCATE waits on it forever. It passes on small tables (the
+  reader closes inside one batch) and hangs on big ones; with N-251 fixed
+  it hangs always. Fix: move `samePGDatabase`/`loadOptions` into the
+  Writer path. Audit, traced. (RPU plan, phase 1)
+- **N-254** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  The TUI saves editor text only on a clean quit, a console swap, or a
+  tab open or close: `saveConsole`'s callers are `tui/app.go:398`,
+  `tui/console.go:136,230,338` and `tui/tabs.go:382,471,1054`; there is no
+  timer, and `saveLayout` runs only at quit. Bubble Tea v2.0.8 catches
+  SIGINT and SIGTERM only, and dbc adds no SIGHUP handler (the one
+  `signal.NotifyContext` is `main.go:1107`). So a closed terminal window,
+  an ssh drop or a kill loses all SQL typed since launch, plus tabs,
+  groups and layout. Quit also saves last: `tui/app.go:395-401` runs
+  `shutdown()` first, which can block up to 30 s in `jobs.Close`
+  (`tui/jobs.go:607`), with the terminal restored and nothing printed, so
+  a second Ctrl+C kills dbc with the buffers unsaved. Fix: a debounced
+  autosave keyed on `editor.version` (and on each run); a SIGHUP handler
+  that quits through the same path; save before shutdown and print
+  "stopping N runs…". dbc web already debounces its saves. Read here.
+  (RPU plan, phase 1)
+- **N-255** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Consoles, the editor buffer and the history trim are written in place.
+  `userdata/buffer.go:40` is `os.WriteFile`, reached from
+  `userdata/console.go:322` by both the TUI and `web/consoles.go:178`,
+  though `userdata/files.go` says consoles get the atomic write; a crash
+  or a full disk mid-write truncates the user's SQL. Past 500 entries
+  every start rewrites the history file (`userdata/history.go:184`) with
+  no lock, racing a running dbc web's appends. `userdata.writeAtomic`
+  (`files.go:33-57`), `SaveLayout` and `SaveChat` rename without an fsync,
+  unlike `config/saved.go`, so scripts, pipeline specs and run records can
+  come back zero-length after a power loss; leaked `.tmp-*` files are
+  never swept. Fix: one temp + fsync + rename helper for all of them.
+  Read here (`buffer.go`); the rest audit, traced. (RPU plan, phase 1)
+- **N-256** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  One over-long statement stops history loading. The loader's scanner
+  caps a line at 1 MiB (`userdata/history.go:32,99-100`) and `sc.Err()` is
+  never checked, while `AddEntry` writes any size (dbc web takes 4 MB
+  buffers, the TUI has no limit). After one 2 MB generated INSERT, every
+  later start stops reading at that line; with fewer than 500 entries
+  before it the trim never fires, so new entries are appended, never load,
+  and the file grows without bound. The constant's own comment names this
+  failure. Fix: cap or elide the SQL on write, and read with a
+  `bufio.Reader` that skips an over-long line. Read here.
+  (RPU plan, phase 1)
+- **N-257** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  An open transaction is guarded on tab close (`tui/tabs.go:462`) and
+  nowhere else. `interrupt()` when idle and `quitCmd`
+  (`tui/app.go:939-975`) check for running queries, connects, the
+  assistant and live runs, never `ws.Session()`; a click on another
+  connection row switches at once (`tui/mouse.go` → `tui/sidebar.go:184`)
+  with a note after the fact. Scenario: `BEGIN; UPDATE …`, then the psql
+  habit of Ctrl+C to clear a line exits dbc and rolls back every tab's
+  transaction. Fix: confirm, or "press again", when any tab's session is
+  stateful. Read here. (RPU plan, phase 1)
+- **N-258** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  A script result with a short row panics the grid. `tui/grid.go:305`
+  indexes `g.res.Rows[ri][rc]` unguarded (the `Raw` read two lines above
+  and the width loop at `:237` are guarded); `s.Show` passes a hand-built
+  `model.Result` through unnormalised (`workspace/run.go:393-403`). Fix:
+  bounds-check in `value()`, or pad rows in `showLocked`. Read here.
+  (RPU plan, phase 1)
+- **N-259** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  `designer.Import`'s expression recursion has no depth cap
+  (`designer/importparse.go:1080-1106`). `WHERE c.id = ((((…1…))))` a
+  million deep (2 MB, under dbc web's 4 MB `maxBuffer`) ends in
+  `fatal error: stack overflow`, which no `recover` catches, so it takes
+  dbc web down with every tab's session; 100k deep takes 400 ms. Fix: a
+  depth counter in the parser that returns an `ImportError`. Audit, run.
+  (RPU plan, phase 1)
+- **N-260** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  dbc web's background goroutines have no `recover` (`web/hub.go:508-523`,
+  `:799-823`, `web/routines.go:112,212`, among others; the only `recover`
+  calls in the repo are in `script/`). rweb recovers handler panics only,
+  so a panic in a job or a `deliver` ends the process and every tab's
+  session. No concrete panic was found on these paths; this is the
+  backstop. Fix: one `safeGo` helper that recovers, logs the stack, and
+  lands the failure on the tab. Audit, traced. (RPU plan, phase 1)
+- **N-261** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  dbc web's idle reaper cancels running statements and tells nobody.
+  `web/hub.go:273-281` calls `t.ws.Close()` on every tab of a window that
+  has had no stream attached for `conn_idle_timeout` (1 h);
+  `workspace/workspace.go:638` shows `Close` calls `Stop()` first, and
+  `Busy()` is never checked. Scenario: start a long statement, close the
+  browser tab (or Chrome discards it); an hour later it is cancelled, and
+  an open transaction is rolled back. `wsState` (`web/api.go:245-288`) has
+  no "released" field, so on return the "session state" badge is just
+  gone and the rest of a `BEGIN … COMMIT` sequence runs in autocommit.
+  Fix: skip busy tabs, record the release, and show it in state plus a
+  log line when a stream reattaches. Read here (`hub.go`).
+  (RPU plan, phase 1)
+- **N-262** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  The formatter rewrites operators it does not know
+  (`sqlsplit/format.go:403` `fmtOps`, `:965` `fmtUnary`). Split into two
+  tokens: `a <=> b` → `a <= > b` (MySQL, pgvector), `<->` → `< ->`, `<#>`,
+  `?|`, `#-`, `@?`, `~~*`, `<<=`, SQLite `==` → `= =`, `U&'…'` →
+  `U & '…'`. A silent change of meaning: `SELECT - -1, 2` → `SELECT --1,
+  2` and `y = - -3` → `y = --3`, which turn the rest of the line into a
+  comment. Fix: extend `fmtOps`, treat a run of unknown operator
+  characters as one token, and never glue two signs. Audit, run.
+  (RPU plan, phase 1)
+- **N-263** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  A nested script run releases the outer script's Readers and Writers.
+  `go.action` and `script.run` call `script.run()` on the same session
+  (`script/plugins.go:418,441-459`), whose `defer s.Release()`
+  (`script/engine.go:154`) empties the shared `openSet` (`sdb/etl.go:145`;
+  `ForFiles` shares `st`). Scenario:
+  `for rd.Next() { s.RunPipelineNamed(...) }` ends after one row with
+  `rd.Err() == nil`. Fix: release only what the nested run opened. Audit,
+  traced. (RPU plan, phase 1)
+- **N-264** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  `explain.Detect` never checks the statement was an EXPLAIN
+  (`explain/detect.go:252-296`, used at `workspace/run.go:599`).
+  `SELECT id, parent, detail FROM categories` on Postgres returns
+  `ok=true`, engine sqlite, "3 steps": it replaces the connection's real
+  plan and can go to the assistant. A column aliased `"QUERY PLAN"` does
+  the same. Fix: require `Strip(r.Query)` to succeed. Also
+  `Strip("EXPLAIN (SELECT 1) UNION (SELECT 2)")` returns
+  `"UNION (SELECT 2)"` (`detect.go:38`). Audit, run. (RPU plan, phase 1)
+- **N-265** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  dbc web's tab and console saves fail silently.
+  `web/static/js/app.js:3948-3953` handles only a 409; a 400 (over 4 MB),
+  401, 500 or network error is discarded, and `saveConsole` (`:2487`)
+  swallows network errors too. Query-tab and console text has no local
+  fallback (`drafts.js` covers scripts, pipelines and jobs only) and there
+  is no `beforeunload`. Scenario: dbc web dies or restarts while the user
+  types; everything since the last good save is gone on reload. The
+  pagehide path has its own hole: `app.js:3995-4009` sends the whole
+  buffer with `keepalive: true`, which the Fetch spec caps at 64 KiB, so a
+  large console's last edits are not saved and its claims are not released
+  (`web/claims.go:271-286` skips the release when the save errors); a tab
+  opened inside the 15 s grace then shows "open in another browser tab".
+  Fix: a "not saved" marker with retry, a localStorage draft for consoles
+  as for files, and a release sent first and without the text. Read here
+  (the swallowed catch); the keepalive quota is from the spec, not run.
+  (RPU plan, phase 2)
+- **N-266** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  dbc web's event stream can lose events with no resync.
+  `web/hub.go:164-176` and `:383-389` send through rweb's non-blocking
+  `BroadcastRaw` (`ChannelSize` 256, `MaxDropped` 3); in rweb v0.1.32
+  (`sse_hub.go:173-206`) a full channel drops the event and any later
+  successful send resets the drop count, so one or two drops lose events
+  without a disconnect and the page's `resync()`
+  (`web/static/js/app.js:1468-1485`) never fires. Scenario: a script
+  printing in a loop or a pipeline's `job.line` burst drops lines or the
+  final `run` event, and the tab stays "busy". Log lines live only in the
+  DOM (`web/static/js/core.js:121-142`), so they are also lost on every
+  reload, and each appended line forces a layout (`core.js:136-138` reads
+  `scrollHeight` per event), which makes the burst worse. Fix: force a
+  resync on any drop, keep a per-tab log tail on the server that resync
+  and reload fetch, and batch log lines per animation frame. Mechanism
+  audit, traced; the burst size that triggers it is not measured.
+  (RPU plan, phase 2)
+- **N-267** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Headless exports have no way past `max_rows` from the command line.
+  `dbc -t csv "SELECT …"` stops at 1,000 rows, notes it on stderr
+  (`main.go:970-996`) and exits 0 (run 2026-11-10); with `--dsn` and no
+  config file the cap cannot be raised at all. Add `--max-rows N` (0 =
+  no cap), with N-282's streaming writer behind it. Same neighbourhood:
+  collected output ignores a stdout write error (`main.go:953`,
+  `fmt.Print(out)`), so `> /full/disk/x.csv` exits 0 with a short file;
+  and a headless run that finds no config uses the demo silently
+  (`config/config.go:363-367`, `warnConfig` at `main.go:481` says
+  nothing), so cron with the wrong HOME gets "relation does not exist"
+  with no hint: print one stderr line naming the paths searched.
+  (RPU plan, phase 2)
+- **N-268** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Nothing stands behind a node that ignores cancel. Cancel is cooperative
+  by design, but `script/engine.go:155` and `script/plugins.go:321` call
+  interpreted functions directly, and a retry loop that swallows errors
+  spins on after Stop. `jobs/job.go:234` and `jobs/engine.go:604` wait
+  unbounded, so `policy.timeout` and `Cancel` never finish the run; it
+  keeps `pipes[name]` and `jobLast`, the pipeline is "already running",
+  and scheduled fires are skipped until dbc web restarts. Headless,
+  `interruptible()` (`main.go:1106`) swallows a second Ctrl+C and SIGTERM,
+  and `jobscmd.go:305` waits on `context.Background()`: only SIGKILL ends
+  it. Fix: a second signal exits hard; the engine abandons a run N
+  seconds after cancel (marks it failed, releases its holds); look at
+  yaegi's `EvalWithContext`. Audit, traced. (RPU plan, phase 2)
+- **N-269** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Overlap rules are per process. `holdLocked` (`jobs/engine.go:471`) and
+  `jobLast` (`jobs/job.go:103`) are in memory, and only scheduled fires
+  are claimed across processes (`jobs/scheduler.go:353`), while the README
+  says the rule "holds everywhere". Scenario: OS cron running
+  `dbc job run X` every 5 minutes with a 7-minute run, or cron beside dbc
+  web, gives two loads into one table. Fix: consult the live on-disk
+  records (heartbeat and PID are already there) or take an `O_EXCL` lock
+  per name. Audit, traced. (RPU plan, phase 2)
+- **N-270** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Migrations take no runner lock (`migrate/run.go:262-315`; no advisory
+  lock or `GET_LOCK` anywhere in `migrate/`). Two deploys both read
+  `applied` and both run a data migration; the version table has no
+  unique key. On MySQL the dialect (`run.go:51`) is not `noTx`, so
+  `runOne` (`:445-462`) "rolls back" DDL that MySQL committed as it ran:
+  re-running `up` fails on statement 1 and the error never says "partly
+  applied". Fix: `pg_advisory_lock` / `GET_LOCK` / `BEGIN IMMEDIATE`
+  around a run; on MySQL report statement k of n as applied. Read here
+  (no lock); the MySQL path audit, traced. (RPU plan, phase 2)
+- **N-271** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Stop on Postgres always destroys the pinned session. `openPool`
+  (`db/manager.go:364-377`) leaves pgx's default
+  `DeadlineContextWatcherHandler`, which closes the connection on cancel.
+  Scenario: `BEGIN; UPDATE …;` then Stop on a slow SELECT loses the
+  transaction, the SETs and the temp tables.
+  `workspace/live_test.go:407` pins this as what both drivers do, but on
+  Postgres it is a configuration choice: set
+  `pcfg.BuildContextWatcherHandler` to pgx's
+  `CancelRequestContextWatcherHandler` and the session survives, as in
+  psql. Related (`db/explain.go:215-224`): Stop during EXPLAIN ANALYZE of
+  a write finds the connection closed, the undo `ROLLBACK` returns
+  `ErrBadConn`, `rolledBack` drops the cancel error, and the run lands as
+  a failure with "may not have been undone" and session lost, though the
+  server rolled back on disconnect. If the first error is a cancel and the
+  session is dead, return the cancel. Audit, traced in pgx v5.10.0's
+  source; run the live suites. (RPU plan, phase 2)
+- **N-272** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  `Session.stateful` misses state a "read" sets
+  (`db/manager.go:554-565,811`): `SELECT set_config(…, false)`,
+  `SELECT pg_advisory_lock()`, MySQL `SELECT GET_LOCK()` and `@v := …`,
+  SQLite `PRAGMA foreign_keys = ON` (`pragma` is in `queryVerbs`). After
+  an idle cut `ready()` returns `ErrBadConn`, `Classify` gives FaultRetry,
+  and the statement reruns on a fresh session without the state, which is
+  the case `ErrSessionLost` exists to stop. `SELECT … INTO newtable` is
+  classed as a read too, so no recount; and EXPLAIN ANALYZE of such a
+  "read" may run outside the rollback wrapper on Postgres
+  (`workspace/explain.go:77-87`, suspected). Fix: treat a SELECT that
+  calls a known state-setting function, and any PRAGMA with `=`, as
+  stateful; always wrap an analyze on Postgres. Classification audit,
+  traced; how often it bites is unknown. (RPU plan, phase 2)
+- **N-273** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Unknown TOML keys are ignored. `config/config.go:374` and
+  `config/saved.go:138` discard the decoder's metadata; nothing calls
+  `Undecoded`. Scenario: `ssl = "verify-full"` or `tls_mode = …` in place
+  of `tls` connects without verification, while a bad `tls` value fails
+  the load on purpose; `max_row = 50000` is ignored too. Fix: turn
+  `md.Undecoded()` into warnings, and into errors for keys under
+  `[[connection]]`. Same file: a literal `$` in a password cannot be
+  written (`config/config.go:779-801`, `os.Expand`; `db/dsn.go:144`
+  leaves the form's `$` as typed), so `S3cr$t9` loses `$t9` to an "unset
+  env var" warning and authentication fails; make `$$` a literal `$` and
+  say so in the warning. Read here (the discarded metadata); the `$` path
+  audit, traced. (RPU plan, phase 2)
+- **N-274** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  dbc web checks Origin on non-GET requests only (`web/auth.go:116`), and
+  SameSite does not tell ports apart, so a page on another
+  `127.0.0.1` port can send credentialed GETs. The one id-less GET with a
+  side effect that was found is `/api/v1/conn-tables?conn=`
+  (`web/complete.go:127`), which dials the named connection; the response
+  stays opaque to the caller. Fix inside the existing checks: on `/api/*`
+  refuse a present `Origin` or `Sec-Fetch-Site` that is not same-origin
+  for GET as well. No new auth machinery. Read here.
+  (RPU plan, phase 2)
+- **N-275** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Completion requests can fill the browser's six connections.
+  `web/complete.go:62-69` blocks each `/complete` on the schema load in
+  flight (30 s a read, `workspace/complete.go:91`);
+  `web/static/js/editor.js:640-653` never aborts a superseded request and
+  `dbc.api` (`web/static/js/core.js:43`) has no timeout. On a slow
+  catalog (N-106's database) five pending completions plus the event
+  stream leave Run, Ctrl+K and saves queued for a minute or more. Fix:
+  answer at once with vocabulary and `incomplete: true` while loading, or
+  abort superseded requests with an `AbortController`. Audit, traced.
+  (RPU plan, phase 2)
+- **N-276** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  A result cut at `max_rows` still streams the whole result.
+  `db/manager.go:700-702` breaks out of the fetch loop, then the deferred
+  `rows.Close()` (`:684`) drains: pgx's `ResultReader.Close` reads until
+  the command concludes, and mysql's `Rows.Close` skips rows to EOF.
+  Scenario: `SELECT * FROM events` over 100M rows keeps 1,000 and stays
+  "running" while the server ships the rest; `Duration` is taken before
+  the drain, so the status shows milliseconds for a run of minutes.
+  `limitedRows` (`db/schema.go:589`) has the same shape at 250k rows, and
+  so does an early `Reader.Close`/`rollback` (`etl/reader.go:211-240`): a
+  50-row pipeline Preview or `rows.limit` over a huge table reads all of
+  it, though `copyRows` adds a private cancel for exactly this
+  (`etl/copy.go:244-256`). Fix: on truncation cancel a statement-scoped
+  child context before Close on Postgres, `KILL QUERY` on MySQL (a
+  context cancel there closes the connection); give `Reader` its own
+  cancel for Abort and early Close. Also `doneNote`
+  (`workspace/run.go:641`) logs "1000 rows" without "truncated". The loop
+  read here; the drain is from driver source, not run: measure it on the
+  live suites first. Neighbour: N-271. (RPU plan, phase 3)
+- **N-277** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Cell cost follows the value's length in both grids. TUI:
+  `tui/grid.go:968` calls `truncate(flatten(val))` per visible cell per
+  frame; `flatten` builds a `NewReplacer` and copies any value with a
+  newline (`:255-260`), `truncate` measures the whole string before
+  cutting (`tui/canvas.go:416`), and `valuesWidth` does the same for 500
+  rows on arrival (`:236-240`). Web: `web/grid.go:177-186` sends every
+  value whole, and `web/static/js/grid.js:398-420` runs `flat()` and
+  `esc()` over each visible cell's full string and rebuilds `innerHTML`
+  per scroll frame. Scenario: 100 KB JSON or TEXT columns make hover and
+  scroll sluggish in the TUI and give about 20 MB pages in the browser.
+  Fix: clip to a few hundred bytes before flatten and width, make
+  `truncate` exit early, clip cells server-side (about 500 runes plus a
+  flag) and fetch the full value for Inspect and copy. Audit, traced.
+  (RPU plan, phase 3)
+- **N-278** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  The TUI's `View()` redoes buffer-sized work on every message, and
+  `MouseModeAllMotion` (`tui/layout.go:273`) makes every pointer cell a
+  message. Editor: `Text()` about four times and two full dialect
+  `Split`s per frame (`tui/editor.go:846`, `tui/run.go:53-55,247`,
+  `tui/layout.go:443`); `offset()` allocates a string per line
+  (`tui/editor.go:237-246`). Log: re-wraps all 2,000 lines and formats
+  each timestamp (`tui/logpane.go:128-137`). Chat: `layoutRows` re-wraps
+  the transcript and re-lexes every code block on each streamed delta
+  (`tui/chat.go:1011,1163`). Inspect: `size()` and `draw()` each split
+  and wrap the whole value (`tui/modals.go:513-524,539-542`). Each
+  `s.Print` is a blocking `p.Send` and one frame, so render time
+  throttles scripts; and a background tab's pending queue
+  (`tui/tabs.go:228`, replayed whole at `:288-292`) grows without bound
+  under a printing script. Fix: cache on `editor.version` (as
+  `highlight` does), on (log generation, width) and on (transcript
+  length, width); coalesce prints; send a background tab's `ScriptPrint`
+  straight to its log and keep only the last `ScriptShow`. Sites audit,
+  traced; a 3.5 MB buffer measured at Split 11 ms and Lex 20 ms.
+  (RPU plan, phase 3)
+- **N-279** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Each keystroke costs the whole buffer. `highlight` re-lexes everything
+  and allocates a `Style` per rune on each edit
+  (`tui/editor.go:961-987`, about 42 MB of allocations on a 3.5 MB
+  buffer); `checkpoint` copies the buffer (`:298-302`) and `undoCap` is
+  200 snapshots by count, not bytes, with parked `consoleViews` keeping
+  theirs; completion calls `Text()`/`Caret()` and a synchronous
+  `ws.Complete` per character (`tui/complete.go:85,235,255`). "Cheap at
+  scratchpad sizes" stops being true for a pasted multi-MB migration.
+  Fix: a per-line lex cache (or highlight the visible rows only), a
+  byte-capped undo. Neighbour: N-106. Audit, traced and timed.
+  (RPU plan, phase 3)
+- **N-280** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Completion builds every doc before filtering
+  (`sqlcomplete/complete.go:733-747,842-845`; `scope.go:521,568,623`):
+  `ddl()` and `colDoc()` each call `outgoing()`, which scans all Rels and
+  allocates a map, for every table or column before `add` checks the
+  prefix. Measured: 5,000 tables × 20 columns, 32–34 ms a request even
+  for `SELECT col▮` returning 5 items; 2,000 tables, 7–9 ms; up to 183 KB
+  of doc text out per keystroke. Fix: match the prefix first, build a doc
+  only for the items kept (≤400), and index rels by child once.
+  Neighbour: N-106. Audit, run. (RPU plan, phase 3)
+- **N-281** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  The formatter is O(tokens × nesting depth)
+  (`sqlsplit/format.go:987-1004`: `try` lays out the whole subtree at
+  every level, with no early exit past column 80). Left-nested
+  `((a=0 OR a=1) OR …)`: depth 5,000 (69 KB) 1.4 s, 10,000 (139 KB)
+  5.9 s, 20,000 (289 KB) 27 s; 100k bare parens 2 m 43 s. A generated
+  query pasted and formatted freezes the editor. Fix: stop the flat
+  measurement once it is over the width, or memoise flat widths per
+  node. Audit, run. (RPU plan, phase 3)
+- **N-282** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  A result is held twice and an export about four times.
+  `db/manager.go:707-715` builds `Rows` and `Raw` with two to three
+  allocations a cell (a MySQL `[]byte` cloned by Scan, then stringed for
+  each; strings through `fmt.Sprint`); a headless or `-o` export adds a
+  `strings.Builder` (`export/export.go:337`) and a `[]byte(out)` copy
+  (`main.go:956`). Nothing at 1,000 rows; it multiplies when `max_rows`
+  is raised for an export. Fix: convert once and share the string, with
+  strconv fast paths; a streaming row writer for a single-statement
+  csv/tsv/JSON-lines export (N-267's `--max-rows` needs it). Same cause
+  in the TUI: `export.ToFile` (`tui/modals.go:269`), `renderCopy`
+  (`tui/copy.go:112`) and sort with `ToLower` per compare
+  (`workspace/view.go:63`) run inside `Update` and freeze it once
+  `max_rows` is raised; run them as a `tea.Cmd` with an "exporting…"
+  status. Read here (the loop); the rest audit, traced.
+  (RPU plan, phase 3)
+- **N-283** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Postgres row counts are all-or-nothing (`db/rowcount.go:506-516,
+  434-456`). One huge table pushes `PgCountsQuery` past `countBudget`
+  (2 min); the result is an empty map with a nil error, cached as
+  covering every table for `rowCountTTL`, with no note. The per-table
+  path (30 s each, 4 workers) would have counted the rest. Fix: chunk
+  the statement, or fall back to per-table on a budget timeout, and say
+  so when cut. Audit, traced. (RPU plan, phase 3)
+- **N-284** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  dbc web does whole-buffer work on small events. A typing pause PUTs the
+  tab and the console (`web/static/js/app.js:3896`), the tab row
+  duplicates the console's text in bytdb, and the console's full text is
+  broadcast to every window, the saver included (`web/consoles.go:183`);
+  `/stmt` runs 150 ms after every caret move
+  (`web/static/js/editor.js:507-520`) and `/folds` on each change.
+  `assetVersion()` re-hashes about 4.7 MB of embedded assets on every
+  sign-in or error page, reachable unauthenticated (`web/server.go:534`,
+  `web/auth.go:219-228`). A window with no stream keeps every tab's
+  result sets for 24 h (`web/hub.go:63,265-276`); cells have no size cap,
+  so `max_rows` bounds rows, not bytes. Fix: no buffer on console-backed
+  tab rows, the revision alone in the event, skip `/stmt` when the text
+  is unchanged and the caret is inside the last range, use the cached
+  `s.ver`, drop results at the idle release. Audit, traced.
+  (RPU plan, phase 3)
+- **N-285** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Every headless job or pipeline run parses every run record.
+  `newHeadlessEngine` → `Recover` (`jobscmd.go:156`,
+  `jobs/records.go:158`) → `parseHead` reads each file whole
+  (`userdata/runs.go:249`): up to 200 records a name, each with up to
+  2,000 log lines, and a one-shot process has an empty head cache.
+  `dbc runs --sql` skips `--limit` (`jobscmd.go:439-443`), globs per id
+  (`runs.go:359`) and inserts row by row in autocommit
+  (`jobscmd.go:723-777`). Fix: a small head sidecar or live-marker file;
+  one transaction for the load. Path audit, traced; the cost is not
+  measured. (RPU plan, phase 3)
+- **N-286** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Headless errors print as raw log lines. `main.go:1116-1120` → `fail` →
+  `logger.LogErr` → logrus's text formatter, so `dbc "selec 1"` prints
+  `time="…" level=error msg="SQL logic error: near \"selec\": syntax
+  error (1)" conn=dsn error="…" fields.msg="query failed" function="main.fail
+  -> dbc/db.wrapRunErr" location="dbc/main.go:1117 -> db/manager.go:996"`
+  (run 2026-11-10), with newlines escaped. Fix: plain
+  `dbc: <message>: <error>` on stderr, the structured line behind a flag
+  or env var. An unknown `-c NAME` says "unknown connection" and lists
+  none of the configured names (`main.go:697` likewise). A mistyped
+  subcommand (`dbc wbe`) is sent to the default connection as SQL: refuse
+  a single bare word that is not SQL, and suggest the nearest command.
+  (RPU plan, phase 4)
+- **N-287** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  CLI discoverability. There is no `dbc conns` to list connections; no
+  shell completion (`EnableShellCompletion` is not set); no `DBC_CONFIG`
+  or `DBC_CONN`; connect failures and SQL errors both exit 1, so a script
+  cannot tell "could not reach the database" from "the statement failed".
+  Each is small with urfave/cli v3. Audit, grep. (RPU plan, phase 4)
+- **N-288** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Values lose detail on the way out (`db/manager.go:1098-1120`, feeding
+  `export/export.go:337,388,446`). `time.Time` is formatted `RFC3339` in
+  both `renderVal` and `rawVal`, so fractional seconds are dropped in the
+  grid, CSV and JSON, and a Postgres `date` shows as
+  `2026-11-10T00:00:00Z`. `float64` goes through `fmt.Sprint`, so
+  `1234567.0` shows as `1.234567e+06`, and pgx widens `float4`, so
+  `0.1::real` shows as `0.10000000149011612`. `bytea` becomes a raw-byte
+  string: invalid UTF-8 in CSV, U+FFFD in JSON. NULL is the text `NULL`
+  in CSV and TSV, the same as the string 'NULL'. A float `NaN` or
+  `Infinity` fails `json.MarshalIndent` for the whole `-t json` render
+  after the query ran. There is no CSV formula guard and no BOM option.
+  Fix: `RFC3339Nano`, date-only for a date column,
+  `strconv.FormatFloat(v, 'f', -1, bits)`, hex for bytes that are not
+  UTF-8, a typed NULL (empty in CSV), NaN and Inf as null or a string.
+  Read here (`renderVal`, `rawVal`); the export paths audit, traced.
+  (RPU plan, phase 4)
+- **N-289** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Row-returning statements outside `queryVerbs` run as Exec and lose
+  their rows (`db/manager.go:528-531,611-617,660`): `CALL`, `FETCH`,
+  `EXECUTE`, MySQL `CHECK`/`ANALYZE`/`OPTIMIZE TABLE`. MySQL
+  `CALL monthly_report()` (a procedure that SELECTs) shows "0 affected",
+  as does Postgres `FETCH 10 FROM cur`, though completion offers `CALL`.
+  `NextResultSet` is never used, so a procedure's further results cannot
+  show. Fix: for a verb that is neither clearly a read nor a write, run
+  as Query and fall back to affected when `Columns()` is empty. Read
+  here. (RPU plan, phase 4)
+- **N-290** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  `Manager.Columns` is the one catalog read still cut at `max_rows`
+  (`db/catalog.go:601` uses `RunContext` and ignores `Truncated`). When
+  the tables mentioned have more columns than `max_rows`, or it was
+  lowered, later tables reach the assistant with some or none of their
+  columns. Fix: use `stringRows`. Audit, traced. (RPU plan, phase 4)
+- **N-291** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  A failed query's message is only in the log. The grid keeps the
+  previous result and its title, and the status bar says "error after
+  12ms — ✦ ask the assistant why" (`workspace/run.go:800-802`); the log
+  is hidden under 18 terminal rows (`tui/layout.go:179`) and under `z`
+  zoom (`:188`). In a short split pane the user sees stale rows and no
+  error text. Fix: an error banner in the results pane, or the error's
+  first line in the status bar. Audit, traced; check in `tui/e2e`.
+  (RPU plan, phase 4)
+- **N-292** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  The TUI has no find. Editor: no Ctrl+F and no go-to-line
+  (`tui/editor.go:651-749`). Grid: no search, filter or jump to row
+  (`tui/grid.go:652-700`). Log: no search. Sort has no key, only a
+  header click or a menu row (`tui/mouse.go:273`, `tui/menu.go:229`).
+  Fix: `/` in the grid and the log reusing the `tableFind` line, with
+  n/N; Ctrl+F in the editor; a sort key. Absent by grep 2026-11-10.
+  (RPU plan, phase 4)
+- **N-293** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Keys are hard to find. F1 is about 130 rows with no filter
+  (`tui/help.go`), there is no command palette, and the status bar's
+  hints are fixed, not per focused pane (`tui/layout.go:595`), so the
+  grid's keys (`t - + < > P S z`) are learnable only from F1 or the
+  startup log line. Fix: a filterable palette built from `keyGroups`
+  (the history modal's filter and list fit), and hints that follow
+  focus. Audit, traced. (RPU plan, phase 4)
+- **N-294** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Colour-only signals in the TUI. The editor's selection
+  (`tui/editor.go:921`) and the grid's range and hover
+  (`tui/grid.go:959-964`) are background-only; log levels differ by
+  colour alone, and `ok` equals `accent` (`tui/theme.go`); `AttrReverse`
+  exists and is never set (`tui/canvas.go:67`). Bubble Tea's colour
+  profile strips colour under `NO_COLOR` and downsamples on 16-colour
+  terminals, so selections disappear. Fix: reverse video for selections
+  below ANSI256 (`ColorProfileMsg`), and a glyph before warn and error
+  log lines. Not N-117 (the light/dark switch). Audit, traced.
+  (RPU plan, phase 4)
+- **N-295** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Load errors drop Postgres's detail. The etl path never appends
+  `PgError.Detail`/`Where`; only `db.withPgDetail` does
+  (`db/manager.go:1017`). A load fails with "duplicate key … (SQLSTATE
+  23505)" and no "Key (id)=(42)" or "COPY t, line N, column c". The
+  `row` field (`etl/writer.go:146`) is the flush position, not the
+  failing row, and the inserter gives only `batch_rows` (`:607`). Fix:
+  append Detail and Where in etl; report a row range for an INSERT
+  batch. Audit, traced. (RPU plan, phase 4)
+- **N-296** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  `truncate` is skipped when a transform sits before the sink and no
+  rows arrive (`pipeline/run.go:539-551`): a nightly reload whose source
+  is empty or fully filtered keeps yesterday's rows and reports success
+  with 0 rows, with only a log line to say so. `pipelines.md:851`
+  covers the no-transform case only. Fix: open the sink with the last
+  known columns, or fail, or warn in the run's status. Audit, traced.
+  (RPU plan, phase 4)
+- **N-297** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  No dry run on the headless movers. `dbc copy` (`copycmd.go:72-81`) has
+  no `--dry-run`, `--columns`, `--query` or `--batch`, takes one table a
+  call, and shows a bare row count with no rate or estimate.
+  `dbc migrate` (`migrate.go:40-52`) cannot print the pending SQL.
+  `dbc dump --dry-run` and `pipeline`/`job check` exist already. A job
+  re-run always starts at the root; there is no "from the failed step".
+  Neighbour: N-151. Audit, traced. (RPU plan, phase 4)
+- **N-298** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Completion gaps. Nothing is offered inside an open quoted name:
+  `FROM "User▮`, `WHERE "Em▮` and MySQL ``FROM `ord▮`` return no items
+  (`insideLiteral`, `sqlcomplete/complete.go:272`), which hits
+  mixed-case Postgres schemas. `ALTER TABLE orders DROP COLUMN ▮` offers
+  clause keywords (AND, ASC…), not the table's columns.
+  `CREATE INDEX ON orders (▮` offers every catalog column, qualified.
+  Audit, run. (RPU plan, phase 4)
+- **N-299** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Reserved-word quoting is one small list for all engines
+  (`designer/catalog.go:454-493`, `sqlcomplete/vocab.go:53-84`). The
+  designer writes `FROM rank r` on MySQL, and completion inserts
+  `groups`, `rank`, `condition`, `range` and `interval` bare, all
+  reserved in MySQL 8. On a real SQLite the designer's
+  `SELECT r.transaction`, `r.foreign` and `r.commit` each fail with
+  `near "transaction": syntax error`. Fix: per-dialect reserved sets, or
+  quote on any keyword hit. SQLite audit, run; MySQL by its reserved
+  list, no server run. (RPU plan, phase 4)
+- **N-300** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  dbc web usability basics. Modals have no focus trap, so Tab reaches the
+  page behind the shade (`web/static/js/ui.js:90-111`). The grid is a
+  `tabindex` div with no grid/row/cell roles or `aria-activedescendant`
+  (`web/pages/workbench.go:134`). `#status` is not a live region
+  (`:164`), so "disconnected" and errors are not announced. Light-theme
+  warn and accent text compute to about 3.6–3.8:1
+  (`theme/palette.go:52-53`). The topbar's ten `nowrap` buttons do not
+  wrap until 700 px (`web/static/css/app.css:50-59,101,696`), so widths
+  of roughly 700–1100 px probably overflow (from the CSS, not rendered):
+  wrap, or an overflow menu. A failed grid page fetch leaves "…" cells
+  with no retry and logs an error per scroll frame while the server is
+  down (`web/static/js/grid.js:272-287`). Audit, traced.
+  (RPU plan, phase 4)
+- **N-301** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  A wide plan draws as an unreadable strip
+  (`explain/picture.go:406-456`): siblings are laid out in one row and
+  folding is by depth only, so an `Append` over 200 partitions gives a
+  20000×199 px image and over 1,000 a 20000×40 one. Fix: collapse or
+  wrap a run of siblings past N. Audit, run. (RPU plan, phase 4)
 
 ## Validate
 
@@ -404,6 +1028,46 @@ and `raised`.
   to an OSC 52 read. Note which terminals answer that read (kitty and
   Ghostty ask first; iTerm2 and tmux refuse by default and so never answer,
   which leaves only the log line).
+- **N-302** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Fuzz targets for the hand-written parsers. The repo has no `func Fuzz`
+  at all (1,380 tests), and on 2026-11-10 an ad-hoc fuzz of completion
+  found N-250 within minutes. Write native Go fuzz targets with seed
+  corpora for: `sqlsplit` Split per dialect (no panic; the pieces'
+  spans cover the input; no statement text inside a comment or string),
+  the formatter (no panic; formatting twice is a no-op; the formatted
+  text lexes to the same code tokens, which would have caught N-262),
+  `sqlcomplete.Complete`/`Resolve` at every caret, `designer.Import`
+  (including a depth bound, N-259), the explain parsers, and
+  `jobs/cron.go`. Run each briefly in CI (`-fuzztime`) and at length by
+  hand. Best written alongside N-247 and N-248, whose repro inputs are
+  the first corpus entries. (RPU plan, phase 5)
+- **N-303** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Benchmarks with budgets. There are three benchmarks in the repo, all
+  in `script/plugins_bench_test.go`. Add ones for Split, Lex and Folds
+  on a 3.5 MB buffer (measured 2026-11-10 at 11, 20 and 45 ms), Complete
+  on a 5,000-table schema (32–34 ms before N-280), Format on a nested
+  expression (N-281), one TUI `View()` frame with a large buffer and a
+  2,000-line log (N-278), a grid frame over long cells (N-277), and the
+  fetch loop's allocations per cell (N-282). Record the numbers before
+  and after each phase-3 item. (RPU plan, phase 5)
+- **N-304** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  A linter in CI. `test.yml` runs build, vet and the race tests and no
+  static analysis. The local `staticcheck` was built with Go 1.24 and
+  refuses the Go 1.26 module, and on 2026-11-10 running a current one
+  was not permitted in the review session, so the code has had nothing
+  past `go vet`. Add a step that builds staticcheck (or golangci-lint)
+  with the module's Go, run it once, and triage what it reports into
+  fixes or a recorded ignore list. (RPU plan, phase 5)
+- **N-305** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  The live Postgres and MySQL suites in CI. `db/live_*`,
+  `workspace/live_test.go`, `etl/live_*` and the TUI navigator's live
+  tests skip without `DBC_LIVE_PG_DSN`/`DBC_LIVE_MYSQL_DSN`, so they run
+  only when someone starts the containers by hand. Add a Linux job to
+  `test.yml` with `postgres:17` and `mysql:8.4` service containers and
+  the two DSNs set (the TLS and Docker suites can stay opt-in). Phase 1
+  and 2 of the RPU plan change sessions, cancel and transactions
+  (N-251, N-253, N-270, N-271, N-276); this is what keeps those pinned.
+  (RPU plan, phase 5)
 
 ## Roadmap
 

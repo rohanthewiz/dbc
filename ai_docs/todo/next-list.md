@@ -78,16 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-250** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  Completion panics when `.` is the first token of a statement
-  (`sqlcomplete/complete.go:357`): `slice bounds out of range [:-1]` at
-  `qualifiedRoutines(before[:n-2])`, reproduced 2026-11-10 with the buffer
-  `.`. `prev(2)` returns a zero `tok{}`, whose kind is `tWord` (iota 0,
-  `scope.go:17`), so `isName()` passes. The same for `SELECT 1;.`. The
-  audit traced the TUI's auto-open after a typed `.`
-  (`tui/complete.go:222,240`) to this call on the event loop; in dbc web
-  rweb recovers it as a 500. Fix: guard `n >= 2`, and make the zero tok
-  not a name. (RPU plan, phase 1)
 - **N-251** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   A pipeline "move" loses rows when the sink fails.
   `pipeline/builtin_sql.go:151` opens the source with the public
@@ -1286,6 +1276,17 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-250** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Completion panics when `.` is the first token of a statement
+  (`sqlcomplete/complete.go:357`): `slice bounds out of range [:-1]` at
+  `qualifiedRoutines(before[:n-2])`, reproduced 2026-11-10 with the buffer
+  `.`. `prev(2)` returns a zero `tok{}`, whose kind is `tWord` (iota 0,
+  `scope.go:17`), so `isName()` passes. The same for `SELECT 1;.`. The
+  audit traced the TUI's auto-open after a typed `.`
+  (`tui/complete.go:222,240`) to this call on the event loop; in dbc web
+  rweb recovers it as a 500. Fix: guard `n >= 2`, and make the zero tok
+  not a name. (RPU plan, phase 1)
+  closed 2026-11-10 (RPU plan, phase 1): both halves of the fix. The zero `tok` is no longer a word: `tNone` is the zero `tokKind` (every token the tokenizer makes names its kind, so nothing relied on the zero being `tWord`), so a lookback past the statement's first token is no name and no punctuation; and the qualified branch returns when `n < 2` before it slices. Tests: `TestCompleteDotFirst` (`.`, `SELECT 1;.`, `(.`, `  .x` on all four drivers; 20 panics on the old code) and `tui.TestCompletionDotFirst`, which types `.` into an empty editor and after `SELECT 1;⏎` — on the old code it panics through the editor's auto-open, the path the audit traced; now no popup opens and the dot is typed.
 - **N-249** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   A UTF-8 BOM stays in the first statement (`sqlsplit/sqlsplit.go:77`;
   nothing strips it on the `main.go:510` file path). The statement is

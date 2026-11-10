@@ -57,6 +57,26 @@ func TestCompletionOpensOnDotAndPicks(t *testing.T) {
 	}
 }
 
+// TestCompletionDotFirst is N-250 through the editor: a "." typed as a
+// statement's first character auto-opens completion, whose qualified
+// branch panicked on the event loop with nothing before the dot. Now it
+// opens nothing, and the dot is typed.
+func TestCompletionDotFirst(t *testing.T) {
+	for _, before := range []string{"", "SELECT 1;\n"} {
+		m := newTestModel(t)
+		m.focus = focusEditor
+		m.editor.SetText(before)
+		m.editor.cur = pos{strings.Count(before, "\n"), 0}
+		typeText(t, m, ".")
+		if m.compl != nil {
+			t.Errorf("%q + \".\": popup opened: %v", before, popupLabels(m))
+		}
+		if got := m.editor.Text(); got != before+"." {
+			t.Errorf("%q + \".\": buffer %q", before, got)
+		}
+	}
+}
+
 // A buffer replaced behind the popup's back (a history pick, a tab switch)
 // closes it.
 func TestCompletionClosesOnSetText(t *testing.T) {

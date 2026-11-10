@@ -14,10 +14,16 @@ import (
 type tokKind int
 
 const (
-	tWord   tokKind = iota // a bare word: a keyword or a name
-	tQuoted                // a quoted identifier, text unquoted
-	tPunct                 // one punctuation mark, or ::
-	tOther                 // a string, a number, a parameter
+	// tNone is the zero kind: no token. It is what a lookback past the
+	// statement's first token returns (completer.suggest's prev), and it
+	// must be no name: when it was tWord, a "." opening a statement made
+	// its missing qualifier a name, and the qualified branch sliced
+	// before[:n-2] with n = 1 — a panic on the TUI's event loop (N-250).
+	tNone   tokKind = iota
+	tWord           // a bare word: a keyword or a name
+	tQuoted         // a quoted identifier, text unquoted
+	tPunct          // one punctuation mark, or ::
+	tOther          // a string, a number, a parameter
 )
 
 // tok is one token of the statement window, with its byte range in the

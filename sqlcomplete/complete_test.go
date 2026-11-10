@@ -364,3 +364,28 @@ func TestCompleteAfterBackslashString(t *testing.T) {
 		t.Errorf("mysql: %d items inside the string, want none", len(r.Items))
 	}
 }
+
+// TestCompleteDotFirst is N-250: a "." as a statement's first token, with
+// nothing before it to qualify, panicked (slice bounds out of range in the
+// qualified branch) — on the TUI's event loop, after the auto-open a typed
+// "." triggers. It is a context with nothing to offer.
+func TestCompleteDotFirst(t *testing.T) {
+	for _, buf := range []string{".", ".▮", "SELECT 1;.", "SELECT 1;\n.▮", "  .x▮", "(.▮"} {
+		for _, driver := range []string{"postgres", "mysql", "sqlite", "bytdb"} {
+			b, i := buf, strings.Index(buf, "▮")
+			if i < 0 {
+				i = len(buf)
+			} else {
+				b = buf[:i] + buf[i+len("▮"):]
+			}
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Errorf("%s: Complete(%q) panicked: %v", driver, b, r)
+					}
+				}()
+				Complete(Request{Schema: shop(), Driver: driver, Buffer: b, Caret: i})
+			}()
+		}
+	}
+}

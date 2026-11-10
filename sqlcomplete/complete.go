@@ -333,7 +333,7 @@ func (c *completer) suggest(before []tok) {
 	n := len(before)
 	prev := func(k int) tok { // k = 1 is the token just before the word
 		if n-k < 0 {
-			return tok{}
+			return tok{} // kind tNone: no name, no punctuation
 		}
 		return before[n-k]
 	}
@@ -343,8 +343,8 @@ func (c *completer) suggest(before []tok) {
 	// touch the word being typed
 	if p.isPunct(".") && p.end == c.caret-len(c.prefix) {
 		q := prev(2)
-		if !q.isName() {
-			return
+		if n < 2 || !q.isName() {
+			return // `.▮` with nothing before the dot: no qualifier
 		}
 		var q0 string
 		if prev(3).isPunct(".") && prev(4).isName() {

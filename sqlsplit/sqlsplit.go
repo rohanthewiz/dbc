@@ -66,7 +66,10 @@ type Stmt struct {
 type chunk struct {
 	start, end int
 	tail       int  // end of the span: end, or past a same-line trailing remark
+	term       int  // length of the terminator that ends sql[start:end]: 1 for ;, a DELIMITER's, 0 at the buffer's end
 	hasCode    bool // saw something outside whitespace and comments
+	cmd        bool // a MySQL DELIMITER command's line (and the comments before it): no code
+	custom     bool // scanned under a delimiter of the user's, not ;
 }
 
 // Split returns the runnable statements in sql, in buffer order, read as
@@ -82,10 +85,9 @@ func (d Dialect) Split(sql string) []Stmt {
 		if !c.hasCode {
 			continue
 		}
-		raw := sql[c.start:c.end]
-		// the terminator, when present, is the last non-space byte of the span
-		body := strings.TrimRight(raw, " \t\r\n")
-		body = strings.TrimSuffix(body, ";")
+		// the terminator, when there is one, ends the span: a ;, or what
+		// MySQL's DELIMITER made the terminator
+		body := strings.TrimRight(sql[c.start:c.end-c.term], " \t\r\n")
 		lead := len(body) - len(strings.TrimLeft(body, " \t\r\n"))
 		text := strings.TrimSpace(body)
 		if text == "" {
@@ -481,28 +483,73 @@ func (d Dialect) HasKeyword(sql, word string) bool {
 	return false
 }
 
-// scan cuts sql into semicolon-delimited chunks, its strings read as d's
-// engine reads them.
+// scan cuts sql into semicolon-delimited chunks, its strings and comments
+// read as d's engine reads them.
+//
+// A ; ends a statement except where the statement's own text holds it: in
+// a trigger's, routine's or event's BEGIN … END body, or a rule's ( … )
+// action list (body, in body.go). On MySQL the client's DELIMITER command
+// changes what ends one, as the mysql client does: from the command's line
+// on, only the new delimiter does, and a ; is plain text —
+//
+//	DELIMITER //                                 a chunk with no code: dropped
+//	CREATE PROCEDURE p() BEGIN SELECT 1; END //  one statement, // removed
+//	DELIMITER ;                                  back to ;
 func scan(sql string, d Dialect) []chunk {
 	var (
 		out     []chunk
 		start   int
 		hasCode bool
 		i       int
+		delim   = ";" // what ends a statement; MySQL's DELIMITER changes it
+		b       body  // the statement's body, if it has one
 	)
+	// cut ends the chunk at i, just past its terminator of term bytes, and
+	// starts the next one past the terminator's same-line remark. The
+	// remark holds no terminator that could end a statement (its comments
+	// were skipped whole), so the scan resumes past it.
+	cut := func(term int) {
+		tail := remarkEnd(sql, i, d)
+		out = append(out, chunk{start: start, end: i, tail: tail, term: term, hasCode: hasCode, custom: delim != ";"})
+		start, hasCode, i = tail, false, tail
+		b.reset()
+	}
 	for i < len(sql) {
 		c := sql[i]
+		// a delimiter of the user's ends a statement wherever it stands
+		// outside a string or a comment, body or no body, and it is looked
+		// for first, as the mysql client does: $$ or // there is no quote
+		if delim != ";" && strings.HasPrefix(sql[i:], delim) {
+			i += len(delim)
+			cut(len(delim))
+			continue
+		}
 		if k, end := d.commentAt(sql, i); k != noComment {
 			// an executable comment is code (and holds no ; that ends a
 			// statement); the others are skipped as blanks are
-			hasCode = hasCode || k == execComment
+			if k == execComment {
+				hasCode = true
+				b.code()
+			}
 			i = end
 			continue
+		}
+		// the client's DELIMITER command: the first thing on its line, with
+		// nothing of a statement before it. Its line is a chunk with no
+		// code, which Split drops — it is the client's, never sent.
+		if d == MySQL && !hasCode && (c == 'd' || c == 'D') && atLineStart(sql, i) {
+			if nd, next, ok := delimiterCmd(sql, i); ok {
+				out = append(out, chunk{start: start, end: next, tail: next, cmd: true})
+				delim, start, i = nd, next, next
+				b.reset()
+				continue
+			}
 		}
 		switch c {
 		case '\'', '"', '`':
 			i = skipQuoted(sql, i, c, d)
 			hasCode = true
+			b.code()
 		case '$':
 			if tag, ok := d.dollarTag(sql, i); ok {
 				i = skipDollarQuoted(sql, i, tag)
@@ -510,22 +557,53 @@ func scan(sql string, d Dialect) []chunk {
 				i++ // a placeholder such as $1
 			}
 			hasCode = true
+			b.code()
 		case ';':
 			i++
-			tail := remarkEnd(sql, i, d)
-			out = append(out, chunk{start: start, end: i, tail: tail, hasCode: hasCode})
-			// the remark holds no semicolon that could end a statement (its
-			// comments were skipped whole), so the scan resumes past it
-			start, hasCode, i = tail, false, tail
-		default:
-			if !isSpace(c) {
+			if delim != ";" || b.holds() {
+				// plain text under another delimiter, or inside a body
 				hasCode = true
+				continue
 			}
+			cut(1)
+		case '(':
+			hasCode = true
+			b.open()
 			i++
+		case ')':
+			hasCode = true
+			b.close()
+			i++
+		default:
+			switch {
+			case isWordByte(c):
+				// a word, read whole for the body's sake; a $ past its
+				// first byte is part of it (a$b), as dollarTag reads it —
+				// up to a delimiter of the user's, which ends it as it
+				// would anything else (END$$ under DELIMITER $$)
+				j := i + 1
+				for j < len(sql) && (isWordByte(sql[j]) || sql[j] == '$') {
+					if delim != ";" && strings.HasPrefix(sql[j:], delim) {
+						break
+					}
+					j++
+				}
+				if b.active() {
+					qualified := i > 0 && strings.IndexByte(".:@$", sql[i-1]) >= 0
+					b.word(sql, i, j, qualified, d, delim)
+				}
+				hasCode, i = true, j
+			case isSpace(c):
+				i++
+			default:
+				hasCode = true
+				b.code()
+				i++
+			}
 		}
 	}
 	if start < len(sql) {
-		out = append(out, chunk{start: start, end: len(sql), tail: len(sql), hasCode: hasCode})
+		out = append(out, chunk{start: start, end: len(sql), tail: len(sql), hasCode: hasCode, custom: delim != ";"})
 	}
 	return out
 }

@@ -1324,7 +1324,17 @@ it takes the same path as a selection of every statement.
 
 Statements are separated on semicolons, ignoring the ones inside strings,
 quoted identifiers, comments, and PostgreSQL `$$` bodies — so a function
-definition stays in one piece.
+definition stays in one piece. What counts as a string or a comment is the
+connection's engine's rule: on MySQL `#` starts a comment and a backslash
+escapes inside `'…'`, only Postgres nests `/* */`, and MySQL's executable
+comments (`/*!40101 SET NAMES utf8mb4 */;`, as a dump writes them) are
+statements. The `;` inside a body is not an end either: a trigger's,
+procedure's, function's or event's `BEGIN … END` (SQLite and MySQL triggers,
+MySQL routines, Postgres `BEGIN ATOMIC`) and a Postgres rule's `( … ; … )`.
+On MySQL the client's `DELIMITER` command works as it does in the `mysql`
+client — from a `DELIMITER //` line on, only `//` ends a statement, until
+`DELIMITER ;` — and its lines are never sent. Format leaves the stretches
+under such a delimiter as written.
 
 Editor runs share one pinned database session per connection, just like a
 headless multi-statement buffer: `BEGIN` in one `Ctrl+R` and `COMMIT` in a
@@ -3261,7 +3271,9 @@ stopped there.
 ### Multi-statement runs
 
 The SQL argument may hold several statements, split the same way the editor
-splits them — semicolons inside strings, comments, and `$$` bodies don't count.
+splits them — semicolons inside strings, comments, `$$` bodies and trigger or
+routine `BEGIN … END` bodies don't count, and MySQL's `DELIMITER` works (see
+[Consoles and multi-statement buffers](#consoles-and-multi-statement-buffers)).
 They run in order on one connection, and every result is rendered:
 
 ```sh

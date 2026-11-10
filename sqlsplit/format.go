@@ -1,6 +1,7 @@
 package sqlsplit
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -58,6 +59,67 @@ func (d Dialect) Format(sql string) string { return d.FormatWith(sql, FormatOpti
 // FormatWith is d.Format with the choices in o. The zero FormatOptions is
 // Format's own output, so Format is FormatWith with none made.
 func (d Dialect) FormatWith(sql string, o FormatOptions) string {
+	if d == MySQL {
+		if out, ok := formatAroundDelimiters(sql, o); ok {
+			return out
+		}
+	}
+	return d.formatWith(sql, o)
+}
+
+// formatAroundDelimiters formats a MySQL script that uses the client's
+// DELIMITER command, reporting false when sql has none. The layout knows
+// nothing of the command: it would join its line to the next (so the
+// client reads the next line's code as the delimiter), space a // out to
+// `/ /`, and Unwrap would cut a leading DELIMITER line as a log's prose.
+// So only the stretches a ; ends are laid out; the command lines and
+// everything a delimiter of the user's ends — routine bodies, in practice
+// — are kept as written, the scan's chunks saying which is which:
+//
+//	SELECT 1;            ← formatted
+//	DELIMITER //         ┐
+//	CREATE PROCEDURE …   │ kept as written
+//	END //               │
+//	DELIMITER ;          ┘
+//	select 2;            ← formatted
+func formatAroundDelimiters(sql string, o FormatOptions) (string, bool) {
+	chunks := scan(sql, MySQL)
+	if !slices.ContainsFunc(chunks, func(c chunk) bool { return c.cmd }) {
+		return "", false
+	}
+	var b strings.Builder
+	// the chunks tile the buffer (each starts where the last one's tail
+	// ended), so the runs of kept and formatted chunks do too
+	for i := 0; i < len(chunks); {
+		keep := chunks[i].cmd || chunks[i].custom
+		j := i + 1
+		for j < len(chunks) && (chunks[j].cmd || chunks[j].custom) == keep {
+			j++
+		}
+		run := sql[chunks[i].start:chunks[j-1].tail]
+		if keep {
+			b.WriteString(run)
+		} else {
+			b.WriteString(formatSpanPlain(run, o))
+		}
+		i = j
+	}
+	return strings.TrimRight(b.String(), " \n"), true
+}
+
+// formatSpanPlain is FormatSpanWith on MySQL for a stretch with no
+// DELIMITER command in it: the blanks around it kept, the rest laid out.
+func formatSpanPlain(s string, o FormatOptions) string {
+	body := strings.TrimSpace(s)
+	if body == "" {
+		return s
+	}
+	lead := s[:strings.Index(s, body)]
+	return lead + MySQL.formatWith(body, o) + s[len(lead)+len(body):]
+}
+
+// formatWith is FormatWith's layout, for SQL with no client commands.
+func (d Dialect) formatWith(sql string, o FormatOptions) string {
 	sql = unwrap(sql, d)
 	// The case is set on the token stream, before the tree is built over it:
 	// layout reads only a token's kind and its lower-case form, never the

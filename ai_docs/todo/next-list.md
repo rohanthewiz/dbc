@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-307
+**Next ID:** N-308
 
 ## Open
 
@@ -78,20 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-248** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  A compound body splits at its inner `;` (`sqlsplit/sqlsplit.go:507`):
-  SQLite and MySQL `CREATE TRIGGER … BEGIN … END;`, MySQL procedures and
-  functions, Postgres `BEGIN ATOMIC`, `CREATE RULE … DO ALSO (a; b)`.
-  Reproduced 2026-11-10 on a SQLite trigger: the pieces are
-  `CREATE TRIGGER … BEGIN DELETE FROM order_items …` and a bare `END`.
-  With two statements in the body, a caret on a body line picks the inner
-  statement alone; `workspace/pick.go:34` splits a selection the same way,
-  so selecting the text does not help; `--keep-going` would run the body's
-  statements for real. Such objects cannot be created from the editor or
-  `dbc -f`. `DELIMITER` is unknown too. Fix: track `BEGIN…END` and
-  `CASE…END` depth after `CREATE … TRIGGER|PROCEDURE|FUNCTION|EVENT`,
-  track paren depth for `CREATE RULE`, and honour `DELIMITER` on MySQL.
-  (RPU plan, phase 1)
 - **N-249** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   A UTF-8 BOM stays in the first statement (`sqlsplit/sqlsplit.go:77`;
   nothing strips it on the `main.go:510` file path). The statement is
@@ -687,6 +673,17 @@ ten session docs in `ai_docs/claude_sessions/`
   folding is by depth only, so an `Append` over 200 partitions gives a
   20000×199 px image and over 1,000 a 20000×40 one. Fix: collapse or
   wrap a run of siblings past N. Audit, run. (RPU plan, phase 4)
+- **N-307** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  The formatter lays out a compound body as separate statements: it cuts
+  its tree on every `;` (`fmtStatements`) and reads the trigger head's
+  `AFTER DELETE` as a DELETE clause, so `create trigger t after delete on
+  o begin delete from i …; update s …; end;` comes out as `CREATE trigger
+  t after⏎DELETE ON o BEGIN⏎DELETE FROM i …;⏎⏎UPDATE s …;⏎⏎END;`. The
+  meaning is kept (`TestBodyFormat` re-splits it to the one statement),
+  only the layout is poor; it was the same before N-248. Fix: have
+  `fmtStatements` take its statements from the scan (`body`), and lay a
+  body's statements out indented under its BEGIN, or keep the statement
+  as written. Raised while closing N-248.
 
 ## Validate
 
@@ -1295,6 +1292,21 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-248** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  A compound body splits at its inner `;` (`sqlsplit/sqlsplit.go:507`):
+  SQLite and MySQL `CREATE TRIGGER … BEGIN … END;`, MySQL procedures and
+  functions, Postgres `BEGIN ATOMIC`, `CREATE RULE … DO ALSO (a; b)`.
+  Reproduced 2026-11-10 on a SQLite trigger: the pieces are
+  `CREATE TRIGGER … BEGIN DELETE FROM order_items …` and a bare `END`.
+  With two statements in the body, a caret on a body line picks the inner
+  statement alone; `workspace/pick.go:34` splits a selection the same way,
+  so selecting the text does not help; `--keep-going` would run the body's
+  statements for real. Such objects cannot be created from the editor or
+  `dbc -f`. `DELIMITER` is unknown too. Fix: track `BEGIN…END` and
+  `CASE…END` depth after `CREATE … TRIGGER|PROCEDURE|FUNCTION|EVENT`,
+  track paren depth for `CREATE RULE`, and honour `DELIMITER` on MySQL.
+  (RPU plan, phase 1)
+  closed 2026-11-10 (RPU plan, phase 1): `sqlsplit/body.go`. The scan reads each statement's head — `CREATE [OR REPLACE] [TEMP] [CONSTRAINT] [AGGREGATE] [DEFINER = user] TRIGGER|PROCEDURE|FUNCTION|EVENT` counts blocks, `CREATE [OR REPLACE] RULE` counts parens, anything else nothing — and a `;` inside an open block or paren holds. Blocks are a stack: BEGIN (outside parens, and followed by a word, so `IF begin > 0` and `SET x = begin;` are names) and CASE push; END pops a CASE, and pops a BEGIN only when a `;` or the end follows, past an optional label (so a column called `end` in `INSERT INTO log (start, end)` or `SELECT start, end FROM` does not close the body); `END IF|LOOP|WHILE|REPEAT` pop nothing (those openers are not counted: IF has a function form), the CASE in `END CASE` opens nothing, and `END CASE`/`END FOR` never close a BEGIN. Misreading leans safe: a head misread as a body is harmless (valid SQL closes every CASE), a missed END merges what follows (the server refuses it). MySQL's `DELIMITER` is honoured as the mysql client does: at a line start with nothing of a statement before it, its line is a chunk with no code (dropped, never sent), and until `DELIMITER ;` only the new delimiter ends a statement — looked for before comments and quotes, and ending a word (`END$$`); `chunk.term` carries the terminator's length so `Split` trims `//` or `$$` as it trimmed `;`. That needed N-306 (no dollar quotes on MySQL) first. The formatter knew no DELIMITER (it spaced `//` to `/ /` and joined `DELIMITER ;` onto the END), so on MySQL a buffer with one is formatted around it: command lines and custom-delimiter stretches kept as written (and no Unwrap, which took a leading DELIMITER line for log prose), the `;` stretches laid out. Bodies under `;` format as statements, untidily but split the same after (raised N-307). Not done: MariaDB's anonymous `BEGIN NOT ATOMIC … END` (its leading BEGIN reads as transaction control elsewhere; nobody asked). README's splitting paragraphs updated. Tests: `sqlsplit/body_test.go` — `TestBodySplit` (the item's SQLite trigger first; MySQL procedure, definer forms, one-statement trigger, event; Postgres BEGIN ATOMIC, procedure, rule, `$$` body; no-body statements unchanged), `TestBodyConstructs` (each tricky construct alone in a procedure, so two misreads cannot cancel — they did once while writing it), `TestBodyCaret`, `TestDelimiter` (`//`, `$$`, mysqldump's `;;` around `/*!50003 … */`, not-a-command cases, caret on the command line), `TestBodyFolds`, `TestBodyFormat`; all fail on the old scanner. Real binary, HEAD vs new: a SQLite trigger script (HEAD: "incomplete input"; new: the trigger fires on delete), a MySQL 8.4 script with a `DELIMITER //` procedure (WHILE, CASE) and an undelimited BEGIN…END trigger (HEAD: syntax error at DELIMITER; new: `CALL` inserts 4 rows through the trigger), and a Postgres 17 `BEGIN ATOMIC` function (HEAD: syntax error at end of input; new: it inserts its 2 rows).
 - **N-306** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   sqlsplit reads Postgres dollar quotes on every engine (`dollarTag`,
   `skipDollarQuoted`), as it read Postgres's comment rules before N-247.

@@ -87,17 +87,6 @@ ten session docs in `ai_docs/claude_sessions/`
   `ok=false` in a preview, and refuse a write-verb source on engines that
   have no read transaction to roll back (N-152's engines). Audit, traced.
   (RPU plan, phase 1)
-- **N-253** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  `sql.write` with `truncate` into a table the same fragment reads hangs
-  on Postgres. `sqlWrite.Open` (`pipeline/builtin_sql.go:271-275`) uses
-  plain `Truncate` → `TRUNCATE` (`etl/writer.go:108-110`); the DELETE swap
-  and `lock_timeout` live only in `etl.Copy` (`etl/copy.go:451-468`).
-  Scenario: `sql.table t → transform → sql.write t truncate`, or a source
-  view over the destination: the reader's open transaction holds ACCESS
-  SHARE and TRUNCATE waits on it forever. It passes on small tables (the
-  reader closes inside one batch) and hangs on big ones; with N-251 fixed
-  it hangs always. Fix: move `samePGDatabase`/`loadOptions` into the
-  Writer path. Audit, traced. (RPU plan, phase 1)
 - **N-254** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   The TUI saves editor text only on a clean quit, a console swap, or a
   tab open or close: `saveConsole`'s callers are `tui/app.go:398`,
@@ -1296,6 +1285,18 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-253** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  `sql.write` with `truncate` into a table the same fragment reads hangs
+  on Postgres. `sqlWrite.Open` (`pipeline/builtin_sql.go:271-275`) uses
+  plain `Truncate` → `TRUNCATE` (`etl/writer.go:108-110`); the DELETE swap
+  and `lock_timeout` live only in `etl.Copy` (`etl/copy.go:451-468`).
+  Scenario: `sql.table t → transform → sql.write t truncate`, or a source
+  view over the destination: the reader's open transaction holds ACCESS
+  SHARE and TRUNCATE waits on it forever. It passes on small tables (the
+  reader closes inside one batch) and hangs on big ones; with N-251 fixed
+  it hangs always. Fix: move `samePGDatabase`/`loadOptions` into the
+  Writer path. Audit, traced. (RPU plan, phase 1)
+  closed 2026-11-10 (RPU plan, phase 1): the same-database rules moved from `etl.Copy` into the Writer, where both paths get them. `sameDatabaseSetup` (with the cycle diagrams loadOptions had) makes a Postgres load empty its table with DELETE where Truncate would TRUNCATE, and, when the read is a query, puts the bounded lock wait first; `etl.NewSameDatabaseWriter(…, fromQuery)` is the way in, `ReadOptions.SameDatabase` bounds the read's waits, and `etl.SameDatabase`/`etl.LockTimedOut` are exported. Copy's `loadOptions` now only sets the (unexported) flags — fields on `WriteOptions` would have put the summary sdb sends the assistant over its 14 KB budget, and a script's Reader is not held anyway (N-309). In the pipeline, `fragRun.shareDatabase` marks a sql.read/sql.table source and each sql.write sink that reach one Postgres database before the source opens — asked only when the sink truncates or the source is a query — and a lock timeout on such a fragment gets a hint field. Test: `TestLivePGSameDatabaseTruncate` reads a 3,000-row table through a transform and loads it back with truncate through a second pool on the same database, as sql.table and as sql.read: on the old code it hung until the 30 s test deadline, now each pass doubles every value. Copy's own same-database live tests (`etl/live_pg_edge_test.go`) pass unchanged.
 - **N-251** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   A pipeline "move" loses rows when the sink fails.
   `pipeline/builtin_sql.go:151` opens the source with the public

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
@@ -81,5 +82,48 @@ func TestLivePGMoveKeepsRowsWhenTheSinkFails(t *testing.T) {
 	}
 	if src, dst := h.count(t, "pg", "pipeline_live.moving"), h.count(t, "b", "moved"); src != "0" || dst != "10" {
 		t.Errorf("after the move: source %s rows, sink %s; want 0 and 10", src, dst)
+	}
+}
+
+// TestLivePGSameDatabaseTruncate is N-253: a fragment that reads a table
+// and loads it back with truncate, through a transform, on one database.
+// The read is held until the load commits (N-251), and TRUNCATE waits on
+// the read's lock for good — the run hung until canceled, on a table of
+// more than one batch even before reads were held. On the source's own
+// database the load empties the table with DELETE, which the read does
+// not block, and reads the old rows through its snapshot meanwhile. Both
+// a table source and a query source, each through a second pool on the
+// same database.
+func TestLivePGSameDatabaseTruncate(t *testing.T) {
+	h := livePGHost(t)
+	h.exec(t, "pg", "CREATE TABLE pipeline_live.t (id int, v int)")
+	h.exec(t, "pg", "INSERT INTO pipeline_live.t SELECT g, g FROM generate_series(1, 3000) g")
+	double := func(b *Batch) (*Batch, error) {
+		for i := range b.Rows {
+			v, _ := b.Get(i, "v").(int64)
+			b.Set(i, "v", v*2)
+		}
+		return b, nil
+	}
+	for i, src := range []Node{
+		{Plugin: "sql.table", Cfg: Config{"conn": "pg", "table": "pipeline_live.t"}},
+		{Plugin: "sql.read", Cfg: Config{"conn": "pg", "query": "SELECT id, v FROM pipeline_live.t"}},
+	} {
+		p := New("reload")
+		f := p.Fragment("f").Batch(500)
+		f.Node(src.Plugin, src.Cfg)
+		f.ThenFunc(double)
+		f.Then("sql.write", Config{"conn": "pg2", "table": "pipeline_live.t", "truncate": "true"})
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		_, err := Run(ctx, h, p.Spec(), Options{})
+		cancel()
+		if err != nil {
+			t.Fatalf("%s: %v", src.Plugin, err)
+		}
+		// each pass doubles every v: sum(1..3000) = 4501500
+		want := []string{"3000", map[int]string{0: "9003000", 1: "18006000"}[i]}
+		if got := h.rows(t, "pg", "SELECT count(*), sum(v) FROM pipeline_live.t")[0]; got[0] != want[0] || got[1] != want[1] {
+			t.Errorf("%s: count, sum = %v, want %v", src.Plugin, got, want)
+		}
 	}
 }

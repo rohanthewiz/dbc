@@ -273,7 +273,7 @@ func copyRows(ctx context.Context, src Conn, table, query string, dst Conn, dest
 	if err != nil {
 		return err
 	}
-	w, err := NewWriter(ctx, dst, dest, rd.Columns(), loadOptions(dest, setup, same, opt))
+	w, err := NewWriter(ctx, dst, dest, rd.Columns(), loadOptions(setup, same, opt))
 	if err != nil {
 		return err
 	}
@@ -334,7 +334,7 @@ func copyDirect(ctx context.Context, src Conn, table, query string, dst Conn, de
 	if err != nil {
 		return err
 	}
-	w, err := NewWriter(ctx, dst, dest, cols, loadOptions(dest, setup, same, opt))
+	w, err := NewWriter(ctx, dst, dest, cols, loadOptions(setup, same, opt))
 	if err != nil {
 		return err
 	}
@@ -405,69 +405,17 @@ func copyDirect(ctx context.Context, src Conn, table, query string, dst Conn, de
 }
 
 // loadOptions are the Writer's options for a copy's load: the Setup from
-// prepareDest, then Truncate — which is TRUNCATE, except when the source and
-// destination are the same Postgres database. There it is a DELETE, in the
-// load's transaction like the TRUNCATE would be.
-//
-// TRUNCATE takes an ACCESS EXCLUSIVE lock, held until the load commits, and
-// within one database the copy's own read may need that table: a table
-// copied onto itself to rewrite it through a Transform, a Query or a view
-// over the destination. The read then waits on the lock, the load waits on
-// the rows, and Postgres cannot see the cycle — it runs through this
-// process — so the copy hangs until canceled:
-//
-//	load (dst tx):  BEGIN; TRUNCATE t ──holds ACCESS EXCLUSIVE on t──┐
-//	read (src):     SELECT … FROM t   ◄──waits for that lock─────────┘
-//	load:           waits for rows from the read
-//
-// DELETE's ROW EXCLUSIVE lock does not conflict with a read, and the read's
-// snapshot does not see the uncommitted delete, so it reads the old rows
-// while the load replaces them. The cost is DELETE's: slower than TRUNCATE
-// on a big table, and dead rows for vacuum — paid only within one database.
-//
-// A Query within one database gets a lock_timeout on both sides
-// (pgSameDBLockTimeout), the load here and the read in sourceSetup. A
-// Query can write, and its change stays uncommitted until the load has
-// committed (see copyDirect), so when the load needs a row the Query
-// wrote — or the Query a row the load's DELETE took first — each side
-// waits on the other: the same kind of cycle through this process, which
-// Postgres cannot see either:
-//
-//	read (src tx):  DELETE FROM t … RETURNING ──row locks on t, uncommitted──┐
-//	load (dst tx):  INSERT into a table with an FK to t,                      │
-//	                or the moved rows back into t (a key match) ◄──waits──────┘
-//	read:           commits only after the load does
-//
-//	load (dst tx):  DELETE FROM t (Truncate) ──row locks on t, uncommitted──┐
-//	read (src tx):  DELETE FROM t … RETURNING ◄──waits──────────────────────┘
-//	load:           waits for rows from the read
-//
-// (the second on the direct path, whose load opens before its read starts.)
-// No setting removes the cycle — the order of the two commits is what keeps
-// a failed move's rows in the source — so the timeout turns the hang into an
-// error, the read rolls back, and the rows stay where they were.
-//
-// same is Copy's answer to whether src and dst are one Postgres database.
-func loadOptions(dest string, setup []string, same bool, opt CopyOptions) WriteOptions {
-	wo := WriteOptions{Setup: setup, Truncate: opt.Truncate, BatchSize: opt.BatchSize}
-	if !same {
-		return wo
-	}
-	wo.Setup = append([]string(nil), setup...)
-	if opt.Query != "" {
-		// First, so it covers the Setup's CREATE and DELETE as well as the
-		// COPY: the DELETE waits on the Query's rows when they are moved
-		// back into the table they came from.
-		wo.Setup = append([]string{pgSameDBLockTimeout()}, wo.Setup...)
-	}
-	if opt.Truncate {
-		wo.Setup = append(wo.Setup, "DELETE FROM "+Postgres.QuoteTable(dest))
-		wo.Truncate = false
-	}
-	return wo
+// prepareDest, then Truncate — with the same-database rules when the
+// source and destination are one Postgres database (same): a DELETE in
+// place of the TRUNCATE, and for a Query bounded lock waits. The Writer
+// applies them (sameDatabaseSetup, which draws the cycles they break), as
+// it does for a pipeline's held read (NewSameDatabaseWriter).
+func loadOptions(setup []string, same bool, opt CopyOptions) WriteOptions {
+	return WriteOptions{Setup: setup, Truncate: opt.Truncate, BatchSize: opt.BatchSize,
+		sameDB: same, fromQuery: opt.Query != ""}
 }
 
-// sourceSetup is the read's side of loadOptions' lock_timeout: statements
+// sourceSetup is the read's side of the load's lock_timeout: statements
 // for the source's transaction, after its pinned output settings. A table
 // or view source only reads, and never waits on the load, so it gets none.
 func sourceSetup(same bool, opt CopyOptions) []string {
@@ -502,14 +450,31 @@ func pgSameDBLockTimeout() string {
 // "probably" because the wait could also have been on another session that
 // held its lock past the timeout. errors.As still reaches the *PgError.
 func lockTimeoutHint(err error, same bool, opt CopyOptions) error {
-	var pe *pgconn.PgError
-	if !same || opt.Query == "" || !errors.As(err, &pe) || pe.Code != "55P03" {
+	if !same || opt.Query == "" || !LockTimedOut(err) {
 		return err
 	}
 	return fmt.Errorf("etl: the load and the Query probably waited on each other, so lock_timeout stopped "+
 		"the copy and the source kept its rows — within one database the load cannot use rows the Query "+
 		"changed (a foreign key into them, or the same rows moved back) until the Query commits, "+
 		"which is after the load: %w", err)
+}
+
+// LockTimedOut reports whether err is Postgres's lock_timeout firing
+// (SQLSTATE 55P03): with a same-database load (NewSameDatabaseWriter,
+// ReadOptions.SameDatabase), most likely the load and its read waiting on
+// each other. A caller explains it in its own terms, as Copy does
+// (lockTimeoutHint).
+func LockTimedOut(err error) bool {
+	var pe *pgconn.PgError
+	return errors.As(err, &pe) && pe.Code == "55P03"
+}
+
+// SameDatabase reports whether a and b reach one database of one running
+// Postgres server — when a read on a and a load on b, open together, need
+// the same-database rules (NewSameDatabaseWriter). False for any other
+// engine, and when the lookup fails.
+func SameDatabase(ctx context.Context, a, b Conn) bool {
+	return a.Engine == Postgres && b.Engine == Postgres && samePGDatabase(ctx, a, b)
 }
 
 // samePGDatabase reports whether two Postgres connections reach the same

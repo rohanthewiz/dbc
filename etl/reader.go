@@ -100,11 +100,22 @@ type ReadOptions struct {
 	// and a load that failed then lost the rows. Off Postgres a read has
 	// no transaction and Hold changes nothing.
 	Hold bool
+	// SameDatabase says the rows feed a load on the same Postgres
+	// database that is open while the read is (NewSameDatabaseWriter).
+	// The read's lock waits are then bounded, as the load's are, so the
+	// two waiting on each other through this process ends in an error,
+	// not a hang (sameDatabaseSetup). For a query: a plain table read
+	// never waits on the load.
+	SameDatabase bool
 }
 
 // ReadWith is Read with opt.
 func ReadWith(ctx context.Context, c Conn, query string, opt ReadOptions, args ...any) (*Reader, error) {
-	rd, err := read(ctx, c, query, nil, args...)
+	var setup []string
+	if opt.SameDatabase && c.Engine == Postgres {
+		setup = []string{pgSameDBLockTimeout()}
+	}
+	rd, err := read(ctx, c, query, setup, args...)
 	if err != nil {
 		return nil, err
 	}

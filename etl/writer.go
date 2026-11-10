@@ -39,6 +39,12 @@ type WriteOptions struct {
 	// table; without one the server's own error says so. Postgres and
 	// SQLite only — see upsertEngine.
 	Upsert []string
+
+	// sameDB and fromQuery are the same-database rules
+	// (sameDatabaseSetup): set by Copy, and by NewSameDatabaseWriter for
+	// a pipeline's held read. Unexported, so they stay off a script's
+	// WriteOpts: a script's Reader is not held past its last row.
+	sameDB, fromQuery bool
 }
 
 const (
@@ -105,8 +111,12 @@ func NewWriter(ctx context.Context, c Conn, table string, cols []string, opt Wri
 		}
 	}
 	setup := opt.Setup
+	truncate := c.Engine.truncateStmt(table)
+	if opt.sameDB && c.Engine == Postgres {
+		setup, truncate = sameDatabaseSetup(setup, table, opt.fromQuery)
+	}
 	if opt.Truncate {
-		setup = append(append([]string(nil), setup...), c.Engine.truncateStmt(table))
+		setup = append(append([]string(nil), setup...), truncate)
 	}
 	var (
 		impl loader
@@ -121,6 +131,68 @@ func NewWriter(ctx context.Context, c Conn, table string, cols []string, opt Wri
 		return nil, serr.Wrap(canceled(ctx, err), "conn", c.Name, "table", table)
 	}
 	return &Writer{ctx: ctx, conn: c.Name, table: table, cols: cols, impl: impl}, nil
+}
+
+// NewSameDatabaseWriter is NewWriter for a load whose rows come from a
+// read on the same Postgres database that stays open until this load has
+// committed — a held read (ReadOptions.Hold), as a pipeline's sql.read
+// is. The load then empties the table with DELETE where Truncate would
+// TRUNCATE, and when the read is a query (fromQuery: it may write, and
+// hold row locks until it commits, after this load) bounds its lock
+// waits, so the load and the read cannot wait on each other for good
+// (sameDatabaseSetup). Off Postgres it is NewWriter.
+func NewSameDatabaseWriter(ctx context.Context, c Conn, table string, cols []string, opt WriteOptions, fromQuery bool) (*Writer, error) {
+	opt.sameDB, opt.fromQuery = true, fromQuery
+	return NewWriter(ctx, c, table, cols, opt)
+}
+
+// sameDatabaseSetup is a Postgres load's Setup, and the statement that
+// empties its table, when the rows come from a read on the same database
+// that commits only after the load does (NewSameDatabaseWriter, Copy).
+//
+// TRUNCATE takes an ACCESS EXCLUSIVE lock, held until the load commits,
+// and within one database the read may need that table: a table copied
+// onto itself to rewrite it through a transform, a query or a view over
+// the destination. The read then waits on the lock, the load waits on the
+// rows, and Postgres cannot see the cycle — it runs through this process
+// — so the load hangs until canceled:
+//
+//	load (dst tx):  BEGIN; TRUNCATE t ──holds ACCESS EXCLUSIVE on t──┐
+//	read (src):     SELECT … FROM t   ◄──waits for that lock─────────┘
+//	load:           waits for rows from the read
+//
+// (or the other way round: a read already open holds ACCESS SHARE until it
+// commits, after the load, and the TRUNCATE waits on that forever.)
+// DELETE's ROW EXCLUSIVE lock conflicts with neither, and the read's
+// snapshot does not see the uncommitted delete, so it reads the old rows
+// while the load replaces them. The cost is DELETE's: slower than TRUNCATE
+// on a big table, and dead rows for vacuum — paid only within one database.
+//
+// A read that is a query (fromQuery) gets a lock_timeout on both sides —
+// the load's here, first so it covers the Setup's CREATE and DELETE as well
+// as the rows, and the read's from ReadOptions.SameDatabase. A query can
+// write, and its change stays uncommitted until the load has committed, so
+// when the load needs a row the query wrote — or the query a row the
+// load's DELETE took first — each side waits on the other: the same kind
+// of cycle through this process, which Postgres cannot see either:
+//
+//	read (src tx):  DELETE FROM t … RETURNING ──row locks on t, uncommitted──┐
+//	load (dst tx):  INSERT into a table with an FK to t,                      │
+//	                or the moved rows back into t (a key match) ◄──waits──────┘
+//	read:           commits only after the load does
+//
+//	load (dst tx):  DELETE FROM t (Truncate) ──row locks on t, uncommitted──┐
+//	read (src tx):  DELETE FROM t … RETURNING ◄──waits──────────────────────┘
+//	load:           waits for rows from the read
+//
+// No setting removes the cycle — the order of the two commits is what keeps
+// a failed move's rows in the source — so the timeout turns the hang into an
+// error, the read rolls back, and the rows stay where they were.
+func sameDatabaseSetup(setup []string, table string, fromQuery bool) ([]string, string) {
+	if fromQuery {
+		setup = append([]string{pgSameDBLockTimeout()}, setup...)
+	}
+	return setup, "DELETE FROM " + Postgres.QuoteTable(table)
 }
 
 // Columns returns the column list rows are written in.

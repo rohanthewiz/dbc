@@ -274,6 +274,9 @@ type fragRun struct {
 	nodes map[string]*nodeInst
 	order []string // node ids, source first, each after its parent
 	stop  bool     // set through Env.Stop
+	// sharedQuery: a sql.read query and a sink share one Postgres
+	// database (shareDatabase), so a lock timeout gets a hint
+	sharedQuery bool
 }
 
 // runFragment runs one fragment through to its sinks' commits.
@@ -375,7 +378,56 @@ func (r *runner) runFragment(f *Fragment) (FragmentStats, error) {
 	if err == nil {
 		r.log(fmt.Sprintf("fragment %s done: %d rows in %s", f.Name, fs.Rows, fs.Elapsed().Round(time.Millisecond)))
 	}
+	if err != nil && fr.sharedQuery && etl.LockTimedOut(err) {
+		// a bare "canceling statement due to lock timeout" says nothing
+		// of why; on a shared database it is most likely this
+		err = serr.Wrap(err, "hint", "the source query and a sink on the same database probably waited on each other, "+
+			"so lock_timeout stopped the fragment and the source kept its rows: the load cannot use rows the query "+
+			"changed (a foreign key into them, or the same rows written back) until the query commits, which is after the load")
+	}
 	return done(err)
+}
+
+// shareDatabase marks a sql.read or sql.table source and each sql.write
+// sink that reach one Postgres database, before the source opens (its
+// read takes the rules at Open). The source's read is held until every
+// sink has committed (sqlRead), so within one database each side can wait
+// on the other through this process, where Postgres cannot see it — a
+// sink's TRUNCATE on the read's ACCESS SHARE lock forever (N-253), a
+// sink's rows on a DELETE … RETURNING's row locks. The marked pair takes
+// etl's same-database rules, as etl.Copy does: the sink empties its table
+// with DELETE, and when the source is a query both bound their lock waits.
+//
+// Asked only where it matters — the sink truncates, or the source is a
+// query that may write — so a plain load between two databases skips the
+// lookup. A conn that does not resolve is left to the node's own Open,
+// which reports it.
+func (fr *fragRun) shareDatabase(src *nodeInst, sinks []*nodeInst) {
+	rd, ok := src.impl.(*sqlRead)
+	if !ok {
+		return
+	}
+	var from *etl.Conn
+	for _, n := range sinks {
+		w, ok := n.impl.(*sqlWrite)
+		if !ok || !(w.truncate || !rd.isTable) {
+			continue
+		}
+		if from == nil {
+			c, err := fr.r.h.ETLConn(rd.conn)
+			if err != nil || c.Engine != etl.Postgres {
+				return
+			}
+			from = &c
+		}
+		to, err := fr.r.h.ETLConn(w.conn)
+		if err != nil || !etl.SameDatabase(fr.r.ctx, *from, to) {
+			continue
+		}
+		w.sameDB, w.fromQuery = true, !rd.isTable
+		rd.sameDB = true
+		fr.sharedQuery = fr.sharedQuery || !rd.isTable
+	}
 }
 
 // describe is the fragment's shape for the log: "sql.read → go.transform → sql.write, preview".
@@ -480,6 +532,7 @@ func (fr *fragRun) stream(src *nodeInst) (err error) {
 		}
 	}()
 
+	fr.shareDatabase(src, sinks)
 	if err = source.Open(src.env); err != nil {
 		return fr.nodeErr(src, err)
 	}

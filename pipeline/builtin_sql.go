@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"slices"
 	"strconv"
 	"strings"
@@ -136,6 +137,10 @@ type sqlRead struct {
 	where   string
 	order   string
 
+	// sameDB: a sink loads into this read's Postgres database
+	// (fragRun.shareDatabase), so the read bounds its lock waits
+	sameDB bool
+
 	rd   *etl.Reader
 	cols []Col
 }
@@ -156,7 +161,7 @@ func (s *sqlRead) Open(e *Env) error {
 	if s.isTable {
 		s.query = tableQuery(c.Engine, s.table, s.columns, s.where, s.order)
 	}
-	rd, err := etl.ReadWith(e.Ctx, c, s.query, etl.ReadOptions{Hold: true}, s.args...)
+	rd, err := etl.ReadWith(e.Ctx, c, s.query, etl.ReadOptions{Hold: true, SameDatabase: s.sameDB && !s.isTable}, s.args...)
 	if err != nil {
 		return err
 	}
@@ -237,6 +242,10 @@ type sqlWrite struct {
 	// upsert is mode upsert: rows matched on key update the table's row
 	// (etl.WriteOptions.Upsert), the rest are inserted
 	upsert bool
+	// sameDB: the fragment's source reads this sink's Postgres database
+	// and stays open until the load commits (fragRun.shareDatabase);
+	// fromQuery: that source is a query, which may write
+	sameDB, fromQuery bool
 
 	w     *etl.Writer
 	ncols int
@@ -280,7 +289,16 @@ func (s *sqlWrite) Open(e *Env, cols []Col) error {
 	if s.upsert {
 		opt.Upsert = s.key
 	}
-	w, err := etl.NewWriter(e.Ctx, c, s.table, names, opt)
+	newWriter := etl.NewWriter
+	if s.sameDB {
+		// on the source's own database, truncate is a DELETE (TRUNCATE
+		// would wait for good on the held read's lock) and, from a query,
+		// lock waits are bounded (N-253; etl's sameDatabaseSetup)
+		newWriter = func(ctx context.Context, c etl.Conn, table string, cols []string, opt etl.WriteOptions) (*etl.Writer, error) {
+			return etl.NewSameDatabaseWriter(ctx, c, table, cols, opt, s.fromQuery)
+		}
+	}
+	w, err := newWriter(e.Ctx, c, s.table, names, opt)
 	if err != nil {
 		return err
 	}

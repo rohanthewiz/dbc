@@ -2476,7 +2476,12 @@ Postgres, nothing between, runs as `s.Copy`'s direct COPY and says so.
 A Postgres source commits **last**, as a copy's does: its read stays open
 until every sink of the fragment has committed, so a `sql.read` of a
 `DELETE … RETURNING` that moves rows keeps them in the source if a sink
-fails or the run is stopped.
+fails or the run is stopped. When a sink loads into the source's own
+database, the same rules as a copy's apply: `truncate` is a `DELETE`
+there (a table read and loaded back through a transform works), and a
+query source and the sink each give up on a lock after 30 seconds rather
+than wait on each other for good — moving rows back into the table they
+came from, say.
 
 A script runs a pipeline by name, or builds one with its own funcs as
 nodes — the one thing the JSON cannot say:

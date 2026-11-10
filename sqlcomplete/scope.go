@@ -374,7 +374,8 @@ func (s *scope) parseCTEs(toks []tok, i int, c *completer) int {
 		if i < len(toks) && toks[i].isPunct("(") {
 			close := matching(toks, i)
 			for _, t := range toks[i+1 : close] {
-				if t.isName() {
+				// an empty name is a quoted one left open (`"`): no column
+				if t.isName() && t.text != "" {
 					ct.cols = append(ct.cols, t.text)
 				}
 			}

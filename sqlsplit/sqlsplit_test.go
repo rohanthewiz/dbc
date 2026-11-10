@@ -410,3 +410,23 @@ func TestSplitBOM(t *testing.T) {
 		t.Errorf("Format kept the mark: %q", got)
 	}
 }
+
+// TestSplitBlanks: Text and its offsets trim the same blanks, Unicode's.
+// FuzzSplit found "\v0" giving Text "\v": TrimSpace took the \v off the
+// text's length but the offset counted only " \t\r\n", so a statement led
+// by \v, \f or a pasted no-break space lost its last bytes.
+func TestSplitBlanks(t *testing.T) {
+	for _, c := range []struct{ sql, first string }{
+		{"\v\fSELECT 1\v;\fSELECT 2", "SELECT 1"},
+		{"\u00a0SELECT 1\u00a0; SELECT 2", "SELECT 1"},
+		{"\u2003\nSELECT 1;SELECT 2\u00a0", "SELECT 1"},
+	} {
+		stmts := Split(c.sql)
+		eq(t, texts(stmts), []string{c.first, "SELECT 2"})
+		for _, s := range stmts {
+			if c.sql[s.Start:s.End] != s.Text || c.sql[s.CodeStart:s.CodeStart+1] != "S" {
+				t.Errorf("%q: %q at %d…%d, code at %d", c.sql, s.Text, s.Start, s.End, s.CodeStart)
+			}
+		}
+	}
+}

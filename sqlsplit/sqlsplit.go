@@ -15,7 +15,10 @@
 // dialect.go and commentAt.
 package sqlsplit
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // Stmt is one statement found in a buffer.
 //
@@ -87,9 +90,15 @@ func (d Dialect) Split(sql string) []Stmt {
 		}
 		// the terminator, when there is one, ends the span: a ;, or what
 		// MySQL's DELIMITER made the terminator
-		body := strings.TrimRight(sql[c.start:c.end-c.term], " \t\r\n")
-		lead := len(body) - len(strings.TrimLeft(body, " \t\r\n"))
-		text := strings.TrimSpace(body)
+		// MySQL's DELIMITER made the terminator. Blanks are Unicode's
+		// (a no-break space pasted from a web page or a chat is one), and
+		// the same set is trimmed off Text and counted into its offset:
+		// trimmed by TrimSpace but counted by " \t\r\n", a statement led
+		// by \v or a no-break space got an offset short of its text, and
+		// lost its last bytes (FuzzSplit found it).
+		body := strings.TrimRightFunc(sql[c.start:c.end-c.term], unicode.IsSpace)
+		text := strings.TrimLeftFunc(body, unicode.IsSpace)
+		lead := len(body) - len(text)
 		if text == "" {
 			continue
 		}
@@ -824,8 +833,15 @@ func (d Dialect) dollarTag(s string, i int) (string, bool) {
 	if d != Postgres && d != Generic {
 		return "", false
 	}
-	if i > 0 && isWordByte(s[i-1]) {
-		return "", false // a$b: the $ continues the name
+	// a$b: the $ continues the name — and so does every $ of a run after
+	// one (a$$$), as a word is read (FuzzSplit found 0$$$ read as one word
+	// by the scan and as 0, $ and a quote by Lex)
+	k := i
+	for k > 0 && s[k-1] == '$' {
+		k--
+	}
+	if k > 0 && isWordByte(s[k-1]) {
+		return "", false
 	}
 	j := i + 1
 	if j < len(s) && isDigit(s[j]) {

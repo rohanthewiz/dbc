@@ -274,7 +274,9 @@
       } else if (c === "$") {
         // sqlsplit's dollarTag: Postgres (and Generic) only, never inside
         // a name
-        const tag = (d === "postgres" || d === "") && !isWord(s[i - 1]) && s.slice(i).match(/^\$(?![0-9])\w*\$/);
+        let k = i;
+        while (k > 0 && s[k - 1] === "$") k--; // a$$$: every $ of the run continues the name
+        const tag = (d === "postgres" || d === "") && !isWord(s[k - 1]) && s.slice(i).match(/^\$(?![0-9])\w*\$/);
         if (tag) {
           const j = scanUntil(s, i + tag[0].length, tag[0], false);
           emit(i, j, "s"); i = j;

@@ -950,8 +950,9 @@ func matchQuality(word, prefix string) (q int, ok bool) {
 	}
 	// letters in order, the first one matching the word's first: "cid"
 	// finds customer_id, but "id" alone does not find every word with an
-	// i and a d in it
-	if w[0] != p[0] {
+	// i and a d in it. An empty word matches no prefix (FuzzComplete found
+	// one: a name from a quoted identifier left open)
+	if w == "" || w[0] != p[0] {
 		return 0, false
 	}
 	j := 0

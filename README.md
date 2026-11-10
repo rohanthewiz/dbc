@@ -2481,7 +2481,9 @@ database, the same rules as a copy's apply: `truncate` is a `DELETE`
 there (a table read and loaded back through a transform works), and a
 query source and the sink each give up on a lock after 30 seconds rather
 than wait on each other for good — moving rows back into the table they
-came from, say.
+came from, say. A preview rolls the source back: a `DELETE … RETURNING`
+shows its rows and deletes nothing. On MySQL, SQLite and bytdb, which
+commit such a write as it runs, a preview refuses it instead.
 
 A script runs a pipeline by name, or builds one with its own funcs as
 nodes — the one thing the JSON cannot say:
@@ -2568,7 +2570,8 @@ below it as for a query.
   ✓ Check logs every finding.
 - **◎ Preview** runs the canvas as it is — unsaved edits too — on real
   data, writing nothing: every sink becomes a preview, the source stops
-  after `rows`, actions are skipped. Each branch's rows land in the grid
+  after `rows` and is rolled back (a `DELETE … RETURNING` deletes nothing;
+  off Postgres a preview refuses one), actions are skipped. Each branch's rows land in the grid
   ("Result 1 · 2" for two). A lane's ◎ previews that fragment alone.
 - **▶ Run** (`Ctrl+Enter`) saves, then runs the file — what `dbc pipeline
   run` would run. Runs belong to dbc web, not to the tab: the tab is

@@ -450,7 +450,7 @@ func (fr *fragRun) build(n Node) (*nodeInst, error) {
 	frag, node := fr.f.Name, n.ID
 	inst.env = &Env{
 		Ctx: fr.r.ctx, S: fr.r.h, Params: fr.r.params, Vars: fr.r.vars, Batch: fr.f.BatchSize(),
-		filesDir: fr.r.opt.FilesDir,
+		filesDir: fr.r.opt.FilesDir, preview: fr.r.opt.PreviewRows > 0,
 		Pipeline: fr.r.spec.Name, Fragment: frag, Node: node, stop: &fr.stop,
 		Logf: func(format string, args ...any) {
 			fr.r.log(fmt.Sprintf("[%s/%s] %s", frag, node, fmt.Sprintf(format, args...)))
@@ -633,8 +633,11 @@ func (fr *fragRun) stream(src *nodeInst) (err error) {
 	fr.stats.Vars["rows"] = strconv.FormatInt(fr.stats.Rows, 10)
 	ok = true
 	// last, so a source that changed rows (DELETE … RETURNING) commits
-	// only once every load has
-	if err = source.Close(true); err != nil {
+	// only once every load has. A preview loaded nothing, so its source
+	// ends as a failed one would: a DELETE … RETURNING it ran to show its
+	// rows is rolled back, not committed with the rows written nowhere
+	// (N-252) — the README's "writing nothing" holds for the source too.
+	if err = source.Close(!src.env.preview); err != nil {
 		return fr.nodeErr(src, err)
 	}
 	srcOpen = false

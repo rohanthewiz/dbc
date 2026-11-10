@@ -78,15 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-252** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  Preview runs and commits a writing source. `previewShape`
-  (`pipeline/run.go:784-838`) only swaps sinks and adds a limit; `stream`
-  still ends with `source.Close(true)` (`run.go:584`). Pressing Preview on
-  a `DELETE … RETURNING` source deletes the rows and writes them nowhere,
-  against the README's "writing nothing". Fix: close the source with
-  `ok=false` in a preview, and refuse a write-verb source on engines that
-  have no read transaction to roll back (N-152's engines). Audit, traced.
-  (RPU plan, phase 1)
 - **N-254** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   The TUI saves editor text only on a clean quit, a console swap, or a
   tab open or close: `saveConsole`'s callers are `tui/app.go:398`,
@@ -1285,6 +1276,16 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-252** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Preview runs and commits a writing source. `previewShape`
+  (`pipeline/run.go:784-838`) only swaps sinks and adds a limit; `stream`
+  still ends with `source.Close(true)` (`run.go:584`). Pressing Preview on
+  a `DELETE … RETURNING` source deletes the rows and writes them nowhere,
+  against the README's "writing nothing". Fix: close the source with
+  `ok=false` in a preview, and refuse a write-verb source on engines that
+  have no read transaction to roll back (N-152's engines). Audit, traced.
+  (RPU plan, phase 1)
+  closed 2026-11-10 (RPU plan, phase 1): a preview closes its source as failed — `source.Close(!src.env.preview)`, from a new unexported `Env.preview` the runner sets in a preview — so on Postgres, where the read is held (N-251), a `DELETE … RETURNING` shown in a preview is rolled back. On MySQL, SQLite and bytdb, whose read has no transaction and commits the write as it runs, `sqlRead.Open` refuses a query whose main verb writes (`queryWrites`, lexical like db's isQuery) in a preview, before it runs, saying to run the pipeline instead. The README's preview bullet and pipeline section say so. Tests: `TestLivePGPreviewRollsBackAWritingSource` (all 10 rows remain after a preview; 0 on the old code) and `TestPreviewRefusesAWritingSourceWithoutTransaction` (SQLite: refused, the 25 rows remain — the old code deleted 3; a SELECT preview and a real move are unchanged).
 - **N-253** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   `sql.write` with `truncate` into a table the same fragment reads hangs
   on Postgres. `sqlWrite.Open` (`pipeline/builtin_sql.go:271-275`) uses

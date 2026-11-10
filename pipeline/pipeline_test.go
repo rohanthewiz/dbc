@@ -708,3 +708,38 @@ func TestProgressSnapshotsAreCopies(t *testing.T) {
 		}
 	}
 }
+
+// TestPreviewRefusesAWritingSourceWithoutTransaction is N-252 off
+// Postgres: a preview ends its source rolled back, which SQLite (like
+// MySQL and bytdb) cannot do — a read has no transaction there, and a
+// DELETE … RETURNING commits as it runs. So a preview refuses it before
+// it runs, where it used to delete the rows to show them. A real run
+// still moves them, and a preview of a read that writes nothing is
+// unchanged.
+func TestPreviewRefusesAWritingSourceWithoutTransaction(t *testing.T) {
+	h := newTestHost(t)
+	build := func(query string) *Spec {
+		p := New("move")
+		f := p.Fragment("f")
+		f.Node("sql.read", Config{"conn": "a", "query": query})
+		f.Then("sql.write", Config{"conn": "b", "table": "moved", "create": "true"})
+		return p.Spec()
+	}
+	del := "DELETE FROM cats WHERE id <= 3 RETURNING id, name"
+	_, err := Run(context.Background(), h, build(del), Options{PreviewRows: 2})
+	if err == nil || !strings.Contains(err.Error(), "a preview writes nothing") {
+		t.Fatalf("preview of a DELETE … RETURNING on SQLite: %v, want it refused", err)
+	}
+	if n := h.rows(t, "a", "SELECT count(*) FROM cats")[0][0]; n != "25" {
+		t.Errorf("after the refused preview cats has %s rows, want 25", n)
+	}
+	if _, err = Run(context.Background(), h, build("SELECT id, name FROM cats"), Options{PreviewRows: 2}); err != nil {
+		t.Errorf("preview of a SELECT: %v", err)
+	}
+	if _, err = Run(context.Background(), h, build(del), Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if src, dst := h.rows(t, "a", "SELECT count(*) FROM cats")[0][0], h.rows(t, "b", "SELECT count(*) FROM moved")[0][0]; src != "22" || dst != "3" {
+		t.Errorf("after the run: cats %s rows, moved %s; want 22 and 3", src, dst)
+	}
+}

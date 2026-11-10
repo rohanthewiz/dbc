@@ -160,6 +160,13 @@ func (s *sqlRead) Open(e *Env) error {
 	}
 	if s.isTable {
 		s.query = tableQuery(c.Engine, s.table, s.columns, s.where, s.order)
+	} else if e.preview && c.Engine != etl.Postgres && queryWrites(c.Engine, s.query) {
+		// a preview ends its read rolled back (fragRun.stream), which only
+		// Postgres can do: elsewhere a read has no transaction, and the
+		// write commits as it runs, before a row is shown
+		return serr.New("a preview writes nothing, and this query would: "+c.Engine.String()+
+			" commits it as it runs, with no transaction to roll back — run the pipeline to make the change",
+			"conn", s.conn)
 	}
 	rd, err := etl.ReadWith(e.Ctx, c, s.query, etl.ReadOptions{Hold: true, SameDatabase: s.sameDB && !s.isTable}, s.args...)
 	if err != nil {
@@ -169,6 +176,20 @@ func (s *sqlRead) Open(e *Env) error {
 	s.cols = ColsOf(rd.Columns(), rd.DBTypes())
 	e.SourceEngine = c.Engine.String()
 	return nil
+}
+
+// writeVerbs are the statements that change rows, as a query's main verb:
+// a source that is one of them (with RETURNING, to give rows) writes.
+var writeVerbs = map[string]bool{
+	"insert": true, "update": true, "delete": true, "merge": true, "replace": true,
+}
+
+// queryWrites reports whether query, read as e's engine reads it, changes
+// rows: its main verb is a write (a CTE that writes is Postgres's, whose
+// read rolls back anyway). Lexical, like db's isQuery: a CALL or a
+// function with side effects is not seen.
+func queryWrites(e etl.Engine, query string) bool {
+	return writeVerbs[e.Dialect().Verbs(query).Main]
 }
 
 // tableQuery is SELECT cols FROM table [WHERE …] [ORDER BY …], quoted for e.

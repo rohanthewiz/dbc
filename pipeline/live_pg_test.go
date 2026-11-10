@@ -85,6 +85,30 @@ func TestLivePGMoveKeepsRowsWhenTheSinkFails(t *testing.T) {
 	}
 }
 
+// TestLivePGPreviewRollsBackAWritingSource is N-252: Preview runs the
+// source to show its rows, and a DELETE … RETURNING it ran is rolled
+// back — a preview writes nothing, the source included. It used to be
+// committed, the rows deleted and written nowhere.
+func TestLivePGPreviewRollsBackAWritingSource(t *testing.T) {
+	h := livePGHost(t)
+	h.exec(t, "pg", "CREATE TABLE pipeline_live.moving (id int PRIMARY KEY, v text)")
+	h.exec(t, "pg", "INSERT INTO pipeline_live.moving SELECT g, 'v' || g FROM generate_series(1, 10) g")
+	p := New("move")
+	f := p.Fragment("f")
+	f.Node("sql.read", Config{"conn": "pg", "query": "DELETE FROM pipeline_live.moving RETURNING id, v"})
+	f.Then("sql.write", Config{"conn": "b", "table": "moved", "create": "true"})
+	st, err := Run(context.Background(), h, p.Spec(), Options{PreviewRows: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Status != Succeeded {
+		t.Fatalf("preview: %+v", st)
+	}
+	if n := h.count(t, "pg", "pipeline_live.moving"); n != "10" {
+		t.Errorf("after a preview the source has %s rows, want all 10", n)
+	}
+}
+
 // TestLivePGSameDatabaseTruncate is N-253: a fragment that reads a table
 // and loads it back with truncate, through a transform, on one database.
 // The read is held until the load commits (N-251), and TRUNCATE waits on

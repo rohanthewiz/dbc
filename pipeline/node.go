@@ -84,6 +84,11 @@ type Env struct {
 	Logf func(format string, args ...any)
 
 	stop *bool // set by Stop; read by the fragment runner
+	// preview says the run is a preview (Options.PreviewRows): it writes
+	// nothing, and a source that would write — sql.read of a DELETE …
+	// RETURNING — must not either (sqlRead). Unexported: the built-ins'
+	// concern, not a plugin's.
+	preview bool
 }
 
 // Stop asks the fragment to stop pulling batches from the source once the

@@ -205,9 +205,10 @@
   // (and # on MySQL), /* */ comments (nested on Postgres and Generic alone;
   // MySQL's executable /*!…*/ and /*M!…*/ drawn as one comment span, its
   // strings honoured), '…' strings (doubled '', and a backslash escape
-  // where d's engine has one), "…"/`…` quoted identifiers (i), $tag$ bodies,
-  // and $1 ? :name parameters (p) — but not ::casts. Words are ASCII only
-  // there, so they are here.
+  // where d's engine has one), "…"/`…` quoted identifiers (i), $tag$ bodies
+  // (Postgres and Generic, never inside a name: a$b is one word), and $1 ?
+  // :name parameters (p) — but not ::casts. Words are ASCII only there, so
+  // they are here.
   function lexSQL(s, d) {
     const out = [];
     const emit = (a, b, k) => { if (b > a) out.push([a, b, k]); };
@@ -271,7 +272,9 @@
       } else if (c === '"' || c === "`") {
         const j = quoted(i); emit(i, j, "i"); i = j;
       } else if (c === "$") {
-        const tag = s.slice(i).match(/^\$(?![0-9])\w*\$/);
+        // sqlsplit's dollarTag: Postgres (and Generic) only, never inside
+        // a name
+        const tag = (d === "postgres" || d === "") && !isWord(s[i - 1]) && s.slice(i).match(/^\$(?![0-9])\w*\$/);
         if (tag) {
           const j = scanUntil(s, i + tag[0].length, tag[0], false);
           emit(i, j, "s"); i = j;
@@ -292,7 +295,7 @@
         emit(i, j, "n"); i = j;
       } else if (isWord(c)) {
         let j = i;
-        while (j < n && isWord(s[j])) j++;
+        while (j < n && (isWord(s[j]) || s[j] === "$")) j++; // a$b is one name
         if (kw.sql.has(s.slice(i, j).toLowerCase())) emit(i, j, "k");
         i = j;
       } else {

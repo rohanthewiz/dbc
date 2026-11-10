@@ -178,3 +178,47 @@ func TestDialectFormat(t *testing.T) {
 		t.Errorf("postgres Format:\n%s\nwant\n%s", got, want)
 	}
 }
+
+// TestDollarQuotesPostgresOnly is N-306: a dollar quote is Postgres's, so
+// on MySQL the $ in a name opens nothing, and the ; after it ends the
+// statement. Read as a quote, `$b$` ran to the end of the buffer.
+func TestDollarQuotesPostgresOnly(t *testing.T) {
+	name := "SELECT a$b$c FROM t; SELECT 2"
+	// a $ inside a name opens nothing on Postgres either: a$b$c is one
+	// identifier there, and a quote starts only where a token does
+	for _, d := range []Dialect{MySQL, Postgres, Generic} {
+		eq(t, texts(d.Split(name)), []string{"SELECT a$b$c FROM t", "SELECT 2"})
+	}
+	if Postgres.HasKeyword("SELECT a$returning FROM t", "returning") {
+		t.Errorf("RETURNING found inside the name a$returning")
+	}
+	for _, d := range []Dialect{SQLite, Bytdb} {
+		eq(t, texts(d.Split("SELECT $a$; SELECT 2")), []string{"SELECT $a$", "SELECT 2"})
+	}
+	// Postgres and Generic keep their bodies whole
+	body := "CREATE FUNCTION f() RETURNS int AS $$ SELECT 1; $$ LANGUAGE sql; SELECT 2"
+	for _, d := range []Dialect{Postgres, Generic} {
+		eq(t, texts(d.Split(body)), []string{"CREATE FUNCTION f() RETURNS int AS $$ SELECT 1; $$ LANGUAGE sql", "SELECT 2"})
+	}
+	// and the editor draws a string only where the run sees one
+	for _, c := range []struct {
+		d    Dialect
+		want int
+	}{{MySQL, 0}, {Postgres, 1}} {
+		n := 0
+		for _, tk := range c.d.Lex(body) {
+			if tk.Kind == TokString {
+				n++
+			}
+		}
+		if n != c.want {
+			t.Errorf("%v: %d strings in %q, want %d", c.d, n, body, c.want)
+		}
+	}
+	// the formatter keeps the name whole (it spaced it out as a $ b $ c)
+	for _, d := range []Dialect{MySQL, Postgres} {
+		if got := d.Format("select a$b$c from t"); got != "SELECT a$b$c\nFROM t" {
+			t.Errorf("%v.Format kept a$b$c as %q", d, got)
+		}
+	}
+}

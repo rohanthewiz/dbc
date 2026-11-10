@@ -81,7 +81,7 @@ func (d Dialect) Lex(sql string) []Token {
 			emit(i, j, TokIdent)
 			i = j
 		case c == '$':
-			if tag, ok := dollarTag(sql, i); ok {
+			if tag, ok := d.dollarTag(sql, i); ok {
 				j := skipDollarQuoted(sql, i, tag)
 				emit(i, j, TokString)
 				i = j
@@ -114,8 +114,10 @@ func (d Dialect) Lex(sql string) []Token {
 			emit(i, j, TokNumber)
 			i = j
 		case isWordByte(c):
+			// a name may hold a $ past its first byte (a$b, on Postgres
+			// and MySQL), which is not a parameter in the middle of it
 			j := i
-			for j < len(sql) && isWordByte(sql[j]) {
+			for j < len(sql) && (isWordByte(sql[j]) || sql[j] == '$') {
 				j++
 			}
 			if keywords[strings.ToLower(sql[i:j])] {

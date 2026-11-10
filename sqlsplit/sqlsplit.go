@@ -269,7 +269,7 @@ func (d Dialect) Verbs(sql string) StmtVerbs {
 		case c == '\'', c == '"', c == '`':
 			i = skipQuoted(sql, i, c, d)
 		case c == '$':
-			if tag, ok := dollarTag(sql, i); ok {
+			if tag, ok := d.dollarTag(sql, i); ok {
 				i = skipDollarQuoted(sql, i, tag)
 			} else {
 				i++
@@ -450,7 +450,7 @@ func (d Dialect) HasKeyword(sql, word string) bool {
 		case c == '\'', c == '"', c == '`':
 			i = skipQuoted(sql, i, c, d)
 		case c == '$':
-			if tag, ok := dollarTag(sql, i); ok {
+			if tag, ok := d.dollarTag(sql, i); ok {
 				i = skipDollarQuoted(sql, i, tag)
 				continue
 			}
@@ -466,7 +466,8 @@ func (d Dialect) HasKeyword(sql, word string) bool {
 				i++
 			}
 			if start > 0 {
-				if p := sql[start-1]; p == '.' || p == ':' || p == '@' {
+				// a$returning is one name, and $returning a parameter
+				if p := sql[start-1]; p == '.' || p == ':' || p == '@' || p == '$' {
 					continue
 				}
 			}
@@ -503,7 +504,7 @@ func scan(sql string, d Dialect) []chunk {
 			i = skipQuoted(sql, i, c, d)
 			hasCode = true
 		case '$':
-			if tag, ok := dollarTag(sql, i); ok {
+			if tag, ok := d.dollarTag(sql, i); ok {
 				i = skipDollarQuoted(sql, i, tag)
 			} else {
 				i++ // a placeholder such as $1
@@ -717,7 +718,27 @@ func skipQuoted(s string, i int, q byte, d Dialect) int {
 
 // dollarTag reports whether a PostgreSQL dollar-quote tag ($$ or $tag$) opens
 // at i, as opposed to a positional parameter such as $1.
-func dollarTag(s string, i int) (string, bool) {
+//
+// Only Postgres has dollar quotes (and Generic, whose reading is Postgres's
+// in everything but the backslash). Elsewhere a $ is something else, and
+// reading a quote into it hides every ; up to a closing tag that is not
+// coming, merging the statements after it:
+//
+//	MySQL    a$b$c is one name ($ is a name byte); DELIMITER $$ ends a
+//	         statement (N-248)
+//	SQLite   $name is a parameter
+//	bytdb    $1 is a parameter, as on Postgres; its lexer has no quote
+//
+// Nor does a $ open one inside a name, on Postgres either: a$b$c is one
+// identifier there (a name may hold a $ past its first byte), and Postgres
+// reads a dollar quote only where a token starts.
+func (d Dialect) dollarTag(s string, i int) (string, bool) {
+	if d != Postgres && d != Generic {
+		return "", false
+	}
+	if i > 0 && isWordByte(s[i-1]) {
+		return "", false // a$b: the $ continues the name
+	}
 	j := i + 1
 	if j < len(s) && isDigit(s[j]) {
 		return "", false // $1, $2, …

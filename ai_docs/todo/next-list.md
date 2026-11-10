@@ -687,18 +687,6 @@ ten session docs in `ai_docs/claude_sessions/`
   folding is by depth only, so an `Append` over 200 partitions gives a
   20000×199 px image and over 1,000 a 20000×40 one. Fix: collapse or
   wrap a run of siblings past N. Audit, run. (RPU plan, phase 4)
-- **N-306** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  sqlsplit reads Postgres dollar quotes on every engine (`dollarTag`,
-  `skipDollarQuoted`), as it read Postgres's comment rules before N-247.
-  MySQL allows `$` inside an unquoted name, so `SELECT a$b$c FROM t;
-  SELECT 2` opens a `$b$` quote at the first `$` that runs to the end of
-  the buffer (no closing `$b$`): the statements merge, the server refuses
-  them, and the editor draws the rest as a string. SQLite's `$name`
-  parameters can do the same. It only merges, never cuts (a quote that is
-  not there hides a `;`, it does not invent one), so nothing runs that was
-  not written. Fix: dollar quotes on Postgres and Generic only (bytdb
-  v0.21.2's lexer has none either). Raised while closing N-247; nobody
-  has hit it.
 
 ## Validate
 
@@ -1307,6 +1295,19 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-306** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  sqlsplit reads Postgres dollar quotes on every engine (`dollarTag`,
+  `skipDollarQuoted`), as it read Postgres's comment rules before N-247.
+  MySQL allows `$` inside an unquoted name, so `SELECT a$b$c FROM t;
+  SELECT 2` opens a `$b$` quote at the first `$` that runs to the end of
+  the buffer (no closing `$b$`): the statements merge, the server refuses
+  them, and the editor draws the rest as a string. SQLite's `$name`
+  parameters can do the same. It only merges, never cuts (a quote that is
+  not there hides a `;`, it does not invent one), so nothing runs that was
+  not written. Fix: dollar quotes on Postgres and Generic only (bytdb
+  v0.21.2's lexer has none either). Raised while closing N-247; nobody
+  has hit it.
+  closed 2026-11-10, done ahead of N-248 because MySQL's `DELIMITER $$` needs `$$` not to open a quote: `Dialect.dollarTag` opens one on Postgres and Generic only, and never where the `$` continues a word — Postgres's own rule (a name may hold a `$` past its first byte, and a quote starts only where a token does), so `a$b$c` was misread on Postgres too. Beside it, the meaning-changing half: the formatter lexed `a$b` as `a`, a parameter `$`, `b` and spaced it out as `a $ b` on every engine; its words now run through a `$`. `Lex` reads such a word whole (no parameter drawn mid-name), `HasKeyword` skips a word right after a `$` (`a$returning`, a `$name` parameter), and `hl.js` mirrors the quote rule and the word. Test: `TestDollarQuotesPostgresOnly` (split on MySQL, Postgres and Generic; `$a$` on SQLite and bytdb; Postgres and Generic bodies kept whole; Lex strings; Format), failing before the change.
 - **N-247** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   sqlsplit follows Postgres's comment rules on every dialect
   (`sqlsplit/sqlsplit.go:490-520,577`, `lex.go:58`). On MySQL `#` is not

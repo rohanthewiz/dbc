@@ -459,7 +459,7 @@ func fmtLex(sql string, d Dialect) []ftok {
 			add(ftIdent, i, j)
 			i = j
 		case c == '$':
-			if tag, ok := dollarTag(sql, i); ok {
+			if tag, ok := d.dollarTag(sql, i); ok {
 				j := skipDollarQuoted(sql, i, tag)
 				add(ftString, i, j)
 				i = j
@@ -509,9 +509,11 @@ func fmtLex(sql string, d Dialect) []ftok {
 			}
 			i = j
 		case fmtWordByte(c) || (c == '@' && i+1 < len(sql) && (fmtWordByte(sql[i+1]) || sql[i+1] == '@')):
-			// a word, or a MySQL @var / @@var
+			// a word, or a MySQL @var / @@var. A $ past a word's first
+			// byte is part of it (a$b is one name on Postgres and MySQL):
+			// lexed apart, it would be spaced out as `a $ b`
 			j := i + 1
-			for j < len(sql) && (fmtWordByte(sql[j]) || c == '@' && j == i+1 && sql[j] == '@') {
+			for j < len(sql) && (fmtWordByte(sql[j]) || sql[j] == '$' || c == '@' && j == i+1 && sql[j] == '@') {
 				j++
 			}
 			// E'…', N'…', X'…', B'…': a prefixed string is one token

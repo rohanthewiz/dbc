@@ -78,12 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-249** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  A UTF-8 BOM stays in the first statement (`sqlsplit/sqlsplit.go:77`;
-  nothing strips it on the `main.go:510` file path). The statement is
-  `﻿SELECT 1`, `FirstKeyword` is "", so it is classed as a non-read
-  and the server rejects it. Strip a leading BOM in `Split` or where the
-  file is read. CRLF is fine. Audit, run. (RPU plan, phase 1)
 - **N-250** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Completion panics when `.` is the first token of a statement
   (`sqlcomplete/complete.go:357`): `slice bounds out of range [:-1]` at
@@ -1292,6 +1286,13 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-249** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  A UTF-8 BOM stays in the first statement (`sqlsplit/sqlsplit.go:77`;
+  nothing strips it on the `main.go:510` file path). The statement is
+  `﻿SELECT 1`, `FirstKeyword` is "", so it is classed as a non-read
+  and the server rejects it. Strip a leading BOM in `Split` or where the
+  file is read. CRLF is fine. Audit, run. (RPU plan, phase 1)
+  closed 2026-11-10 (RPU plan, phase 1): stripped in the scan rather than at each file read, so every path that splits — headless `-f`, the editors, migrations, pipelines — gets it: a leading U+FEFF stays outside every chunk (`scan` starts at 3), so the first statement's Text, Start and CodeStart begin past it and a caret on it still picks that statement. The formatter's lexer drops it too (it read `\uFEFFselect` as one word, no keyword, so the case was not set). Test: `TestSplitBOM` (every dialect, with CRLF; offsets and FirstKeyword; a heading comment after the mark; a mark-only buffer; Format), failing before. Real binary on SQLite: HEAD ran the BOM-headed `SELECT 1 AS one` as a write (`rows_affected 0`, the row dropped — SQLite accepts the text, Postgres refuses it); now it returns the row.
 - **N-248** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   A compound body splits at its inner `;` (`sqlsplit/sqlsplit.go:507`):
   SQLite and MySQL `CREATE TRIGGER … BEGIN … END;`, MySQL procedures and

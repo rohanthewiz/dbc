@@ -381,3 +381,32 @@ func TestVerbs(t *testing.T) {
 		}
 	}
 }
+
+// TestSplitBOM is N-249: a UTF-8 byte order mark at the head of a file is
+// no part of the first statement, which the server refused with it and
+// FirstKeyword read as no keyword (so it was classed as a write).
+func TestSplitBOM(t *testing.T) {
+	sql := "\uFEFFSELECT 1;\r\nSELECT 2;"
+	for _, d := range []Dialect{Generic, Postgres, MySQL, SQLite, Bytdb} {
+		stmts := d.Split(sql)
+		eq(t, texts(stmts), []string{"SELECT 1", "SELECT 2"})
+		if len(stmts) > 0 {
+			if s := stmts[0]; s.Start != 3 || s.CodeStart != 3 || FirstKeyword(s.Text) != "select" {
+				t.Errorf("%v: first statement at %d (code %d), keyword %q; want 3, 3, select",
+					d, s.Start, s.CodeStart, FirstKeyword(s.Text))
+			}
+			if i := IndexAt(stmts, 0); i != 0 {
+				t.Errorf("%v: caret on the mark picks statement %d", d, i)
+			}
+		}
+	}
+	// a heading comment after the mark heads the statement as usual
+	eq(t, texts(Split("\uFEFF-- note\nSELECT 1")), []string{"-- note\nSELECT 1"})
+	if got := len(Split("\uFEFF \n")); got != 0 {
+		t.Errorf("a mark and blanks: %d statements, want none", got)
+	}
+	// the formatter drops it rather than reading it into the first word
+	if got := Format("\uFEFFselect a from t"); got != "SELECT a\nFROM t" {
+		t.Errorf("Format kept the mark: %q", got)
+	}
+}

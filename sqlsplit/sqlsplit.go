@@ -504,6 +504,13 @@ func scan(sql string, d Dialect) []chunk {
 		delim   = ";" // what ends a statement; MySQL's DELIMITER changes it
 		b       body  // the statement's body, if it has one
 	)
+	// a UTF-8 byte order mark, which Windows editors put at the head of a
+	// saved .sql file, is no code: kept in, it heads the first statement,
+	// which every engine then refuses (and FirstKeyword reads as no
+	// keyword, so it is classed as a write). It stays outside every chunk.
+	if strings.HasPrefix(sql, bom) {
+		start, i = len(bom), len(bom)
+	}
 	// cut ends the chunk at i, just past its terminator of term bytes, and
 	// starts the next one past the terminator's same-line remark. The
 	// remark holds no terminator that could end a statement (its comments
@@ -607,6 +614,9 @@ func scan(sql string, d Dialect) []chunk {
 	}
 	return out
 }
+
+// bom is the UTF-8 byte order mark, U+FEFF.
+const bom = "\uFEFF"
 
 // remarkEnd returns where the trailing remark after a semicolon ends, where i
 // is just past the semicolon: the end of the line (before its newline, so a

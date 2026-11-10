@@ -484,6 +484,9 @@ func fmtLex(sql string, d Dialect) []ftok {
 		space, nl = false, false
 	}
 	i := 0
+	if strings.HasPrefix(sql, bom) {
+		i = len(bom) // a byte order mark is no token (scan's reading)
+	}
 	for i < len(sql) {
 		c := sql[i]
 		switch k, j := d.commentAt(sql, i); {

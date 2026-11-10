@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-306
+**Next ID:** N-307
 
 ## Open
 
@@ -78,21 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-247** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  sqlsplit follows Postgres's comment rules on every dialect
-  (`sqlsplit/sqlsplit.go:490-520,577`, `lex.go:58`). On MySQL `#` is not
-  taken as a comment, so `DELETE FROM t # old; cleanup⏎WHERE id = 1;`
-  splits at the `;` inside it, and the first piece, `DELETE FROM t # old`,
-  deletes every row (reproduced 2026-11-10 with `sqlsplit.MySQL.Split`).
-  An apostrophe in a `#` comment swallows the statements after it into one
-  string. `/*!40101 SET NAMES utf8mb4 */;` counts as no code and is
-  dropped, so a mysqldump loses its conditional statements. Comments nest
-  on MySQL and SQLite, where the server does not nest them, so
-  `/* see /* note */ DELETE …; …` yields no statements. Fix in the shared
-  scanner: `#` to end of line is a comment under the MySQL dialect
-  (`designer/importparse.go:77` already does this), nest only on Postgres
-  and bytdb, and count `/*!` and `/*+` as code on MySQL. Neighbour: N-241.
-  (RPU plan, phase 1)
 - **N-248** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   A compound body splits at its inner `;` (`sqlsplit/sqlsplit.go:507`):
   SQLite and MySQL `CREATE TRIGGER … BEGIN … END;`, MySQL procedures and
@@ -702,6 +687,18 @@ ten session docs in `ai_docs/claude_sessions/`
   folding is by depth only, so an `Append` over 200 partitions gives a
   20000×199 px image and over 1,000 a 20000×40 one. Fix: collapse or
   wrap a run of siblings past N. Audit, run. (RPU plan, phase 4)
+- **N-306** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  sqlsplit reads Postgres dollar quotes on every engine (`dollarTag`,
+  `skipDollarQuoted`), as it read Postgres's comment rules before N-247.
+  MySQL allows `$` inside an unquoted name, so `SELECT a$b$c FROM t;
+  SELECT 2` opens a `$b$` quote at the first `$` that runs to the end of
+  the buffer (no closing `$b$`): the statements merge, the server refuses
+  them, and the editor draws the rest as a string. SQLite's `$name`
+  parameters can do the same. It only merges, never cuts (a quote that is
+  not there hides a `;`, it does not invent one), so nothing runs that was
+  not written. Fix: dollar quotes on Postgres and Generic only (bytdb
+  v0.21.2's lexer has none either). Raised while closing N-247; nobody
+  has hit it.
 
 ## Validate
 
@@ -1310,6 +1307,22 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-247** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  sqlsplit follows Postgres's comment rules on every dialect
+  (`sqlsplit/sqlsplit.go:490-520,577`, `lex.go:58`). On MySQL `#` is not
+  taken as a comment, so `DELETE FROM t # old; cleanup⏎WHERE id = 1;`
+  splits at the `;` inside it, and the first piece, `DELETE FROM t # old`,
+  deletes every row (reproduced 2026-11-10 with `sqlsplit.MySQL.Split`).
+  An apostrophe in a `#` comment swallows the statements after it into one
+  string. `/*!40101 SET NAMES utf8mb4 */;` counts as no code and is
+  dropped, so a mysqldump loses its conditional statements. Comments nest
+  on MySQL and SQLite, where the server does not nest them, so
+  `/* see /* note */ DELETE …; …` yields no statements. Fix in the shared
+  scanner: `#` to end of line is a comment under the MySQL dialect
+  (`designer/importparse.go:77` already does this), nest only on Postgres
+  and bytdb, and count `/*!` and `/*+` as code on MySQL. Neighbour: N-241.
+  (RPU plan, phase 1)
+  closed 2026-11-10 (RPU plan, phase 1): one helper, `Dialect.commentAt`, says what comment (if any) opens at an offset as the engine reads it, and every scanner in sqlsplit goes through it: `scan`, `remarkEnd`, `keywordAt`, `codeAt`, `headStart`, `Verbs`, `HasKeyword`, `Lex` and the formatter's `fmtLex` (so `Folds` and completion's tokenizer follow). `#` to the end of the line is a comment on MySQL only (an operator to Postgres, and Generic keeps that reading). `/* */` nests on Postgres and Generic only; the item said bytdb nests too, but bytdb v0.21.2's lexer closes at the first `*/` (`strings.Index`), so it is grouped with MySQL and SQLite. MySQL's executable comments, `/*!…*/` and MariaDB's `/*M!…*/` (mariadb-dump writes `/*M!100616 SET … */;`), are one opaque piece of code: they keep their statement, are never a heading comment or a remark, hide their inner `;` (dumps put trigger bodies there) and honour strings inside (`skipExecComment`); `Lex` draws one as a comment span and the formatter lays it out as an opaque token. Two choices against the item's text: `/*+ hint */` stays a plain comment, since the server reads hints only after a statement's verb, where the chunk already has code; and `--` stays a comment on MySQL with any byte after it (the server wants a blank), because a `--x` the scanner takes for a comment can only merge statements, never cut one, and a commented-out line with no space keeps working as in the mysql client. Found on the way: on MySQL a SELECT headed by a `#` comment was classed by `Verbs` as no verb, so `isQuery` ran it as an Exec and its rows were dropped; it now returns rows. `web/static/js/hl.js` mirrors the rules (`#`, nesting, executable comments), checked under node with a DOM stub. Tests: `sqlsplit/comment_test.go` (split per engine, the item's repros first; heading/remark/CodeStart; Verbs and HasKeyword; Lex agreeing with Split; Folds; Format), each failing on the old scanner except the ones pinning unchanged behaviour. Real binary against mysql:8.4: HEAD's build ran `DELETE FROM t # old` (3 rows deleted), dropped `/*!40101 SET @x = … */;` and returned no rows for the `#`-headed SELECT; the new build deleted 1 row, ran the executable comment, and returned the count. On SQLite `/* see /* note */ SELECT 1; SELECT 2` ran nothing on HEAD and both statements now. Raised N-306 (dollar quotes on every engine).
 - **N-218** · raised `2026-1014-1945-editor-context-menu` · value low
   dbc web's editor menu (`app.js editorMenu`) has three rows the TUI's
   (`tui/menu.go openEditorMenu`) lacks: **■ Stop** (dim with nothing

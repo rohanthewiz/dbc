@@ -201,10 +201,12 @@
     return "";
   }
 
-  // lexSQL follows sqlsplit's Dialect.Lex, read as dialect d: -- and nested
-  // /* */ comments, '…' strings (doubled '', and a backslash escape where
-  // d's engine has one), "…"/`…` quoted identifiers (i), $tag$ bodies, and
-  // $1 ? :name parameters (p) — but not ::casts. Words are ASCII only
+  // lexSQL follows sqlsplit's Dialect.Lex, read as dialect d: -- comments
+  // (and # on MySQL), /* */ comments (nested on Postgres and Generic alone;
+  // MySQL's executable /*!…*/ and /*M!…*/ drawn as one comment span, its
+  // strings honoured), '…' strings (doubled '', and a backslash escape
+  // where d's engine has one), "…"/`…` quoted identifiers (i), $tag$ bodies,
+  // and $1 ? :name parameters (p) — but not ::casts. Words are ASCII only
   // there, so they are here.
   function lexSQL(s, d) {
     const out = [];
@@ -228,11 +230,24 @@
       }
       return s.length;
     };
-    const blockComment = (i) => { // PostgreSQL nests them
+    // sqlsplit's skipBlockComment: only Postgres (and Generic) nest them
+    const nests = d === "postgres" || d === "";
+    const blockComment = (i) => {
       let depth = 0;
       while (i < s.length) {
-        if (s.startsWith("/*", i)) { depth++; i += 2; }
+        if (s.startsWith("/*", i) && (nests || depth === 0)) { depth++; i += 2; }
         else if (s.startsWith("*/", i)) { i += 2; if (--depth === 0) return i; }
+        else i++;
+      }
+      return s.length;
+    };
+    // sqlsplit's skipExecComment: a */ inside one of its strings or names
+    // does not close it
+    const execComment = (i) => {
+      i += 2;
+      while (i < s.length) {
+        if (s[i] === "'" || s[i] === '"' || s[i] === "`") i = quoted(i);
+        else if (s.startsWith("*/", i)) return i + 2;
         else i++;
       }
       return s.length;
@@ -241,9 +256,12 @@
     let i = 0;
     while (i < n) {
       const c = s[i];
-      if (s.startsWith("--", i)) {
+      if (s.startsWith("--", i) || (c === "#" && d === "mysql")) {
         let j = s.indexOf("\n", i);
         if (j < 0) j = n;
+        emit(i, j, "c"); i = j;
+      } else if (d === "mysql" && (s.startsWith("/*!", i) || s.startsWith("/*M!", i))) {
+        const j = execComment(i);
         emit(i, j, "c"); i = j;
       } else if (s.startsWith("/*", i)) {
         const j = blockComment(i);

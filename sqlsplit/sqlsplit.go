@@ -4,13 +4,15 @@
 //
 // The scanner understands the lexical constructs that can legally contain a
 // semicolon: single-quoted strings, double-quoted and backquoted identifiers,
-// line and (nestable) block comments, and PostgreSQL dollar-quoted bodies.
-// Anything else is opaque — it is a splitter, not a parser.
+// line and block comments, and PostgreSQL dollar-quoted bodies. Anything
+// else is opaque — it is a splitter, not a parser.
 //
 // Where a string ends depends on the engine (a backslash escapes on MySQL,
-// not on Postgres, SQLite or bytdb), so every scan runs under a Dialect: a
-// caller that knows its connection scans as DialectOf(driver) does, and the
-// package-level functions are the Generic dialect's — see dialect.go.
+// not on Postgres, SQLite or bytdb), and so does what a comment is (# is one
+// on MySQL alone, only Postgres nests /* */), so every scan runs under a
+// Dialect: a caller that knows its connection scans as DialectOf(driver)
+// does, and the package-level functions are the Generic dialect's — see
+// dialect.go and commentAt.
 package sqlsplit
 
 import "strings"
@@ -94,11 +96,11 @@ func (d Dialect) Split(sql string) []Stmt {
 		// the chunk has code (hasCode), so codeAt stops inside Text; it
 		// starts on a token boundary (only blanks were skipped to reach
 		// Start), so it cannot mistake a comment's inside for code
-		code := codeAt(sql, start)
+		code := codeAt(sql, start, d)
 		// drop heading comments a blank line cuts off from the code; start
 		// only moves forward, onto a comment or the code itself, so Text
 		// stays a trimmed slice of the buffer
-		start = headStart(sql, start, code)
+		start = headStart(sql, start, code, d)
 		out = append(out, Stmt{
 			Text:      sql[start:end],
 			Start:     start,
@@ -134,7 +136,7 @@ func IndexAt(stmts []Stmt, offset int) int {
 // any leading comments, whitespace, and open parens skipped. It returns ""
 // when the statement holds no keyword.
 func FirstKeyword(sql string) string {
-	return wordAt(sql, keywordAt(sql, 0))
+	return wordAt(sql, keywordAt(sql, 0, Generic))
 }
 
 // ddlVerbs are the leading keywords of the statements IsDDL counts as data
@@ -240,7 +242,7 @@ func Verbs(sql string) StmtVerbs { return Generic.Verbs(sql) }
 // reads them, so a string ending in a backslash on Postgres cannot hide the
 // main verb or a CTE's past its closing quote.
 func (d Dialect) Verbs(sql string) StmtVerbs {
-	at := keywordAt(sql, 0)
+	at := keywordAt(sql, 0, d)
 	kw := wordAt(sql, at)
 	if kw != "with" {
 		return StmtVerbs{Main: kw, MainAt: at}
@@ -254,16 +256,16 @@ func (d Dialect) Verbs(sql string) StmtVerbs {
 	i := at + len(kw)
 	for i < len(sql) {
 		c := sql[i]
+		k, end := d.commentAt(sql, i)
 		switch {
 		case isSpace(c):
 			i++
 			continue // whitespace does not change what came before
-		case isLineCommentAt(sql, i):
-			i = skipLineComment(sql, i)
-			continue
-		case isBlockCommentAt(sql, i):
-			i = skipBlockComment(sql, i)
-			continue
+		case k == lineComment, k == blockComment:
+			i = end
+			continue // nor does a comment
+		case k == execComment:
+			i = end // code, though no word: it ends what came before
 		case c == '\'', c == '"', c == '`':
 			i = skipQuoted(sql, i, c, d)
 		case c == '$':
@@ -276,7 +278,7 @@ func (d Dialect) Verbs(sql string) StmtVerbs {
 			if depth == 0 {
 				switch {
 				case prevWord == "as" || prevWord == "materialized":
-					body := keywordAt(sql, i+1)
+					body := keywordAt(sql, i+1, d)
 					v.CTEs = append(v.CTEs, wordAt(sql, body))
 				case afterClose:
 					// a parenthesized main statement; a nested WITH in it
@@ -321,40 +323,39 @@ func (d Dialect) Verbs(sql string) StmtVerbs {
 }
 
 // keywordAt returns the offset of the first keyword at or after i, skipping
-// whitespace, comments and open parens as FirstKeyword does; len(sql) when
-// there is none.
-func keywordAt(sql string, i int) int {
+// whitespace, comments (as d reads them) and open parens as FirstKeyword
+// does; len(sql) when there is none. It stops at an executable comment,
+// which is code, though not a keyword: the word there is "".
+func keywordAt(sql string, i int, d Dialect) int {
 	for i < len(sql) {
-		switch {
-		case isSpace(sql[i]), sql[i] == '(':
+		if isSpace(sql[i]) || sql[i] == '(' {
 			i++
-		case isLineCommentAt(sql, i):
-			i = skipLineComment(sql, i)
-		case isBlockCommentAt(sql, i):
-			i = skipBlockComment(sql, i)
-		default:
+			continue
+		}
+		end := d.skippedCommentAt(sql, i)
+		if end == i {
 			return i
 		}
+		i = end
 	}
 	return len(sql)
 }
 
 // codeAt returns the offset of the first byte at or after i that is neither
-// whitespace nor inside a comment; len(sql) when there is none. Unlike
-// keywordAt it stops at an open paren, which is code: a statement such as
-// `(SELECT 1) UNION (SELECT 2)` starts there.
-func codeAt(sql string, i int) int {
+// whitespace nor inside a comment the engine skips; len(sql) when there is
+// none. Unlike keywordAt it stops at an open paren, which is code: a
+// statement such as `(SELECT 1) UNION (SELECT 2)` starts there.
+func codeAt(sql string, i int, d Dialect) int {
 	for i < len(sql) {
-		switch {
-		case isSpace(sql[i]):
+		if isSpace(sql[i]) {
 			i++
-		case isLineCommentAt(sql, i):
-			i = skipLineComment(sql, i)
-		case isBlockCommentAt(sql, i):
-			i = skipBlockComment(sql, i)
-		default:
+			continue
+		}
+		end := d.skippedCommentAt(sql, i)
+		if end == i {
 			return i
 		}
+		i = end
 	}
 	return len(sql)
 }
@@ -374,12 +375,12 @@ func codeAt(sql string, i int) int {
 // The walk tracks whether the line so far is empty. A line comment eats its
 // own newline, so the line after it starts empty; a block comment leaves
 // the walk on the line it closes on, which then holds content.
-func headStart(sql string, i, code int) int {
+func headStart(sql string, i, code int, d Dialect) int {
 	head := i
 	empty := false // the current line holds nothing but whitespace so far
 	cut := false   // a blank line has passed since the last comment
 	for i < code {
-		switch {
+		switch k, end := d.commentAt(sql, i); {
 		case sql[i] == '\n':
 			if empty {
 				cut = true
@@ -388,15 +389,11 @@ func headStart(sql string, i, code int) int {
 			i++
 		case isSpace(sql[i]):
 			i++
-		case isLineCommentAt(sql, i), isBlockCommentAt(sql, i):
+		case k == lineComment, k == blockComment:
 			if cut {
 				head, cut = i, false
 			}
-			if isLineCommentAt(sql, i) {
-				i, empty = skipLineComment(sql, i), true
-			} else {
-				i, empty = skipBlockComment(sql, i), false
-			}
+			i, empty = end, k == lineComment
 		default:
 			return head // not reached: only blanks and comments precede code
 		}
@@ -432,19 +429,24 @@ func wordAt(sql string, i int) string {
 // The package-level HasKeyword reads strings as the Generic dialect does.
 func HasKeyword(sql, word string) bool { return Generic.HasKeyword(sql, word) }
 
-// HasKeyword is the package-level HasKeyword with sql's strings read as d's
-// engine reads them: on Postgres, `VALUES ('a\') RETURNING id` has its
-// RETURNING outside the string, where the Generic reading would have the
-// string run on over it.
+// HasKeyword is the package-level HasKeyword with sql's strings and
+// comments read as d's engine reads them: on Postgres, `VALUES ('a\')
+// RETURNING id` has its RETURNING outside the string, where the Generic
+// reading would have the string run on over it.
+//
+// A MySQL executable comment (/*!…*/) is passed over whole, as a comment
+// is: its body is code to the server, but no caller looks there for a word
+// (the one asked about is RETURNING, which MySQL lacks and MariaDB's dumps
+// do not hide in one).
 func (d Dialect) HasKeyword(sql, word string) bool {
 	i := 0
 	for i < len(sql) {
 		c := sql[i]
+		if k, end := d.commentAt(sql, i); k != noComment {
+			i = end
+			continue
+		}
 		switch {
-		case isLineCommentAt(sql, i):
-			i = skipLineComment(sql, i)
-		case isBlockCommentAt(sql, i):
-			i = skipBlockComment(sql, i)
 		case c == '\'', c == '"', c == '`':
 			i = skipQuoted(sql, i, c, d)
 		case c == '$':
@@ -489,24 +491,27 @@ func scan(sql string, d Dialect) []chunk {
 	)
 	for i < len(sql) {
 		c := sql[i]
-		switch {
-		case isLineCommentAt(sql, i):
-			i = skipLineComment(sql, i)
-		case isBlockCommentAt(sql, i):
-			i = skipBlockComment(sql, i)
-		case c == '\'', c == '"', c == '`':
+		if k, end := d.commentAt(sql, i); k != noComment {
+			// an executable comment is code (and holds no ; that ends a
+			// statement); the others are skipped as blanks are
+			hasCode = hasCode || k == execComment
+			i = end
+			continue
+		}
+		switch c {
+		case '\'', '"', '`':
 			i = skipQuoted(sql, i, c, d)
 			hasCode = true
-		case c == '$':
+		case '$':
 			if tag, ok := dollarTag(sql, i); ok {
 				i = skipDollarQuoted(sql, i, tag)
 			} else {
 				i++ // a placeholder such as $1
 			}
 			hasCode = true
-		case c == ';':
+		case ';':
 			i++
-			tail := remarkEnd(sql, i)
+			tail := remarkEnd(sql, i, d)
 			out = append(out, chunk{start: start, end: i, tail: tail, hasCode: hasCode})
 			// the remark holds no semicolon that could end a statement (its
 			// comments were skipped whole), so the scan resumes past it
@@ -534,23 +539,25 @@ func scan(sql string, d Dialect) []chunk {
 // A block comment that opens on the line counts even when it closes on a
 // later one: it started as a remark on this statement, and what decides is
 // the line it closes on. The end of the buffer ends the line too, which
-// covers an unterminated comment.
-func remarkEnd(s string, i int) int {
+// covers an unterminated comment. An executable comment (MySQL's /*!…*/) is
+// code, so it starts the next statement as any other code would.
+func remarkEnd(s string, i int, d Dialect) int {
 	j := i
 	for j < len(s) {
-		switch {
+		switch k, end := d.commentAt(s, j); {
 		case s[j] == '\n':
 			return j
 		case s[j] == ' ', s[j] == '\t', s[j] == '\r', s[j] == '\v', s[j] == '\f':
 			j++
-		case isLineCommentAt(s, j):
+		case k == lineComment:
 			// a line comment runs to the newline, which ends the remark
-			if nl := strings.IndexByte(s[j:], '\n'); nl >= 0 {
-				return j + nl
+			// (end is past it; the remark stops before it)
+			if end > j && s[end-1] == '\n' {
+				return end - 1
 			}
-			return len(s)
-		case isBlockCommentAt(s, j):
-			j = skipBlockComment(s, j)
+			return end
+		case k == blockComment:
+			j = end
 		default:
 			return i // code follows on the same line
 		}
@@ -558,12 +565,81 @@ func remarkEnd(s string, i int) int {
 	return len(s)
 }
 
-func isLineCommentAt(s string, i int) bool {
-	return s[i] == '-' && i+1 < len(s) && s[i+1] == '-'
+// commentKind is what commentAt found at an offset.
+type commentKind uint8
+
+const (
+	noComment    commentKind = iota
+	lineComment              // -- …, or # … on MySQL; runs to the end of the line
+	blockComment             // /* … */
+	// execComment is MySQL's executable comment, /*!…*/ (with or without a
+	// version after the !) or MariaDB's /*M!…*/: comment syntax, but the
+	// server runs what is inside. mysqldump writes its session settings
+	// that way (`/*!40101 SET NAMES utf8mb4 */;`), so a scanner that skipped
+	// one as a comment would find no code in that statement and drop it.
+	// Every scanner here treats one as a single opaque piece of code: it
+	// gives its statement code, is never a heading comment or a remark, and
+	// holds no semicolon that ends a statement. That last is what dumps
+	// need: their trigger bodies sit inside /*!50003 … */, inner ; and all.
+	execComment
+)
+
+// commentAt reports the comment, if any, that opens at s[i] as d's engine
+// reads comments, and the offset just past it: past the newline for a line
+// comment, len(s) for a comment left open.
+//
+// The engines part on three points, and getting the first wrong is what
+// made this per-dialect. A scanner that misses a comment the server skips
+// can cut a statement at a ; inside it, and the piece before the cut runs
+// on its own — `DELETE FROM t # old; …⏎WHERE id = 1` would delete every
+// row — while one that sees a comment the server does not only merges two
+// statements, which the server then refuses.
+//
+//	            # …        /* /* */ */      /*!…*/  /*M!…*/
+//	MySQL       comment    first */ ends    code    code
+//	Postgres    operator   nests            —       —
+//	SQLite      (error)    first */ ends    —       —
+//	bytdb       (error)    first */ ends    —       —
+//	Generic     operator   nests            —       —
+//
+// Generic keeps the reading every scan had before dialects (no #, nesting)
+// for the same reason it keeps the backslash rule: it is what the package
+// functions give a caller with no engine to name, and # is an operator to
+// Postgres (`a # b`, `j #> '{a}'`). A dash pair is a comment on every
+// engine here, MySQL included, though MySQL's server wants a blank or a
+// control byte after it: a `--x` the scanner takes for a comment can only
+// merge two statements, never cut one, and it keeps the commented-out line
+// with no space after its dashes working as it does in the mysql client.
+func (d Dialect) commentAt(s string, i int) (commentKind, int) {
+	switch s[i] {
+	case '-':
+		if i+1 < len(s) && s[i+1] == '-' {
+			return lineComment, skipLineComment(s, i)
+		}
+	case '#':
+		if d == MySQL {
+			return lineComment, skipLineComment(s, i)
+		}
+	case '/':
+		if i+1 < len(s) && s[i+1] == '*' {
+			if d == MySQL && (strings.HasPrefix(s[i+2:], "!") || strings.HasPrefix(s[i+2:], "M!")) {
+				return execComment, skipExecComment(s, i, d)
+			}
+			return blockComment, d.skipBlockComment(s, i)
+		}
+	}
+	return noComment, i
 }
 
-func isBlockCommentAt(s string, i int) bool {
-	return s[i] == '/' && i+1 < len(s) && s[i+1] == '*'
+// skippedCommentAt is commentAt for the scanners that pass over comments
+// as they pass over blanks: it reports the end of a comment the engine
+// skips at s[i] (a line or block comment, never an executable one, which
+// is code), or i when there is none.
+func (d Dialect) skippedCommentAt(s string, i int) int {
+	if k, end := d.commentAt(s, i); k == lineComment || k == blockComment {
+		return end
+	}
+	return i
 }
 
 func skipLineComment(s string, i int) int {
@@ -573,12 +649,17 @@ func skipLineComment(s string, i int) int {
 	return len(s)
 }
 
-// skipBlockComment handles nesting, which PostgreSQL allows.
-func skipBlockComment(s string, i int) int {
+// skipBlockComment returns the offset past the /* … */ opening at s[i].
+// Only Postgres nests them (and Generic, whose reading is Postgres's): on
+// MySQL, SQLite and bytdb the first */ closes the comment, so
+// `/* see /* note */ DELETE …` has its DELETE outside it there, where a
+// nesting scan would read the rest of the buffer as a comment left open.
+func (d Dialect) skipBlockComment(s string, i int) int {
+	nests := d == Postgres || d == Generic
 	depth := 0
 	for i < len(s) {
 		switch {
-		case isBlockCommentAt(s, i):
+		case s[i] == '/' && i+1 < len(s) && s[i+1] == '*' && (nests || depth == 0):
 			depth++
 			i += 2
 		case s[i] == '*' && i+1 < len(s) && s[i+1] == '/':
@@ -586,6 +667,24 @@ func skipBlockComment(s string, i int) int {
 			if depth--; depth == 0 {
 				return i
 			}
+		default:
+			i++
+		}
+	}
+	return len(s) // unterminated
+}
+
+// skipExecComment returns the offset past the executable comment (/*!…*/
+// or /*M!…*/) opening at s[i]. Its body is code to the server, which reads
+// its strings and names as anywhere else, so a */ inside one of them does
+// not close it; nothing else in the body is looked at.
+func skipExecComment(s string, i int, d Dialect) int {
+	for i += 2; i < len(s); {
+		switch c := s[i]; {
+		case c == '\'', c == '"', c == '`':
+			i = skipQuoted(s, i, c, d)
+		case c == '*' && i+1 < len(s) && s[i+1] == '/':
+			return i + 2
 		default:
 			i++
 		}

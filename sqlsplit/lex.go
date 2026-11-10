@@ -57,20 +57,21 @@ func (d Dialect) Lex(sql string) []Token {
 	i := 0
 	for i < len(sql) {
 		c := sql[i]
-		switch {
-		case isLineCommentAt(sql, i):
-			j := skipLineComment(sql, i)
+		if k, j := d.commentAt(sql, i); k != noComment {
 			// the newline that ends a line comment is not part of it
 			end := j
-			if end > i && sql[end-1] == '\n' {
+			if k == lineComment && end > i && sql[end-1] == '\n' {
 				end--
 			}
+			// a MySQL executable comment (/*!…*/) is code to the server
+			// but drawn as the comment it looks like: one span, so the
+			// ; and brackets inside it are hidden here as they are from
+			// Split and Folds
 			emit(i, end, TokComment)
 			i = j
-		case isBlockCommentAt(sql, i):
-			j := skipBlockComment(sql, i)
-			emit(i, j, TokComment)
-			i = j
+			continue
+		}
+		switch {
 		case c == '\'':
 			j := skipQuoted(sql, i, c, d)
 			emit(i, j, TokString)

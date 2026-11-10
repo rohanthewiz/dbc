@@ -424,24 +424,31 @@ func fmtLex(sql string, d Dialect) []ftok {
 	i := 0
 	for i < len(sql) {
 		c := sql[i]
-		switch {
+		switch k, j := d.commentAt(sql, i); {
 		case isSpace(c):
 			space = true
 			if c == '\n' {
 				nl = true
 			}
 			i++
-		case isLineCommentAt(sql, i):
-			j := skipLineComment(sql, i)
+		case k == lineComment:
+			// -- …, or # … on MySQL: a line comment must end its line in
+			// the output too, or the code laid out after it would join it
 			end := j
 			if end > i && sql[end-1] == '\n' {
 				end-- // the newline is whitespace, seen on the next token
 			}
 			add(ftLineComment, i, end)
 			i = end
-		case isBlockCommentAt(sql, i):
-			j := skipBlockComment(sql, i)
+		case k == blockComment:
 			add(ftBlockComment, i, j)
+			i = j
+		case k == execComment:
+			// MySQL's /*!…*/ is code the server runs, so it is laid out
+			// as an opaque piece of code — spaced like a quoted name, and
+			// never a heading comment or a remark after a ; (fmtStatements
+			// would hang it on the statement before) — not as a comment
+			add(ftIdent, i, j)
 			i = j
 		case c == '\'':
 			j := skipQuoted(sql, i, c, d)

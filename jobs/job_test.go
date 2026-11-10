@@ -181,9 +181,21 @@ func TestJobFailurePolicies(t *testing.T) {
 		t.Run(policy, func(t *testing.T) {
 			je := newJobEngine(t, nil)
 			je.act("pa", func(*pipeline.Env) error { return nil })
-			je.act("pb", func(*pipeline.Env) error { return errors.New("b broke") })
+			// b fails only once c is running: under stop, a b that failed
+			// first would cancel c before it started, its action would
+			// never run, and the wait on cDone below would hang — which it
+			// did once under a loaded `go test -race ./...` (N-308)
+			cStarted := make(chan struct{})
+			je.act("pb", func(*pipeline.Env) error {
+				select {
+				case <-cStarted:
+				case <-time.After(5 * time.Second):
+				}
+				return errors.New("b broke")
+			})
 			cDone := make(chan struct{})
 			je.act("pc", func(e *pipeline.Env) error {
+				close(cStarted)
 				defer close(cDone)
 				select {
 				case <-time.After(150 * time.Millisecond):

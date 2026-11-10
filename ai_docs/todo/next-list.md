@@ -1029,8 +1029,10 @@ and `raised`.
     `go test -race ./...` (passes alone, five times under -race): it
     waits on `cDone`, closed by pipeline c's action, but under the stop
     policy b can fail before c starts, and c is then canceled without
-    running. Have b fail only once c has started. Fixed in its own commit
-    right after N-252.
+    running. Have b fail only once c has started. Fixed 2026-11-10 in its
+    own commit after N-252: b waits (5 s at most) for c's action to
+    start. Reproduced first: the old test hung at the same line within
+    200 runs under `-race -cpu 1`; the fixed one passed 200.
   And `TestLiveDesigner/postgres` failed once when the live packages ran
   in parallel on the one database (passes alone): run the live suites
   with `-p 1`, as the live-db-tests note says for a full run.

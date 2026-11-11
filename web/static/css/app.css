@@ -865,6 +865,9 @@ a.btnlink:hover { border-color: var(--accent); }
 .qstate { color: var(--warn); }
 /* a tab another browser tab of dbc web now holds: its copy here is not saved */
 .qlost { color: var(--err); }
+/* a save dbc web did not take (app.js saveTrouble): warn, not err — the
+   text is kept and retried, nothing has failed for good */
+.qunsaved { color: var(--warn); }
 .qtab.lost .qt { font-style: italic; }
 .qx { border: 0; background: none; padding: 0 3px; color: var(--muted); line-height: 1; }
 .qx:hover { color: var(--err); }

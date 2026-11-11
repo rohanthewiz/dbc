@@ -101,6 +101,34 @@ func TestReleaseSavesThenFrees(t *testing.T) {
 	}
 }
 
+// A goodbye whose save is refused still lets the window's tabs go (N-265).
+// The page that sent it is gone, so before, nothing released them: they
+// stayed claimed for claimGrace, and a browser tab opened meanwhile was
+// told they were open in another one.
+func TestReleaseFreesWhenItsSaveIsRefused(t *testing.T) {
+	e := newTestEnv(t)
+	a, _ := e.openWin()
+	e.saveIn(a, "k1", "SELECT 1", 200)
+	// a script name the store would refuse: the save is a 400
+	e.api("POST", "/api/v1/win/"+a+"/release",
+		`{"save":{"id":"k1","title":"Q","conn":"","buffer":"","script":"../x"}}`, 400)
+	b, _ := e.openWin()
+	got := e.claimAll(b, false, 200)
+	if len(got.Tabs) != 1 || got.Tabs[0].ID != "k1" || len(got.Held) != 0 {
+		t.Fatalf("claim after a refused goodbye = %+v, want k1 free", got)
+	}
+	if got.Tabs[0].Buffer != "SELECT 1" {
+		t.Fatalf("buffer = %q, want the last good save's", got.Tabs[0].Buffer)
+	}
+	// and a body that is not JSON at all
+	c, _ := e.openWin()
+	e.saveIn(c, "k2", "SELECT 2", 200)
+	e.api("POST", "/api/v1/win/"+c+"/release", `{"save":`, 400)
+	if got := e.claimAll(b, false, 200); len(got.Held) != 0 {
+		t.Fatalf("claim after a garbled goodbye = %+v, want nothing held", got)
+	}
+}
+
 // A window whose stream has been gone past the grace holds nothing; within
 // it (a reload, a reconnect) it keeps its tabs.
 func TestClaimLapsesAfterGrace(t *testing.T) {

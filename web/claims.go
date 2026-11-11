@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"slices"
 	"strings"
 	"time"
@@ -253,6 +254,17 @@ func (s *Server) handleClaim(ctx rweb.Context) error {
 // and claim the tab straight back. A window the server no longer has
 // answers 200 all the same — there is nothing of it to release, and the
 // save is made as an unknown window's would be.
+//
+// The release happens whatever becomes of the save. A save refused (a
+// buffer over maxBuffer, a tab another window took) used to return before
+// it, and the page that sent it is gone, so nothing would release the
+// tabs: they stayed claimed for claimGrace, and a browser tab opened
+// meanwhile was told they were open in another one (N-265). The save's
+// error is still the answer, for the log of whoever is listening.
+//
+// The page sends the shown console's last edits as their own PUT now
+// (app.js release, which keeps the request inside the keepalive quota);
+// Console is still taken here for a page loaded before that.
 func (s *Server) handleRelease(ctx rweb.Context) error {
 	id := ctx.Request().PathParam("id")
 	var req struct {
@@ -265,25 +277,28 @@ func (s *Server) handleRelease(ctx rweb.Context) error {
 			consoleSave
 		} `json:"console"`
 	}
-	if err := decode(ctx, &req); err != nil {
-		return fail(ctx, err)
+	// a body that does not parse still releases: the page is gone either way
+	decodeErr := decode(ctx, &req)
+	var saveErr error
+	if decodeErr == nil && req.Save != nil {
+		saveErr = s.saveTab(id, *req.Save)
 	}
-	if req.Save != nil {
-		if err := s.saveTab(id, *req.Save); err != nil {
-			return fail(ctx, err)
-		}
-	}
-	if c := req.Console; c != nil && s.opt.ConsolesDir != "" {
+	// the console is the user's text, the tab row only its frame: it is
+	// saved even when the row was refused
+	var consoleErr error
+	if c := req.Console; decodeErr == nil && c != nil && s.opt.ConsolesDir != "" {
 		// a conflict is not written, and there is no page left to tell:
 		// the file's newer text stands, as it would have on screen
 		if path := userdata.ConsolePath(s.opt.ConsolesDir, c.ConsoleDB, c.Name); path != "" {
-			if _, err := s.saveConsole(id, c.ConsoleDB, c.Name, path, c.consoleSave); err != nil {
-				return fail(ctx, err)
-			}
+			_, consoleErr = s.saveConsole(id, c.ConsoleDB, c.Name, path, c.consoleSave)
 		}
 	}
+	// after the saves: a save claims its tab (claimOne), and this lets it go
 	if w, err := s.hub.window(id); err == nil {
 		s.hub.release(w)
+	}
+	if err := cmp.Or(decodeErr, saveErr, consoleErr); err != nil {
+		return fail(ctx, err)
 	}
 	return ok(ctx, nil)
 }

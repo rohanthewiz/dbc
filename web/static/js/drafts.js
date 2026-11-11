@@ -1,12 +1,20 @@
 // dbc web — unsaved drafts of the files the page edits: scripts (and
-// plugin files) in script tabs, pipelines and jobs in canvas tabs. Each
-// kit keeps its unsaved text in this browser's localStorage under the
-// file's name and the window that typed it, with the revision it was
-// typed against:
+// plugin files) in script tabs, pipelines and jobs in canvas tabs, and the
+// SQL consoles query tabs show. Each kit keeps its unsaved text in this
+// browser's localStorage under the file's name and the window that typed
+// it, with the revision it was typed against:
 //
 //	<prefix><owner>:<name>  = {base, text, at}     dbc.script.draft.,
-//	                                                dbc.pipe.draft., dbc.job.draft.
+//	                                                dbc.pipe.draft., dbc.job.draft.,
+//	                                                dbc.console.draft.
 //	dbc.draftSeen.<owner>   = ms of the owner's last heartbeat
+//
+// A console is not like the files above: it saves itself a moment after
+// each pause in typing, so its draft is not "edits not saved yet" but
+// "edits dbc web could not take" — written when a save fails (dbc web
+// stopped or restarting, the network gone) and at the page's goodbye, and
+// dropped once a save lands. app.js (consoles) has the rules; the owner
+// and orphan scheme below is the same for every kit (N-265).
 //
 // Opening the file again: a draft whose base is the file's revision is put
 // back as it was (unsaved). One whose base is older — the file moved on
@@ -54,7 +62,7 @@
   // '-' and '_'; a plugin file's "plugin:<file>" has one, after the owner's,
   // which the first ":" still splits off), so an owner's key and an older
   // page's one-key draft never collide.
-  const KITS = ["dbc.script.draft.", "dbc.pipe.draft.", "dbc.job.draft."];
+  const KITS = ["dbc.script.draft.", "dbc.pipe.draft.", "dbc.job.draft.", "dbc.console.draft."];
   const OWNER = "dbc.draftOwner"; // sessionStorage: this browser tab's owner id
   const SEEN = "dbc.draftSeen.";  // localStorage: SEEN + owner = last heartbeat
   const BEAT = 30e3, ORPHAN = 5 * 60e3, CLOSING = 15e3;
@@ -68,11 +76,16 @@
       return d && typeof d.text === "string" ? d : null;
     } catch (_) { return null; }
   }
+  // writeKey reports whether storage took the write: a console's save
+  // trouble is said differently when its text is safe in this browser and
+  // when it is not (app.js consoleTrouble), and the page's goodbye asks
+  // before closing only in the second case.
   function writeKey(k, d) {
     try {
       if (d) localStorage.setItem(k, JSON.stringify(d));
       else localStorage.removeItem(k);
-    } catch (_) { /* no storage: the tab still edits, a reload just loses the draft */ }
+      return true;
+    } catch (_) { return false; /* no storage, or full: the tab still edits, a reload just loses the draft */ }
   }
   function storageKeys() {
     try { return Object.keys(localStorage); } catch (_) { return []; }
@@ -175,7 +188,17 @@
       }
     }
 
-    return { read, write, adopt, rename };
+    // drop forgets name's drafts — this window's and closed windows' —
+    // for a file that is gone (a console deleted). Left behind, an orphan
+    // would be adopted by the next file to take the name, and put its old
+    // text into a file that never held it. A live window's draft is its
+    // own to drop: it hears of the delete itself.
+    function drop(name) {
+      write(name, null);
+      for (const o of others(name)) if (!o.live) writeKey(o.key, null);
+    }
+
+    return { read, write, adopt, rename, drop };
   }
 
   // the heartbeat, and the forgetting of owners that are gone and left no

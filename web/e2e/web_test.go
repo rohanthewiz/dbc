@@ -82,6 +82,7 @@ func TestWeb(t *testing.T) {
 		{"plugin files and the palette", pluginFiles},
 		{"query designer", queryDesigner},
 		{"connection clicks and failed connects", connClicks},
+		{"saves dbc web did not take", saveTrouble},
 	}
 	// DBC_E2E_STEPS narrows a run to the steps whose names contain one of
 	// its comma-separated words (plus the sign-in and boot every step

@@ -1482,6 +1482,7 @@
         activate(activeAtBoot);
       } else {
         resync(); // back after a drop: catch up on anything missed
+        retryNow(); // and the saves it failed meanwhile
       }
     };
     src.onerror = async () => {
@@ -1574,7 +1575,8 @@
       designKit.show(t);
     } else {
       const c = cons.get(docOf(t));
-      dbc.editor.useDoc(docOf(t), c ? c.text : t.buffer || "");
+      if (c) showConsoleDoc(docOf(t), c);
+      else dbc.editor.useDoc(docOf(t), t.buffer || "");
     }
     renderTabs();
     saveLayout(Object.assign({ tab: t.key }, plansChanged()));
@@ -2419,11 +2421,37 @@
   // when this window has no unsaved edits to that console; with some, the
   // next save meets the conflict above.
   //
-  // cons: doc key ─► {cdb, name, rev, saved, text, saving, again}
+  // cons: doc key ─► {cdb, name, rev, saved, text, saving, again,
+  //                    unsaved, retry, noDraft, drafted, stale}
   //   rev: the file's revision as last loaded or saved ("" = no file)
   //   saved: the text at that revision; text: the text when last seen
   //   (what a textarea editor reopens it with); saving: the PUT in flight
+  //   unsaved, retry: the last save's failure, and whether to try it
+  //   again (saveTrouble); noDraft: its text could not be kept in this
+  //   browser either; drafted: a draft of it may be in localStorage;
+  //   stale: a draft older than the file, shown once (showConsoleDoc)
+  //
+  // When dbc web cannot take a save (it stopped, is restarting, or the
+  // network is gone) the text is kept in this browser as a DRAFT
+  // (drafts.js, kit dbc.console.draft.), the tabs showing the console are
+  // marked ⚠, and the save is tried again. The next load of the console —
+  // this page's reload, or the next window to open it — puts the draft
+  // back (N-265):
+  //
+  //   save fails ─► draft {base: rev, text} ─► ⚠ + retry ─► a save lands ─► draft dropped
+  //   load: draft.text = the file's ─► dropped (it was saved after all)
+  //         draft.base = the file's rev ─► the draft is the text, saved now
+  //         draft.base older ─► the file moved on meanwhile: shown as a
+  //           conflict is, the file's text over the draft as one edit
+  //           (Ctrl+Z brings the draft back)
+  //
+  // The page's goodbye writes the draft too, before anything is sent: its
+  // keepalive requests may not fit, or may not reach a server that is down.
   const cons = new Map();
+  const consoleDrafts = dbc.drafts.kit("dbc.console.draft.", log);
+  // draftName is a console's name in the draft store: unique per database
+  const draftName = (c) => c.cdb.host + "/" + c.cdb.database + "/" + c.name;
+  const consoleWhat = (c) => "console " + (c.cdb.label || c.cdb.database) + " · " + c.name;
   const ckey = (cdb, name) => "c:" + cdb.host + "/" + cdb.database + "/" + name;
   const cpath = (cdb, name) => "/api/v1/consoles/" + encodeURIComponent(cdb.host) + "/" +
     encodeURIComponent(cdb.database) + (name === undefined ? "" : "/" + encodeURIComponent(name));
@@ -2451,44 +2479,144 @@
   }
 
   // loadConsole reads a console once; later calls get the copy here, which
-  // the saves and "console" events keep current.
+  // the saves and "console" events keep current. The first read also puts
+  // back a draft of it this browser kept (putBackDraft).
   async function loadConsole(cdb, name) {
     const k = ckey(cdb, name);
     if (cons.has(k)) return cons.get(k);
     const r = await api("GET", cpath(cdb, name));
-    if (!cons.has(k)) cons.set(k, { cdb, name, rev: r.rev, saved: r.text, text: r.text, saving: null, again: false });
-    return cons.get(k);
+    if (cons.has(k)) return cons.get(k);
+    const c = { cdb, name, rev: r.rev, saved: r.text, text: r.text, saving: null, again: false };
+    cons.set(k, c);
+    putBackDraft(c, k);
+    return c;
+  }
+
+  // putBackDraft is the load half of the drafts (see cons above): the
+  // draft of console c that this window kept — or a closed window left —
+  // put back into it. A live window's draft is left to that window, which
+  // is still saving it.
+  function putBackDraft(c, k) {
+    const { d, liveN } = consoleDrafts.adopt(draftName(c));
+    if (liveN) {
+      log("info", consoleWhat(c) + " has unsaved edits in another open window of dbc web — they are saved from there");
+    }
+    if (!d) return;
+    if (d.text === c.saved) { consoleDrafts.write(draftName(c), null); return; } // it reached the file after all
+    c.drafted = true;
+    const when = new Date(d.at || Date.now()).toLocaleTimeString();
+    if (d.base === c.rev) {
+      // nothing else wrote the file since: the draft is simply the text,
+      // and it is saved now. A save that fails again keeps the draft.
+      c.text = d.text;
+      log("info", consoleWhat(c) + ": edits from " + when + " that dbc web could not save were kept in this browser " +
+        "— they are back, and saved now");
+      saveConsole(k);
+      return;
+    }
+    // the file moved on (the TUI, an editor, another window) after the
+    // draft was typed: neither may silently win, so the draft waits to be
+    // shown under the file's text (showConsoleDoc)
+    c.stale = { text: d.text, when };
+  }
+
+  // showConsoleDoc puts console c's document (key k) on screen. A draft
+  // older than the file is shown the way a save's conflict is: the draft
+  // first, then the file's text over it as ONE edit, so the screen shows
+  // the file and Ctrl+Z brings the draft back (and saves it over the
+  // file, from the file's revision). Done on first showing, not at load:
+  // only an open document has the undo history that keeps the draft.
+  function showConsoleDoc(k, c) {
+    if (!c.stale) { dbc.editor.useDoc(k, c.text); return; }
+    const d = c.stale;
+    c.stale = null;
+    dbc.editor.useDoc(k, d.text);
+    dbc.editor.replaceDoc(k, c.text);
+    log("warn", consoleWhat(c) + ": edits from " + d.when + " that dbc web could not save were kept in this browser, " +
+      "but the console was changed elsewhere since — this tab shows that version; Ctrl+Z brings back yours, " +
+      "which then saves over it");
   }
 
   // saveConsole writes document k's console if it changed. One PUT at a
   // time per console: a second save waits for the first's revision rather
   // than send a stale base and meet a conflict of its own making.
+  //
+  // A save dbc web did not take (no answer, or an error) is not dropped:
+  // consoleTrouble keeps the text as a draft, marks the tabs and retries
+  // (N-265). Before, the failure was swallowed and the edits since the
+  // last good save were gone on the next reload.
   function saveConsole(k, keepalive) {
     const c = cons.get(k);
     if (!c) return Promise.resolve(); // not a console's document
     if (c.saving) { c.again = true; return c.saving; }
     const text = dbc.editor.docText(k) ?? c.text;
     c.text = text;
-    if (text === c.saved) return Promise.resolve();
+    if (text === c.saved) { settleDraft(c, k); return Promise.resolve(); }
     c.saving = fetch(cpath(c.cdb, c.name) + winQuery(), {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text, base: c.rev }), keepalive: !!keepalive,
-    }).then((res) => res.json()).then((env) => {
-      if (!env.success) { log("warn", "console " + c.name + " not saved: " + env.error); return; }
+    }).then(async (res) => {
+      const env = await res.json().catch(() => null); // a proxy's or a dead server's page is no JSON
+      if (!res.ok || !env || !env.success) {
+        consoleTrouble(c, text, (env && env.error) || res.status + " " + res.statusText, retryable(res.status));
+        return;
+      }
       const r = env.data;
+      saveFixed(c, consoleWhat(c));
       if (r.conflict) {
         adopt(c, r.text, r.rev);
         log("warn", "console " + c.cdb.label + " · " + c.name + " was changed elsewhere (another window, the TUI or " +
           "an editor) — this tab now shows that version; Ctrl+Z brings back yours, which then saves over it");
-        return;
+      } else {
+        c.rev = r.rev;
+        c.saved = text;
       }
-      c.rev = r.rev;
-      c.saved = text;
-    }).catch(() => { /* best effort: the next edit saves again */ }).finally(() => {
+      settleDraft(c, ckey(c.cdb, c.name));
+    }, () => consoleTrouble(c, text, "dbc web did not answer", true)).finally(() => {
       c.saving = null;
       if (c.again) { c.again = false; saveConsole(ckey(c.cdb, c.name)); } // its key may have been renamed meanwhile
     });
     return c.saving;
+  }
+
+  // consoleTrouble is a console save that did not land: its text is kept
+  // in this browser first (the draft, against the revision it was typed
+  // from), then said and retried.
+  function consoleTrouble(c, text, msg, retry) {
+    c.noDraft = !consoleDrafts.write(draftName(c), { base: c.rev, text, at: Date.now() });
+    if (!c.noDraft) c.drafted = true;
+    saveTrouble(c, consoleWhat(c), msg, retry, c.noDraft ? "" : "its text is kept in this browser meanwhile");
+  }
+
+  // settleDraft drops console c's draft once what is on screen is what the
+  // file holds. Text typed while a save was out keeps it: the save that
+  // follows settles it, or fails and rewrites it.
+  //
+  // A stale draft not shown yet (showConsoleDoc) is not settled: the
+  // file's text in c is not the user's word on it, only the screen is.
+  function settleDraft(c, k) {
+    if (!c.drafted || c.stale || (dbc.editor.docText(k) ?? c.text) !== c.saved) return;
+    consoleDrafts.write(draftName(c), null);
+    c.drafted = false;
+  }
+
+  // keepConsoleDrafts is the goodbye's first step: every console with
+  // edits not yet in its file is kept in this browser, synchronously,
+  // before any request is tried; one whose edits are all saved drops a
+  // draft it had. The requests that follow may not fit the keepalive
+  // quota, or may not reach a dbc web that is down — the draft does not
+  // depend on either. The next load of the console sorts it out
+  // (putBackDraft): a draft whose text did reach the file is dropped there.
+  function keepConsoleDrafts() {
+    for (const [k, c] of cons) {
+      if (c.stale) continue; // its draft, never shown, stays as it is
+      const text = dbc.editor.docText(k) ?? c.text;
+      if (text !== c.saved) {
+        if (consoleDrafts.write(draftName(c), { base: c.rev, text, at: Date.now() })) c.drafted = true;
+      } else {
+        settleDraft(c, k);
+      }
+    }
   }
 
   // adopt makes text, at rev, the console's — in its document as one edit.
@@ -2575,7 +2703,7 @@
     const k = docOf(t);
     if (seed && c.text === "" && dbc.editor.docText(k) === null) c.text = seed;
     t.buffer = c.text;
-    if (t === state.tab) dbc.editor.useDoc(k, c.text);
+    if (t === state.tab) showConsoleDoc(k, c);
     // the document left, if no tab here shows it now: anything typed into
     // it while this was loading is saved (leaveDoc)
     if (oldKey !== k && !tabs.some((o) => docOf(o) === oldKey)) leaveDoc(oldKey);
@@ -2685,6 +2813,10 @@
       const from = ckey(d, d.renamed.from), to = ckey(d, d.renamed.to);
       const c = cons.get(from);
       if (c) { cons.delete(from); c.name = d.renamed.to; cons.set(to, c); }
+      // its drafts follow it, this window's and closed windows' (a live
+      // window moves its own on this same event)
+      const at = d.host + "/" + d.database + "/";
+      consoleDrafts.rename(at + d.renamed.from, at + d.renamed.to);
       dbc.editor.renameDoc(from, to);
       for (const t of tabs) {
         if (t.cdb && sameDB(t.cdb, d) && t.console === d.renamed.from) { t.console = d.renamed.to; saveTab(t); }
@@ -2694,6 +2826,9 @@
     if (d.deleted) {
       const k = ckey(d, d.deleted);
       cons.delete(k); // nothing more is saved to it
+      // nor kept: a draft left behind would be put into the next console
+      // to take the name
+      consoleDrafts.drop(d.host + "/" + d.database + "/" + d.deleted);
       // a document no tab here shows (kept by leaveDoc) goes now; one a
       // tab shows goes once that tab has moved to another console
       if (!tabs.some((o) => docOf(o) === k)) dbc.editor.dropDoc(k);
@@ -3893,7 +4028,7 @@
     if (state.tab && state.tab.pipeline) { pipeKit.edited(state.tab.pipeline); return; }
     if (state.tab && state.tab.job) { jobKit.edited(state.tab.job); return; }
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => { saveTab(state.tab); saveConsole(docOf(state.tab)); }, 600);
+    saveTimer = setTimeout(() => { saveTimer = 0; saveTab(state.tab); saveConsole(docOf(state.tab)); }, 600);
   }
 
   // tabBody is what a save sends for t: its text (the editor's when it is
@@ -3941,16 +4076,137 @@
       // (N-110). So the console is saved here too. saveConsole is a no-op
       // when nothing changed, and one PUT at a time per console.
       clearTimeout(saveTimer);
+      saveTimer = 0;
       saveConsole(docOf(t), keepalive);
     }
     if (t.lost) return; // not ours to save any more
-    // keepalive lets the last save outlive the page when it is closing
+    // keepalive lets the last save outlive the page when it is closing.
+    // A save dbc web did not take is said and tried again (saveTrouble),
+    // where it used to be dropped without a word (N-265).
     return fetch("/api/v1/tabs/" + encodeURIComponent(t.key) + winQuery(), {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tabBody(t)),
       keepalive: !!keepalive,
-    }).then((res) => {
-      if (res.status === 409) markLost(t); // another browser tab holds it
-    }).catch(() => { /* best effort: the next edit saves again */ });
+    }).then(async (res) => {
+      // another browser tab holds it: not a trouble to retry, nor a save —
+      // the tab is lost here (⊘ in place of any ⚠)
+      if (res.status === 409) { t.unsaved = ""; t.retry = false; markLost(t); return; }
+      const env = await res.json().catch(() => null);
+      if (res.ok && env && env.success) { saveFixed(t, t.title); return; }
+      saveTrouble(t, t.title, (env && env.error) || res.status + " " + res.statusText, retryable(res.status), ownText(t) ? "" :
+        "its text is in its console");
+    }, () => saveTrouble(t, t.title, "dbc web did not answer", true, ownText(t) ? "" : "its text is in its console"));
+  }
+
+  // ── save trouble: a save dbc web did not take is said, marked, retried ─
+  // Tab rows (saveTab) and consoles (saveConsole) both report here. Before
+  // N-265 a failed save was dropped without a word: dbc web stopped or
+  // restarting while the user typed, and everything since the last good
+  // save was gone on the next reload.
+  //
+  //   save fails ─► o.unsaved = why ─► ⚠ on the tabs it covers, one log line
+  //       │                             (not one per attempt)
+  //       ▼
+  //   retry: 2 s, 4 s … 30 s, and at once when the event stream is back
+  //       │
+  //   a save lands ─► o.unsaved = "" ─► the ⚠ goes, "saved again" logged
+  //
+  // o is a tab or a console's entry (cons). A refusal that cannot change
+  // by asking again — a 400: too big, not a name — is not retried on a
+  // timer; the next edit tries again, and the ⚠ says why meanwhile.
+  let retryTimer = 0, retryDelay = 0;
+  let boutN = 0; // how many tabs and consoles failed since everything was last saved
+
+  // retryable says whether a failed save's status may pass by itself: no
+  // answer (0), a server error, a lapsed sign-in, a timeout or a throttle.
+  const retryable = (status) => status === 0 || status >= 500 || status === 401 || status === 408 || status === 429;
+
+  // ownText: tab t's text is in its saved row alone — no console, script,
+  // pipeline or job file holds it — so a row that cannot be saved puts the
+  // text itself at risk (a tab that never connected, or a design).
+  const ownText = (t) => !t.console && !t.script && !t.pipeline && !t.job;
+
+  // saveTrouble records that o's save failed: what (its name in the log),
+  // why, and whether to retry. The log hears of it once per bout and per
+  // reason, with kept (where the text is safe meanwhile, or "" when
+  // nowhere but here): a dbc web that is down fails every save at once —
+  // a tab's row and its console, each tab left — and one line says it;
+  // the ⚠ marks say which tabs.
+  function saveTrouble(o, what, why, retry, kept) {
+    const others = unsavedAll();
+    if (!others.length) boutN = 0; // a new bout (the last may have ended in a lost tab, unlogged)
+    const told = !!o.unsaved || others.some((x) => x.unsaved === why);
+    if (!o.unsaved) boutN++;
+    o.unsaved = why;
+    o.retry = retry;
+    if (!told) {
+      log("warn", what + " not saved: " + why + " — " + (kept ? kept + "; " : "") +
+        (retry ? "dbc web tries again" : "the next edit tries again") +
+        (kept ? "" : " (keep this page open until it says saved)"));
+    }
+    redrawStrip();
+    scheduleRetry();
+  }
+
+  // saveFixed clears o's trouble after a save landed. The log hears of it
+  // once nothing is left unsaved — the bout's end — naming what when it
+  // was the only one that failed.
+  function saveFixed(o, what) {
+    if (!o.unsaved) return;
+    o.unsaved = "";
+    o.retry = false;
+    if (!unsavedAll().length) {
+      log("info", (boutN === 1 && what ? what : "everything") + " saved again");
+      boutN = 0;
+      clearTimeout(retryTimer);
+      retryTimer = 0;
+      retryDelay = 0;
+    }
+    redrawStrip();
+  }
+
+  // unsavedAll lists every tab and console whose last save failed.
+  function unsavedAll() {
+    return tabs.filter((t) => t.unsaved && !t.lost).concat([...cons.values()].filter((c) => c.unsaved));
+  }
+
+  // troubled lists the saves to retry: {o, go} — go makes the attempt.
+  function troubled() {
+    const out = [];
+    for (const t of tabs) if (t.unsaved && t.retry && !t.lost) out.push({ o: t, go: () => saveTab(t) });
+    for (const [k, c] of cons) if (c.unsaved && c.retry) out.push({ o: c, go: () => saveConsole(k) });
+    return out;
+  }
+
+  // scheduleRetry arms the one retry timer, backing off from 2 s to 30 s
+  // while saves keep failing (a dbc web that is down is asked twice a
+  // minute, not on every keystroke's pause).
+  function scheduleRetry() {
+    if (retryTimer || !troubled().length) return;
+    retryDelay = Math.min(retryDelay ? retryDelay * 2 : 2000, 30000);
+    retryTimer = setTimeout(() => { retryTimer = 0; for (const x of troubled()) x.go(); }, retryDelay);
+  }
+
+  // retryNow is for the event stream coming back: dbc web answers again,
+  // so the failed saves go now, and the back-off starts over.
+  function retryNow() {
+    clearTimeout(retryTimer);
+    retryTimer = 0;
+    retryDelay = 0;
+    for (const x of troubled()) x.go();
+  }
+
+  // atRisk says whether closing the page now would lose text: text whose
+  // only copy is on this page. A console's text is kept in this browser
+  // (its draft) and a script's, pipeline's or job's in theirs, so what is
+  // left is a tab's own text (ownText) that dbc web has not taken, a
+  // console whose draft storage refused, and the tab on screen's own
+  // text, still waiting for its save, if it is too big to ride the
+  // goodbye (release). beforeunload asks only then.
+  function atRisk() {
+    if (tabs.some((t) => t.unsaved && !t.lost && ownText(t))) return true;
+    for (const c of cons.values()) if (c.unsaved && c.noDraft) return true;
+    const t = state.tab;
+    return !!(t && saveTimer && !t.lost && ownText(t) && bytes(JSON.stringify({ save: tabBody(t) })) > KEEPALIVE_ROOM);
   }
 
   function saveLayout(values) {
@@ -3989,23 +4245,60 @@
     } catch (_) { /* a lost window: the stream's onerror starts over */ }
   }
 
-  // release is the page's goodbye: the active tab's last save and the
-  // window's claims let go, in one request, so the save cannot land after
-  // the release and claim the tab straight back.
+  // KEEPALIVE_ROOM is what the goodbye's requests may carry in all. The
+  // Fetch spec caps the bodies of a page's in-flight keepalive requests at
+  // 64 KiB together, and refuses a request past it outright: before
+  // N-265 a console over about 32 KB (sent twice, as the console and as
+  // the tab's buffer) made the one goodbye request fail, so neither the
+  // last edits nor the release went, and the tabs stayed claimed for
+  // claimGrace — a browser tab opened meanwhile was told they were "open
+  // in another browser tab". 4 KiB is left for anything else in flight.
+  const KEEPALIVE_ROOM = 60 * 1024;
+  const bytes = (s) => new Blob([s]).size; // UTF-8 length, what the quota counts
+
+  // release is the page's goodbye: the window's claims let go, and the
+  // last edits sent, as far as the keepalive quota allows.
+  //
+  //   1. every console's unsaved edits kept in this browser (drafts) —
+  //      synchronous, so they survive whatever the requests below manage
+  //   2. the release, carrying the active tab's last save when it fits.
+  //      One request, so the save cannot land after the release and claim
+  //      the tab straight back. Too big: the release goes alone — it must
+  //      always go — and a tab whose text is its own (no console) loses
+  //      the edits of its last pause; atRisk asked about that before the
+  //      page went (beforeunload)
+  //   3. the shown console's last edits, a PUT of their own if they fit.
+  //      Room is kept for them before the tab's save: the tab's buffer
+  //      only repeats the console's text (for a dbc from before
+  //      consoles), and a console save claims nothing, so it is safe
+  //      after the release
   function release() {
     if (!state.win) return;
     const t = state.tab;
     clearTimeout(saveTimer);
-    const save = t && !t.lost ? Object.assign({ id: t.key }, tabBody(t)) : undefined;
+    saveTimer = 0;
+    keepConsoleDrafts();
+    let room = KEEPALIVE_ROOM;
     // the shown console's last edits, if any are unsaved (a background
-    // tab's were saved when it was left)
+    // tab's were saved when it was left). Not while a save of it is out:
+    // that save moves the revision, so this one would meet a conflict of
+    // its own making — the draft has the newer text either way
     const c = t && cons.get(docOf(t));
     const text = c && dbc.editor.text();
-    const console = c && text !== c.saved && !c.saving
-      ? { host: c.cdb.host, database: c.cdb.database, name: c.name, text, base: c.rev } : undefined;
+    let cBody = c && text !== c.saved && !c.saving ? JSON.stringify({ text, base: c.rev }) : "";
+    if (cBody && bytes(cBody) > room) cBody = ""; // kept in the draft only
+    if (cBody) room -= bytes(cBody);
+    const save = t && !t.lost ? Object.assign({ id: t.key }, tabBody(t)) : undefined;
+    let body = save ? JSON.stringify({ save }) : "{}";
+    if (bytes(body) > room) body = "{}";
     fetch("/api/v1/win/" + encodeURIComponent(state.win) + "/release", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ save, console }), keepalive: true,
+      method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true,
     }).catch(() => { /* the claims lapse on their own after the grace */ });
+    if (cBody) {
+      fetch(cpath(c.cdb, c.name) + winQuery(), {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: cBody, keepalive: true,
+      }).catch(() => { /* kept in the draft: the next load puts it back */ });
+    }
   }
 
   // ── saving which tabs show their plan ──────────────────────────────────
@@ -4052,6 +4345,13 @@
 
   dbc.editor.onChange(scheduleSave);
   window.addEventListener("pagehide", () => { scriptKit.flush(); pipeKit.flush(); jobKit.flush(); release(); });
+  // the browser's "leave this page?" — only when leaving would lose text
+  // (atRisk), never for edits that are safe on the server or in a draft
+  window.addEventListener("beforeunload", (e) => {
+    if (!atRisk()) return;
+    e.preventDefault();
+    e.returnValue = ""; // older browsers ask only when this is set
+  });
   window.addEventListener("pageshow", (e) => { if (e.persisted) reclaim(); });
 
   // ── the query tab strip ────────────────────────────────────────────────
@@ -4096,6 +4396,15 @@
     saveLayout({ groups: groups.encode(), groupsOff: groups.encodeOff() });
   }
 
+  // redrawStrip is renderTabs for the save-trouble marks, which a save
+  // made during boot (a console draft put back, putBackDraft) can change
+  // before the strip exists: drawing it then would run the groups'
+  // arrangement before they are restored from the layout.
+  let stripReady = false;
+  function redrawStrip() {
+    if (stripReady) renderTabs();
+  }
+
   function renderTabs() {
     markInUse(); // the tab on screen, or a title, may have changed
     if (renaming) return;
@@ -4129,6 +4438,17 @@
       else if (t.done) marks.append(el("span", { class: t.failed ? "qfail" : "qdone", title: "finished in the background" }, "•"));
       if (t.stateful) marks.append(el("span", { class: "qstate", title: "its session may hold a transaction, SET values or temp tables" }, "◆"));
       if (t.lost) marks.append(el("span", { class: "qlost", title: "open in another browser tab of dbc web — not saved here" }, "⊘"));
+      else {
+        // ⚠: its save failed (saveTrouble) — its own row's, or its
+        // console's, which every tab showing that console shares
+        const c = cons.get(docOf(t));
+        const why = t.unsaved || (c && c.unsaved);
+        if (why) {
+          marks.append(el("span", { class: "qunsaved", title: "not saved: " + why +
+            (c && c.unsaved && !c.noDraft ? " — kept in this browser meanwhile" : "") +
+            ((c && c.unsaved ? c.retry : t.retry) ? "; dbc web tries again" : "; the next edit tries again") }, "⚠"));
+        }
+      }
       const b = el("div", { class: "qtab" + (t === state.tab ? " on" : "") + (t.lost ? " lost" : "") +
           (t.script ? " script" : "") + (t.pipeline ? " pipeline" : "") + (t.job ? " job" : "") + (t.design ? " design" : "") + (g ? " grp g" + groups.color(g) : ""), role: "tab", tabindex: "-1",
         "aria-selected": t === state.tab ? "true" : "false", "data-key": t.key,
@@ -4871,6 +5191,7 @@
         sessionStorage.setItem(wsKey(activeAtBoot.key), first);
       }
       state.tab = null;
+      stripReady = true;
       renderTabs();
       attach(); // its first open activates activeAtBoot
     } catch (e) {

@@ -78,23 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-265** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  dbc web's tab and console saves fail silently.
-  `web/static/js/app.js:3948-3953` handles only a 409; a 400 (over 4 MB),
-  401, 500 or network error is discarded, and `saveConsole` (`:2487`)
-  swallows network errors too. Query-tab and console text has no local
-  fallback (`drafts.js` covers scripts, pipelines and jobs only) and there
-  is no `beforeunload`. Scenario: dbc web dies or restarts while the user
-  types; everything since the last good save is gone on reload. The
-  pagehide path has its own hole: `app.js:3995-4009` sends the whole
-  buffer with `keepalive: true`, which the Fetch spec caps at 64 KiB, so a
-  large console's last edits are not saved and its claims are not released
-  (`web/claims.go:271-286` skips the release when the save errors); a tab
-  opened inside the 15 s grace then shows "open in another browser tab".
-  Fix: a "not saved" marker with retry, a localStorage draft for consoles
-  as for files, and a release sent first and without the text. Read here
-  (the swallowed catch); the keepalive quota is from the spec, not run.
-  (RPU plan, phase 2)
 - **N-266** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   dbc web's event stream can lose events with no resync.
   `web/hub.go:164-176` and `:383-389` send through rweb's non-blocking
@@ -1177,6 +1160,24 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-265** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  dbc web's tab and console saves fail silently.
+  `web/static/js/app.js:3948-3953` handles only a 409; a 400 (over 4 MB),
+  401, 500 or network error is discarded, and `saveConsole` (`:2487`)
+  swallows network errors too. Query-tab and console text has no local
+  fallback (`drafts.js` covers scripts, pipelines and jobs only) and there
+  is no `beforeunload`. Scenario: dbc web dies or restarts while the user
+  types; everything since the last good save is gone on reload. The
+  pagehide path has its own hole: `app.js:3995-4009` sends the whole
+  buffer with `keepalive: true`, which the Fetch spec caps at 64 KiB, so a
+  large console's last edits are not saved and its claims are not released
+  (`web/claims.go:271-286` skips the release when the save errors); a tab
+  opened inside the 15 s grace then shows "open in another browser tab".
+  Fix: a "not saved" marker with retry, a localStorage draft for consoles
+  as for files, and a release sent first and without the text. Read here
+  (the swallowed catch); the keepalive quota is from the spec, not run.
+  (RPU plan, phase 2)
+  closed 2026-11-10 (RPU plan, phase 2): a failed tab or console save is no longer dropped. `saveTrouble` records it (no answer, or any error but the 409 that marks a tab lost), puts `⚠` on every tab it covers (its tooltip gives the reason), logs one line per bout and reason, and retries every 2 s backing off to 30 s, and at once when the event stream reopens (a 400 waits for the next edit); "saved again" ends the bout. A console's text is kept in this browser while its save fails: a new drafts.js kit, `dbc.console.draft.`, with the same owner/orphan scheme as scripts. The goodbye writes a draft for every console with unsaved edits before it sends anything, and `loadConsole` puts a draft back. If its base is the file's revision it becomes the text and is saved. If the file moved on, the draft is shown under the file's text as one edit on first showing (`showConsoleDoc`), so Ctrl+Z brings it back, the same rule as a save's conflict. A rename moves drafts and a delete drops them. The goodbye (`release`) keeps within the keepalive quota (`KEEPALIVE_ROOM`, 60 KiB). The shown console's edits go as their own keepalive PUT when they fit. The release carries the tab's save only when it fits too, and otherwise goes alone. Before, it was one request carrying the text twice, and Chrome refused it outright. Server: `handleRelease` releases the window's claims even when its save is refused or the body does not parse. `beforeunload` asks only when text would be lost: a tab whose own text (no console: never connected, or a design) is failing to save, a console whose draft storage refused, or the shown own-text tab's pending edits too big to ride the goodbye. Tests: `web.TestReleaseFreesWhenItsSaveIsRefused` (fails on the old code: k1 held), and the web e2e step "saves dbc web did not take" (`web/e2e/savetrouble_test.go`, its own windows). With saves failing it shows the ⚠, the log line and the draft, then recovers and drops the draft. A reload while dbc web is still down puts the draft back and saves it. A draft older than a file the TUI wrote shows the file, and Ctrl+Z brings the draft back to save over it. A ~100 KB console reloaded before its save comes back. A window closed with one still frees its tab for a window opened at once. The old code fails at step 1 (no ⚠), at the 100 KB reload (text lost) and at the closed window (tab still held). Full web e2e passes. README (Consoles) says how it behaves. Neighbour: N-284 (the tab row's buffer still repeats the console's text).
 - **N-264** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   `explain.Detect` never checks the statement was an EXPLAIN
   (`explain/detect.go:252-296`, used at `workspace/run.go:599`).

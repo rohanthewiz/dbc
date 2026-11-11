@@ -1308,6 +1308,18 @@ seeds the console you start on; it is left in place, no longer written.
 console back only when you changed it, so one it merely had open does not
 overwrite what a browser tab saved meanwhile.
 
+In `dbc web` a save the server did not take is not lost. That happens when
+`dbc web` stopped or is restarting, or the network went. The tab gets a `⚠`
+(its tooltip says why), the log says so once, and the save is tried again:
+every few seconds, and at once when the page reconnects. Meanwhile the
+console's text is kept in the browser. The next time that browser opens the
+console (the page's reload, or a new window once this one is closed), the
+kept text comes back and is saved. If the console changed elsewhere in
+between, the newer file is shown and `Ctrl+Z` brings the kept text back. The
+browser asks before you leave the page only when leaving would lose text: a
+tab with no console (one that never connected, or a query design) whose
+save is failing.
+
 A console you switch back to is as you left it: the caret, the selection, the
 scroll and the undo history come back with it (for as long as dbc runs). If its
 file changed while it was away, the new text comes in as one edit, so `Ctrl+Z`

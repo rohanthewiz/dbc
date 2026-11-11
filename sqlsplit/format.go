@@ -460,11 +460,74 @@ var fmtKeywords = func() map[string]bool {
 	return m
 }()
 
-// fmtOps are the operators longer than one character, longest first so a
-// prefix never wins ("->>" before "->").
-var fmtOps = []string{
-	"->>", "#>>", "!~*", "!~~", "::", "->", "#>", "@>", "<@", "<>", "!=", "<=",
-	">=", "||", "&&", "~*", "!~", "~~", ":=", "=>", "<<", ">>",
+// fmtOpChars are the bytes an operator is made of — Postgres's set, which
+// holds the other engines' (MySQL's <=>, SQLite's ==). A run of them is one
+// token, written back as it was (fmtOpEnd).
+const fmtOpChars = "+-*/<>=~!@#%^&|?"
+
+// fmtOpEnd returns where the operator starting at sql[i] ends.
+//
+// It used to be a fixed list of known operators, and anything else was
+// cut into single characters and spaced apart: `a <=> b` came out as
+// `a <= > b`, pgvector's <-> as `< ->`, SQLite's == as `= =`, which the
+// engines read as other operators or none (N-262). An operator is now
+// the whole run of operator bytes, as Postgres's lexer reads one, ending
+// early only where something else starts inside it: a comment (-- or /*,
+// # on MySQL), a MySQL @variable, a ? placeholder on the engines that
+// have them. Written back unsplit, the run reads the same to every
+// engine, known to this formatter or not.
+//
+// Postgres's own rule then gives a run's trailing signs back: an operator
+// of several characters ends in + or - only when it also holds one of
+// ~ ! @ # % ^ & | ` ?, so in `a=-1` the run is = and the - is the sign of
+// 1 — laid out `a = -1`, as before.
+func fmtOpEnd(sql string, i int, d Dialect) int {
+	if strings.HasPrefix(sql[i:], "::") || strings.HasPrefix(sql[i:], ":=") {
+		return i + 2 // a cast, a named argument (: is no operator byte)
+	}
+	j := i
+	for j < len(sql) && strings.IndexByte(fmtOpChars, sql[j]) >= 0 {
+		if j > i {
+			if k, _ := d.commentAt(sql, j); k != noComment {
+				break
+			}
+			if sql[j] == '@' && j+1 < len(sql) && (fmtWordByte(sql[j+1]) || sql[j+1] == '@') {
+				break // a MySQL @var or @@var
+			}
+			if sql[j] == '?' && !fmtQuestionOp(sql, j, d) {
+				break // a placeholder
+			}
+		}
+		j++
+	}
+	if j == i {
+		// no operator byte: one character, a whole rune past ASCII
+		if sql[i] >= utf8.RuneSelf {
+			_, n := utf8.DecodeRuneInString(sql[i:])
+			return i + n
+		}
+		return i + 1
+	}
+	if j-i > 1 && !strings.ContainsAny(sql[i:j], "~!@#%^&|`?") {
+		for j-i > 1 && (sql[j-1] == '+' || sql[j-1] == '-') {
+			j--
+		}
+	}
+	return j
+}
+
+// fmtQuestionOp reports whether the ? at sql[i] is an operator rather than
+// a placeholder: always on Postgres and bytdb (jsonb's ?, ?|, ?& — their
+// placeholders are $1), never on MySQL and SQLite; on Generic, only where
+// another operator byte follows it (?| ?& ?-).
+func fmtQuestionOp(sql string, i int, d Dialect) bool {
+	switch d {
+	case Postgres, Bytdb:
+		return true
+	case Generic:
+		return i+1 < len(sql) && strings.IndexByte("|&-", sql[i+1]) >= 0
+	}
+	return false
 }
 
 // fmtLex cuts sql into tokens, dropping whitespace but noting it on the
@@ -536,7 +599,7 @@ func fmtLex(sql string, d Dialect) []ftok {
 			}
 			add(ftParam, i, j)
 			i = j
-		case c == '?':
+		case c == '?' && !fmtQuestionOp(sql, i, d):
 			add(ftParam, i, i+1)
 			i++
 		case c == ':' && i+1 < len(sql) && fmtWordByte(sql[i+1]) && !isDigit(sql[i+1]) &&
@@ -588,6 +651,20 @@ func fmtLex(sql string, d Dialect) []ftok {
 				i = k
 				continue
 			}
+			// U&'…' and U&"…", Postgres's Unicode-escape string and
+			// name: one token, or the & between was spaced out as an
+			// operator (`U & '…'`), which is no string at all
+			if j-i == 1 && (c == 'U' || c == 'u') && j+1 < len(sql) && sql[j] == '&' &&
+				(sql[j+1] == '\'' || sql[j+1] == '"') {
+				k := skipQuoted(sql, j+1, sql[j+1], d)
+				kind := ftString
+				if sql[j+1] == '"' {
+					kind = ftIdent
+				}
+				add(kind, i, k)
+				i = k
+				continue
+			}
 			add(ftWord, i, j)
 			i = j
 		case c == '(':
@@ -612,17 +689,7 @@ func fmtLex(sql string, d Dialect) []ftok {
 			add(ftDot, i, i+1)
 			i++
 		default:
-			j := i + 1
-			for _, op := range fmtOps {
-				if strings.HasPrefix(sql[i:], op) {
-					j = i + len(op)
-					break
-				}
-			}
-			if j == i+1 && c >= utf8.RuneSelf {
-				_, n := utf8.DecodeRuneInString(sql[i:])
-				j = i + n
-			}
+			j := fmtOpEnd(sql, i, d)
 			add(ftOp, i, j)
 			i = j
 		}
@@ -970,7 +1037,8 @@ func (w *fmtWriter) tok(t *ftok) {
 	if w.breakNext || (comment && t.nl && w.prev != nil && !w.flat) {
 		w.nl(w.indent)
 	}
-	if w.prev != nil && !w.glue && fmtSpace(w.prev, t) {
+	// a glued sign is never written against an operator (fmtUnary)
+	if w.prev != nil && (!w.glue || t.kind == ftOp) && fmtSpace(w.prev, t) {
 		w.buf = append(w.buf, ' ')
 		w.col++
 	}
@@ -1036,6 +1104,11 @@ func fmtSpace(prev, t *ftok) bool {
 
 // fmtUnary reports whether t, written after prev, is a sign rather than an
 // operator — so the number after it attaches: "= -1", "(-x)", "THEN -1".
+//
+// The sign glues to what follows it, so it must never be followed by an
+// operator: `SELECT - -1` written as `SELECT --1` turned the rest of the
+// line into a comment (N-262), and `~ -1` written `~-1` is Postgres's
+// operator ~- (none). tok keeps a space before an operator after a sign.
 func fmtUnary(prev, t *ftok) bool {
 	if t.kind != ftOp || (t.text != "-" && t.text != "+" && t.text != "~") {
 		return false

@@ -78,16 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-262** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  The formatter rewrites operators it does not know
-  (`sqlsplit/format.go:403` `fmtOps`, `:965` `fmtUnary`). Split into two
-  tokens: `a <=> b` → `a <= > b` (MySQL, pgvector), `<->` → `< ->`, `<#>`,
-  `?|`, `#-`, `@?`, `~~*`, `<<=`, SQLite `==` → `= =`, `U&'…'` →
-  `U & '…'`. A silent change of meaning: `SELECT - -1, 2` → `SELECT --1,
-  2` and `y = - -3` → `y = --3`, which turn the rest of the line into a
-  comment. Fix: extend `fmtOps`, treat a run of unknown operator
-  characters as one token, and never glue two signs. Audit, run.
-  (RPU plan, phase 1)
 - **N-263** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   A nested script run releases the outer script's Readers and Writers.
   `go.action` and `script.run` call `script.run()` on the same session
@@ -1198,6 +1188,17 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-262** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  The formatter rewrites operators it does not know
+  (`sqlsplit/format.go:403` `fmtOps`, `:965` `fmtUnary`). Split into two
+  tokens: `a <=> b` → `a <= > b` (MySQL, pgvector), `<->` → `< ->`, `<#>`,
+  `?|`, `#-`, `@?`, `~~*`, `<<=`, SQLite `==` → `= =`, `U&'…'` →
+  `U & '…'`. A silent change of meaning: `SELECT - -1, 2` → `SELECT --1,
+  2` and `y = - -3` → `y = --3`, which turn the rest of the line into a
+  comment. Fix: extend `fmtOps`, treat a run of unknown operator
+  characters as one token, and never glue two signs. Audit, run.
+  (RPU plan, phase 1)
+  closed 2026-11-10 (RPU plan, phase 1): the fixed `fmtOps` list is gone. An operator is the whole run of operator bytes (`fmtOpChars`, Postgres's set), written back as it was, ending early only where a comment (`--`, `/*`, MySQL `#`), a MySQL `@var` or a placeholder `?` starts inside it; a `?` is an operator on Postgres and bytdb (jsonb's `?`, `?|`, `?&`), a placeholder on MySQL and SQLite, and on Generic an operator only before `|`, `&` or `-`. Postgres's own rule gives a run's trailing `+`/`-` back as signs unless it holds one of `~ ! @ # % ^ & | ` ?`, so `a=-1` still reads `a = -1`. `U&'…'`/`U&"…"` are one string/name token. And a glued sign is never written against an operator (`tok`): `SELECT - -1` stays `- -1`, not `--1`. Test: `TestFormatOperators` — `<=>`, `<->`, `<#>`, `?|`, `?&`, `#-`, `@?`, `~~*`, `<<=`, jsonb `?`, SQLite `==`, `U&` strings and names, `- -1`, `= - -3`, `a=-1`/`b*-2` still attached, MySQL/SQLite `?` and `@v`, a comment inside a run — each also re-split to the same statement count; 8 of its cases fail on the old formatter.
 - **N-261** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   dbc web's idle reaper cancels running statements and tells nobody.
   `web/hub.go:273-281` calls `t.ws.Close()` on every tab of a window that

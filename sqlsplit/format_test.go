@@ -231,3 +231,42 @@ func tokenTexts(sql string) []string {
 	}
 	return out
 }
+
+// TestFormatOperators is N-262: the formatter knew a fixed list of
+// operators and cut any other into single characters, spaced apart — a
+// change of meaning — and glued two signs into a line comment.
+func TestFormatOperators(t *testing.T) {
+	for _, c := range []struct {
+		d         Dialect
+		sql, want string
+	}{
+		{MySQL, "select a <=> b from t", "SELECT a <=> b\nFROM t"},
+		{Postgres, "select v <-> '[1,2]' from t", "SELECT v <-> '[1,2]'\nFROM t"},
+		{Postgres, "select v <#> '[1,2]', j ?| array['a'], j ?& array['b'], j #- '{a}', j @? '$.a' from t",
+			"SELECT v <#> '[1,2]', j ?| ARRAY['a'], j ?& ARRAY['b'], j #- '{a}', j @? '$.a'\nFROM t"},
+		{Postgres, "select a from t where x ~~* 'a%' and r <<= '10/8'", "SELECT a\nFROM t\nWHERE x ~~* 'a%' AND r <<= '10/8'"},
+		{Postgres, "select j ? 'k' from t", "SELECT j ? 'k'\nFROM t"},
+		{SQLite, "select 1 where a == 2", "SELECT 1\nWHERE a == 2"},
+		{Postgres, "select U&'d\\0061t\\+000061', U&\"x\" from t", "SELECT U&'d\\0061t\\+000061', U&\"x\"\nFROM t"},
+		// two signs never glue into a comment
+		{Generic, "SELECT - -1, 2", "SELECT - -1, 2"},
+		{Generic, "select a from t where y = - -3", "SELECT a\nFROM t\nWHERE y = - -3"},
+		// a sign after an operator still attaches to its number
+		{Generic, "select a from t where a=-1 and b*-2 > 0", "SELECT a\nFROM t\nWHERE a = -1 AND b * -2 > 0"},
+		// placeholders stay placeholders where the engine has them
+		{MySQL, "select a from t where a=? and b=@v", "SELECT a\nFROM t\nWHERE a = ? AND b = @v"},
+		{SQLite, "select a from t where a=?", "SELECT a\nFROM t\nWHERE a = ?"},
+		// a comment inside what looks like an operator run ends it
+		{Generic, "select 1+-- note\n2", "SELECT 1 + -- note\n2"},
+	} {
+		got := c.d.Format(c.sql)
+		if got != c.want {
+			t.Errorf("%v.Format(%q):\n%s\nwant\n%s", c.d, c.sql, got, c.want)
+		}
+		// and whatever the layout, the code reads the same: the same
+		// statements, the same tokens
+		if a, b := len(c.d.Split(c.sql)), len(c.d.Split(got)); a != b {
+			t.Errorf("%v: %d statements before, %d after", c.d, a, b)
+		}
+	}
+}

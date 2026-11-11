@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-310
+**Next ID:** N-311
 
 ## Open
 
@@ -78,19 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-268** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  Nothing stands behind a node that ignores cancel. Cancel is cooperative
-  by design, but `script/engine.go:155` and `script/plugins.go:321` call
-  interpreted functions directly, and a retry loop that swallows errors
-  spins on after Stop. `jobs/job.go:234` and `jobs/engine.go:604` wait
-  unbounded, so `policy.timeout` and `Cancel` never finish the run; it
-  keeps `pipes[name]` and `jobLast`, the pipeline is "already running",
-  and scheduled fires are skipped until dbc web restarts. Headless,
-  `interruptible()` (`main.go:1106`) swallows a second Ctrl+C and SIGTERM,
-  and `jobscmd.go:305` waits on `context.Background()`: only SIGKILL ends
-  it. Fix: a second signal exits hard; the engine abandons a run N
-  seconds after cancel (marks it failed, releases its holds); look at
-  yaegi's `EvalWithContext`. Audit, traced. (RPU plan, phase 2)
 - **N-269** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Overlap rules are per process. `holdLocked` (`jobs/engine.go:471`) and
   `jobLast` (`jobs/job.go:103`) are in memory, and only scheduled fires
@@ -486,6 +473,21 @@ ten session docs in `ai_docs/claude_sessions/`
   the Writer's database, take the same-database rules — or document
   `s.Copy` for a same-table rewrite (it handles it). Traced, not run.
   Raised while working N-251–N-253.
+
+- **N-310** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  A script run in the TUI or dbc web that ignores Stop has no backstop.
+  N-268 gave the jobs engine one (a run still going a minute after its
+  stop is abandoned) and headless a second Ctrl+C, but a workspace's
+  script run (`workspace` Job, `script.Run` on the tab's session) waits
+  on the interpreted `Run` for as long as it spins: the tab stays busy,
+  Stop does nothing more, and only closing the tab (dbc web) or quitting
+  frees it. A script gets a fresh interpreter per run, so stopping it is
+  possible in principle (yaegi's run id, `EvalWithContext`'s `stop()`),
+  but only through `EvalWithContext`/`ExecuteWithContext`, which swap
+  `interp.done` under the running frames (a race). Options: call the
+  script's `Run` through `ExecuteWithContext` of a compiled call, or have
+  the workspace abandon a run a minute after Stop as the engine does
+  (free the slot, say the session stays busy). Raised while closing N-268.
 
 ## Validate
 
@@ -1130,6 +1132,20 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-268** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Nothing stands behind a node that ignores cancel. Cancel is cooperative
+  by design, but `script/engine.go:155` and `script/plugins.go:321` call
+  interpreted functions directly, and a retry loop that swallows errors
+  spins on after Stop. `jobs/job.go:234` and `jobs/engine.go:604` wait
+  unbounded, so `policy.timeout` and `Cancel` never finish the run; it
+  keeps `pipes[name]` and `jobLast`, the pipeline is "already running",
+  and scheduled fires are skipped until dbc web restarts. Headless,
+  `interruptible()` (`main.go:1106`) swallows a second Ctrl+C and SIGTERM,
+  and `jobscmd.go:305` waits on `context.Background()`: only SIGKILL ends
+  it. Fix: a second signal exits hard; the engine abandons a run N
+  seconds after cancel (marks it failed, releases its holds); look at
+  yaegi's `EvalWithContext`. Audit, traced. (RPU plan, phase 2)
+  closed 2026-11-10 (RPU plan, phase 2): the jobs engine stands behind a stop. Each run gets a `watchdog` on the context whose end means "stop": the run's own (Cancel, Close) for a pipeline, and the walk's `runCtx` for a job (Cancel, Close, policy timeout, on_failure stop). A run still going `AbandonAfter` later (`Options`, default `DefaultAbandonAfter` 1 min, negative never) is `abandon`ed. Its running steps and fragments are marked failed and its queued ones skipped. The helpers are stopped, and `finish` makes the record final ("abandoned: still running 1m0s after it was stopped (timed out) — a node is not heeding the stop; its connection, and any lock or transaction it holds, stay busy until it returns or dbc exits"). That lets go of `pipes` and `jobLast` and closes `done`, so `Wait` returns. `finish` runs once (`liveRun.ended`), and `line`, `emit` (all but RunDone) and `progress` drop what a late-returning goroutine sends, so a finished run never moves. Headless: `interruptible` cancels on the first SIGINT/SIGTERM and exits 130 at once on a second. After 2 s it says "still stopping — Ctrl+C again to exit at once". `signal.NotifyContext` used to swallow every signal after the first. yaegi looked at and not used. `EvalWithContext`/`ExecuteWithContext` stop code by bumping the interpreter's run id through the unexported `stop()`, which ends every frame of that interpreter. User plugins share one interpreter across runs, so a stop there would end other runs too. And reaching `stop()` means swapping `interp.done` under running frames, a data race. Tests: `jobs.TestEngineAbandonsARunThatIgnoresItsStop` (Wait returns failed and abandoned; the tab and the pipeline can start again; no event after RunDone once the stuck node returns), `TestJobTimeoutAbandonsAStuckStep` (a 50 ms policy timeout; overlap skip admits a second run), and `TestAbandonAfterSettings`. The first two hang to their 10 s limit with the watchdog off. `TestSecondInterruptExits` is a child that interrupts itself twice: exit 130 at once, where the old `interruptible` sat out the child's 5 s. Real binary: `dbc script spin.go` (a loop that ignores its stop), SIGINT, still running 3 s later with the hint printed, SIGINT again, exit 130. README: the abandon rule under Jobs, and the second Ctrl+C under the headless flags. Not covered: a TUI or dbc web script run (the workspace's run slot) that ignores Stop has no backstop; raised as N-310.
 - **N-267** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Headless exports have no way past `max_rows` from the command line.
   `dbc -t csv "SELECT …"` stops at 1,000 rows, notes it on stderr

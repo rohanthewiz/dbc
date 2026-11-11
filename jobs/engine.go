@@ -44,6 +44,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rohanthewiz/serr"
@@ -283,7 +284,22 @@ type Options struct {
 	// process (Run.PID, Run.Host), so another process's Cancel can stop
 	// the run by interrupting it (signal.go).
 	Signalable bool
+	// AbandonAfter is how long a run may go on after it was told to stop —
+	// a Cancel, Close, a job's policy timeout or on_failure "stop" —
+	// before the engine gives up on it (abandon): its record is made final
+	// as failed, what it holds is let go, and its Wait returns. 0 means
+	// DefaultAbandonAfter; a negative value never gives up.
+	AbandonAfter time.Duration
 }
+
+// DefaultAbandonAfter is Options.AbandonAfter's default. Stopping is
+// cooperative — a node is asked through its context, and Go code cannot
+// be stopped from outside — so a node that ignores the ask runs on. A
+// minute is past any rollback a stop starts in the ordinary way (a load's
+// open transaction rolled back on Postgres, SQLite or MySQL), and short
+// enough that a stuck run does not hold its pipeline for the rest of the
+// day (N-268).
+const DefaultAbandonAfter = time.Minute
 
 // ErrBusy is a start refused because what it would run is running: the
 // same pipeline, the same job (overlap: skip), or another run from the
@@ -358,6 +374,17 @@ type liveRun struct {
 	// (JobRequest.Show); nil sends them to the Sink. Set before the run
 	// starts and never changed.
 	show func(*model.Result)
+
+	// ended is set by the one finish that makes the record final (finish
+	// runs once: the run's own goroutine, or abandon before it). After
+	// it, a goroutine of an abandoned run that comes back late changes
+	// nothing anyone sees: its lines and events are dropped (line, emit),
+	// and its finish is a no-op.
+	ended atomic.Bool
+	// stopHelpers stops the run's ticker and flusher (background) and
+	// waits for them; once, whichever of the run and abandon gets there
+	// first. Set by background before the run's work starts.
+	stopHelpers func()
 }
 
 func newLive(id string, cancel context.CancelFunc) *liveRun {
@@ -386,6 +413,9 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Engine {
 	}
 	if opt.Find == nil {
 		opt.Find = PipelineFinder(cfg.PipelinesDir)
+	}
+	if opt.AbandonAfter == 0 {
+		opt.AbandonAfter = DefaultAbandonAfter
 	}
 	return &Engine{cfg: cfg, mgr: mgr, opt: opt, live: map[string]*liveRun{},
 		pipes: map[string]holder{}, jobLast: map[string]*liveRun{}}
@@ -536,6 +566,7 @@ func queued(spec *pipeline.Spec, now time.Time, preview bool) pipeline.RunStats 
 func (e *Engine) execute(ctx context.Context, lr *liveRun, spec *pipeline.Spec, req Request) {
 	defer e.wg.Done()
 	stop := e.background(lr)
+	go e.watchdog(ctx, lr)
 	st, err := e.runOne(ctx, lr, 0, spec, pipeline.Options{
 		Params: req.Params, Fragment: req.Fragment, PreviewRows: req.PreviewRows,
 		Run: e.runVars(lr, ""),
@@ -647,6 +678,9 @@ func (e *Engine) paths() sdb.Paths {
 
 // line appends a line to the run's log and sends it.
 func (e *Engine) line(lr *liveRun, pid, level, text string) {
+	if lr.ended.Load() {
+		return // an abandoned run's late words: its record is final
+	}
 	l := Line{At: time.Now(), Level: level, Pipeline: pid, Text: text}
 	lr.mu.Lock()
 	lr.rec.Log = append(lr.rec.Log, l)
@@ -662,7 +696,14 @@ func (e *Engine) line(lr *liveRun, pid, level, text string) {
 // moved from live to done, what it held let go, RunDone sent — and only
 // then done closed, so whoever Waits sees the event has gone out. A Sink
 // calling Wait from RunDone does not block, as the run has left e.live.
+//
+// It runs once (lr.ended): a run abandoned by its watchdog is finished
+// there, and its own goroutine's finish, should the stuck node ever
+// return, finds the record final and leaves it.
 func (e *Engine) finish(lr *liveRun, status pipeline.Status, msg string) {
+	if !lr.ended.CompareAndSwap(false, true) {
+		return
+	}
 	lr.mu.Lock()
 	lr.rec.Ended = time.Now()
 	lr.rec.Status = status
@@ -716,6 +757,9 @@ func mergeFragments(queued, ran []pipeline.FragmentStats) []pipeline.FragmentSta
 // out as an event — at once when the fragment's state changed, else left
 // for the ticker, which sends the latest.
 func (e *Engine) progress(lr *liveRun, idx int, pid string, f pipeline.FragmentStats) {
+	if lr.ended.Load() {
+		return // an abandoned run's late progress: it sends without emit, so it is stopped here
+	}
 	lr.mu.Lock()
 	frags := lr.rec.Pipelines[idx].Fragments
 	if i := slices.IndexFunc(frags, func(x pipeline.FragmentStats) bool { return x.Name == f.Name }); i >= 0 {
@@ -777,11 +821,101 @@ func (e *Engine) background(lr *liveRun) func() {
 			}
 		}
 	}()
-	return func() { close(stop); <-gone }
+	lr.stopHelpers = sync.OnceFunc(func() { close(stop); <-gone })
+	return lr.stopHelpers
+}
+
+// watchdog stands behind a run's stop (N-268). Stopping is cooperative: a
+// node is asked through its context, and one that ignores the ask — Go
+// code in a retry loop that swallows the cancel's error, a driver call
+// that never returns — runs on. Its run's goroutine waits on it, so
+// before, the run never ended: it kept holding its pipeline ("already
+// running") and its job's overlap slot (scheduled fires skipped), and a
+// policy timeout or Cancel never finished it, until the process exited.
+//
+// stopped is the context whose end means "stop": the run's own (Cancel,
+// Close) or, for a job, its walk's (a policy timeout, on_failure "stop"
+// too). Once it ends, the run has AbandonAfter to finish by itself; past
+// that it is abandoned.
+//
+//	stopped done ─► wait AbandonAfter ─┬─ run ended (lr.done) ─► nothing to do
+//	                                   └─ still going ─► abandon
+func (e *Engine) watchdog(stopped context.Context, lr *liveRun) {
+	after := e.opt.AbandonAfter
+	if after < 0 {
+		return
+	}
+	select {
+	case <-lr.done:
+		return
+	case <-stopped.Done():
+	}
+	t := time.NewTimer(after)
+	defer t.Stop()
+	select {
+	case <-lr.done:
+	case <-t.C:
+		e.abandon(lr, context.Cause(stopped), after)
+	}
+}
+
+// abandon gives up on a run that did not end within after of being told
+// to stop (watchdog). Its record is made final as failed, saying so; every
+// step still running is marked failed and every queued one skipped; and
+// finish lets go of what it holds — its pipelines, its job's overlap slot
+// — and closes done, so Wait returns. The stuck goroutine itself runs on:
+// Go cannot stop it. What it holds outside the engine (its session's
+// connection, a lock or transaction on the server) stays held until it
+// returns or the process exits; the message says so, since that is what
+// the user will run into next.
+func (e *Engine) abandon(lr *liveRun, cause error, after time.Duration) {
+	why := "canceled"
+	if cause != nil && !errors.Is(cause, context.Canceled) {
+		why = cause.Error()
+	}
+	msg := fmt.Sprintf("abandoned: still running %s after it was stopped (%s) — a node is not heeding the stop; "+
+		"its connection, and any lock or transaction it holds, stay busy until it returns or dbc exits", after, why)
+	now := time.Now()
+	lr.mu.Lock()
+	for i := range lr.rec.Pipelines {
+		p := &lr.rec.Pipelines[i]
+		switch p.Status {
+		case pipeline.Running:
+			p.Status, p.Ended = pipeline.Failed, now
+			if p.Error == "" {
+				p.Error = msg
+			}
+			for j := range p.Fragments {
+				if f := &p.Fragments[j]; f.Status == pipeline.Running {
+					f.Status = pipeline.Failed
+				} else if f.Status == pipeline.Queued {
+					f.Status = pipeline.Skipped
+				}
+			}
+		case pipeline.Queued:
+			p.Status = pipeline.Skipped
+			for j := range p.Fragments {
+				p.Fragments[j].Status = pipeline.Skipped
+			}
+		}
+	}
+	lr.mu.Unlock()
+	e.line(lr, "", "err", msg)
+	if lr.stopHelpers != nil {
+		lr.stopHelpers()
+	}
+	e.finish(lr, pipeline.Failed, msg)
 }
 
 // emit sends one of a run's events, in the run's order.
+//
+// Once the run has ended, only its RunDone goes out (finish sends it): a
+// late event from an abandoned run's goroutine would tell the hosts a
+// finished run had moved on.
 func (e *Engine) emit(lr *liveRun, ev Event) {
+	if _, last := ev.(*RunDone); lr.ended.Load() && !last {
+		return
+	}
 	lr.emitMu.Lock()
 	defer lr.emitMu.Unlock()
 	e.send(ev)

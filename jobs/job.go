@@ -197,6 +197,12 @@ func (e *Engine) executeJob(ctx context.Context, lr *liveRun, spec *Spec, pipes 
 		runCtx, cancelT = context.WithTimeoutCause(runCtx, d, errTimedOut)
 		defer cancelT()
 	}
+	// the walk below waits on every step it started; one whose node does
+	// not heed the stop would hold the whole job, timeout and all, so the
+	// watchdog watches the walk's context — Cancel, Close, the timeout and
+	// on_failure "stop" alike — and abandons the job if it outlives it
+	// (N-268)
+	go e.watchdog(runCtx, lr)
 	root := spec.RootID()
 	vars := e.runVars(lr, spec.Name)
 	params := lr.header().Params

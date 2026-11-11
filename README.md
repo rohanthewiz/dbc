@@ -2677,6 +2677,15 @@ in `~/.config/dbc/jobs/<name>.json` (`jobs_dir`):
   holds everywhere: a job step whose pipeline is already running fails,
   and a pipeline tab's ▶ Run is refused while a job's step runs it.
 - **policy.timeout** cancels the run after so long; the job ends failed.
+
+A stop (■ Stop, `Ctrl+C`, a timeout, `on_failure: stop`) asks each node to
+end, and a well-behaved one does at once. Go code in a node can keep going,
+though: a retry loop that swallows the cancel's error, or a call that never
+returns. A run still going a minute after its stop is **abandoned**. Its
+record ends failed and says so, its pipelines and its job's overlap slot are
+free again, and whoever waits on it moves on. The stuck code itself runs on
+(Go cannot stop it from outside), and its connection and any lock or
+transaction it holds stay busy until it returns or dbc exits.
 - **triggers.schedule** is cron lines — `minute hour day-of-month month
   day-of-week`, with `*`, lists, ranges, `*/15`, `jan`–`dec`, `sun`–`sat`
   and `@daily`, `@hourly`, `@weekly`, `@monthly`, `@yearly` — in `tz` (the
@@ -2985,7 +2994,10 @@ dbc reads the SQL from stdin when stdin is a pipe or a file, and otherwise
 opens the TUI. Give the SQL as one quoted argument: more than one argument is
 an error rather than a silently shortened query. Use `--` before SQL that
 starts with a comment, so the flag parser leaves it alone. `Ctrl+C` cancels a
-running query or script and exits 130; bad usage exits 2.
+running query or script and exits 130; bad usage exits 2. A second `Ctrl+C`
+(or `SIGTERM`) exits at once, without waiting for the run to stop: for a
+script or a pipeline node that does not heed the first. Two seconds after
+the first, if the run has not stopped, dbc says so.
 
 A result cut at `max_rows` says so on stderr (`note: result truncated at 1000
 rows`), so a CSV export that looks complete is not quietly short; `--max-rows

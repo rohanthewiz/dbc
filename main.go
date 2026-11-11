@@ -66,6 +66,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -1186,8 +1187,53 @@ func scriptLog(f export.Format) io.Writer {
 
 // interruptible returns a context canceled by Ctrl+C or SIGTERM, so a long
 // headless query is aborted on the server rather than orphaned.
+//
+// A SECOND signal exits at once (N-268). The first only asks the run to
+// stop, and stopping is cooperative: a script's Go code or a pipeline
+// node that ignores the ask runs on. signal.NotifyContext kept catching
+// the signals after the first, so every later Ctrl+C was swallowed and
+// only SIGKILL ended the process. Now:
+//
+//	signal ─► the context canceled (the run rolls back and ends as usual)
+//	   │  still going 2 s later ─► "still stopping — Ctrl+C again to exit at once"
+//	   ▼
+//	signal again ─► exit 130 now; the server rolls back what the closed
+//	                connections held, and a run's record reads interrupted
 func interruptible() (context.Context, context.CancelFunc) {
-	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := context.WithCancel(context.Background())
+	sigs := make(chan os.Signal, 2)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	over := make(chan struct{})
+	go func() {
+		select {
+		case <-sigs:
+		case <-over:
+			return
+		}
+		cancel()
+		hint := time.NewTimer(2 * time.Second)
+		defer hint.Stop()
+		for {
+			select {
+			case <-sigs:
+				fmt.Fprintln(os.Stderr, "interrupted again — exiting without waiting for the run to stop")
+				logger.CloseLog()
+				os.Exit(130)
+			case <-hint.C:
+				fmt.Fprintln(os.Stderr, "still stopping — Ctrl+C again to exit at once")
+			case <-over:
+				return
+			}
+		}
+	}()
+	var once sync.Once
+	return ctx, func() {
+		once.Do(func() {
+			signal.Stop(sigs)
+			close(over)
+		})
+		cancel()
+	}
 }
 
 func canceled(what string) {

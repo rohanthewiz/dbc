@@ -929,6 +929,12 @@ and `raised`.
   failing test's name was cut off. Nine more runs of the package (five
   in a row, four in that combination) and ten `-race` runs of its job
   and run tests passed. Watch for it.
+  And one in the web e2e suite: it failed once when run right after the
+  full `-race` and live suites (end of RPU phase 1, 2026-11-10), in a step
+  around a console switch ("connecting to lite… console-2" are its last
+  log lines); the failure's own message was cut by a `| tail`. Three
+  clean runs followed, one under concurrent load. Run it with its full
+  output kept when it next fails.
 
 ## Roadmap
 

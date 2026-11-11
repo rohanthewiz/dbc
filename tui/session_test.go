@@ -20,7 +20,9 @@ import (
 
 // Switching connections closes the old session at once — its open
 // transaction rolled back — and says so, rather than leaving it open until
-// the next run on the new connection happens to replace it.
+// the next run on the new connection happens to replace it. Since N-257 a
+// session that may hold a transaction asks first; this is the switch
+// confirmed (the asking is TestSwitchAsksAboutAnOpenTransaction).
 func TestSwitchingConnectionReleasesSession(t *testing.T) {
 	m := newTestModel(t)
 	m.cfg.Connections = append(m.cfg.Connections, config.Connection{
@@ -36,6 +38,11 @@ func TestSwitchingConnectionReleasesSession(t *testing.T) {
 	}
 
 	drive(t, m, nil, m.setActive("other"))
+	if m.menu == nil {
+		t.Fatal("no confirm before switching away from an open transaction")
+	}
+	key(t, m, "down")
+	key(t, m, "enter") // Switch to other and roll back
 
 	if m.ws.Active() != "other" {
 		t.Fatalf("active = %q, want other", m.ws.Active())

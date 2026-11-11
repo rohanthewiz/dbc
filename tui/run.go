@@ -157,7 +157,29 @@ func (m *Model) cancelConnect() bool {
 
 // setActive switches to a connection, opening its sidebar on the schema last
 // picked there (navigator.go), or the default.
+//
+// A session that may hold a transaction asks first (N-257): the switch
+// releases it, which rolls the transaction back, and a click on another
+// connection row used to do that at once with only a note after. The
+// cursor opens on staying; a busy workspace is left to SwitchPick to
+// refuse (Session would wait on its run).
 func (m *Model) setActive(name string) tea.Cmd {
+	if !m.ws.Busy() {
+		if conn, stateful := m.ws.Session(); stateful && conn != name {
+			x, y := m.lay.editor.X+2, m.lay.editor.Y+1
+			m.openMenu(x, y, []menuItem{
+				heading("switch to " + name + "? the session on " + conn + " may hold a transaction — switching rolls it back"),
+				{label: "Stay on " + conn, act: func(*Model) tea.Cmd { return nil }},
+				{label: "Switch to " + name + " and roll back", act: func(m *Model) tea.Cmd { return m.switchActive(name) }},
+			})
+			return nil
+		}
+	}
+	return m.switchActive(name)
+}
+
+// switchActive is setActive past its question: the switch itself.
+func (m *Model) switchActive(name string) tea.Cmd {
 	st := m.ws.SwitchPick(name, m.schemaPicks[name])
 	if st.Job != nil {
 		m.aimAt(name)

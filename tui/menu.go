@@ -27,6 +27,10 @@ type menu struct {
 	cur   int
 	rect  Rect // as last drawn; items occupy rows rect.Y+1 …
 	x, y  int  // where it was opened
+	// keys are keys this menu answers itself rather than closing on —
+	// the quit confirm's ^Q or ^C pressed again (quitCmd). Most menus
+	// have none.
+	keys map[string]func(*Model) tea.Cmd
 }
 
 // menuItem is one row.
@@ -80,7 +84,11 @@ func (m *Model) menuKey(k tea.KeyPressMsg) tea.Cmd {
 	case "enter", "space":
 		return m.menuPick(m.menu.cur)
 	default:
+		act := m.menu.keys[k.String()]
 		m.menu = nil
+		if act != nil {
+			return act(m)
+		}
 	}
 	return nil
 }

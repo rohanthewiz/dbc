@@ -145,10 +145,10 @@ func (m *Model) saveEdited() {
 // hangup is SIGHUP: the terminal is gone. Every tab's text and the layout
 // are saved first, here on the model's goroutine — the quit that follows
 // stops runs and may wait on a rollback, and nothing must wait behind it —
-// then it quits as ^Q would.
+// then it quits without asking (quitNow): no one is left to answer.
 func (m *Model) hangup() tea.Cmd {
 	m.saveAll()
-	return m.quitCmd()
+	return m.quitNow() // no one is there to answer a question
 }
 
 // saveAll saves the layout and every tab's editor, whether or not it was

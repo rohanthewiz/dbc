@@ -992,13 +992,55 @@ func (m *Model) interrupt() tea.Cmd {
 	return m.quitCmd()
 }
 
-// quitCmd cancels anything in flight and ends the program.
+// quitCmd ends the program — first asking, when a tab's session may hold
+// an open transaction, since quitting rolls it back (N-257). Ctrl+C on an
+// idle editor is the psql habit for clearing a line, and it used to exit
+// at once and roll back every tab's BEGIN … with it. The menu's cursor
+// opens on Keep working, so Enter is the safe answer; ^Q or ^C again quits,
+// for the user who meant it.
 func (m *Model) quitCmd() tea.Cmd {
+	if open := m.openTransactions(); len(open) > 0 {
+		x, y := m.lay.editor.X+2, m.lay.editor.Y+1
+		m.openMenu(x, y, []menuItem{
+			heading("quit? " + strings.Join(open, ", ") + " may hold a transaction — quitting rolls it back"),
+			{label: "Keep working", act: func(*Model) tea.Cmd { return nil }},
+			{label: "Quit and roll back", key: "^Q", act: func(m *Model) tea.Cmd { return m.quitNow() }},
+		})
+		again := func(m *Model) tea.Cmd { return m.quitNow() }
+		m.menu.keys = map[string]func(*Model) tea.Cmd{"ctrl+q": again, "ctrl+c": again}
+		return nil
+	}
+	return m.quitNow()
+}
+
+// quitNow cancels anything in flight and ends the program, asking nothing:
+// the confirmed quit, and SIGHUP's (the terminal is gone).
+func (m *Model) quitNow() tea.Cmd {
 	for _, ws := range m.tabWorkspaces() {
 		ws.Stop()
 	}
 	m.quit = true
 	return nil
+}
+
+// openTransactions names each tab whose session may hold a transaction
+// ("Query 2 on prod"). A busy tab is not asked: Session waits on its run,
+// which would hold the UI, and a quit stops that run anyway.
+func (m *Model) openTransactions() []string {
+	var out []string
+	for i, t := range m.tabs {
+		ws := t.ws
+		if i == m.curTab {
+			ws = m.ws
+		}
+		if ws == nil || ws.Busy() {
+			continue
+		}
+		if conn, stateful := ws.Session(); stateful {
+			out = append(out, t.title+" on "+conn)
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------

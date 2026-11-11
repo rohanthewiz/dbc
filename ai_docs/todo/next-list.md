@@ -78,16 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-257** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  An open transaction is guarded on tab close (`tui/tabs.go:462`) and
-  nowhere else. `interrupt()` when idle and `quitCmd`
-  (`tui/app.go:939-975`) check for running queries, connects, the
-  assistant and live runs, never `ws.Session()`; a click on another
-  connection row switches at once (`tui/mouse.go` → `tui/sidebar.go:184`)
-  with a note after the fact. Scenario: `BEGIN; UPDATE …`, then the psql
-  habit of Ctrl+C to clear a line exits dbc and rolls back every tab's
-  transaction. Fix: confirm, or "press again", when any tab's session is
-  stateful. Read here. (RPU plan, phase 1)
 - **N-258** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   A script result with a short row panics the grid. `tui/grid.go:305`
   indexes `g.res.Rows[ri][rc]` unguarded (the `Raw` read two lines above
@@ -996,6 +986,12 @@ and `raised`.
   And `TestLiveDesigner/postgres` failed once when the live packages ran
   in parallel on the one database (passes alone): run the live suites
   with `-p 1`, as the live-db-tests note says for a full run.
+  One more, unexplained: `go test ./userdata ./workspace ./web ./tui`
+  failed once in `tui` on 2026-11-10 (after N-256), its only output a
+  "pipeline slow … was stopped" line from a jobs test's cleanup; the
+  failing test's name was cut off. Nine more runs of the package (five
+  in a row, four in that combination) and ten `-race` runs of its job
+  and run tests passed. Watch for it.
 
 ## Roadmap
 
@@ -1238,6 +1234,17 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-257** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  An open transaction is guarded on tab close (`tui/tabs.go:462`) and
+  nowhere else. `interrupt()` when idle and `quitCmd`
+  (`tui/app.go:939-975`) check for running queries, connects, the
+  assistant and live runs, never `ws.Session()`; a click on another
+  connection row switches at once (`tui/mouse.go` → `tui/sidebar.go:184`)
+  with a note after the fact. Scenario: `BEGIN; UPDATE …`, then the psql
+  habit of Ctrl+C to clear a line exits dbc and rolls back every tab's
+  transaction. Fix: confirm, or "press again", when any tab's session is
+  stateful. Read here. (RPU plan, phase 1)
+  closed 2026-11-10 (RPU plan, phase 1): `quitCmd` asks when any tab's session may hold a transaction (`openTransactions`; a busy tab is skipped, since `Session` waits on its run and the quit stops it anyway). The menu names the tabs and connections, opens on Keep working, and ^Q or ^C again quits (a menu may now answer keys of its own, `menu.keys`); `quitNow` is the old quit, which SIGHUP uses, as no one is there to answer. `setActive` asks the same before a switch would release a stateful session — every user switch goes through it: a connection row, the menu, the navigator, a new connection or Docker Postgres — opening on Stay; the confirmed switch is `switchActive`. Tests: `TestQuitAsksAboutAnOpenTransaction` (idle ^C asks, Enter keeps working, ^Q then ^Q quits), `TestQuitWithoutATransactionAsksNothing`, `TestSwitchAsksAboutAnOpenTransaction` (Stay keeps the transaction; Switch rolls the DELETE back; a clean session switches without asking); `TestSwitchingConnectionReleasesSession` now confirms its switch. Real binary in a pty (`--demo sqlite`, CATS_* stripped): after `BEGIN;` ran, an idle Ctrl+C ended HEAD's dbc; the new one stayed up with the question on screen. TUI e2e suite passes.
 - **N-256** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   One over-long statement stops history loading. The loader's scanner
   caps a line at 1 MiB (`userdata/history.go:32,99-100`) and `sc.Err()` is

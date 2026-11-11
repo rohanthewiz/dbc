@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -225,6 +227,8 @@ type Model struct {
 
 	aiAgent ai.Agent // the configured assistant backend
 	quit    bool
+	// autosave is the editors' save-on-pause bookkeeping (autosave.go)
+	autosave autosaveState
 }
 
 // focusID is which pane has the keyboard.
@@ -390,15 +394,32 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 	// go to the log pane instead (see db.SetDriverLog)
 	db.SetDriverLog(lineWriter(func(line string) { m.send(driverLogMsg(line)) }))
 	defer db.SetDriverLog(nil)
-	_, err := p.Run()
-
-	m.shutdown()
-	m.saveLayout()
-	m.forEachTab(func() {
-		if werr := m.saveConsole(); werr != nil {
-			fmt.Fprintf(os.Stderr, "could not save the editor buffer: %v\n", werr)
+	// SIGHUP — the terminal window closed, an ssh session dropped — would
+	// end the process where it stood, with whatever was typed since the
+	// last save (autosave.go). Bubble Tea handles SIGINT and SIGTERM only,
+	// so dbc takes this one: the model saves everything, then quits by the
+	// usual path. The goroutine ends with the program.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-hup:
+			p.Send(hangupMsg{})
+		case <-done:
 		}
-	})
+	}()
+	_, err := p.Run()
+	signal.Stop(hup)
+	close(done)
+
+	// Save first, stop second: shutdown can wait up to 30s for a job to
+	// roll back (stopJobsForQuit), with the terminal already restored, and
+	// a second ^C in that wait would kill dbc with nothing saved yet.
+	for _, werr := range m.saveAll() {
+		fmt.Fprintf(os.Stderr, "could not save the editor buffer: %v\n", werr)
+	}
+	m.shutdown()
 	return err
 }
 
@@ -466,7 +487,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.quit {
 		return m, tea.Quit
 	}
-	return m, cmd
+	// any message may have edited the editor on screen — a key, a paste,
+	// a pick, a format — so the autosave looks once here, after all of them
+	return m, tea.Batch(cmd, m.noteEdits())
 }
 
 func (m *Model) route(msg tea.Msg) tea.Cmd {
@@ -491,6 +514,10 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 	case tea.BlurMsg:
 		m.hover = hoverState{}
 		return nil
+	case autosaveMsg:
+		return m.autosaveDue()
+	case hangupMsg:
+		return m.hangup()
 	case tabMsg:
 		// a workspace's event, tagged with the tab that started it: drawn
 		// now if that tab is on screen, kept for its activation if not

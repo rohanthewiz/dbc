@@ -604,6 +604,11 @@ func (m *Model) stopJobsForQuit() {
 		return
 	}
 	going := m.jobs.Running()
+	if n := len(going); n > 0 {
+		// the terminal is back to the shell by now, and the rollbacks can
+		// take a while: say what the wait is for
+		fmt.Fprintf(os.Stderr, "stopping %d run%s…\n", n, map[bool]string{true: "s"}[n > 1])
+	}
 	late := m.jobs.Close(30 * time.Second)
 	m.jobPump.close()
 	for _, r := range going {

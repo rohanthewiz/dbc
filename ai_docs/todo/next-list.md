@@ -78,22 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-254** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  The TUI saves editor text only on a clean quit, a console swap, or a
-  tab open or close: `saveConsole`'s callers are `tui/app.go:398`,
-  `tui/console.go:136,230,338` and `tui/tabs.go:382,471,1054`; there is no
-  timer, and `saveLayout` runs only at quit. Bubble Tea v2.0.8 catches
-  SIGINT and SIGTERM only, and dbc adds no SIGHUP handler (the one
-  `signal.NotifyContext` is `main.go:1107`). So a closed terminal window,
-  an ssh drop or a kill loses all SQL typed since launch, plus tabs,
-  groups and layout. Quit also saves last: `tui/app.go:395-401` runs
-  `shutdown()` first, which can block up to 30 s in `jobs.Close`
-  (`tui/jobs.go:607`), with the terminal restored and nothing printed, so
-  a second Ctrl+C kills dbc with the buffers unsaved. Fix: a debounced
-  autosave keyed on `editor.version` (and on each run); a SIGHUP handler
-  that quits through the same path; save before shutdown and print
-  "stopping N runs…". dbc web already debounces its saves. Read here.
-  (RPU plan, phase 1)
 - **N-255** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Consoles, the editor buffer and the history trim are written in place.
   `userdata/buffer.go:40` is `os.WriteFile`, reached from
@@ -1278,6 +1262,23 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-254** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  The TUI saves editor text only on a clean quit, a console swap, or a
+  tab open or close: `saveConsole`'s callers are `tui/app.go:398`,
+  `tui/console.go:136,230,338` and `tui/tabs.go:382,471,1054`; there is no
+  timer, and `saveLayout` runs only at quit. Bubble Tea v2.0.8 catches
+  SIGINT and SIGTERM only, and dbc adds no SIGHUP handler (the one
+  `signal.NotifyContext` is `main.go:1107`). So a closed terminal window,
+  an ssh drop or a kill loses all SQL typed since launch, plus tabs,
+  groups and layout. Quit also saves last: `tui/app.go:395-401` runs
+  `shutdown()` first, which can block up to 30 s in `jobs.Close`
+  (`tui/jobs.go:607`), with the terminal restored and nothing printed, so
+  a second Ctrl+C kills dbc with the buffers unsaved. Fix: a debounced
+  autosave keyed on `editor.version` (and on each run); a SIGHUP handler
+  that quits through the same path; save before shutdown and print
+  "stopping N runs…". dbc web already debounces its saves. Read here.
+  (RPU plan, phase 1)
+  closed 2026-11-10 (RPU plan, phase 1): `tui/autosave.go`. Update notes, after every message, whether the editor on screen was edited (its edit version moved) and arms one timer; when it fires after a 2 s pause — or 20 s into steady typing — every tab whose editor moved past its `savedVer` is saved, and the layout with them. The tab on screen goes through `saveConsole`; a parked tab is saved from its own fields, not through `forEachTab`, whose load would close the completion popup on screen. A failed save is logged once. SIGHUP: `Run` takes the signal (Bubble Tea handles INT and TERM only) and sends `hangupMsg`, which saves every tab and the layout on the model's goroutine, then quits as ^Q does. Quit now saves before `shutdown`, and `stopJobsForQuit` prints "stopping N runs…" before its wait, so the up-to-30 s rollback wait cannot strand the buffers behind a second ^C. Only with persistence on: under NoPersist no timer runs (the harness's pause is 1 ms, as it runs a timer's sleep inline). README's console paragraph says when a console is saved. Tests: `TestAutosaveOnPause` (fails with the hook disabled), `TestAutosaveWaitsForAPause` (re-arms mid-typing, saves past the cap), `TestAutosaveSavesAParkedTab` (the parked tab's console saved, the popup on screen still open), `TestHangupSavesThenQuits`, `TestNoAutosaveWithoutPersistence`. Real binary in a pty (scratch HOME, CATS_* stripped), typing `SELECT 'n254 typed'` into the editor: HEAD's build saved nothing when killed (SIGKILL) after a 3.5 s pause, nor on SIGHUP (exit 1); the new build had it in the console file both times, and exited 0 on SIGHUP. Not checked by hand: the "stopping N runs…" line.
 - **N-252** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Preview runs and commits a writing source. `previewShape`
   (`pipeline/run.go:784-838`) only swaps sinks and adds a limit; `stream`

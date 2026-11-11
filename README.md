@@ -1296,8 +1296,12 @@ consoles/
 A host or database name that is not already a safe file name (a socket path,
 a database with a space in it, an embedded database's full path) gets a short
 hash of the original added, so two names that fold together stay apart. A
-console is saved on every switch and on quit, so each database's scratchpad is
-still there tomorrow; one that never had anything typed into it gets no file.
+console is saved two seconds after you stop typing (and every 20 seconds of
+steady typing), on every switch, on quit, and when the terminal goes away
+(`SIGHUP`: a closed window, a dropped ssh session), along with the tabs and
+the layout — so each database's scratchpad is still there tomorrow, and a
+dbc that is killed loses at most the last few seconds. One that never had
+anything typed into it gets no file.
 On the first launch with consoles, the old single `~/.config/dbc/buffer.sql`
 seeds the console you start on; it is left in place, no longer written.
 `dbc web` edits the same files (see [the browser workbench](#the-browser-workbench-dbc-web)): the TUI writes a

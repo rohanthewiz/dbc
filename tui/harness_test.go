@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -47,6 +48,13 @@ func logText(m *Model) string { return m.logp.Text() }
 
 // newTestModel builds a model over a fresh, seeded in-memory SQLite demo
 // database, sized 120×40, with persistence off and the clipboard stubbed.
+func init() {
+	// drive runs commands as they come, a timer's sleep included: with
+	// consoles on (consoleModel), the autosave's 2s pause would be slept
+	// through after every edit. A millisecond still arms, fires and saves.
+	autosaveIdle = time.Millisecond
+}
+
 func newTestModel(t *testing.T) *Model {
 	t.Helper()
 	// Tests may themselves be running inside a cats pane (the developer's

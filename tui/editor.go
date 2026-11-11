@@ -66,8 +66,12 @@ type editor struct {
 
 	// version counts edits; the highlighter caches against it.
 	version int
-	hlVer   int
-	hl      [][]Style
+	// savedVer is the edit version the text was last saved at by
+	// autosave (autosave.go): an editor whose version moved past it has
+	// something to save.
+	savedVer int
+	hlVer    int
+	hl       [][]Style
 
 	// marks are the uses of a symbol (Shift+F12, symbol.go), drawn while
 	// marksVer is still the edit version they were found at.

@@ -34,8 +34,7 @@ func SaveBuffer(path, text string) error {
 	if path == "" {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(text), 0o600)
+	// atomically: a console written in place and cut short — a crash, a
+	// full disk — lost the user's SQL, the old text with the new (N-255)
+	return writeAtomic(path, []byte(text), 0o600)
 }

@@ -89,12 +89,23 @@ func LoadHistory(path string) *History {
 	if path == "" {
 		return h
 	}
+	h.entries = readHistory(path)
+	if len(h.entries) > histMax {
+		h.trim()
+	}
+	return h
+}
+
+// readHistory reads the entries of the history file at path, skipping lines
+// that do not parse or hold no SQL.
+func readHistory(path string) []Entry {
 	f, err := os.Open(path)
 	if err != nil {
-		return h
+		return nil
 	}
 	defer f.Close()
 
+	var out []Entry
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), histMaxLine)
 	for sc.Scan() {
@@ -105,13 +116,9 @@ func LoadHistory(path string) *History {
 		if strings.TrimSpace(e.SQL) == "" {
 			continue
 		}
-		h.entries = append(h.entries, e)
+		out = append(out, e)
 	}
-	if len(h.entries) > histMax {
-		h.entries = h.entries[len(h.entries)-histMax:]
-		h.rewrite()
-	}
-	return h
+	return out
 }
 
 // Add records a statement, unless it repeats the one just recorded — running
@@ -144,6 +151,11 @@ func (h *History) AddEntry(e Entry) error {
 
 // appendLine writes one entry to the file, creating it user-only: a query
 // history accumulates real values as surely as the scratchpad does.
+//
+// The append holds the file's lock (lockFile), which another process's
+// trim holds too: without it, a dbc web appending while a TUI starts up and
+// trims would write into the file the trim is about to rename away, and
+// the entry would be gone.
 func (h *History) appendLine(e Entry) error {
 	if h.path == "" {
 		return nil
@@ -151,6 +163,11 @@ func (h *History) appendLine(e Entry) error {
 	if err := os.MkdirAll(filepath.Dir(h.path), 0o755); err != nil {
 		return serr.Wrap(err, "path", h.path)
 	}
+	lock, err := lockFile(h.path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
 	f, err := os.OpenFile(h.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return serr.Wrap(err, "path", h.path)
@@ -167,11 +184,34 @@ func (h *History) appendLine(e Entry) error {
 	return nil
 }
 
-// rewrite replaces the file with what is in memory — the trim at load time.
-func (h *History) rewrite() {
+// trim cuts the file back to its newest histMax entries — at load time,
+// the one point the file is rewritten rather than appended to — and the
+// entries in memory with it.
+//
+// It holds the file's lock and reads the file again under it, so an entry
+// another process appended since this one's load is kept rather than
+// overwritten, and the rewrite is atomic (writeAtomic): it used to write
+// the file in place, unlocked, so a crash mid-write truncated the history
+// and a running dbc web's append could land in the old file and be lost
+// (N-255). If the lock or the write fails, the file is left long; the
+// next start trims it.
+func (h *History) trim() {
 	if h.path == "" {
 		return
 	}
+	keep := func(es []Entry) []Entry {
+		if len(es) > histMax {
+			return es[len(es)-histMax:]
+		}
+		return es
+	}
+	h.entries = keep(h.entries)
+	lock, err := lockFile(h.path)
+	if err != nil {
+		return
+	}
+	defer func() { _ = lock.Close() }()
+	h.entries = keep(readHistory(h.path))
 	var sb strings.Builder
 	for _, e := range h.entries {
 		bs, err := json.Marshal(e)
@@ -181,7 +221,7 @@ func (h *History) rewrite() {
 		sb.Write(bs)
 		sb.WriteByte('\n')
 	}
-	_ = os.WriteFile(h.path, []byte(sb.String()), 0o600)
+	_ = writeAtomic(h.path, []byte(sb.String()), 0o600)
 }
 
 // Recent returns the entries newest first — the order they are picked in.

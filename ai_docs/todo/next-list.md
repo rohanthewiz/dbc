@@ -78,19 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-255** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  Consoles, the editor buffer and the history trim are written in place.
-  `userdata/buffer.go:40` is `os.WriteFile`, reached from
-  `userdata/console.go:322` by both the TUI and `web/consoles.go:178`,
-  though `userdata/files.go` says consoles get the atomic write; a crash
-  or a full disk mid-write truncates the user's SQL. Past 500 entries
-  every start rewrites the history file (`userdata/history.go:184`) with
-  no lock, racing a running dbc web's appends. `userdata.writeAtomic`
-  (`files.go:33-57`), `SaveLayout` and `SaveChat` rename without an fsync,
-  unlike `config/saved.go`, so scripts, pipeline specs and run records can
-  come back zero-length after a power loss; leaked `.tmp-*` files are
-  never swept. Fix: one temp + fsync + rename helper for all of them.
-  Read here (`buffer.go`); the rest audit, traced. (RPU plan, phase 1)
 - **N-256** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   One over-long statement stops history loading. The loader's scanner
   caps a line at 1 MiB (`userdata/history.go:32,99-100`) and `sc.Err()` is
@@ -1262,6 +1249,20 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-255** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Consoles, the editor buffer and the history trim are written in place.
+  `userdata/buffer.go:40` is `os.WriteFile`, reached from
+  `userdata/console.go:322` by both the TUI and `web/consoles.go:178`,
+  though `userdata/files.go` says consoles get the atomic write; a crash
+  or a full disk mid-write truncates the user's SQL. Past 500 entries
+  every start rewrites the history file (`userdata/history.go:184`) with
+  no lock, racing a running dbc web's appends. `userdata.writeAtomic`
+  (`files.go:33-57`), `SaveLayout` and `SaveChat` rename without an fsync,
+  unlike `config/saved.go`, so scripts, pipeline specs and run records can
+  come back zero-length after a power loss; leaked `.tmp-*` files are
+  never swept. Fix: one temp + fsync + rename helper for all of them.
+  Read here (`buffer.go`); the rest audit, traced. (RPU plan, phase 1)
+  closed 2026-11-10 (RPU plan, phase 1): one helper for every user file, `userdata.writeAtomic`: temp file, `Sync`, rename, then a best-effort sync of the directory (Windows cannot sync one). `SaveBuffer` — so `SaveConsole`, the TUI's and dbc web's — `SaveLayout` and `SaveChat` now go through it, as scripts, specs, run records and picks already did; a symlinked path stays a link (the file it points at is replaced). The history's trim (`trim`, was `rewrite`) takes the file's sidecar lock (`lockFile`, btypedb's flock/share-mode lock, as config's saved-connections file uses), reads the file again under it, keeps the newest 500 and writes atomically; `appendLine` takes the same lock, so a dbc web's append during a TUI's startup trim is kept, not written into the file the trim renames away. Leaked temp files (`.<name>.tmp-*`, the layout's old `.tui-layout-*`) older than an hour are swept from a directory on the process's first write into it — once per directory, so a run record written every few seconds does not list its directory each time. Tests: `TestSaveBufferIsAtomic` (a new file under the old name, nothing left behind, 0600; fails on the old `os.WriteFile`), `TestWriteAtomicKeepsASymlink`, `TestSweepTemps`, `TestHistoryTrimKeepsAnotherProcessAppend` (an entry another History appended after the load survives the trim). Not done: the fsync of config's own atomic write was already there; `pruneChats` still re-reads every chat after each answer (noted in the plan, small).
 - **N-254** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   The TUI saves editor text only on a clean quit, a console swap, or a
   tab open or close: `saveConsole`'s callers are `tui/app.go:398`,

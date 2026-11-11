@@ -95,10 +95,10 @@ func LoadLayout(path string) Layout {
 	return l
 }
 
-// SaveLayout writes the layout, through a temp file renamed over the old
-// one so a crash mid-write leaves the previous layout rather than a
-// truncated file. Two TUIs quitting at once: the last one's layout wins,
-// which is the one the user saw last.
+// SaveLayout writes the layout atomically (writeAtomic: synced, renamed
+// over the old one), so a crash mid-write leaves the previous layout rather
+// than a truncated file. Two TUIs quitting at once: the last one's layout
+// wins, which is the one the user saw last.
 func SaveLayout(path string, l Layout) error {
 	if path == "" {
 		return nil
@@ -107,22 +107,7 @@ func SaveLayout(path string, l Layout) error {
 	if err != nil {
 		return serr.Wrap(err, "op", "encode layout")
 	}
-	if err = os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return serr.Wrap(err, "op", "save layout")
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tui-layout-*")
-	if err != nil {
-		return serr.Wrap(err, "op", "save layout")
-	}
-	_, err = tmp.Write(append(bs, '\n'))
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Rename(tmp.Name(), path)
-	}
-	if err != nil {
-		_ = os.Remove(tmp.Name())
+	if err = writeAtomic(path, append(bs, '\n'), 0o600); err != nil {
 		return serr.Wrap(err, "op", "save layout", "path", path)
 	}
 	return nil

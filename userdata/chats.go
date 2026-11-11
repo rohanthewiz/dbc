@@ -163,13 +163,10 @@ func SaveChat(dir string, c Chat) error {
 	if err != nil {
 		return serr.Wrap(err)
 	}
+	// atomically and synced (writeAtomic): the old fixed "<id>.json.tmp"
+	// was not synced, and two writers of one chat shared it
 	path := filepath.Join(dir, c.ID+chatExt)
-	tmp := path + ".tmp"
-	if err = os.WriteFile(tmp, bs, 0o600); err != nil {
-		return serr.Wrap(err, "path", tmp)
-	}
-	if err = os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	if err = writeAtomic(path, bs, 0o600); err != nil {
 		return serr.Wrap(err, "path", path)
 	}
 	pruneChats(dir)

@@ -1,8 +1,10 @@
 package script
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -285,5 +287,62 @@ func Run(s *sdb.S) error {
 	}
 	if v, ok := os.LookupEnv("DBC_SCRIPT_SET"); ok {
 		t.Errorf("the script's Setenv reached the process: DBC_SCRIPT_SET=%q", v)
+	}
+}
+
+// TestNestedRunKeepsOuterReader is N-263: a script reading rows and, per
+// row, running a pipeline with a script.run node ran that node's script on
+// the same session, whose end released every Reader the session had — the
+// outer one too, so the loop ended after one row with no error. A run
+// releases only what it opened now (sdb.S.OpenScope): the inner script's
+// own Reader, left open, is closed at its end; the outer loop sees every
+// row.
+func TestNestedRunKeepsOuterReader(t *testing.T) {
+	inner := filepath.Join(t.TempDir(), "inner.go")
+	if err := os.WriteFile(inner, []byte(`//go:build ignore
+
+package main
+
+import "github.com/rohanthewiz/dbc/sdb"
+
+func Run(s *sdb.S) error {
+	_, err := s.Reader("a", "SELECT 1") // left open: its run's end closes it
+	return err
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mgr, printed, err := runScript(t, fmt.Sprintf(`package main
+
+import "github.com/rohanthewiz/dbc/sdb"
+
+func Run(s *sdb.S) error {
+	rd, err := s.Reader("a", "SELECT id FROM cats ORDER BY id")
+	if err != nil {
+		return err
+	}
+	defer rd.Close()
+	n := 0
+	for rd.Next() {
+		p := sdb.NewPipeline("nested")
+		p.Fragment("f").Node("script.run", sdb.Cfg{"name": %q})
+		if _, err := s.RunPipeline(p, sdb.PipelineOpts{}); err != nil {
+			return err
+		}
+		n++
+	}
+	if err := rd.Err(); err != nil {
+		return err
+	}
+	s.Print("rows=%%d", n)
+	return nil
+}
+`, inner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "rows=" + query(t, mgr, "a", "SELECT count(*) FROM cats")[0][0]
+	if !slices.Contains(printed, want) {
+		t.Errorf("printed %q, want %q — the outer loop lost its Reader", printed, want)
 	}
 }

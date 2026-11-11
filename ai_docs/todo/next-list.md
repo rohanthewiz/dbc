@@ -78,15 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-263** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  A nested script run releases the outer script's Readers and Writers.
-  `go.action` and `script.run` call `script.run()` on the same session
-  (`script/plugins.go:418,441-459`), whose `defer s.Release()`
-  (`script/engine.go:154`) empties the shared `openSet` (`sdb/etl.go:145`;
-  `ForFiles` shares `st`). Scenario:
-  `for rd.Next() { s.RunPipelineNamed(...) }` ends after one row with
-  `rd.Err() == nil`. Fix: release only what the nested run opened. Audit,
-  traced. (RPU plan, phase 1)
 - **N-264** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   `explain.Detect` never checks the statement was an EXPLAIN
   (`explain/detect.go:252-296`, used at `workspace/run.go:599`).
@@ -1189,6 +1180,16 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-263** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  A nested script run releases the outer script's Readers and Writers.
+  `go.action` and `script.run` call `script.run()` on the same session
+  (`script/plugins.go:418,441-459`), whose `defer s.Release()`
+  (`script/engine.go:154`) empties the shared `openSet` (`sdb/etl.go:145`;
+  `ForFiles` shares `st`). Scenario:
+  `for rd.Next() { s.RunPipelineNamed(...) }` ends after one row with
+  `rd.Err() == nil`. Fix: release only what the nested run opened. Audit,
+  traced. (RPU plan, phase 1)
+  closed 2026-11-10 (RPU plan, phase 1): `sdb.S.OpenScope()` (host-only, beside Release) marks how many Readers and Writers are open and returns the release for those opened after; `script.run()` — every script run, headless, TUI, web, and the nested ones `go.action` and `script.run` start — releases its own scope rather than the session's all. The outermost run's scope is everything, as before; the jobs engine's whole-session `Release` is unchanged. Test: `script.TestNestedRunKeepsOuterReader` — a Reader over the 8 demo cats, a pipeline with a `script.run` node per row (the inner script leaves a Reader of its own open): the loop sees all 8; on the old code it printed rows=1 with no error.
 - **N-262** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   The formatter rewrites operators it does not know
   (`sqlsplit/format.go:403` `fmtOps`, `:965` `fmtUnary`). Split into two

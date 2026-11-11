@@ -142,11 +142,33 @@ func (s *S) Writer(conn, table string, cols []string, opt WriteOpts) (*Writer, e
 // transaction — and its locks — for the rest of the process. It rolls back
 // rather than commits, because only an explicit Close says the load is
 // complete. Both are no-ops on what the script already closed.
-func (s *S) Release() {
+func (s *S) Release() { s.releaseFrom(0, 0) }
+
+// OpenScope marks the Readers and Writers open now, and returns the release
+// for those opened after it: what one script run opened, where runs nest
+// on one session. A script's pipeline can hold a go.action or a script.run
+// node, which runs a script on the same session; that run's end used to
+// Release everything — the outer script's Reader too, mid-loop, so
+// `for rd.Next() { s.RunPipelineNamed(…) }` stopped after one row with
+// rd.Err() nil (N-263). Each run releases its own scope instead; the
+// outermost one's is everything, as Release was.
+func (s *S) OpenScope() (release func()) {
 	s.st.open.mu.Lock()
-	readers, writers := s.st.open.readers, s.st.open.writers
-	s.st.open.readers, s.st.open.writers = nil, nil
+	r, w := len(s.st.open.readers), len(s.st.open.writers)
 	s.st.open.mu.Unlock()
+	return func() { s.releaseFrom(r, w) }
+}
+
+// releaseFrom closes the Readers and aborts the Writers opened after the
+// first r and w, and forgets them.
+func (s *S) releaseFrom(r, w int) {
+	o := &s.st.open
+	o.mu.Lock()
+	r, w = min(r, len(o.readers)), min(w, len(o.writers))
+	readers := append([]*etl.Reader(nil), o.readers[r:]...)
+	writers := append([]*etl.Writer(nil), o.writers[w:]...)
+	o.readers, o.writers = o.readers[:r], o.writers[:w]
+	o.mu.Unlock()
 	for _, w := range writers {
 		_ = w.Abort()
 	}

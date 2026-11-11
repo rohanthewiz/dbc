@@ -150,8 +150,12 @@ func run(path string, s *sdb.S, load func(*interp.Interpreter) error) (err error
 	s.LogDDL()
 	// Registered after the recover above, so it runs first on a panic too:
 	// whatever the script left open is rolled back / closed before the
-	// panic becomes an error.
-	defer s.Release()
+	// panic becomes an error. Only what THIS run opened: a run nested in
+	// another on the same session (a go.action or script.run node in a
+	// pipeline the outer script runs) must not close the outer one's
+	// Readers and Writers under it (N-263).
+	release := s.OpenScope()
+	defer release()
 	if err = fn(s); err != nil {
 		return serr.Wrap(err, "script", path, "phase", "run")
 	}

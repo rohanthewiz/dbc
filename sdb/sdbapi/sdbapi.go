@@ -122,7 +122,7 @@ const (
 // runner (WithJobs) and lends its connections to one (Manager). Offering them in
 // completion would invite a script to break its own run. TestHostOnlyExist
 // keeps the list in step with sdb.
-var hostOnly = []string{"New", "WithContext", "LogDDL", "Release", "CatalogChanged", "WithPaths", "ETLConn",
+var hostOnly = []string{"New", "WithContext", "LogDDL", "Release", "OpenScope", "CatalogChanged", "WithPaths", "ETLConn",
 	"WithJobs", "Manager", "ForFiles"}
 
 // connParams are the parameter names that mean "a connection name".

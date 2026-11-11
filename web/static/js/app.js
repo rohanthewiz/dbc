@@ -1212,7 +1212,60 @@
   }
 
   // ── the event stream ───────────────────────────────────────────────────
+  // ── the log journal: lines the stream did not bring (N-266) ──────────
+  // The server numbers every log line it sends per window (seq) and keeps
+  // the last thousand (web/journal.go). The page draws each line once, in
+  // order, by its number:
+  //
+  //   live "log" ev ─► seq ≤ logSeq? ─yes─► already drawn (a catch-up had it)
+  //                        │no
+  //                        ▼
+  //                  drawn; logSeq = seq
+  //
+  // catchUpLog runs when the stream (re)opens — the first attach after a
+  // reload, where the page's logs start empty, and every reconnect, where
+  // a drop may have lost lines. It fetches the lines after logSeq and
+  // draws them as they would have been drawn live; live lines arriving
+  // meanwhile wait in logHeld, and follow, so the order stays the
+  // server's.
+  let logSeq = 0;       // the newest numbered line drawn
+  let logHeld = null;   // live log events held while a catch-up is fetched
+
+  async function catchUpLog() {
+    if (logHeld || !state.win) return; // one at a time; a second open finds the first's
+    logHeld = [];
+    const from = logSeq;
+    try {
+      const r = await api("GET", "/api/v1/win/" + state.win + "/log?after=" + from);
+      // lines older than the journal keeps went for good: said, where the
+      // gap is, once — not on a first attach, where nothing was drawn yet
+      if (from > 0 && r.first > from + 1) {
+        log("muted", "some log lines were missed while the stream was down (older than dbc web keeps)");
+      }
+      for (const e of r.lines) drawLog({ type: "log", ws: e.ws, seq: e.seq, data: e.data });
+    } catch (_) { /* the stream's onerror says why; the next open tries again */ }
+    const held = logHeld;
+    logHeld = null;
+    for (const ev of held) drawLog(ev);
+  }
+
+  // drawLog draws a numbered log event unless it was drawn already.
+  function drawLog(ev) {
+    if (ev.seq <= logSeq) return;
+    logSeq = ev.seq;
+    dispatch(ev);
+  }
+
   function onEvent(ev) {
+    if (ev.type === "log" && ev.seq) {
+      if (logHeld) logHeld.push(ev);
+      else drawLog(ev);
+      return;
+    }
+    dispatch(ev);
+  }
+
+  function dispatch(ev) {
     const d = ev.data;
     if (!ev.ws) {
       // window-level: the assistant's, or a connection added, edited or
@@ -1257,6 +1310,10 @@
       } else if (ev.type === "dump") {
         dbc.conns.onDump(d); // a running dump's lines and state (conns.js)
       } else if (ev.type.startsWith("chat.")) dbc.chat.onEvent(ev.type, d);
+      // the window's own lines (the assistant's: its conversation could
+      // not be saved), to the log on screen — they had no case here, and
+      // were dropped unseen
+      else if (ev.type === "log") log(d.level, d.text, undefined, d.at);
       return;
     }
     const t = tabOf(ev.ws);
@@ -1264,7 +1321,7 @@
     if (t !== state.tab) { onBackground(t, ev.type, d); return; }
     switch (ev.type) {
       case "log":
-        log(d.level, d.text, logRoute(t, d));
+        log(d.level, d.text, logRoute(t, d), d.at);
         break;
       case "busy":
       case "tick":
@@ -1427,7 +1484,7 @@
   function onBackground(t, type, d) {
     switch (type) {
       case "log":
-        log(d.level, "[" + t.title + "] " + d.text, logRoute(t, d));
+        log(d.level, "[" + t.title + "] " + d.text, logRoute(t, d), d.at);
         break;
       case "run":
       case "explain":
@@ -1484,6 +1541,11 @@
         resync(); // back after a drop: catch up on anything missed
         retryNow(); // and the saves it failed meanwhile
       }
+      // the log lines this page has not drawn: after a drop, those the
+      // stream lost; on the first open, the window's lines from before a
+      // reload (activate has put the tab on screen, so they route as
+      // they did live)
+      catchUpLog();
     };
     src.onerror = async () => {
       setStatus("disconnected — reconnecting…", "warn");

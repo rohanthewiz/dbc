@@ -363,6 +363,7 @@ func (s *Server) routes() {
 
 	r.Get("/api/v1/win/:id", s.handleWindow)
 	r.Get("/api/v1/win/:id/events", s.handleWindowEvents)
+	r.Get("/api/v1/win/:id/log", s.handleWindowLog) // the log lines a page missed (journal.go)
 	r.Post("/api/v1/win/:id/tabs", s.handleClaim)
 	r.Post("/api/v1/win/:id/release", s.handleRelease)
 

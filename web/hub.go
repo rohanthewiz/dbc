@@ -114,6 +114,10 @@ type window struct {
 	// are gone and a page booting on this window is its reload, not a copy.
 	detached  atomic.Int64
 	handedOff bool
+
+	// log is the journal of the log lines sent on the stream (journal.go),
+	// for a page that missed some: a dropped event, or a reload
+	log journal
 }
 
 // tab is one query tab: a workspace and the page's views of it.
@@ -169,11 +173,18 @@ func (h *hub) open(winID string) (*tab, error) {
 		w.detached.Store(time.Now().UnixNano()) // claims.go: its grace runs from birth until a stream attaches
 		w.sse = rweb.NewSSEHub(rweb.SSEHubOptions{
 			// A run's events come in bursts (notes, then the outcome); 256
-			// absorbs any burst a browser tab could fall behind on. A client
-			// that stays full through 3 sends is gone, and is dropped; its
-			// EventSource reconnects if it was merely slow.
+			// absorbs most bursts a browser tab could fall behind on.
 			ChannelSize: 256,
-			MaxDropped:  3,
+			// A client whose channel is full is dropped at the FIRST event
+			// it misses, not after 3 in a row: rweb resets that count on
+			// any send that gets through, so one or two drops in a burst
+			// (a script printing in a loop) were lost without a disconnect,
+			// and the page never knew to resync — a lost "run" left its
+			// tab busy for good (N-266). Dropped, the client's EventSource
+			// reconnects (what it had queued is still written first), and
+			// the page's reconnect resyncs its state and fetches the log
+			// lines it missed from the window's journal (journal.go).
+			MaxDropped: 1,
 			// a comment line every 20 s keeps an idle stream from being cut
 			// by anything in between, and lets a dead peer be noticed
 			HeartbeatInterval: 20 * time.Second,
@@ -435,13 +446,22 @@ func (h *hub) count() int {
 type wireEvent struct {
 	Type string `json:"type"`
 	WS   string `json:"ws,omitempty"`
+	// Seq numbers a "log" event within its window (journal.go); the page
+	// asks for the lines after the last it drew when it may have missed
+	// some
+	Seq  uint64 `json:"seq,omitempty"`
 	Data any    `json:"data"`
 }
 
 // send puts one event on the window's stream. It is the JSON rweb's
 // BroadcastAny would write, plus "ws" — sent raw, as a "message" event, so
-// the page keeps its single onmessage switch.
+// the page keeps its single onmessage switch. A log line goes through the
+// window's journal (sendLog), whoever sends it.
 func (w *window) send(typ, ws string, data any) {
+	if l, ok := data.(logLine); ok && typ == "log" {
+		w.sendLog(ws, l)
+		return
+	}
 	b, err := json.Marshal(wireEvent{Type: typ, WS: ws, Data: data})
 	if err != nil {
 		return // every event type here is plain data; this cannot happen
@@ -464,6 +484,9 @@ type logLine struct {
 	Level string `json:"level"`
 	Text  string `json:"text"`
 	Conn  string `json:"conn,omitempty"`
+	// At is when it was sent (unix ms), stamped by the journal: a line
+	// drawn late — fetched after a drop or a reload — shows its own time
+	At int64 `json:"at,omitempty"`
 }
 
 // levelNames are the page's CSS class suffixes for workspace.Level.

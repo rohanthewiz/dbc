@@ -118,13 +118,34 @@
   // one on screen. app.js replaces it with the active query tab's.
   dbc.logKey = () => shownLog;
 
-  dbc.log = function (level, text, key) {
+  // stickToEnd scrolls the shown log to its last line, once per frame
+  // however many lines arrived in it (N-266). Reading scrollHeight forces
+  // a layout, and it was read for every line: a script printing in a loop
+  // laid the page out per line, which slowed the page's reading of the
+  // stream and made the very burst that overflowed it worse. Appending a
+  // node costs no layout; the one read happens when the frame is drawn
+  // (or when the page is shown again, for a hidden one).
+  let stickQueued = false;
+  function stickToEnd() {
+    if (stickQueued) return;
+    stickQueued = true;
+    requestAnimationFrame(() => {
+      stickQueued = false;
+      const log = $("log");
+      log.scrollTop = log.scrollHeight;
+    });
+  }
+
+  // log adds a line to log key. at, when given, is when the server sent it
+  // (unix ms): a line drawn late — fetched after a dropped stream or a
+  // reload (app.js catchUpLog) — shows its own time, not the drawing's.
+  dbc.log = function (level, text, key, at) {
     if (key === undefined || key === null || key === "") key = dbc.logKey();
     if (key === "" && shownLog !== "") key = shownLog; // see the holding log above
     const line = document.createElement("div");
     const t = document.createElement("span");
     t.className = "t";
-    t.textContent = new Date().toTimeString().slice(0, 8);
+    t.textContent = (at ? new Date(at) : new Date()).toTimeString().slice(0, 8);
     const msg = document.createElement("span");
     msg.className = level || "info";
     msg.textContent = text;
@@ -132,10 +153,9 @@
     const lines = linesOf(key);
     lines.push(line);
     if (key === shownLog) {
-      const log = $("log");
-      log.append(line);
+      $("log").append(line);
       trim(lines);
-      log.scrollTop = log.scrollHeight;
+      stickToEnd();
     } else {
       trim(lines);
     }

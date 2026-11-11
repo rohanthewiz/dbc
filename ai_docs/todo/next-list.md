@@ -78,23 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-266** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  dbc web's event stream can lose events with no resync.
-  `web/hub.go:164-176` and `:383-389` send through rweb's non-blocking
-  `BroadcastRaw` (`ChannelSize` 256, `MaxDropped` 3); in rweb v0.1.32
-  (`sse_hub.go:173-206`) a full channel drops the event and any later
-  successful send resets the drop count, so one or two drops lose events
-  without a disconnect and the page's `resync()`
-  (`web/static/js/app.js:1468-1485`) never fires. Scenario: a script
-  printing in a loop or a pipeline's `job.line` burst drops lines or the
-  final `run` event, and the tab stays "busy". Log lines live only in the
-  DOM (`web/static/js/core.js:121-142`), so they are also lost on every
-  reload, and each appended line forces a layout (`core.js:136-138` reads
-  `scrollHeight` per event), which makes the burst worse. Fix: force a
-  resync on any drop, keep a per-tab log tail on the server that resync
-  and reload fetch, and batch log lines per animation frame. Mechanism
-  audit, traced; the burst size that triggers it is not measured.
-  (RPU plan, phase 2)
 - **N-267** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Headless exports have no way past `max_rows` from the command line.
   `dbc -t csv "SELECT …"` stops at 1,000 rows, notes it on stderr
@@ -1160,6 +1143,24 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-266** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  dbc web's event stream can lose events with no resync.
+  `web/hub.go:164-176` and `:383-389` send through rweb's non-blocking
+  `BroadcastRaw` (`ChannelSize` 256, `MaxDropped` 3); in rweb v0.1.32
+  (`sse_hub.go:173-206`) a full channel drops the event and any later
+  successful send resets the drop count, so one or two drops lose events
+  without a disconnect and the page's `resync()`
+  (`web/static/js/app.js:1468-1485`) never fires. Scenario: a script
+  printing in a loop or a pipeline's `job.line` burst drops lines or the
+  final `run` event, and the tab stays "busy". Log lines live only in the
+  DOM (`web/static/js/core.js:121-142`), so they are also lost on every
+  reload, and each appended line forces a layout (`core.js:136-138` reads
+  `scrollHeight` per event), which makes the burst worse. Fix: force a
+  resync on any drop, keep a per-tab log tail on the server that resync
+  and reload fetch, and batch log lines per animation frame. Mechanism
+  audit, traced; the burst size that triggers it is not measured.
+  (RPU plan, phase 2)
+  closed 2026-11-10 (RPU plan, phase 2): any drop now forces a resync. The window's SSE hub evicts a client at its first missed event (`MaxDropped: 1`), so its EventSource reconnects. What it had queued is still written first. The page's reconnect then resyncs as before. Lost log lines come back from a journal: `web/journal.go` numbers every log line a window sends (`seq`), stamps its time (`at`), and keeps the newest 1,000 lines or 1 MiB. It assigns the number and sends under one lock, so the stream carries lines in order. `GET /api/v1/win/:id/log?after=N` returns the lines after N, plus the oldest number kept. The page (`catchUpLog`) asks for the lines after the last it drew whenever the stream opens: on the first attach after a reload (the log survives a reload now) and on every reconnect. Live lines are held while that fetch is out, and each line is drawn once, in order, by number. A late line shows its own time. A gap older than the journal is said once. The log scrolls to its end once per animation frame (`stickToEnd`) instead of reading `scrollHeight` per line. The window's own "log" events (the assistant's "could not save the conversation") had no case in `onEvent` and were dropped unseen. They now go to the log on screen. Tests: `TestStreamDropsAClientAtItsFirstMiss` (fails with `MaxDropped: 3`), `TestJournalKeepsTheNewestLines`, `TestWindowLogCatchUp`, `TestLogEventsCarrySeq`. Web e2e step "the log after a reload and a dropped stream": a run's lines survive a reload with their own times and are drawn once. A run's events dropped on the way into the page come back on the reconnect's open, as many lines as a run draws. The old code fails at the reload. The drop half is played in the page: CDP's offline mode does not cut a stream that is already open, and dbc web has no switch to cut one. Full web e2e passes. Not done: the job and pipeline lines (`job.line`) are not journaled. A run's record keeps them, and `pipeKit.sync` refetches runs on resync. Chat deltas are not journaled either.
 - **N-265** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   dbc web's tab and console saves fail silently.
   `web/static/js/app.js:3948-3953` handles only a 409; a 400 (over 4 MB),

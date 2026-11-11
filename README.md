@@ -1656,7 +1656,11 @@ text moves into a console of its database (without overwriting one that
 exists). The tab keeps its own copy too, so an older dbc still opens it.
 
 Tabs, their connection and console, the pane sizes and light/dark are saved in
-`~/.config/dbc/web.bytdb`; a reload keeps every tab's session. A saved tab
+`~/.config/dbc/web.bytdb`; a reload keeps every tab's session, and its log:
+dbc web keeps a window's last thousand log lines and the page draws them
+again, each at its own time. They are also how the page catches up after
+its event stream drops (a sleeping laptop, a burst of output it fell behind
+on): the lines it missed are drawn once the stream is back. A saved tab
 is shown by one browser tab of dbc web at a time: a second browser tab gets
 the saved tabs the first is not showing, or a fresh one, with sessions of its
 own. Closing a browser tab frees its tabs for the next one opened.

@@ -10,12 +10,15 @@ package userdata
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rohanthewiz/serr"
 )
@@ -26,10 +29,18 @@ const (
 	// the oldest entries fall off the front.
 	histMax = 500
 
-	// histMaxLine caps how much of one entry we will read back. A generated
-	// INSERT can be enormous, and a scanner that gives up on a long line would
-	// silently drop everything after it.
+	// histMaxLine caps how much of one line the loader will read back; a
+	// longer line is skipped and the reading goes on past it (readHistory).
+	// It used to cap a bufio.Scanner whose error nobody checked, so one
+	// line over it — a 2 MB generated INSERT run once — stopped the load
+	// there, and every entry after it never loaded again (N-256).
 	histMaxLine = 1 << 20
+
+	// histMaxSQL caps the SQL an entry keeps (cutSQL), well under
+	// histMaxLine even after JSON's escaping, so a new entry is never one
+	// the loader skips. History is for finding and re-running a statement;
+	// the head of a statement this long is what tells it apart.
+	histMaxSQL = 256 << 10
 )
 
 // Entry is one statement the user ran — one line of the history file.
@@ -89,36 +100,76 @@ func LoadHistory(path string) *History {
 	if path == "" {
 		return h
 	}
-	h.entries = readHistory(path)
-	if len(h.entries) > histMax {
+	entries, skipped := readHistory(path)
+	h.entries = entries
+	// past the cap, or holding a line too long to load: rewrite the file
+	// as what loaded, so the next start reads neither
+	if len(h.entries) > histMax || skipped {
 		h.trim()
 	}
 	return h
 }
 
 // readHistory reads the entries of the history file at path, skipping lines
-// that do not parse or hold no SQL.
-func readHistory(path string) []Entry {
+// that do not parse, hold no SQL, or run past histMaxLine; skipped reports
+// whether it skipped one for its length, which the file is then rewritten
+// without (LoadHistory).
+func readHistory(path string) (out []Entry, skipped bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	defer f.Close()
 
-	var out []Entry
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), histMaxLine)
-	for sc.Scan() {
-		var e Entry
-		if err := json.Unmarshal(sc.Bytes(), &e); err != nil {
-			continue
+	r := bufio.NewReaderSize(f, 64<<10)
+	for {
+		line, long, err := nextLine(r, histMaxLine)
+		skipped = skipped || long
+		if !long && len(line) > 0 {
+			var e Entry
+			if json.Unmarshal(line, &e) == nil && strings.TrimSpace(e.SQL) != "" {
+				out = append(out, e)
+			}
 		}
-		if strings.TrimSpace(e.SQL) == "" {
-			continue
+		if err != nil {
+			return out, skipped // io.EOF, or a read error: what was read stands
 		}
-		out = append(out, e)
 	}
-	return out
+}
+
+// nextLine reads r's next line, without its newline. A line longer than
+// max is read through to its end but not kept: long is true and line nil,
+// so the caller goes on with the line after it. err is io.EOF after the
+// last line (which may lack a newline, a killed process's half line).
+func nextLine(r *bufio.Reader, max int) (line []byte, long bool, err error) {
+	for {
+		frag, ferr := r.ReadSlice('\n')
+		if !long {
+			if len(line)+len(frag) > max+1 { // +1: the newline
+				long, line = true, nil
+			} else {
+				line = append(line, frag...)
+			}
+		}
+		if ferr == bufio.ErrBufferFull {
+			continue // the line goes on
+		}
+		return bytes.TrimSuffix(line, []byte("\n")), long, ferr
+	}
+}
+
+// cutSQL keeps the head of a statement longer than histMaxSQL, cut on a
+// rune boundary, with a comment saying what was dropped, so the entry
+// reads as cut rather than as the statement it was.
+func cutSQL(sql string) string {
+	if len(sql) <= histMaxSQL {
+		return sql
+	}
+	n := histMaxSQL
+	for n > 0 && !utf8.RuneStart(sql[n]) {
+		n--
+	}
+	return sql[:n] + fmt.Sprintf("\n-- … cut here: the statement was %d bytes, and history keeps the first %d", len(sql), n)
 }
 
 // Add records a statement, unless it repeats the one just recorded — running
@@ -136,7 +187,7 @@ func (h *History) Add(conn, sql string, at time.Time) error {
 // database and then on another is two entries, or the second database's
 // scoped history would be missing a statement that ran on it.
 func (h *History) AddEntry(e Entry) error {
-	e.SQL = strings.TrimSpace(e.SQL)
+	e.SQL = cutSQL(strings.TrimSpace(e.SQL))
 	if e.SQL == "" {
 		return nil
 	}
@@ -211,7 +262,8 @@ func (h *History) trim() {
 		return
 	}
 	defer func() { _ = lock.Close() }()
-	h.entries = keep(readHistory(h.path))
+	again, _ := readHistory(h.path)
+	h.entries = keep(again)
 	var sb strings.Builder
 	for _, e := range h.entries {
 		bs, err := json.Marshal(e)

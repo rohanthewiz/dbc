@@ -78,17 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-256** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  One over-long statement stops history loading. The loader's scanner
-  caps a line at 1 MiB (`userdata/history.go:32,99-100`) and `sc.Err()` is
-  never checked, while `AddEntry` writes any size (dbc web takes 4 MB
-  buffers, the TUI has no limit). After one 2 MB generated INSERT, every
-  later start stops reading at that line; with fewer than 500 entries
-  before it the trim never fires, so new entries are appended, never load,
-  and the file grows without bound. The constant's own comment names this
-  failure. Fix: cap or elide the SQL on write, and read with a
-  `bufio.Reader` that skips an over-long line. Read here.
-  (RPU plan, phase 1)
 - **N-257** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   An open transaction is guarded on tab close (`tui/tabs.go:462`) and
   nowhere else. `interrupt()` when idle and `quitCmd`
@@ -1249,6 +1238,18 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-256** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  One over-long statement stops history loading. The loader's scanner
+  caps a line at 1 MiB (`userdata/history.go:32,99-100`) and `sc.Err()` is
+  never checked, while `AddEntry` writes any size (dbc web takes 4 MB
+  buffers, the TUI has no limit). After one 2 MB generated INSERT, every
+  later start stops reading at that line; with fewer than 500 entries
+  before it the trim never fires, so new entries are appended, never load,
+  and the file grows without bound. The constant's own comment names this
+  failure. Fix: cap or elide the SQL on write, and read with a
+  `bufio.Reader` that skips an over-long line. Read here.
+  (RPU plan, phase 1)
+  closed 2026-11-10 (RPU plan, phase 1): the loader reads with a `bufio.Reader` (`nextLine`), which reads a line past `histMaxLine` through to its end without keeping it and goes on with the next, so one over-long line costs itself and nothing after it. A load that skipped one rewrites the file without it (the locked, atomic trim of N-255), so the next start does not read it again. On the way in, `AddEntry` cuts SQL past 256 KiB (`histMaxSQL`, well under the read limit even JSON-escaped) to its head, on a rune boundary, with a closing comment `-- … cut here: the statement was N bytes, and history keeps the first M`. Tests: `TestHistoryReadsPastAnOverLongLine` (a 2 MB INSERT between three entries: all three load, the file shrinks, and a new 2 MB entry comes back cut and loadable) and `TestNextLine`. HEAD's loader, given the same file in a scratch worktree, loaded 1 entry of the 3.
 - **N-255** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Consoles, the editor buffer and the history trim are written in place.
   `userdata/buffer.go:40` is `os.WriteFile`, reached from

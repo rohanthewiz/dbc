@@ -1,6 +1,7 @@
 package userdata
 
 import (
+	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -219,5 +220,64 @@ func TestHistoryScopedByDatabase(t *testing.T) {
 	}
 	if (ConsoleDB{}).Key() != "" || ConsoleDBOf("h:1", "app").Key() != "h_1/app" {
 		t.Errorf("Key: %q, %q", (ConsoleDB{}).Key(), ConsoleDBOf("h:1", "app").Key())
+	}
+}
+
+// TestHistoryReadsPastAnOverLongLine is N-256: one line past histMaxLine —
+// a 2 MB generated INSERT, written before entries were cut — no longer
+// stops the load. Entries after it load, the file is rewritten without it,
+// and so the next start does not read it again.
+func TestHistoryReadsPastAnOverLongLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.jsonl")
+	line := func(sql string) string {
+		bs, _ := json.Marshal(Entry{At: time.Now(), Conn: "demo", SQL: sql})
+		return string(bs) + "\n"
+	}
+	huge := "INSERT INTO t VALUES " + strings.Repeat("(1, 'x'), ", 200_000) + "(2, 'y')"
+	text := line("SELECT 'before'") + line(huge) + line("SELECT 'after'") + line("SELECT 'last'")
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := LoadHistory(path)
+	var got []string
+	for _, e := range h.Recent() {
+		got = append(got, e.SQL)
+	}
+	if strings.Join(got, "|") != "SELECT 'last'|SELECT 'after'|SELECT 'before'" {
+		t.Errorf("loaded %d entries: %.80q", len(got), got)
+	}
+	if fi, err := os.Stat(path); err != nil || fi.Size() > 1000 {
+		t.Errorf("the file was not rewritten without the long line (size %v, %v)", fi.Size(), err)
+	}
+	// a new one, past the loader's limit as written, is cut to a head
+	// that loads, saying so
+	if err := h.Add("demo", huge, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	back := LoadHistory(path).Recent()[0].SQL
+	if len(back) > histMaxSQL+200 || !strings.HasPrefix(back, "INSERT INTO t VALUES (1, 'x')") ||
+		!strings.Contains(back, "-- … cut here: the statement was") {
+		t.Errorf("a %d-byte statement came back as %d bytes ending %q", len(huge), len(back), back[len(back)-80:])
+	}
+}
+
+// TestNextLine reads lines of any length, skipping only the long ones,
+// and a last line with no newline.
+func TestNextLine(t *testing.T) {
+	r := bufio.NewReaderSize(strings.NewReader("ab\n"+strings.Repeat("x", 100)+"\ncd\nlast"), 16)
+	var got []string
+	for {
+		line, long, err := nextLine(r, 10)
+		if long {
+			got = append(got, "<long>")
+		} else {
+			got = append(got, string(line))
+		}
+		if err != nil {
+			break
+		}
+	}
+	if strings.Join(got, ",") != "ab,<long>,cd,last" {
+		t.Errorf("lines: %v", got)
 	}
 }

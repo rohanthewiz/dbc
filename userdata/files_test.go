@@ -119,7 +119,8 @@ func TestHistoryTrimKeepsAnotherProcessAppend(t *testing.T) {
 		}
 	}
 	// this process's view, loaded before the other's append
-	mine := &History{path: path, entries: readHistory(path)}
+	loaded, _ := readHistory(path)
+	mine := &History{path: path, entries: loaded}
 	other := &History{path: path}
 	if err := other.Add("demo", "SELECT 'from the other process'", at); err != nil {
 		t.Fatal(err)

@@ -101,7 +101,7 @@ command = ["./bin/dbc", "web"]
 binary = "dbc"
 subcommands = ["script", "scripts", "pipeline", "pipelines", "plugins", "job", "jobs", "runs", "run", "copy", "migrate",
                "explain", "erd", "dump", "web", "tutorial", "encrypt", "version"]
-flags = ["--config", "-c", "--conn", "-f", "--file", "-t", "--format", "-o", "--out",
+flags = ["--config", "-c", "--conn", "-f", "--file", "-t", "--format", "-o", "--out", "--max-rows",
          "--tx", "-k", "--keep-going",
          "--demo", "--driver", "--dsn", "--tls", "--tls-ca", "--tls-cert", "--tls-key",
          "--tls-key-password", "--dir", "--allow-missing",

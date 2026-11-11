@@ -2970,6 +2970,7 @@ Everything works without the TUI, for cron jobs and shell pipelines:
 | `-f`, `--file FILE` | read the SQL from a file; `-f -` reads stdin |
 | `-t`, `--format FORMAT` | `text` (default), `csv`, `tsv`, `markdown`, `html`, `json` |
 | `-o`, `--out FILE` | write the output to a file instead of stdout |
+| `--max-rows N` | fetch at most `N` rows per result (`0`: no cap), over the config's `max_rows` (1,000 by default), for this run |
 | `-c`, `--conn NAME` | which connection to run on |
 | `--tx` | run the statements in one transaction: all commit, or none do |
 | `-k`, `--keep-going` | go on past a failed statement instead of stopping there |
@@ -2985,6 +2986,15 @@ opens the TUI. Give the SQL as one quoted argument: more than one argument is
 an error rather than a silently shortened query. Use `--` before SQL that
 starts with a comment, so the flag parser leaves it alone. `Ctrl+C` cancels a
 running query or script and exits 130; bad usage exits 2.
+
+A result cut at `max_rows` says so on stderr (`note: result truncated at 1000
+rows`), so a CSV export that looks complete is not quietly short; `--max-rows
+0` exports all of it (the whole result is held in memory first). A write that
+fails, such as a full disk under `> file.csv`, exits 1. With no config file,
+a run on a built-in demo connection says on stderr where dbc looked
+(`note: no config file found (looked for …)`), so cron under another `HOME`
+does not reach the demo silently. Naming the connection (`-c`), `--dsn` or
+`--demo` says it was meant.
 
 `-f` was the output format before it was the SQL file; `dbc -f csv …` now
 says to use `-t csv` rather than looking for a file named `csv`.

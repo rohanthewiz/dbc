@@ -26,6 +26,8 @@
 //	-f, --file path    read the SQL to run headless from a file ("-" = stdin)
 //	-t, --format fmt   headless output format: text|csv|tsv|markdown|html|json
 //	-o, --out file     write headless output to a file instead of stdout
+//	--max-rows n       fetch at most n rows per result (0: no cap); overrides
+//	                   max_rows in the config, for this run only
 //	--tx               run a headless query's statements in one transaction:
 //	                   all of them commit, or none do
 //	-k, --keep-going   go on past a failed statement instead of stopping there
@@ -60,6 +62,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/signal"
 	"strings"
@@ -105,6 +108,9 @@ var (
 	flagMissing bool
 	flagTx      bool
 	flagKeep    bool
+	// --max-rows: flagMaxRowsSet says it was given (applyMaxRows)
+	flagMaxRows    int
+	flagMaxRowsSet bool
 )
 
 func main() {
@@ -153,6 +159,29 @@ func newCLI() *cli.Command {
 				Usage: "headless output `FORMAT`: text|csv|tsv|markdown|html|json", Destination: &flagFormat},
 			&cli.StringFlag{Name: "out", Aliases: []string{"o"}, Usage: "write headless output to `FILE` instead of stdout",
 				Destination: &flagOut},
+			// --max-rows is the cap the config's max_rows sets, for one run:
+			// an export of a whole table should not need a config file
+			// edited first (and with --dsn and no config file there was no
+			// way past 1,000 rows at all — N-267). Set marks it given, since
+			// 0 is a value here (no cap) and cannot be the "not given" one.
+			&cli.IntFlag{Name: "max-rows", Usage: "fetch at most `N` rows per result (0: no cap), over max_rows in config",
+				Destination: &flagMaxRows,
+				Action: func(_ context.Context, cmd *cli.Command, n int) error {
+					if n < 0 {
+						// said here: the cli package prints a parse error,
+						// not one a flag's Action returns, and main exits 2
+						// on either without a word of its own
+						err := fmt.Errorf("--max-rows takes 0 (no cap) or more, not %d", n)
+						w := cmd.Root().ErrWriter
+						if w == nil {
+							w = os.Stderr
+						}
+						fmt.Fprintln(w, err)
+						return err
+					}
+					flagMaxRowsSet = true
+					return nil
+				}},
 			&cli.BoolFlag{Name: "tx",
 				Usage:       "run the statements in one transaction: all commit, or on the first failure none do",
 				Destination: &flagTx},
@@ -425,6 +454,7 @@ func setup(demos demoOpen) (*config.Config, *db.Manager) {
 	if err != nil {
 		fail(err, "could not load config")
 	}
+	applyMaxRows(cfg)
 	if err = addAdHocConn(cfg); err != nil {
 		fail(err, "bad ad-hoc connection flags (--dsn, --driver, --tls*)")
 	}
@@ -456,6 +486,53 @@ func setup(demos demoOpen) (*config.Config, *db.Manager) {
 		fail(err, "could not open the demo connection")
 	}
 	return cfg, mgr
+}
+
+// applyMaxRows puts --max-rows, when given, over the config's max_rows. 0
+// lifts the cap: the fetch loop (db.Manager) stops at MaxRows rows, so the
+// largest int is "never". The whole result is still held in memory before
+// it is written, as with a large max_rows in the config.
+func applyMaxRows(cfg *config.Config) {
+	if !flagMaxRowsSet {
+		return
+	}
+	if flagMaxRows == 0 {
+		cfg.MaxRows = math.MaxInt
+		return
+	}
+	cfg.MaxRows = flagMaxRows
+}
+
+// demoNoted keeps noteDemo to one line a run: pickConn, which calls it,
+// runs more than once in some commands (connDialect asks it too). The
+// commands run one at a time on main's goroutine, so a plain bool will do.
+var demoNoted bool
+
+// noteDemo says on stderr, once, what demoNote has to say.
+func noteDemo(cfg *config.Config, conn string) {
+	if msg := demoNote(cfg, conn); msg != "" && !demoNoted {
+		demoNoted = true
+		fmt.Fprintln(os.Stderr, msg)
+	}
+}
+
+// demoNote is the line a run going to a built-in demo connection gets
+// because no config file was found, naming where dbc looked; "" when there
+// is nothing to say. A run meant for a real database — cron with another
+// HOME, a script started from another directory — otherwise reached the
+// demo without a word, and the first sign was "relation does not exist"
+// (N-267). Nothing is said when the demo is what was asked for: --demo (or
+// $DBC_DEMO), -c naming a connection, or --dsn (the ad-hoc connection is no
+// demo).
+func demoNote(cfg *config.Config, conn string) string {
+	if !cfg.Demo || flagDemo != "" || flagConn != "" || flagDSN != "" {
+		return ""
+	}
+	if cc, ok := cfg.ConnByName(conn); !ok || !cc.Demo {
+		return ""
+	}
+	return fmt.Sprintf("note: no config file found (looked for %s) — running on the built-in demo "+
+		"connection %q; --config FILE names one", strings.Join(cfg.Searched, ", "), conn)
 }
 
 // usage reports bad command-line usage and exits 2, the status Go's flag
@@ -696,6 +773,7 @@ func pickConn(cfg *config.Config) string {
 	if conn == "" {
 		usage("multiple connections configured — pick one with -c <name>")
 	}
+	noteDemo(cfg, conn)
 	return conn
 }
 
@@ -950,7 +1028,12 @@ func writeOut(out string, results []*model.Result) { writeOutTo(os.Stdout, out, 
 // (runJSONResults).
 func writeOutTo(note io.Writer, out string, results []*model.Result) {
 	if flagOut == "" {
-		fmt.Print(out)
+		// checked: `dbc -t csv … > /full/disk/x.csv` used to exit 0 with a
+		// short file (N-267). A closed pipe (| head) never gets here: Go
+		// ends the process on SIGPIPE for a write to stdout.
+		if _, err := io.WriteString(os.Stdout, out); err != nil {
+			fail(serr.Wrap(err, "to", "stdout"), "write failed")
+		}
 		return
 	}
 	if err := os.WriteFile(flagOut, []byte(out), 0644); err != nil {
@@ -993,7 +1076,7 @@ func noteTruncated(w io.Writer, r *model.Result, what string) {
 	if what != "" {
 		what += ": "
 	}
-	fmt.Fprintf(w, "note: %sresult truncated at %d rows — raise max_rows in config for more\n",
+	fmt.Fprintf(w, "note: %sresult truncated at %d rows — --max-rows N (0: no cap) or max_rows in config for more\n",
 		what, len(r.Rows))
 }
 

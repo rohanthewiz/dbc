@@ -328,6 +328,9 @@ type Config struct {
 
 	Path string `toml:"-"` // file the config was loaded from ("" if none)
 	Demo bool   `toml:"-"` // true when running with the built-in demo connection
+	// Searched is where a config file was looked for, when none was found
+	// (Demo): the paths, absolute, in the order tried
+	Searched []string `toml:"-"`
 
 	// Warnings are load-time findings worth telling the user about but not
 	// worth refusing to start over, e.g. a DSN referencing an unset env var.
@@ -363,6 +366,16 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 	}
 
 	if path == "" {
+		// where it looked, for a headless run to say (main.go noteDemo): a
+		// run meant for a real database that lands on the demo instead —
+		// cron with another HOME — is told why. Absolute, so the working
+		// directory that ./dbc.toml was looked for in is plain.
+		for _, p := range searchPaths() {
+			if abs, err := filepath.Abs(p); err == nil {
+				p = abs
+			}
+			cfg.Searched = append(cfg.Searched, p)
+		}
 		cfg.demoFallback(demo)
 		cfg.resolveScripts("")
 		return cfg, nil

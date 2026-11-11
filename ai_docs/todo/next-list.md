@@ -78,19 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-267** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  Headless exports have no way past `max_rows` from the command line.
-  `dbc -t csv "SELECT …"` stops at 1,000 rows, notes it on stderr
-  (`main.go:970-996`) and exits 0 (run 2026-11-10); with `--dsn` and no
-  config file the cap cannot be raised at all. Add `--max-rows N` (0 =
-  no cap), with N-282's streaming writer behind it. Same neighbourhood:
-  collected output ignores a stdout write error (`main.go:953`,
-  `fmt.Print(out)`), so `> /full/disk/x.csv` exits 0 with a short file;
-  and a headless run that finds no config uses the demo silently
-  (`config/config.go:363-367`, `warnConfig` at `main.go:481` says
-  nothing), so cron with the wrong HOME gets "relation does not exist"
-  with no hint: print one stderr line naming the paths searched.
-  (RPU plan, phase 2)
 - **N-268** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Nothing stands behind a node that ignores cancel. Cancel is cooperative
   by design, but `script/engine.go:155` and `script/plugins.go:321` call
@@ -1143,6 +1130,20 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-267** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Headless exports have no way past `max_rows` from the command line.
+  `dbc -t csv "SELECT …"` stops at 1,000 rows, notes it on stderr
+  (`main.go:970-996`) and exits 0 (run 2026-11-10); with `--dsn` and no
+  config file the cap cannot be raised at all. Add `--max-rows N` (0 =
+  no cap), with N-282's streaming writer behind it. Same neighbourhood:
+  collected output ignores a stdout write error (`main.go:953`,
+  `fmt.Print(out)`), so `> /full/disk/x.csv` exits 0 with a short file;
+  and a headless run that finds no config uses the demo silently
+  (`config/config.go:363-367`, `warnConfig` at `main.go:481` says
+  nothing), so cron with the wrong HOME gets "relation does not exist"
+  with no hint: print one stderr line naming the paths searched.
+  (RPU plan, phase 2)
+  closed 2026-11-10 (RPU plan, phase 2): `--max-rows N` (a root flag, so every command takes it) is the run's `max_rows`, and `0` lifts the cap (`applyMaxRows`: `math.MaxInt` to the fetch loop). A negative N is a usage error, said on stderr: the cli package does not print an error a flag's Action returns. The truncation note now names the flag. The collected output to stdout is a checked `io.WriteString`, so a failed write fails the run (exit 1, "write failed"). The streamed path already checked its writes, and a closed pipe never gets there because Go exits on SIGPIPE. With no config file, `config.LoadDemo` records where it looked (`Searched`, absolute). `pickConn` then says once on stderr, for a run going to a demo connection, "note: no config file found (looked for …) — running on the built-in demo connection …; --config FILE names one". It says nothing when the demo was asked for (`--demo`/`$DBC_DEMO`, `-c`, or `--dsn`). That covers the query, migrate, explain, erd and dump commands. Scripts, pipelines and jobs name their own connections and are left alone. N-282's streaming writer did not land with it, so a whole result is still held before it is written, as with a large `max_rows`. Tests (`maxrows_test.go`): `TestMaxRowsFlag`. `TestMaxRowsExport` exports 1,500 rows: 1,000 under the config's cap, 1,500 with 0. `TestStdoutWriteFailureFails` runs a child process whose stdout is read-only. It wants exit 1 and fails on the old `fmt.Print`. `TestDemoNote` and `TestLoadRecordsWhereItLooked` cover the note. Checked in the real binary (scratch HOME, empty cwd, `CATS_*` stripped): the note on a default run and none with `-c demo-sqlite`; 1,000 rows plus the note under the default cap, 1,500 with `--max-rows 0`, and 1,200 with `--dsn … --max-rows 1200`; exit 1 with a read-only stdout; exit 2 with a message for `--max-rows -1`. `cats-plugin.toml` completions list the flag. README updated: the flags table, and the paragraph on truncation, write failures and the demo note.
 - **N-266** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   dbc web's event stream can lose events with no resync.
   `web/hub.go:164-176` and `:383-389` send through rweb's non-blocking

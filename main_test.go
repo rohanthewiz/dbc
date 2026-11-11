@@ -851,11 +851,14 @@ func resetFlags(t *testing.T) {
 	for _, p := range ptrs {
 		setFlag(t, p, "")
 	}
-	for _, p := range []*bool{&flagMissing, &flagTx, &flagKeep, &flagCreate, &flagTruncate} {
+	for _, p := range []*bool{&flagMissing, &flagTx, &flagKeep, &flagCreate, &flagTruncate, &flagMaxRowsSet, &demoNoted} {
 		old := *p
 		*p = false
 		t.Cleanup(func() { *p = old })
 	}
+	oldMax := flagMaxRows
+	flagMaxRows = 0
+	t.Cleanup(func() { flagMaxRows = oldMax })
 }
 
 // TestRunStatementsNoticesOffPostgres: off Postgres there are no notices, so

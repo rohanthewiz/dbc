@@ -493,7 +493,7 @@ func (s *Server) handleDisconnect(ctx rweb.Context) error {
 	t.send("conn", s.connEventOf(t, true, false, "disconnected"))
 	t.notes(st.Notes)
 	s.hub.announceInUse()
-	go func() {
+	goSafe(t, "a disconnect", func() {
 		s.deliver(t, st.Job())
 		// counted after the session is closed, so this tab is not among them.
 		// An in-memory database's pool is kept regardless (see
@@ -504,7 +504,7 @@ func (s *Server) handleDisconnect(ctx rweb.Context) error {
 		} else {
 			s.mgr.Disconnect(left)
 		}
-	}()
+	})
 	return ok(ctx, map[string]any{"disconnected": left})
 }
 
@@ -560,7 +560,7 @@ func (s *Server) handleRowCounts(ctx rweb.Context) error {
 	counting := false
 	if job := t.ws.ShowRowCounts(req.On); job != nil {
 		counting = true
-		go func() { s.deliver(t, job()) }()
+		goSafe(t, "row counts", func() { s.deliver(t, job()) })
 	} else {
 		// off, or on with no tables listed yet: nothing will land, so the
 		// page hears now that its rows have no numbers

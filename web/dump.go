@@ -198,7 +198,7 @@ func (s *Server) handleDumpStart(ctx rweb.Context) error {
 	s.dumps.mu.Unlock()
 	s.hub.broadcast("dump", map[string]any{"running": s.dumps.state()})
 
-	go func() {
+	goSafe(nil, "a dump", func() {
 		defer close(job.done)
 		say := func(level, text string) {
 			s.hub.broadcast("dump", map[string]any{"level": level, "text": text, "conn": req.Conn})
@@ -212,7 +212,7 @@ func (s *Server) handleDumpStart(ctx rweb.Context) error {
 			s.readyDownload(err, token, tmp, opts.Out, say)
 		}
 		s.hub.broadcast("dump", map[string]any{"running": s.dumps.state()})
-	}()
+	})
 	return ok(ctx, map[string]any{"ok": true, "out": opts.Out, "tool": run.Tools.Version, "token": token})
 }
 

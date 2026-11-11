@@ -271,7 +271,8 @@ func (a *assistant) ensureLocked() {
 	a.state = chatStarting
 	a.needAuth = false // a refusal of this connection sets it again
 	a.c = a.srv.opt.StartChat(a.agent, ai.Options{Dir: agentDir(), Model: a.srv.cfg.AIModel})
-	go a.pump(a.c, a.gen)
+	c, gen := a.c, a.gen
+	goSafe(nil, "the assistant", func() { a.pump(c, gen) })
 }
 
 // agentDir is the agent's working directory: dbc's own, as in the TUI.
@@ -385,10 +386,10 @@ func (a *assistant) ask(t *tab, q string, ctx ai.Context, refs []db.TableRef) er
 	a.streaming = true // in flight from here, lookup included
 	a.sendStateLocked()
 	gen, ws := a.gen, t.ws
-	go func() {
+	goSafe(t, "the assistant's schema lookup", func() {
 		cols, err := ws.LookupColumns(refs)
 		a.schemaLanded(gen, q, ctx, cols, err)
-	}()
+	})
 	return nil
 }
 
@@ -701,10 +702,10 @@ func (a *assistant) startSignIn() error {
 	a.addLocked("info", "starting GitHub sign-in…")
 	a.sendStateLocked()
 	seq, begin := a.signSeq, a.srv.opt.BeginSignIn
-	go func() {
+	goSafe(nil, "the assistant's sign-in", func() {
 		s, err := begin(ag, agentDir())
 		a.signInCode(seq, s, err)
-	}()
+	})
 	return nil
 }
 
@@ -733,10 +734,10 @@ func (a *assistant) signInCode(seq int, s *ai.SignIn, err error) {
 	a.addLocked("info", "enter code "+a.signCode+" at "+a.signURL+
 		" — ⧉ copy code and ↗ open page below. Waiting for GitHub…")
 	a.sendStateLocked()
-	go func() {
+	goSafe(nil, "the assistant's sign-in", func() {
 		st, err := s.Wait()
 		a.signInDone(seq, st, err)
-	}()
+	})
 }
 
 // signInDone lands the end of the device flow.

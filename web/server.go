@@ -448,8 +448,8 @@ func (s *Server) Run() error {
 	}
 	reapCtx, stopReap := context.WithCancel(context.Background())
 	defer stopReap()
-	go s.reapLoop(reapCtx)
-	go s.pluginWatch(s.watchCtx)
+	goSafe(nil, "the idle reaper", func() { s.reapLoop(reapCtx) })
+	goSafe(nil, "the plugin watcher", func() { s.pluginWatch(s.watchCtx) })
 	// the scheduler only while serving: a Server a test builds and never
 	// runs fires nothing
 	s.sched.Start()

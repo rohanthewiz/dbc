@@ -240,7 +240,7 @@ func (h *hub) close(id string) (*tab, error) {
 		return nil, notFound("no workspace %q — it was closed or dbc web restarted", id)
 	}
 	t.ws.Stop()
-	go t.ws.Close()
+	goSafe(nil, "closing a tab", t.ws.Close)
 	return t, nil
 }
 
@@ -277,16 +277,16 @@ func (h *hub) reap(now time.Time) {
 	}
 	h.mu.Unlock()
 	for _, t := range release {
-		go t.ws.Close()
+		goSafe(nil, "releasing an idle tab", t.ws.Close)
 	}
 	for i, w := range forget {
-		go func() {
+		goSafe(nil, "forgetting a window", func() {
 			w.chat.close()
 			for _, t := range forgetTabs[i] {
 				t.ws.Close()
 			}
 			w.sse.Close()
-		}()
+		})
 	}
 	// a forgotten window's tabs are off their connections now: the other
 	// windows' marks for them go
@@ -317,18 +317,18 @@ func (h *hub) closeAll(grace time.Duration) (timedOut bool) {
 	}
 	for _, t := range tabs {
 		wg.Add(1)
-		go func() {
+		goSafe(nil, "closing a tab at shutdown", func() {
 			defer wg.Done()
 			t.ws.Close()
-		}()
+		})
 	}
 	for _, w := range wins {
 		wg.Add(1)
-		go func() {
+		goSafe(nil, "closing a window at shutdown", func() {
 			defer wg.Done()
 			w.chat.close() // saved, as quitting the TUI saves
 			w.sse.Close()
-		}()
+		})
 	}
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
@@ -505,7 +505,7 @@ func (s *Server) launch(t *tab, st workspace.Start) {
 	}
 	if st.Gen > 0 {
 		t.send("busy", busyEvent{Busy: true, Tag: st.Tag, Status: t.ws.RunningStatus()})
-		go func() {
+		goSafe(t, "a run's ticker", func() {
 			tick := time.NewTicker(tickEvery)
 			defer tick.Stop()
 			for range tick.C {
@@ -515,12 +515,21 @@ func (s *Server) launch(t *tab, st workspace.Start) {
 				}
 				t.send("tick", busyEvent{Busy: true, Tag: st.Tag, Status: status})
 			}
-		}()
+		})
 	}
 	// the Job must be CALLED on the new goroutine: `go s.deliver(t,
 	// st.Job())` would evaluate st.Job() right here, on the request's
-	// goroutine, holding the POST open for the whole run
-	go func() { s.deliver(t, st.Job()) }()
+	// goroutine, holding the POST open for the whole run. A Job that
+	// panics is recovered (runSafe); a run it was is abandoned — its slot
+	// released and its failure delivered as a run's — so the tab is not
+	// left busy for good
+	go runSafe(t, st.Tag, func() { s.deliver(t, st.Job()) }, func(err error) {
+		if st.Gen > 0 {
+			if ev := t.ws.AbandonRun(st.Gen, st.Tag, err); ev != nil {
+				s.deliver(t, ev)
+			}
+		}
+	})
 }
 
 // busyEvent is sent when a run starts, and ticks while it runs.
@@ -798,16 +807,16 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 		s.hub.announceInUse()
 		if ev.Release != nil {
 			left := ev.Left
-			go func() {
+			goSafe(t, "releasing the session left", func() {
 				s.deliver(t, ev.Release())
 				s.closeLeft(t, left)
-			}()
+			})
 		}
 		if ev.Counts != nil {
-			go func() { s.deliver(t, ev.Counts()) }()
+			goSafe(t, "row counts", func() { s.deliver(t, ev.Counts()) })
 		}
 		if ev.Routines != nil {
-			go func() { s.deliver(t, ev.Routines()) }()
+			goSafe(t, "the routines", func() { s.deliver(t, ev.Routines()) })
 		}
 	case *workspace.SchemaLoaded:
 		if ev.Stale {
@@ -816,10 +825,10 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 		t.notes(ev.Notes)
 		t.send("conn", s.connEventOf(t, false, ev.Catalog == nil, ""))
 		if ev.Counts != nil {
-			go func() { s.deliver(t, ev.Counts()) }()
+			goSafe(t, "row counts", func() { s.deliver(t, ev.Counts()) })
 		}
 		if ev.Routines != nil {
-			go func() { s.deliver(t, ev.Routines()) }()
+			goSafe(t, "the routines", func() { s.deliver(t, ev.Routines()) })
 		}
 	case *workspace.RoutinesLoaded:
 		if ev.Stale {
@@ -860,13 +869,13 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 		// Wrote, not Counts, decides the others: this tab's own counts may
 		// be off while another's are on.
 		if ev.Counts != nil {
-			go func() { s.deliver(t, ev.Counts()) }()
+			goSafe(t, "row counts", func() { s.deliver(t, ev.Counts()) })
 		}
 		// the run may have changed the catalog: this tab's sidebar lists
 		// it again (a *Connected, landing as a Refresh does). The other
 		// tabs on the connection keep their lists until their own Refresh.
 		if ev.Relist != nil {
-			go func() { s.deliver(t, ev.Relist()) }()
+			goSafe(t, "a relist", func() { s.deliver(t, ev.Relist()) })
 		}
 		if ev.Wrote {
 			s.recountOthers(t, ev.Conn)
@@ -947,7 +956,7 @@ func (s *Server) recountOthers(writer *tab, conn string) {
 	// the Recount calls take each workspace's lock, so not under hub.mu
 	for _, o := range others {
 		if job := o.ws.Recount(conn); job != nil {
-			go func() { s.deliver(o, job()) }()
+			goSafe(o, "a recount", func() { s.deliver(o, job()) })
 		}
 	}
 }

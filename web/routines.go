@@ -109,7 +109,7 @@ func (s *Server) handleRoutines(ctx rweb.Context) error {
 	loading := false
 	if job := t.ws.ShowRoutines(req.On); job != nil {
 		loading = true
-		go func() { s.deliver(t, job()) }()
+		goSafe(t, "the routines", func() { s.deliver(t, job()) })
 	} else {
 		t.send("routines", routinesEventOf(t))
 	}
@@ -209,7 +209,7 @@ func (s *Server) handleSection(ctx rweb.Context) error {
 	loading := false
 	if job := t.ws.OpenSection(sec, req.Open); job != nil {
 		loading = true
-		go func() { s.deliver(t, job()) }()
+		goSafe(t, "the routines", func() { s.deliver(t, job()) })
 	} else if sec == workspace.SectionRoutines {
 		t.send("routines", routinesEventOf(t))
 	}

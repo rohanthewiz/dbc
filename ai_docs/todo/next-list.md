@@ -78,14 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-260** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  dbc web's background goroutines have no `recover` (`web/hub.go:508-523`,
-  `:799-823`, `web/routines.go:112,212`, among others; the only `recover`
-  calls in the repo are in `script/`). rweb recovers handler panics only,
-  so a panic in a job or a `deliver` ends the process and every tab's
-  session. No concrete panic was found on these paths; this is the
-  backstop. Fix: one `safeGo` helper that recovers, logs the stack, and
-  lands the failure on the tab. Audit, traced. (RPU plan, phase 1)
 - **N-261** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   dbc web's idle reaper cancels running statements and tells nobody.
   `web/hub.go:273-281` calls `t.ws.Close()` on every tab of a window that
@@ -1219,6 +1211,15 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-260** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  dbc web's background goroutines have no `recover` (`web/hub.go:508-523`,
+  `:799-823`, `web/routines.go:112,212`, among others; the only `recover`
+  calls in the repo are in `script/`). rweb recovers handler panics only,
+  so a panic in a job or a `deliver` ends the process and every tab's
+  session. No concrete panic was found on these paths; this is the
+  backstop. Fix: one `safeGo` helper that recovers, logs the stack, and
+  lands the failure on the tab. Audit, traced. (RPU plan, phase 1)
+  closed 2026-11-10 (RPU plan, phase 1): `web/safego.go`: `goSafe(t, what, fn)` runs fn on a goroutine of its own under `runSafe`, which recovers a panic, logs it with its stack (`logger.LogErr`) and says it in t's log when the work was a tab's. Every goroutine dbc web starts goes through it — Job deliveries, recounts, relists, routines, a session's release, a tab's or window's close (reaper and shutdown included), the run ticker, the assistant's pump, lookup and sign-in, a dump, the reaper and plugin watcher loops — except a WaitGroup waiter and rweb's own Run. A run's Job that panics would have left its slot taken, the tab busy for good: `launch` hands runSafe a cleanup that calls the new `Workspace.AbandonRun(gen, tag, err)` — the slot released, a failed `RunDone` returned when gen is still the run in flight — and delivers it as a run's outcome, so the page leaves its busy state. Tests: `TestRunSafe` (recovered, after told, a panic in after recovered too) and `TestLaunchRecoversAPanickingRun` (a real run's Job swapped for one that panics: the tab's log says so, the run event fails, the tab is not busy and runs again); with the old `launch`, the panic ends the test process.
 - **N-259** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   `designer.Import`'s expression recursion has no depth cap
   (`designer/importparse.go:1080-1106`). `WHERE c.id = ((((…1…))))` a

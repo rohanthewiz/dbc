@@ -449,6 +449,23 @@ func (w *Workspace) beginRunLocked(tag string) (context.Context, error) {
 	return ctx, nil
 }
 
+// AbandonRun ends run gen as failed after its Job died without landing —
+// a panic its host recovered (dbc web's runSafe, N-260). The run slot is
+// released, so the tab can run again rather than stay busy for good, and
+// the RunDone returned carries err for the host to deliver as it would
+// the Job's own. Nil when gen is not the run in flight: it landed, or it
+// was written off.
+func (w *Workspace) AbandonRun(gen int, tag string, err error) *RunDone {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if gen != w.runGen || !w.busy {
+		return nil
+	}
+	ev := &RunDone{Tag: tag, Conn: w.active, Err: err}
+	ev.Elapsed = w.endRunLocked()
+	return ev
+}
+
 // endRunLocked releases the slot and returns how long the run took.
 func (w *Workspace) endRunLocked() time.Duration {
 	if w.cancel != nil {

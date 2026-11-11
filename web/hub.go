@@ -50,8 +50,10 @@ import (
 //	stream detached (browser tab closed, laptop asleep) ── idle clock starts
 //	  a new stream within the grace period reattaches: same sessions, same
 //	  open transactions (a reload keeps the ids in sessionStorage)
-//	idle > releaseAfter (conn_idle_timeout) ──► every query tab's session
-//	  released (transactions rolled back); the workspaces stay usable
+//	idle > releaseAfter (conn_idle_timeout) ──► every idle query tab's
+//	  session released (transactions rolled back); the workspaces stay
+//	  usable. A tab still running a statement waits for it to end; one
+//	  released with state is told so when a page attaches (sayReleased)
 //	idle > forgetAfter (a day) ──► the window and its query tabs forgotten;
 //	  their ids now answer 404 and the page opens new ones
 //
@@ -137,6 +139,10 @@ type tab struct {
 	// (moveResults): the workspace keeps them by name but does not list
 	// its names. Guarded by viewMu.
 	visited map[string]bool
+	// released is the idle reaper's word on this tab (releaseIdle), kept
+	// until a page attaches to say it to (sayReleased); "" when there is
+	// none
+	released atomic.Pointer[string]
 }
 
 func newHub(newWS func(sink func(workspace.Event)) *workspace.Workspace, releaseAfter time.Duration) *hub {
@@ -247,6 +253,15 @@ func (h *hub) close(id string) (*tab, error) {
 // reap applies the idle rules to every window; run periodically. Releasing
 // waits on the sessions (a statement still returning from its cancel), so
 // it runs off the lock, on its own goroutine per query tab.
+//
+// A tab whose statement is still running is not released (N-261): the
+// release cancels it, and with no page attached nobody would know — a long
+// statement started, the browser tab closed (or discarded by Chrome), and
+// an hour later it was cancelled and its transaction rolled back, in
+// silence. Its window is left unreleased, so the next tick tries again
+// once the run is over; the forget rule still ends a window abandoned for
+// good. A session released while it may have held a transaction leaves
+// the tab a note (releaseIdle), said when a page next attaches.
 func (h *hub) reap(now time.Time) {
 	var release []*tab
 	var forget []*window
@@ -276,8 +291,20 @@ func (h *hub) reap(now time.Time) {
 		}
 	}
 	h.mu.Unlock()
+	var retry []*window
 	for _, t := range release {
-		goSafe(nil, "releasing an idle tab", t.ws.Close)
+		if t.ws.Busy() {
+			retry = append(retry, t.win)
+			continue
+		}
+		goSafe(nil, "releasing an idle tab", func() { h.releaseIdle(t) })
+	}
+	if len(retry) > 0 {
+		h.mu.Lock()
+		for _, w := range retry {
+			w.released = false
+		}
+		h.mu.Unlock()
 	}
 	for i, w := range forget {
 		goSafe(nil, "forgetting a window", func() {
@@ -292,6 +319,40 @@ func (h *hub) reap(now time.Time) {
 	// windows' marks for them go
 	if len(forget) > 0 {
 		h.announceInUse()
+	}
+}
+
+// releaseIdle closes an idle tab's session. One that may have held a
+// transaction (Session's stateful) leaves the tab a note: the page that
+// comes back would otherwise find the "session state" badge simply gone,
+// and the rest of a BEGIN … COMMIT it was in the middle of would run in
+// autocommit on a new session.
+func (h *hub) releaseIdle(t *tab) {
+	conn, stateful := t.ws.Session()
+	t.ws.Close()
+	if stateful {
+		note := fmt.Sprintf("this tab's session on %s was released after %s with no page attached: "+
+			"any open transaction was rolled back, and SET values and temp tables went with it — "+
+			"what runs next runs on a new session", conn, h.releaseAfter)
+		t.released.Store(&note)
+	}
+}
+
+// sayReleased tells w's tabs what the idle reaper did to them while no page
+// was attached, once one is: a log line in each tab released with state.
+// It runs beside handleEvents, which blocks for the stream's life, so it
+// waits (briefly) for the stream to be counted before it sends.
+func (h *hub) sayReleased(w *window) {
+	for i := 0; i < 150 && w.sse.ClientCount() == 0; i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+	h.mu.Lock()
+	ts := h.tabsOfLocked(w)
+	h.mu.Unlock()
+	for _, t := range ts {
+		if note := t.released.Swap(nil); note != nil {
+			t.logOn("", "warn", *note)
+		}
 	}
 }
 

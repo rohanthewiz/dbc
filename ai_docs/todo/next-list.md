@@ -78,19 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-261** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  dbc web's idle reaper cancels running statements and tells nobody.
-  `web/hub.go:273-281` calls `t.ws.Close()` on every tab of a window that
-  has had no stream attached for `conn_idle_timeout` (1 h);
-  `workspace/workspace.go:638` shows `Close` calls `Stop()` first, and
-  `Busy()` is never checked. Scenario: start a long statement, close the
-  browser tab (or Chrome discards it); an hour later it is cancelled, and
-  an open transaction is rolled back. `wsState` (`web/api.go:245-288`) has
-  no "released" field, so on return the "session state" badge is just
-  gone and the rest of a `BEGIN … COMMIT` sequence runs in autocommit.
-  Fix: skip busy tabs, record the release, and show it in state plus a
-  log line when a stream reattaches. Read here (`hub.go`).
-  (RPU plan, phase 1)
 - **N-262** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   The formatter rewrites operators it does not know
   (`sqlsplit/format.go:403` `fmtOps`, `:965` `fmtUnary`). Split into two
@@ -1211,6 +1198,20 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-261** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  dbc web's idle reaper cancels running statements and tells nobody.
+  `web/hub.go:273-281` calls `t.ws.Close()` on every tab of a window that
+  has had no stream attached for `conn_idle_timeout` (1 h);
+  `workspace/workspace.go:638` shows `Close` calls `Stop()` first, and
+  `Busy()` is never checked. Scenario: start a long statement, close the
+  browser tab (or Chrome discards it); an hour later it is cancelled, and
+  an open transaction is rolled back. `wsState` (`web/api.go:245-288`) has
+  no "released" field, so on return the "session state" badge is just
+  gone and the rest of a `BEGIN … COMMIT` sequence runs in autocommit.
+  Fix: skip busy tabs, record the release, and show it in state plus a
+  log line when a stream reattaches. Read here (`hub.go`).
+  (RPU plan, phase 1)
+  closed 2026-11-10 (RPU plan, phase 1): the reaper skips a tab whose workspace is `Busy` and leaves its window unreleased, so the next tick tries again once the run is over (the day-long forget rule still ends an abandoned window). A release now goes through `releaseIdle`, which reads `Session` first: a session that may have held a transaction leaves the tab a note (`tab.released`). When a page attaches the window's stream again (`handleEvents` → `sayReleased`, beside the blocking stream handler, after the client is counted), each such tab gets a warn line in its log — "this tab's session on X was released after 1h0m0s with no page attached: any open transaction was rolled back, and SET values and temp tables went with it — what runs next runs on a new session" — background tabs included, as the page files log lines by tab. No page change; the item's "released" field in `wsState` was not needed for that. Tests: `TestIdleReleaseSparesARunningStatement` (a script waiting on its context survives a 2 h idle reap; on the old reaper it was cancelled) and `TestIdleTabReleasedThenForgotten`, which now reattaches a stream and reads the note (absent on the old code) before the forget.
 - **N-260** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   dbc web's background goroutines have no `recover` (`web/hub.go:508-523`,
   `:799-823`, `web/routines.go:112,212`, among others; the only `recover`

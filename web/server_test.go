@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -548,9 +549,74 @@ func TestIdleTabReleasedThenForgotten(t *testing.T) {
 	}
 	e.api("GET", "/api/v1/ws/"+id, "", 200) // released, not forgotten
 
+	// a page attaching again hears what happened while it was gone
+	// (N-261): the badge alone would just be gone, and the rest of the
+	// BEGIN … COMMIT would run in autocommit
+	res := e.req("GET", "/api/v1/ws/"+id+"/events", "", nil)
+	sc := bufio.NewScanner(res.Body)
+	heard := false
+	for deadline := time.Now().Add(5 * time.Second); !heard && time.Now().Before(deadline) && sc.Scan(); {
+		heard = strings.Contains(sc.Text(), "was released after") && strings.Contains(sc.Text(), "rolled back")
+	}
+	if !heard {
+		t.Error("the reattached page was not told its session was released")
+	}
+	_ = res.Body.Close()
+	for deadline := time.Now().Add(3 * time.Second); tb.win.sse.ClientCount() > 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("the second stream never detached")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
 	e.srv.hub.reap(now.Add(25 * time.Hour))
 	e.api("GET", "/api/v1/ws/"+id, "", 404)
 }
+
+// TestIdleReleaseSparesARunningStatement is N-261: the idle reaper used to
+// release a tab whose statement was still running — the browser tab
+// closed mid-statement — cancelling it, rolling its transaction back, and
+// telling nobody. A busy tab is now left alone until its run ends.
+func TestIdleReleaseSparesARunningStatement(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	tb, _ := e.srv.hub.get(id)
+	// a run the test holds open: a script that waits for its context
+	script := filepath.Join(t.TempDir(), "wait.go")
+	if err := os.WriteFile(script, []byte("//go:build ignore\n\npackage main\n\nimport \"github.com/rohanthewiz/dbc/sdb\"\n\n"+
+		"func Run(s *sdb.S) error {\n\t<-s.Ctx().Done()\n\treturn s.Ctx().Err()\n}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := tb.ws.RunScript(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.srv.launch(tb, st)
+	_ = s.body.Close()
+	for deadline := time.Now().Add(3 * time.Second); tb.win.sse.ClientCount() > 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("the stream never detached")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	now := time.Now()
+	e.srv.hub.reap(now)
+	e.srv.hub.reap(now.Add(2 * time.Hour))
+	time.Sleep(100 * time.Millisecond) // a release, had there been one, runs off the reaper
+	if !tb.ws.Busy() {
+		t.Fatal("the idle reaper cancelled a running statement")
+	}
+	// once the run is over, the next tick releases the tab
+	tb.ws.Stop()
+	for deadline := time.Now().Add(3 * time.Second); tb.ws.Busy(); {
+		if time.Now().After(deadline) {
+			t.Fatal("the run never stopped")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	e.srv.hub.reap(now.Add(3 * time.Hour))
+}
+
 
 // ---------------------------------------------------------------------------
 // Tabs, layout, and the error mapping

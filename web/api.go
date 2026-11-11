@@ -376,6 +376,8 @@ func (s *Server) handleEvents(ctx rweb.Context) error {
 		return fail(ctx, err)
 	}
 	ctx.Response().SetHeader("Cache-Control", "no-store")
+	// a page attaching after the idle reaper released a session hears so
+	goSafe(nil, "a reattach's notes", func() { s.hub.sayReleased(t.win) })
 	return t.win.sse.Handler(s.rw)(ctx)
 }
 

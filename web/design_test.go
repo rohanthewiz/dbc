@@ -244,4 +244,12 @@ func TestDesignImportRoute(t *testing.T) {
 	if env = e.api("POST", path, runBody("  ", 0, false), 400); !strings.Contains(env.Error, "nothing to open") {
 		t.Fatalf("empty = %q", env.Error)
 	}
+	// N-259: a million brackets (2 MB, under the 4 MB request cap) used to
+	// overflow the parser's stack, a fatal error that ended dbc web; now
+	// it is a refusal like the others, and the server goes on serving
+	deep := "SELECT id FROM orders WHERE id = " + strings.Repeat("(", 1_000_000) + "1" + strings.Repeat(")", 1_000_000)
+	if env = e.api("POST", path, runBody(deep, 0, false), 400); !strings.Contains(env.Error, "levels deep") {
+		t.Fatalf("deep = %.200q", env.Error)
+	}
+	e.api("POST", path, runBody("SELECT id FROM orders", 0, false), 200)
 }

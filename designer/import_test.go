@@ -349,3 +349,28 @@ func TestImportRefuses(t *testing.T) {
 		t.Fatalf("line %d: %v", ie.Line, ie)
 	}
 }
+
+// TestImportDepth is N-259: nesting without end — brackets, stacked NOTs
+// or signs, subqueries — is refused with a reason past maxDepth, where a
+// million brackets (2 MB, under dbc web's request cap) ran the parser into
+// Go's fatal stack overflow, which no recover catches. Nesting within the
+// limit still imports.
+func TestImportDepth(t *testing.T) {
+	cat := shopCat()
+	deep := func(open, close string, n int) string { return strings.Repeat(open, n) + "1" + strings.Repeat(close, n) }
+	for _, c := range []struct{ name, sql string }{
+		{"brackets", "SELECT id FROM orders WHERE id = " + deep("(", ")", 1_000_000)},
+		{"signs", "SELECT id FROM orders WHERE id = " + deep("- ", "", 100_000)},
+		{"NOTs", "SELECT id FROM orders WHERE " + strings.Repeat("NOT ", 100_000) + "id = 1"},
+		{"subqueries", "SELECT id FROM orders WHERE id = " + strings.Repeat("(SELECT ", 10_000) + "1" + strings.Repeat(")", 10_000)},
+	} {
+		_, _, err := Import(c.sql, cat)
+		var ie *ImportError
+		if !errors.As(err, &ie) || !strings.Contains(ie.Reason, "levels deep") {
+			t.Errorf("%s: %v, want the depth refusal", c.name, err)
+		}
+	}
+	if _, _, err := Import("SELECT id FROM orders WHERE id = "+deep("(", ")", 100), cat); err != nil {
+		t.Errorf("100 brackets: %v", err)
+	}
+}

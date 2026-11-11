@@ -309,6 +309,27 @@ type parser struct {
 	toks []token
 	i    int
 	sql  string
+	// depth counts the recursion in flight (deeper): brackets, subqueries,
+	// stacked NOTs and signs each take a level.
+	depth int
+}
+
+// maxDepth bounds the parser's recursion. Every nesting the grammar allows
+// recurses — `((((x))))`, `NOT NOT x`, `- - x`, a subquery in a subquery —
+// and nothing else stopped it: `WHERE c.id = ((((…1…))))` a million deep
+// (2 MB, under dbc web's 4 MB request cap) ended in Go's fatal "stack
+// overflow", which no recover catches, so it took dbc web down with every
+// tab's session (N-259). A query a person writes nests a few levels; a
+// generated one a few dozen. Past this the import says why and stops.
+const maxDepth = 500
+
+// deeper enters one level of nesting, failing past maxDepth; each
+// successful call is paired with a p.depth-- on the way out.
+func (p *parser) deeper() error {
+	if p.depth++; p.depth > maxDepth {
+		return p.fail(p.peek().pos, "nested more than "+strconv.Itoa(maxDepth)+" levels deep (brackets, subqueries, NOTs or signs): the designer reads no deeper")
+	}
+	return nil
 }
 
 func (p *parser) peek() token { return p.toks[p.i] }
@@ -454,6 +475,12 @@ func parseStatement(toks []token, sql string) (*sel, error) {
 
 // parseSelect reads SELECT … up to the end of its last clause.
 func (p *parser) parseSelect() (*sel, error) {
+	// a subquery in FROM recurses through here and parseFrom alone, with
+	// no parseExpr between, so the level is counted here too
+	if err := p.deeper(); err != nil {
+		return nil, err
+	}
+	defer func() { p.depth-- }()
 	s := &sel{pos: p.next().pos, limit: -1}
 	if p.take("distinct") {
 		if p.is("on") {
@@ -786,7 +813,13 @@ func (p *parser) nameNext(want string) (string, bool, error) {
 
 // ── expressions ────────────────────────────────────────────────────────
 
-func (p *parser) parseExpr() (*ex, error) { return p.parseOr() }
+func (p *parser) parseExpr() (*ex, error) {
+	if err := p.deeper(); err != nil {
+		return nil, err
+	}
+	defer func() { p.depth-- }()
+	return p.parseOr()
+}
 
 func (p *parser) parseOr() (*ex, error) {
 	a, err := p.parseAnd()
@@ -839,7 +872,11 @@ func (p *parser) parseNot() (*ex, error) {
 			e.not, e.pos = true, pos
 			return e, nil
 		}
+		if err := p.deeper(); err != nil { // NOT NOT … recurses here
+			return nil, err
+		}
 		k, err := p.parseNot()
+		p.depth--
 		if err != nil {
 			return nil, err
 		}
@@ -1012,7 +1049,11 @@ func (p *parser) parseAdd() (*ex, error) {
 func (p *parser) parseUnary() (*ex, error) {
 	if t := p.peek(); t.kind == tPunct && (t.val == "-" || t.val == "+") {
 		p.next()
+		if err := p.deeper(); err != nil { // - - … recurses here
+			return nil, err
+		}
 		k, err := p.parseUnary()
+		p.depth--
 		if err != nil {
 			return nil, err
 		}

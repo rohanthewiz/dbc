@@ -78,14 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-259** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  `designer.Import`'s expression recursion has no depth cap
-  (`designer/importparse.go:1080-1106`). `WHERE c.id = ((((…1…))))` a
-  million deep (2 MB, under dbc web's 4 MB `maxBuffer`) ends in
-  `fatal error: stack overflow`, which no `recover` catches, so it takes
-  dbc web down with every tab's session; 100k deep takes 400 ms. Fix: a
-  depth counter in the parser that returns an `ImportError`. Audit, run.
-  (RPU plan, phase 1)
 - **N-260** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   dbc web's background goroutines have no `recover` (`web/hub.go:508-523`,
   `:799-823`, `web/routines.go:112,212`, among others; the only `recover`
@@ -1227,6 +1219,15 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-259** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  `designer.Import`'s expression recursion has no depth cap
+  (`designer/importparse.go:1080-1106`). `WHERE c.id = ((((…1…))))` a
+  million deep (2 MB, under dbc web's 4 MB `maxBuffer`) ends in
+  `fatal error: stack overflow`, which no `recover` catches, so it takes
+  dbc web down with every tab's session; 100k deep takes 400 ms. Fix: a
+  depth counter in the parser that returns an `ImportError`. Audit, run.
+  (RPU plan, phase 1)
+  closed 2026-11-10 (RPU plan, phase 1): the parser counts its nesting (`parser.depth`, `deeper`) where every recursion passes — `parseExpr`, `parseSelect` (a subquery in FROM recurses without parseExpr between), and the self-recursion of stacked NOTs and signs — and past `maxDepth` (500) returns an `ImportError` ("nested more than 500 levels deep …"), a refusal like any other. Tests: `designer.TestImportDepth` (a million brackets, 100k signs, 100k NOTs, 10k nested subqueries all refused; 100 brackets import) and a case in `web.TestDesignImportRoute`: the million brackets posted to `…/design/import` get a 400 and the next import works. On the old parser both tests die with `fatal error: stack overflow` — the web one taking its test server, as it took dbc web.
 - **N-258** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   A script result with a short row panics the grid. `tui/grid.go:305`
   indexes `g.res.Rows[ri][rc]` unguarded (the `Raw` read two lines above

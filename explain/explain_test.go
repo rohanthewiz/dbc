@@ -449,6 +449,10 @@ func TestStrip(t *testing.T) {
 		{"/* c */ explain select 1", "select 1", false, true},
 		{"EXPLAIN", "EXPLAIN", false, false},
 		{"explainer SELECT 1", "explainer SELECT 1", false, false},
+		// N-264: MySQL's bracketed query after EXPLAIN is the statement,
+		// not an option list
+		{"EXPLAIN (SELECT 1) UNION (SELECT 2)", "(SELECT 1) UNION (SELECT 2)", false, true},
+		{"EXPLAIN ANALYZE ((SELECT 1))", "((SELECT 1))", true, true},
 	}
 	for _, c := range cases {
 		inner, analyze, ok := Strip(c.in)
@@ -511,18 +515,36 @@ func TestDetect(t *testing.T) {
 	}
 
 	tree, _ := os.ReadFile("testdata/my_tree_join.txt")
-	res = &model.Result{Columns: []string{"EXPLAIN"}, Rows: [][]string{{string(tree)}}}
+	res = &model.Result{Query: "EXPLAIN FORMAT=TREE SELECT 1", Columns: []string{"EXPLAIN"}, Rows: [][]string{{string(tree)}}}
 	if p, ok = Detect(res, "mysql"); !ok || p.Engine != MySQL {
 		t.Fatalf("mysql tree: ok=%v", ok)
 	}
 
 	cols, rows := loadTable(t, "my_tabular_join.tsv")
-	if _, ok = Detect(&model.Result{Columns: cols, Rows: rows}, "mysql"); !ok {
+	if _, ok = Detect(&model.Result{Query: "EXPLAIN SELECT 1", Columns: cols, Rows: rows}, "mysql"); !ok {
 		t.Fatal("mysql table")
 	}
-	res = &model.Result{Columns: []string{"id", "parent", "notused", "detail"}, Rows: [][]string{{"2", "0", "0", "SCAN cats"}}}
+	// MySQL's DESCRIBE of a statement is EXPLAIN
+	if _, ok = Detect(&model.Result{Query: "DESCRIBE SELECT 1", Columns: cols, Rows: rows}, "mysql"); !ok {
+		t.Fatal("mysql DESCRIBE SELECT")
+	}
+	res = &model.Result{Query: "EXPLAIN QUERY PLAN SELECT * FROM cats", Columns: []string{"id", "parent", "notused", "detail"},
+		Rows: [][]string{{"2", "0", "0", "SCAN cats"}}}
 	if p, ok = Detect(res, "sqlite"); !ok || p.Engine != SQLite {
 		t.Fatal("sqlite")
+	}
+	// N-264: a plan's columns from a statement that is no EXPLAIN are an
+	// ordinary result — a table with id, parent and detail, a column
+	// aliased "QUERY PLAN"
+	res = &model.Result{Query: "SELECT id, parent, detail FROM categories", Columns: []string{"id", "parent", "detail"},
+		Rows: [][]string{{"1", "0", "books"}, {"2", "1", "novels"}}}
+	if _, ok = Detect(res, "postgres"); ok {
+		t.Error("SELECT id, parent, detail was taken for a SQLite plan")
+	}
+	res = &model.Result{Query: `SELECT 'Seq Scan on t' AS "QUERY PLAN"`, Columns: []string{"QUERY PLAN"},
+		Rows: [][]string{{"Seq Scan on t  (cost=0.00..1.00 rows=1 width=4)"}}}
+	if _, ok = Detect(res, "postgres"); ok {
+		t.Error("a column aliased QUERY PLAN was taken for a plan")
 	}
 	if _, ok = Detect(&model.Result{Columns: []string{"id", "name"}, Rows: [][]string{{"1", "x"}}}, "sqlite"); ok {
 		t.Error("an ordinary result is not a plan")

@@ -78,15 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-264** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  `explain.Detect` never checks the statement was an EXPLAIN
-  (`explain/detect.go:252-296`, used at `workspace/run.go:599`).
-  `SELECT id, parent, detail FROM categories` on Postgres returns
-  `ok=true`, engine sqlite, "3 steps": it replaces the connection's real
-  plan and can go to the assistant. A column aliased `"QUERY PLAN"` does
-  the same. Fix: require `Strip(r.Query)` to succeed. Also
-  `Strip("EXPLAIN (SELECT 1) UNION (SELECT 2)")` returns
-  `"UNION (SELECT 2)"` (`detect.go:38`). Audit, run. (RPU plan, phase 1)
 - **N-265** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   dbc web's tab and console saves fail silently.
   `web/static/js/app.js:3948-3953` handles only a 409; a 400 (over 4 MB),
@@ -1180,6 +1171,16 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-264** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  `explain.Detect` never checks the statement was an EXPLAIN
+  (`explain/detect.go:252-296`, used at `workspace/run.go:599`).
+  `SELECT id, parent, detail FROM categories` on Postgres returns
+  `ok=true`, engine sqlite, "3 steps": it replaces the connection's real
+  plan and can go to the assistant. A column aliased `"QUERY PLAN"` does
+  the same. Fix: require `Strip(r.Query)` to succeed. Also
+  `Strip("EXPLAIN (SELECT 1) UNION (SELECT 2)")` returns
+  `"UNION (SELECT 2)"` (`detect.go:38`). Audit, run. (RPU plan, phase 1)
+  closed 2026-11-10 (RPU plan, phase 1): `Detect` first requires the result's own statement to ask for a plan (`isPlanQuery`): an EXPLAIN by `Strip`, or MySQL's `DESCRIBE`/`DESC` of a statement (its synonym; DESCRIBE of a table lists columns and stays no plan). `Strip` reads a bracket after EXPLAIN that holds a query (SELECT, WITH, VALUES, TABLE first — `parenQuery`) as the statement, not an option list, so MySQL's `EXPLAIN (SELECT 1) UNION (SELECT 2)` strips to `(SELECT 1) UNION (SELECT 2)`. Tests: `TestDetect` (SELECT id, parent, detail on Postgres, and a column aliased "QUERY PLAN", are no plans; `DESCRIBE SELECT` is; the plan fixtures now carry the EXPLAIN that made them, as every db result does) and `TestStrip` (the bracketed UNION, and `EXPLAIN ANALYZE ((SELECT 1))`); all four new cases fail on the old code.
 - **N-263** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   A nested script run releases the outer script's Readers and Writers.
   `go.action` and `script.run` call `script.run()` on the same session

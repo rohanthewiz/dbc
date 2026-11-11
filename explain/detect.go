@@ -34,6 +34,11 @@ func Strip(stmt string) (inner string, analyze, ok bool) {
 	for {
 		w := strings.ToLower(firstWord(s))
 		switch {
+		case strings.HasPrefix(s, "(") && parenQuery(s):
+			// MySQL's EXPLAIN (SELECT …) UNION (SELECT …): the bracket
+			// opens the statement, not an option list — read as options,
+			// it left "UNION (SELECT …)" as the statement
+			return s, analyze, true
 		case strings.HasPrefix(s, "("):
 			end := strings.IndexByte(s, ')')
 			if end < 0 {
@@ -65,6 +70,39 @@ func Strip(stmt string) (inner string, analyze, ok bool) {
 			return s, analyze, true
 		}
 	}
+}
+
+// parenQuery reports whether the bracket s opens holds a query — SELECT,
+// WITH, VALUES or TABLE first, past more brackets and blanks — rather
+// than EXPLAIN's options (ANALYZE, FORMAT JSON …).
+func parenQuery(s string) bool {
+	s = strings.TrimLeft(s, "( \t\r\n")
+	switch strings.ToLower(firstWord(s)) {
+	case "select", "with", "values", "table":
+		return true
+	}
+	return false
+}
+
+// isPlanQuery reports whether stmt asks for a plan: an EXPLAIN (Strip), or
+// MySQL's DESCRIBE or DESC of a statement, its synonym — DESCRIBE of a
+// table lists columns, and is no plan.
+func isPlanQuery(stmt string) bool {
+	if _, _, ok := Strip(stmt); ok {
+		return true
+	}
+	s := skipLeadingComments(stmt)
+	switch strings.ToLower(firstWord(s)) {
+	case "describe", "desc":
+	default:
+		return false
+	}
+	rest := strings.TrimSpace(s[len(firstWord(s)):])
+	switch strings.ToLower(firstWord(rest)) {
+	case "select", "insert", "update", "delete", "replace", "with", "table", "format", "analyze":
+		return true
+	}
+	return strings.HasPrefix(rest, "(")
 }
 
 // firstWord is the leading run of letters, digits and underscores.
@@ -249,8 +287,14 @@ func (p *Plan) ResolveAliases(stmt string) {
 // EXPLAIN the user ran themselves — and parses it, so the grid can offer
 // "show as plan". driver names the engine the result came from. ok is false
 // for any other result.
+//
+// The result's own statement must ask for a plan (isPlanQuery). The
+// columns alone are not enough: `SELECT id, parent, detail FROM
+// categories` has SQLite's plan columns, and a column aliased
+// "QUERY PLAN" Postgres's, and either replaced the connection's real
+// plan and could go to the assistant as one (N-264).
 func Detect(r *model.Result, driver string) (*Plan, bool) {
-	if r == nil || r.IsExec || len(r.Columns) == 0 || len(r.Rows) == 0 {
+	if r == nil || r.IsExec || len(r.Columns) == 0 || len(r.Rows) == 0 || !isPlanQuery(r.Query) {
 		return nil, false
 	}
 	cols := make([]string, len(r.Columns))

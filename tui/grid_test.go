@@ -348,3 +348,20 @@ func TestGridSizesNumericColumnsFromEveryRow(t *testing.T) {
 		t.Errorf("text width = %d, want 3 (header + arrow; sampled rows are \"x\")", g.widths[1])
 	}
 }
+
+// TestGridShortRow is N-258's backstop: a result row shorter than its
+// columns (sdb.Show evens a script's out, but not every result comes
+// through it) draws its missing cells blank instead of panicking.
+func TestGridShortRow(t *testing.T) {
+	g := newGrid()
+	g.setResult(&model.Result{
+		Columns: []string{"a", "b", "c"},
+		Rows:    [][]string{{"1"}, {"1", "2", "3"}},
+	}, 0, false)
+	if s, _, ok := g.value(0, 2); !ok || s != "" {
+		t.Errorf("value(0, 2) = %q, %v; want a blank cell", s, ok)
+	}
+	if f := drawGrid(g, 60, 8).Text(); !strings.Contains(f, "3") {
+		t.Errorf("the full row is not drawn:\n%s", f)
+	}
+}

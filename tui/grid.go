@@ -302,6 +302,12 @@ func (g *grid) value(row, col int) (string, any, bool) {
 	if ri < len(g.res.Raw) && rc < len(g.res.Raw[ri]) {
 		raw = g.res.Raw[ri][rc]
 	}
+	// a row shorter than the columns is missing that cell; sdb.Show evens
+	// a script's rows out (N-258), and this keeps any other short row a
+	// blank cell rather than a panic on the event loop
+	if rc >= len(g.res.Rows[ri]) {
+		return "", raw, true
+	}
 	return g.res.Rows[ri][rc], raw, true
 }
 

@@ -273,7 +273,47 @@ func (s *S) Show(r *Result) {
 	if r == nil || s.show == nil {
 		return
 	}
-	s.show(r)
+	s.show(evenRows(r))
+}
+
+// evenRows is r with every row exactly as wide as its columns. A result a
+// script builds by hand may have a short row, or a long one, and every
+// consumer indexes a row by column — the TUI's grid (where a short row
+// panicked on the event loop), dbc web's, the exports (N-258). A short row
+// is padded with "" (Raw with nil, a NULL) and a long one cut. r itself is
+// left alone, as the script may reuse it: a result that needs no change is
+// returned as is, any other as a copy with new row slices.
+func evenRows(r *Result) *Result {
+	n := len(r.Columns)
+	even := true
+	for _, row := range r.Rows {
+		even = even && len(row) == n
+	}
+	for _, row := range r.Raw {
+		even = even && len(row) == n
+	}
+	if even {
+		return r
+	}
+	c := *r
+	c.Rows = make([][]string, len(r.Rows))
+	for i, row := range r.Rows {
+		c.Rows[i] = fit(row, n)
+	}
+	if r.Raw != nil {
+		c.Raw = make([][]any, len(r.Raw))
+		for i, row := range r.Raw {
+			c.Raw[i] = fit(row, n)
+		}
+	}
+	return &c
+}
+
+// fit is row cut or zero-padded to n values, in a slice of its own.
+func fit[T any](row []T, n int) []T {
+	out := make([]T, n)
+	copy(out, row)
+	return out
 }
 
 // Print writes a Printf-style message to the script output.

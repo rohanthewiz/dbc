@@ -78,13 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-258** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  A script result with a short row panics the grid. `tui/grid.go:305`
-  indexes `g.res.Rows[ri][rc]` unguarded (the `Raw` read two lines above
-  and the width loop at `:237` are guarded); `s.Show` passes a hand-built
-  `model.Result` through unnormalised (`workspace/run.go:393-403`). Fix:
-  bounds-check in `value()`, or pad rows in `showLocked`. Read here.
-  (RPU plan, phase 1)
 - **N-259** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   `designer.Import`'s expression recursion has no depth cap
   (`designer/importparse.go:1080-1106`). `WHERE c.id = ((((…1…))))` a
@@ -1234,6 +1227,14 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-258** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  A script result with a short row panics the grid. `tui/grid.go:305`
+  indexes `g.res.Rows[ri][rc]` unguarded (the `Raw` read two lines above
+  and the width loop at `:237` are guarded); `s.Show` passes a hand-built
+  `model.Result` through unnormalised (`workspace/run.go:393-403`). Fix:
+  bounds-check in `value()`, or pad rows in `showLocked`. Read here.
+  (RPU plan, phase 1)
+  closed 2026-11-10 (RPU plan, phase 1): both. `sdb.S.Show` hands on `evenRows(r)`: a result whose rows (and Raw rows) are not all as wide as its columns is copied with each row padded ("" / nil) or cut, so every consumer — the TUI's grid, dbc web's (`web/grid.go:182,210` index the same way), the exports — gets even rows; the script's own result is left alone, and an even one passes through uncopied. The TUI grid's `value` also returns a blank cell past a short row's end, for any result that does not come through Show. Tests: `sdb.TestShowEvensRows`, `tui.TestGridShortRow` (on the old grid it panics: index out of range [2] with length 1). Headless, a script showing a short row did not crash before either (the text writer copes); it now prints the row padded.
 - **N-257** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   An open transaction is guarded on tab close (`tui/tabs.go:462`) and
   nowhere else. `interrupt()` when idle and `quitCmd`

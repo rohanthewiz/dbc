@@ -18,6 +18,7 @@ package sqlsplit
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Stmt is one statement found in a buffer.
@@ -108,6 +109,11 @@ func (d Dialect) Split(sql string) []Stmt {
 		// starts on a token boundary (only blanks were skipped to reach
 		// Start), so it cannot mistake a comment's inside for code
 		code := codeAt(sql, start, d)
+		if code >= end {
+			// all its "code" was a Unicode blank the scan counted and the
+			// trim took (U+2000 before a comment): nothing to run
+			continue
+		}
 		// drop heading comments a blank line cuts off from the code; start
 		// only moves forward, onto a comment or the code itself, so Text
 		// stays a trimmed slice of the buffer
@@ -836,11 +842,14 @@ func (d Dialect) dollarTag(s string, i int) (string, bool) {
 	// a$b: the $ continues the name — and so does every $ of a run after
 	// one (a$$$), as a word is read (FuzzSplit found 0$$$ read as one word
 	// by the scan and as 0, $ and a quote by Lex)
+	// A byte past ASCII counts as a name's too: Postgres takes UTF-8
+	// letters into names (é$$ is one), as the formatter does (fmtWordByte)
+	// — FuzzFormat found the two parting on one.
 	k := i
 	for k > 0 && s[k-1] == '$' {
 		k--
 	}
-	if k > 0 && isWordByte(s[k-1]) {
+	if k > 0 && (isWordByte(s[k-1]) || s[k-1] >= utf8.RuneSelf) {
 		return "", false
 	}
 	j := i + 1

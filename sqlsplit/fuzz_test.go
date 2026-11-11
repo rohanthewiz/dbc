@@ -123,3 +123,58 @@ func hasDelimiterCmd(sql string, d Dialect) bool {
 	}
 	return false
 }
+
+// FuzzFormat holds the formatter to what makes it safe to press (N-302):
+// layout, never meaning. For every dialect:
+//
+//   - nothing panics
+//   - the output splits into as many statements as the input: a sign glued
+//     into -- (N-262) commented a ; out and merged two
+//   - the output holds the input's characters, whitespace, letter case
+//     and semicolons aside: no token dropped, doubled or invented (an
+//     empty statement's ; is dropped by design; where the statements
+//     end is the check above)
+//
+// The last two compare with what Format lays out, which is the input
+// after Unwrap; an input Unwrap rewrites (log prose, a quoted query) or a
+// MySQL one naming DELIMITER (a script formatted around it, not through
+// it) is checked for panics only. Run at length by hand:
+//
+//	go test -run '^$' -fuzz '^FuzzFormat$' -fuzztime 5m ./sqlsplit
+func FuzzFormat(f *testing.F) {
+	for _, s := range []string{
+		"select a, b from t where a = 1 and b in (select id from u) order by 1",
+		"SELECT - -1, 2; SELECT 3",
+		"select a <=> b, v <-> w, j ?| array['a'], j #- '{a}', x == y from t",
+		"select a=-1, b*-2, U&'d\\0061t', U&\"x\" from t",
+		"select 1+-- note\n2; select 2",
+		"with x as (select 1) select * from x; update t set a = case when b then 1 else 2 end",
+		"create trigger t after delete on o begin delete from i; end; select 1",
+		"DELIMITER //\nCREATE PROCEDURE p() BEGIN SELECT 1; END //\nDELIMITER ;\nselect 2;",
+		"select a # c;\nfrom t", "select /*! 1 */ 2", "select $$a;b$$, $1, :n, ?, @v from t",
+	} {
+		for d := range Bytdb + 1 {
+			f.Add(s, uint8(d))
+		}
+	}
+	squeeze := func(s string) string {
+		return strings.ReplaceAll(strings.ToLower(strings.Join(strings.Fields(s), "")), ";", "")
+	}
+	f.Fuzz(func(t *testing.T, sql string, dn uint8) {
+		d := Dialect(dn % uint8(Bytdb+1))
+		out := d.Format(sql)
+		// on MySQL a statement that begins with the word DELIMITER is
+		// none (`DELIMITER!0`), and spaced out it reads as the client's
+		// command; no statement a server runs starts so, so it is not held
+		// to the comparisons
+		if unwrap(sql, d) != sql || (d == MySQL && strings.Contains(strings.ToLower(sql), "delimiter")) {
+			return
+		}
+		if a, b := len(d.Split(sql)), len(d.Split(out)); a != b {
+			t.Fatalf("%v: %d statements in, %d out\nin:  %q\nout: %q", d, a, b, sql, out)
+		}
+		if a, b := squeeze(sql), squeeze(out); a != b {
+			t.Fatalf("%v: the text changed beyond layout\nin:  %q\nout: %q", d, sql, out)
+		}
+	})
+}

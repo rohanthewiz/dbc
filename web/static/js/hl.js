@@ -276,7 +276,9 @@
         // a name
         let k = i;
         while (k > 0 && s[k - 1] === "$") k--; // a$$$: every $ of the run continues the name
-        const tag = (d === "postgres" || d === "") && !isWord(s[k - 1]) && s.slice(i).match(/^\$(?![0-9])\w*\$/);
+        // a letter past ASCII is a name's too (é$$ is one name), as in sqlsplit
+        const named = k > 0 && (isWord(s[k - 1]) || s[k - 1] > "\x7f");
+        const tag = (d === "postgres" || d === "") && !named && s.slice(i).match(/^\$(?![0-9])\w*\$/);
         if (tag) {
           const j = scanUntil(s, i + tag[0].length, tag[0], false);
           emit(i, j, "s"); i = j;

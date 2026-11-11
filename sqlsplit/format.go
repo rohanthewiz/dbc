@@ -626,9 +626,10 @@ func fmtLex(sql string, d Dialect) []ftok {
 					break
 				}
 			}
-			// 1abc is a word in MySQL (an identifier may start with a digit)
-			if j < len(sql) && fmtWordByte(sql[j]) {
-				for j < len(sql) && fmtWordByte(sql[j]) {
+			// 1abc is a word in MySQL (an identifier may start with a
+			// digit), and a $ continues it as it does any word (1a$b)
+			if j < len(sql) && (fmtWordByte(sql[j]) || sql[j] == '$') {
+				for j < len(sql) && (fmtWordByte(sql[j]) || sql[j] == '$') {
 					j++
 				}
 				add(ftWord, i, j)
@@ -1037,8 +1038,9 @@ func (w *fmtWriter) tok(t *ftok) {
 	if w.breakNext || (comment && t.nl && w.prev != nil && !w.flat) {
 		w.nl(w.indent)
 	}
-	// a glued sign is never written against an operator (fmtUnary)
-	if w.prev != nil && (!w.glue || t.kind == ftOp) && fmtSpace(w.prev, t) {
+	// a glued sign is never written against an operator or a comment
+	// (fmtUnary): `- --c` written `---c` is all comment
+	if w.prev != nil && (!w.glue || t.kind == ftOp || comment) && fmtSpace(w.prev, t) {
 		w.buf = append(w.buf, ' ')
 		w.col++
 	}
@@ -1106,9 +1108,10 @@ func fmtSpace(prev, t *ftok) bool {
 // operator — so the number after it attaches: "= -1", "(-x)", "THEN -1".
 //
 // The sign glues to what follows it, so it must never be followed by an
-// operator: `SELECT - -1` written as `SELECT --1` turned the rest of the
-// line into a comment (N-262), and `~ -1` written `~-1` is Postgres's
-// operator ~- (none). tok keeps a space before an operator after a sign.
+// operator or a comment: `SELECT - -1` written as `SELECT --1` turned the
+// rest of the line into a comment (N-262), `~ -1` written `~-1` is
+// Postgres's operator ~- (none), and `- --c` written `---c` is a comment
+// whole (FuzzFormat). tok keeps a space before either after a sign.
 func fmtUnary(prev, t *ftok) bool {
 	if t.kind != ftOp || (t.text != "-" && t.text != "+" && t.text != "~") {
 		return false

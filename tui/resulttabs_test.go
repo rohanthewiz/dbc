@@ -543,8 +543,23 @@ func TestRerunResultTab(t *testing.T) {
 
 	x, y := findText(t, frame(m), " 1⚑")
 	rightClick(t, m, x+1, y)
-	if m.menu == nil || !strings.Contains(menuLabels(m), "↻ Rerun its query") {
-		t.Fatalf("strip menu = %v", m.menu != nil)
+	// Copy query sits right under rerun, and puts the tab's whole
+	// statement on the clipboard — t.Stmt, not the strip's cut title
+	if m.menu == nil || !strings.Contains(menuLabels(m), "↻ Rerun query\n⧉ Copy query\n") {
+		t.Fatalf("strip menu = %q", func() string {
+			if m.menu == nil {
+				return "<none>"
+			}
+			return menuLabels(m)
+		}())
+	}
+	clipLog = nil
+	pickMenu(t, m, "⧉ Copy query")
+	if got := lastClip(t).Text; got != "SELECT count(*) AS n FROM tick" {
+		t.Errorf("copied %q, want the tab's statement", got)
+	}
+	if log := logText(m); !strings.Contains(log, "copied the query") {
+		t.Errorf("log: %s", log)
 	}
 	m.menu = nil
 }

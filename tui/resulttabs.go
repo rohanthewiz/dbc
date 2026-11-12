@@ -465,15 +465,28 @@ func (m *Model) resultTabItems() []menuItem {
 	// rerun goes through r's own path, so a write is asked about from the
 	// menu too: a menu row is one misclick from its neighbours (dbc web's
 	// row does the same). The menu acts on the current tab, which is t.
-	rerun := menuItem{label: "↻ Rerun its query", key: "r",
+	rerun := menuItem{label: "↻ Rerun query", key: "r",
 		act: func(m *Model) tea.Cmd { return m.rerunCurResultTab() }}
 	switch {
 	case t.Stmt == "":
 		rerun.why = "a script's results — run the script again to refresh them"
 	case t.Writes:
-		rerun.label = "↻ Rerun its query — it writes again"
+		rerun.label = "↻ Rerun query — it writes again"
 	}
-	items := []menuItem{rerun, pin, share,
+	// copy puts the tab's whole statement on the clipboard, as it was run
+	// (t.Stmt — not the title, which is a cut preview or the user's name
+	// for the tab). It sits under rerun: both act on the tab's query. No
+	// key of its own: y/Y are the grid's copies and c its menu when the
+	// grid has focus, and the strip's keys stay the ones its hint lists. A
+	// script's tab
+	// has no single statement, so the row says why it is off, as rerun's.
+	stmt := t.Stmt
+	cp := menuItem{label: "⧉ Copy query",
+		act: func(m *Model) tea.Cmd { return m.copyString(stmt, "the query") }}
+	if stmt == "" {
+		cp.why = "a script's results — there is no single query to copy"
+	}
+	items := []menuItem{rerun, cp, pin, share,
 		{label: "Close this result tab", key: "x", act: func(m *Model) tea.Cmd { return m.closeResultTab(t.ID, pos) }}}
 	tabs, _ := m.ws.ResultTabs()
 	if unpinned := countUnpinned(tabs); unpinned > 0 && n > 1 {

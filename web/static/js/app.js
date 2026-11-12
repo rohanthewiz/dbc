@@ -3781,8 +3781,13 @@
       { head: "result tab" },
       // picking the row is the ask, but a write still gets rerun's
       // confirm: a menu row is one misclick away from its neighbours
-      { label: "↻ Rerun its query" + (r.writes ? " — it writes again" : ""), key: "r",
+      { label: "↻ Rerun query" + (r.writes ? " — it writes again" : ""), key: "r",
         why: r.stmt ? "" : "a script's results — run the script again to refresh them", act: () => rerun(r) },
+      // the tab's whole statement as it was run (r.stmt, the tooltip's
+      // text — not the title, a cut preview or the user's name for the
+      // tab); a script's tab has none, and the row says so, as rerun's
+      { label: "⧉ Copy query", why: r.stmt ? "" : "a script's results — there is no single query to copy",
+        act: () => dbc.clip.copyText(r.stmt, "the query") },
       { label: r.pinned ? "Unpin — a run may replace it" : "Pin — a run opens a new tab instead", key: "P",
         act: () => resultTabOp(r.pinned ? "unpin" : "pin", r.id) },
       { label: r.shared ? "✦ Stop sharing with the assistant" : "✦ Share with the assistant", key: "S",

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -754,9 +755,19 @@ func resultTabsPerConn(t *testing.T, _ *env, p *rod.Page) {
 	  return b ? b.className + "|" + b.title : ""; }`); !strings.Contains(got, "off|") || !strings.Contains(got, "ai_rows = true on lite") {
 		t.Fatalf("the share row = %q", got)
 	}
-	if got := evalStr(t, p, `() => [...document.querySelectorAll(".menu .mitem")].map((m) => m.textContent).join("|")`); !strings.Contains(got, "↻ Rerun its query") {
+	// Copy query sits right under rerun; the row text may carry a key hint
+	if got := evalStr(t, p, `() => [...document.querySelectorAll(".menu .mitem")].map((m) => m.textContent).join("|")`); !regexp.MustCompile(`↻ Rerun query[^|]*\|⧉ Copy query`).MatchString(got) {
 		t.Fatalf("the strip menu = %q", got)
 	}
+	// Copy query puts the tab's whole statement on the clipboard (not the
+	// strip's title); the menu closes with the pick, so it is reopened
+	setClipboard(t, p, "sentinel")
+	menuPick(t, p, "⧉ Copy query")
+	waitFor(t, p, "the query copied", `() => [...document.querySelectorAll("#log > div")].some((d) => d.textContent.includes("copied the query"))`)
+	if got := clipboard(t, p); got != "SELECT name, age FROM cats ORDER BY id" {
+		t.Fatalf("the copied query = %q", got)
+	}
+	rightClick(t, p, `#rstrip .rt:nth-child(1)`)
 	menuPick(t, p, "Close this result tab")
 	waitFor(t, p, "one tab left, on screen, its result in the grid", `() => document.querySelectorAll("#rstrip .rt").length === 1 &&
 	  !!document.querySelector("#rstrip .rt.on") && !document.querySelector("#rstrip .pin") &&

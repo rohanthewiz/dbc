@@ -166,7 +166,7 @@ type rerunReq struct {
 
 // handleRerun is POST /api/v1/ws/:id/rerun {id}: result tab id's statement
 // run again into that tab (workspace.RerunResultTab) — the r key, and the
-// strip's "↻ Rerun its query". Refusals are a run's (busy → 409) or the
+// strip's "↻ Rerun query". Refusals are a run's (busy → 409) or the
 // tab's (gone, a script's → 400), logged as /run logs its own. Whether a
 // write should be asked about is the page's to ask (resultTabRef.Writes);
 // by the time this is called the user has said yes.

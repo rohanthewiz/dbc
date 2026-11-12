@@ -379,7 +379,7 @@ with no database picker.
 | `‹` on Connections · `›` on the left edge | click | fold the sidebar away · bring it back (`Ctrl+B`) |
 | assistant | `⤓ insert` on a code block | puts that SQL in the editor at the caret |
 | results title | click `Results` / `◈ Plan` | switches the results pane between the grid and the plan |
-| result tabs (the results pane's bottom border) | click · right-click | shows that result · rerun its query, pin or unpin, share with the assistant, close, close the unpinned ones (see [Result tabs](#result-tabs-and-the-log-per-connection)) |
+| result tabs (the results pane's bottom border) | click · right-click | shows that result · rerun its query, copy its query, pin or unpin, share with the assistant, close, close the unpinned ones (see [Result tabs](#result-tabs-and-the-log-per-connection)) |
 | ↻ after the result tab on screen | click | reruns its query into that tab, as `r` does (a statement that writes asks first) |
 | log title | click `⧉ copy` / `✕ clear` | copies the connection's log to the clipboard / empties it |
 | plan | click / double-click / right-click | select a step (fold it) / step menu: copy, zoom the flame graph, ask the assistant |
@@ -1485,7 +1485,7 @@ tab clears it. Empty the box to name the tab after its query again. The
 tab's tooltip still shows the statement.
 
 **Rerun** a tab (`r`, a click on the **↻** beside the tab on screen, or
-**↻ Rerun its query** on its right-click menu) to bring its result up to
+**↻ Rerun query** on its right-click menu) to bring its result up to
 date: its statement runs again, on the same session,
 and the fresh result goes back **into that same tab** — a pinned one
 included, which stays pinned, in its place in the strip, with its name (a
@@ -1497,6 +1497,8 @@ one at a time, `Ctrl+K` stops it, and if it fails the tab keeps its old
 result. A tab whose statement may write (an `INSERT`'s "n affected") asks
 before running it again, and a script's tab has no statement to rerun — run
 the script again instead. A rerun is not added to the history again.
+**⧉ Copy query**, just below it on the menu, puts the tab's whole statement
+on the clipboard, as it was run.
 
 A run of **several statements** (Run all, or a selection of several) opens
 a tab per statement that returns rows, as DBeaver and DataGrip do; an

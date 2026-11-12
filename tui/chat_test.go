@@ -275,12 +275,84 @@ func TestAssistantModelMenu(t *testing.T) {
 	m := newTestModel(t)
 	key(t, m, "ctrl+a")
 	pumpChat(t, m, func() bool { return m.chat.state == chatReady })
-	x, y := findText(t, frame(m), "✦ Copilot · Fast Model ▾")
+	// the default pane is narrow: the title sheds "effort" and the agent
+	// (chatTitle) — the model and its level are what it keeps
+	x, y := findText(t, frame(m), "✦ Fast Model · Medium ▾")
 	click(t, m, x, y)
 	mx, my := findText(t, frame(m), "Smart Model")
 	click(t, m, mx, my)
 	if m.chat.modelID != "smart" {
 		t.Errorf("model = %q", m.chat.modelID)
+	}
+}
+
+// The title menu's effort section lists the model's levels by name; picking
+// one sets it on the agent, says so, and shows in the title. A model switch
+// keeps the choice, and the menu then lists the new model's levels.
+func TestAssistantEffortMenu(t *testing.T) {
+	f := fakeAssistant(t, nil)
+	m := newTestModel(t)
+	key(t, m, "ctrl+a")
+	pumpChat(t, m, func() bool { return m.chat.state == chatReady })
+
+	x, y := findText(t, frame(m), "· Medium ▾")
+	click(t, m, x, y)
+	fr := frame(m)
+	findText(t, fr, "● Medium") // the level in force is marked
+	if strings.Contains(fr.String(), "Max") {
+		t.Error("Fast Model has no max level, yet the menu offers one")
+	}
+	mx, my := findText(t, fr, "  High")
+	click(t, m, mx, my)
+	if f.Effort() != "high" || m.chat.effort.Current != "high" {
+		t.Errorf("effort: agent %q, pane %q", f.Effort(), m.chat.effort.Current)
+	}
+	if !strings.Contains(m.chat.transcriptText(), "effort: High") {
+		t.Errorf("no transcript line for the change:\n%s", m.chat.transcriptText())
+	}
+
+	// switch model: the agent resets to medium, dbc asks for high again
+	x, y = findText(t, frame(m), "· High ▾")
+	click(t, m, x, y)
+	mx, my = findText(t, frame(m), "Smart Model")
+	click(t, m, mx, my)
+	pumpChat(t, m, func() bool { return len(m.chat.effort.Levels) == 4 && m.chat.effort.Current == "high" })
+	if f.Effort() != "high" {
+		t.Errorf("the choice was not re-applied after the switch: agent at %q", f.Effort())
+	}
+	x, y = findText(t, frame(m), "✦ Smart Model · High ▾")
+	click(t, m, x, y)
+	findText(t, frame(m), "  Max")
+}
+
+// The title sheds words before it truncates, and keeps the effort level
+// longest; without one it is the agent and model it always was.
+func TestChatTitleFits(t *testing.T) {
+	cases := []struct {
+		effort string
+		w      int
+		want   string
+	}{
+		{"high", 60, "✦ Copilot · Claude Sonnet 5.5 · high effort ▾"},
+		{"high", 40, "✦ Copilot · Claude Sonnet 5.5 · high ▾"},
+		{"high", 30, "✦ Claude Sonnet 5.5 · high ▾"},
+		{"high", 24, "✦ Claude Sonne… · high ▾"},
+		{"high", 14, "✦ Claude So… ▾"}, // no room left to shorten the model into
+		{"", 60, "✦ Copilot · Claude Sonnet 5.5 ▾"},
+		{"", 20, "✦ Copilot · Claud… ▾"},
+	}
+	for _, tc := range cases {
+		got := chatTitle("Copilot", "Claude Sonnet 5.5", tc.effort, tc.w)
+		if got != tc.want {
+			t.Errorf("effort %q in %d: got %q, want %q", tc.effort, tc.w, got, tc.want)
+		}
+		if width(got) > tc.w {
+			t.Errorf("effort %q in %d: %q is %d wide", tc.effort, tc.w, got, width(got))
+		}
+	}
+	// before the handshake: no model, no effort
+	if got := chatTitle("Copilot", "", "", 30); got != "✦ Copilot ▾" {
+		t.Errorf("unconnected title = %q", got)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,11 @@ import (
 //	"PERMISSION" → ask the client for permission mid-turn, then finish
 //	"SLOW"       → stream nothing until session/cancel arrives
 //	anything else → two text chunks, a tool call, end_turn
+//
+// Its reasoning effort behaves as Copilot's was measured to (effort.go):
+// levels per model (fakeLevels), a model switch answered first and then
+// reported as a config_option_update with the effort back at "medium", and
+// set_config_option refusing a level the model lacks.
 type fakeAgent struct {
 	t   *testing.T
 	in  *bufio.Reader  // what the client wrote
@@ -30,15 +36,59 @@ type fakeAgent struct {
 	permReply chan json.RawMessage
 	cancel    chan struct{}
 	writeMu   sync.Mutex
+
+	model    string // in force; guarded by mu
+	effort   string // in force; guarded by mu
+	noConfig bool   // an agent with no configOptions at all; set before serve
+}
+
+// fakeLevels is the fake's effort levels per model.
+var fakeLevels = map[string][]string{
+	"gpt-4.1":       {"low", "medium", "high"},
+	"claude-sonnet": {"low", "medium", "high", "max"},
+}
+
+// configOptionsLocked is the agent's whole settings list, as ACP sends it:
+// a mode option first, so a parser that took the first select it saw would
+// be caught, then the effort option when the model has one. Names are
+// capitalized so a test can tell a name from a value.
+func (fa *fakeAgent) configOptionsLocked() []any {
+	opts := []any{map[string]any{"type": "select", "id": "mode", "name": "Mode", "category": "mode",
+		"currentValue": "agent", "options": []any{map[string]any{"value": "agent", "name": "Agent"}}}}
+	if levels := fakeLevels[fa.model]; levels != nil {
+		var vals []any
+		for _, l := range levels {
+			vals = append(vals, map[string]any{"value": l, "name": strings.ToUpper(l[:1]) + l[1:]})
+		}
+		opts = append(opts, map[string]any{"type": "select", "id": "reasoning_effort", "name": "Reasoning",
+			"category": "thought_level", "currentValue": fa.effort, "options": vals})
+	}
+	return opts
+}
+
+// configUpdate sends a config_option_update carrying opts.
+func (fa *fakeAgent) configUpdate(opts []any) {
+	fa.update("config_option_update", map[string]any{"configOptions": opts})
 }
 
 // startFake builds a Chat wired to a fresh fake agent.
 func startFake(t *testing.T, opt Options) (*Chat, *fakeAgent) {
 	t.Helper()
+	return startFakeWith(t, opt, nil)
+}
+
+// startFakeWith is startFake with the agent adjusted by setup before it
+// serves its first message.
+func startFakeWith(t *testing.T, opt Options, setup func(*fakeAgent)) (*Chat, *fakeAgent) {
+	t.Helper()
 	c2aR, c2aW := io.Pipe()
 	a2cR, a2cW := io.Pipe()
 	fa := &fakeAgent{t: t, in: bufio.NewReader(c2aR), out: a2cW,
-		permReply: make(chan json.RawMessage, 1), cancel: make(chan struct{}, 1)}
+		permReply: make(chan json.RawMessage, 1), cancel: make(chan struct{}, 1),
+		model: "gpt-4.1", effort: "medium"}
+	if setup != nil {
+		setup(fa)
+	}
 	go fa.serve()
 	dial := func(onNotify func(string, json.RawMessage),
 		onRequest func(string, json.RawMessage) (any, error),
@@ -89,7 +139,7 @@ func (fa *fakeAgent) serve() {
 		case m.Method == "initialize":
 			fa.reply(m.ID, map[string]any{"protocolVersion": 1})
 		case m.Method == "session/new":
-			fa.reply(m.ID, map[string]any{
+			res := map[string]any{
 				"sessionId": "s1",
 				"models": map[string]any{
 					"currentModelId": "gpt-4.1",
@@ -98,9 +148,49 @@ func (fa *fakeAgent) serve() {
 						map[string]any{"modelId": "claude-sonnet", "name": "Claude Sonnet", "_meta": map[string]any{"copilotUsage": "1x"}},
 					},
 				},
-			})
+			}
+			if !fa.noConfig {
+				fa.mu.Lock()
+				res["configOptions"] = fa.configOptionsLocked()
+				fa.mu.Unlock()
+			}
+			fa.reply(m.ID, res)
 		case m.Method == "session/set_model":
+			var p struct {
+				ModelID string `json:"modelId"`
+			}
+			_ = json.Unmarshal(m.Params, &p)
+			fa.mu.Lock()
+			fa.model, fa.effort = p.ModelID, "medium"
+			opts := fa.configOptionsLocked()
+			fa.mu.Unlock()
+			// answered first, reported after — the order that makes the
+			// client re-ask for its level before it has seen the new list
 			fa.reply(m.ID, map[string]any{})
+			if !fa.noConfig {
+				fa.configUpdate(opts)
+			}
+		case m.Method == "session/set_config_option":
+			var p struct {
+				ConfigID string `json:"configId"`
+				Value    string `json:"value"`
+			}
+			_ = json.Unmarshal(m.Params, &p)
+			fa.mu.Lock()
+			ok := p.ConfigID == "reasoning_effort" && slices.Contains(fakeLevels[fa.model], p.Value)
+			if ok {
+				fa.effort = p.Value
+			}
+			opts := fa.configOptionsLocked()
+			model := fa.model
+			fa.mu.Unlock()
+			if !ok {
+				// Copilot's words for this refusal
+				fa.write(map[string]any{"jsonrpc": "2.0", "id": m.ID, "error": map[string]any{"code": -32603,
+					"message": "Reasoning effort '" + p.Value + "' is not supported for model '" + model + "'."}})
+				continue
+			}
+			fa.reply(m.ID, map[string]any{"configOptions": opts})
 		case m.Method == "session/cancel":
 			fa.cancel <- struct{}{}
 		case m.Method == "session/prompt":

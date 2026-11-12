@@ -1204,6 +1204,19 @@ premium multiplier is shown beside each model) or to switch assistant:
 `ai_agent = "claude"` uses Claude Code (`claude-code-acp`), `"gemini"` uses
 the Gemini CLI.
 
+**Reasoning effort.** The same menu's **effort** section sets how hard the
+model thinks before it answers — for Copilot `low`, `medium` (its default),
+`high`, `xhigh` and `max`. The levels are the agent's and differ by model:
+some offer fewer, and a model with no setting (Claude Haiku 4.5, say) gets
+no section. The level in force is in the title, `· high effort` (in a
+narrow pane the agent and model names are shortened first). Switching model
+resets the agent to its default, so dbc asks for your level again; a model
+without that level keeps its own default, shown in the title.
+`ai_effort = "high"` sets the level each conversation starts with, as
+`ai_model` sets the model. dbc changes it through ACP's session settings
+(`session/set_config_option`, the option of category `thought_level`), so
+any agent that offers one works the same way.
+
 **Conversations are kept.** Each one is saved to `~/.config/dbc/chats/` (one
 JSON file per conversation, readable only by you, the last 30 kept) after
 every answer, on `⟲ new`, and on quit. The empty pane lists the most recent

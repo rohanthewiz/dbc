@@ -574,6 +574,8 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 		return m.chatEvent(msg)
 	case chatModelSetMsg:
 		return m.chatModelSet(msg)
+	case chatEffortSetMsg:
+		return m.chatEffortSet(msg)
 	case chatSchemaMsg:
 		return m.chatSchema(msg)
 	case chatSignInCodeMsg:

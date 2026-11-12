@@ -105,6 +105,9 @@ type chatPane struct {
 	agent   ai.Agent
 	models  []ai.Model
 	modelID string
+	// effort is the agent's reasoning-effort setting for the model in force,
+	// replaced whole by EventReady and EventEffort; zero when it has none
+	effort ai.Effort
 
 	msgs      []chatMsg
 	streaming bool   // an answer is in flight
@@ -205,6 +208,14 @@ type chatModelSetMsg struct {
 	err error
 }
 
+// chatEffortSetMsg reports an effort change. The new state itself arrives
+// as EventEffort; this carries the outcome for the transcript.
+type chatEffortSetMsg struct {
+	gen   int
+	value string
+	err   error
+}
+
 func newChatPane() *chatPane {
 	p := &chatPane{input: newEditor(false), follow: true, first: true, attach: true, hover: -1}
 	p.input.placeholder = "ask about the query or result…"
@@ -301,7 +312,7 @@ func (m *Model) ensureChat() tea.Cmd {
 	p.gen++
 	p.state = chatStarting
 	p.needAuth = false // a refusal of this connection sets it again
-	p.c = startChat(p.agent, ai.Options{Dir: dir, Model: m.cfg.AIModel})
+	p.c = startChat(p.agent, ai.Options{Dir: dir, Model: m.cfg.AIModel, Effort: m.cfg.AIEffort})
 	return waitChat(p.c, p.gen)
 }
 
@@ -360,13 +371,18 @@ func (m *Model) chatEvent(msg chatEventMsg) tea.Cmd {
 	e := msg.ev
 	switch e.Kind {
 	case ai.EventReady:
-		p.state, p.models, p.modelID = chatReady, e.Models, e.ModelID
+		p.state, p.models, p.modelID, p.effort = chatReady, e.Models, e.ModelID, e.Effort
 		p.needAuth = false
 		if p.pending != "" {
 			prompt := p.pending
 			p.pending = ""
 			m.chatSend(prompt)
 		}
+	case ai.EventEffort:
+		// Silent in the transcript: a change the user made is noted by
+		// chatEffortSet, and one a model switch made shows in the header —
+		// a line for each would say the same thing twice.
+		p.effort = e.Effort
 	case ai.EventText:
 		p.appendAgent(e.Text)
 	case ai.EventTool:
@@ -425,6 +441,22 @@ func (m *Model) chatModelSet(msg chatModelSetMsg) tea.Cmd {
 	return nil
 }
 
+func (m *Model) chatEffortSet(msg chatEffortSetMsg) tea.Cmd {
+	p := m.chat
+	if msg.gen != p.gen {
+		return nil
+	}
+	if msg.err != nil {
+		p.add(roleErr, "could not set effort: "+msg.err.Error())
+		return nil
+	}
+	// EventEffort carries the same state and may land after this; setting
+	// it here keeps the header and this line in agreement meanwhile.
+	p.effort.Current = msg.value
+	p.add(roleInfo, "effort: "+p.effort.Name())
+	return nil
+}
+
 func (p *chatPane) add(role chatRole, text string) {
 	p.msgs = append(p.msgs, chatMsg{role: role, text: text})
 }
@@ -446,6 +478,60 @@ func (p *chatPane) modelName() string {
 		}
 	}
 	return p.modelID
+}
+
+// effortLabel is the level in force, by name, or "" when the model offers
+// no effort setting.
+func (p *chatPane) effortLabel() string {
+	if !p.effort.Offered() || p.effort.Current == "" {
+		return ""
+	}
+	return p.effort.Name()
+}
+
+// chatTitle is the pane's title chip, fitted to w cells.
+//
+// The pane is narrow by default (a side pane next to the editor) and model
+// names are long ("Claude Sonnet 5.5"), so the full title rarely fits, and
+// plain truncation would cut its end — the effort, the part that changes
+// how each answer is made and billed. So with an effort it sheds words in
+// order of how little they say, and then shortens the model, not the level:
+//
+//	✦ Copilot · Claude Sonnet 5.5 · high effort ▾   everything
+//	✦ Copilot · Claude Sonnet 5.5 · high ▾          "effort" — the menu says it
+//	✦ Claude Sonnet 5.5 · high ▾                    the agent — rarely changed
+//	✦ Claude Son… · high ▾                          the model, shortened
+//
+// Without an effort the title is what it always was, agent and model,
+// truncated when it must be — keeping the ▾ that says it opens a menu.
+func chatTitle(agent, model, effort string, w int) string {
+	title := func(parts ...string) string {
+		var keep []string
+		for _, s := range parts {
+			if s != "" {
+				keep = append(keep, s)
+			}
+		}
+		return "✦ " + strings.Join(keep, " · ") + " ▾"
+	}
+	if effort == "" {
+		t := title(agent, model)
+		if width(t) <= w {
+			return t
+		}
+		return truncate(strings.TrimSuffix(t, " ▾"), w-2) + " ▾"
+	}
+	for _, t := range []string{title(agent, model, effort+" effort"), title(agent, model, effort), title(model, effort)} {
+		if width(t) <= w {
+			return t
+		}
+	}
+	// What is left for the model once the rest is drawn; under a few cells
+	// a shortened name says nothing, and the whole title is cut instead.
+	if room := w - width(title("", effort)) - width(" · "); model != "" && room >= 4 {
+		return title(truncate(model, room), effort)
+	}
+	return truncate(strings.TrimSuffix(title(model, effort), " ▾"), w-2) + " ▾"
 }
 
 // ---------------------------------------------------------------------------
@@ -790,7 +876,8 @@ func (m *Model) chatHover(x, y int) {
 	}
 }
 
-// openModelMenu lists the agent's models and the other installed agents.
+// openModelMenu lists the agent's models, the model's effort levels, and
+// the other installed agents.
 func (m *Model) openModelMenu(x, y int) {
 	p := m.chat
 	var items []menuItem
@@ -805,6 +892,25 @@ func (m *Model) openModelMenu(x, y int) {
 			items = append(items, menuItem{label: label, key: md.Usage, act: func(m *Model) tea.Cmd {
 				c, gen := m.chat.c, m.chat.gen
 				return func() tea.Msg { return chatModelSetMsg{gen: gen, id: id, err: c.SetModel(id)} }
+			}})
+		}
+	}
+	// Only the model in force's levels: they differ by model, and a model
+	// without the setting gets no section rather than an empty one.
+	if p.effort.Offered() {
+		items = append(items, heading("effort"))
+		for _, l := range p.effort.Levels {
+			v, name := l.Value, l.Name
+			if name == "" {
+				name = v
+			}
+			label := "  " + name
+			if v == p.effort.Current {
+				label = "● " + name
+			}
+			items = append(items, menuItem{label: label, act: func(m *Model) tea.Cmd {
+				c, gen := m.chat.c, m.chat.gen
+				return func() tea.Msg { return chatEffortSetMsg{gen: gen, value: v, err: c.SetEffort(v)} }
 			}})
 		}
 	}
@@ -859,7 +965,7 @@ func (m *Model) openChatMenu(x, y int) {
 		{label: "Recent conversations…", act: func(m *Model) tea.Cmd { m.openRecentChats(); return nil }},
 		{label: "Delete this conversation", why: noConversation,
 			act: func(m *Model) tea.Cmd { return m.chatDeleteLive() }},
-		{label: "Model and assistant…", act: func(m *Model) tea.Cmd { m.openModelMenu(x, y); return nil }},
+		{label: "Model, effort and assistant…", act: func(m *Model) tea.Cmd { m.openModelMenu(x, y); return nil }},
 		// Always offered for an agent dbc can sign in to, not only after a
 		// refusal: it is also how to check which account is signed in, and
 		// a signed-in account just gets "already signed in as …".
@@ -922,17 +1028,13 @@ func (m *Model) drawChat(c *Canvas, r Rect) *caret {
 	in := c.Sub(r.Inset(1))
 	W := in.W()
 
-	// header: agent · model ▾ …… ⟲ new ✕
+	// header: agent · model · effort ▾ …… ⟲ new ✕
 	name := p.agent.Name
 	if name == "" {
 		name = m.aiAgent.Name
 	}
-	title := "✦ " + name
-	if p.modelID != "" {
-		title += " · " + p.modelName()
-	}
-	title += " ▾"
-	p.modelChip = chip(s, 2, 0, " "+truncate(title, W-14)+" ", onBg(ts, st.base))
+	title := chatTitle(name, p.modelName(), p.effortLabel(), W-14)
+	p.modelChip = chip(s, 2, 0, " "+title+" ", onBg(ts, st.base))
 	p.closeBtn = chip(s, r.W-5, 0, " ✕ ", st.err.Bold())
 	p.newBtn = chip(s, r.W-12, 0, " ⟲ new ", st.muted)
 

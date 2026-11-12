@@ -99,6 +99,7 @@ type assistant struct {
 	agent     ai.Agent
 	models    []ai.Model
 	modelID   string
+	effort    ai.Effort // the model's reasoning-effort setting; zero when it has none
 	msgs      []chatLine
 	streaming bool // an answer is in flight (a schema lookup included)
 	first     bool // the next turn is the conversation's first
@@ -155,14 +156,26 @@ type modelInfo struct {
 	Usage string `json:"usage,omitempty"`
 }
 
+// effortInfo is one reasoning-effort level the model offers.
+type effortInfo struct {
+	Value string `json:"value"`
+	Name  string `json:"name"`
+}
+
 // chatView is the pane's chrome: header, stop, the sign-in chips.
 type chatView struct {
-	State     string      `json:"state"`
-	Agent     agentInfo   `json:"agent"`
-	Model     string      `json:"model"`
-	ModelID   string      `json:"modelId"`
-	Models    []modelInfo `json:"models"`
-	Streaming bool        `json:"streaming"`
+	State   string      `json:"state"`
+	Agent   agentInfo   `json:"agent"`
+	Model   string      `json:"model"`
+	ModelID string      `json:"modelId"`
+	Models  []modelInfo `json:"models"`
+	// The reasoning effort: the level in force (value and display name)
+	// and the model's levels, lowest first. Efforts is empty — and the
+	// menu has no effort section — when the model offers no setting.
+	Effort     string       `json:"effort"`
+	EffortName string       `json:"effortName"`
+	Efforts    []effortInfo `json:"efforts"`
+	Streaming  bool         `json:"streaming"`
 	// SignIn is "offer" (the ⎆ chip belongs under the transcript),
 	// "starting", "waiting" (Code and URL are set), or "".
 	SignIn    string `json:"signIn"`
@@ -173,10 +186,20 @@ type chatView struct {
 
 func (a *assistant) viewLocked() chatView {
 	v := chatView{State: a.state, Agent: infoOf(a.agentLocked()), Model: a.modelNameLocked(),
-		ModelID: a.modelID, Models: []modelInfo{}, Streaming: a.streaming,
+		ModelID: a.modelID, Models: []modelInfo{}, Efforts: []effortInfo{}, Streaming: a.streaming,
 		SignIn: a.signState, Code: a.signCode, URL: a.signURL, ArchiveID: a.archiveID}
 	for _, m := range a.models {
 		v.Models = append(v.Models, modelInfo{ID: m.ID, Name: m.Name, Usage: m.Usage})
+	}
+	if a.effort.Offered() {
+		v.Effort, v.EffortName = a.effort.Current, a.effort.Name()
+		for _, l := range a.effort.Levels {
+			name := l.Name
+			if name == "" {
+				name = l.Value
+			}
+			v.Efforts = append(v.Efforts, effortInfo{Value: l.Value, Name: name})
+		}
 	}
 	if a.offerSignInLocked() {
 		v.SignIn = "offer"
@@ -270,7 +293,7 @@ func (a *assistant) ensureLocked() {
 	a.gen++
 	a.state = chatStarting
 	a.needAuth = false // a refusal of this connection sets it again
-	a.c = a.srv.opt.StartChat(a.agent, ai.Options{Dir: agentDir(), Model: a.srv.cfg.AIModel})
+	a.c = a.srv.opt.StartChat(a.agent, ai.Options{Dir: agentDir(), Model: a.srv.cfg.AIModel, Effort: a.srv.cfg.AIEffort})
 	c, gen := a.c, a.gen
 	goSafe(nil, "the assistant", func() { a.pump(c, gen) })
 }
@@ -307,13 +330,17 @@ func (a *assistant) onEvent(gen int, e ai.Event) {
 	}
 	switch e.Kind {
 	case ai.EventReady:
-		a.state, a.models, a.modelID = chatReady, e.Models, e.ModelID
+		a.state, a.models, a.modelID, a.effort = chatReady, e.Models, e.ModelID, e.Effort
 		a.needAuth = false
 		if a.pending != "" {
 			prompt := a.pending
 			a.pending = ""
 			a.sendLocked(prompt)
 		}
+	case ai.EventEffort:
+		// Silent in the transcript, as in the TUI: setEffort notes a change
+		// the user made, and the header shows one a model switch made.
+		a.effort = e.Effort
 	case ai.EventText:
 		a.appendAgentLocked(e.Text)
 		return // a chunk changes no chrome; no state event per chunk
@@ -506,6 +533,34 @@ func (a *assistant) setModel(id string) error {
 	return nil
 }
 
+// setEffort sets the reasoning effort — setModel's rules: a level the
+// model does not list is the caller's mistake (400), the agent's refusal is
+// the transcript's. The new state also arrives as EventEffort; recording
+// the level here keeps the header in step with the "effort:" line meanwhile.
+func (a *assistant) setEffort(value string) error {
+	a.mu.Lock()
+	c, gen := a.c, a.gen
+	known := a.effort.Offered() && a.effort.Has(value)
+	a.mu.Unlock()
+	if c == nil || !known {
+		return badRequest("the model does not offer effort %q", value)
+	}
+	err := c.SetEffort(value)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if gen != a.gen {
+		return nil // the conversation was replaced meanwhile
+	}
+	if err != nil {
+		a.addLocked("error", "could not set effort: "+err.Error())
+	} else {
+		a.effort.Current = value
+		a.addLocked("info", "effort: "+a.effort.Name())
+	}
+	a.sendStateLocked()
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // New, switch, the archive
 // ---------------------------------------------------------------------------
@@ -546,6 +601,7 @@ func (a *assistant) resetLocked() {
 	}
 	a.c, a.state, a.streaming, a.pending = nil, chatIdle, false, ""
 	a.msgs, a.first, a.apiSent, a.models, a.modelID = nil, true, false, nil, ""
+	a.effort = ai.Effort{}
 	a.archiveID, a.archiveStart = "", time.Time{}
 	a.ensureLocked()
 	a.send("chat.reset", nil)
@@ -1081,6 +1137,23 @@ func (s *Server) handleChatModel(ctx rweb.Context) error {
 		return fail(ctx, err)
 	}
 	if err = a.setModel(req.ID); err != nil {
+		return fail(ctx, err)
+	}
+	return ok(ctx, nil)
+}
+
+// handleChatEffort sets the reasoning effort: {"id": "<level value>"},
+// the same body the model switch takes.
+func (s *Server) handleChatEffort(ctx rweb.Context) error {
+	_, a, err := s.tabChat(ctx)
+	if err != nil {
+		return fail(ctx, err)
+	}
+	var req idReq
+	if err = decode(ctx, &req); err != nil {
+		return fail(ctx, err)
+	}
+	if err = a.setEffort(req.ID); err != nil {
 		return fail(ctx, err)
 	}
 	return ok(ctx, nil)

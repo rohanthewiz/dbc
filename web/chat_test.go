@@ -380,6 +380,35 @@ func TestChatModelAndAgent(t *testing.T) {
 	e.api("POST", "/api/v1/ws/"+id+"/chat/agent", `{"id":"nope"}`, 400)
 }
 
+// The view carries the model's effort levels; setting one tells the agent
+// and the transcript, a level the model lacks is a 400, and a model switch
+// keeps the choice and brings the new model's levels.
+func TestChatEffort(t *testing.T) {
+	f := &aitest.Fake{}
+	e, _ := chatEnv(t, f)
+	id, s := e.open()
+	e.api("POST", "/api/v1/ws/"+id+"/chat/open", "", 200)
+	v := awaitChat(t, s, chatReadyView)
+	if v.Effort != "medium" || v.EffortName != "Medium" || len(v.Efforts) != 3 || v.Efforts[2] != (effortInfo{"high", "High"}) {
+		t.Fatalf("ready view effort = %q/%q %+v", v.Effort, v.EffortName, v.Efforts)
+	}
+
+	e.api("POST", "/api/v1/ws/"+id+"/chat/effort", `{"id":"high"}`, 200)
+	awaitChat(t, s, func(v chatView) bool { return v.Effort == "high" })
+	if f.Effort() != "high" {
+		t.Errorf("agent effort = %q", f.Effort())
+	}
+	e.api("POST", "/api/v1/ws/"+id+"/chat/effort", `{"id":"max"}`, 400) // Fast Model has no max
+
+	e.api("POST", "/api/v1/ws/"+id+"/chat/model", `{"id":"smart"}`, 200)
+	v = awaitChat(t, s, func(v chatView) bool { return v.ModelID == "smart" && len(v.Efforts) == 4 })
+	if v.Effort != "high" || f.Effort() != "high" {
+		t.Errorf("after the switch: view %q, agent %q — want the choice kept", v.Effort, f.Effort())
+	}
+	e.api("POST", "/api/v1/ws/"+id+"/chat/effort", `{"id":"max"}`, 200)
+	awaitChat(t, s, func(v chatView) bool { return v.Effort == "max" })
+}
+
 // ---------------------------------------------------------------------------
 // Scripts
 // ---------------------------------------------------------------------------

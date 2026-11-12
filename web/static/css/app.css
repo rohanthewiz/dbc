@@ -807,8 +807,17 @@ button.primary { border-color: var(--accent); }
 .chat-split:hover, .chat-split.dragging { background: var(--accent); }
 .cbar { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-bottom: 1px solid var(--line); background: var(--panel2); }
 .cbar button { font-size: 12px; padding: 1px 8px; }
+/* Only the title gives way in a narrow pane: the buttons after it keep
+   their one line ("⟲ new" would otherwise break under its icon once the
+   title — model and effort — is long enough to squeeze it). */
+.cbar button:not(.cmodel) { flex: none; white-space: nowrap; }
 .cmodel { border: 0; background: none; color: var(--accent); font-weight: 600; margin-right: auto;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; padding-left: 2px !important; }
+/* The title in two parts (chat.js renderChrome): the agent and model give
+   way to an ellipsis, the effort level and ▾ after them never do. */
+.cmodel:has(.cm-tail) { display: flex; align-items: baseline; }
+.cm-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cm-tail { flex: none; white-space: pre; }
 .cstop { border-color: var(--warn); color: var(--warn); }
 .ctrans { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 10px; outline: none; }
 .cmsg { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }

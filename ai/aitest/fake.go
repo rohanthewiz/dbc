@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 
@@ -16,6 +17,11 @@ import (
 // handshake with a two-model roster, and answers each prompt by streaming the
 // chunks Reply returns for it (by default, "echo: " plus the prompt's last
 // line). A prompt containing "SLOW" streams nothing until it is cancelled.
+//
+// It offers a reasoning-effort setting the way Copilot does (see ai's
+// effort.go): a "thought_level" config option whose levels depend on the
+// model (Levels), reset to "medium" by a model switch, which is answered
+// first and then reported as a config_option_update.
 type Fake struct {
 	// Reply scripts the answer to a prompt, as the chunks to stream.
 	Reply func(prompt string) []string
@@ -34,6 +40,8 @@ type Fake struct {
 	prompts []string
 	cancels int
 	signIns int // device codes handed out
+	model   string
+	effort  string
 
 	out     *io.PipeWriter
 	writeMu sync.Mutex
@@ -48,6 +56,36 @@ func Start(agent ai.Agent, opt ai.Options, f *Fake) *ai.Chat {
 	f.cancel = make(chan struct{}, 4)
 	go f.serve(bufio.NewReader(c2aR))
 	return ai.StartPipes(agent, opt, a2cR, c2aW)
+}
+
+// Levels is the Fake's effort levels per model: "fast" has three, "smart"
+// four; any other model would have none.
+var Levels = map[string][]string{
+	"fast":  {"low", "medium", "high"},
+	"smart": {"low", "medium", "high", "max"},
+}
+
+// Effort returns the effort level in force on the agent's side.
+func (f *Fake) Effort() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.effort
+}
+
+// configOptionsLocked is the session's settings list: the effort option
+// when the model has one. Level names are capitalized, as an agent may name
+// them, so a UI showing a value where a name belongs is caught.
+func (f *Fake) configOptionsLocked() []any {
+	levels := Levels[f.model]
+	if levels == nil {
+		return []any{}
+	}
+	var opts []any
+	for _, l := range levels {
+		opts = append(opts, map[string]any{"value": l, "name": strings.ToUpper(l[:1]) + l[1:]})
+	}
+	return []any{map[string]any{"type": "select", "id": "reasoning_effort", "name": "Reasoning effort",
+		"category": "thought_level", "currentValue": f.effort, "options": opts}}
 }
 
 // Prompts returns the prompt texts received so far.
@@ -105,15 +143,50 @@ func (f *Fake) serve(in *bufio.Reader) {
 					"error": map[string]any{"code": -32000, "message": "Authentication required"}})
 				continue
 			}
+			f.mu.Lock()
+			f.model, f.effort = "fast", "medium" // each session starts at the defaults
+			opts := f.configOptionsLocked()
+			f.mu.Unlock()
 			f.reply(m.ID, map[string]any{"sessionId": "s1", "models": map[string]any{
 				"currentModelId": "fast",
 				"availableModels": []any{
 					map[string]any{"modelId": "fast", "name": "Fast Model", "_meta": map[string]any{"copilotUsage": "0x"}},
 					map[string]any{"modelId": "smart", "name": "Smart Model", "_meta": map[string]any{"copilotUsage": "1x"}},
 				},
-			}})
+			}, "configOptions": opts})
 		case "session/set_model":
+			var p struct {
+				ModelID string `json:"modelId"`
+			}
+			_ = json.Unmarshal(m.Params, &p)
+			f.mu.Lock()
+			f.model, f.effort = p.ModelID, "medium"
+			opts := f.configOptionsLocked()
+			f.mu.Unlock()
 			f.reply(m.ID, map[string]any{})
+			f.write(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{
+				"sessionId": "s1",
+				"update":    map[string]any{"sessionUpdate": "config_option_update", "configOptions": opts},
+			}})
+		case "session/set_config_option":
+			var p struct {
+				ConfigID string `json:"configId"`
+				Value    string `json:"value"`
+			}
+			_ = json.Unmarshal(m.Params, &p)
+			f.mu.Lock()
+			ok := p.ConfigID == "reasoning_effort" && slices.Contains(Levels[f.model], p.Value)
+			if ok {
+				f.effort = p.Value
+			}
+			opts := f.configOptionsLocked()
+			f.mu.Unlock()
+			if !ok {
+				f.write(map[string]any{"jsonrpc": "2.0", "id": m.ID, "error": map[string]any{"code": -32603,
+					"message": "Reasoning effort '" + p.Value + "' is not supported"}})
+				continue
+			}
+			f.reply(m.ID, map[string]any{"configOptions": opts})
 		case "session/cancel":
 			f.mu.Lock()
 			f.cancels++

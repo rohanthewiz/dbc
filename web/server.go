@@ -429,6 +429,7 @@ func (s *Server) routes() {
 	r.Post("/api/v1/ws/:id/chat/stop", s.handleChatStop)
 	r.Post("/api/v1/ws/:id/chat/new", s.handleChatNew)
 	r.Post("/api/v1/ws/:id/chat/model", s.handleChatModel)
+	r.Post("/api/v1/ws/:id/chat/effort", s.handleChatEffort)
 	r.Post("/api/v1/ws/:id/chat/agent", s.handleChatAgent)
 	r.Post("/api/v1/ws/:id/chat/load", s.handleChatLoad)
 	r.Post("/api/v1/ws/:id/chat/delete", s.handleChatDeleteLive)

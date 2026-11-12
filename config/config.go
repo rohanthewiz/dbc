@@ -272,11 +272,16 @@ type Config struct {
 
 	// The AI assistant (package ai). AIAgent picks the ACP backend —
 	// "copilot" (the default), "claude" or "gemini"; AIModel is a preferred
-	// model id, applied when the agent offers it. AIContextRows caps how many
-	// result rows go with a question on connections that allow rows at all
-	// (ai_rows); 0 sends none, and unset means ai.DefaultContextRows.
+	// model id, applied when the agent offers it. AIEffort is a preferred
+	// reasoning-effort level ("low" … "max", as the agent names them),
+	// applied likewise and again after each model switch — not validated
+	// here, since which levels exist is the agent's and the model's to say.
+	// AIContextRows caps how many result rows go with a question on
+	// connections that allow rows at all (ai_rows); 0 sends none, and unset
+	// means ai.DefaultContextRows.
 	AIAgent       string `toml:"ai_agent"`
 	AIModel       string `toml:"ai_model"`
+	AIEffort      string `toml:"ai_effort"`
 	AIContextRows int    `toml:"ai_context_rows"`
 
 	// ConnIdleTimeout is how long a pooled connection may sit idle before it

@@ -14,7 +14,9 @@ import (
 //
 // LIFECYCLE, as the ACP spec defines it and ced proved it:
 //
-//	Start ──spawn──► initialize ──► session/new ──► EventReady{models}
+//	Start ──spawn──► initialize ──► session/new ──► EventReady{models, effort}
+//	                                                  │
+//	SetModel / SetEffort / the agent's own config_option_update ──► EventEffort
 //	                                                  │
 //	Send ──session/prompt (blocks for the whole turn)─┤◄─ session/update … EventText/EventTool
 //	                                                  │
@@ -40,8 +42,9 @@ const (
 	// initTimeout covers a cold start, which can block on a macOS Keychain
 	// prompt the first time the agent reads its credential.
 	initTimeout = 2 * time.Minute
-	// sessionTimeout covers session/new and session/set_model: quick calls,
-	// but the first one may be fetching the model roster over the network.
+	// sessionTimeout covers session/new, session/set_model and
+	// session/set_config_option: quick calls, but the first one may be
+	// fetching the model roster over the network.
 	sessionTimeout = 30 * time.Second
 	// turnTimeout bounds one answer. A long streamed answer can take minutes;
 	// past this the agent is wedged, not thinking.
@@ -53,7 +56,8 @@ type EventKind int
 
 const (
 	// EventReady: the handshake finished and Send may be called. Models and
-	// ModelID describe the roster the agent offers.
+	// ModelID describe the roster the agent offers; Effort its reasoning-
+	// effort setting for that model (zero when it offers none).
 	EventReady EventKind = iota
 	// EventText: the next chunk of the agent's answer. Chunks of one answer
 	// arrive in order; the UI appends them.
@@ -69,6 +73,11 @@ const (
 	// EventExit: the connection is gone — the handshake failed or the process
 	// died. Err says why (nil after a deliberate Close). No events follow.
 	EventExit
+	// EventEffort: the reasoning-effort setting changed — the user set it,
+	// a model switch replaced its levels, or the agent changed it on its own.
+	// Effort is the whole new state (zero when the model offers none), so
+	// the UI replaces what it had rather than merging. See effort.go.
+	EventEffort
 )
 
 // Event is one thing that happened in a conversation.
@@ -77,6 +86,7 @@ type Event struct {
 	Text       string
 	Models     []Model
 	ModelID    string
+	Effort     Effort // EventReady, EventEffort
 	StopReason string
 	Err        error
 }
@@ -97,6 +107,11 @@ type Options struct {
 	// offers, keeps the agent's default — a stale saved preference must never
 	// break the handshake.
 	Model string
+	// Effort is the preferred reasoning-effort level ("high", …), applied
+	// after Model and again after every later model switch, until SetEffort
+	// replaces it. Empty, or a level the model does not offer, keeps the
+	// agent's default, for the reason Model does.
+	Effort string
 }
 
 // dialFunc opens the transport. Start uses the real process; tests hand in a
@@ -118,6 +133,17 @@ type Chat struct {
 	ready      bool
 	turn       bool // a session/prompt is in flight
 	cancelSent bool // one session/cancel per turn is enough
+
+	// The reasoning-effort setting — see effort.go. effort is the agent's
+	// latest report; effortID the option id last seen (kept while a model
+	// without the setting is in force); wantEffort the level the user chose,
+	// re-applied after each model switch.
+	effort     Effort
+	effortID   string
+	wantEffort string
+	// emitMu orders EventReady against EventEffort (see setEffort). It is
+	// taken before mu, never after.
+	emitMu sync.Mutex
 
 	// connecting is true from Start until the handshake's outcome is
 	// known; while it is, connect owns the EventExit (see connect).
@@ -176,6 +202,7 @@ func startWith(agent Agent, opt Options, dial dialFunc) *Chat {
 		events:     make(chan Event, 256),
 		done:       make(chan struct{}),
 		connecting: true,
+		wantEffort: opt.Effort,
 	}
 	go c.connect(opt, dial)
 	return c
@@ -252,13 +279,20 @@ func (c *Chat) connect(opt Options, dial dialFunc) {
 	default:
 	}
 
-	sess, err := handshake(conn, opt)
+	sess, err := c.handshake(conn, opt)
+	// emitMu spans marking the chat ready and sending EventReady, so an
+	// effort update that lands meanwhile is either in the snapshot below or
+	// emitted after EventReady — never ahead of it (see setEffort). Taken
+	// here, before mu, because setEffort takes them in that order.
+	c.emitMu.Lock()
+	defer c.emitMu.Unlock()
 	c.mu.Lock()
 	c.connecting = false
 	lost, lostErr := c.lost, c.lostErr
 	if err == nil && !lost {
 		c.sessionID, c.ready = sess.id, true
 	}
+	effort := c.effort
 	c.mu.Unlock()
 	switch {
 	case err != nil:
@@ -272,7 +306,7 @@ func (c *Chat) connect(opt Options, dial dialFunc) {
 		// the handshake finished just as the transport went
 		c.exited(lostErr)
 	default:
-		c.emit(Event{Kind: EventReady, Models: sess.models, ModelID: sess.modelID})
+		c.emit(Event{Kind: EventReady, Models: sess.models, ModelID: sess.modelID, Effort: effort})
 	}
 }
 
@@ -344,8 +378,13 @@ type session struct {
 }
 
 // handshake runs initialize and session/new, then applies the preferred
-// model if the roster offers it.
-func handshake(conn *rpcConn, opt Options) (session, error) {
+// model if the roster offers it, then the preferred effort level.
+//
+// It records the session id on the Chat as soon as session/new returns,
+// before the model switch: the agent reports the new model's effort levels
+// in a session/update notification, and handleUpdate drops updates for any
+// session but the Chat's own.
+func (c *Chat) handshake(conn *rpcConn, opt Options) (session, error) {
 	initParams := map[string]any{
 		"protocolVersion": 1,
 		// No fs capability: the agent is told up front it cannot read or
@@ -371,6 +410,9 @@ func handshake(conn *rpcConn, opt Options) (session, error) {
 			} `json:"availableModels"`
 			CurrentModelID string `json:"currentModelId"`
 		} `json:"models"`
+		// The session's settings, the effort among them; absent from an
+		// agent that has none. Parsed by parseEffort (effort.go).
+		ConfigOptions json.RawMessage `json:"configOptions"`
 	}
 	// mcpServers is required and must be an array, never null.
 	err := conn.call("session/new",
@@ -387,10 +429,25 @@ func handshake(conn *rpcConn, opt Options) (session, error) {
 			s.models = append(s.models, Model{ID: m.ModelID, Name: m.Name, Usage: m.Meta.Usage})
 		}
 	}
+	c.mu.Lock()
+	c.sessionID = s.id
+	c.mu.Unlock()
+	c.setEffort(parseEffort(resp.ConfigOptions)) // not ready yet: recorded, not emitted
+
+	switched := false
 	if opt.Model != "" && opt.Model != s.modelID && hasModel(s.models, opt.Model) {
 		if err = conn.call("session/set_model",
 			map[string]any{"sessionId": s.id, "modelId": opt.Model}, nil, sessionTimeout); err == nil {
-			s.modelID = opt.Model
+			s.modelID, switched = opt.Model, true
+		}
+	}
+	// The preferred effort. After a switch it is always asked for: the
+	// levels just reported belong to the old model, and the switch has put
+	// the agent's default back. Without one, only when it would change
+	// something the model offers. Either way a refusal is not an error.
+	if opt.Effort != "" {
+		if e := c.Effort(); switched || (e.Current != opt.Effort && e.Has(opt.Effort)) {
+			c.reapplyEffort(conn, s.id)
 		}
 	}
 	return s, nil
@@ -408,7 +465,8 @@ func hasModel(ms []Model, id string) bool {
 // handleUpdate turns one session/update notification into events. Answer
 // text and tool calls are kept; the agent's thoughts and plans are dropped —
 // a side pane has no room for its inner monologue, and the answer is what
-// the user asked for.
+// the user asked for. A change to the session's settings is kept for its
+// effort option (see effort.go).
 func (c *Chat) handleUpdate(params json.RawMessage) {
 	var p struct {
 		SessionID string `json:"sessionId"`
@@ -416,6 +474,11 @@ func (c *Chat) handleUpdate(params json.RawMessage) {
 			Kind    string          `json:"sessionUpdate"`
 			Content json.RawMessage `json:"content"`
 			Title   string          `json:"title"`
+			// config_option_update: every option, as session/new lists them
+			// — measured on Copilot, whose list after a switch to a model
+			// without effort still holds mode, model and allow_all. So an
+			// effort option missing from it means the model has none.
+			ConfigOptions json.RawMessage `json:"configOptions"`
 		} `json:"update"`
 	}
 	if json.Unmarshal(params, &p) != nil {
@@ -438,6 +501,8 @@ func (c *Chat) handleUpdate(params json.RawMessage) {
 			title = "tool call"
 		}
 		c.emit(Event{Kind: EventTool, Text: title})
+	case "config_option_update":
+		c.setEffort(parseEffort(p.Update.ConfigOptions))
 	}
 }
 
@@ -564,6 +629,10 @@ func (c *Chat) Cancel() bool {
 
 // SetModel switches the session's model. It blocks for the round trip, so a
 // UI calls it off its event loop.
+//
+// The switch resets the effort to the new model's default, so the level the
+// user chose is asked for again before SetModel returns (see effort.go); the
+// outcome arrives as EventEffort, whether the model took it or not.
 func (c *Chat) SetModel(id string) error {
 	c.mu.Lock()
 	if !c.ready || c.conn == nil {
@@ -572,8 +641,12 @@ func (c *Chat) SetModel(id string) error {
 	}
 	conn, sid := c.conn, c.sessionID
 	c.mu.Unlock()
-	return conn.call("session/set_model",
-		map[string]any{"sessionId": sid, "modelId": id}, nil, sessionTimeout)
+	if err := conn.call("session/set_model",
+		map[string]any{"sessionId": sid, "modelId": id}, nil, sessionTimeout); err != nil {
+		return err
+	}
+	c.reapplyEffort(conn, sid)
+	return nil
 }
 
 // Close ends the conversation and the agent process. Safe to call more than

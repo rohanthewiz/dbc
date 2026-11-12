@@ -111,6 +111,12 @@ plan_theme = "dark"
 ai_agent = "copilot"
 # Preferred model id; the agent's default when unset or no longer offered.
 # ai_model = "claude-sonnet-5"
+# Preferred reasoning effort — how hard the model thinks before answering.
+# The levels are the agent's and differ by model (Copilot: low, medium,
+# high, xhigh, max; some models fewer, some none). Re-applied after every
+# model switch; a level the model lacks keeps its default (usually medium).
+# Also on the assistant's title menu, under "effort".
+# ai_effort = "high"
 # The query and its error always go with a question. Result ROWS go only on
 # connections with ai_rows = true, and at most this many (0 = none).
 ai_context_rows = 10

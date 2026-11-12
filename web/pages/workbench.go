@@ -404,7 +404,7 @@ func (p Workbench) chat(b *element.Builder) any {
 		b.DivClass("chat-split", "id", "chat-split", "role", "separator", "aria-orientation", "vertical",
 			"title", "Drag to resize (double-click to reset)").R(),
 		b.DivClass("cbar").R(
-			b.ButtonClass("cmodel", "id", "chat-model", "type", "button", "title", "Model and assistant").T("✦ Assistant ▾"),
+			b.ButtonClass("cmodel", "id", "chat-model", "type", "button", "title", "Model, effort and assistant").T("✦ Assistant ▾"),
 			b.ButtonClass("cstop", "id", "chat-stop", "type", "button", "hidden", "hidden", "title", "Stop the answer (Ctrl+K)").T("■ stop"),
 			b.Button("id", "chat-new", "type", "button", "title", "Save this conversation and start a new one").T("⟲ new"),
 			b.ButtonClass("mclose", "id", "chat-close", "type", "button", "title", "Close the pane (the conversation stays)").T("✕"),

@@ -415,6 +415,7 @@ func TestLoadAIKeys(t *testing.T) {
 	body := `
 ai_agent = "claude"
 ai_model = "claude-sonnet-5"
+ai_effort = "high"
 
 [[connection]]
 name = "scratch"
@@ -431,8 +432,8 @@ dsn = "postgres://x"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AIAgent != "claude" || cfg.AIModel != "claude-sonnet-5" {
-		t.Errorf("agent/model = %q/%q", cfg.AIAgent, cfg.AIModel)
+	if cfg.AIAgent != "claude" || cfg.AIModel != "claude-sonnet-5" || cfg.AIEffort != "high" {
+		t.Errorf("agent/model/effort = %q/%q/%q", cfg.AIAgent, cfg.AIModel, cfg.AIEffort)
 	}
 	if cfg.AIContextRows != DefaultAIContextRows {
 		t.Errorf("absent ai_context_rows = %d, want the default", cfg.AIContextRows)

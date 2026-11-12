@@ -284,7 +284,19 @@
     if (v.state === "starting") label += " · connecting…";
     else if (v.model) label += " · " + v.model;
     else if (v.state === "dead") label += " · not connected";
-    els.model.textContent = label + " ▾";
+    // Two parts so a narrow pane shortens the agent and model (the
+    // ellipsis is on .cm-name) and never the effort level after them —
+    // the TUI's chatTitle keeps the level for the same reason. The whole
+    // title goes in the tooltip, where nothing is cut.
+    const effort = v.efforts.length && v.effort ? " · " + v.effortName + " effort" : "";
+    const name = document.createElement("span");
+    name.className = "cm-name";
+    name.textContent = label;
+    const tail = document.createElement("span");
+    tail.className = "cm-tail";
+    tail.textContent = effort + " ▾";
+    els.model.replaceChildren(name, tail);
+    els.model.title = "Model, effort and assistant — " + label.slice(2) + effort;
     els.stop.hidden = !v.streaming;
     els.send.disabled = v.streaming;
     els.pane.classList.toggle("streaming", v.streaming);
@@ -529,8 +541,8 @@
   if (els.toggle) els.toggle.addEventListener("click", toggle);
 
   // ── menus ──────────────────────────────────────────────────────────────
-  // modelMenu lists the agent's models and the other assistants — the
-  // TUI's model chip menu.
+  // modelMenu lists the agent's models, the model's effort levels and the
+  // other assistants — the TUI's model chip menu.
   function modelMenu(x, y) {
     const v = c.view;
     const items = [];
@@ -539,6 +551,15 @@
       for (const m of v.models) {
         items.push({ label: (m.id === v.modelId ? "● " : "  ") + m.name, key: m.usage,
           act: () => post("/chat/model", { id: m.id }).catch(() => {}) });
+      }
+    }
+    // the levels of the model in force only — they differ by model, and
+    // one without the setting gets no section
+    if (v && v.efforts.length) {
+      items.push({ head: "effort" });
+      for (const l of v.efforts) {
+        items.push({ label: (l.value === v.effort ? "● " : "  ") + l.name,
+          act: () => post("/chat/effort", { id: l.value }).catch(() => {}) });
       }
     }
     items.push({ head: "assistant" });
@@ -570,7 +591,7 @@
       { label: "Recent conversations…", act: recentModal },
       { label: "Delete this conversation", why: c.msgs.length || v.archiveId ? "" : "no conversation to delete",
         act: () => post("/chat/delete").catch(() => {}) },
-      { label: "Model and assistant…", act: () => modelMenu(e.clientX, e.clientY) },
+      { label: "Model, effort and assistant…", act: () => modelMenu(e.clientX, e.clientY) },
       // Always offered for an agent dbc can sign in to: it is also how to
       // check which account is signed in ("already signed in as …").
       { label: "Sign in to " + v.agent.name + "…", why: v.agent.canSignIn ? "" : "dbc cannot sign in to " + v.agent.name + " — " + (v.agent.auth || ""),

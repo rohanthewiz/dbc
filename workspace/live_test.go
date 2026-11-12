@@ -130,7 +130,7 @@ func liveWorkspace(t *testing.T, e liveEngine, extra ...string) (w *Workspace, o
 	t.Cleanup(mgr.Close)
 	w = New(cfg, mgr, nil, Options{})
 	t.Cleanup(w.Close)
-	ev := w.Connect("live").Job().(*Connected)
+	ev := landed(w.Connect("live"))
 	if ev.Err != nil || w.Catalog() == nil {
 		t.Fatalf("connect: %+v", ev)
 	}
@@ -218,7 +218,7 @@ func TestLiveWorkspaceConnect(t *testing.T) {
 	forLive(t, func(t *testing.T, e liveEngine) {
 		w, _ := liveWorkspace(t, e)
 		countsOn(t, w)
-		ev := w.Connect("live").Job().(*Connected)
+		ev := landed(w.Connect("live"))
 		if ev.Err != nil || ev.Changed || ev.Counts == nil {
 			t.Fatalf("reconnect: %+v (a connect to the active connection changes nothing)", ev)
 		}
@@ -463,7 +463,7 @@ func TestLiveWorkspaceSwitch(t *testing.T) {
 		run(t, w, `UPDATE `+liveTable+` SET n = 99 WHERE id = 1`)
 		id := wsVal(t, w, e.backend)
 
-		ev := w.Switch("live2").Job().(*Connected)
+		ev := landed(w.Switch("live2"))
 		if ev.Err != nil || !ev.Changed || ev.Left != "live" || ev.Release == nil || w.Active() != "live2" {
 			t.Fatalf("switch: %+v, active %q", ev, w.Active())
 		}
@@ -510,7 +510,7 @@ func TestLiveWorkspaceDerivedDatabase(t *testing.T) {
 			t.Fatal(err)
 		}
 		st.Job()
-		if ev := w.Connect("live").Job().(*Connected); ev.Err != nil {
+		if ev := landed(w.Connect("live")); ev.Err != nil {
 			t.Fatalf("reconnect: %+v", ev)
 		}
 		listed := false
@@ -522,7 +522,7 @@ func TestLiveWorkspaceDerivedDatabase(t *testing.T) {
 		}
 
 		derived := config.DerivedName("live", other)
-		ev := w.Switch(derived).Job().(*Connected)
+		ev := landed(w.Switch(derived))
 		if ev.Err != nil || !ev.Changed || ev.Left != "live" || !w.Derived(derived) {
 			t.Fatalf("switch to %s: %+v", derived, ev)
 		}
@@ -542,7 +542,7 @@ func TestLiveWorkspaceDerivedDatabase(t *testing.T) {
 			t.Fatal("no connection to the picked database")
 		}
 
-		back := w.Switch("live").Job().(*Connected)
+		back := landed(w.Switch("live"))
 		if back.Err != nil || back.Left != derived || !w.Derived(back.Left) {
 			t.Fatalf("switch back: %+v", back)
 		}
@@ -577,7 +577,7 @@ func TestLiveWorkspaceSchemaNamesFallback(t *testing.T) {
 
 		_, st, _ := w.Disconnect()
 		st.Job()
-		ev := w.ConnectPick("live", SchemaPick{All: true}).Job().(*Connected)
+		ev := landed(w.ConnectPick("live", SchemaPick{All: true}))
 		if ev.Err != nil || ev.Catalog == nil {
 			t.Fatalf("connect: %+v", ev)
 		}
@@ -640,7 +640,7 @@ func TestLiveWorkspacePickSchema(t *testing.T) {
 		// reconnect, so the schema list holds the new schemas
 		_, st, _ := w.Disconnect()
 		st.Job()
-		if ev := w.Connect("live").Job().(*Connected); ev.Err != nil || ev.Schema != "public" {
+		if ev := landed(w.Connect("live")); ev.Err != nil || ev.Schema != "public" {
 			t.Fatalf("connect: %+v, want it on public, the default with tables", ev)
 		}
 
@@ -774,7 +774,7 @@ func liveWorkspaceDSN(t *testing.T, e liveEngine, dsn string) *Workspace {
 	t.Cleanup(mgr.Close)
 	w := New(cfg, mgr, nil, Options{})
 	t.Cleanup(w.Close)
-	if ev := w.Connect("live").Job().(*Connected); ev.Err != nil {
+	if ev := landed(w.Connect("live")); ev.Err != nil {
 		t.Fatalf("connect: %+v", ev)
 	}
 	return w
@@ -816,7 +816,7 @@ func TestLiveWorkspaceCompletionNames(t *testing.T) {
 		t.Cleanup(func() { _, _ = obs.Run("live", drop) })
 		_, st, _ := w.Disconnect()
 		st.Job()
-		if ev := w.Connect("live").Job().(*Connected); ev.Err != nil {
+		if ev := landed(w.Connect("live")); ev.Err != nil {
 			t.Fatalf("reconnect: %+v", ev)
 		}
 		if err := w.LoadCompletions(context.Background()); err != nil {
@@ -901,7 +901,7 @@ func TestLiveWorkspaceCompletionMySQL(t *testing.T) {
 	// the load below is the first one on a connection that has them
 	_, st, _ := w.Disconnect()
 	st.Job()
-	if ev := w.Connect("live").Job().(*Connected); ev.Err != nil {
+	if ev := landed(w.Connect("live")); ev.Err != nil {
 		t.Fatalf("reconnect: %+v", ev)
 	}
 	if err := w.LoadCompletions(context.Background()); err != nil {
@@ -934,7 +934,7 @@ func TestLiveWorkspaceCompletionMySQL(t *testing.T) {
 	}
 
 	derived := config.DerivedName("live", other)
-	if ev := w.Switch(derived).Job().(*Connected); ev.Err != nil || !ev.Changed {
+	if ev := landed(w.Switch(derived)); ev.Err != nil || !ev.Changed {
 		t.Fatalf("switch to %s: %+v", derived, ev)
 	}
 	if err := w.LoadCompletions(context.Background()); err != nil {
@@ -984,7 +984,7 @@ END $$`, from, to))
 			t.Helper()
 			_, st, _ := w.Disconnect()
 			st.Job()
-			if ev := w.Connect("live").Job().(*Connected); ev.Err != nil {
+			if ev := landed(w.Connect("live")); ev.Err != nil {
 				t.Fatalf("reconnect: %+v", ev)
 			}
 			start := time.Now()

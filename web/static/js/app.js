@@ -218,19 +218,37 @@
   // "conn" with its tables lands (or the request fails)
   let loadingSchema = false;
 
+  // A CONNECT DRAWS THE SIDEBAR TWICE. Its first "conn" lands on the open
+  // connection with side.loading set and nothing listed; a second brings
+  // the databases, schemas and tables once they are read (web/hub.go,
+  // workspace.CatalogLoaded):
+  //
+  //	"conn" {loading}  ─► list: "loading tables…"; the pickers left as they were
+  //	"conn" {loaded}   ─► pickers and list drawn; a Tab pick's keyboard moves on
+  //
+  // The pickers are NOT redrawn for the first. It has no databases or
+  // schemas to draw them from, so they would be hidden — the box the
+  // keyboard is in among them, after a database picked with Tab — only to
+  // come back a moment later; and dbPicker.landed would settle the Tab
+  // pick against a sidebar that has no boxes yet. For that moment the
+  // boxes still show the connection before's, as they did for the whole
+  // of the connect when it read the catalog itself; a pick made in them
+  // is refused by the server ("still reading … catalog") and says so.
   function showSide(s) {
     side = s || { tables: [] };
     allTables = side.tables || [];
     loadingSchema = false;
     drawModes();
     drawRowCountsBox();
-    dbPicker.draw();
-    drawSchemaFilter();
+    if (!side.loading) {
+      dbPicker.draw();
+      drawSchemaFilter();
+    }
     drawFindBox();
     drawTables();
     // last: a database picked with Tab moves the keyboard on to the boxes
-    // just drawn for it
-    dbPicker.landed();
+    // just drawn for it — once they are (not while its catalog loads)
+    if (!side.loading) dbPicker.landed();
   }
 
   // ── the "rows" box ─────────────────────────────────────────────────────
@@ -341,6 +359,14 @@
     els.findFilter.classList.toggle("on", find !== "");
     if (loadingSchema) {
       els.tables.append(el("li", "none", "loading " + schemaLabel(pick === null ? "all schemas" : pick) + "…"));
+      return;
+    }
+    // connected, the catalog still on its way: a connect's "conn" lands on
+    // the open connection, and a second one brings the pickers and tables
+    // (sideState.Loading, web/hub.go). Said, so the empty list is not read
+    // as an empty database.
+    if (side.loading && state.active) {
+      els.tables.append(el("li", "none", "loading tables…"));
       return;
     }
     if (state.tab && state.tab.script) {
@@ -1411,9 +1437,12 @@
         if (!d.active) { els.stateful.hidden = true; t.stateful = false; } // its session goes with it
         showSide(d);
         // a relist after a run's DDL leaves the status to the run (its
-        // result summary): the user asked for the run, not the re-read
+        // result summary): the user asked for the run, not the re-read.
+        // So does the catalog of a connect that landed earlier (d.loaded):
+        // the bar already said "connected", and a statement may have run
+        // since — the connection is usable while its tables load
         if (d.status) setStatus(d.status);
-        else if (!state.busy && !d.relisted) setStatus("ready on " + d.active);
+        else if (!state.busy && !d.relisted && !d.loaded) setStatus("ready on " + d.active);
         if (d.changed) {
           saveTab(t);
           // the results pane and the log follow the connection: its own

@@ -205,8 +205,13 @@ func (m *Model) routeTab(tm tabMsg) tea.Cmd {
 		// release left to do.
 		if !ev.Stale && ev.Err == nil {
 			t.unconnected, t.aim = false, ""
-			cmd = m.tagFor(t, m.releaseThenCloseOn(t.ws, ev))
-			ev.Release, ev.Left = nil, ""
+			// the catalog read starts now too, as a relist does below: a
+			// tab connected in the background should come back with its
+			// tables listed, not start reading them on the user's return.
+			// Its *CatalogLoaded queues behind this event and replays
+			// after it.
+			cmd = tea.Batch(m.tagFor(t, m.releaseThenCloseOn(t.ws, ev)), m.tagFor(t, job(ev.Load)))
+			ev.Release, ev.Left, ev.Load = nil, "", nil
 			m.refreshConns() // its ○ in the connections list moved
 		}
 	case *workspace.RunDone:

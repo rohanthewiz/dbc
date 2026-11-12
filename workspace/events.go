@@ -90,9 +90,19 @@ type Start struct {
 type Event interface{ event() }
 
 // Connected lands a connect.
+//
+// A connect proper lands as soon as the connection is open, WITHOUT its
+// catalog: Catalog, Databases, Schemas and Schema are then empty, and Load
+// is the Job that reads them (its event a *CatalogLoaded). A re-read of the
+// connection the workspace is already on — a Refresh, the relist after a
+// run's DDL — dials nothing worth waiting for, so it still reads the
+// catalog in its one Job and lands it here, with Load nil.
+//
+//	connect ─► dial ─► *Connected (Load set) ─► Load ─► *CatalogLoaded
+//	refresh ─► dial (cached pool) + read ─────────────► *Connected (Load nil)
 type Connected struct {
 	Name    string
-	Catalog *model.Result // the connection's tables; nil if the catalog query failed
+	Catalog *model.Result // a re-read's tables; nil on a connect (see Load), or if the catalog query failed
 	// Databases and Schemas are the levels above the tables: the server's
 	// databases, on a driver with a database picker (db.HasDatabases:
 	// Postgres, MySQL), and this database's schemas with their table
@@ -124,6 +134,18 @@ type Connected struct {
 	// because it waits for any statement still running on that session,
 	// and the switch itself must not.
 	Release Job
+	// Load, when non-nil, reads the catalog of the connection just opened
+	// — the server's databases, this database's schemas, the tables of the
+	// schema the connect's pick names — for the sidebar; its event is a
+	// *CatalogLoaded. It is a Job of its own so that "connected" means the
+	// connection is open, and is said when it is: on a big production
+	// database the three reads take seconds (the schema summary alone can
+	// spend its whole budget), and a user who came to run a statement
+	// should not wait for a table list to do it. A UI must run it whenever
+	// it is set, as it does Counts: until it lands the workspace reports
+	// CatalogLoading, and its sidebar has nothing to list. nil on a re-read
+	// (above), on a failed connect, and on a driver with no catalog query.
+	Load Job
 	// Counts, when non-nil, fetches the row counts of the catalog's tables
 	// for the sidebar; its event is a *RowCounts. It is separate so the
 	// tables list draws at once and the numbers fill in after — a count
@@ -238,6 +260,36 @@ type RowCounts struct {
 	Notes []Note
 }
 
+// CatalogLoaded lands the catalog read a connect left running
+// (Connected.Load): the levels of the sidebar, for the connection the
+// workspace is already on. The workspace keeps them too (Databases,
+// Schemas, CatalogSchema, Catalog), so a UI may redraw from either.
+//
+// Whatever was read is installed, even when the tables were not: a
+// database whose table list failed or was canceled still has its schema
+// picker, and a pick from it (PickSchema) or a Refresh is how the user
+// tries again. Notes say what could not be read.
+type CatalogLoaded struct {
+	Conn      string
+	Catalog   *model.Result // the tables; nil when their read failed or was canceled
+	Databases []db.DatabaseInfo
+	Schemas   []db.SchemaInfo
+	Schema    string // the schema Catalog is of; "" for every schema's
+	// Canceled reports a read the user stopped (Workspace.Cancel), rather
+	// than one that failed: a UI says so in its status bar, and offers no
+	// explanation of an error.
+	Canceled bool
+	// Stale reports a read superseded by a later connect, refresh or
+	// disconnect: nothing landed, and a UI draws nothing.
+	Stale  bool
+	Notes  []Note
+	Status string // for a status bar; "" leaves it
+	// Counts is the row counting of the tables, as on Connected.
+	Counts Job
+	// Routines reads the listed schema's routines, as on Connected.
+	Routines Job
+}
+
 // SchemaLoaded lands a schema pick (Workspace.PickSchema): the tables of
 // another schema of the active database, in place of the ones the sidebar
 // listed.
@@ -290,6 +342,7 @@ type ViewDDL struct {
 
 func (*ViewDDL) event()         {}
 func (*SchemaLoaded) event()    {}
+func (*CatalogLoaded) event()   {}
 func (*RoutinesLoaded) event()  {}
 func (*RoutineDDL) event()      {}
 func (*Connected) event()       {}

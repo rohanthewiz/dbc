@@ -238,13 +238,35 @@ func (s *stream) awaitLog(t *testing.T, text string) (sseEvent, []string) {
 	}
 }
 
+// awaitCatalog reads a connect's two "conn" events and returns the second.
+// A connect lands on the open connection first — the tab is on it, its
+// sidebar Loading — and its catalog follows in a "conn" of its own, marked
+// Loaded (hub.go deliver). The order is fixed: the catalog's read starts
+// only after the first event is sent.
+func (s *stream) awaitCatalog(t *testing.T) connEvent {
+	t.Helper()
+	ev, _ := s.await(t, "conn")
+	first := decodeData[connEvent](t, testEnvelope{Data: ev.Data})
+	if first.Failed || !first.Connected {
+		return first // the connect failed: no catalog follows, and the caller says so
+	}
+	if !first.Loading || first.Loaded || len(first.Tables) != 0 {
+		t.Fatalf("a connect's first conn event = %+v, want the connection alone, loading", first)
+	}
+	ev, _ = s.await(t, "conn")
+	c := decodeData[connEvent](t, testEnvelope{Data: ev.Data})
+	if !c.Loaded || c.Loading || c.Changed {
+		t.Fatalf("a connect's second conn event = %+v, want its catalog", c)
+	}
+	return c
+}
+
 // connected opens a workspace, attaches its stream and connects it.
 func (e *testEnv) connected() (string, *stream) {
 	e.t.Helper()
 	id, s := e.open()
 	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"demo-sqlite"}`, 200)
-	ev, _ := s.await(e.t, "conn")
-	c := decodeData[connEvent](e.t, testEnvelope{Data: ev.Data})
+	c := s.awaitCatalog(e.t)
 	if c.Active != "demo-sqlite" || c.Failed || len(c.Tables) == 0 {
 		e.t.Fatalf("conn event = %+v", c)
 	}
@@ -885,8 +907,7 @@ func TestDisconnectKeepsTheConnection(t *testing.T) {
 	}
 
 	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"demo-sqlite"}`, 200)
-	ev, _ = s.await(t, "conn")
-	if c := decodeData[connEvent](t, testEnvelope{Data: ev.Data}); c.Active != "demo-sqlite" || len(c.Tables) == 0 {
+	if c := s.awaitCatalog(t); c.Active != "demo-sqlite" || len(c.Tables) == 0 {
 		t.Fatalf("reconnect = %+v", c)
 	}
 }

@@ -32,7 +32,7 @@ func reconnectAndLoad(t *testing.T, w *Workspace) {
 	t.Helper()
 	_, st, _ := w.Disconnect()
 	st.Job()
-	if ev := w.Connect("live").Job().(*Connected); ev.Err != nil {
+	if ev := landed(w.Connect("live")); ev.Err != nil {
 		t.Fatalf("reconnect: %+v", ev)
 	}
 	if err := w.LoadCompletions(context.Background()); err != nil {

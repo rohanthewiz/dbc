@@ -25,7 +25,7 @@ func otherConn(w *Workspace) {
 // switchTo connects w to name and fails the test unless it landed.
 func switchTo(t *testing.T, w *Workspace, name string) {
 	t.Helper()
-	if ev := w.Switch(name).Job().(*Connected); ev.Err != nil || w.Active() != name {
+	if ev := landed(w.Switch(name)); ev.Err != nil || w.Active() != name {
 		t.Fatalf("switch to %s: %+v", name, ev)
 	}
 }

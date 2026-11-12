@@ -218,6 +218,12 @@ func (m *Model) refreshCatalog() tea.Cmd {
 // the old connection is released by the event's Release job — separately,
 // because it waits for any statement still running there. The tables' row
 // counts come from the Counts job, after the list has drawn.
+//
+// A connect proper lands with no tables: the connection is open and the
+// editor runs on it, while the event's Load job reads the catalog and
+// lands it as a *workspace.CatalogLoaded (catalogLoaded). Until then the
+// Tables pane says "loading tables…" (drawTablesPane). A refresh or relist
+// lands its tables here, in the one event, with no Load.
 func (m *Model) connected(ev *workspace.Connected) tea.Cmd {
 	if ev.Stale {
 		return nil // superseded by a later connect, which canceled this one
@@ -242,7 +248,29 @@ func (m *Model) connected(ev *workspace.Connected) tea.Cmd {
 		m.relistTables()
 	}
 	m.catsAfterTransition()
-	return tea.Batch(m.tag(m.releaseThenClose(ev)), m.tag(job(ev.Counts)), m.tag(job(ev.Routines)))
+	return tea.Batch(m.tag(m.releaseThenClose(ev)), m.tag(job(ev.Load)),
+		m.tag(job(ev.Counts)), m.tag(job(ev.Routines)))
+}
+
+// catalogLoaded draws the catalog a connect left loading (Connected.Load):
+// the database and schema rows and the tables, then their row counts and
+// routines, as a connect's own landing did when it read them itself. The
+// list was empty until now, so it is filled as a re-read's is — nothing
+// was under the cursor, which then starts on the first table.
+//
+// A read that could not list the tables still redraws: the pickers above
+// the list may have been read, and "loading tables…" has to give way to
+// whatever is true now (the notes say what was not read, and why).
+func (m *Model) catalogLoaded(ev *workspace.CatalogLoaded) tea.Cmd {
+	if ev.Stale {
+		return nil // a later connect, refresh or disconnect owns the sidebar
+	}
+	m.notes(ev.Notes)
+	if ev.Status != "" {
+		m.setStatus(ev.Status)
+	}
+	m.relistTables()
+	return tea.Batch(m.tag(job(ev.Counts)), m.tag(job(ev.Routines)))
 }
 
 // sessionReleased tells the user when a released session took state with

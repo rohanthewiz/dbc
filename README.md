@@ -291,6 +291,13 @@ second `Esc` leaves the box). Typing `schema.` matches qualified names.
 starts a new find with what you type, except for `c` and `e`, which are
 that row's own keys; `/` goes back to the box.
 
+A connection is ready as soon as it is open: the log says "connected" and
+the editor runs on it, while the sidebar says `loading tables…` and reads
+the catalog behind it. A big production catalog can take seconds to list,
+and that is no longer time spent waiting to run a statement. `Ctrl+K` with
+nothing running stops the read (the connection stays), and a refresh reads
+it again.
+
 On Postgres the sidebar is loaded a level at a time, so connecting to a big
 server costs what the sidebar shows, not what the server holds:
 
@@ -401,7 +408,7 @@ dragging.
 | `Ctrl+Shift+R` / `Alt+R` | Run every statement in the buffer, in order |
 | `Ctrl+X` | Explain the statement under the caret (or the selected one) — the plan opens in the results pane |
 | `Alt+X` / `Ctrl+Shift+X` | Explain **analyze**: run it and measure every step (a write is rolled back or not run — see below) |
-| `Ctrl+K` | Stop the running query or script, a connect still dialing — or the assistant's answer |
+| `Ctrl+K` | Stop the running query or script, a connect still dialing, the sidebar's catalog read — or the assistant's answer |
 | `Alt+Shift+F` | Format the selection, or the whole buffer — and unwrap a query pasted from a log line (see [Formatting a query](#formatting-a-query)) |
 | *name* `Tab` · `Alt+S` | *(editor)* Expand the snippet of that name · the snippets dialog: insert one (wrapping the selection), new, edit, delete (see [Live snippets](#live-snippets)) |
 | `Ctrl+A` | Open the assistant / move between it and the editor |

@@ -47,11 +47,32 @@ func newTestWorkspace(t *testing.T) *Workspace {
 	}
 	w := New(cfg, mgr, nil, Options{})
 	t.Cleanup(w.Close)
-	ev := w.Connect(w.Active()).Job().(*Connected)
+	ev := landed(w.Connect(w.Active()))
 	if ev.Err != nil || w.Catalog() == nil {
 		t.Fatalf("connect: %v", ev.Err)
 	}
 	return w
+}
+
+// landed runs a connect's Job and then the catalog read it leaves behind
+// (Connected.Load), as a UI does, and folds what that read landed into the
+// *Connected — its lists, its notes, its Counts and Routines jobs — so a
+// test that is about what a connect ends up listing can ask one event.
+// A test about the gap between the two landings runs the Jobs itself.
+func landed(st Start) *Connected {
+	ev := st.Job().(*Connected)
+	if ev.Load == nil {
+		return ev // failed, superseded, or a driver with no catalog
+	}
+	ld := ev.Load().(*CatalogLoaded)
+	ev.Load = nil
+	if ld.Stale {
+		return ev
+	}
+	ev.Catalog, ev.Databases, ev.Schemas, ev.Schema = ld.Catalog, ld.Databases, ld.Schemas, ld.Schema
+	ev.Notes = append(ev.Notes, ld.Notes...)
+	ev.Counts, ev.Routines = ld.Counts, ld.Routines
+	return ev
 }
 
 // run starts stmts and runs the Job to completion.
@@ -569,7 +590,7 @@ func TestDisconnect(t *testing.T) {
 	refusal(t, err, NoConnection)
 
 	// nothing was active, so the reconnect left nothing (Left "")
-	if ev := w.Switch(demo).Job().(*Connected); ev.Err != nil || !ev.Changed || ev.Left != "" || w.Catalog() == nil {
+	if ev := landed(w.Switch(demo)); ev.Err != nil || !ev.Changed || ev.Left != "" || w.Catalog() == nil {
 		t.Fatalf("reconnect: %+v", ev)
 	}
 }
@@ -668,7 +689,7 @@ func TestNewerConnectSupersedesOlder(t *testing.T) {
 	addConn(w, config.Connection{Name: "slow", Driver: "postgres", DSN: blackholeDSN(t)})
 	addConn(w, config.Connection{Name: "other", Driver: "sqlite", DSN: memDSN()})
 	slow := async(w.Switch("slow").Job)
-	if ev := w.Switch("other").Job().(*Connected); ev.Err != nil || w.Active() != "other" {
+	if ev := landed(w.Switch("other")); ev.Err != nil || w.Active() != "other" {
 		t.Fatalf("other: %+v", ev)
 	}
 	ev := await(t, slow).(*Connected)
@@ -719,7 +740,7 @@ func TestRowCountsAreOptIn(t *testing.T) {
 	if w.RowCountsShown() {
 		t.Fatal("row counts start on")
 	}
-	if ev := w.Connect(demo).Job().(*Connected); ev.Err != nil || ev.Counts != nil {
+	if ev := landed(w.Connect(demo)); ev.Err != nil || ev.Counts != nil {
 		t.Fatalf("a connect with counts off: %+v", ev)
 	}
 	ev := run(t, w, "INSERT INTO cats (name, breed, age) VALUES ('Zed', 'tabby', 1)")
@@ -740,12 +761,12 @@ func TestRowCountsAreOptIn(t *testing.T) {
 	if w.ShowRowCounts(true) != nil {
 		t.Error("ticking on again recounts")
 	}
-	if ev := w.Connect(demo).Job().(*Connected); ev.Counts == nil {
+	if ev := landed(w.Connect(demo)); ev.Counts == nil {
 		t.Error("with counts on, a connect should count")
 	}
 
 	// off while a counting is on its way: the numbers go, it lands Stale
-	inflight := w.Connect(demo).Job().(*Connected).Counts
+	inflight := landed(w.Connect(demo)).Counts
 	if w.ShowRowCounts(false) != nil || w.RowCountsShown() || w.RowCounts() != nil {
 		t.Fatalf("ticking off: shown %v, counts %v", w.RowCountsShown(), w.RowCounts())
 	}
@@ -759,7 +780,7 @@ func TestRowCountsAreOptIn(t *testing.T) {
 func TestConnectCountsRows(t *testing.T) {
 	w := newTestWorkspace(t)
 	countsOn(t, w)
-	ev := w.Connect(demo).Job().(*Connected)
+	ev := landed(w.Connect(demo))
 	if ev.Err != nil || ev.Counts == nil {
 		t.Fatalf("connect: %+v", ev)
 	}
@@ -786,8 +807,8 @@ func TestRowCountsStaleAfterSwitch(t *testing.T) {
 	w := newTestWorkspace(t)
 	countsOn(t, w)
 	addConn(w, config.Connection{Name: "other", Driver: "sqlite", DSN: memDSN()})
-	first := w.Connect(demo).Job().(*Connected)
-	if ev := w.Switch("other").Job().(*Connected); ev.Err != nil {
+	first := landed(w.Connect(demo))
+	if ev := landed(w.Switch("other")); ev.Err != nil {
 		t.Fatalf("other: %+v", ev)
 	}
 	if rc := first.Counts().(*RowCounts); !rc.Stale {
@@ -805,7 +826,7 @@ func TestRunThatWritesRecounts(t *testing.T) {
 	w := newTestWorkspace(t)
 	countsOn(t, w)
 	cats := db.TableRef{Schema: "main", Name: "cats"}
-	before := w.Connect(demo).Job().(*Connected)
+	before := landed(w.Connect(demo))
 	if rc := before.Counts().(*RowCounts); rc.Stale || w.RowCounts()[cats].N != 8 {
 		t.Fatalf("first counting: %+v", rc)
 	}
@@ -817,7 +838,7 @@ func TestRunThatWritesRecounts(t *testing.T) {
 	}
 
 	// a counting from before the write, still in flight
-	inflight := w.Connect(demo).Job().(*Connected).Counts
+	inflight := landed(w.Connect(demo)).Counts
 	ev := run(t, w, "BEGIN", "INSERT INTO cats (name, breed, age) VALUES ('Zed', 'tabby', 1)", "COMMIT")
 	if ev.Err != nil || ev.Counts == nil {
 		t.Fatalf("insert: err %v, counts job %v", ev.Err, ev.Counts != nil)
@@ -1105,7 +1126,7 @@ func TestConnectCatalogIgnoresMaxRows(t *testing.T) {
 	}
 	all := len(w.Catalog().Rows) + 2
 	w.cfg.MaxRows = 2
-	ev := w.Connect(demo).Job().(*Connected)
+	ev := landed(w.Connect(demo))
 	if ev.Err != nil || ev.Catalog == nil {
 		t.Fatalf("connect: %+v", ev)
 	}
@@ -1334,7 +1355,7 @@ func TestConnectedOnlyOnceAConnectLanded(t *testing.T) {
 		t.Fatalf("new: active %q, connected %v", w.Active(), w.Connected())
 	}
 
-	if ev := w.Connect("broken").Job().(*Connected); ev.Err == nil {
+	if ev := landed(w.Connect("broken")); ev.Err == nil {
 		t.Fatal("broken connected")
 	}
 	if w.Active() != demo || w.Connected() {
@@ -1343,10 +1364,10 @@ func TestConnectedOnlyOnceAConnectLanded(t *testing.T) {
 	_, err := w.Refresh()
 	refusal(t, err, NoConnection)
 
-	if ev := w.Connect(demo).Job().(*Connected); ev.Err != nil || !w.Connected() {
+	if ev := landed(w.Connect(demo)); ev.Err != nil || !w.Connected() {
 		t.Fatalf("connect: %v, connected %v", ev.Err, w.Connected())
 	}
-	if ev := w.Switch("broken").Job().(*Connected); ev.Err == nil || w.Active() != demo || !w.Connected() {
+	if ev := landed(w.Switch("broken")); ev.Err == nil || w.Active() != demo || !w.Connected() {
 		t.Fatalf("failed switch: err %v, active %q, connected %v — want still on %s", ev.Err, w.Active(), w.Connected(), demo)
 	}
 
@@ -1373,7 +1394,7 @@ func TestRefreshWithoutTablesKeepsTheList(t *testing.T) {
 		gen := w.connGen
 		w.mu.Unlock()
 		ev := &Connected{Name: demo, Notes: []Note{notef(Warn, "tables list unavailable: boom")}}
-		w.landConnect(ev, gen, kind)
+		w.landConnect(ev, gen, kind, SchemaPick{})
 		return ev
 	}
 
@@ -1746,7 +1767,7 @@ func TestSectionsAndViewDDL(t *testing.T) {
 	}
 
 	run(t, w, "CREATE VIEW old_cats AS SELECT * FROM cats WHERE age > 5")
-	if ev := w.Connect(w.Active()).Job().(*Connected); ev.Err != nil {
+	if ev := landed(w.Connect(w.Active())); ev.Err != nil {
 		t.Fatal(ev.Err)
 	}
 	st, err := w.ViewDDL(db.TableRef{Schema: "main", Name: "old_cats", View: true})

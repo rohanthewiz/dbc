@@ -121,6 +121,13 @@ type Workspace struct {
 	wholeCatalog bool               // Options.WholeCatalog
 	schemaCancel context.CancelFunc // cancels the schema load in flight; nil when none is
 	schemaPick   SchemaPick         // what that load is for, while schemaCancel is set (refreshPickLocked)
+	// loadCancel cancels the catalog read a connect left running when it
+	// landed (Connected.Load, loadJobLocked); nil when none is, which is
+	// also how "is the catalog still loading" is asked (CatalogLoading).
+	// loadPick is the pick that read is for, so a Refresh that supersedes
+	// it lists what the connect was asked to (refreshPickLocked).
+	loadCancel context.CancelFunc
+	loadPick   SchemaPick
 	// rowCounts are the catalog's tables' row counts, once the Counts job
 	// of the connect that loaded it lands; nil until then. countCancel
 	// stops that job, which the next connect does: the counts would be for
@@ -311,11 +318,23 @@ func (w *Workspace) Connected() bool {
 }
 
 // Catalog is the active connection's tables, as its catalog query returned
-// them; nil before the first connect completes, or when the query failed.
+// them; nil before the first connect completes, while the connect's
+// catalog read is still running (CatalogLoading), or when the query failed.
 func (w *Workspace) Catalog() *model.Result {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.catalog
+}
+
+// CatalogLoading reports whether the catalog read of the connect that
+// landed last (Connected.Load) is still in flight: the workspace is on the
+// connection and statements run, but Catalog, Databases and Schemas are
+// empty because they have not been read yet, not because there is nothing
+// to list. A UI says "loading…" in its sidebar for as long as it holds.
+func (w *Workspace) CatalogLoading() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.loadCancel != nil
 }
 
 // Databases is the active connection's server's databases, for a database
@@ -629,6 +648,9 @@ func (w *Workspace) Stop() {
 	}
 	if w.schemaCancel != nil {
 		w.schemaCancel()
+	}
+	if w.loadCancel != nil {
+		w.loadCancel()
 	}
 }
 

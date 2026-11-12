@@ -435,7 +435,7 @@ func TestScriptResultSets(t *testing.T) {
 
 	// a run with a result of its own: the script's list is over
 	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"demo-sqlite"}`, 200)
-	s.await(t, "conn")
+	s.awaitCatalog(t)
 	e.api("POST", "/api/v1/ws/"+id+"/run", runBody("SELECT 1", 0, false), 200)
 	ev, _ = s.await(t, "run")
 	if run = decodeData[runEvent](t, testEnvelope{Data: ev.Data}); run.Sets != nil {

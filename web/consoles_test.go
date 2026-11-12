@@ -89,8 +89,7 @@ func TestFailedFirstConnectIsOnNothing(t *testing.T) {
 	}
 
 	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"demo-sqlite"}`, 200)
-	ev, _ = s.await(t, "conn")
-	if c := decodeData[connEvent](t, testEnvelope{Data: ev.Data}); !c.Connected || c.Failed || c.Console == nil {
+	if c := s.awaitCatalog(t); !c.Connected || c.Failed || c.Console == nil {
 		t.Fatalf("connect: %+v", c)
 	}
 	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"broken"}`, 200)

@@ -753,11 +753,17 @@ func (w *Workspace) relistAfterRunLocked(conn string, eff runEffects) Job {
 // to replace the list anyway and must not be canceled by this one. The
 // caller holds mu.
 //
+// A catalog still loading (the connect landed, its Load has not) IS
+// relisted, though nothing is listed yet: that read may have passed the
+// tables before the run's DDL committed, and would land a list already
+// out of date with nothing to correct it. The relist supersedes it, for
+// the same pick (refreshPickLocked).
+//
 // Only this workspace's sidebar is relisted. Another on the same Manager
 // (dbc web's other tabs) keeps its list until its own Refresh — as it
 // would for DDL any other client ran.
 func (w *Workspace) relistLocked(conn string) Job {
-	if conn != w.active || w.catalog == nil || w.connCancel != nil {
+	if conn != w.active || (w.catalog == nil && w.loadCancel == nil) || w.connCancel != nil {
 		return nil
 	}
 	w.mgr.ForgetRowCounts(conn)
@@ -820,8 +826,15 @@ func (w *Workspace) failedLocked(set *resultSet, err error, tag string, elapsed 
 }
 
 // Cancel is Ctrl+K and the Stop button: it stops the run in flight or,
-// with none, the connect in flight. The Note says what it did; status is
-// for a status bar ("" leaves it). The stopped work still lands, as stopped.
+// with none, the connect in flight or, with neither, the catalog read a
+// landed connect left running (Connected.Load). The Note says what it did;
+// status is for a status bar ("" leaves it). The stopped work still lands,
+// as stopped.
+//
+// The run comes first because it is what the user is most likely looking
+// at: with the catalog now read after the connect lands, a statement can
+// be running while the sidebar still loads, and Ctrl+K then means the
+// statement. A second Ctrl+K, the run stopped, reaches the read.
 func (w *Workspace) Cancel() (n Note, status string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -832,6 +845,12 @@ func (w *Workspace) Cancel() (n Note, status string) {
 	// no run, but a connect may be dialing — Cancel stops that too
 	if n, ok := w.cancelConnectLocked(); ok {
 		return n, ""
+	}
+	if w.loadCancel != nil {
+		// not cleared here: the read lands as canceled and clears it
+		// (loadJobLocked), so CatalogLoading holds until it has
+		w.loadCancel()
+		return notef(Warn, "canceling the catalog read of %s…", w.active), ""
 	}
 	return Note{Warn, "nothing is running"}, ""
 }

@@ -131,8 +131,7 @@ func TestConnAddConnectRemove(t *testing.T) {
 
 	// a tab can use it like any other
 	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"scratch"}`, 200)
-	cev, _ := s.await(t, "conn")
-	c := decodeData[connEvent](t, testEnvelope{Data: cev.Data})
+	c := s.awaitCatalog(t)
 	if c.Active != "scratch" || c.Failed {
 		t.Fatalf("connect to the added one: %+v", c)
 	}
@@ -143,7 +142,7 @@ func TestConnAddConnectRemove(t *testing.T) {
 		t.Fatalf("refusal = %q", res.Error)
 	}
 	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"demo-sqlite"}`, 200)
-	s.await(t, "conn")
+	s.awaitCatalog(t)
 
 	got = decodeData[connListResp](t, e.api("DELETE", "/api/v1/conns/scratch", "", 200))
 	if _, ok := got.find("scratch"); ok {
@@ -439,7 +438,7 @@ func testConnEdit(t *testing.T, persistent bool) {
 
 	// while a tab is on it, a new DSN or name is refused, ai_rows is not
 	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"renamed"}`, 200)
-	s.await(t, "conn")
+	s.awaitCatalog(t)
 	res = e.api("PUT", "/api/v1/conns/renamed",
 		editBody("renamed", "sqlite", "file:other?mode=memory&cache=shared", true), 409)
 	if !strings.Contains(res.Error, "1 query tab is") {
@@ -455,7 +454,7 @@ func testConnEdit(t *testing.T, persistent bool) {
 
 	// off it, a new DSN goes through and the next connect uses it
 	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"demo-sqlite"}`, 200)
-	s.await(t, "conn")
+	s.awaitCatalog(t) // both of the connect's events, so the next await is the next connect's
 	e.api("PUT", "/api/v1/conns/renamed",
 		editBody("renamed", "sqlite", "file:edit2?mode=memory&cache=shared", false), 200)
 	if cc, _ = e.srv.cfg.ConnByName("renamed"); cc.DSN != "file:edit2?mode=memory&cache=shared" {
@@ -465,8 +464,7 @@ func testConnEdit(t *testing.T, persistent bool) {
 		t.Fatalf("new DSN not saved: %+v", sc)
 	}
 	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"renamed"}`, 200)
-	cev, _ := s.await(t, "conn")
-	if c := decodeData[connEvent](t, testEnvelope{Data: cev.Data}); c.Active != "renamed" || c.Failed {
+	if c := s.awaitCatalog(t); c.Active != "renamed" || c.Failed {
 		t.Fatalf("connect after edit: %+v", c)
 	}
 }

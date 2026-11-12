@@ -642,6 +642,11 @@ type connEvent struct {
 	// Relisted: the sidebar was listed again after a run's DDL
 	// (workspace.Connected.Relisted), so the page keeps the run's status.
 	Relisted bool `json:"relisted,omitempty"`
+	// Loaded: this is the catalog of a connect that already landed
+	// (workspace.CatalogLoaded), arriving after its own "conn". The page
+	// keeps its status for the same reason: a statement may have run on
+	// the connection since, and its summary is what the bar should say.
+	Loaded bool `json:"loaded,omitempty"`
 	sideState
 	// The results pane follows the connection: a switch puts the new
 	// connection's result set on screen (workspace/results.go), so the
@@ -675,6 +680,12 @@ func (s *Server) connEventOf(t *tab, changed, failed bool, status string) connEv
 // too, with its database's tables listed whole below it.
 type sideState struct {
 	Tables []tabRef `json:"tables"`
+	// Loading says the tab is connected but its catalog is still being
+	// read (workspace.CatalogLoading): a connect lands on the open
+	// connection, and the pickers and tables follow in a second "conn"
+	// event. The page says "loading tables…" meanwhile, rather than
+	// drawing an empty list that reads as an empty database.
+	Loading bool `json:"loading,omitempty"`
 	// Base is the configured connection the sidebar's connection is, or is
 	// derived from (config.DatabaseSep): the Connections list's row to
 	// mark active while the tab is on another of its server's databases.
@@ -748,7 +759,8 @@ func (s *Server) sidebar(ws *workspace.Workspace) sideState {
 // no connection — disconnected, or never connected — has an empty one,
 // rather than the default's that its Active still names.
 func sidebar(cfg *config.Config, ws *workspace.Workspace) sideState {
-	st := sideState{Tables: tables(ws), Schema: ws.CatalogSchema(), RowCounts: ws.RowCountsShown(),
+	st := sideState{Tables: tables(ws), Loading: ws.CatalogLoading(),
+		Schema: ws.CatalogSchema(), RowCounts: ws.RowCountsShown(),
 		ShowRoutines: ws.RoutinesShown(), Routines: routines(ws),
 		TablesOpen: ws.SectionOpen(workspace.SectionTables), ViewsOpen: ws.SectionOpen(workspace.SectionViews)}
 	active := ws.Active()
@@ -896,6 +908,30 @@ func (s *Server) deliver(t *tab, ev workspace.Event) {
 				s.closeLeft(t, left)
 			})
 		}
+		// a connect proper lands without its catalog: the "conn" above
+		// put the tab on the connection (Loading set), and this reads the
+		// databases, schemas and tables for a second one
+		if ev.Load != nil {
+			goSafe(t, "the catalog", func() { s.deliver(t, ev.Load()) })
+		}
+		if ev.Counts != nil {
+			goSafe(t, "row counts", func() { s.deliver(t, ev.Counts()) })
+		}
+		if ev.Routines != nil {
+			goSafe(t, "the routines", func() { s.deliver(t, ev.Routines()) })
+		}
+	case *workspace.CatalogLoaded:
+		if ev.Stale {
+			return // a later connect, refresh or disconnect will report
+		}
+		// the sidebar is redrawn from the workspace, as a schema pick's
+		// is: one "conn" shape for the page, Changed false since the tab
+		// was already on the connection. Failed marks a read with no
+		// tables, so the page expects no counting to follow it.
+		t.notesOn(ev.Conn, ev.Notes)
+		ce := s.connEventOf(t, false, ev.Catalog == nil, ev.Status)
+		ce.Loaded = true
+		t.send("conn", ce)
 		if ev.Counts != nil {
 			goSafe(t, "row counts", func() { s.deliver(t, ev.Counts()) })
 		}

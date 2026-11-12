@@ -527,6 +527,8 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 	// script's mid-run output from the sink
 	case *workspace.Connected:
 		return m.connected(msg)
+	case *workspace.CatalogLoaded:
+		return m.catalogLoaded(msg)
 	case *workspace.SchemaLoaded:
 		return m.schemaLoaded(msg)
 	case *workspace.RowCounts:

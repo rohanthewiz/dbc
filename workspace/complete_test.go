@@ -84,7 +84,7 @@ func TestCompletionCacheAcrossPickAndConnect(t *testing.T) {
 		t.Fatal("a schema pick dropped the completion cache")
 	}
 
-	if ev := w.Connect(w.Active()).Job().(*Connected); ev.Err != nil {
+	if ev := landed(w.Connect(w.Active())); ev.Err != nil {
 		t.Fatal(ev.Err)
 	}
 	if _, ready := w.Complete("SELECT ", 7); ready {

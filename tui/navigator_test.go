@@ -14,7 +14,44 @@ import (
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/userdata"
+	"github.com/rohanthewiz/dbc/workspace"
 )
+
+// A connect lands on the open connection before its catalog is read
+// (workspace.Connected.Load): the log says connected and the Tables pane
+// says "loading tables…" — not "no tables", which would read as an empty
+// database — until the catalog's own landing fills the list.
+func TestTablesPaneSaysLoadingUntilTheCatalogLands(t *testing.T) {
+	m := newTestModel(t)
+	m.focus = focusConns
+	key(t, m, "x") // disconnect, so the connect below is a connect proper
+
+	ev := m.ws.Connect(config.DemoSQLite).Job().(*workspace.Connected)
+	if ev.Err != nil || ev.Load == nil {
+		t.Fatalf("connect: %+v", ev)
+	}
+	// the connect's landing alone: its commands (the catalog read among
+	// them) are held back, as they are in flight in the running program
+	_, cmd := m.Update(ev)
+	m.render()
+	f := frame(m)
+	findText(t, f, "connected to demo-sqlite")
+	findText(t, f, "loading tables…")
+	if len(m.tables.items) != 0 || !m.ws.CatalogLoading() {
+		t.Fatalf("mid-load: %d rows listed, loading %v", len(m.tables.items), m.ws.CatalogLoading())
+	}
+
+	drive(t, m, nil, cmd)
+	if len(tableNames(m)) == 0 || m.ws.CatalogLoading() {
+		t.Fatalf("after the load: %d tables, loading %v", len(tableNames(m)), m.ws.CatalogLoading())
+	}
+	if strings.Contains(frame(m).String(), "loading tables…") {
+		t.Error("the pane still says loading with its tables listed")
+	}
+	if name, _ := m.currentTable(); name == "" {
+		t.Error("the cursor is on no table after the load")
+	}
+}
 
 // x in the Connections pane leaves the connection without picking another:
 // nothing active, an empty sidebar saying so, "not connected" in the status
@@ -271,8 +308,9 @@ func TestLiveNavigatorPostgres(t *testing.T) {
 	}
 	typeText(t, m, "nav_b")
 	key(t, m, "enter")
-	if s := m.ws.CatalogSchema(); s != "tui_nav_b" || len(m.tables.items) != 2 {
-		t.Fatalf("schema %q, %d tables:\n%s", s, len(m.tables.items), logText(m))
+	// the names, not the rows: the list has its sections' headers too
+	if s := m.ws.CatalogSchema(); s != "tui_nav_b" || len(tableNames(m)) != 2 {
+		t.Fatalf("schema %q, %d tables:\n%s", s, len(tableNames(m)), logText(m))
 	}
 	findText(t, frame(m), "◫ tui_nav_b · 2")
 

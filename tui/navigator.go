@@ -171,6 +171,10 @@ func (m *Model) drawTablesPane(s Surface) *caret {
 		empty = "no match"
 	case m.ws.Active() == "":
 		empty = "not connected"
+	case m.ws.CatalogLoading():
+		// connected, the catalog read still on its way (Connected.Load):
+		// said, so an empty pane is not read as an empty database
+		empty = "loading tables…"
 	case m.ws.Catalog() != nil:
 		empty = "no tables"
 	}

@@ -40,9 +40,19 @@ func TestLiveDerivedPoolClosedWhenLeft(t *testing.T) {
 	connect := func(id string, s *stream, name string) {
 		t.Helper()
 		e.api("POST", "/api/v1/ws/"+id+"/connect", fmt.Sprintf(`{"name":%q}`, name), 200)
-		ev, logs := s.await(t, "conn")
-		if c := decodeData[connEvent](t, testEnvelope{Data: ev.Data}); c.Active != name || c.Failed {
-			t.Fatalf("connect %s = %+v (%q)", name, c, logs)
+		// the connect's own "conn", not its catalog's after it: the pool
+		// left is closed between the two, and the log line saying so is
+		// what this test waits for next. An earlier connect's catalog may
+		// still be on the stream, on the connection before — read past it.
+		for {
+			ev, _ := s.await(t, "conn")
+			c := decodeData[connEvent](t, testEnvelope{Data: ev.Data})
+			if c.Failed {
+				t.Fatalf("connect %s = %+v", name, c)
+			}
+			if c.Active == name {
+				return
+			}
 		}
 	}
 	a, sa := e.open()

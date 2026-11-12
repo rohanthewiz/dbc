@@ -46,7 +46,7 @@ func TestDesignerSQLitePrefixIndex(t *testing.T) {
 		`INSERT INTO qd_orders VALUES (1, 'open', 'r1', 'C1'), (2, 'open', 'R10', 'c2'), (3, 'shut', 'x_1', 'd3')`)
 	w := New(cfg, mgr, nil, Options{})
 	t.Cleanup(w.Close)
-	if ev := w.Connect(demo).Job().(*Connected); ev.Err != nil {
+	if ev := landed(w.Connect(demo)); ev.Err != nil {
 		t.Fatalf("connect: %v", ev.Err)
 	}
 

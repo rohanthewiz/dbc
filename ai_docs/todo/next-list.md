@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-316
+**Next ID:** N-319
 
 ## Open
 
@@ -354,16 +354,6 @@ ten session docs in `ai_docs/claude_sessions/`
   UTF-8, a typed NULL (empty in CSV), NaN and Inf as null or a string.
   Read here (`renderVal`, `rawVal`); the export paths audit, traced.
   (RPU plan, phase 4)
-- **N-289** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  Row-returning statements outside `queryVerbs` run as Exec and lose
-  their rows (`db/manager.go:528-531,611-617,660`): `CALL`, `FETCH`,
-  `EXECUTE`, MySQL `CHECK`/`ANALYZE`/`OPTIMIZE TABLE`. MySQL
-  `CALL monthly_report()` (a procedure that SELECTs) shows "0 affected",
-  as does Postgres `FETCH 10 FROM cur`, though completion offers `CALL`.
-  `NextResultSet` is never used, so a procedure's further results cannot
-  show. Fix: for a verb that is neither clearly a read nor a write, run
-  as Query and fall back to affected when `Columns()` is empty. Read
-  here. (RPU plan, phase 4)
 - **N-290** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   `Manager.Columns` is the one catalog read still cut at `max_rows`
   (`db/catalog.go:601` uses `RunContext` and ignores `Truncated`). When
@@ -527,6 +517,36 @@ ten session docs in `ai_docs/claude_sessions/`
   user's Refresh retry (one flag at `connectLocked`'s `names`), expire
   the memory after some minutes (as `complRetry` does a failed load), or
   drop it on a Disconnect.
+- **N-317** · raised `2026-1112-1634-n289-rows-by-result` · value low
+  A script sees only the first of a statement's result sets unless it
+  asks. `s.Query("my", "CALL monthly_report()")` returns a Result whose
+  further sets are in `More` (N-289), but `s.Show(r)` shows `r` alone,
+  and nothing in the examples or the built-in scripts ranges over
+  `r.Sets()`. Either `Show` shows every set (each a result of its own,
+  as the workspace lands them), or it stays as it is and the scripting
+  docs carry the loop (the dbc skill's `scripting.md` does; the README's
+  script section does not). Same neighbourhood: `s.Exec` of a statement
+  that returned rows hands back 0, where on Postgres a `FETCH` used to
+  give its row count.
+- **N-318** · raised `2026-1112-1634-n289-rows-by-result` · value low
+  Calls N-289 made without the user's word, each easy to flip:
+  - A statement's result sets are capped at 51 (`db.maxMoreSets` = 50
+    past the first), for the procedure that SELECTs in a loop; the rest
+    are dropped with a warning. Not a config key.
+  - Headless, a lone statement with several sets renders as a
+    multi-result document: banners `1/1`, `1/1` in text and markdown,
+    and in `-t json` an array of envelopes where a lone statement
+    otherwise gives a bare array of rows. A consumer that runs one
+    `CALL` and expects rows gets another shape once the procedure
+    returns a second set (before N-289 it got `rows_affected`).
+  - A verb in neither list (`queryVerbs`, `execVerbs`) runs as a Query
+    on Postgres and MySQL, which costs a round trip when it returns no
+    rows (a describe on Postgres, `SELECT ROW_COUNT()` on MySQL). The
+    other way round was a list of row-returning verbs, with a silent
+    "0 affected" for any verb missing from it.
+  - A different statement run with one of a `CALL`'s set tabs on screen
+    replaces that tab alone and leaves its siblings, as a single
+    statement does to a run-all's group.
 
 ## Validate
 
@@ -920,6 +940,12 @@ and `raised`.
   And `TestLiveDesigner/postgres` failed once when the live packages ran
   in parallel on the one database (passes alone): run the live suites
   with `-p 1`, as the live-db-tests note says for a full run.
+  Both seen again 2026-11-12 (`2026-1112-1634-n289-rows-by-result`, on
+  postgres:17): the routines test fails the same way on the tree before
+  that session's change, and `TestLiveDesigner/postgres` failed once in
+  a full `-race ./...` run with both servers (line 366, "the pattern
+  index should find the prefix and not the range"), then passed five
+  times, alone and in a `-race` run of the package.
   One more, unexplained: `go test ./userdata ./workspace ./web ./tui`
   failed once in `tui` on 2026-11-10 (after N-256), its only output a
   "pipeline slow … was stopped" line from a jobs test's cleanup; the
@@ -973,6 +999,22 @@ and `raised`.
     Tables pane's "not read" line, `r` / the refresh link listing the
     tables, and that nothing reaches the server before it (the server's
     log, or `pg_stat_activity`).
+- **N-316** · raised `2026-1112-1634-n289-rows-by-result` · value low
+  Hand checks of a statement's several result sets (N-289), which only
+  the workspace's live test and the headless binary have exercised. On a
+  MySQL connection, with a procedure that runs two or three SELECTs:
+  - TUI, in a real terminal: `CALL` it; a tab per set, and whether the
+    `· 2/3` survives the strip's shortening of a long title (the suffix
+    is at the end, where the cut is); `{` / `}` across them; the done
+    note; run it again and rerun one tab (`r` on a pinned one too) and
+    see the same tabs refilled.
+  - dbc web: the same, plus the tab's hover card and the grid view kept
+    per tab.
+  - Headless `-t html` and `-o file` with a lone `CALL` (text, JSON and
+    CSV were looked at).
+  - Postgres, in either UI: `BEGIN; DECLARE c CURSOR FOR …; FETCH 5 FROM
+    c` shows rows, and a `CALL` of a procedure with an INOUT parameter
+    its one row.
 
 ## Roadmap
 
@@ -1215,6 +1257,17 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-289** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Row-returning statements outside `queryVerbs` run as Exec and lose
+  their rows (`db/manager.go:528-531,611-617,660`): `CALL`, `FETCH`,
+  `EXECUTE`, MySQL `CHECK`/`ANALYZE`/`OPTIMIZE TABLE`. MySQL
+  `CALL monthly_report()` (a procedure that SELECTs) shows "0 affected",
+  as does Postgres `FETCH 10 FROM cur`, though completion offers `CALL`.
+  `NextResultSet` is never used, so a procedure's further results cannot
+  show. Fix: for a verb that is neither clearly a read nor a write, run
+  as Query and fall back to affected when `Columns()` is empty. Read
+  here. (RPU plan, phase 4)
+  closed 2026-11-12, `2026-1112-1634-n289-rows-by-result` (RPU plan, phase 4), commit `9179296`: a statement is now one of three kinds (`db/stmtkind.go`, `kindOf`). The verb settles what it can: `queryVerbs` and a write with RETURNING are a Query, `execVerbs` (the writes, DDL, transaction, session and admin statements) an Exec. Everything else, on Postgres and MySQL only, is a `kindMaybe`: run as a Query, rows when columns come back, a count when none do. That is a list of known Execs rather than of row-returning verbs, so a verb in neither list costs a round trip instead of losing rows. The count of a Query is not in database/sql, so it is asked for per engine: on Postgres the command tag, through a pgx query tracer (`pgTagTracer`, a holder in the statement's context); on MySQL `SELECT ROW_COUNT()` on the same connection, a pooled run checking one out for the pair with one retry on `driver.ErrBadConn`. So `EXECUTE` of a prepared INSERT and a `CALL` that only writes report the count they did. On Postgres a kindMaybe goes out in pgx's `QueryExecModeDescribeExec`: with the pool's cached mode a cursor declared again over another query had `FETCH` decode its rows under the first one's columns ("convert field 0 failed: invalid length for int4", reproduced). A text of several statements stays an Exec (the extended protocol refuses the pair). SQLite and bytdb are unchanged. `NextResultSet` is used: `readSets` puts a statement's further sets in `model.Result.More` (each cut at `max_rows`; at most 50, `MoreCut` past that; `Result.Sets()` is all of them). The workspace lands each in a tab titled `CALL p() · 2/3`, and the same statement run again, or a rerun of one of the tabs (a pinned one included), refills them in place (`resultTab.set/sets/nth`, `placeRunLocked`); the done note says "3 result sets, showing the last". Headless: each set is a block at its statement's position, also for a lone statement (`export.RenderRun`), and a JSON envelope each. The item's premise was confirmed with a probe against postgres:17 and mysql:8.4 before the fix, except one part that was wrong: `(SELECT 1) UNION (SELECT 2)` already ran as a Query (`sqlsplit.Verbs` reads through the paren). Tests: `db` `TestKindOf`, `TestReadSets` (a fake driver with several sets); live `TestLiveStmtKindPostgres` and `TestLiveStmtKindMySQL` (rows, counts, the re-declared cursor, arguments, a procedure that raises after its first set); live `workspace.TestLiveWorkspaceResultSets`; `export.TestRenderRunSetsOfOneStatement`. Real binary against both servers: a two-SELECT procedure in text, JSON and CSV, a `FETCH` between `BEGIN` and `COMMIT`, a result cut by `--max-rows`. README (result tabs, headless formats), the dbc skill and `sdb/sdbapi/api.json` updated; the summary's 14 KB budget was met by shortening the first sentence of three `model.Result` field comments. Not seen on screen: N-316. Calls made without the user: N-318.
 - **N-311** · raised `2026-1112-1538-lazy-catalog-after-connect` · value medium
   Levels of introspection: a per-connection `introspect` setting (with a
   global default) for how much of a database dbc reads unasked. The user

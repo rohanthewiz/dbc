@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-313
+**Next ID:** N-316
 
 ## Open
 
@@ -508,32 +508,25 @@ ten session docs in `ai_docs/claude_sessions/`
   script's `Run` through `ExecuteWithContext` of a compiled call, or have
   the workspace abandon a run a minute after Stop as the engine does
   (free the slot, say the session stays busy). Raised while closing N-268.
-- **N-311** · raised `2026-1112-1538-lazy-catalog-after-connect` · value medium
-  Levels of introspection: a per-connection `introspect` setting (with a
-  global default) for how much of a database dbc reads unasked. The user
-  floated the concept on 2026-11-12, beside the lazy catalog read
-  (`8ffc279`), from a ProdDr log where the schema summary spent its whole
-  5s budget on every connect. Since `8ffc279` that no longer holds
-  "connected" back, but it is still paid — on every connect, refresh and
-  relist after DDL of such a database — before the sidebar fills.
-  Proposed shape, awaiting the user's yes or their own levels:
-  - `off`: connect only; the sidebar reads nothing until a refresh, and
-    completion offers the dialect's words until then.
-  - `names`: databases, schema names (`db.SchemaNamesQuery`, no pass over
-    `pg_class`), the open schema's tables; no per-schema counts, no "all
-    schemas"; completion scoped to the open schema and `search_path`
-    (`Manager.SchemaIn`) rather than the whole database.
-  - `full` (the default): today's reads, counts included.
-  Plus an adaptive default: when the summary times out once, remember it
-  for the connection (as `complScoped` does for completion) and go
-  straight to names on later reads, so no config edit is needed to stop
-  paying the 5s. Open questions inside that: whether a user's Refresh
-  tries the summary again, and whether the memory outlives the process.
-  Row counts and routines would stay their own switches (already opt-in),
-  not higher levels. Touches `workspace/connect.go` (`readCatalog`,
-  `listSchemas`), `workspace/complete.go`, `config` (a connection field,
-  so also the TUI's and the web's connection forms, `connedit`), README
-  and `dbc.example.toml`.
+- **N-313** · raised `2026-1112-1610-n311-introspection-levels` · value low
+  The TUI's database and schema pickers give the wrong reason while a
+  connect's catalog is still loading (`CatalogLoading`, since `8ffc279`).
+  `d` then logs "the server's databases could not be listed" and `s`
+  "this database has one schema — its tables are all listed"
+  (`tui/navigator.go` `pickWhy`): neither is true, the lists are on their
+  way. Add a loading case beside the unread one N-311 added ("still
+  reading <conn>'s catalog"). Seen while wording the unread case; not run.
+- **N-314** · raised `2026-1112-1610-n311-introspection-levels` · value low
+  Two calls inside N-311's adaptive default were the session's, made
+  without the user's word, and stand until the user says otherwise: a
+  Refresh does not try a remembered-slow schema summary again, and the
+  memory lasts the process (not written down). The cost: one transient
+  timeout on a small database takes its picker's counts and "all schemas"
+  away until dbc restarts or the connection's DSN is edited, which for a
+  long-running `dbc web` is a long time. Options if that bites: let the
+  user's Refresh retry (one flag at `connectLocked`'s `names`), expire
+  the memory after some minutes (as `complRetry` does a failed load), or
+  drop it on a Disconnect.
 
 ## Validate
 
@@ -962,6 +955,25 @@ and `raised`.
     `TestConnectLandsBeforeItsCatalog` does. A catalog slow by size
     rather than by lock would.
 
+- **N-315** · raised `2026-1112-1610-n311-introspection-levels` · value low
+  Hand checks of the levels of introspection (N-311) on a database whose
+  schema summary really is slow (ProdDr); the tests force the timeout
+  with a 1ns budget. Checks:
+  - At the default `full`: the first connect of a run pays the 5s once,
+    after "connected", and logs the two notes (counts unavailable; read
+    by schema names from here on). A second connect, a refresh, a relist
+    after DDL and a second tab on the connection fill the sidebar with
+    no wait and no note.
+  - With `introspect = "names"` on the connection: no wait on the first
+    connect either; the picker lists names without counts and has no
+    "all schemas"; completion offers the open schema's tables, and
+    another schema's once it is picked. Note how long the scoped
+    completion read takes there.
+  - With `introspect = "off"`, in a real terminal and in dbc web: the
+    Tables pane's "not read" line, `r` / the refresh link listing the
+    tables, and that nothing reaches the server before it (the server's
+    log, or `pg_stat_activity`).
+
 ## Roadmap
 
 Wanted, but deliberately not next. Empty at seeding: the session docs never
@@ -1203,6 +1215,33 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-311** · raised `2026-1112-1538-lazy-catalog-after-connect` · value medium
+  Levels of introspection: a per-connection `introspect` setting (with a
+  global default) for how much of a database dbc reads unasked. The user
+  floated the concept on 2026-11-12, beside the lazy catalog read
+  (`8ffc279`), from a ProdDr log where the schema summary spent its whole
+  5s budget on every connect. Since `8ffc279` that no longer holds
+  "connected" back, but it is still paid — on every connect, refresh and
+  relist after DDL of such a database — before the sidebar fills.
+  Proposed shape, awaiting the user's yes or their own levels:
+  - `off`: connect only; the sidebar reads nothing until a refresh, and
+    completion offers the dialect's words until then.
+  - `names`: databases, schema names (`db.SchemaNamesQuery`, no pass over
+    `pg_class`), the open schema's tables; no per-schema counts, no "all
+    schemas"; completion scoped to the open schema and `search_path`
+    (`Manager.SchemaIn`) rather than the whole database.
+  - `full` (the default): today's reads, counts included.
+  Plus an adaptive default: when the summary times out once, remember it
+  for the connection (as `complScoped` does for completion) and go
+  straight to names on later reads, so no config edit is needed to stop
+  paying the 5s. Open questions inside that: whether a user's Refresh
+  tries the summary again, and whether the memory outlives the process.
+  Row counts and routines would stay their own switches (already opt-in),
+  not higher levels. Touches `workspace/connect.go` (`readCatalog`,
+  `listSchemas`), `workspace/complete.go`, `config` (a connection field,
+  so also the TUI's and the web's connection forms, `connedit`), README
+  and `dbc.example.toml`.
+  closed 2026-11-12, `2026-1112-1610-n311-introspection-levels`: built as proposed, the user's "next list item N-311" taken as the yes. `introspect` is a global key (default `full`) and a per-connection one, in the config file, `connections.toml` (left out when unset) and both connection forms (a chip row in the TUI, a select in dbc web); `config.IntrospectFor` settles the level, a derived connection reading at its base's, a level that is none warning and falling back. `names`: `readCatalog` lists schemas by `SchemaNames` and never tries the summary; completion (`LoadCompletions`, `ConnCompletions`) is scoped from the start on Postgres, and reads whole elsewhere. `off`: the connect lands with no `Load` and the workspace is `CatalogUnread` (both sidebars say "not read", with the refresh), completion is the dialect's words, a schema pick and a second click on the row are refused or ignored, no relist follows DDL; the user's Refresh reads as `names` for the pick the connect was asked for, and one that read nothing leaves it unread. Adaptive: a summary that runs out its budget is remembered on the `db.Manager` (`MarkSummarySlow`), shared by every workspace, and the connection reads as `names` from then on, completion included, with one note naming the setting. The two open questions were settled by the session, not the user (N-314): a Refresh does not retry, and the memory lasts the process (kept across a Disconnect, dropped by `Manager.Drop`, i.e. an edit of what the connection dials). `ConnCompletions` at `off` reads nothing, so the pipeline inspector offers no tables there. Diagram, Show columns, the designer, and the row-count and routines switches are untouched. Tests: `config/introspect_test.go`, `db` `TestSummarySlowMemory`, `workspace/introspect_test.go` (SQLite) and three live Postgres tests (`TestLiveWorkspaceIntrospectNames`, `…IntrospectOff`, `…SlowSummaryRemembered`), `connedit` `TestIntrospectRidesTheForm`, tui `TestConnFormIntrospectOff`, web `TestOffConnectionSidebarIsUnread` and a `TestConnEdit` case, and the e2e step "introspect off: an unread sidebar". Full suite and the 54-step browser suite green against Postgres 17. README ("Levels of introspection") and `dbc.example.toml` updated. The check on a database that is really slow is N-315.
 - **N-268** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Nothing stands behind a node that ignores cancel. Cancel is cooperative
   by design, but `script/engine.go:155` and `script/plugins.go:321` call

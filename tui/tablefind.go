@@ -53,12 +53,25 @@ type tableFind struct {
 // header stays while its section has a match below it, so each match is
 // still seen under the section it is in, and goes with a section that has
 // none — a find that matches nothing leaves an empty list, which says
-// "no match". A section's note ("no views") is not a match either. Only
-// the open sections' rows are searched: a folded one's are not listed.
+// "no match". A section's note ("no views") is not a match either.
+//
+// A folded section is searched too: its rows are in all, marked folded
+// (sectionItems), and listed only while they match. Its header then
+// "peeks" — a hollow ▿ in place of ▸ — so the matches do not read as
+// sitting under a closed fold, and the workspace's fold is left alone:
+// Esc puts the ▸ back, and Enter on the header opens it for good.
+//
+//	find "legac", Tables folded       Esc
+//	▿ Tables          34              ▸ Tables          34
+//	  legacy_orders                   ▾ Views            3
+//	                                    …
+//
+// Folded Routines are the exception: nothing is read while they are
+// folded, so there are no rows of theirs to search.
 func (f *tableFind) matches() []listItem {
 	q := strings.ToLower(strings.TrimSpace(f.input.Text()))
 	if q == "" {
-		return f.all
+		return listedRows(f.all)
 	}
 	out := make([]listItem, 0, len(f.all))
 	var header *listItem // the section heading the rows now scanned, until its first match
@@ -70,9 +83,35 @@ func (f *tableFind) matches() []listItem {
 			// a note between the rows: never a match
 		case strings.Contains(strings.ToLower(it.label), q):
 			if header != nil {
-				out = append(out, *header)
+				h := *header // a copy: the peek mark is this find's, not all's
+				if it.folded {
+					h.mark = "▿"
+				}
+				out = append(out, h)
 				header = nil
 			}
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// listedRows is items as the pane lists them with no find: the rows of
+// folded sections left out. It returns items itself when none is folded
+// (the usual case), so an unfiltered fill allocates nothing.
+func listedRows(items []listItem) []listItem {
+	n := 0
+	for _, it := range items {
+		if it.folded {
+			n++
+		}
+	}
+	if n == 0 {
+		return items
+	}
+	out := make([]listItem, 0, len(items)-n)
+	for _, it := range items {
+		if !it.folded {
 			out = append(out, it)
 		}
 	}
@@ -86,11 +125,13 @@ func isSectionHeader(it listItem) bool {
 }
 
 // countNames is how many rows of items name something — a table, view or
-// routine — leaving out the sections' headers and notes.
-func countNames(items []listItem) int {
+// routine — leaving out the sections' headers and notes. A folded
+// section's rows count only with folded true: they are not listed, but
+// they are what a find searches, so its "3 of 40" counts them.
+func countNames(items []listItem, folded bool) int {
 	n := 0
 	for _, it := range items {
-		if !it.head && !isSectionHeader(it) {
+		if !it.head && !isSectionHeader(it) && (folded || !it.folded) {
 			n++
 		}
 	}
@@ -110,10 +151,14 @@ func (m *Model) findEditing() bool {
 
 // setTableRows puts the catalog's rows in the Tables pane, through the
 // filter when there is one. Every fill of the list goes through here.
+// Without a filter the folded sections' rows are dropped (listedRows);
+// with one they are kept in its all, for it to search.
 func (m *Model) setTableRows(items []listItem) {
 	if f := m.tfind; f != nil {
 		f.all = items
 		items = f.matches()
+	} else {
+		items = listedRows(items)
 	}
 	m.tables.set(items)
 }
@@ -122,16 +167,20 @@ func (m *Model) setTableRows(items []listItem) {
 // the open sections' tables, views and routines, not their headers.
 func (m *Model) tableRowsTotal() int {
 	if m.tfind != nil {
-		return countNames(m.tfind.all)
+		return countNames(m.tfind.all, false)
 	}
-	return countNames(m.tables.items)
+	return countNames(m.tables.items, false)
 }
 
 // openTableFind is the Tables pane's /: into the filter line, made on the
-// first use with the list as it stands (unfiltered, as there was no filter).
+// first use. The list on screen has lost its folded sections' rows
+// (setTableRows), so the filter's all is filled from the catalog afresh —
+// an in-memory rebuild, no read — rather than taken from the screen; with
+// no text yet it lists the same rows, so the cursor stays put.
 func (m *Model) openTableFind() {
 	if m.tfind == nil {
 		m.tfind = &tableFind{input: newEditor(true), all: m.tables.items}
+		m.fillTables()
 	}
 	m.tfind.editing = true
 	m.focus = focusTables
@@ -158,7 +207,7 @@ func (m *Model) clearTableFind() {
 	}
 	all := m.tfind.all
 	m.tfind = nil
-	m.tables.set(all)
+	m.tables.set(listedRows(all)) // the folds back: a peeking section's rows go
 	m.cursorToKey(was)
 }
 
@@ -219,7 +268,8 @@ func (m *Model) drawTableFind(s Surface, y int) (Rect, *caret) {
 	st := m.st.raised
 	r.Fill(st)
 	r.Put(1, 0, "⌕", st.WithFg(m.st.accent.Fg))
-	// the open sections are searched: tables, views, routines alike
+	// every section is searched, folded or not (matches): tables, views,
+	// and routines while they are open (folded, they are not read)
 	m.tfind.input.placeholder = "find by name"
 	cx, cy, ok := m.tfind.input.Draw(r.Sub(Rect{3, 0, max(r.W()-4, 1), 1}), m.st, st, [2]int{}, true)
 	if ok && m.findEditing() {
@@ -228,13 +278,28 @@ func (m *Model) drawTableFind(s Surface, y int) (Rect, *caret) {
 	return r.Rect(), nil
 }
 
+// tablesCounted reports whether the Tables pane's title carries a count:
+// while the pane lists names, or while a find searches some. The second
+// is not implied by the first — with every section folded nothing is
+// listed, yet a find under the folds (matches) has names to count.
+func (m *Model) tablesCounted() bool {
+	if m.tfind.active() && m.tfind.input.Text() != "" {
+		return countNames(m.tfind.all, true) > 0
+	}
+	return m.tableRowsTotal() > 0
+}
+
 // tablesTitleCount is the Tables pane title's count of the names listed
 // (headers left out): "40", or "3 of 40" while the filter narrows the
 // list.
+//
+// Both sides count folded sections' rows (countNames' folded): the matches
+// may be peeking from one, and "of" is every name the find searched, so it
+// never reads "3 of 1" with the tables folded.
 func (m *Model) tablesTitleCount() string {
-	n := countNames(m.tables.items)
+	n := countNames(m.tables.items, true)
 	if m.tfind.active() && m.tfind.input.Text() != "" {
-		return fmt.Sprintf("%d of %d", n, countNames(m.tfind.all))
+		return fmt.Sprintf("%d of %d", n, countNames(m.tfind.all, true))
 	}
 	return fmt.Sprint(n)
 }

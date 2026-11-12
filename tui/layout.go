@@ -336,7 +336,7 @@ func (m *Model) render() (*Canvas, *caret) {
 			m.conns.draw(s, m.st, m.st.panel, m.focus == focusConns, "no connections")
 		})
 		title := "Tables"
-		if n := m.tableRowsTotal(); n > 0 {
+		if m.tablesCounted() {
 			title = "Tables · " + m.tablesTitleCount() // "3 of 40" while filtered
 		}
 		// the row counts' switch, so a list without numbers reads as

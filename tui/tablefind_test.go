@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/rohanthewiz/dbc/workspace"
 )
 
 // labels is the tables list's names, by label: the sections' headers
@@ -179,5 +181,80 @@ func TestTablesFindAcrossCatalogs(t *testing.T) {
 	}
 	if len(tableNames(m)) != 2 || m.tableRowsTotal() != 2 {
 		t.Errorf("rows %v", labels(m))
+	}
+}
+
+// THE FIND LOOKS UNDER THE FOLDS. A folded section's names are in hand (the
+// catalog lists tables and views together), so the find searches them: a
+// match peeks out under its section's header, drawn ▿, while the fold
+// itself is left alone — Esc puts the ▸ back, and toggling the header
+// during the find opens it for good.
+func TestTablesFindUnderFold(t *testing.T) {
+	m := newTestModel(t)
+	for _, q := range []string{
+		"CREATE TABLE legacy_orders (x INT)",
+		"CREATE VIEW legacy_cats AS SELECT * FROM cats",
+	} {
+		if _, err := m.ws.Manager().Run(m.ws.Active(), q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	drive(t, m, nil, job(m.ws.Connect(m.ws.Active()).Job))
+	m.focus = focusTables
+	key(t, m, "t") // fold Tables; Views start folded
+	if got := strings.Join(labelsAll(m), ","); got != "Tables,Views" {
+		t.Fatalf("both folded: %q", got)
+	}
+	if n := m.tableRowsTotal(); n != 0 {
+		t.Errorf("tableRowsTotal = %d with every section folded, want 0", n)
+	}
+
+	key(t, m, "/")
+	typeText(t, m, "legac")
+	if got := strings.Join(labelsAll(m), ","); got != "Tables,legacy_orders,Views,legacy_cats" {
+		t.Fatalf("find under the folds: %q", got)
+	}
+	for _, i := range []int{0, 2} {
+		if it := m.tables.items[i]; it.mark != "▿" {
+			t.Errorf("%s header mark %q, want ▿ (peeking)", it.label, it.mark)
+		}
+	}
+	if name, _ := m.currentTable(); name != "legacy_orders" {
+		t.Errorf("cursor on %q, want the first match", name)
+	}
+	// "of" counts every name searched, the folded ones included
+	if c := frame(m); !strings.Contains(c.Text(), "Tables · 2 of 3") {
+		t.Errorf("title should read 2 of 3:\n%s", c.Text())
+	}
+	if m.ws.SectionOpen(workspace.SectionTables) || m.ws.SectionOpen(workspace.SectionViews) {
+		t.Error("the find unfolded a section; its fold is the workspace's, not the find's")
+	}
+
+	// toggling a peeking header opens it for good: ▾, still narrowed
+	m.toggleSection(workspace.SectionTables)
+	if !m.ws.SectionOpen(workspace.SectionTables) {
+		t.Fatal("toggling the peeking Tables header did not open it")
+	}
+	if got := strings.Join(labelsAll(m), ","); got != "Tables,legacy_orders,Views,legacy_cats" {
+		t.Errorf("after opening Tables: %q", got)
+	}
+	if it := m.tables.items[0]; it.mark != "▾" {
+		t.Errorf("opened Tables header mark %q, want ▾", it.mark)
+	}
+
+	// Esc: the folds back — Views' rows go, Tables' (now open) stay
+	key(t, m, "esc")
+	if got := strings.Join(labelsAll(m), ","); got != "Tables,cats,legacy_orders,Views" {
+		t.Errorf("after Esc: %q", got)
+	}
+	if it := m.tables.items[3]; it.mark != "▸" {
+		t.Errorf("Views header mark %q after Esc, want ▸", it.mark)
+	}
+
+	// nothing anywhere: no match, even with a folded section searched
+	key(t, m, "/")
+	typeText(t, m, "zzz")
+	if len(m.tables.items) != 0 {
+		t.Errorf("a miss lists %q", labelsAll(m))
 	}
 }

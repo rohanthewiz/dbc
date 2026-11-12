@@ -387,6 +387,42 @@ func findTable(t *testing.T, _ *env, p *rod.Page) {
 	  document.activeElement !== document.getElementById("table-find") &&
 	  document.getElementById("table-find").value === "" &&
 	  !!document.querySelector('#tables li[data-name="cats"]')`)
+
+	// The find looks under a fold: with Tables folded, "ats" still finds
+	// cats, under a peeking ▿ header; Esc folds it back, and a click on a
+	// peeking header opens the section for good. A synthetic click is
+	// enough — the list's listener takes the bubbled event — and avoids
+	// rod's stale-handle hang on a list that redraws.
+	eval(t, p, `() => document.querySelector('#tables li.shead[data-section="tables"]').click()`)
+	waitFor(t, p, "Tables folded", `() =>
+	  !document.querySelector('#tables li[data-name="cats"]') &&
+	  document.querySelector('#tables li.shead[data-section="tables"] .caret').textContent === "▸"`)
+	eval(t, p, `() => document.getElementById("table-find").focus()`)
+	p.Keyboard.MustType(input.KeyA, input.KeyT, input.KeyS)
+	waitFor(t, p, "cats found under the fold", `() => {
+	  const h = document.querySelector('#tables li.shead[data-section="tables"]');
+	  return !!h && h.classList.contains("peek") && h.querySelector(".caret").textContent === "▿" &&
+	    h.getAttribute("aria-expanded") === "true" &&
+	    !!document.querySelector('#tables li.sel[data-name="cats"]');
+	}`)
+	p.Keyboard.MustType(input.Escape)
+	waitFor(t, p, "the fold back after Esc", `() =>
+	  document.getElementById("table-find").value === "" &&
+	  !document.querySelector('#tables li[data-name="cats"]') &&
+	  !document.querySelector("#tables li.shead.peek")`)
+	p.Keyboard.MustType(input.KeyA, input.KeyT, input.KeyS)
+	waitFor(t, p, "peeking again", `() => !!document.querySelector('#tables li.shead.peek[data-section="tables"]')`)
+	eval(t, p, `() => document.querySelector('#tables li.shead[data-section="tables"]').click()`)
+	waitFor(t, p, "Tables opened for good from the peek", `() => {
+	  const h = document.querySelector('#tables li.shead[data-section="tables"]');
+	  return !!h && !h.classList.contains("peek") && h.querySelector(".caret").textContent === "▾" &&
+	    !!document.querySelector('#tables li[data-name="cats"]');
+	}`)
+	eval(t, p, `() => document.getElementById("table-find").focus()`)
+	p.Keyboard.MustType(input.Escape, input.Escape)
+	waitFor(t, p, "Tables still open after the find", `() =>
+	  document.getElementById("table-find").value === "" &&
+	  !!document.querySelector('#tables li[data-name="cats"]')`)
 }
 
 // catsColumns is what Show columns lists for cats, in order.

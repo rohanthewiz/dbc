@@ -225,6 +225,9 @@ body.row-dragging { cursor: row-resize; user-select: none; }
 #tables li.shead { font-family: inherit; font-weight: 600; color: var(--muted); padding: 3px 8px 1px; user-select: none; }
 #tables li.shead .caret { color: var(--accent); display: inline-block; width: 1em; }
 #tables li.shead .scount { font-weight: 400; }
+/* a folded section shown only for the find's matches (drawTables): its
+   hollow caret is muted, so it reads as "open for now", not as the fold */
+#tables li.shead.peek .caret { color: var(--muted); }
 #tables li[data-name] { padding-left: 24px; }
 #tables li.none { padding-left: 24px; }
 #tables li.none { color: var(--muted); cursor: default; font-family: inherit; }

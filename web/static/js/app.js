@@ -309,8 +309,26 @@
   // Tables and views both come in the "conn" event's list, so their folds
   // read nothing (POST /section remembers them for the tab); Routines'
   // fold is the routines switch, and opening it reads them (routines
-  // below). The find box narrows every open section; a section's header
-  // stays while it has a match.
+  // below). The find box narrows every section; a section's header stays
+  // while it has a match.
+  //
+  // A FIND LOOKS UNDER THE FOLDS. A folded Tables or Views section still
+  // has every row on the page, so its fold is only what is drawn — a find
+  // that skipped it would answer "no name matches" for a table that is
+  // right there. While a find is typed, a folded section with a match
+  // lists it under a hollow caret, "peeking":
+  //
+  //	find "legac", Tables folded:
+  //	▿ Tables · 34        li.shead.peek: folded, shown for the find
+  //	  legacy_orders
+  //	Esc ─► ▸ Tables · 34 (the fold was never changed)
+  //
+  // The tab's fold (side.tablesOpen / viewsOpen) is left alone, so
+  // clearing the find folds the section back, and a click on a peeking
+  // header opens it for good (▾), as it would with no find. Routines are
+  // the one section a find cannot look under: folded, they are not read
+  // (the fold is the routines switch), so the no-match note says they
+  // were not searched rather than read them for a keystroke.
   function drawTables() {
     const pick = schemaPick();
     const inPick = side.navigable || pick === null ? allTables : allTables.filter((t) => t.schema === pick);
@@ -334,18 +352,26 @@
 
     const tables = inPick.filter((t) => !t.view), views = inPick.filter((t) => t.view);
     let matched = 0;
-    // section draws one section: its header, then — open — its rows (or a
-    // note), narrowed by the find. With a find, a section without a match
-    // is left out, header and all, so a find that matches nothing says so.
+    // section draws one section: its header, then — open, or peeking for
+    // the find — its rows (or a note), narrowed by the find. With a find,
+    // a section without a match is left out, header and all, so a find
+    // that matches nothing says so.
     const section = (key, title, count, open, rows, rowOf, empty) => {
-      const shown = open ? findTables(rows, find) : [];
+      // searched: an open section, or — while a find is typed — a folded
+      // one whose rows are on the page (rows is null for folded Routines,
+      // which were never read)
+      const searched = open || (find !== "" && !!rows);
+      const shown = searched ? findTables(rows, find) : [];
       if (find !== "" && !shown.length) return;
-      const head = el("li", { class: "shead", tabindex: "-1", "data-section": key, "aria-expanded": String(open),
-        title: (open ? "Fold " : "Show ") + title.toLowerCase() + " — click or Enter" });
-      head.append(el("span", "caret", open ? "▾" : "▸"), " " + title);
+      const peek = !open && shown.length > 0;
+      const head = el("li", { class: peek ? "shead peek" : "shead", tabindex: "-1", "data-section": key,
+        "aria-expanded": String(open || peek),
+        title: peek ? title + " are folded — shown for the find's matches; click or Enter keeps them open"
+          : (open ? "Fold " : "Show ") + title.toLowerCase() + " — click or Enter" });
+      head.append(el("span", "caret", open ? "▾" : peek ? "▿" : "▸"), " " + title);
       if (count !== "") head.append(el("span", "scount", " · " + count));
       els.tables.append(head);
-      if (!open) return;
+      if (!open && !peek) return;
       if (!rows) { els.tables.append(el("li", "none", "loading " + title.toLowerCase() + "…")); return; }
       if (!rows.length) { els.tables.append(el("li", "none", empty)); return; }
       for (const r of shown) els.tables.append(rowOf(r));
@@ -358,7 +384,10 @@
       section("routines", "Routines", list ? String(list.length) : "", routinesOn(), list, routineRow, "no routines");
     }
     if (find !== "" && !matched) {
-      els.tables.append(el("li", "none", "no name matches “" + find + "” — Esc clears"));
+      // folded Routines were not searched (nothing read to search): say
+      // so, or the routine being looked for reads as not existing
+      const unread = side.hasRoutines && !routinesOn() ? " · routines are folded, so not searched" : "";
+      els.tables.append(el("li", "none", "no name matches “" + find + "” — Esc clears" + unread));
       return;
     }
     // The first name is the list's Tab stop until another is selected. While

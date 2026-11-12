@@ -34,7 +34,12 @@ type listItem struct {
 	// between the rows (the scripts browser's "Examples", "Trash (2) ▸").
 	// The cursor steps over it, and it never lights up under the mouse.
 	head bool
-	data any // what picking it means, for the caller
+	// folded is a row of a folded section in the Tables pane (sections.go):
+	// carried so the pane's find can search under the fold, and dropped
+	// before the list is drawn unfiltered (listedRows, tablefind.go). No
+	// other list sets it.
+	folded bool
+	data   any // what picking it means, for the caller
 }
 
 func newList() *list { return &list{hover: -1} }

@@ -42,6 +42,13 @@ type sectionRow workspace.Section
 // sectionItems are a section's rows: its header, then — while it is open —
 // its rows, or a note when it has none. count is the header's number ("" for
 // none known); empty is the note.
+//
+// A folded section's rows come along too, marked folded: the list never
+// shows them unfiltered (setTableRows drops them), but the pane's find
+// searches them, since a folded section's names are already in hand and a
+// find that skipped them would say "no match" for a table that is there
+// (tableFind.matches). Folded Routines have no rows to bring: their fold
+// is the routines switch, and nothing is read while it is off.
 func sectionItems(s workspace.Section, title, count string, open bool, rows []listItem, empty string) []listItem {
 	mark := "▸"
 	if open {
@@ -49,6 +56,13 @@ func sectionItems(s workspace.Section, title, count string, open bool, rows []li
 	}
 	items := []listItem{{mark: mark, label: title, sub: count, data: sectionRow(s)}}
 	if !open {
+		for _, it := range rows {
+			if it.mark == "" {
+				it.mark = " " // as an open section's, should the find show it
+			}
+			it.folded = true
+			items = append(items, it)
+		}
 		return items
 	}
 	if len(rows) == 0 {

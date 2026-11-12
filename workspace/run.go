@@ -193,7 +193,9 @@ func (w *Workspace) runLocked(stmts []string, tag string, again *resultTab) (Sta
 	// tab's title is the workspace's to change, and the job runs unlocked
 	keepTitle := ""
 	if again != nil {
-		w.runAgain, w.runTitle, keepTitle = again, again.title, again.title
+		// the base title: a tab holding one of several result sets gets
+		// its "· 2/3" back from this run's own count of them (below)
+		w.runAgain, w.runTitle, keepTitle = again, again.baseTitle(), again.baseTitle()
 	}
 	titleOf := func(stmt string) string {
 		if keepTitle != "" {
@@ -242,10 +244,26 @@ func (w *Workspace) runLocked(stmts []string, tag string, again *resultTab) (Sta
 				notes = append(notes, wl.see(i+1, len(stmts), stmt, res)...)
 			}
 			if res != nil && !res.IsExec {
-				rows = append(rows, landing{title: titleOf(stmt), stmt: stmt, res: res, n: i + 1})
-				if len(rows) > limit {
-					rows = slices.Delete(rows, 0, 1)
-					over++
+				// a tab for each result set the statement returned: one,
+				// except for a procedure call that returned several
+				// (model.Result.More), whose tabs are told apart by a
+				// "· 2/3" on the title
+				sets := res.Sets()
+				for k, set := range sets {
+					l := landing{title: titleOf(stmt), stmt: stmt, res: set, n: i + 1}
+					if len(sets) > 1 {
+						l.set, l.sets = k+1, len(sets)
+						l.title += setSuffix(l.set, l.sets)
+					}
+					rows = append(rows, l)
+					if len(rows) > limit {
+						rows = slices.Delete(rows, 0, 1)
+						over++
+					}
+				}
+				if res.MoreCut {
+					notes = append(notes, notef(Warn, "statement %d/%d returned more than %d result sets — the rest were dropped — %s",
+						i+1, len(stmts), len(sets), Preview(stmt)))
 				}
 			}
 		}
@@ -647,6 +665,10 @@ func plural(n int, one, many string) string {
 //	3 statements completed on Pilot in 2.5s — showing the last result: 1 affected
 //	3 statements completed on Pilot in 2.5s — showing statement 1's result: 42 rows
 //	3 statements completed on Pilot in 2.5s — 2 result tabs, showing statement 3's: 42 rows
+//
+// One statement that returned several result sets (a tab each) says so:
+//
+//	query completed on Pilot in 80ms — 3 result sets, showing the last: 12 rows
 func doneNote(ev *RunDone, shown int) Note {
 	took := ev.Elapsed.Round(time.Millisecond)
 	what := ev.Tag
@@ -669,6 +691,9 @@ func doneNote(ev *RunDone, shown int) Note {
 		return notef(Ok, "%s completed on %s in %s — showing statement %d's result: %s", what, ev.Conn, took, shown, summary)
 	case len(ev.Stmts) > 1:
 		return notef(Ok, "%s completed on %s in %s — showing the last result: %s", what, ev.Conn, took, summary)
+	case ev.Tabs > 1:
+		// one statement, several tabs: it returned several result sets
+		return notef(Ok, "%s completed on %s in %s — %d result sets, showing the last: %s", what, ev.Conn, took, ev.Tabs, summary)
 	default:
 		return notef(Ok, "%s completed on %s in %s — %s", what, ev.Conn, took, summary)
 	}

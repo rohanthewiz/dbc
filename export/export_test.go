@@ -354,6 +354,27 @@ func TestRenderRunShapeFollowsTotal(t *testing.T) {
 	}
 }
 
+// One statement that returned several result sets (a procedure call:
+// model.Result.More) is a multi-result document, each set a block at the
+// statement's position — not the first set alone, as a run of one
+// statement otherwise renders.
+func TestRenderRunSetsOfOneStatement(t *testing.T) {
+	a := query("demo", "CALL p()", []string{"n"}, [][]string{{"1"}})
+	b := query("demo", "CALL p()", []string{"total"}, [][]string{{"9"}})
+	out, err := RenderRun([]*model.Result{a, b}, []int{1, 1}, 1, Text)
+	if err != nil {
+		t.Fatalf("RenderRun: %v", err)
+	}
+	if strings.Count(out, "-- 1/1 │ demo │") != 2 || !strings.Contains(out, "total") {
+		t.Errorf("want both sets, each bannered 1/1, got:\n%s", out)
+	}
+	out, err = RenderRun([]*model.Result{a, b}, []int{1, 1}, 1, JSON)
+	var envs []map[string]any
+	if err != nil || json.Unmarshal([]byte(out), &envs) != nil || len(envs) != 2 {
+		t.Errorf("want two envelopes, got %s (err %v)", out, err)
+	}
+}
+
 func TestRenderRunNeedsAPositionPerResult(t *testing.T) {
 	r := query("demo", "SELECT 1", []string{"n"}, [][]string{{"1"}})
 	if _, err := RenderRun([]*model.Result{r, r}, []int{1}, 2, Text); err == nil {

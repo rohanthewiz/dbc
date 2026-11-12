@@ -907,11 +907,17 @@ func runStatements(ctx context.Context, sess *db.Session, stmts []sqlsplit.Stmt,
 			}
 			continue
 		}
-		out.results = append(out.results, res)
-		out.at = append(out.at, i+1)
-		if h.onResult != nil {
-			if err = h.onResult(i, res); err != nil {
-				return out, err
+		// A statement that answered with several result sets (a MySQL
+		// CALL whose procedure runs several SELECTs: model.Result.More)
+		// puts each in the output as a result of its own, all at the
+		// statement's position, so the banners read "2/5" for each.
+		for _, set := range res.Sets() {
+			out.results = append(out.results, set)
+			out.at = append(out.at, i+1)
+			if h.onResult != nil {
+				if err = h.onResult(i, set); err != nil {
+					return out, err
+				}
 			}
 		}
 	}
@@ -1070,12 +1076,20 @@ func warnTruncated(w io.Writer, results []*model.Result, at []int, total int) {
 // noteTruncated writes warnTruncated's note for one result, if it hit the
 // cap. what names the result — "statement 2/5", a script's "result #2" — or
 // is "" for a lone result, which needs no name.
+//
+// It also says when the statement's result sets were themselves cut short
+// (model.Result.MoreCut, which only a statement's first set carries): the
+// ones dropped are in no output at all, so nothing else would say so.
 func noteTruncated(w io.Writer, r *model.Result, what string) {
-	if !r.Truncated {
-		return
-	}
 	if what != "" {
 		what += ": "
+	}
+	if r.MoreCut {
+		fmt.Fprintf(w, "note: %sthe statement returned more than %d result sets — the rest were dropped\n",
+			what, 1+len(r.More))
+	}
+	if !r.Truncated {
+		return
 	}
 	fmt.Fprintf(w, "note: %sresult truncated at %d rows — --max-rows N (0: no cap) or max_rows in config for more\n",
 		what, len(r.Rows))

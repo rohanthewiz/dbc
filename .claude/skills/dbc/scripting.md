@@ -80,7 +80,10 @@ dbc runs it regardless. Connection names come from config /
 | `sdb.IsCanceled(err) bool` | tell a stop from a real failure |
 
 `sdb.Result`: `Columns []string`, `Rows [][]string`, `Raw [][]any`,
-`Duration`, `Affected`.
+`Duration`, `Affected`. A statement that returned several result sets (a
+MySQL `CALL` whose procedure runs several `SELECT`s) has the first in the
+Result and the rest in `More []*Result`; `r.Sets()` is all of them in order
+(`for _, set := range r.Sets() { s.Show(set) }`).
 
 **Files: open every one through `s.Path`** — `os.Create(s.Path("out.csv"))`,
 `os.ReadFile(s.Path("in/ids.txt"))`. A relative path is then in `files_dir`

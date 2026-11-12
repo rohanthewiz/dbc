@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -378,6 +377,8 @@ func openPool(drv, dsn string, t config.TLSOpts, database string) (*sql.DB, erro
 	// Server notices (RAISE NOTICE …) go to the Session holding the
 	// connection, if any (notice.go).
 	pcfg.OnNotice = dispatchNotice
+	// The rows-affected count of a statement run as a Query (stmtkind.go).
+	pcfg.Tracer = pgTagTracer{}
 	return pgxstdlib.OpenDB(*pcfg, pgxstdlib.OptionShouldPing(pgShouldPing)), nil
 }
 
@@ -651,10 +652,13 @@ func (m *Manager) Run(name, stmt string, args ...any) (*model.Result, error) {
 	return m.RunContext(context.Background(), name, stmt, args...)
 }
 
-// RunContext executes a statement on the named connection. SELECT-like
-// statements return their rows; anything else runs as Exec and returns rows
-// affected. Canceling ctx aborts the statement on the server where the driver
-// supports it, and always stops row collection.
+// RunContext executes a statement on the named connection. A statement that
+// returns rows comes back with them — every result set of them, for a
+// procedure call that returns several (model.Result.More); anything else
+// returns rows affected. Which it is, is read off the statement's verb where
+// the verb says, and off its result where it does not (CALL, EXECUTE, FETCH:
+// see stmtkind.go). Canceling ctx aborts the statement on the server where
+// the driver supports it, and always stops row collection.
 //
 // The statement takes whichever pooled connection is free. Statements that
 // depend on session state — BEGIN/COMMIT, SET, temp tables — need a Session.
@@ -673,75 +677,43 @@ type execQuerier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
+// run executes one statement on ex and reads its result. How the statement
+// is sent — Query, Exec, or a Query whose result decides — is kindOf's call
+// (stmtkind.go):
+//
+//	kindRows   Query; every result set is read (readSets)
+//	kindExec   Exec; the driver's rows-affected count
+//	kindMaybe  Query; rows when it brought any, else the count (runMaybe)
 func (m *Manager) run(ctx context.Context, ex execQuerier, name, stmt string, args ...any) (*model.Result, error) {
 	stmt = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(stmt), ";"))
 	if stmt == "" {
 		return nil, serr.New("empty statement")
 	}
 	start := time.Now()
+	// "" for a name the config does not hold: kindOf then keeps to Query
+	// and Exec, as the Generic dialect is all that is known of the engine.
+	drv, _ := m.DriverOf(name)
 
-	if !isQuery(stmt, m.dialect(name)) {
+	switch kindOf(stmt, sqlsplit.DialectOf(drv), drv) {
+	case kindExec:
 		res, err := ex.ExecContext(ctx, stmt, args...)
 		if err != nil {
 			return nil, wrapRunErr(ctx, err, name)
 		}
 		aff, _ := res.RowsAffected()
-		if aff != 0 && !sqliteCounts(stmt) {
-			if drv, _ := m.DriverOf(name); drv == "sqlite" {
-				aff = 0
-			}
+		if aff != 0 && drv == "sqlite" && !sqliteCounts(stmt) {
+			aff = 0
 		}
-		return &model.Result{
-			Conn: name, Query: stmt, IsExec: true, Affected: aff,
-			Columns:  []string{"rows_affected"},
-			Rows:     [][]string{{strconv.FormatInt(aff, 10)}},
-			Raw:      [][]any{{aff}},
-			Duration: time.Since(start),
-		}, nil
+		return affectedResult(name, stmt, aff, start), nil
+	case kindMaybe:
+		return m.runMaybe(ctx, ex, name, drv, stmt, start, args...)
 	}
 
-	rows, err := ex.QueryContext(ctx, stmt, args...)
+	res, err := m.query(ctx, ex, name, stmt, args...)
 	if err != nil {
-		return nil, wrapRunErr(ctx, err, name)
+		return nil, err
 	}
-	defer rows.Close()
-
-	cols, err := rows.Columns()
-	if err != nil {
-		return nil, wrapRunErr(ctx, err, name, "op", "columns")
-	}
-
-	result := &model.Result{Conn: name, Query: stmt, Columns: cols}
-	holders := make([]any, len(cols))
-	for i := range holders {
-		holders[i] = new(any)
-	}
-	for rows.Next() {
-		if err = ctx.Err(); err != nil {
-			return nil, wrapRunErr(ctx, err, name, "op", "fetch")
-		}
-		if len(result.Rows) >= m.cfg.MaxRows {
-			result.Truncated = true
-			break
-		}
-		if err = rows.Scan(holders...); err != nil {
-			return nil, wrapRunErr(ctx, err, name, "op", "scan")
-		}
-		disp := make([]string, len(cols))
-		raw := make([]any, len(cols))
-		for i, h := range holders {
-			v := *(h.(*any))
-			disp[i] = renderVal(v)
-			raw[i] = rawVal(v)
-		}
-		result.Rows = append(result.Rows, disp)
-		result.Raw = append(result.Raw, raw)
-	}
-	if err = rows.Err(); err != nil {
-		return nil, wrapRunErr(ctx, err, name, "op", "iterate")
-	}
-	result.Duration = time.Since(start)
-	return result, nil
+	return stamp(res, time.Since(start)), nil
 }
 
 // Session is a run pinned to one connection from the pool, so a sequence of

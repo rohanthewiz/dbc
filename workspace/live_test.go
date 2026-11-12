@@ -1372,3 +1372,90 @@ func TestLiveWorkspaceScriptNotices(t *testing.T) {
 		}
 	})
 }
+
+// A MySQL CALL whose procedure runs several SELECTs lands each result set
+// in a tab of its own, titled "… · k/n" (N-289: they used to be "0
+// affected"). Running the CALL again — from the editor, or as a rerun of
+// one of its tabs, a pinned one included — refills those same tabs rather
+// than adding a set of them beside the last, and leaves another
+// statement's tab alone.
+func TestLiveWorkspaceResultSets(t *testing.T) {
+	e := liveEngines[1] // MySQL: the one engine whose driver has further result sets
+	w, obs := liveWorkspace(t, e)
+	obsExec(t, obs,
+		`DROP PROCEDURE IF EXISTS dbc_live_ws_sets`,
+		`CREATE PROCEDURE dbc_live_ws_sets() BEGIN
+			SELECT id FROM `+liveTable+` ORDER BY id;
+			SELECT count(*) AS total FROM `+liveTable+`;
+		END`)
+	t.Cleanup(func() { _, _ = obs.Run("live", `DROP PROCEDURE IF EXISTS dbc_live_ws_sets`) })
+	const call = "CALL dbc_live_ws_sets()"
+	sets := "[" + call + " · 1/2 " + call + " · 2/2]"
+
+	ev := run(t, w, call)
+	if ev.Err != nil {
+		t.Fatalf("call: %v", ev.Err)
+	}
+	if got := fmt.Sprint(titles(w)); got != sets {
+		t.Fatalf("titles = %s, want %s", got, sets)
+	}
+	// the last set is on screen, and the log says there were two
+	if r := w.LastResult(); r == nil || fmt.Sprint(r.Columns, r.Rows) != "[total] [[3]]" {
+		t.Errorf("on screen: %+v, want the second set", r)
+	}
+	if !hasNote(ev.Notes, Ok, "2 result sets, showing the last: 1 rows") {
+		t.Errorf("notes = %+v, want the two result sets said", ev.Notes)
+	}
+	first, _ := tabIDs(w)
+
+	// the same CALL from the editor refills both tabs
+	obsExec(t, obs, `INSERT INTO `+liveTable+` VALUES (4, 4)`)
+	run(t, w, call)
+	if now, _ := tabIDs(w); !slices.Equal(now, first) || fmt.Sprint(titles(w)) != sets {
+		t.Fatalf("after running it again: tabs %v titled %v, want %v refilled", now, titles(w), first)
+	}
+	if r := w.LastResult(); fmt.Sprint(r.Rows) != "[[4]]" {
+		t.Errorf("second set after the insert = %v", r.Rows)
+	}
+
+	// a rerun of the FIRST set's tab, pinned, refills both as well: its
+	// title does not grow a second "· 1/2", and it stays pinned
+	if err := w.PinResultTab(first[0], true); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	obsExec(t, obs, `INSERT INTO `+liveTable+` VALUES (5, 5)`)
+	rerun(t, w, first[0])
+	tabs, _ := w.ResultTabs()
+	if now, _ := tabIDs(w); !slices.Equal(now, first) || fmt.Sprint(titles(w)) != sets || !tabs[0].Pinned {
+		t.Fatalf("after the rerun: tabs %v titled %v pinned %v", now, titles(w), tabs[0].Pinned)
+	}
+	if len(tabs[0].Result.Rows) != 5 || fmt.Sprint(tabs[1].Result.Rows) != "[[5]]" {
+		t.Errorf("after the rerun: %v and %v, want both sets fresh", tabs[0].Result.Rows, tabs[1].Result.Rows)
+	}
+	_ = w.PinResultTab(first[0], false)
+
+	// beside another statement's tab in one run-all, a rerun of a set's
+	// tab refills the CALL's two and not the SELECT's
+	_ = w.CloseUnpinnedResultTabs()
+	run(t, w, "SELECT 7 AS seven", call)
+	all, _ := tabIDs(w)
+	if len(all) != 3 {
+		t.Fatalf("run-all tabs = %v (%v)", all, titles(w))
+	}
+	rerun(t, w, all[2])
+	tabs, _ = w.ResultTabs()
+	if now, _ := tabIDs(w); !slices.Equal(now, all) || fmt.Sprint(tabs[0].Result.Rows) != "[[7]]" ||
+		fmt.Sprint(titles(w)) != "[SELECT 7 AS seven "+call+" · 1/2 "+call+" · 2/2]" {
+		t.Errorf("after rerunning a set beside a SELECT: tabs %v titled %v, first holds %v", now, titles(w), tabs[0].Result.Rows)
+	}
+
+	// a procedure that only writes still reports its count
+	obsExec(t, obs,
+		`DROP PROCEDURE IF EXISTS dbc_live_ws_w`,
+		`CREATE PROCEDURE dbc_live_ws_w() BEGIN UPDATE `+liveTable+` SET n = n + 1; END`)
+	t.Cleanup(func() { _, _ = obs.Run("live", `DROP PROCEDURE IF EXISTS dbc_live_ws_w`) })
+	ev = run(t, w, "CALL dbc_live_ws_w()")
+	if ev.Err != nil || ev.Result == nil || !ev.Result.IsExec || ev.Result.Affected != 5 {
+		t.Errorf("a writing CALL: %+v, err %v; want 5 affected", ev.Result, ev.Err)
+	}
+}

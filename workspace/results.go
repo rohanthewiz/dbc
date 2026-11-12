@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -148,6 +149,32 @@ type resultTab struct {
 	// run into the tab, then a rerun of that) would otherwise carry a sort
 	// over from a different question.
 	rerunOf int
+	// set and sets say which of its statement's result sets res is, 1-based,
+	// and how many the statement returned — when it returned several (a
+	// MySQL CALL whose procedure runs several SELECTs: model.Result.More).
+	// Both are 0 for the usual statement with one. The sets land in a tab
+	// each, side by side, their titles ending setSuffix; running the
+	// statement again into any of them refills them all (placeRunLocked).
+	// nth is the statement's number in the run that filled the tab
+	// (landing.n): with run it tells one statement's sets from another's,
+	// when a run-all called the same procedure twice.
+	set, sets int
+	nth       int
+}
+
+// setSuffix is what ends the title of a tab holding result set k of n of
+// one statement: "CALL monthly_report() · 2/3".
+func setSuffix(k, n int) string { return fmt.Sprintf(" · %d/%d", k, n) }
+
+// baseTitle is the tab's title without its setSuffix: what the statement's
+// tab would be called had it returned one result set. A rerun titles its
+// own sets from it, so a tab titled "… · 2/3" does not come back as
+// "… · 2/3 · 2/3".
+func (t *resultTab) baseTitle() string {
+	if t.sets > 1 {
+		return strings.TrimSuffix(t.title, setSuffix(t.set, t.sets))
+	}
+	return t.title
 }
 
 // label is what the tab is called: the user's name, else the generated
@@ -164,6 +191,9 @@ type landing struct {
 	title, stmt string
 	res         *model.Result
 	n           int // the statement's number in the run, 1-based (0: not a statement's)
+	// set of sets: which of its statement's result sets res is, when the
+	// statement returned several (resultTab.set); 0 of 0 otherwise.
+	set, sets int
 }
 
 // shown is one of a script run's s.Show results, with its seq.
@@ -311,6 +341,21 @@ func (w *Workspace) placeLocked(conn string, target *resultTab, title, stmt stri
 // many results came back: rerunning the buffer after a statement stopped
 // returning rows (or failed) still replaces the group, closing the tab the
 // missing result had.
+//
+// The sets of one statement that returned several are slots together too,
+// for that statement run again (alone: from the editor, or as a rerun of
+// any one of their tabs). They refill in order, and the ones this run has
+// no set for are closed, rather than the last run's sets staying beside
+// this one's:
+//
+//	before      [SELECT 1] [CALL p() · 1/2] [CALL p() · 2/2]      one run-all
+//	rerun 2/2   slots = the two CALL tabs, not the SELECT's
+//	after       [SELECT 1] [CALL p() · 1/2] [CALL p() · 2/2]      both fresh
+//	            [SELECT 1] [CALL p()]                 had p() returned one set
+//
+// Any other statement landing on one of them replaces that tab alone, as
+// it does a tab of a run-all's group. A rerun's own tab is a slot among
+// its siblings even when kept, as it is when it is the only slot.
 // Results past the slots open new tabs after the last tab filled; slots
 // past the results are closed — they held the replaced run's results for
 // statements this run did not return rows from. See the package comment
@@ -323,9 +368,16 @@ func (w *Workspace) placeRunLocked(conn string, target *resultTab, run int, grou
 	// its own statement is how the user asks for it fresh
 	if target != nil && slices.Contains(s.tabs, target) && (!s.kept(target) || target == w.runAgain) {
 		slots = []*resultTab{target}
-		if group {
+		switch {
+		case group:
 			slots = slices.DeleteFunc(slices.Clone(s.tabs), func(t *resultTab) bool {
 				return t.run != target.run || s.kept(t)
+			})
+		case target.sets > 1 && ls[0].stmt == target.stmt:
+			// target's siblings: the other sets its statement returned
+			slots = slices.DeleteFunc(slices.Clone(s.tabs), func(t *resultTab) bool {
+				return t.run != target.run || t.nth != target.nth || t.sets <= 1 ||
+					(s.kept(t) && t != w.runAgain)
 			})
 		}
 	}
@@ -343,6 +395,7 @@ func (w *Workspace) placeRunLocked(conn string, target *resultTab, run int, grou
 				t.name = "" // another question: the user's name was for the last one's rows
 			}
 			t.title, t.stmt, t.res, t.seq, t.run = l.title, l.stmt, l.res, w.resSeq, run
+			t.set, t.sets, t.nth = l.set, l.sets, l.n
 			t.shows, t.cut = nil, 0
 			placed = append(placed, t)
 			continue
@@ -357,7 +410,8 @@ func (w *Workspace) placeRunLocked(conn string, target *resultTab, run int, grou
 			}
 		}
 		w.tabSeq++
-		t := &resultTab{id: w.tabSeq, title: l.title, stmt: l.stmt, res: l.res, seq: w.resSeq, run: run}
+		t := &resultTab{id: w.tabSeq, title: l.title, stmt: l.stmt, res: l.res, seq: w.resSeq, run: run,
+			set: l.set, sets: l.sets, nth: l.n}
 		s.tabs = slices.Insert(s.tabs, at, t)
 		placed = append(placed, t)
 	}

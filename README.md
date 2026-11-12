@@ -1589,6 +1589,20 @@ while a pinned (or shared) tab is left out and keeps its result. Running
 one statement with one of those tabs on screen replaces just that tab. When
 a statement fails, the results of the ones before it still land.
 
+**One statement can return several result sets**: a MySQL
+`CALL monthly_report()` whose procedure runs three `SELECT`s returns three.
+Each gets a tab, titled `CALL monthly_report() · 1/3` and so on, with the
+last on screen, and the log says how many there were. Running the `CALL`
+again, or rerunning any one of its tabs, refills those tabs in order. (More
+than 51 sets from one statement — a `SELECT` inside a procedure's loop —
+are cut there, with a warning in the log.)
+
+Whether a statement shows rows or a count is read from its result where its
+verb does not say. `CALL`, `EXECUTE`, `FETCH` and MySQL's
+`CHECK`/`ANALYZE`/`OPTIMIZE`/`REPAIR TABLE` show the rows they return, and
+`n affected` when they return none: an `EXECUTE` of a prepared `INSERT`, a
+`CALL` of a procedure that only writes.
+
 `result_tabs` (default 10, at most 50) caps the tabs of one connection's
 set. When a run needs a new tab and the set is full, the oldest tab that is
 neither pinned nor shared is dropped — another run's before one of this
@@ -3477,9 +3491,12 @@ Each format keeps its own shape across statements:
 | `html` | one page, a section per statement |
 | `json` | an array of envelopes: `{"statement", "conn", "duration", "columns", "rows"}`, or `"rows_affected"` for a non-query |
 
-A single statement renders exactly as it always did, in every format. A
-result that hit `max_rows` is noted on stderr, so a truncated export cannot
-pass for the full set while the data stream stays clean. In `json`, duplicate
+A single statement renders exactly as it always did, in every format — with
+one exception: a statement that returns several result sets (a MySQL `CALL`
+whose procedure runs several `SELECT`s) renders each as a block of its own,
+all at the statement's position (`1/1`, `1/1`; in `json`, an envelope
+each). A result that hit `max_rows` is noted on stderr, so a truncated export
+cannot pass for the full set while the data stream stays clean. In `json`, duplicate
 column names are suffixed (`a`, `a_2`) rather than silently collapsed.
 
 Postgres server notices (`RAISE NOTICE`, `RAISE WARNING`, "table … does not

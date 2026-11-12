@@ -81,6 +81,9 @@ Formats (`-t`): `text` (default), `csv`, `tsv`, `markdown`, `html`, `json`.
 Prefer `json` for reading results programmatically: one statement gives an
 array of row objects; several give an array of envelopes
 `{"statement","conn","duration","columns","rows"}` (or `"rows_affected"`).
+A statement that returns several result sets (a MySQL `CALL` whose procedure
+runs several `SELECT`s) gives an envelope per set, even when it is the only
+statement.
 Duplicate column names become `a`, `a_2`.
 
 Rules that trip people up:

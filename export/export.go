@@ -93,7 +93,10 @@ func RenderAll(rs []*model.Result, f Format) (string, error) {
 // not len(rs): a multi-statement run is always a multi-result document, even
 // when only one of its statements made it — a JSON consumer gets the array of
 // envelopes it asked for, not a bare result array. A run of one statement
-// renders exactly as Render does.
+// renders exactly as Render does — unless that statement returned several
+// result sets (model.Result.More, which the caller passes as results of
+// their own at the statement's position): those are a multi-result
+// document too, each block bannered "1/1".
 func RenderRun(rs []*model.Result, at []int, total int, f Format) (string, error) {
 	switch {
 	case len(rs) == 0:
@@ -101,7 +104,7 @@ func RenderRun(rs []*model.Result, at []int, total int, f Format) (string, error
 	case len(at) != len(rs):
 		return "", serr.New("a position is needed for every result",
 			"results", fmt.Sprint(len(rs)), "positions", fmt.Sprint(len(at)))
-	case total == 1:
+	case total == 1 && len(rs) == 1:
 		return Render(rs[0], f)
 	}
 	switch f {

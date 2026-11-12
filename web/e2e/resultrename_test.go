@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"testing"
+	"time"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/input"
@@ -56,8 +57,28 @@ func renameResultTab(t *testing.T, _ *env, p *rod.Page) {
 	}
 	typeName("cat names", input.Enter)
 	onScreen("the tab renamed", "cat names")
-	if ok := evalStr(t, p, `() => document.querySelector("#rstrip button.rt.on").title.startsWith("SELECT name") ? "y" : ""`); ok != "y" {
-		t.Error("a renamed tab's tooltip should still show its query")
+	if ok := evalStr(t, p, `() => (document.querySelector("#rstrip button.rt.on").getAttribute("aria-description") || "").startsWith("SELECT name") ? "y" : ""`); ok != "y" {
+		t.Error("a renamed tab's description should still show its query")
+	}
+
+	// 1b. its hover card (ui.js dbc.hovercard, app.js resultTabCard): the
+	// name as the heading, the query highlighted under it. The pointer
+	// leaves first: the double-click's presses muted the tab's card until
+	// it does. A press puts the card away, and it stays away while the
+	// pointer rests there.
+	p.Mouse.MustMoveTo(0, 0)
+	moveAt(t, p, "#rstrip button.rt.on .tt", "hover")
+	waitFor(t, p, "the tab's hover card", `() => { const c = document.querySelector(".hcard");
+	  return !!c && c.querySelector(".hc-title").textContent === "cat names" &&
+	    c.querySelector(".hc-sql").textContent.startsWith("SELECT name") &&
+	    !!c.querySelector(".hc-sql .hl-k"); }`)
+	if err := p.Mouse.Click(proto.InputMouseButtonLeft, 1); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, p, "the card put away by the press", `() => !document.querySelector(".hcard")`)
+	time.Sleep(700 * time.Millisecond) // past SHOW_MS: a card coming back would be up by now
+	if evalStr(t, p, `() => document.querySelector(".hcard") ? "up" : ""`) != "" {
+		t.Error("a press should keep the tab's card away until the pointer leaves")
 	}
 
 	// 2. ↻ keeps it

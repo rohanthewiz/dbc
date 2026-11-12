@@ -3561,18 +3561,25 @@
   function drawResultTabs(d) {
     const box = $("rstrip");
     if (rtEdit) rtEdit.moving = true; // the detach below is not the user leaving the box
+    // the buttons are about to be replaced, and a removed one gets no
+    // pointerout to take its card down. The next move over the strip
+    // brings the card back, drawn from the set as it now is
+    dbc.hovercard.hide();
     box.replaceChildren();
     rtabState = d && d.resultTabs && d.resultTabs.length ? d : null;
     box.hidden = !rtabState;
     if (!rtabState) { if (rtEdit) rtEdit.cancel(); return; }
     rtabState.resultTabs.forEach((r, i) => {
-      const what = r.exec ? dbc.plural(r.affected || 0, "row") + " affected"
-        : r.shows ? dbc.plural(r.shows, "result") + " shown" : dbc.plural(r.rows, "row");
+      const what = resultWhat(r);
       const tip = (r.stmt || r.title) + "\n" + what + (r.pinned ? " · pinned: a run opens a new tab instead of replacing this one" : "") +
         (r.shared ? " · shared with the assistant: it goes with every question on this connection" : "") +
         "\nclick shows it · ↻ or r reruns it · double-click or F2 renames it · right-click: rerun, pin, share, rename, close";
+      // The tab's description goes in aria-description, not title. Seen,
+      // it is the hover card (resultTabCard below); a title too would put
+      // the browser's plain box over the card. Screen readers still read
+      // the same text the title used to carry.
       box.append(el("button", { type: "button", role: "tab", class: "rt" + (r.id === rtabState.resultTab ? " on" : ""),
-        "data-rt": String(r.id), "aria-selected": r.id === rtabState.resultTab ? "true" : "false", title: tip },
+        "data-rt": String(r.id), "aria-selected": r.id === rtabState.resultTab ? "true" : "false", "aria-description": tip },
       el("span", "n", String(i + 1)),
       r.pinned ? el("span", { class: "pin", "aria-label": "pinned" }, "⚑") : null,
       r.shared ? el("span", { class: "shr", "aria-label": "shared with the assistant", title: "shared with the assistant" }, "✦") : null,
@@ -3862,6 +3869,116 @@
     if (r && r.id !== rtabState.resultTab) items.splice(1, 0, { label: "Show it", act: () => resultTabOp("show", r.id) });
     dbc.menu.open(e.clientX, e.clientY, items);
   });
+
+  // ── the result tab's hover card ──
+  // Resting the pointer on a result tab shows what it holds, in place of
+  // the browser's one-line `title` box (ui.js dbc.hovercard):
+  //
+  //   ┌───────────────────────────────────────────────┐
+  //   │ [2] monitor - Active jobs             19 rows │  number, heading, size
+  //   │ ┌───────────────────────────────────────────┐ │
+  //   │ │ SELECT * FROM srv.monitor t               │ │  the statement as it was run,
+  //   │ │ where t.is_active = 'Y'                   │ │  highlighted, cut at CARD_LINES
+  //   │ └───────────────────────────────────────────┘ │
+  //   │ ⚑ Pinned — a run opens a new tab instead …    │  what its marks mean
+  //   │ ───────────────────────────────────────────── │
+  //   │ click show · ↻ r rerun · F2 rename · …        │  what acts on it
+  //   └───────────────────────────────────────────────┘
+  //
+  // The key row is for the tab under the pointer. r, F2 and x act on the
+  // tab on screen, and ↻ is drawn only there, so another tab's card offers
+  // a click and a double-click instead.
+  //
+  // The card is drawn from rtabState when it opens, so it never shows a
+  // set older than the strip. drawResultTabs takes it down on a redraw.
+  const CARD_LINES = 12;   // the statement's lines shown before "… N more lines"
+  const CARD_CHARS = 1600; // and its characters: a one-line 10 KB INSERT wraps into a wall
+
+  // resultWhat is what a tab holds, in words: "19 rows", "3 rows
+  // affected", "2 results shown".
+  function resultWhat(r) {
+    return r.exec ? dbc.plural(r.affected || 0, "row") + " affected"
+      : r.shows ? dbc.plural(r.shows, "result") + " shown" : dbc.plural(r.rows, "row");
+  }
+
+  // stmtPreview is workspace.Preview: the statement's whitespace
+  // collapsed and cut at 60 code points. It is what an unnamed editor
+  // run's tab is titled, so a title equal to it says nothing the SQL below
+  // will not. Array.from splits by code point, as Go's []rune does. (Not
+  // "preview": that is the table preview's name in this scope, and a
+  // second function declaration would silently replace it.)
+  function stmtPreview(stmt) {
+    const s = Array.from(stmt.trim().split(/\s+/).join(" "));
+    return s.length > 60 ? s.slice(0, 59).join("") + "…" : s.join("");
+  }
+
+  // cardHeading splits a tab into its card's heading and the SQL to show
+  // under it:
+  //
+  //   - a name the user gave it, or a tag the app gave it ("preview
+  //     cats"): that is the heading, and the statement is shown whole;
+  //   - a statement opening with a `--` comment ("--- monitor: active
+  //     jobs ---"): the comment's words are the heading, and the line is
+  //     left out of the SQL rather than shown twice. The dashes are the
+  //     comment's frame, not its words;
+  //   - otherwise no heading: the title would only repeat the SQL's
+  //     first words.
+  //
+  // A script's tab has no statement: its title is all there is.
+  function cardHeading(r) {
+    const stmt = (r.stmt || "").trim();
+    if (!stmt) return { head: r.title, sql: "" };
+    if (r.named || r.title !== stmtPreview(stmt)) return { head: r.title, sql: stmt };
+    const lines = stmt.split("\n");
+    const m = /^\s*--+\s*(.*?)\s*-*\s*$/.exec(lines[0]);
+    if (m && m[1]) return { head: m[1], sql: lines.slice(1).join("\n").trim() };
+    return { head: "", sql: stmt };
+  }
+
+  // cardSQL is the statement, highlighted, cut at CARD_LINES lines and
+  // CARD_CHARS characters, with a muted note of what was left out. The
+  // full statement is a right-click away (⧉ Copy query).
+  function cardSQL(sql) {
+    let lines = sql.split("\n");
+    const more = Math.max(0, lines.length - CARD_LINES);
+    lines = lines.slice(0, CARD_LINES);
+    let text = lines.join("\n");
+    let cut = false;
+    if (text.length > CARD_CHARS) { text = text.slice(0, CARD_CHARS); cut = true; }
+    const pre = el("pre", "hc-sql", dbc.hl("sql", text, dbc.state.driver));
+    if (cut || more) pre.append(el("span", "hc-more", (cut ? "…" : "") + (more ? "\n… " + dbc.plural(more, "more line") : "")));
+    return pre;
+  }
+
+  function resultTabCard(b) {
+    if (!rtabState) return null;
+    const i = rtabState.resultTabs.findIndex((x) => x.id === Number(b.dataset.rt));
+    if (i < 0) return null;
+    const r = rtabState.resultTabs[i];
+    const onScreen = r.id === rtabState.resultTab;
+    const { head, sql } = cardHeading(r);
+    const frag = document.createDocumentFragment();
+    frag.append(el("div", "hc-head",
+      el("span", "hc-n", String(i + 1)),
+      head ? el("span", "hc-title", head) : null,
+      el("span", "hc-what", resultWhat(r))));
+    if (sql) frag.append(cardSQL(sql));
+    // what the tab's marks mean: each line only when the tab has the mark
+    const note = (cls, glyph, text) => el("div", "hc-note", el("span", "g " + cls, glyph), text);
+    if (!r.stmt) frag.append(note("", "▤", "A script's results — run the script again to refresh them"));
+    if (r.pinned) frag.append(note("pin", "⚑", "Pinned — a run opens a new tab instead of replacing this one"));
+    if (r.shared) frag.append(note("shr", "✦", "Shared with the assistant — it goes with every question on this connection"));
+    if (r.writes) frag.append(note("wr", "↻", "Rerunning it may change the database, so it asks first"));
+    const key = (keys, what) => el("span", "hc-key", ...keys.map((k) => el("kbd", null, k)), " " + what);
+    frag.append(el("div", "hc-keys",
+      key(["click"], "show"),
+      onScreen && r.stmt ? key(["↻", "r"], "rerun") : null,
+      onScreen ? key(["F2"], "rename") : key(["double-click"], "rename"),
+      onScreen ? key(["x"], "close") : null,
+      key(["right-click"], "more")));
+    return frag;
+  }
+  dbc.hovercard.bind($("rstrip"), "button[data-rt]", resultTabCard, (b) => b.dataset.rt);
 
   // The strip's keys, anywhere in the results pane — the grid or the plan
   // (both pass keys they do not use up to here), and an exec result's

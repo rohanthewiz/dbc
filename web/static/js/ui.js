@@ -1,5 +1,5 @@
-// dbc web — menus, dialogs and the clipboard: the small pieces of UI the
-// grid, the sidebar and the plan view all use.
+// dbc web — menus, dialogs, hover cards and the clipboard: the small
+// pieces of UI the grid, the sidebar and the plan view all use.
 (function () {
   "use strict";
 
@@ -121,6 +121,168 @@
   }
 
   dbc.modal = { open: openModal, close: closeModal, isOpen: () => !!modal };
+
+  // ── hover cards ────────────────────────────────────────────────────────
+  // A hover card is a tooltip built from real markup: a heading,
+  // highlighted SQL, key hints. The browser's `title` can only draw one
+  // unstyled run of text, wrapped wherever the OS likes, after a delay the
+  // page cannot set.
+  //
+  //   dbc.hovercard.bind(root, selector, render, keyOf)
+  //
+  // listens on root for the pointer resting on an element matching
+  // selector (the anchor), calls render(anchor) → a Node, or null for no
+  // card, and floats the result under the anchor, or above it when there
+  // is no room below. The listeners are delegated, so root's children can
+  // be redrawn freely. A redraw that removes the anchor should call
+  // dbc.hovercard.hide(): a removed node gets no pointerout, so nothing
+  // else would put the card away.
+  //
+  // keyOf(anchor) names what the anchor stands for (a result tab's id).
+  // It is what a press mutes (below), because a click usually redraws the
+  // anchor: the button under the pointer afterwards is a new element for
+  // the same tab, and muting the old element would let the card straight
+  // back. Omitted, the anchor element is its own key.
+  //
+  // The mute ends when the pointer is over anything but an anchor with
+  // that key. The check runs on every pointerover in the document rather
+  // than on the anchor's pointerout, because a redraw under a resting
+  // pointer removes the element that would have had the pointerout.
+  //
+  // The card is look-only (pointer-events: none). It never takes a click
+  // or the focus, so it cannot get between the user and what is under it,
+  // and leaving the anchor is all it takes to put it away. Everything it
+  // says can be reached another way (a menu row, a key): it explains, it
+  // offers nothing.
+  //
+  // Timing follows native tooltips. The first card waits SHOW_MS of
+  // resting, so a pointer passing over a strip does not flash cards. For
+  // WARM_MS after a card goes, the next anchor's card shows at once, so
+  // scanning along a row of tabs reads each without waiting again:
+  //
+  //   rest ─ SHOW_MS ─▶ card A ──move──▶ card B (at once) ──leave──▶ gone
+  //                                       └── within WARM_MS of A going
+  //
+  // It goes away when the pointer leaves the anchor, on any press or key
+  // (the user is acting, not reading), on a wheel or on a scroll of a box
+  // that holds the anchor (the anchor moves), on a resize, and when the
+  // window loses focus. After a press or
+  // a key it stays away until the pointer leaves that anchor. A click on a
+  // tab should not bring the card straight back over what the click
+  // showed.
+  //
+  // A child of the anchor with a title of its own (the ↻ or × in a tab)
+  // puts the card away while the pointer is on it, so the child's own
+  // short tip is the only one showing.
+  //
+  // Mouse only: a touch or a pen has no hover, and a card left up by a tap
+  // would have nothing to take it down.
+  const SHOW_MS = 450, WARM_MS = 600;
+  const GAP = 6, EDGE = 8; // px: from the anchor, and kept from the window's edges
+  // `on` below is a binding: { root, selector, key }, one per bind call.
+  let hc = null;        // the card up: { node, anchor, on, key }
+  let hcWait = null;    // a card about to show: { anchor, on, key, timer }
+  let hcWarmUntil = 0;  // performance.now() before which the next card shows at once
+  let hcMuted = null;   // { on, key }: what a press or key put the card away on, until the pointer leaves it
+
+  function hideCard() {
+    if (hcWait) { clearTimeout(hcWait.timer); hcWait = null; }
+    if (!hc) return;
+    hc.node.remove();
+    hc = null;
+    hcWarmUntil = performance.now() + WARM_MS;
+  }
+
+  function showCard(at, render) {
+    hideCard();
+    if (!at.anchor.isConnected) return; // redrawn away during the wait
+    const body = render(at.anchor);
+    if (!body) return;
+    const node = el("div", { class: "hcard", role: "tooltip" }, body);
+    document.body.append(node);
+    placeCard(node, at.anchor);
+    hc = { node, anchor: at.anchor, on: at.on, key: at.key };
+  }
+
+  // placeCard puts the card under the anchor, left edges aligned, slid
+  // left to stay in the window. With no room below it goes above. When
+  // neither side has room it takes the roomier one and is cut to fit
+  // (.hcard hides its overflow); the SQL inside is already cut to a few
+  // lines, so that only happens in a very short window.
+  function placeCard(node, anchor) {
+    const a = anchor.getBoundingClientRect();
+    const r = node.getBoundingClientRect();
+    const x = Math.max(EDGE, Math.min(a.left, innerWidth - r.width - EDGE));
+    const below = innerHeight - EDGE - (a.bottom + GAP);
+    const above = a.top - GAP - EDGE;
+    let y;
+    if (r.height <= below || below >= above) {
+      y = a.bottom + GAP;
+      if (r.height > below) node.style.maxHeight = Math.max(0, below) + "px";
+    } else {
+      const h = Math.min(r.height, above);
+      if (r.height > above) node.style.maxHeight = above + "px";
+      y = a.top - GAP - h;
+    }
+    node.style.left = x + "px";
+    node.style.top = y + "px";
+  }
+
+  function bindCard(root, selector, render, keyOf) {
+    const on = { root, selector, key: keyOf || ((a) => a) };
+    root.addEventListener("pointerover", (e) => {
+      if (e.pointerType !== "mouse") return;
+      const a = e.target.closest(selector);
+      if (!a || !root.contains(a)) return;
+      // over a titled child: its own tip speaks, the card steps aside
+      const own = e.target.closest("[title]");
+      if (own && own !== a && a.contains(own)) { hideCard(); return; }
+      if (hcMuted) return; // still on the muted anchor: the document's check below cleared any other
+      if ((hc && hc.anchor === a) || (hcWait && hcWait.anchor === a)) return;
+      const warm = !!hc || performance.now() < hcWarmUntil;
+      hideCard();
+      const at = { anchor: a, on, key: on.key(a) };
+      if (warm) { showCard(at, render); return; }
+      hcWait = Object.assign(at, { timer: setTimeout(() => { hcWait = null; showCard(at, render); }, SHOW_MS) });
+    });
+    root.addEventListener("pointerout", (e) => {
+      const a = e.target.closest(selector);
+      // a move between the anchor's own children is not leaving it
+      if (!a || (e.relatedTarget && a.contains(e.relatedTarget))) return;
+      if ((hc && hc.anchor === a) || (hcWait && hcWait.anchor === a)) hideCard();
+    });
+  }
+
+  // A press or a key mutes the anchor under the pointer. Both listen in
+  // the capture phase, so a handler that stops the event (the grid's keys,
+  // a menu's) cannot leave a card up.
+  const muteCard = () => {
+    const cur = hc || hcWait;
+    if (cur) hcMuted = { on: cur.on, key: cur.key };
+    hideCard();
+  };
+  // The mute's end: the pointer over anything that is not an anchor of
+  // the muted binding with the muted key. Capture phase, so it runs before
+  // the binding's own pointerover and that one sees the mute already gone.
+  const unmuteCard = (e) => {
+    if (!hcMuted) return;
+    const { on, key } = hcMuted;
+    const a = e.target instanceof Element ? e.target.closest(on.selector) : null;
+    if (!a || !on.root.contains(a) || on.key(a) !== key) hcMuted = null;
+  };
+  document.addEventListener("pointerdown", muteCard, true);
+  document.addEventListener("keydown", muteCard, true);
+  document.addEventListener("pointerover", unmuteCard, true);
+  document.addEventListener("wheel", hideCard, { capture: true, passive: true });
+  // a scroll moves the anchor only when the box scrolled holds it; the
+  // log scrolling itself to a new line must not take a card away
+  document.addEventListener("scroll", (e) => {
+    if (hc && (e.target === document || (e.target instanceof Node && e.target.contains(hc.anchor)))) hideCard();
+  }, true);
+  window.addEventListener("resize", hideCard);
+  window.addEventListener("blur", hideCard);
+
+  dbc.hovercard = { bind: bindCard, hide: hideCard };
 
   // ── the clipboard ──────────────────────────────────────────────────────
   // copy puts {text, html} on the clipboard; content may be a promise (a

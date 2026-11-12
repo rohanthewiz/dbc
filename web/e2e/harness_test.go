@@ -596,6 +596,20 @@ func rightClick(t *testing.T, p *rod.Page, sel string) {
 // which surfaced only as a later wait timing out.
 func clickAt(t *testing.T, p *rod.Page, sel string, button proto.InputMouseButton) {
 	t.Helper()
+	moveAt(t, p, sel, "click")
+	if err := p.Mouse.Click(button, 1); err != nil {
+		t.Fatalf("click %s: %v", sel, err)
+	}
+	if button == proto.InputMouseButtonRight {
+		waitFor(t, p, "a menu", `() => !!document.querySelector(".menu")`)
+	}
+}
+
+// moveAt puts the pointer on the element sel names, at a point that
+// hit-tests to it (clickAt's aim, below), without pressing: a hover. what
+// names the move in a failure ("click", "hover").
+func moveAt(t *testing.T, p *rod.Page, sel, what string) {
+	t.Helper()
 	waitFor(t, p, sel+" drawn", `(s) => { const e = document.querySelector(s);
 	  if (!e) return false;
 	  const r = e.getBoundingClientRect();
@@ -616,15 +630,9 @@ func clickAt(t *testing.T, p *rod.Page, sel string, button proto.InputMouseButto
 	  }
 	  return [x, r.y + r.height / 2]; }`, sel).([]any)
 	if !ok {
-		t.Fatalf("click %s: it went away before the click", sel)
+		t.Fatalf("%s %s: it went away before the %s", what, sel, what)
 	}
 	p.Mouse.MustMoveTo(box[0].(float64), box[1].(float64))
-	if err := p.Mouse.Click(button, 1); err != nil {
-		t.Fatalf("click %s: %v", sel, err)
-	}
-	if button == proto.InputMouseButtonRight {
-		waitFor(t, p, "a menu", `() => !!document.querySelector(".menu")`)
-	}
 }
 
 // tabSelector names the query tab titled title on the strip by its key —

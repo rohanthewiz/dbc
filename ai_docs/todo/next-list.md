@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-311
+**Next ID:** N-313
 
 ## Open
 
@@ -508,6 +508,32 @@ ten session docs in `ai_docs/claude_sessions/`
   script's `Run` through `ExecuteWithContext` of a compiled call, or have
   the workspace abandon a run a minute after Stop as the engine does
   (free the slot, say the session stays busy). Raised while closing N-268.
+- **N-311** · raised `2026-1112-1538-lazy-catalog-after-connect` · value medium
+  Levels of introspection: a per-connection `introspect` setting (with a
+  global default) for how much of a database dbc reads unasked. The user
+  floated the concept on 2026-11-12, beside the lazy catalog read
+  (`8ffc279`), from a ProdDr log where the schema summary spent its whole
+  5s budget on every connect. Since `8ffc279` that no longer holds
+  "connected" back, but it is still paid — on every connect, refresh and
+  relist after DDL of such a database — before the sidebar fills.
+  Proposed shape, awaiting the user's yes or their own levels:
+  - `off`: connect only; the sidebar reads nothing until a refresh, and
+    completion offers the dialect's words until then.
+  - `names`: databases, schema names (`db.SchemaNamesQuery`, no pass over
+    `pg_class`), the open schema's tables; no per-schema counts, no "all
+    schemas"; completion scoped to the open schema and `search_path`
+    (`Manager.SchemaIn`) rather than the whole database.
+  - `full` (the default): today's reads, counts included.
+  Plus an adaptive default: when the summary times out once, remember it
+  for the connection (as `complScoped` does for completion) and go
+  straight to names on later reads, so no config edit is needed to stop
+  paying the 5s. Open questions inside that: whether a user's Refresh
+  tries the summary again, and whether the memory outlives the process.
+  Row counts and routines would stay their own switches (already opt-in),
+  not higher levels. Touches `workspace/connect.go` (`readCatalog`,
+  `listSchemas`), `workspace/complete.go`, `config` (a connection field,
+  so also the TUI's and the web's connection forms, `connedit`), README
+  and `dbc.example.toml`.
 
 ## Validate
 
@@ -883,6 +909,9 @@ and `raised`.
   - `tui.TestLiveNavigatorPostgres` wants 2 sidebar items for a schema of
     two tables and gets 5: the sidebar's foldable sections (`4d5600c`,
     2026-11-03) add header rows, and this opt-in test was not updated.
+    Fixed 2026-11-12 in `8ffc279`
+    (`2026-1112-1538-lazy-catalog-after-connect`): it counts the names
+    (`tableNames`), and the whole test passes on postgres:17.
   - `workspace.TestLiveWorkspaceCompletionRoutines/postgres` wants an
     overloaded routine's detail to start with its one-argument form;
     Postgres 17 listed the two-argument one first. Either the catalog
@@ -910,6 +939,28 @@ and `raised`.
   log lines); the failure's own message was cut by a `| tail`. Three
   clean runs followed, one under concurrent load. Run it with its full
   output kept when it next fails.
+- **N-312** · raised `2026-1112-1538-lazy-catalog-after-connect` · value low
+  Hand checks of the gap between a connect landing and its catalog
+  landing (`8ffc279`), which local databases close in milliseconds and no
+  test holds open in a browser or on a real terminal. Wants a database
+  whose catalog is slow to list (ProdDr, or a Postgres with another
+  session holding `LOCK TABLE pg_catalog.pg_namespace`):
+  - TUI: the Tables pane says `loading tables…`, the database and schema
+    rows appear when the catalog lands without the cursor jumping, and a
+    statement run meanwhile lands and keeps its status-bar summary.
+  - dbc web: the same; and whether `■ Stop` / `Ctrl+K` can be reached to
+    stop the read while no run is in flight (the workspace's `Cancel`
+    stops it; whether the page offers the button then was not looked at).
+  - dbc web: switch to a query tab whose catalog is still loading. The
+    page leaves the pickers undrawn while `side.loading` (`showSide`), so
+    for that moment they may show the tab before's database and schema.
+    If they do, and it reads wrong, raise it.
+  - A statement running on real Postgres while the catalog read is
+    stalled: `TestLiveConnectLandsAheadOfABlockedCatalog` cannot show it
+    (pgx prepares what it runs, and preparing even `SELECT 1` resolves
+    `search_path` through the locked `pg_namespace`); SQLite's
+    `TestConnectLandsBeforeItsCatalog` does. A catalog slow by size
+    rather than by lock would.
 
 ## Roadmap
 

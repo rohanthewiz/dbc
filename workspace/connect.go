@@ -62,7 +62,9 @@ type SchemaPick struct {
 // Switch is picking a connection: a connect with a line for the log, and
 // nothing at all when name is already active and its catalog loaded — or
 // still loading (CatalogLoading): a second click on the row while the
-// tables are on their way must not dial again and start the read over.
+// tables are on their way must not dial again and start the read over. Nor
+// when it was left unread on purpose (CatalogUnread, introspect = "off"):
+// a click on the row is not the Refresh that reads it.
 func (w *Workspace) Switch(name string) Start {
 	return w.SwitchPick(name, w.defaultPick())
 }
@@ -72,7 +74,7 @@ func (w *Workspace) Switch(name string) Start {
 // schema's tables only to replace them with a PickSchema at once.
 func (w *Workspace) SwitchPick(name string, pick SchemaPick) Start {
 	w.mu.Lock()
-	same := name == w.active && (w.catalog != nil || w.loadCancel != nil)
+	same := name == w.active && (w.catalog != nil || w.loadCancel != nil || w.unread)
 	w.mu.Unlock()
 	if same {
 		return Start{}
@@ -123,7 +125,10 @@ func (w *Workspace) Connect(name string) Start {
 // what its sidebar shows, not what the server holds. Each has its own
 // budget (navListTimeout, schemaSummaryTimeout, catalog_timeout), and a
 // schema list too slow to count its tables falls back to their names
-// (listSchemas). Elsewhere it is the
+// (listSchemas). How much of this is read at all is the connection's level
+// of introspection (introspect.go): names skips the counting from the
+// start, and at off the connect lands with no Load — nothing is read
+// until a Refresh. Elsewhere it is the
 // whole table list, as it always was — after, on MySQL, the server's
 // databases (db.HasDatabases), for the database picker.
 //
@@ -189,6 +194,13 @@ func (w *Workspace) connectLocked(name string, pick SchemaPick, kind connectKind
 	w.connCancel, w.connName = cancel, name
 
 	mgr, budget := w.mgr, w.cfg.CatalogTimeout
+	// A re-read's level, settled now. At off it reads as names does: the
+	// re-read of an off connection is the user's Refresh (a relist never
+	// starts while nothing is listed: relistLocked), which asks for the
+	// sidebar, and off's answer to "how much" is still "as little as fills
+	// it". A connect proper reads nothing here, and settles its own level
+	// when it lands (landConnect).
+	names := levelOf(w.cfg, mgr, name) != levelFull
 	job := func() Event {
 		defer cancel() // releases the context; the landing may already have
 		ev := &Connected{Name: name}
@@ -204,7 +216,7 @@ func (w *Workspace) connectLocked(name string, pick SchemaPick, kind connectKind
 			// found its pool), so there is nothing to land ahead of the
 			// catalog, and one landing keeps the old list up until the
 			// new one is whole (landConnect)
-			r := readCatalog(ctx, mgr, name, driver, budget, pick)
+			r := readCatalog(ctx, mgr, name, driver, budget, pick, names)
 			ev.Databases, ev.Schemas, ev.Schema, ev.Catalog = r.databases, r.schemas, r.schema, r.tables
 			ev.Notes = append(ev.Notes, r.notes...)
 		}
@@ -242,17 +254,24 @@ type catalogRead struct {
 // It is shared by the two ways a catalog is read whole: a connect's Load
 // job (loadJobLocked) and a re-read's own Job (connectLocked).
 //
+// names is the level of introspection the read runs at (introspect.go):
+// set, the schemas are listed by name and the summary is never tried, so
+// the middle read is the one of 5s that pg_namespace answers in
+// milliseconds. The databases and the tables are read the same at both
+// levels: the first is one row per database, the second is what the
+// sidebar is for.
+//
 // A failed list of databases only hides the database picker, and earns no
 // note; a failed list of schemas is handled by listSchemas, then
 // loadTables. ctx (the caller's own, cancelable) is the parent of each
 // read's budget, so a Cancel stops whichever is running.
 func readCatalog(ctx context.Context, mgr *db.Manager, name, driver string,
-	budget time.Duration, pick SchemaPick) catalogRead {
+	budget time.Duration, pick SchemaPick, names bool) catalogRead {
 	var r catalogRead
 	dctx, dcancel := context.WithTimeout(ctx, navListTimeout)
 	r.databases, _ = mgr.Databases(dctx, name)
 	dcancel()
-	schemas, notes, serr := listSchemas(ctx, mgr, name)
+	schemas, notes, serr := listSchemas(ctx, mgr, name, names)
 	r.schemas = schemas
 	r.notes = append(r.notes, notes...)
 	tctx, tcancel := withBudget(ctx, budget)
@@ -282,13 +301,13 @@ func readCatalog(ctx context.Context, mgr *db.Manager, name, driver string,
 // A read the user canceled (Cancel) lands like any other, with whatever
 // it had read by then — the schema picker, if it got that far, is the way
 // to a smaller read — and a note saying how to read the rest.
-func (w *Workspace) loadJobLocked(name, driver string, gen int, pick SchemaPick) Job {
+func (w *Workspace) loadJobLocked(name, driver string, gen int, pick SchemaPick, names bool) Job {
 	ctx, cancel := context.WithCancel(context.Background())
 	w.loadCancel, w.loadPick = cancel, pick
 	mgr, budget := w.mgr, w.cfg.CatalogTimeout
 	return func() Event {
 		defer cancel()
-		r := readCatalog(ctx, mgr, name, driver, budget, pick)
+		r := readCatalog(ctx, mgr, name, driver, budget, pick, names)
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		ev := &CatalogLoaded{Conn: name}
@@ -340,7 +359,10 @@ func (w *Workspace) loadJobLocked(name, driver string, gen int, pick SchemaPick)
 // supersedes a schema pick or a counting in flight. It supersedes a
 // connect's catalog read still in flight too (Connected.Load), reading for
 // the pick that read was for: that is how the user starts over a read
-// they canceled, or one that is taking its time. Refused with no active connection
+// they canceled, or one that is taking its time. And it is the one read
+// of a connection left unread by introspect = "off" (CatalogUnread): what
+// was read of nothing is read now, at the names level, for the pick the
+// connect was asked for. Refused with no active connection
 // (or only the default a workspace that never connected names: Connected),
 // and while a connect is still in flight (the catalog it would re-read is
 // about to be replaced).
@@ -379,10 +401,13 @@ func (w *Workspace) Refresh() (Start, error) {
 //
 // A connect's catalog read still loading is the same case one step
 // earlier: nothing is listed yet, and what the sidebar is about to list is
-// the connect's pick (loadPick).
+// the connect's pick (loadPick). So is a connect that read nothing because
+// its introspection is off (unread): the Refresh that reads it is the
+// first listing of the pick the connect was asked for — a schema a UI
+// remembered for the connection, say — which landConnect kept in loadPick.
 func (w *Workspace) refreshPickLocked() SchemaPick {
 	switch {
-	case w.loadCancel != nil:
+	case w.loadCancel != nil || w.unread:
 		return w.loadPick
 	case w.schemaCancel != nil:
 		return w.schemaPick
@@ -420,28 +445,59 @@ func (w *Workspace) cancelCatalogWorkLocked() {
 // Tables are db.TablesUnknown. Only an error from both is returned — and
 // then loadTables lists every table, as it did before the fallback.
 //
+//	names ─────────────────────────────────────► names ──ok──► schemas, counts unknown
+//	                                                 └─fails──► err (loadTables reads whole)
 //	summary ──ok──────────────────────────────► schemas with counts
 //	   └─fails─► names ──ok─────────────────► schemas, counts unknown (+ note)
-//	                └─fails──────────────────► err (loadTables reads whole)
+//	      │         └─fails──────────────────► err (loadTables reads whole)
+//	      └─ by running out its budget: db.Manager.MarkSummarySlow, so the
+//	         connection's later reads take the top row (levelOf)
+//
+// names is the level the read runs at (introspect.go): set — by the
+// connection's introspect, or because the summary was slow before — the
+// summary is not tried and nothing is said, the uncounted picker being
+// what was asked for rather than a fallback to explain.
+//
+// A summary that fails by its deadline is remembered, and said once, with
+// the setting that skips even the first wait. One that fails otherwise —
+// a role that may not read pg_class, a dropped connection — is not: it
+// failed fast, so trying again costs nothing, and it may well work next
+// time.
 //
 // ctx is the connect's; a cancel of it is said elsewhere, so it earns no
 // note and no fallback here. A driver that is not db.Navigable gets nil
 // from both, at no cost: neither has a query for it.
-func listSchemas(ctx context.Context, mgr *db.Manager, name string) ([]db.SchemaInfo, []Note, error) {
+func listSchemas(ctx context.Context, mgr *db.Manager, name string, names bool) ([]db.SchemaInfo, []Note, error) {
+	if names {
+		nctx, ncancel := context.WithTimeout(ctx, navListTimeout)
+		defer ncancel()
+		schemas, err := mgr.SchemaNames(nctx, name)
+		return schemas, nil, err
+	}
 	sctx, scancel := context.WithTimeout(ctx, schemaSummaryTimeout)
 	schemas, err := mgr.SchemaSummary(sctx, name)
+	// read before the cancel, which would otherwise be what Err reports for
+	// a summary that returned in time
+	timedOut := errors.Is(sctx.Err(), context.DeadlineExceeded)
 	scancel()
 	if err == nil || ctx.Err() != nil {
 		return schemas, nil, err
 	}
 	nctx, ncancel := context.WithTimeout(ctx, navListTimeout)
 	defer ncancel()
-	names, nerr := mgr.SchemaNames(nctx, name)
+	byName, nerr := mgr.SchemaNames(nctx, name)
 	if nerr != nil {
 		return nil, nil, err // the summary's error: the one worth reading
 	}
-	return names, []Note{notef(Warn, "schema table counts unavailable, listing schemas without them: %s",
-		serr.StringFromErr(err))}, nil
+	notes := []Note{notef(Warn, "schema table counts unavailable, listing schemas without them: %s",
+		serr.StringFromErr(err))}
+	if timedOut {
+		mgr.MarkSummarySlow(name)
+		notes = append(notes, notef(Info,
+			"%s is read by schema names from here on, without the counts — introspect = \"names\" on the connection skips this first wait too",
+			name))
+	}
+	return byName, notes, nil
 }
 
 // loadTables reads the tables a sidebar lists — those of the schema pick
@@ -518,7 +574,8 @@ func resolvePick(schemas []db.SchemaInfo, pick SchemaPick) (string, []Note) {
 	def := defaultSchema(schemas)
 	switch {
 	case pick.All && !counted:
-		return def, []Note{notef(Info, "%d schemas whose tables could not be counted, too many to chance at once: listing %s", len(schemas), def)}
+		// "are not", not "could not be": at introspect = "names" nobody tried
+		return def, []Note{notef(Info, "%d schemas whose tables are not counted, too many to chance at once: listing %s", len(schemas), def)}
 	case pick.All:
 		return def, []Note{notef(Info, "%d tables in %d schemas, too many to list at once: listing %s", total, len(schemas), def)}
 	case pick.Name != "":
@@ -570,6 +627,14 @@ func defaultSchema(schemas []db.SchemaInfo) string {
 // be worse than "loading…". pick is read only then; a re-read has listed
 // for it already.
 //
+// At introspect = "off" (introspect.go) there is no Load either: the
+// connect lands unread, with a note saying the empty sidebar is by choice
+// and what fills it, and pick is kept for the Refresh that does.
+//
+//	connect lands ─┬─ off ───────────► unread, loadPick = pick, no Load
+//	               ├─ names ─────────► Load (schema names, no counts)
+//	               └─ full ──────────► Load (the summary, unless slow before)
+//
 // A refresh (Workspace.Refresh) lands as a connect back to the same
 // connection, with two differences. Its words say refresh, since nothing
 // was connected to. And a re-read that could not list the tables lands
@@ -579,6 +644,7 @@ func defaultSchema(schemas []db.SchemaInfo) string {
 //
 //	refresh lands ─┬─ canceled / failed ──────────► notes only (as a connect)
 //	               ├─ no tables, a list shown ────► notes only; old list stays
+//	               ├─ nothing read, was unread ───► notes only; stays unread
 //	               └─ tables (or none ever shown) ► installed as a connect's,
 //	                                                 + "refreshed …" note
 //
@@ -632,11 +698,27 @@ func (w *Workspace) landConnect(ev *Connected, gen int, kind connectKind, pick S
 		status(noun + " failed")
 		return
 	}
+	if reread && w.unread && ev.Catalog == nil && ev.Schemas == nil && ev.Databases == nil {
+		// The Refresh of a connection left unread (introspect = "off") that
+		// read nothing at all — canceled before its first list, or every
+		// list failed — leaves it unread: "not read, a refresh reads it" is
+		// still the truth, where an installed nothing would show as a list
+		// that failed. One that read the schemas but not the tables is
+		// installed below, as a connect's Load is: its picker is the way to
+		// a smaller read.
+		ev.Notes = append(ev.Notes, notef(Warn, "%s not %sed: its catalog is still not read", ev.Name, noun))
+		status(noun + " failed")
+		return
+	}
 	ev.Changed = ev.Name != w.active
 	if ev.Changed {
 		ev.Left = w.active
 	}
 	w.active, w.landed = ev.Name, true
+	// whatever lands here was read, or is about to be: a re-read ends an
+	// unread connection's wait, and a connect proper sets it again below
+	// if its level says so
+	w.unread = false
 	// the levels above go in first: the catalog's index reads the schemas
 	w.databases, w.schemas, w.schema = ev.Databases, ev.Schemas, ev.Schema
 	w.setCatalogLocked(ev.Catalog)
@@ -653,7 +735,12 @@ func (w *Workspace) landConnect(ev *Connected, gen int, kind connectKind, pick S
 		// made here, under the hold of mu that moved active, so the
 		// workspace is never on a connection with no list and no read
 		if cc, ok := w.cfg.ConnByName(ev.Name); ok && hasCatalog(cc.Driver) {
-			ev.Load = w.loadJobLocked(ev.Name, cc.Driver, gen, pick)
+			switch lvl := levelOf(w.cfg, w.mgr, ev.Name); lvl {
+			case levelOff:
+				w.unread, w.loadPick = true, pick
+			default:
+				ev.Load = w.loadJobLocked(ev.Name, cc.Driver, gen, pick, lvl != levelFull)
+			}
 		}
 	}
 	if ev.Changed {
@@ -662,6 +749,12 @@ func (w *Workspace) landConnect(ev *Connected, gen int, kind connectKind, pick S
 		// issued only after active has moved to Name, so a run started in
 		// the meantime is already on Name and its session is left alone
 		ev.Release = w.releaseJob(ev.Name)
+	}
+	if w.unread {
+		// after "connected to", which it qualifies; said on a connect back
+		// to the same connection too, where nothing else is
+		ev.Notes = append(ev.Notes, notef(Info,
+			"catalog of %s not read (introspect = \"off\") — a refresh reads it", ev.Name))
 	}
 	switch kind {
 	case kindRefresh:
@@ -737,7 +830,9 @@ func (w *Workspace) setCatalogLocked(tables *model.Result) {
 // flight is refused — the schema list it would pick from is being replaced
 // — and so is one while the connect's catalog read is (CatalogLoading):
 // the schemas to resolve the pick against have not been read yet, and a
-// pick resolved against none would read every schema's tables.
+// pick resolved against none would read every schema's tables. One on a
+// connection left unread by introspect = "off" (CatalogUnread) is refused
+// for the same reason, until a Refresh has read the schemas.
 //
 //	pick sales ──► gen=5, load sales ───────────── (canceled) ─► Stale
 //	pick hr    ──► gen=6, cancel sales, load hr ─► lands, schema = hr
@@ -753,6 +848,11 @@ func (w *Workspace) PickSchema(pick SchemaPick) (Start, error) {
 		return Start{}, refuse(Busy, Warn, "still connecting to %s", w.connName)
 	case w.loadCancel != nil:
 		return Start{}, refuse(Busy, Warn, "still reading %s's catalog", name)
+	case w.unread:
+		// no schemas have been read to resolve the pick against, and a pick
+		// resolved against none reads every schema's tables — the one read
+		// an off connection is surest not to want
+		return Start{}, refuse(Invalid, Warn, "%s's catalog is not read (introspect = \"off\") — refresh first", name)
 	case !db.Navigable(cc.Driver):
 		return Start{}, refuse(Invalid, Warn, "%s lists its tables whole, not by schema", name)
 	}
@@ -902,6 +1002,7 @@ func (w *Workspace) Disconnect() (left string, st Start, err error) {
 	w.cancelCatalogWorkLocked()
 	w.connGen++ // anything of the old connection's still landing is Stale
 	w.active, w.landed, w.databases, w.schemas, w.schema = "", false, nil, nil, ""
+	w.unread = false // on nothing: there is no catalog to have left unread
 	w.setCatalogLocked(nil)
 	w.dropCompletionsLocked()
 	return left, Start{

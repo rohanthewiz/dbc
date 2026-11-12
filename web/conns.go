@@ -33,8 +33,9 @@ import (
 //	                             the edit form: db.SplitDSN, password withheld
 //	POST   /api/v1/conns/test ─► db.Probe: open, ping, close; nothing saved
 //	POST   /api/v1/conns ──────► cfg.AddConn, saved.Add, "conns" to every window
-//	PUT    /api/v1/conns/:name ► an edit (rename, driver, DSN, TLS, ai_rows); all but an
-//	                             ai_rows change refused while a query tab is on it;
+//	PUT    /api/v1/conns/:name ► an edit (rename, driver, DSN, TLS, ai_rows, introspect);
+//	                             all but an ai_rows or introspect change refused while a
+//	                             query tab is on it;
 //	                             cfg.ReplaceConn, saved.Update, store.RetagTabs,
 //	                             mgr.Drop, "conns"
 //	DELETE /api/v1/conns/:name ► refused while a query tab is on it; else
@@ -127,7 +128,8 @@ func (s *Server) connList() map[string]any {
 	conns := s.cfg.Conns()
 	out := make([]connInfo, len(conns))
 	for i, c := range conns {
-		out[i] = connInfo{Name: c.Name, Driver: c.Driver, Saved: c.Web, AIRows: c.AIRows, TLSOpts: c.TLSOpts}
+		out[i] = connInfo{Name: c.Name, Driver: c.Driver, Saved: c.Web, AIRows: c.AIRows,
+			Introspect: c.Introspect, TLSOpts: c.TLSOpts}
 	}
 	return map[string]any{"conns": out, "default": s.defaultConn()}
 }
@@ -139,6 +141,9 @@ type connForm struct {
 	Driver string `json:"driver"`
 	DSN    string `json:"dsn"`
 	AIRows bool   `json:"ai_rows"`
+	// Introspect is the connection's level of introspection, "" for the
+	// global default (connedit.Form.Introspect).
+	Introspect string `json:"introspect"`
 	// TLS as typed: ${VAR}s unexpanded and a relative path relative, as the
 	// saved file keeps them (config.SavedConn); connedit resolves them.
 	config.TLSOpts
@@ -159,7 +164,7 @@ type connForm struct {
 // build one, stay exactly as they were before the logic moved out.
 func (f connForm) form() connedit.Form {
 	return connedit.Form{Name: f.Name, Driver: f.Driver, DSN: f.DSN, AIRows: f.AIRows,
-		TLSOpts: f.TLSOpts, Parts: f.Parts, KeepPassword: f.KeepPassword}
+		Introspect: f.Introspect, TLSOpts: f.TLSOpts, Parts: f.Parts, KeepPassword: f.KeepPassword}
 }
 
 // connEditor is the shared add/edit/remove logic over this server's config,
@@ -272,7 +277,7 @@ func (s *Server) handleConnAdd(ctx rweb.Context) error {
 // a query tab in any window on the connection (or connecting to it) holds a
 // session — perhaps a transaction — under its old name and DSN, so it is
 // refused until the user switches those tabs away. forEdit adds that the
-// assistant's row access alone may still change.
+// assistant's row access and the level of introspection may still change.
 func (s *Server) inUseRefusal(forEdit bool) func(string) error {
 	return func(name string) error {
 		n := s.hub.tabsOn(name)
@@ -281,7 +286,7 @@ func (s *Server) inUseRefusal(forEdit bool) func(string) error {
 		}
 		if forEdit {
 			return conflict("%s on %q — switch %s to another connection first "+
-				"(the assistant's row access alone can change while it is in use)",
+				"(the assistant's row access and the level of introspection can change while it is in use)",
 				tabsAre(n), name, itThem(n))
 		}
 		return conflict("%s on %q — switch %s to another connection first",
@@ -290,7 +295,7 @@ func (s *Server) inUseRefusal(forEdit bool) func(string) error {
 }
 
 // handleConnEdit is PUT /api/v1/conns/:name: change a connection added in
-// the browser — its name, driver, DSN, TLS or ai_rows — in place. The body
+// the browser — its name, driver, DSN, TLS, ai_rows or introspect — in place. The body
 // is the add form's; an empty DSN keeps the stored one. See
 // connedit.Editor.Edit for the order of the changes and the in-use rule,
 // which here is the hub's tab count across every window.

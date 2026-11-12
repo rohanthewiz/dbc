@@ -73,6 +73,10 @@ type Manager struct {
 	// rows caches each connection's table row counts for the sidebar; see
 	// rowcount.go. It has its own lock, as a counting can take seconds.
 	rows rowCounter
+
+	// slowSummary holds the connections whose schema summary ran out its
+	// budget once (MarkSummarySlow); see navigate.go. Guarded by mu.
+	slowSummary map[string]bool
 }
 
 // openCall is one open-and-ping in progress. dbh and err are written before
@@ -451,9 +455,20 @@ func sqliteDSN(dsn string) string {
 // The pools derived from the connection onto its server's other databases
 // (config.DatabaseSep) go with it: an edit may have changed the host or the
 // credentials they were opened with, and a removal leaves them no base.
+//
+// What was learned about the database goes too (its row counts, below, and
+// a schema summary remembered as slow: SummarySlow): an edit may have
+// pointed the name at another database altogether.
 func (m *Manager) Drop(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.forgetSummarySlowLocked(name)
+	m.dropPoolsLocked(name)
+}
+
+// dropPoolsLocked is Drop's closing of name's pool and those derived from
+// it, with their cached row counts. The caller holds mu.
+func (m *Manager) dropPoolsLocked(name string) {
 	for _, key := range m.droppedWith(name) {
 		if dbh, ok := m.conns[key]; ok {
 			closeOpened(dbh, m.anchors[key])
@@ -481,9 +496,17 @@ func (m *Manager) Disconnect(name string) bool {
 	if inMemory {
 		return false
 	}
-	// Between the check and Drop an open may cache a pool; Drop closes that
-	// one too, which is what a disconnect asked for.
-	m.Drop(name)
+	// Between the check and the close an open may cache a pool; that one is
+	// closed too, which is what a disconnect asked for.
+	//
+	// The pools alone, not Drop: the database is the same one when the user
+	// connects again, so a schema summary remembered as slow (SummarySlow)
+	// stays remembered. Forgetting it here would charge the wait again on
+	// every reconnect, and on every return to a derived connection, whose
+	// pool a UI closes each time it is left.
+	m.mu.Lock()
+	m.dropPoolsLocked(name)
+	m.mu.Unlock()
 	return open
 }
 

@@ -2,7 +2,9 @@ package db
 
 import (
 	"context"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -274,6 +276,64 @@ func (m *Manager) SchemaSummary(ctx context.Context, name string) ([]SchemaInfo,
 func (m *Manager) SchemaNames(ctx context.Context, name string) ([]SchemaInfo, error) {
 	rows, err := m.navRows(ctx, name, SchemaNamesQuery, "list schema names")
 	return schemaInfos(rows), err
+}
+
+// A SLOW SUMMARY IS REMEMBERED. The summary's counts are a pass over the
+// whole of pg_class (SchemaNamesQuery says why that can take long), and a
+// database where the pass ran out its budget once will run it out again:
+// the catalog that size does not shrink between two connects. So the
+// reader that watched it time out says so here (MarkSummarySlow), and every
+// later reader of the connection asks first (SummarySlow) and goes straight
+// to the names — without the wait, and without a config edit to stop it.
+//
+//	summary times out ─► MarkSummarySlow(conn)
+//	later reads ───────► SummarySlow(conn)? ─► SchemaNames, no summary tried
+//
+// The memory is the Manager's rather than a workspace's so that every
+// workspace on it shares one: dbc web's query tabs, and the TUI's, are a
+// workspace each, and a tab opened on the connection must not pay for what
+// another already learned. It lasts as long as the process — nothing is
+// written down, so a restart tries the summary once more — and is dropped
+// with the connection when an edit may have pointed its name elsewhere
+// (Drop), but not by a Disconnect, after which the database is the same.
+
+// MarkSummarySlow remembers that name's schema summary did not finish
+// within its budget; SummarySlow then reports it.
+func (m *Manager) MarkSummarySlow(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.slowSummary == nil {
+		m.slowSummary = map[string]bool{}
+	}
+	m.slowSummary[name] = true
+}
+
+// SummarySlow reports whether name's schema summary has run out its budget
+// before (MarkSummarySlow), which is a reader's cue to list the schemas by
+// name instead of trying it again.
+func (m *Manager) SummarySlow(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.slowSummary[name]
+}
+
+// forgetSummarySlowLocked drops what MarkSummarySlow remembered of name and
+// of every connection derived from it ("<name>/<database>"), open or not:
+// unlike the pools (droppedWith), the memory may be of a derived connection
+// whose pool was closed long ago. A configured connection that merely has
+// such a name is not derived from it and keeps its own. The caller holds mu.
+func (m *Manager) forgetSummarySlowLocked(name string) {
+	delete(m.slowSummary, name)
+	prefix := name + config.DatabaseSep
+	for key := range m.slowSummary {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		configured := slices.ContainsFunc(m.cfg.Conns(), func(c config.Connection) bool { return c.Name == key })
+		if !configured {
+			delete(m.slowSummary, key)
+		}
+	}
 }
 
 // schemaInfos reads the (name, tables, is_default) rows the two schema

@@ -128,6 +128,13 @@ type Workspace struct {
 	// it lists what the connect was asked to (refreshPickLocked).
 	loadCancel context.CancelFunc
 	loadPick   SchemaPick
+	// unread: the connect landed at introspect = "off", so nothing of the
+	// catalog was read and nothing is reading (introspect.go). It holds
+	// until a re-read lands — the user's Refresh — or the connection is
+	// left. While it does, loadPick is the pick the connect asked for, kept
+	// for that Refresh to list (refreshPickLocked), and completion answers
+	// with the dialect's words alone (complete.go).
+	unread bool
 	// rowCounts are the catalog's tables' row counts, once the Counts job
 	// of the connect that loaded it lands; nil until then. countCancel
 	// stops that job, which the next connect does: the counts would be for

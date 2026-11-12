@@ -63,6 +63,22 @@ import (
 //	           ▼
 //	         scoped (Manager.SchemaIn: focus + path) ──► cache, scope set
 //
+// THE LEVEL OF INTROSPECTION (introspect.go) decides how much a load reads
+// before any of that is found out the hard way. Below full — the
+// connection's introspect is "names", or its schema summary was too slow
+// once — the load is scoped from the start, exactly as after an overflow:
+// the whole read is the one the level exists to spare the database. And a
+// connection left unread by introspect = "off" loads nothing at all:
+// Complete answers at once with the dialect's words, until the user's
+// Refresh has read the sidebar, after which it is scoped as names is.
+//
+//	level   load
+//	─────   ──────────────────────────────────────────────────────────
+//	full    whole, falling back to scoped on ErrCatalogTooBig (above)
+//	names   scoped (Postgres; the other engines have no schemas to scope
+//	        by, and read whole as at full)
+//	off     none while unread; scoped once a Refresh has listed the tables
+//
 // A FAILED LOAD is remembered for complRetry. A catalog too big to read (the
 // ERD's 250,000-row bound) or a server that is down would otherwise be asked
 // again on every keystroke — and a big catalog's failing read is itself
@@ -163,7 +179,10 @@ func (w *Workspace) Complete(buffer string, caret int) (res sqlcomplete.Result, 
 	var path []string
 	var routines []model.Routine
 	ready = true
-	if conn != "" {
+	// A connection left unread (introspect = "off") is answered like no
+	// connection at all, though with its dialect below: ready, and nothing
+	// loaded for it.
+	if conn != "" && !w.unread {
 		c := w.compl
 		switch {
 		case c.conn != conn || c.gen != w.complGen || c.loading != nil:
@@ -212,11 +231,16 @@ func (w *Workspace) Rename(buffer string, caret int, name string) ([]sqlcomplete
 func (w *Workspace) LoadCompletions(ctx context.Context) error {
 	w.mu.Lock()
 	conn, gen, focus := w.active, w.complGen, w.schema
-	if conn == "" {
+	if conn == "" || w.unread {
+		// unread: introspect = "off" and no Refresh yet — nothing is read
+		// unasked, a schema for completion included (see THE LEVEL above)
 		w.mu.Unlock()
 		return nil
 	}
-	scoped := w.complScoped[conn]
+	// below full the load is scoped from the start; only a navigable
+	// connection has schemas to scope by (readCompletions)
+	scoped := w.complScoped[conn] ||
+		(levelOf(w.cfg, w.mgr, conn) != levelFull && navigable(w.cfg, conn))
 	c := w.compl
 	if c.conn == conn && c.gen == gen {
 		switch {

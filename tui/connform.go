@@ -39,8 +39,10 @@ import (
 // "In use" is the TUI's one connection: the active one (or one of its other
 // databases), or the one still dialing. An edit that would change what it
 // dials, or a removal, is refused while it is — disconnecting first is one
-// key (x) — as dbc web refuses while a query tab is on it. ai_rows alone
-// may change at any time: the assistant reads it afresh for each question.
+// key (x) — as dbc web refuses while a query tab is on it. ai_rows and the
+// level of introspection may change at any time: the assistant reads the
+// one afresh for each question, the workspace the other for each catalog
+// read, so a new level shows at the connection's next refresh.
 //
 // A Save runs in Update rather than as a command: it is a few milliseconds
 // of file write under a lock, and doing it inline lets the form stay open
@@ -68,6 +70,7 @@ const (
 	cfTLSCert
 	cfTLSKey
 	cfTLSKeyPass
+	cfIntrospect
 	cfAIRows
 	cfTest
 	cfSave
@@ -82,6 +85,21 @@ var cfDrivers = []string{"postgres", "mysql", "sqlite", "bytdb"}
 
 // cfTLSModes are the TLS chips: "" leaves TLS to the DSN, as in dbc web.
 var cfTLSModes = append([]string{""}, config.TLSModes...)
+
+// cfIntrospectLevels are the Introspect chips: "" follows the config's
+// global introspect, as an entry that never chose a level does.
+var cfIntrospectLevels = append([]string{""}, config.IntrospectLevels...)
+
+// cfIntrospectHints say what the level under the cursor reads, on the
+// form's message line while the row has the focus: the chips alone are
+// three words, and which of them spares a production catalog is the whole
+// reason to pick one.
+var cfIntrospectHints = map[string]string{
+	"":                     "Introspect: follow the config's introspect key (full unless it says otherwise).",
+	config.IntrospectFull:  "full: read schemas with their table counts, and every schema for completion.",
+	config.IntrospectNames: "names: schema names only — no counts, no \"all schemas\"; completion reads the open schema and search_path.",
+	config.IntrospectOff:   "off: read nothing on connect; a refresh (r) lists the tables, as names does.",
+}
 
 // cfDSNExamples is what the DSN field shows while empty, per driver — the
 // same examples dbc web's form gives.
@@ -113,6 +131,9 @@ type connFormModal struct {
 	asDSN  bool   // "Enter as" DSN text rather than fields
 	tls    string // a cfTLSModes entry
 	aiRows bool
+	// introspect is a cfIntrospectLevels entry: the connection's level of
+	// introspection, "" for the global default
+	introspect string
 
 	fields map[cfCtl]*editor // every text control, made once
 
@@ -138,6 +159,7 @@ type connFormModal struct {
 	drvR    []Rect
 	modeR   [2]Rect
 	tlsR    []Rect
+	introR  []Rect
 	content int // rows the last layout needed, for size
 }
 
@@ -207,6 +229,11 @@ func (m *Model) openConnForm(name string) {
 // hold (several hosts, a unix socket) opens on the DSN text and says why.
 func (cf *connFormModal) fill(sc config.SavedConn) {
 	cf.from, cf.driver, cf.initDriver, cf.aiRows = sc.Name, sc.Driver, sc.Driver, sc.AIRows
+	// a level the file holds that is none (a hand edit) shows as the
+	// default, which is how the config read it (config.MergeSaved)
+	if lvl, ok := config.ParseIntrospect(sc.Introspect); ok {
+		cf.introspect = lvl
+	}
 	cf.set(cfName, sc.Name)
 	// the TLS settings as saved — ${VAR}s and relative paths as typed — so
 	// saving does not pin them to today's expansion
@@ -292,7 +319,7 @@ func (cf *connFormModal) rows() []cfCtl {
 			out = append(out, cfTLSCA, cfTLSCert, cfTLSKey, cfTLSKeyPass, cfTLSHint)
 		}
 	}
-	return append(out, cfAIRows)
+	return append(out, cfIntrospect, cfAIRows)
 }
 
 // order is the focus order: the rows' controls, then the buttons.
@@ -360,7 +387,7 @@ func (cf *connFormModal) dirty() bool {
 // fields as parts (or nothing, on an untouched edit, to keep the DSN), the
 // DSN text otherwise, and TLS only for a server engine.
 func (cf *connFormModal) form() connedit.Form {
-	f := connedit.Form{Name: cf.fields[cfName].Text(), Driver: cf.driver, AIRows: cf.aiRows}
+	f := connedit.Form{Name: cf.fields[cfName].Text(), Driver: cf.driver, AIRows: cf.aiRows, Introspect: cf.introspect}
 	if cf.asDSN {
 		f.DSN = cf.fields[cfDSN].Text()
 	} else if cf.dirty() {
@@ -543,6 +570,11 @@ func (cf *connFormModal) draw(m *Model, s Surface) *caret {
 			field(cfTLSKeyPass, cfLabelW, y, fw)
 		case cfTLSHint:
 			s.Put(cfLabelW, y, truncate("PEM files; ~ and ${VAR} work; relative to ~/.config/dbc", fw), label.Italic())
+		case cfIntrospect:
+			s.Put(1, y, "Introspect", label)
+			cf.introR, _ = chips(y, cfIntrospectLevels, cf.introspect, cf.focus == cfIntrospect, func(n string) string {
+				return orDefault(n, "default")
+			}) // 30 cells: never wraps
 		case cfAIRows:
 			box := pick(cf.aiRows, "[✓]", "[ ]")
 			st := pick(cf.focus == cfAIRows, m.st.sel, onBg(m.st.base, bg))
@@ -553,10 +585,15 @@ func (cf *connFormModal) draw(m *Model, s Surface) *caret {
 	cf.content = y
 
 	// the message: a test's verdict or a refusal, wrapped onto up to three
-	// lines above the buttons
-	if cf.msg != "" {
+	// lines above the buttons. With nothing to say, the Introspect row's
+	// focus borrows the line for what its level reads (cfIntrospectHints).
+	msg, msgKind := cf.msg, cf.msgKind
+	if msg == "" && cf.focus == cfIntrospect {
+		msg, msgKind = cfIntrospectHints[cf.introspect], logInfo
+	}
+	if msg != "" {
 		st := m.st.muted
-		switch cf.msgKind {
+		switch msgKind {
 		case logOk:
 			st = m.st.ok
 		case logWarn:
@@ -565,7 +602,7 @@ func (cf *connFormModal) draw(m *Model, s Surface) *caret {
 			st = m.st.err
 		}
 		var lines []string
-		for _, l := range strings.Split(cf.msg, "\n") {
+		for _, l := range strings.Split(msg, "\n") {
 			lines = append(lines, wrap(l, s.W()-2)...)
 		}
 		top := s.H() - 4
@@ -636,6 +673,11 @@ func (cf *connFormModal) key(m *Model, k tea.KeyPressMsg) (tea.Cmd, bool) {
 			cf.tls = cfTLSModes[(i+pick(s == "left", len(cfTLSModes)-1, 1))%len(cfTLSModes)]
 			cf.place()
 		}
+	case cfIntrospect:
+		if s == "left" || s == "right" || s == "space" {
+			i := slices.Index(cfIntrospectLevels, cf.introspect)
+			cf.introspect = cfIntrospectLevels[(i+pick(s == "left", len(cfIntrospectLevels)-1, 1))%len(cfIntrospectLevels)]
+		}
 	case cfAIRows:
 		if s == "space" {
 			cf.aiRows = !cf.aiRows
@@ -681,6 +723,12 @@ func (cf *connFormModal) click(m *Model, x, y, clicks int, shift bool) (tea.Cmd,
 		if r.Contains(x, y) && cf.server() {
 			cf.focus, cf.tls = cfTLS, cfTLSModes[i]
 			cf.place()
+			return nil, false
+		}
+	}
+	for i, r := range cf.introR {
+		if r.Contains(x, y) {
+			cf.focus, cf.introspect = cfIntrospect, cfIntrospectLevels[i]
 			return nil, false
 		}
 	}
@@ -829,7 +877,8 @@ func (cf *connFormModal) save(m *Model) (tea.Cmd, bool) {
 // connInUse is the TUI's in-use rule for connedit, dbc web's "a query tab
 // is on it": a tab on the connection — or on one of its other databases,
 // whose pool shares its host and credentials — or still dialing it.
-// forEdit adds that ai_rows alone may still change.
+// forEdit adds what may still change: ai_rows and the level of
+// introspection.
 func (m *Model) connInUse(forEdit bool) func(string) error {
 	return func(name string) error {
 		on := func(c string) bool { return c != "" && (c == name || m.baseOf(c) == name) }
@@ -856,7 +905,7 @@ func (m *Model) connInUse(forEdit bool) func(string) error {
 			msg = fmt.Sprintf("tab %s is on %q — disconnect it (x in Connections) or switch it to another connection first", user.title, name)
 		}
 		if forEdit {
-			msg += " (the assistant's row access alone can change while it is in use)"
+			msg += " (the assistant's row access and the level of introspection can change while it is in use)"
 		}
 		return &connedit.Error{Kind: connedit.Conflict, Msg: msg}
 	}

@@ -175,6 +175,12 @@ func (m *Model) drawTablesPane(s Surface) *caret {
 		// connected, the catalog read still on its way (Connected.Load):
 		// said, so an empty pane is not read as an empty database
 		empty = "loading tables…"
+	case m.ws.CatalogUnread():
+		// connected at introspect = "off": nothing was read, by choice
+		// (workspace/introspect.go). Said with the key that reads it, so
+		// the empty pane is taken neither for an empty database nor for a
+		// read that failed.
+		empty = "not read · r refreshes"
 	case m.ws.Catalog() != nil:
 		empty = "no tables"
 	}
@@ -303,6 +309,10 @@ func (m *Model) pickWhy(what string) string {
 	case what == "databases" && !m.hasDatabases(),
 		what == "schemas" && !m.navigable():
 		return m.ws.Active() + " lists its tables whole — there are no " + what + " to pick"
+	case m.ws.CatalogUnread():
+		// neither "could not be listed" nor "has one schema" would be true:
+		// nothing was asked (introspect = "off"), and a refresh asks
+		return m.ws.Active() + "'s " + what + " are not read (introspect = \"off\") — r in Connections reads them"
 	case what == "schemas":
 		return "this database has one schema — its tables are all listed"
 	}

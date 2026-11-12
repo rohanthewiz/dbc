@@ -144,7 +144,10 @@ type Connected struct {
 	// should not wait for a table list to do it. A UI must run it whenever
 	// it is set, as it does Counts: until it lands the workspace reports
 	// CatalogLoading, and its sidebar has nothing to list. nil on a re-read
-	// (above), on a failed connect, and on a driver with no catalog query.
+	// (above), on a failed connect, on a driver with no catalog query, and
+	// on a connection whose level of introspection is off: nothing is read
+	// then until a Refresh, and the workspace reports CatalogUnread
+	// (introspect.go).
 	Load Job
 	// Counts, when non-nil, fetches the row counts of the catalog's tables
 	// for the sidebar; its event is a *RowCounts. It is separate so the

@@ -599,7 +599,7 @@ func TestLiveWorkspaceSchemaNamesFallback(t *testing.T) {
 			said = append(said, n.Text)
 		}
 		joined := strings.Join(said, "\n")
-		if !strings.Contains(joined, "schema table counts unavailable") || !strings.Contains(joined, "could not be counted") {
+		if !strings.Contains(joined, "schema table counts unavailable") || !strings.Contains(joined, "are not counted") {
 			t.Errorf("notes %q, want the fallback and the refused all-schemas said", said)
 		}
 		if strings.Contains(joined, "tables list unavailable") {
@@ -612,6 +612,235 @@ func TestLiveWorkspaceSchemaNamesFallback(t *testing.T) {
 		}
 		if sev := sst.Job().(*SchemaLoaded); sev.Catalog == nil || sev.Schema != "dbc_live_wsn" || len(sev.Catalog.Rows) != 1 {
 			t.Errorf("pick dbc_live_wsn: %+v", sev)
+		}
+	})
+}
+
+// A summary that ran out its budget is remembered for the connection
+// (db.Manager.SummarySlow): the read that watched it says so once, and
+// every later read — a refresh here, with the budget back to normal, so a
+// summary would succeed if it were tried — lists the schemas by name
+// without trying it, and says nothing. Completion is scoped from then on,
+// as at introspect = "names". Dropping the connection (an edit) forgets,
+// and the counts are back.
+func TestLiveWorkspaceSlowSummaryRemembered(t *testing.T) {
+	pgOnly(t, func(t *testing.T, e liveEngine) {
+		w, obs := liveWorkspace(t, e)
+		drop := `DROP SCHEMA IF EXISTS dbc_live_wss CASCADE`
+		obsExec(t, obs, drop, `CREATE SCHEMA dbc_live_wss`, `CREATE TABLE dbc_live_wss.t1 (id int)`)
+		t.Cleanup(func() { _, _ = obs.Run("live", drop) })
+
+		old := schemaSummaryTimeout
+		schemaSummaryTimeout = time.Nanosecond
+		t.Cleanup(func() { schemaSummaryTimeout = old })
+
+		_, st, _ := w.Disconnect()
+		st.Job()
+		ev := landed(w.Connect("live"))
+		if ev.Err != nil || ev.Catalog == nil {
+			t.Fatalf("connect: %+v", ev)
+		}
+		said := noteTexts(ev.Notes)
+		if !strings.Contains(said, "schema table counts unavailable") ||
+			!strings.Contains(said, `live is read by schema names from here on`) ||
+			!strings.Contains(said, `introspect = "names"`) {
+			t.Errorf("notes %q, want the fallback and what was remembered", said)
+		}
+		if !w.Manager().SummarySlow("live") {
+			t.Fatal("the timed-out summary was not remembered")
+		}
+
+		// the budget is ample again: only the memory keeps the summary untried
+		schemaSummaryTimeout = old
+		rst, err := w.Refresh()
+		if err != nil {
+			t.Fatal(err)
+		}
+		rev := rst.Job().(*Connected)
+		if rev.Err != nil || rev.Catalog == nil {
+			t.Fatalf("refresh: %+v", rev)
+		}
+		for _, s := range rev.Schemas {
+			if s.Tables != db.TablesUnknown {
+				t.Errorf("schema %+v counted: the refresh tried the summary again", s)
+			}
+		}
+		if got := noteTexts(rev.Notes); strings.Contains(got, "counts unavailable") || strings.Contains(got, "from here on") {
+			t.Errorf("the refresh explained the names again: %q", got)
+		}
+		if err = w.LoadCompletions(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		w.mu.Lock()
+		scope := w.compl.scope
+		w.mu.Unlock()
+		if !slices.Contains(scope, "public") || slices.Contains(scope, "dbc_live_wss") {
+			t.Errorf("completion scope %v, want the search path's schemas only", scope)
+		}
+
+		// an edit of the connection drops what was learned about it
+		w.Manager().Drop("live")
+		if w.Manager().SummarySlow("live") {
+			t.Fatal("a Drop kept the memory")
+		}
+		_, st, _ = w.Disconnect()
+		st.Job()
+		back := landed(w.Connect("live"))
+		if back.Err != nil || len(back.Schemas) == 0 {
+			t.Fatalf("reconnect: %+v", back)
+		}
+		for _, s := range back.Schemas {
+			if s.Tables == db.TablesUnknown {
+				t.Errorf("schema %+v uncounted after the memory was dropped", s)
+			}
+		}
+	})
+}
+
+// At introspect = "names" the schemas are listed by name from the start:
+// counts unknown, no summary tried and so nothing to explain or remember,
+// "all schemas" not honoured, and the default schema's tables listed.
+// Completion reads the open schema and the search path's, and a pick of
+// another schema reads that one. The connection's level is read afresh for
+// each read: raised to full in the config, a refresh counts.
+func TestLiveWorkspaceIntrospectNames(t *testing.T) {
+	pgOnly(t, func(t *testing.T, e liveEngine) {
+		w, obs := liveWorkspace(t, e, "named")
+		drop := `DROP SCHEMA IF EXISTS dbc_live_win CASCADE`
+		obsExec(t, obs, drop, `CREATE SCHEMA dbc_live_win`, `CREATE TABLE dbc_live_win.only_in_win (id int)`)
+		t.Cleanup(func() { _, _ = obs.Run("live", drop) })
+		setLevel := func(lvl string) {
+			cn, _ := w.cfg.ConnByName("named")
+			cn.Introspect = lvl
+			if err := w.cfg.ReplaceConn("named", cn); err != nil {
+				t.Fatal(err)
+			}
+		}
+		setLevel(config.IntrospectNames)
+
+		ev := landed(w.SwitchPick("named", SchemaPick{All: true}))
+		if ev.Err != nil || ev.Catalog == nil || ev.Schema != "public" {
+			t.Fatalf("connect at names: %+v", ev)
+		}
+		var names []string
+		for _, s := range ev.Schemas {
+			names = append(names, s.Name)
+			if s.Tables != db.TablesUnknown {
+				t.Errorf("schema %+v counted at names", s)
+			}
+		}
+		if !slices.Contains(names, "dbc_live_win") || !slices.Contains(names, "public") {
+			t.Errorf("schemas %v, want public and dbc_live_win by name", names)
+		}
+		said := noteTexts(ev.Notes)
+		if strings.Contains(said, "counts unavailable") || strings.Contains(said, "from here on") {
+			t.Errorf("names explained itself as a fallback: %q", said)
+		}
+		if !strings.Contains(said, "are not counted") {
+			t.Errorf("the refused all-schemas pick went unsaid: %q", said)
+		}
+		if w.Manager().SummarySlow("named") {
+			t.Error("names marked the summary slow without trying it")
+		}
+
+		buf := "SELECT * FROM "
+		if err := w.LoadCompletions(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		r, ready := w.Complete(buf, len(buf))
+		if !ready || !hasLabel(r, liveTable) || hasLabel(r, "only_in_win") {
+			t.Fatalf("scoped completion: ready %v, %s offered %v, only_in_win offered %v",
+				ready, liveTable, hasLabel(r, liveTable), hasLabel(r, "only_in_win"))
+		}
+		sst, err := w.PickSchema(SchemaPick{Name: "dbc_live_win"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sev := sst.Job().(*SchemaLoaded); sev.Catalog == nil || sev.Schema != "dbc_live_win" {
+			t.Fatalf("pick dbc_live_win: %+v", sev)
+		}
+		if _, ready = w.Complete(buf, len(buf)); ready {
+			t.Fatal("the scoped cache answered for a schema it did not read")
+		}
+		if err = w.LoadCompletions(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if r, ready = w.Complete(buf, len(buf)); !ready || !hasLabel(r, "only_in_win") {
+			t.Errorf("after the pick and a load: ready %v, items %v", ready, r.Items)
+		}
+
+		setLevel(config.IntrospectFull)
+		rst, err := w.Refresh()
+		if err != nil {
+			t.Fatal(err)
+		}
+		rev := rst.Job().(*Connected)
+		if rev.Err != nil || len(rev.Schemas) == 0 {
+			t.Fatalf("refresh at full: %+v", rev)
+		}
+		for _, s := range rev.Schemas {
+			if s.Tables == db.TablesUnknown {
+				t.Errorf("schema %+v uncounted at full", s)
+			}
+		}
+	})
+}
+
+// At introspect = "off" a connect to Postgres reads none of the three
+// lists; the refresh that reads them reads as names does — schemas by
+// name, the pick the connect was asked for — and completion, the
+// dialect's words until then, is scoped after.
+func TestLiveWorkspaceIntrospectOff(t *testing.T) {
+	pgOnly(t, func(t *testing.T, e liveEngine) {
+		w, obs := liveWorkspace(t, e, "quiet")
+		drop := `DROP SCHEMA IF EXISTS dbc_live_wio CASCADE`
+		obsExec(t, obs, drop, `CREATE SCHEMA dbc_live_wio`, `CREATE TABLE dbc_live_wio.only_in_wio (id int)`)
+		t.Cleanup(func() { _, _ = obs.Run("live", drop) })
+		cn, _ := w.cfg.ConnByName("quiet")
+		cn.Introspect = config.IntrospectOff
+		if err := w.cfg.ReplaceConn("quiet", cn); err != nil {
+			t.Fatal(err)
+		}
+
+		ev := w.SwitchPick("quiet", SchemaPick{Name: "dbc_live_wio"}).Job().(*Connected)
+		if ev.Err != nil || ev.Load != nil || !w.CatalogUnread() {
+			t.Fatalf("connect at off: %+v, unread %v", ev, w.CatalogUnread())
+		}
+		if len(w.Databases()) != 0 || len(w.Schemas()) != 0 || w.Catalog() != nil {
+			t.Errorf("read at off: %d databases, %d schemas, catalog %v", len(w.Databases()), len(w.Schemas()), w.Catalog() != nil)
+		}
+		buf := "SELECT * FROM "
+		if r, ready := w.Complete(buf, len(buf)); !ready || hasLabel(r, liveTable) {
+			t.Errorf("completion while unread: ready %v, %s offered %v", ready, liveTable, hasLabel(r, liveTable))
+		}
+		if got := wsVal(t, w, `SELECT 1`); got != "1" {
+			t.Errorf("a run on the unread connection: %q", got)
+		}
+
+		rst, err := w.Refresh()
+		if err != nil {
+			t.Fatal(err)
+		}
+		rev := rst.Job().(*Connected)
+		if rev.Err != nil || rev.Catalog == nil || rev.Schema != "dbc_live_wio" || len(rev.Databases) == 0 {
+			t.Fatalf("refresh: %+v", rev)
+		}
+		for _, s := range rev.Schemas {
+			if s.Tables != db.TablesUnknown {
+				t.Errorf("schema %+v counted on an off connection's refresh", s)
+			}
+		}
+		if w.CatalogUnread() {
+			t.Error("still unread after the refresh")
+		}
+		if err = w.LoadCompletions(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		w.mu.Lock()
+		scope := w.compl.scope
+		w.mu.Unlock()
+		if !slices.Contains(scope, "dbc_live_wio") || !slices.Contains(scope, "public") {
+			t.Errorf("completion scope %v, want the open schema and the search path's", scope)
 		}
 	})
 }

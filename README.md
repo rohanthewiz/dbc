@@ -76,6 +76,7 @@ result_tabs        = 10     # result tabs per connection, per query tab (1–50;
 conn_idle_timeout  = "1h"   # close pooled connections idle this long ("0" = never)
 connect_timeout    = "5s"   # give up opening a connection after this ("0" = no limit; Ctrl+K cancels)
 catalog_timeout    = "1m"   # give up reading the sidebar's table list after this ("0" = no limit)
+introspect         = "full" # how much of a database is read unasked: full | names | off (see below)
 default_connection = "local-pg"
 
 [[connection]]
@@ -133,6 +134,57 @@ match fails the load, naming the connection, rather than dialing the envelope.
 The ad-hoc `--dsn` takes an envelope too, so a script or a cron line can carry
 one in place of the password (`dbc --driver postgres --dsn 'enc:v1:…' …`); it
 is used as sealed, with no `${VAR}` expansion, as a `--dsn` always is.
+
+### Levels of introspection
+
+`introspect` says how much of a database dbc reads without being asked: on
+a connect, a refresh, the relist after DDL, and for
+[completion](#completion). Set it at the top of the file as the default for
+every connection, and in a `[[connection]]` (or the connection forms) for
+one database; the connection's own wins.
+
+```toml
+introspect = "full"          # the default for every connection
+
+[[connection]]
+name       = "ProdDr"
+driver     = "postgres"
+dsn        = "postgres://reader:${PGPASS}@proddr.example.com/app"
+introspect = "names"         # a big production catalog: no counting
+```
+
+| Level | The sidebar reads | Completion reads |
+| --- | --- | --- |
+| `full` (default) | the server's databases, the schemas **with their table counts**, the open schema's tables | every schema's tables and columns |
+| `names` | the databases, the schema **names** (no counts, so no "all schemas"), the open schema's tables | the open schema's and the `search_path`'s |
+| `off` | nothing, until you refresh; the refresh then reads as `names` does | nothing until that refresh (the dialect's keywords and functions only), then as `names` |
+
+`full` is right for most databases: the reads are milliseconds, and the
+sidebar and completion then know everything. `names` is for a Postgres
+catalog too big to count. The schema counts are one pass over `pg_class`,
+which on a production database with many partitions can hold millions of
+rows, and takes seconds each time a tab connects. Its schema picker lists
+names alone, and a schema's tables are read when you pick it. `off` is for
+a connection you only run statements on: connecting reads nothing, the
+Tables list says *not read*, and a refresh (`r` in the TUI's Connections
+pane, **Refresh** in `dbc web`) lists the tables when you want them.
+
+`names` differs from `full` only on Postgres. MySQL, SQLite and bytdb have
+no schemas to count or to scope completion by, so there the two read the
+same; `off` works on every engine. A connection opened on another of its
+server's databases (`ProdDr/analytics`) reads at its connection's level.
+
+**`full` adapts.** If the schema counts do not arrive within 5 seconds, dbc
+lists the schemas by name that once, says so in the log, and reads that
+connection as `names` from then on — every tab, every refresh — until dbc
+restarts (or the connection's name, driver, DSN or TLS is edited). So the wait is paid once per run
+rather than on every connect; `introspect = "names"` skips it the first
+time too.
+
+The level covers what dbc reads on its own. What you ask for by name is
+read whatever the level: a schema you pick, a diagram, **Show columns**, the
+query designer. The sidebar's row counts and routines are switches of their
+own, off until turned on.
 
 ### TLS
 
@@ -314,7 +366,10 @@ server costs what the sidebar shows, not what the server holds:
   included. A connect opens on the first schema on `search_path` if it has
   tables (else the first schema that does), or on the schema last picked
   for that connection. "all schemas" is offered while the database has at
-  most 5,000 tables.
+  most 5,000 tables. On a connection whose
+  [`introspect`](#levels-of-introspection) is `names`, or whose counts
+  were too slow to read, the schemas are listed without counts and one at
+  a time.
 - **tables**: the picked schema's tables, read from `pg_catalog`. That
   includes ones your role holds no grant on (as psql's `\dt` does), which
   `information_schema.tables` would hide, making the schema look empty.
@@ -466,7 +521,9 @@ the same form as `dbc web`'s **+** (see
 [the browser workbench](#the-browser-workbench-dbc-web)): name, driver,
 *Enter as* **Fields** (host, port, user, password, database and options —
 or a file for SQLite and bytdb) or the whole **DSN**, TLS for Postgres and
-MySQL, and whether the assistant may see result rows. `Tab`/`Shift+Tab` (or
+MySQL, the [level of introspection](#levels-of-introspection) (the line
+under the form says what the level under the cursor reads), and whether
+the assistant may see result rows. `Tab`/`Shift+Tab` (or
 `↑`/`↓`) move between the controls, `←`/`→` or `Space` change a choice,
 and a click works everywhere. **Test connection** (`Ctrl+T`) dials, pings
 and closes, and says how long it took or the driver's error, inside the
@@ -480,7 +537,8 @@ password withheld as in the browser (leave it empty to keep it; the DSN as
 text starts empty, meaning "keep the saved one"). **Remove…** asks first.
 The connection dbc is on can't be renamed, given a new DSN, driver or TLS,
 or removed — disconnect (`x`) or switch first — though whether the
-assistant may see its rows can change at any time. A rename takes the
+assistant may see its rows, and its level of introspection, can change at
+any time (a new level shows at the next refresh). A rename takes the
 connection's schema picks along. The config file's connections are changed
 in the file: their Edit and Remove rows say so.
 
@@ -621,6 +679,14 @@ end of a word already typed in full it is a new line), `Esc` closes. In dbc
 web it is Monaco's suggest list, fed by the same rules. Running DDL
 (`CREATE`, `ALTER`, `DROP` …) or a script makes the next suggestion read the
 schema again.
+
+How much of the schema is read follows the connection's
+[`introspect`](#levels-of-introspection). At `full` it is every schema; a
+Postgres catalog too big for that (some catalog query past 250,000 rows) is
+read scoped instead, to the browsed schema and the `search_path`'s. At
+`names` it is scoped from the start, and tables of other schemas are
+suggested once you browse to them. At `off` nothing is read until you
+refresh the sidebar, and the suggestions until then are the dialect's own.
 
 ### Go to definition, usages and rename
 
@@ -1687,8 +1753,10 @@ them.
 
 **Adding connections.** The **+** beside *Connections* opens a menu:
 **Add a connection…** and **Postgres in Docker…**. The first opens a form: name,
-driver, the connection itself, [TLS](#tls), and whether the assistant may see
-result rows (`ai_rows`). *Enter as* switches between **Fields** (host, port,
+driver, the connection itself, [TLS](#tls), **Introspect** (how much of the
+database dbc reads unasked: see
+[Levels of introspection](#levels-of-introspection)), and whether the
+assistant may see result rows (`ai_rows`). *Enter as* switches between **Fields** (host, port,
 user, password, database and extra options, or a file for SQLite and bytdb)
 and the whole **DSN** as text. From fields, dbc writes the DSN for you and
 handles the quoting and escaping, so a password with `@`, `/` or spaces

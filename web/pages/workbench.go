@@ -371,6 +371,10 @@ func (p Workbench) connsList(b *element.Builder) any {
 					// the edit form's checkbox starts from this
 					attrs = append(attrs, "data-airows", "1")
 				}
+				if c.Introspect != "" {
+					// the edit form's Introspect select starts from this
+					attrs = append(attrs, "data-introspect", c.Introspect)
+				}
 				// the edit form's TLS fields start from these, and data-tls
 				// marks the entry in the list (css: .conn-item[data-tls])
 				for _, kv := range [][2]string{{"data-tls", c.TLS}, {"data-tls-ca", c.TLSCA},

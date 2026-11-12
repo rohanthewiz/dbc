@@ -69,6 +69,26 @@ connect_timeout = "5s"
 # unavailable". "0" sets no limit; Ctrl+K still abandons the read.
 catalog_timeout = "1m"
 
+# How much of a database dbc reads WITHOUT being asked — on a connect, a
+# refresh, the relist after DDL, and for the editor's completion:
+#
+#   "full"   the server's databases, the schemas with their table counts,
+#            the open schema's tables; completion reads every schema.
+#   "names"  the same, but schema NAMES only: no counts (one pass over
+#            pg_class, seconds on a catalog of millions of rows), so no
+#            "all schemas"; completion reads the open schema and the
+#            search_path's. Differs from full only on Postgres.
+#   "off"    nothing until you refresh the sidebar (which then reads as
+#            names does); completion offers the dialect's words until then.
+#
+# This is the default for every connection; a [[connection]] may set its
+# own (see local-pg below). At "full", a connection whose schema
+# counts do not arrive within 5s is read as "names" for the rest of the run,
+# so the wait is paid once; "names" on that connection skips it altogether.
+# What you ask for by name — a schema pick, a diagram, the sidebar's row
+# counts and routines switches — is read at any level.
+introspect = "full"
+
 # Palette of the pictures drawn outside the browser — plans (`dbc explain -t
 # pdf|jpeg|png`, the TUI's Save as PDF / JPEG) and schema diagrams (`dbc erd
 # -t png|jpeg`, the TUI's Diagram menu items): "dark" (dbc's own) or "light"
@@ -114,6 +134,10 @@ dsn    = "postgres://postgres:${PGPASS}@localhost:5432/mydb?sslmode=disable"
 # dsn  = "enc:v1:…"
 # Directory `dbc migrate` reads for this connection (else --dir, else ".")
 migrations = "db/migrate"
+# This connection's own level of introspection, over the global default
+# above: "names" for a production catalog too big to count on every connect,
+# "off" for one you only run statements on.
+# introspect = "names"
 
 [[connection]]
 name   = "reporting-mysql"

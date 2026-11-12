@@ -37,7 +37,8 @@ type Registered struct {
 //	one added in dbc, same DSN ─────────────► nothing to do (a second pick)
 //	one added in dbc, other DSN ────────────► Edit its DSN: the container
 //	                                          was recreated (new port and
-//	                                          password); its ai_rows stay
+//	                                          password); its ai_rows and
+//	                                          introspect stay
 //	one from the config file ───────────────► Add as docker-pg18-2, -3, …
 //	                                          (the file's is the user's)
 //
@@ -79,6 +80,7 @@ func update(ed *connedit.Editor, name string, res Result, inUse func(string) err
 	f := connedit.Form{Name: name, Driver: "postgres", DSN: res.DSN}
 	if found {
 		f.AIRows = sc.AIRows
+		f.Introspect = sc.Introspect // the user's, like ai_rows: a new DSN is no reason to change it
 	}
 	er, err := ed.Edit(name, f, inUse)
 	if err != nil {

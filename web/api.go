@@ -44,6 +44,10 @@ type connInfo struct {
 	Driver string `json:"driver"`
 	Saved  bool   `json:"saved,omitempty"`
 	AIRows bool   `json:"ai_rows,omitempty"`
+	// Introspect is the connection's own level of introspection
+	// (config.Connection.Introspect), "" when it follows the global
+	// default: the edit form's select starts from it.
+	Introspect string `json:"introspect,omitempty"`
 	// TLS settings fill the edit form, and mark the sidebar entry. They are
 	// the resolved ones (absolute paths), which is what the form shows.
 	config.TLSOpts

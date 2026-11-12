@@ -134,10 +134,22 @@ func (c *ConnCompletions) load(ctx context.Context, conn string) (complState, er
 		}
 		break
 	}
+	// The connection's level of introspection applies here as in a
+	// workspace (complete.go, THE LEVEL): at off nothing is read — there is
+	// no sidebar here whose Refresh could say "read it now", so the answer
+	// stays the dialect's words, and Tables offers none — and below full
+	// the read is scoped from the start. Asked before an entry is made, so
+	// an off connection keeps none, and a level raised in the connection
+	// form takes effect at the next ask.
+	lvl := levelOf(c.cfg, c.mgr, conn)
+	if lvl == levelOff {
+		c.mu.Unlock()
+		return complState{conn: conn}, nil
+	}
 	done := make(chan struct{})
 	mine := &complState{conn: conn, loading: done}
 	c.entries[conn] = mine
-	scoped := c.scoped[conn]
+	scoped := c.scoped[conn] || (lvl != levelFull && navigable(c.cfg, conn))
 	c.mu.Unlock()
 
 	sc, path, scope, tooBig, err := readCompletions(ctx, c.mgr, navigable(c.cfg, conn), conn, "", scoped)

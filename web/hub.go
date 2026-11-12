@@ -686,6 +686,11 @@ type sideState struct {
 	// event. The page says "loading tables…" meanwhile, rather than
 	// drawing an empty list that reads as an empty database.
 	Loading bool `json:"loading,omitempty"`
+	// Unread says the tab is connected with its catalog left unread on
+	// purpose — the connection's introspect is "off"
+	// (workspace.CatalogUnread) — until a refresh. The page says so, with
+	// the way to read it, where Loading says "loading tables…".
+	Unread bool `json:"unread,omitempty"`
 	// Base is the configured connection the sidebar's connection is, or is
 	// derived from (config.DatabaseSep): the Connections list's row to
 	// mark active while the tab is on another of its server's databases.
@@ -759,7 +764,7 @@ func (s *Server) sidebar(ws *workspace.Workspace) sideState {
 // no connection — disconnected, or never connected — has an empty one,
 // rather than the default's that its Active still names.
 func sidebar(cfg *config.Config, ws *workspace.Workspace) sideState {
-	st := sideState{Tables: tables(ws), Loading: ws.CatalogLoading(),
+	st := sideState{Tables: tables(ws), Loading: ws.CatalogLoading(), Unread: ws.CatalogUnread(),
 		Schema: ws.CatalogSchema(), RowCounts: ws.RowCountsShown(),
 		ShowRoutines: ws.RoutinesShown(), Routines: routines(ws),
 		TablesOpen: ws.SectionOpen(workspace.SectionTables), ViewsOpen: ws.SectionOpen(workspace.SectionViews)}

@@ -369,3 +369,98 @@ func TestChipRows(t *testing.T) {
 		t.Errorf("a lone wide chip should stay on its line, lines %d", lines)
 	}
 }
+
+// The form's Introspect row sets a connection's level of introspection:
+// its chips say what the level under the cursor reads, the choice is saved
+// with the connection, and at off the connect that follows a save lists
+// nothing — the Tables pane says so, with the key that reads — until r in
+// the Connections pane refreshes.
+func TestConnFormIntrospectOff(t *testing.T) {
+	m := newTestModel(t)
+	dir := t.TempDir()
+	m.saved = config.OpenSaved(filepath.Join(dir, "connections.toml"))
+	dbFile := filepath.Join(dir, "quiet.db")
+
+	key(t, m, "ctrl+l")
+	key(t, m, "a")
+	cf := connFormOf(t, m)
+	typeText(t, m, "quiet")
+	frame(m)
+	r := cf.drvR[2] // sqlite
+	click(t, m, r.X+1, r.Y)
+	key(t, m, "tab") // Enter as
+	key(t, m, "tab") // File
+	typeText(t, m, dbFile)
+
+	// the chips: default, full, names, off — and the keys walk them too
+	frame(m)
+	if len(cf.introR) != len(cfIntrospectLevels) {
+		t.Fatalf("%d introspect chips drawn, want %d:\n%s", len(cf.introR), len(cfIntrospectLevels), frame(m).Text())
+	}
+	r = cf.introR[2] // names
+	click(t, m, r.X+1, r.Y)
+	if cf.introspect != config.IntrospectNames || cf.focus != cfIntrospect {
+		t.Fatalf("after a click on names: level %q, focus %v", cf.introspect, cf.focus)
+	}
+	key(t, m, "right")
+	if cf.introspect != config.IntrospectOff {
+		t.Fatalf("right of names is %q, want off", cf.introspect)
+	}
+	if text := frame(m).Text(); !strings.Contains(text, "off: read nothing on connect") {
+		t.Fatalf("the level under the cursor is not explained:\n%s", text)
+	}
+
+	key(t, m, "enter") // save, and connect to it
+	if m.modal != nil {
+		t.Fatalf("form still open: %q", connFormOf(t, m).msg)
+	}
+	if got := m.cfg.IntrospectFor("quiet"); got != config.IntrospectOff {
+		t.Fatalf("saved at %q, want off", got)
+	}
+	if sc, found, _ := m.saved.Get("quiet"); !found || sc.Introspect != config.IntrospectOff {
+		t.Fatalf("saved entry = %+v, %v", sc, found)
+	}
+	// a table to find, made through the pool: a run in the editor would be
+	// the workspace's, and is not what lists it
+	if _, err := m.mgr.Run("quiet", "CREATE TABLE quiet_pets (id INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if m.ws.Active() != "quiet" || !m.ws.CatalogUnread() {
+		t.Fatalf("active %q, unread %v; log:\n%s", m.ws.Active(), m.ws.CatalogUnread(), logText(m))
+	}
+	text := frame(m).Text()
+	if !strings.Contains(text, "not read · r refreshes") || strings.Contains(text, "quiet_pets") {
+		t.Fatalf("the Tables pane at off:\n%s", text)
+	}
+	if !strings.Contains(logText(m), `catalog of quiet not read (introspect = "off")`) {
+		t.Errorf("log:\n%s", logText(m))
+	}
+
+	key(t, m, "ctrl+l")
+	key(t, m, "r")
+	if m.ws.CatalogUnread() {
+		t.Fatalf("still unread after r; log:\n%s", logText(m))
+	}
+	// "not read ·" is the pane's: the log keeps the connect's own line
+	if text = frame(m).Text(); !strings.Contains(text, "quiet_pets") || strings.Contains(text, "not read ·") {
+		t.Fatalf("the Tables pane after the refresh:\n%s", text)
+	}
+
+	// the edit form opens on the saved level
+	key(t, m, "ctrl+l")
+	m.conns.cur = slicesIndexConn(m, "quiet")
+	key(t, m, "e")
+	if cf = connFormOf(t, m); cf.introspect != config.IntrospectOff {
+		t.Fatalf("the edit form opened at %q, want off", cf.introspect)
+	}
+}
+
+// slicesIndexConn is the Connections list's row for name, -1 when absent.
+func slicesIndexConn(m *Model, name string) int {
+	for i, it := range m.conns.items {
+		if it.data.(string) == name {
+			return i
+		}
+	}
+	return -1
+}

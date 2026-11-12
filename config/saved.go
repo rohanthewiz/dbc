@@ -73,6 +73,11 @@ type SavedConn struct {
 	TLSOpts
 	// AIRows is Connection.AIRows: the assistant may see result rows.
 	AIRows bool `toml:"ai_rows"`
+	// Introspect is Connection.Introspect: how much of the database is
+	// read unasked, "" for the global default. Left out of the file when
+	// unset, so an entry that never chose a level keeps following the
+	// config file's introspect rather than pinning today's.
+	Introspect string `toml:"introspect,omitempty"`
 	// Added orders the sidebar in dbc web (after the config file's). It is
 	// kept across an edit so an edited entry does not move.
 	Added time.Time `toml:"added"`
@@ -214,8 +219,18 @@ func (c *Config) MergeSaved(saved []SavedConn, knownDriver func(string) bool) []
 		}
 		dsn, w := ExpandDSN(sc.Name, sc.Driver, sc.DSN)
 		tlsOpts, tw := ExpandTLS(sc.Name, sc.TLSOpts, SavedDir())
+		// A level that is none (a hand edit's typo) follows the default,
+		// said below once the entry is known to be merged: it decides how
+		// much is read, not whether the connection works (checkIntrospect).
+		level, levelOK := ParseIntrospect(sc.Introspect)
+		if !levelOK {
+			w = append(w, fmt.Sprintf(
+				"saved connection %q: introspect = %q is not a level (use %s); using the default (%s)",
+				sc.Name, level, quotedLevels(), c.IntrospectDefault()))
+			level = ""
+		}
 		if err := c.AddConn(Connection{Name: sc.Name, Driver: sc.Driver, DSN: dsn,
-			TLSOpts: tlsOpts, AIRows: sc.AIRows, Web: true}); err != nil {
+			TLSOpts: tlsOpts, AIRows: sc.AIRows, Introspect: level, Web: true}); err != nil {
 			warns = append(warns, fmt.Sprintf(
 				"saved connection %q skipped: a connection by that name is already defined "+
 					"(rename one of them, in the config file or in dbc web)", sc.Name))

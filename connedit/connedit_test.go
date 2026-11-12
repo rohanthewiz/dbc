@@ -43,6 +43,7 @@ func TestCheckRefusesWhatCannotWork(t *testing.T) {
 		{Form{Name: "a", Driver: "sqlite", DSN: "  "}, true, "DSN is empty"},
 		{Form{Name: "a", Driver: "sqlite", DSN: "x.db", TLSOpts: config.TLSOpts{TLS: "require"}}, true, "TLS settings are for postgres and mysql"},
 		{Form{Name: "a", Driver: "postgres", DSN: "postgres://h/d", TLSOpts: config.TLSOpts{TLS: "bogus"}}, true, "unknown tls mode"},
+		{Form{Name: "a", Driver: "sqlite", DSN: "x.db", Introspect: "lazy"}, true, `introspect is full, names, off, or empty for the default — not "lazy"`},
 	}
 	for _, c := range cases {
 		err := c.f.Check(c.need)
@@ -224,5 +225,52 @@ func TestUnsavedWarning(t *testing.T) {
 	e.Saved = config.OpenSaved(filepath.Join(t.TempDir(), "c.toml"))
 	if w := e.UnsavedWarning("connection"); w != "" {
 		t.Fatalf("persistent store warned %q", w)
+	}
+}
+
+// A connection's level of introspection rides the form into the config and
+// the file, normalized; an empty one stays unset in both, so the entry
+// follows the global default. Like ai_rows it is no part of how the pool
+// dials: a change to it alone goes through while the connection is in use,
+// and takes effect at once (config.IntrospectFor reads the config live).
+func TestIntrospectRidesTheForm(t *testing.T) {
+	e, dir := newEditor(t)
+	e.Cfg.Introspect = config.IntrospectFull
+	path := filepath.Join(dir, "a.db")
+	if _, err := e.Add(Form{Name: "a", Driver: "sqlite", DSN: path, Introspect: " Names "}); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.Cfg.IntrospectFor("a"); got != config.IntrospectNames {
+		t.Fatalf("added at %q, want names", got)
+	}
+	if sc, _, _ := e.Saved.Get("a"); sc.Introspect != config.IntrospectNames {
+		t.Fatalf("saved at %q, want names", sc.Introspect)
+	}
+
+	busy := errors.New("in use")
+	asked := 0
+	inUse := func(string) error { asked++; return busy }
+	res, err := e.Edit("a", Form{Name: "a", Driver: "sqlite", Introspect: "off"}, inUse)
+	if err != nil || res.Reconnects || asked != 0 {
+		t.Fatalf("introspect edit while in use = %+v, %v (asked %d)", res, err, asked)
+	}
+	if got := e.Cfg.IntrospectFor("a"); got != config.IntrospectOff {
+		t.Fatalf("after the edit: %q, want off", got)
+	}
+	if sc, _, _ := e.Saved.Get("a"); sc.Introspect != config.IntrospectOff || sc.DSN != path {
+		t.Fatalf("saved after the edit: %+v", sc)
+	}
+
+	// back to the default: unset in both, following the global key
+	if _, err = e.Edit("a", Form{Name: "a", Driver: "sqlite"}, inUse); err != nil {
+		t.Fatal(err)
+	}
+	cn, _ := e.Cfg.ConnByName("a")
+	sc, _, _ := e.Saved.Get("a")
+	if cn.Introspect != "" || sc.Introspect != "" || e.Cfg.IntrospectFor("a") != config.IntrospectFull {
+		t.Fatalf("back to the default: config %q, saved %q", cn.Introspect, sc.Introspect)
+	}
+	if _, err = e.Edit("a", Form{Name: "a", Driver: "sqlite", Introspect: "sometimes"}, nil); kindOf(err) != Invalid {
+		t.Fatalf("a level that is none = %v", err)
 	}
 }

@@ -369,6 +369,20 @@
       els.tables.append(el("li", "none", "loading tables…"));
       return;
     }
+    // connected with the catalog left unread on purpose: the connection's
+    // introspect is "off" (sideState.Unread, workspace.CatalogUnread), so
+    // nothing is read until a refresh. Said, with the refresh one click
+    // away, so the empty list is taken neither for an empty database nor
+    // for a read that failed. A script tab falls through to its own words
+    // below, as it does while loading.
+    if (side.unread && state.active && !(state.tab && state.tab.script)) {
+      const read = el("button", { type: "button", class: "linkish",
+        title: "Read this connection's databases, schemas and tables now (Refresh, in the connection's menu)" }, "refresh");
+      read.addEventListener("click", () => dbc.cmd.refresh());
+      const why = "This connection's introspect is \"off\": dbc reads nothing of the database until asked.";
+      els.tables.append(el("li", { class: "none", title: why }, "not read — ", read, " lists the tables"));
+      return;
+    }
     if (state.tab && state.tab.script) {
       const why = "a script names its own connections — click one above to put its name in at the caret";
       els.tables.append(el("li", { class: "none", title: why }, why));

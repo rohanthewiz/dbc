@@ -50,8 +50,11 @@
 // connection across every window, the TUI has one — its active connection.
 // Either way a connection something is on cannot be renamed, given a new
 // DSN, driver or TLS, or removed, since that would pull the pool out from
-// under a session and whatever transaction it holds. Its ai_rows alone can
-// change at any time: the assistant reads it afresh for every question.
+// under a session and whatever transaction it holds. Its ai_rows and its
+// introspect can change at any time: neither is part of how the pool
+// dials. The assistant reads ai_rows afresh for every question, and the
+// workspace reads the level of introspection afresh for every catalog read
+// (config.IntrospectFor), so a new level shows at the next refresh.
 package connedit
 
 import (
@@ -115,6 +118,10 @@ type Form struct {
 	Driver string `json:"driver"`
 	DSN    string `json:"dsn"`
 	AIRows bool   `json:"ai_rows"`
+	// Introspect is the connection's level of introspection
+	// (config.IntrospectLevels), "" for the global default. Check
+	// normalizes it and refuses anything else.
+	Introspect string `json:"introspect"`
 	// TLS as typed: ${VAR}s unexpanded and a relative path relative, as the
 	// saved file keeps them (config.SavedConn); TLSFor resolves them.
 	config.TLSOpts
@@ -230,6 +237,15 @@ func (f *Form) Check(needName bool) error {
 	if err := f.TLSOpts.Check(); err != nil {
 		return refuse(Invalid, "%s", userMsg(err))
 	}
+	// Both forms offer the levels as a choice, so this is a hand-made
+	// request; refused rather than saved, where the config file's own typo
+	// only warns (config.checkIntrospect): a form can say so on the spot.
+	lvl, ok := config.ParseIntrospect(f.Introspect)
+	if !ok {
+		return refuse(Invalid, "introspect is %s, or empty for the default — not %q",
+			strings.Join(config.IntrospectLevels, ", "), lvl)
+	}
+	f.Introspect = lvl
 	// Both forms hide the TLS fields for the embedded engines, so this is a
 	// stale form or a hand-made request; refused here rather than saved and
 	// then failing every connect (db.tlsOpen refuses it too).
@@ -310,7 +326,8 @@ func (e *Editor) Add(f Form) (warns []string, err error) {
 	dsn, warns := config.ExpandDSN(f.Name, f.Driver, f.DSN)
 	tlsOpts, tw := f.TLSFor(f.Name)
 	warns = append(warns, tw...)
-	cn := config.Connection{Name: f.Name, Driver: f.Driver, DSN: dsn, TLSOpts: tlsOpts, AIRows: f.AIRows, Web: true}
+	cn := config.Connection{Name: f.Name, Driver: f.Driver, DSN: dsn, TLSOpts: tlsOpts,
+		AIRows: f.AIRows, Introspect: f.Introspect, Web: true}
 	if err = e.Cfg.AddConn(cn); err != nil {
 		if errors.Is(err, config.ErrConnExists) {
 			return nil, refuse(Conflict, "a connection named %q already exists", f.Name)
@@ -319,7 +336,7 @@ func (e *Editor) Add(f Form) (warns []string, err error) {
 	}
 	// the DSN as typed, ${VAR}s and all: see config.SavedConn
 	if err = e.Saved.Add(config.SavedConn{Name: f.Name, Driver: f.Driver, DSN: f.DSN,
-		TLSOpts: f.TLSOpts, AIRows: f.AIRows}); err != nil {
+		TLSOpts: f.TLSOpts, AIRows: f.AIRows, Introspect: f.Introspect}); err != nil {
 		e.Cfg.RemoveConn(f.Name)
 		if errors.Is(err, config.ErrConnExists) {
 			return nil, refuse(Conflict, "a connection named %q was added by another %s — "+
@@ -343,12 +360,14 @@ type EditResult struct {
 }
 
 // Edit changes a connection added from inside dbc — its name, driver, DSN,
-// TLS or ai_rows — in place. An empty DSN keeps the stored one (FormDSN).
+// TLS, ai_rows or introspect — in place. An empty DSN keeps the stored one
+// (FormDSN).
 //
-// Anything but ai_rows changes what the connection connects to, or what it
-// is called, and whatever is on it holds a session opened under the old
-// name and DSN; inUse (nil: nothing ever is) is asked then, and its error
-// refuses the edit. An ai_rows change alone goes through regardless.
+// Anything but ai_rows and introspect changes what the connection connects
+// to, or what it is called, and whatever is on it holds a session opened
+// under the old name and DSN; inUse (nil: nothing ever is) is asked then,
+// and its error refuses the edit. A change to those two alone goes through
+// regardless: both are read from the config afresh each time they matter.
 func (e *Editor) Edit(name string, f Form, inUse func(name string) error) (EditResult, error) {
 	cur, known := e.Cfg.ConnByName(name)
 	if !known {
@@ -366,7 +385,8 @@ func (e *Editor) Edit(name string, f Form, inUse func(name string) error) (EditR
 	dsn, warns := config.ExpandDSN(f.Name, f.Driver, f.DSN)
 	tlsOpts, tw := f.TLSFor(f.Name)
 	warns = append(warns, tw...)
-	next := config.Connection{Name: f.Name, Driver: f.Driver, DSN: dsn, TLSOpts: tlsOpts, AIRows: f.AIRows, Web: true}
+	next := config.Connection{Name: f.Name, Driver: f.Driver, DSN: dsn, TLSOpts: tlsOpts,
+		AIRows: f.AIRows, Introspect: f.Introspect, Web: true}
 
 	// Compared expanded, as the pool would see it: a DSN retyped to the same
 	// text, or kept, is no change; a ${VAR} whose value moved since startup
@@ -391,7 +411,7 @@ func (e *Editor) Edit(name string, f Form, inUse func(name string) error) (EditR
 	}
 	// the DSN as typed (or as stored, when kept): see config.SavedConn
 	if err := e.Saved.Update(name, config.SavedConn{Name: f.Name, Driver: f.Driver, DSN: f.DSN,
-		TLSOpts: f.TLSOpts, AIRows: f.AIRows}); err != nil {
+		TLSOpts: f.TLSOpts, AIRows: f.AIRows, Introspect: f.Introspect}); err != nil {
 		// Put the config back as it was. That fails only if another window
 		// added a connection under the old name in the moment since it was
 		// given up; the edit then stands for this run and the file keeps

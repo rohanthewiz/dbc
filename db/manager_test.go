@@ -174,3 +174,38 @@ func TestSqliteDDLRowsAffected(t *testing.T) {
 		}
 	}
 }
+
+// A schema summary remembered as slow (MarkSummarySlow) outlives a
+// Disconnect — the database is the same one when the user connects again,
+// and forgetting would charge the summary's wait on every reconnect — and
+// goes with a Drop, with what derived connections remembered: an edit may
+// have pointed the name at another database. A configured connection that
+// merely has a derived-looking name keeps its own.
+func TestSummarySlowMemory(t *testing.T) {
+	cfg := &config.Config{MaxRows: 1000, Connections: []config.Connection{
+		{Name: "pg", Driver: "postgres", DSN: "postgres://localhost/app"},
+		{Name: "pg/own", Driver: "postgres", DSN: "postgres://localhost/own"},
+		{Name: "other", Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "o.db")},
+	}}
+	m := NewManager(cfg)
+	defer m.Close()
+	if m.SummarySlow("pg") {
+		t.Fatal("slow before anything was marked")
+	}
+	for _, name := range []string{"pg", "pg/analytics", "pg/own", "other"} {
+		m.MarkSummarySlow(name)
+	}
+
+	m.Disconnect("pg")
+	if !m.SummarySlow("pg") || !m.SummarySlow("pg/analytics") {
+		t.Error("a Disconnect forgot the slow summary")
+	}
+
+	m.Drop("pg")
+	if m.SummarySlow("pg") || m.SummarySlow("pg/analytics") {
+		t.Error("a Drop kept the slow summary of pg or its derived connection")
+	}
+	if !m.SummarySlow("pg/own") || !m.SummarySlow("other") {
+		t.Error("a Drop of pg forgot another configured connection's")
+	}
+}

@@ -144,6 +144,15 @@ type Connection struct {
 	// was flipped. The query text and errors go regardless — see package ai.
 	AIRows bool `toml:"ai_rows"`
 
+	// Introspect is how much of this connection's database dbc reads
+	// unasked — "full", "names" or "off" (introspect.go) — and "" for the
+	// global default (Config.Introspect). Per connection for AIRows's
+	// reason turned around: it is a decision about one database (a
+	// production catalog too big to count on every connect), which a global
+	// switch would impose on the scratch databases beside it. Read it
+	// through Config.IntrospectFor, which settles the default.
+	Introspect string `toml:"introspect"`
+
 	// Demo marks a built-in demo connection, the only kind db.Manager seeds
 	// with the demo cats table when it opens it. Set by demoFallback alone,
 	// never read from a file: seeding runs CREATE TABLE and DELETE FROM cats,
@@ -291,6 +300,14 @@ type Config struct {
 	// applies, whichever is shorter.
 	CatalogTimeout time.Duration `toml:"catalog_timeout"`
 
+	// Introspect is the default level of introspection — how much of a
+	// database is read unasked: "full" (the default), "names" or "off"; see
+	// introspect.go. A connection's own introspect overrides it. Load
+	// normalizes it to one of the three, warning on anything else; read it
+	// through IntrospectFor (or IntrospectDefault), which also cover a
+	// Config built in code.
+	Introspect string `toml:"introspect"`
+
 	// PlanTheme is the palette of the plan pictures the shell and the TUI
 	// draw — `dbc explain -t pdf|jpeg|png` and the TUI's Save as PDF /
 	// JPEG, and the schema diagrams of `dbc erd -t png|jpeg` and the TUI's
@@ -353,6 +370,7 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 		ResultTabs:      DefaultResultTabs,
 		ConnIdleTimeout: DefaultConnIdleTimeout, ConnectTimeout: DefaultConnectTimeout,
 		CatalogTimeout: DefaultCatalogTimeout, PlanTheme: "dark",
+		Introspect:     IntrospectFull,
 		FormatKeywords: sqlsplit.UpperKeywords.String()}
 
 	path := explicit
@@ -378,7 +396,7 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 		}
 		cfg.demoFallback(demo)
 		cfg.resolveScripts("")
-		return cfg, nil
+		return cfg, nil // Introspect is the default set above: no file to say otherwise
 	}
 
 	// The defaults above survive decoding for keys the file leaves out, which
@@ -404,6 +422,7 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 	cfg.checkDuration("catalog_timeout", &cfg.CatalogTimeout, DefaultCatalogTimeout)
 	cfg.checkPlanTheme()
 	cfg.checkFormatKeywords()
+	cfg.checkIntrospect()
 	if len(cfg.Connections) == 0 {
 		return nil, serr.New("config has no [[connection]] entries", "config_path", path)
 	}

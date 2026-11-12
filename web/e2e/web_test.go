@@ -63,6 +63,7 @@ func TestWeb(t *testing.T) {
 		{"refresh a connection", refreshConn},
 		{"sidebar sections: tables, views, routines", sidebarSections},
 		{"connection form fields and DSN", connForm},
+		{"introspect off: an unread sidebar", introspectOff},
 		{"postgres in docker dialog", pgDockerDialog},
 		{"dump database dialog", dumpDialog},
 		{"postgres schema picker", pgSchemaPicker},

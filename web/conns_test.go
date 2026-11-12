@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -448,6 +449,24 @@ func testConnEdit(t *testing.T, persistent bool) {
 	e.api("PUT", "/api/v1/conns/renamed", editBody("renamed", "sqlite", "", false), 200)
 	if cc, _ = e.srv.cfg.ConnByName("renamed"); cc.AIRows {
 		t.Fatal("ai_rows did not change while in use")
+	}
+	// nor is the level of introspection: it is read afresh for each catalog
+	// read, so it changes under a tab, and the list says what it is
+	b, _ := json.Marshal(connForm{Name: "renamed", Driver: "sqlite", Introspect: "names"})
+	e.api("PUT", "/api/v1/conns/renamed", string(b), 200)
+	if got := e.srv.cfg.IntrospectFor("renamed"); got != config.IntrospectNames {
+		t.Fatalf("introspect while in use: %q, want names", got)
+	}
+	listed := decodeData[struct {
+		Conns []connInfo `json:"conns"`
+	}](t, e.api("GET", "/api/v1/conns", "", 200))
+	if i := slices.IndexFunc(listed.Conns, func(c connInfo) bool { return c.Name == "renamed" }); i < 0 ||
+		listed.Conns[i].Introspect != config.IntrospectNames {
+		t.Fatalf("the list does not carry the level: %+v", listed.Conns)
+	}
+	b, _ = json.Marshal(connForm{Name: "renamed", Driver: "sqlite", Introspect: "whenever"})
+	if res = e.api("PUT", "/api/v1/conns/renamed", string(b), 400); !strings.Contains(res.Error, "introspect is") {
+		t.Fatalf("a level that is none = %q", res.Error)
 	}
 	// retyping the same DSN is no change either
 	e.api("PUT", "/api/v1/conns/renamed", editBody("renamed", "sqlite", typed, false), 200)

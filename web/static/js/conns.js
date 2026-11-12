@@ -66,6 +66,15 @@
     ["verify-full", "verify-full — CA and host name (safest)"],
   ];
 
+  // Levels of introspection (config/introspect.go): how much of a database
+  // dbc reads unasked. "" follows the config's introspect key.
+  const INTROSPECT_LEVELS = [
+    ["", "default — the config's introspect (full unless set)"],
+    ["full", "full — schemas with table counts; completion reads every schema"],
+    ["names", "names — schema names only; completion reads the open schema"],
+    ["off", "off — nothing until a refresh"],
+  ];
+
   // ── the list ───────────────────────────────────────────────────────────
   // draw replaces the list with list (from GET /api/v1/conns or a "conns"
   // event). The active, connecting and in-use marks are app.js's; they are
@@ -79,6 +88,7 @@
       const b = el("button", { class: marks.get(c.name) || "conn-item", type: "button",
         "data-conn": c.name, "data-driver": c.driver,
         "data-saved": c.saved ? "1" : null, "data-airows": c.ai_rows ? "1" : null,
+        "data-introspect": c.introspect || null,
         "data-tls": c.tls || null, "data-tls-ca": c.tls_ca || null,
         "data-tls-cert": c.tls_cert || null, "data-tls-key": c.tls_key || null,
         "data-tls-key-password": c.tls_key_password || null,
@@ -90,7 +100,7 @@
 
   // ── adding and editing ─────────────────────────────────────────────────
   // openForm shows the form: empty to add a connection, or filled from cur
-  // ({name, driver, aiRows} — what the sidebar knows) to edit one added
+  // ({name, driver, aiRows, introspect} — what the sidebar knows) to edit one added
   // here. Test runs the DSN through POST /conns/test and says what happened
   // in the result box; Save adds it (whether or not it was tested — a
   // database that is down right now may still be worth adding) and switches
@@ -144,6 +154,14 @@
       placeholder: "${VAR} holding an encrypted key's passphrase — blank if it is not encrypted" });
 
     const aiRows = el("input", { type: "checkbox", id: "cf-airows" });
+    // The level of introspection: how much of the database dbc reads
+    // unasked (config/introspect.go). "" follows the config's introspect
+    // key, as an entry that never chose a level does. Unlike the DSN it
+    // may change while a tab is on the connection: the server reads it
+    // afresh for each catalog read, so a new level shows at the next
+    // refresh.
+    const introspect = el("select", { id: "cf-introspect" });
+    for (const [v, label] of INTROSPECT_LEVELS) introspect.append(el("option", { value: v }, label));
     const result = el("div", { class: "connresult", "aria-live": "polite", hidden: "hidden" });
 
     // Each row is its label and its control, kept together so a group can
@@ -179,6 +197,7 @@
       name.value = cur.name;
       driver.value = cur.driver;
       aiRows.checked = cur.aiRows;
+      introspect.value = cur.introspect || "";
       tls.value = cur.tls || "";
       tlsCA.value = cur.tlsCA || "";
       tlsCert.value = cur.tlsCert || "";
@@ -252,6 +271,9 @@
       ...rows.mode, ...rows.host, ...rows.user, ...rows.password, ...rows.database,
       ...rows.file, ...rows.options, ...rows.dsn, ...rows.dsnHint,
       ...rows.tls, ...rows.tlsCA, ...rows.tlsCert, ...rows.tlsKey, ...rows.tlsKeyPass, ...rows.tlsHint,
+      el("label", { for: "cf-introspect", title: "How much of the database dbc reads without being asked: " +
+        "on a connect, a refresh, and for completion. Row counts and routines are their own switches." }, "Introspect"),
+      introspect,
       el("span"), el("label", { class: "check full", title: "The assistant may see up to ai_context_rows result rows " +
         "from this connection. Off by default: rows are the database's contents." }, aiRows, "Let the assistant see result rows"),
     );
@@ -267,6 +289,7 @@
     // engine: the server refuses them for a local file.
     function body() {
       const b = { name: name.value, driver: driver.value, dsn: dsn.value, ai_rows: aiRows.checked,
+        introspect: introspect.value,
         from: cur ? cur.name : undefined };
       if (fieldMode()) {
         b.dsn = "";
@@ -368,6 +391,7 @@
 
   // openEdit edits the sidebar entry b — a connection added here.
   const openEdit = (b) => openForm({ name: b.dataset.conn, driver: b.dataset.driver, aiRows: !!b.dataset.airows,
+    introspect: b.dataset.introspect,
     tls: b.dataset.tls, tlsCA: b.dataset.tlsCa, tlsCert: b.dataset.tlsCert, tlsKey: b.dataset.tlsKey,
     tlsKeyPassword: b.dataset.tlsKeyPassword });
 

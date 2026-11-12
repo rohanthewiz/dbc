@@ -965,6 +965,45 @@ func TestRefreshRereadsTheSidebar(t *testing.T) {
 	}
 }
 
+// A connection at introspect = "off" connects with its sidebar unread: one
+// "conn" event — connected, nothing listed, Unread rather than Loading, and
+// no catalog event after it — with the log saying what reads it. The
+// Refresh is that read: its "conn" lists the tables and is no longer
+// Unread.
+func TestOffConnectionSidebarIsUnread(t *testing.T) {
+	e := newTestEnv(t)
+	if err := e.srv.cfg.AddConn(config.Connection{Name: "quiet", Driver: "sqlite",
+		DSN: "file:webquiet?mode=memory&cache=shared", Introspect: config.IntrospectOff}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.srv.mgr.Run("quiet", "CREATE TABLE quiet_pets (id INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	id, s := e.open()
+	e.api("POST", "/api/v1/ws/"+id+"/connect", `{"name":"quiet"}`, 200)
+	ev, logs := s.await(t, "conn")
+	c := decodeData[connEvent](t, testEnvelope{Data: ev.Data})
+	if c.Active != "quiet" || !c.Connected || c.Failed || !c.Unread || c.Loading || len(c.Tables) != 0 {
+		t.Fatalf("conn event at off = %+v", c)
+	}
+	if !slices.ContainsFunc(logs, func(l string) bool { return strings.Contains(l, "catalog of quiet not read") }) {
+		t.Errorf("logs = %q, want the unread note", logs)
+	}
+	// the state a reload draws from says the same
+	if st := decodeData[wsState](t, e.api("GET", "/api/v1/ws/"+id, "", 200)); !st.Unread || st.Loading {
+		t.Errorf("state at off: unread %v, loading %v", st.Unread, st.Loading)
+	}
+
+	e.api("POST", "/api/v1/ws/"+id+"/refresh", "", 200)
+	s.await(t, "connecting")
+	ev, _ = s.await(t, "conn") // the next "conn" is the refresh's: no catalog event came between
+	c = decodeData[connEvent](t, testEnvelope{Data: ev.Data})
+	if c.Unread || c.Status != "refreshed" ||
+		!slices.ContainsFunc(c.Tables, func(r tabRef) bool { return r.Name == "quiet_pets" }) {
+		t.Fatalf("conn event after the refresh = %+v", c)
+	}
+}
+
 // A DDL run relists the tab's sidebar on its own: after its "run", a
 // "conn" that lists the new table, marked relisted with no status — the
 // page keeps the run's summary rather than saying "ready" — and Changed

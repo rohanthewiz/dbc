@@ -78,16 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-274** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  dbc web checks Origin on non-GET requests only (`web/auth.go:116`), and
-  SameSite does not tell ports apart, so a page on another
-  `127.0.0.1` port can send credentialed GETs. The one id-less GET with a
-  side effect that was found is `/api/v1/conn-tables?conn=`
-  (`web/complete.go:127`), which dials the named connection; the response
-  stays opaque to the caller. Fix inside the existing checks: on `/api/*`
-  refuse a present `Origin` or `Sec-Fetch-Site` that is not same-origin
-  for GET as well. No new auth machinery. Read here.
-  (RPU plan, phase 2)
 - **N-275** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Completion requests can fill the browser's six connections.
   `web/complete.go:62-69` blocks each `/complete` on the schema load in
@@ -1222,6 +1212,18 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-274** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  dbc web checks Origin on non-GET requests only (`web/auth.go:116`), and
+  SameSite does not tell ports apart, so a page on another
+  `127.0.0.1` port can send credentialed GETs. The one id-less GET with a
+  side effect that was found is `/api/v1/conn-tables?conn=`
+  (`web/complete.go:127`), which dials the named connection; the response
+  stays opaque to the caller. Fix inside the existing checks: on `/api/*`
+  refuse a present `Origin` or `Sec-Fetch-Site` that is not same-origin
+  for GET as well. No new auth machinery. Read here.
+  (RPU plan, phase 2)
+  closed 2026-11-13 (RPU plan, phase 2): built as the item said. `guard`'s Origin line is now `sameOrigin(method, path, Origin, Sec-Fetch-Site, Host)` (`web/auth.go`): every non-GET/HEAD as before, plus every `/api/` request whatever its method, must have an Origin that is this server (when present; `null` is refused) and a Sec-Fetch-Site of `same-origin` or `none` (when present). `none` is a navigation only the user starts (typed, reloaded, bookmarked), so a reopened plan tab or export URL still works; absent is curl, scripts and browsers too old to send it. Pages and assets stay unchecked on GET: a link from elsewhere may open dbc, and frame-ancestors already keeps it out of frames. Both headers are needed: a no-cors GET (`<img>`, `<script>`, `fetch` with `mode: "no-cors"`) carries no Origin, and an older browser no Sec-Fetch-Site; a script cannot set either. Sec-Fetch-Site also applies to non-GET now, which changes nothing for a browser (it always sends Origin there). Tests: `web` `TestCrossSiteAPIGetIs403` (with the session cookie: other-port/other-site/`null` Origin, `same-site`/`cross-site` fetch site, HEAD, the event stream, a POST with only a cross-site fetch site → 403; same-origin, `none`, neither header, and a page or asset from elsewhere → 200) and `TestSameOriginTable`; both fail with the old GET exemption put back. Browser: new e2e step "a page on another port is refused" (`web/e2e/crossport_test.go`): a page from an httptest server on another 127.0.0.1 port makes an `<img>`, a no-cors fetch and a cors fetch to conn-tables, read off CDP — Chrome sends the session cookie with `Sec-Fetch-Site: same-site` (Origin only on the cors one), dbc answers 403 to all three, and the workbench's own request is 200. With the old guard put back the step fails with 200s, so it confirms the premise in a real browser. Full `./...` and the full e2e suite green. README (dbc web, Access) says other pages are refused.
 
 - **N-273** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Unknown TOML keys are ignored. `config/config.go:374` and

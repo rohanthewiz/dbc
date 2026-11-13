@@ -1741,7 +1741,10 @@ fold are saved with the layout.
 secret can use it: dbc opens `…/login?s=<secret>` (and prints it), which
 trades the secret for a session cookie. A restart signs every browser out;
 use the new link. Scripts can send `Authorization: Bearer <secret>` (set it
-with `--secret` or `DBC_WEB_SECRET`). A `--listen` address off loopback is
+with `--secret` or `DBC_WEB_SECRET`). Its API answers only dbc's own page
+and clients that are not browsers: a call from any other page — another
+site, or another port on this machine — is refused, even in a signed-in
+browser. A `--listen` address off loopback is
 allowed, with a warning — it is a local tool, not a team server. The port is
 8450, or a free one when 8450 is taken.
 

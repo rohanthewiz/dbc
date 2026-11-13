@@ -86,6 +86,7 @@ func TestWeb(t *testing.T) {
 		{"connection clicks and failed connects", connClicks},
 		{"saves dbc web did not take", saveTrouble},
 		{"the log after a reload and a dropped stream", logJournal},
+		{"a page on another port is refused", otherPortRefused},
 	}
 	// DBC_E2E_STEPS narrows a run to the steps whose names contain one of
 	// its comma-separated words (plus the sign-in and boot every step

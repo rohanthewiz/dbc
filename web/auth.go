@@ -31,10 +31,13 @@ import (
 //   - HOST. The Host header must name the loopback address dbc is bound to.
 //     This is the DNS-rebinding guard: a hostile page can point its own
 //     hostname at 127.0.0.1, but its requests then carry that hostname.
-//   - ORIGIN, on anything but GET/HEAD. A browser always sends Origin on a
-//     cross-site POST; one that is not this server is refused before it can
-//     run a statement. The cookie is SameSite=Strict as well, so the browser
-//     would not have attached it anyway — two locks, each one line.
+//   - ORIGIN, on anything but GET/HEAD, and on every /api/ request. A
+//     browser always sends Origin on a cross-site POST; one that is not this
+//     server is refused before it can run a statement. On /api/ a GET is
+//     held to the same rule, and so is Sec-Fetch-Site (see sameOrigin):
+//     SameSite=Strict keeps the cookie off cross-site requests, but "site"
+//     ignores the port, so a page on another 127.0.0.1 port is same-site
+//     and its GETs arrive signed in.
 //   - SECRET. A session cookie, or the secret itself as a Bearer token.
 //
 // The secret is generated per launch (or given with --secret) and the
@@ -113,7 +116,7 @@ func (s *Server) guard(ctx rweb.Context) error {
 	if !s.hostOK(req.Host()) {
 		return plain(ctx, http.StatusForbidden, "forbidden: unexpected Host header")
 	}
-	if m := req.Method(); m != http.MethodGet && m != http.MethodHead && !originOK(req.Header("Origin"), req.Host()) {
+	if !sameOrigin(req.Method(), req.Path(), req.Header("Origin"), req.Header("Sec-Fetch-Site"), req.Host()) {
 		return plain(ctx, http.StatusForbidden, "forbidden: cross-site request")
 	}
 	if publicPath(req.Path()) || s.authed(ctx) {
@@ -170,9 +173,64 @@ func (s *Server) hostOK(host string) bool {
 	return name == bound
 }
 
-// originOK reports whether a state-changing request is same-origin. A client
-// that is not a browser sends no Origin and passes here; it still needs the
-// secret.
+// sameOrigin is the ORIGIN check: false refuses the request. It reads the
+// two headers a browser sets and a page's script cannot (both are forbidden
+// header names), so neither can be forged from a hostile page.
+//
+// What it covers:
+//
+//	request                      checked   why
+//	───────────────────────────  ────────  ─────────────────────────────────
+//	POST, PUT, DELETE, … any     yes       it changes something
+//	GET/HEAD under /api/         yes       some reads have effects: conn-
+//	                                       tables dials the named connection
+//	GET/HEAD of a page or asset  no        a link from elsewhere may open
+//	                                       dbc; the page alone does nothing,
+//	                                       and frame-ancestors keeps it out
+//	                                       of another site's frames
+//
+// Why the GETs need it: the session cookie is SameSite=Strict, but a site
+// is scheme + host with no port, so a page served from 127.0.0.1:3000 is
+// same-site with dbc on 127.0.0.1:8080 and the browser attaches the cookie
+// to its requests. The response stays opaque to that page (no CORS
+// headers are ever sent), so what is left to stop is the request's side
+// effect, which needs it refused before the handler runs.
+//
+// Why both headers: each misses a case the other catches.
+//
+//   - Origin is sent on a CORS-mode request (fetch, EventSource) and on any
+//     non-GET, but not on a no-cors GET: <img src>, <script src>, <link>
+//     reach /api/ with no Origin at all.
+//   - Sec-Fetch-Site is sent on every request by current browsers
+//     (Chrome 76+, Firefox 90+, Safari 16.4+), the no-cors ones included,
+//     but an older browser sends none.
+//
+// Sec-Fetch-Site values that pass: "same-origin" (the page's own requests,
+// downloads and the plan tab it opens), "none" (the user typed, reloaded
+// or bookmarked the URL — only the user starts such a navigation), and
+// absent (curl, scripts, tests, older browsers). "same-site" and
+// "cross-site" are refused: same-site is exactly the other-port page.
+func sameOrigin(method, path, origin, fetchSite, host string) bool {
+	read := method == http.MethodGet || method == http.MethodHead
+	if read && !strings.HasPrefix(path, "/api/") {
+		return true
+	}
+	return originOK(origin, host) && fetchSiteOK(fetchSite)
+}
+
+// fetchSiteOK reads Sec-Fetch-Site; see sameOrigin for the values.
+func fetchSiteOK(site string) bool {
+	switch site {
+	case "", "same-origin", "none":
+		return true
+	}
+	return false
+}
+
+// originOK reports whether a request's Origin, when it has one, is this
+// server. A client that is not a browser sends no Origin and passes here;
+// it still needs the secret. "null" (a sandboxed frame, a file:// page,
+// a cross-origin redirect) has no host and is refused.
 func originOK(origin, host string) bool {
 	if origin == "" {
 		return true

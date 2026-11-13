@@ -363,6 +363,93 @@ func TestCrossSitePostIs403(t *testing.T) {
 	}
 }
 
+// N-274: a page on another 127.0.0.1 port is same-site with dbc (a site has
+// no port), so SameSite=Strict lets the session cookie ride on its GETs.
+// On /api/ such a GET is refused by Origin or Sec-Fetch-Site; the page's
+// own requests, a typed URL and a client with neither header still pass.
+// The requests carry the cookie, not the bearer, since that is what the
+// other-port page would have.
+func TestCrossSiteAPIGetIs403(t *testing.T) {
+	e := newTestEnv(t)
+	res := e.req("GET", "/login?s="+testSecret, "", map[string]string{})
+	res.Body.Close()
+	var cookie string
+	for _, c := range res.Cookies() {
+		if strings.HasPrefix(c.Name, "dbc_session_") {
+			cookie = c.Name + "=" + c.Value
+		}
+	}
+	if cookie == "" {
+		t.Fatal("login set no session cookie")
+	}
+	otherPort := "http://127.0.0.1:1" // same site as e.base, another origin
+
+	// conn-tables is the GET with an effect: it dials the named connection.
+	const tables = "/api/v1/conn-tables?conn=demo-sqlite"
+	for _, c := range []struct {
+		name, method, path string
+		hdr                map[string]string
+		want               int
+	}{
+		// refused: a browser said the request came from somewhere else
+		{"Origin of another port", "GET", tables, map[string]string{"Origin": otherPort}, 403},
+		{"Origin of another site", "GET", tables, map[string]string{"Origin": "https://evil.example"}, 403},
+		{"Origin null", "GET", tables, map[string]string{"Origin": "null"}, 403},
+		{"img/script tag from another port", "GET", tables, map[string]string{"Sec-Fetch-Site": "same-site"}, 403},
+		{"img/script tag from another site", "GET", tables, map[string]string{"Sec-Fetch-Site": "cross-site"}, 403},
+		{"same-origin Origin, same-site fetch site", "GET", tables, map[string]string{"Origin": e.base, "Sec-Fetch-Site": "same-site"}, 403},
+		{"HEAD from another port", "HEAD", "/api/v1/conns", map[string]string{"Sec-Fetch-Site": "same-site"}, 403},
+		{"event stream from another port", "GET", "/api/v1/ws/x/events", map[string]string{"Origin": otherPort, "Sec-Fetch-Site": "same-site"}, 403},
+		{"POST with no Origin, cross-site fetch site", "POST", "/api/v1/ws", map[string]string{"Sec-Fetch-Site": "cross-site"}, 403},
+
+		// allowed: the page itself, the user, or a client that is not a browser
+		{"the page's own fetch", "GET", tables, map[string]string{"Sec-Fetch-Site": "same-origin"}, 200},
+		{"the page's own fetch, Origin sent", "GET", tables, map[string]string{"Origin": e.base, "Sec-Fetch-Site": "same-origin"}, 200},
+		{"a typed or bookmarked URL", "GET", tables, map[string]string{"Sec-Fetch-Site": "none"}, 200},
+		{"curl: neither header", "GET", tables, map[string]string{}, 200},
+		{"a page from a link elsewhere", "GET", "/", map[string]string{"Sec-Fetch-Site": "same-site"}, 200},
+		{"an asset from another site", "GET", "/theme.css", map[string]string{"Sec-Fetch-Site": "cross-site"}, 200},
+	} {
+		hdr := map[string]string{"Cookie": cookie}
+		for k, v := range c.hdr {
+			hdr[k] = v
+		}
+		res := e.req(c.method, c.path, "", hdr)
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		if res.StatusCode != c.want {
+			t.Errorf("%s: %s %s = %d, want %d (%s)", c.name, c.method, c.path, res.StatusCode, c.want, body)
+		}
+	}
+}
+
+func TestSameOriginTable(t *testing.T) {
+	const host = "127.0.0.1:8080"
+	for _, c := range []struct {
+		method, path, origin, site string
+		want                       bool
+	}{
+		{"GET", "/api/v1/conns", "", "", true},
+		{"GET", "/api/v1/conns", "http://127.0.0.1:8080", "same-origin", true},
+		{"GET", "/api/v1/conns", "http://localhost:8080", "", false}, // Host says 127.0.0.1
+		{"GET", "/api/v1/conns", "http://127.0.0.1:8081", "", false},
+		{"GET", "/api/v1/conns", "", "same-site", false},
+		{"GET", "/api/v1/conns", "", "Same-Origin", false}, // browsers send lower case; anything else is not theirs
+		{"GET", "/api/v1/conns", "", "none", true},
+		{"HEAD", "/api/v1/conns", "", "cross-site", false},
+		{"GET", "/", "http://evil.example", "cross-site", true}, // pages and assets are not checked
+		{"GET", "/static/js/app.js", "", "cross-site", true},
+		{"POST", "/login", "", "cross-site", false}, // non-GET is checked everywhere
+		{"PUT", "/api/v1/layout", "null", "", false},
+		{"DELETE", "/api/v1/tabs/1", "http://127.0.0.1:8080", "same-origin", true},
+	} {
+		if got := sameOrigin(c.method, c.path, c.origin, c.site, host); got != c.want {
+			t.Errorf("sameOrigin(%s %s, Origin %q, Sec-Fetch-Site %q) = %v, want %v",
+				c.method, c.path, c.origin, c.site, got, c.want)
+		}
+	}
+}
+
 func TestLoginSetsSessionCookie(t *testing.T) {
 	e := newTestEnv(t)
 	res := e.req("GET", "/login?s=nope", "", map[string]string{})
@@ -638,7 +725,6 @@ func TestIdleReleaseSparesARunningStatement(t *testing.T) {
 	}
 	e.srv.hub.reap(now.Add(3 * time.Hour))
 }
-
 
 // ---------------------------------------------------------------------------
 // Tabs, layout, and the error mapping

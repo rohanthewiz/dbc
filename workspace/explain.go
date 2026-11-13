@@ -6,6 +6,7 @@ import (
 	"github.com/rohanthewiz/dbc/ai"
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/explain"
+	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
 // Explaining. An explain is a RUN like any other: it takes the run slot (one
@@ -77,7 +78,7 @@ func (w *Workspace) Explain(stmt, where string, analyze bool) (Start, error) {
 func (w *Workspace) analyzeWarning(conn, stmt string) (Note, bool) {
 	inner, _, _ := explain.Strip(stmt)
 	cc, _ := w.cfg.ConnByName(conn)
-	if db.IsRead(inner) {
+	if db.IsRead(inner, sqlsplit.DialectOf(cc.Driver)) {
 		return Note{Muted, "analyze runs the statement to time it — Ctrl+K stops it"}, true
 	}
 	if explain.Engine(cc.Driver) == explain.Postgres {

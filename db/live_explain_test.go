@@ -143,6 +143,50 @@ func TestLiveExplainPostgresWriteInUserTx(t *testing.T) {
 	run("ROLLBACK")
 }
 
+// A plain read is analyzed inside the rollback too (N-272): its text cannot
+// show a write made by a function it calls, so SELECT f() that updates
+// rows changes none of them. And a read that takes a session advisory lock
+// — which no rollback releases — leaves the session stateful, as running
+// it would.
+func TestLiveExplainPostgresReadThatWrites(t *testing.T) {
+	mgr := livePGExplainSetup(t)
+	liveExec(t, mgr, `CREATE FUNCTION dbc_explain.zero() RETURNS int LANGUAGE sql AS $$
+		UPDATE dbc_explain.orders SET total = -1 WHERE id <= 100 RETURNING 1 $$`)
+	ctx := context.Background()
+	sess, err := mgr.Session(ctx, "live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	p, err := sess.Explain(ctx, "SELECT dbc_explain.zero()", ExplainOptions{Analyze: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Analyzed {
+		t.Errorf("not analyzed:\n%s", p.Text(explain.TextOptions{}))
+	}
+	if strings.Contains(strings.Join(p.Notes, " "), "rolled back") {
+		t.Errorf("a plain read's analyze talks of a rollback: %v", p.Notes)
+	}
+	if n := liveVal(t, onPool(mgr), "SELECT count(*) FROM dbc_explain.orders WHERE total = -1"); n != "0" {
+		t.Fatalf("the analyzed SELECT's function kept its UPDATE: %s rows", n)
+	}
+	if sess.Stateful() {
+		t.Error("stateful after analyzing a plain read")
+	}
+
+	if _, err = sess.Explain(ctx, "SELECT pg_advisory_lock(272)", ExplainOptions{Analyze: true}); err != nil {
+		t.Fatal(err)
+	}
+	if n := liveVal(t, onPool(mgr), "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objid = 272 AND granted"); n != "1" {
+		t.Fatalf("advisory locks held after the analyze: %s, want the session's 1 (the rollback does not release it)", n)
+	}
+	if !sess.Stateful() {
+		t.Error("not stateful while holding the advisory lock the analyze took")
+	}
+}
+
 func TestLiveExplainMySQL(t *testing.T) {
 	mgr := liveMgr(t, "DBC_LIVE_MYSQL_DSN", "mysql")
 	liveExec(t, mgr,
@@ -187,6 +231,22 @@ func TestLiveExplainMySQL(t *testing.T) {
 	if res.Rows[0][0] != "0" {
 		t.Fatalf("explaining the UPDATE ran it")
 	}
+
+	// a read that takes a named lock (N-272): analyze is refused as for a
+	// write, so the lock is not taken behind the user's back
+	p, err = mgr.Explain(ctx, "live", "SELECT GET_LOCK('dbc_272', 0)", ExplainOptions{Analyze: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Analyzed || len(p.Notes) == 0 || !strings.Contains(p.Notes[0], "not analyzed") || !strings.Contains(p.Notes[0], "lock") {
+		t.Errorf("analyzed=%v notes=%v", p.Analyzed, p.Notes)
+	}
+	if res, err = mgr.Run("live", "SELECT IS_USED_LOCK('dbc_272') IS NULL"); err != nil {
+		t.Fatal(err)
+	}
+	if res.Rows[0][0] != "1" {
+		t.Fatalf("explaining GET_LOCK took the lock")
+	}
 }
 
 // Stopping an EXPLAIN ANALYZE of a write (N-271). The write runs inside
@@ -205,18 +265,26 @@ func TestLiveExplainMySQL(t *testing.T) {
 // failed rollback: "the analyzed write may not have been undone", the
 // session lost — though the server rolls back an open transaction when its
 // connection ends, so nothing could have been kept.
+//
+// A plain read is analyzed inside the same rollback since N-272, so its stop
+// takes the left-hand column too: inside the user's transaction the
+// savepoint closes what the stop aborted, where a read analyzed bare left
+// the transaction aborted (ErrTxAborted).
 func TestLiveExplainPostgresStopWrite(t *testing.T) {
 	const slowWrite = "UPDATE dbc_explain.orders SET total = -1 WHERE id <= 100 AND (SELECT true FROM pg_sleep(60))"
+	const slowRead = "SELECT pg_sleep(60)"
 	cases := []struct {
 		name   string
 		grace  time.Duration
 		userTx bool
 		fault  Fault
+		stmt   string // slowWrite when ""
 	}{
-		{"kept, no transaction", pgCancelGrace, false, FaultNone},
-		{"kept, user transaction", pgCancelGrace, true, FaultNone},
-		{"closed, no transaction", 0, false, FaultDrop},
-		{"closed, user transaction", 0, true, FaultLost},
+		{"kept, no transaction", pgCancelGrace, false, FaultNone, ""},
+		{"kept, user transaction", pgCancelGrace, true, FaultNone, ""},
+		{"closed, no transaction", 0, false, FaultDrop, ""},
+		{"closed, user transaction", 0, true, FaultLost, ""},
+		{"kept, user transaction, a read", pgCancelGrace, true, FaultNone, slowRead},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -243,8 +311,12 @@ func TestLiveExplainPostgresStopWrite(t *testing.T) {
 
 			sctx, stop := context.WithCancel(ctx)
 			done := make(chan error, 1)
+			stmt := c.stmt
+			if stmt == "" {
+				stmt = slowWrite
+			}
 			go func() {
-				_, err := s.Explain(sctx, slowWrite, ExplainOptions{Analyze: true})
+				_, err := s.Explain(sctx, stmt, ExplainOptions{Analyze: true})
 				done <- err
 			}()
 			waitBusy(t, obs, liveEngines[0], id, "1", 5*time.Second)

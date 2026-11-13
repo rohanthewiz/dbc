@@ -18,10 +18,11 @@ import (
 // Explaining a statement: which EXPLAIN each engine gets, and how "analyze"
 // — actually running the statement to measure it — is kept from doing harm.
 //
-//	engine    estimate                         analyze (a read)                   analyze (a write)
+//	engine    estimate                         analyze (a plain read)             analyze (anything else)
 //	───────   ──────────────────────────────   ────────────────────────────────   ───────────────────────────
-//	postgres  EXPLAIN (FORMAT JSON)            + ANALYZE, BUFFERS                 same, inside BEGIN…ROLLBACK
-//	                                                                              (or a SAVEPOINT in an open tx)
+//	postgres  EXPLAIN (FORMAT JSON)            + ANALYZE, BUFFERS, inside         same
+//	                                           BEGIN…ROLLBACK (or a SAVEPOINT
+//	                                           in an open tx)
 //	mysql     EXPLAIN FORMAT=TREE              EXPLAIN ANALYZE                    refused: estimate instead
 //	          ↳ classic EXPLAIN table          ↳ MariaDB: ANALYZE (table form)
 //	sqlite    EXPLAIN QUERY PLAN               the plan, then the statement run   refused: estimate instead
@@ -29,11 +30,21 @@ import (
 //
 // WRITES ARE NEVER CHANGED BY EXPLAINING THEM. EXPLAIN ANALYZE executes the
 // statement: on an UPDATE it updates. Postgres has transactional everything,
-// so an analyzed write there runs inside a transaction dbc rolls back — the
-// user gets the real timings and the table is as it was. Elsewhere there is
-// no such guarantee (MySQL commits DDL implicitly; SQLite and bytdb cannot
-// time steps anyway), so the write gets the estimated plan and a note saying
-// why, rather than a measurement bought with the user's data.
+// so an analyze there runs inside a transaction dbc rolls back — the user
+// gets the real timings and the table is as it was. Elsewhere there is no
+// such guarantee (MySQL commits DDL implicitly; SQLite and bytdb cannot
+// time steps anyway), so anything but a plain read gets the estimated plan
+// and a note saying why, rather than a measurement bought with the user's
+// data — or with a lock or a setting it would leave on the session.
+//
+// "A plain read" is isRead's (effectOf): a SELECT that sets a setting or
+// takes a lock, a SELECT … INTO, is not one. On Postgres even a plain read
+// is analyzed inside the rollback (N-272): a SELECT can write through a
+// function it calls (SELECT archive_old_rows()), which no reading of its
+// text can see, and the rollback costs two round trips. Only what a
+// rollback does not undo survives it — a session advisory lock taken by
+// SELECT pg_advisory_lock(…) — and for that the session is marked
+// stateful, as Run would mark it.
 //
 // EXPLAIN RUNS ON THE SESSION. search_path, temp tables, SET enable_seqscan
 // and an open transaction's uncommitted rows all change the plan, so the plan
@@ -72,12 +83,19 @@ func (s *Session) explain(ctx context.Context, stmt string, opt ExplainOptions) 
 	}
 	cc, _ := s.m.cfg.ConnByName(s.name)
 	engine := explain.Engine(cc.Driver)
-	read := isRead(stmt, sqlsplit.DialectOf(cc.Driver))
+	eff := effectOf(stmt, sqlsplit.DialectOf(cc.Driver))
+	read := eff == effectNone
 
 	var notes []string
 	if opt.Analyze && !read && engine != explain.Postgres {
 		opt.Analyze = false
-		notes = append(notes, "not analyzed: that would run the write for real on "+engine+
+		what := "the write"
+		if eff == effectSession {
+			// a SELECT GET_LOCK(…) or @v := …: no rows change, but the
+			// lock or the variable would stay on the session
+			what = "a statement that leaves a lock or a setting on the session"
+		}
+		notes = append(notes, "not analyzed: that would run "+what+" for real on "+engine+
 			" — this is the planner's estimate instead")
 	}
 
@@ -97,6 +115,12 @@ func (s *Session) explain(ctx context.Context, stmt string, opt ExplainOptions) 
 	}
 	if err != nil {
 		return nil, err
+	}
+	if opt.Analyze && engine == explain.Postgres && eff == effectSession {
+		// The rollback undid a set_config but not a session advisory lock,
+		// which only an unlock or the session's end lets go. Marking errs
+		// toward stateful for the setting, as Stateful does throughout.
+		s.stateful = true
 	}
 	if opt.Analyze && (engine == explain.SQLite || engine == explain.Bytdb) {
 		if err = s.measure(ctx, stmt, p); err != nil {
@@ -156,12 +180,18 @@ func (s *Session) explainPostgres(ctx context.Context, stmt string, opt ExplainO
 		}
 		return explain.ParsePostgresJSON([]byte(out))
 	}
+	// Every analyze runs inside the rollback, a plain read's too: its text
+	// cannot show a write made by a function it calls (see the top of this
+	// file). Only a statement that is not a plain read gets the note — on a
+	// SELECT the user expects nothing to change, and nothing did.
 	var p *explain.Plan
 	var err error
-	if opt.Analyze && !read {
+	if opt.Analyze {
 		var note string
 		p, note, err = s.rolledBack(ctx, run)
-		notes = append(notes, note)
+		if !read && note != "" {
+			notes = append(notes, note)
+		}
 	} else {
 		p, err = run()
 	}
@@ -177,8 +207,8 @@ func (s *Session) explainPostgres(ctx context.Context, stmt string, opt ExplainO
 // user already has open.
 const savepoint = "dbc_explain"
 
-// rolledBack runs f — an EXPLAIN ANALYZE of a write — so that nothing it
-// changes survives, whatever state the session is in:
+// rolledBack runs f — an EXPLAIN ANALYZE, of a write or of anything else —
+// so that nothing it changes survives, whatever state the session is in:
 //
 //	no transaction open   BEGIN ─ f ─ ROLLBACK
 //	a transaction open    SAVEPOINT ─ f ─ ROLLBACK TO SAVEPOINT ─ RELEASE
@@ -192,7 +222,9 @@ const savepoint = "dbc_explain"
 // The undo runs under its own short-lived context: after Ctrl+K the run's
 // context is dead, which is exactly when the undo matters most. If even that
 // fails, the session is left marked stateful, so a later lost connection is
-// reported rather than papered over.
+// reported rather than papered over. A stop inside the user's transaction
+// is undone with the savepoint, so it leaves that transaction usable, where
+// a stopped statement run plainly aborts it (ErrTxAborted).
 func (s *Session) rolledBack(ctx context.Context, f func() (*explain.Plan, error)) (*explain.Plan, string, error) {
 	status := s.pgTxStatus()
 	var begin, undo []string
@@ -203,9 +235,9 @@ func (s *Session) rolledBack(ctx context.Context, f func() (*explain.Plan, error
 		begin = []string{"SAVEPOINT " + savepoint}
 		undo = []string{"ROLLBACK TO SAVEPOINT " + savepoint, "RELEASE SAVEPOINT " + savepoint}
 	case 'E':
-		return nil, "", serr.New("the session's transaction has failed — ROLLBACK before explaining a write")
+		return nil, "", serr.New("the session's transaction has failed — ROLLBACK before analyzing a statement")
 	default:
-		return nil, "", serr.New("could not tell whether the session is in a transaction, so the write was not run")
+		return nil, "", serr.New("could not tell whether the session is in a transaction, so the statement was not run")
 	}
 	for _, q := range begin {
 		if _, err := s.conn.ExecContext(ctx, q); err != nil {

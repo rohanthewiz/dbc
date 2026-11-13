@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-320
+**Next ID:** N-321
 
 ## Open
 
@@ -78,20 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-272** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  `Session.stateful` misses state a "read" sets
-  (`db/manager.go:554-565,811`): `SELECT set_config(…, false)`,
-  `SELECT pg_advisory_lock()`, MySQL `SELECT GET_LOCK()` and `@v := …`,
-  SQLite `PRAGMA foreign_keys = ON` (`pragma` is in `queryVerbs`). After
-  an idle cut `ready()` returns `ErrBadConn`, `Classify` gives FaultRetry,
-  and the statement reruns on a fresh session without the state, which is
-  the case `ErrSessionLost` exists to stop. `SELECT … INTO newtable` is
-  classed as a read too, so no recount; and EXPLAIN ANALYZE of such a
-  "read" may run outside the rollback wrapper on Postgres
-  (`workspace/explain.go:77-87`, suspected). Fix: treat a SELECT that
-  calls a known state-setting function, and any PRAGMA with `=`, as
-  stateful; always wrap an analyze on Postgres. Classification audit,
-  traced; how often it bites is unknown. (RPU plan, phase 2)
 - **N-273** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Unknown TOML keys are ignored. `config/config.go:374` and
   `config/saved.go:138` discard the decoder's metadata; nothing calls
@@ -512,6 +498,16 @@ ten session docs in `ai_docs/claude_sessions/`
   the probe must let go at once and never refuse a start; and a record
   from an engine without a runs dir has no lock to ask. Raised while
   closing N-269.
+- **N-320** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  `sqlsplit.ChangesCatalog` goes by the first keyword alone, so Postgres
+  `SELECT … INTO newtable` (and `INTO TEMP`) leaves the sidebar and
+  completion without the table it made until a refresh; `countless`
+  (`workspace/run.go:352`) reads its rows-affected line by the same rule.
+  N-272 made it count for the session (stateful) and for row counts
+  (`db.ChangesRows`), not for the catalog. Fix: count a SELECT whose main
+  statement holds INTO, past the CTE list (`Verbs().MainAt`, as
+  `db.effectOf` does); on MySQL that costs a relist after `INTO @v`,
+  unless the dialect is passed in. Raised while closing N-272.
 
 ## Validate
 
@@ -1221,6 +1217,22 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-272** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  `Session.stateful` misses state a "read" sets
+  (`db/manager.go:554-565,811`): `SELECT set_config(…, false)`,
+  `SELECT pg_advisory_lock()`, MySQL `SELECT GET_LOCK()` and `@v := …`,
+  SQLite `PRAGMA foreign_keys = ON` (`pragma` is in `queryVerbs`). After
+  an idle cut `ready()` returns `ErrBadConn`, `Classify` gives FaultRetry,
+  and the statement reruns on a fresh session without the state, which is
+  the case `ErrSessionLost` exists to stop. `SELECT … INTO newtable` is
+  classed as a read too, so no recount; and EXPLAIN ANALYZE of such a
+  "read" may run outside the rollback wrapper on Postgres
+  (`workspace/explain.go:77-87`, suspected). Fix: treat a SELECT that
+  calls a known state-setting function, and any PRAGMA with `=`, as
+  stateful; always wrap an analyze on Postgres. Classification audit,
+  traced; how often it bites is unknown. (RPU plan, phase 2)
+  closed 2026-11-13 (RPU plan, phase 2): built as the item said, plus EXPLAIN ANALYZE typed into a run. New `db/effect.go`: `effectOf(stmt, dialect)` → `effectNone` / `effectSession` / `effectAny`; `isRead` is `effectOf == effectNone`, so `Session.Run` marks stateful on anything else. A read verb is not plain when: it calls a `sessionFuncs` function anywhere in the statement (`set_config`, `setseed`, `pg_advisory_lock[_shared]`, `pg_try_advisory_lock[_shared]`, `dblink_connect[_u]`, `get_lock`; schema-qualified calls count; xact locks, unlocks and `nextval` left out on purpose — see the comment); MySQL only, a `:=` (Postgres uses it for named arguments); `INTO` in the main statement of a SELECT/VALUES/TABLE (`effectAny`: a Postgres table, a MySQL variable or OUTFILE; `DESCRIBE INSERT INTO …` stays a read); a PRAGMA with `=`, or `name(value)` for any pragma but the read-with-argument ones (`table_info`, `index_list`, `integrity_check`, …); an `EXPLAIN ANALYZE` (Strip from the verb, so a MySQL `#` comment is behind) is its inner statement's effect, a bare EXPLAIN plain. Lexical helpers in `sqlsplit/calls.go`: `Dialect.Calls` (names called, last part of a qualified name) and `Dialect.HasOp`, skipping comments/strings/quoted names/dollar bodies per dialect. `ChangesRows` recounts on `effectAny` only, so `SELECT … INTO` and an analyzed DELETE recount while `SELECT set_config(…)` does not. `IsRead` takes the connection's dialect now (one caller, `workspace.analyzeWarning`). Explain: every Postgres analyze runs inside `rolledBack` (BEGIN…ROLLBACK, or the savepoint in an open tx) — a SELECT can write through a function it calls — with the rollback note only for non-reads; a stopped read in the user's transaction now leaves it usable rather than aborted. An analyze of an `effectSession` statement on Postgres marks the session stateful (a session advisory lock outlives the rollback; checked live in pg_locks). MySQL/SQLite/bytdb refuse to analyze anything but a plain read, with "not analyzed: that would run a statement that leaves a lock or a setting on the session …" for `effectSession`. Tests: `sqlsplit/calls_test.go`, `db/effect_test.go` (`TestEffectOf`, `TestSessionStatefulPragma`), `TestChangesRows` cases; live `workspace` `TestLiveWorkspaceSessionLostToRead` (3 reads per engine → ErrSessionLost after a kill; all six fail on the old classifier, stateful false), `db` `TestLiveExplainPostgresReadThatWrites` (old code kept a function's 100-row UPDATE), a read case in `TestLiveExplainPostgresStopWrite` (old: ErrTxAborted, status E), GET_LOCK refused in `TestLiveExplainMySQL`. Full `./...` with both live DSNs green; db, workspace, sqlsplit under -race. Real binary: `dbc explain -a "SELECT f()"` on postgres:17 with f an UPDATE of 50 rows analyzed it and changed none. README: session lost, the analyze table, stopped analyze. Raised N-320.
 
 - **N-271** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Stop on Postgres always destroys the pinned session. `openPool`

@@ -370,6 +370,50 @@ func TestLiveWorkspaceSessionLost(t *testing.T) {
 	})
 }
 
+// SESSION LOST AFTER A READ THAT LEFT STATE (N-272): a SELECT can set a
+// setting, take a lock, assign a variable or make a temp table, and a
+// session that ran one is not replayed on a fresh one when the server cuts
+// it — the replay would run without the setting, or believe it held a lock
+// nobody holds. Each of these used to count as a plain read, and the run
+// after the cut was retried in silence.
+func TestLiveWorkspaceSessionLostToRead(t *testing.T) {
+	reads := map[string][]string{
+		"postgres": {
+			"SELECT set_config('application_name', 'dbc_kept', false)",
+			"SELECT pg_advisory_lock(272)",
+			"SELECT 1 AS n INTO TEMP dbc_live_into",
+		},
+		"mysql": {
+			"SELECT GET_LOCK('dbc_272', 0)",
+			"SELECT @dbc_kept := 'dbc_kept'",
+			"SELECT 'dbc_kept' INTO @dbc_kept",
+		},
+	}
+	forLive(t, func(t *testing.T, e liveEngine) {
+		for _, q := range reads[e.driver] {
+			t.Run(q, func(t *testing.T) {
+				w, obs := liveWorkspace(t, e)
+				if ev := run(t, w, q); ev.Err != nil {
+					t.Fatalf("%s: %v", q, ev.Err)
+				}
+				if conn, stateful := w.Session(); conn != "live" || !stateful {
+					t.Fatalf("after %s: session = %q, stateful %v", q, conn, stateful)
+				}
+				id := wsVal(t, w, e.backend)
+				killBackend(t, obs, e, id)
+
+				ev := run(t, w, e.backend)
+				if !errors.Is(ev.Err, db.ErrSessionLost) {
+					t.Fatalf("run after the cut: err = %v, want ErrSessionLost (rows %v)", ev.Err, ev.Result)
+				}
+				if got := wsVal(t, w, e.backend); got == id {
+					t.Errorf("the next run is on the killed connection %s", id)
+				}
+			})
+		}
+	})
+}
+
 // CANCEL REACHES THE SERVER: Stop on a long statement lands as stopped (not
 // failed) at once, and the server stops executing it — on MySQL that takes
 // the KILL db.Session sends, as the driver only closes its socket.

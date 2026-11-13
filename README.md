@@ -920,10 +920,15 @@ What that means depends on the engine, and on whether the statement writes:
 
 | Engine | Plan | Analyze a read | Analyze a write |
 | --- | --- | --- | --- |
-| Postgres | `EXPLAIN (FORMAT JSON)`; a `$1` statement gets a generic plan (16+) | per-step time, rows, loops, buffers | inside a transaction dbc **rolls back** — or a savepoint, if you have one open, so your own work survives |
+| Postgres | `EXPLAIN (FORMAT JSON)`; a `$1` statement gets a generic plan (16+) | per-step time, rows, loops, buffers — inside the same rolled-back transaction, as a query can write through a function it calls | inside a transaction dbc **rolls back** — or a savepoint, if you have one open, so your own work survives |
 | MySQL | `EXPLAIN FORMAT=TREE`, else the classic table (MariaDB) | `EXPLAIN ANALYZE` (8.0.18+) | not run — the estimate, with a note |
 | SQLite | `EXPLAIN QUERY PLAN`, plus each table's size | the whole statement, timed | not run — the estimate, with a note |
 | bytdb | `EXPLAIN` | the whole statement, timed | not run — the estimate, with a note |
+
+A query that takes a lock, sets a variable or makes a table counts as a write
+here: MySQL's `SELECT GET_LOCK(…)` is not analyzed, so the lock is not taken
+behind your back. On Postgres a session advisory lock outlives the rollback,
+so analyzing `SELECT pg_advisory_lock(…)` takes it, as running it would.
 
 The explain runs on the editor's pinned session, so your `SET`s, temp tables
 and open transaction shape the plan just as they would the next `Ctrl+R`.
@@ -1446,11 +1451,14 @@ along with any transaction it had open, which is rolled back, and a warning in
 the log if it had one. If the server drops the session's connection (an idle
 timeout, a restart), a session that ran `BEGIN`, `SET`, or other statements
 fails the run with "session lost", so a `COMMIT` is never replayed on a fresh
-connection outside the transaction it was meant to end. A session that has
-only run queries is quietly replaced and the statement retried — when the
-driver can tell it never reached the server; if it may have, its error is shown
-as-is rather than risk running it twice. Either way the next run starts on a
-new session.
+connection outside the transaction it was meant to end. A query that leaves
+something on the session counts too: `SELECT set_config(…)`,
+`SELECT pg_advisory_lock(…)`, MySQL's `SELECT GET_LOCK(…)` and
+`SELECT @v := …`, `SELECT … INTO`, SQLite's `PRAGMA foreign_keys = ON`. A
+session that has only run plain queries is quietly replaced and the statement
+retried — when the driver can tell it never reached the server; if it may
+have, its error is shown as-is rather than risk running it twice. Either way
+the next run starts on a new session.
 
 Other than the editor's pinned session, pooled connections that sit idle for
 `conn_idle_timeout` (default `"1h"`; `"0"` = never) are closed and reopened on
@@ -1670,7 +1678,7 @@ What a stop costs the editor's session depends on the engine:
 
 A stopped `EXPLAIN ANALYZE` of a write leaves nothing behind either way. On
 Postgres its savepoint is rolled back and your own open transaction is as it
-was.
+was — a read's too, since every analyze there runs inside one.
 
 A canceled script unwinds through its own error handling — the query in flight
 is aborted and every later `s.Query`/`s.Exec` fails immediately. A script that

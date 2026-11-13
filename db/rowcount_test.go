@@ -364,6 +364,11 @@ func TestChangesRows(t *testing.T) {
 		"WITH d AS (DELETE FROM t RETURNING *) SELECT count(*) FROM d": true,
 		"SELECT 1": false, "SET search_path = x": false, "BEGIN": false,
 		"start transaction": false, "SAVEPOINT a": false, "-- note\nSHOW work_mem": false,
+		// reads by their verb (N-272): a table made, a write analyzed —
+		// and a setting or a lock, which change no rows
+		"SELECT * INTO t2 FROM t": true, "EXPLAIN ANALYZE DELETE FROM t": true,
+		"EXPLAIN DELETE FROM t": false, "SELECT set_config('a.b', '1', false)": false,
+		"SELECT pg_advisory_lock(1)": false, "PRAGMA foreign_keys = ON": false,
 	} {
 		if got := ChangesRows(stmt); got != want {
 			t.Errorf("ChangesRows(%q) = %v, want %v", stmt, got, want)

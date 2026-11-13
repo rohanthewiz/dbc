@@ -373,14 +373,20 @@ var sessionVerbs = map[string]bool{
 }
 
 // ChangesRows reports whether stmt may have changed the row count of a
-// table: it is not a plain read (IsRead), nor a statement that only sets up
-// the session (sessionVerbs). It errs toward yes — an UPDATE changes no
-// count, a CREATE INDEX none either — since being wrong that way costs one
-// recount, and the other way a stale number in the sidebar.
+// table: it may do anything (effectAny — not a plain read, nor a read that
+// only sets session state, such as SELECT set_config(…)), and it is not a
+// statement that only sets up the session (sessionVerbs). It errs toward
+// yes — an UPDATE changes no count, a CREATE INDEX none either — since
+// being wrong that way costs one recount, and the other way a stale number
+// in the sidebar. So SELECT … INTO counts (Postgres makes a table of it;
+// MySQL's INTO @v pays one recount for that), and so does an EXPLAIN
+// ANALYZE of a DELETE, which deletes.
 //
-// It reads strings as sqlsplit.Generic, as IsRead does.
+// It reads strings as sqlsplit.Generic: its caller sums up a run without
+// a connection's dialect in hand. The one rule Generic does not apply is
+// MySQL's := (a variable), which changes no rows either way.
 func ChangesRows(stmt string) bool {
-	return !isRead(stmt, sqlsplit.Generic) && !sessionVerbs[sqlsplit.Verbs(stmt).Main]
+	return effectOf(stmt, sqlsplit.Generic) == effectAny && !sessionVerbs[sqlsplit.Verbs(stmt).Main]
 }
 
 // RowCounts returns the row count of each of tables on the named

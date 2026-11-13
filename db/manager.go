@@ -620,27 +620,22 @@ var returningVerbs = map[string]bool{
 // write: `WITH d AS (DELETE … RETURNING *) SELECT count(*) FROM d` returns
 // rows like a SELECT, yet it deleted them.
 //
+// A read's verb is not enough either: a SELECT can set a setting, take a
+// lock or make a table (SELECT set_config(…), SELECT GET_LOCK(…), SELECT …
+// INTO t), a PRAGMA can set one, and an EXPLAIN ANALYZE runs whatever it
+// explains. effectOf (effect.go) holds those rules; a plain read is a
+// statement it finds nothing in (N-272).
+//
 // d is the engine's reading of strings (sqlsplit.Dialect), so a Postgres
 // 'a\' in one CTE cannot hide the DELETE in the next past its quote.
-func isRead(stmt string, d sqlsplit.Dialect) bool {
-	v := d.Verbs(stmt)
-	if !queryVerbs[v.Main] {
-		return false
-	}
-	for _, cte := range v.CTEs {
-		if returningVerbs[cte] {
-			return false
-		}
-	}
-	return true
-}
+func isRead(stmt string, d sqlsplit.Dialect) bool { return effectOf(stmt, d) == effectNone }
 
 // IsRead is isRead for other packages: whether running stmt could change
-// anything. The TUI asks it before an EXPLAIN ANALYZE, to say what will
-// happen before it does. It reads strings as sqlsplit.Generic: what decides
-// is a verb, and a backslash-ended string ahead of one is the only text
-// another engine's rule would read otherwise.
-func IsRead(stmt string) bool { return isRead(stmt, sqlsplit.Generic) }
+// anything. The workspace asks it before an EXPLAIN ANALYZE, to say what
+// will happen before it does. d is the connection's dialect: the verb
+// alone no longer decides (effectOf), and what does — a MySQL @v := 1, a
+// call after a backslash-ended string — is read by the engine's rules.
+func IsRead(stmt string, d sqlsplit.Dialect) bool { return isRead(stmt, d) }
 
 // sqliteCountVerbs are the statements SQLite's changes() counts: "only
 // changes made directly by the INSERT, UPDATE or DELETE statement" (REPLACE
@@ -778,7 +773,9 @@ type Session struct {
 	// stateful is set once a statement other than a plain read succeeds on
 	// the session. Only those can leave session state behind — BEGIN, SET,
 	// CREATE TEMP, LOCK TABLES — so a session that has only ever run SELECTs can be
-	// swapped for a fresh one without anyone losing anything.
+	// swapped for a fresh one without anyone losing anything. "Plain" is
+	// isRead's: a SELECT that sets a setting or takes a lock (SELECT
+	// set_config(…), SELECT GET_LOCK(…)) is not one (effect.go).
 	stateful bool
 
 	// used is when the last statement on the session returned; zero until
@@ -849,7 +846,9 @@ func (s *Session) Run(ctx context.Context, stmt string, args ...any) (*model.Res
 	})
 	// Keyed off the statement, not res.IsExec: an INSERT … RETURNING comes
 	// back as rows, yet it is a write like any other Exec — inside a BEGIN it
-	// is part of the transaction the session must not silently lose.
+	// is part of the transaction the session must not silently lose. The
+	// other way round, a SELECT set_config(…) comes back as rows too, yet
+	// leaves a setting behind (effectOf).
 	if err == nil && !isRead(stmt, s.m.dialect(s.name)) {
 		s.stateful = true
 	}

@@ -2780,6 +2780,13 @@ in `~/.config/dbc/jobs/<name>.json` (`jobs_dir`):
   that one ends (one waits at most). One run of a *pipeline* at a time
   holds everywhere: a job step whose pipeline is already running fails,
   and a pipeline tab's ▶ Run is refused while a job's step runs it.
+  "Everywhere" is every process on the machine that shares the
+  `runs_dir`: dbc web, the TUI, and `dbc job run` / `dbc pipeline run`
+  from a shell or cron each take a lock per job and pipeline name in
+  `runs_dir/.held`, which the OS drops when the process ends, however it
+  ends. So a cron's `dbc job run nightly` that fires while the last one
+  (or dbc web's) still runs is refused under `skip` (exit 1) or waits under
+  `queue`, and a refusal names the process and the run in the way.
 - **policy.timeout** cancels the run after so long; the job ends failed.
 
 A stop (■ Stop, `Ctrl+C`, a timeout, `on_failure: stop`) asks each node to
@@ -3407,6 +3414,9 @@ the `-o` file), as a pipeline run's. Exit 0 when the job
 succeeded, 1 when not, 130 when interrupted (the run is stopped and every
 load in flight rolled back first). It is how a crontab drives a job
 without `dbc web`: `0 2 * * * /usr/local/bin/dbc job run nightly`.
+A run that outlasts the cron interval is no problem: the job's overlap
+policy holds across processes ([Jobs](#jobs)), so the next fire is refused
+or waits rather than loading the same tables at once.
 `--wait=false` is for a trigger that should not wait (a CI step, another
 scheduler): it checks the job, starts the run in a detached copy of dbc,
 and prints its id once the run has started (`-t json`: `{"id", …}`), so

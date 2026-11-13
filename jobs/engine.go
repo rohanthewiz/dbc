@@ -346,6 +346,11 @@ type Engine struct {
 	// jobLast is each job's latest accepted live run — running, or queued
 	// behind the one before (overlap: queue)
 	jobLast map[string]*liveRun
+	// held is the OS file locks this engine holds, by lock name
+	// ("pipeline-orders", "job-nightly", "queue-nightly"): pipes and
+	// jobLast carried across processes (held.go). Taken and dropped
+	// under mu, beside the in-memory holds they mirror.
+	held map[string]heldLock
 }
 
 // holder is who holds a pipeline: a run, and in a job the step.
@@ -418,7 +423,7 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Engine {
 		opt.AbandonAfter = DefaultAbandonAfter
 	}
 	return &Engine{cfg: cfg, mgr: mgr, opt: opt, live: map[string]*liveRun{},
-		pipes: map[string]holder{}, jobLast: map[string]*liveRun{}}
+		pipes: map[string]holder{}, jobLast: map[string]*liveRun{}, held: map[string]heldLock{}}
 }
 
 // StartPipeline starts a run of req.Spec and returns its header at once;
@@ -462,16 +467,28 @@ func (e *Engine) StartPipeline(req Request) (Run, error) {
 		cancel()
 		return Run{}, err
 	}
+	var warn error
 	if req.PreviewRows == 0 {
 		if err := e.holdLocked(spec.Name, holder{run: lr.id}); err != nil {
 			e.mu.Unlock()
 			cancel()
 			return Run{}, err
 		}
+		// then the same hold across processes (held.go): a cron's `dbc
+		// pipeline run` beside dbc web's, say
+		var busy bool
+		var pid string
+		if busy, pid, warn = e.holdFileLocked(lockPipeline, spec.Name, lr.id); busy {
+			delete(e.pipes, spec.Name)
+			e.mu.Unlock()
+			cancel()
+			return Run{}, e.pipelineElsewhere(spec.Name, pid)
+		}
 	}
 	e.live[lr.id] = lr
 	e.wg.Add(1)
 	e.mu.Unlock()
+	e.warnLock(lr.id, spec.Name, warn)
 
 	head := lr.header()
 	e.emit(lr, &RunStarted{Run: head})
@@ -521,6 +538,7 @@ func (e *Engine) release(name string, h holder) {
 	defer e.mu.Unlock()
 	if e.pipes[name] == h {
 		delete(e.pipes, name)
+		e.dropFileLocked(lockPipeline, name, h.run)
 	}
 }
 
@@ -727,6 +745,12 @@ func (e *Engine) finish(lr *liveRun, status pipeline.Status, msg string) {
 	if e.jobLast[final.Name] == lr {
 		delete(e.jobLast, final.Name)
 	}
+	// and the same holds across processes (held.go): the job's lock, a
+	// queued run's place in line, a pipeline a step was running. An
+	// abandoned run lets go here too, as it does of pipes, though its
+	// stuck node may still be loading: the trade N-268 made, so a stuck
+	// run does not hold its name until the process exits.
+	e.dropRunFilesLocked(lr.id)
 	e.done = append(e.done, &final)
 	if over := len(e.done) - e.opt.Keep; over > 0 {
 		e.done = slices.Delete(e.done, 0, over)

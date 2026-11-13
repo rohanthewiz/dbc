@@ -100,6 +100,14 @@ func (e *Engine) StartJob(req JobRequest) (Run, error) {
 		return Run{}, err
 	}
 	var waitFor <-chan struct{}
+	// The overlap rule across processes (held.go). With no run of the job
+	// here, this run takes the job's lock; held by another process, it is
+	// refused (skip) or queued (queue). A queued run, whoever it waits
+	// for, also takes the job's queue lock, as the one run waiting.
+	// elsewhere names the lock another process holds, refused once e.mu
+	// is let go: saying who holds it reads the records.
+	var elsewhere, pid string
+	var warn error
 	if prev := e.jobLast[spec.Name]; prev != nil {
 		ph := prev.header()
 		switch {
@@ -116,15 +124,41 @@ func (e *Engine) StartJob(req JobRequest) (Run, error) {
 		}
 		waitFor = prev.done
 		lr.rec.Status = pipeline.Queued
+	} else {
+		var busy bool
+		if busy, pid, warn = e.holdFileLocked(lockJob, spec.Name, lr.id); busy {
+			if spec.Policy.Overlap != OverlapQueue {
+				elsewhere = lockJob
+			} else {
+				lr.rec.Status = pipeline.Queued // executeJob polls for the lock
+			}
+		}
 	}
+	if elsewhere == "" && lr.rec.Status == pipeline.Queued {
+		busy, qpid, qwarn := e.holdFileLocked(lockQueue, spec.Name, lr.id)
+		if busy {
+			elsewhere, pid = lockQueue, qpid
+		}
+		if warn == nil {
+			warn = qwarn // the same directory: one warning says it
+		}
+	}
+	if elsewhere != "" {
+		e.dropRunFilesLocked(lr.id) // nothing taken yet, but never leave one behind
+		e.mu.Unlock()
+		cancel()
+		return Run{}, e.jobElsewhere(spec.Name, elsewhere, pid)
+	}
+	queuedRun := lr.rec.Status == pipeline.Queued
 	e.live[lr.id] = lr
 	e.jobLast[spec.Name] = lr
 	e.wg.Add(1)
 	e.mu.Unlock()
+	e.warnLock(lr.id, spec.Name, warn)
 
 	head := lr.header()
 	e.emit(lr, &RunStarted{Run: head})
-	go e.executeJob(ctx, lr, spec, pipes, waitFor)
+	go e.executeJob(ctx, lr, spec, pipes, queuedRun, waitFor)
 	return head, nil
 }
 
@@ -169,22 +203,21 @@ var errTimedOut = errors.New("timed out")
 // A fan-in step starts only when every after has succeeded, so a failure
 // anywhere upstream skips it; with finish_branches the branches that do not
 // depend on the failure run to the end, and the job ends failed.
-func (e *Engine) executeJob(ctx context.Context, lr *liveRun, spec *Spec, pipes map[string]*pipeline.Spec, waitFor <-chan struct{}) {
+//
+// A queued run (overlap: queue) first waits its turn (waitTurn): for the
+// run before it here, waitFor, and for the job's lock another process may
+// hold.
+func (e *Engine) executeJob(ctx context.Context, lr *liveRun, spec *Spec, pipes map[string]*pipeline.Spec,
+	queuedRun bool, waitFor <-chan struct{}) {
 	defer e.wg.Done()
 	stop := e.background(lr)
-	if waitFor != nil {
-		e.line(lr, "", "info", fmt.Sprintf("job %s: waiting for the run before it to end (overlap: queue)", spec.Name))
-		select {
-		case <-waitFor:
-		case <-ctx.Done():
+	if queuedRun {
+		if !e.waitTurn(ctx, lr, spec.Name, waitFor) {
 			e.skipRest(lr)
 			stop()
 			e.finish(lr, pipeline.Canceled, "canceled while it waited for the run before it")
 			return
 		}
-		lr.mu.Lock()
-		lr.rec.Status, lr.rec.Started = pipeline.Running, time.Now()
-		lr.mu.Unlock()
 		e.emit(lr, &State{Run: lr.id, Status: pipeline.Running})
 	}
 
@@ -284,6 +317,58 @@ func (e *Engine) executeJob(ctx context.Context, lr *liveRun, spec *Spec, pipes 
 	e.finish(lr, status, msg)
 }
 
+// waitTurn is a queued job run's wait (overlap: queue). First for the run
+// before it in this process, when there is one (waitFor: closed once that
+// run's finish has let go of the job's lock). Then for the job's lock
+// (held.go), which another process may hold, or may have taken in the
+// moment between: polled every heldPoll, since a flock that blocks would
+// keep its goroutine past a cancel.
+//
+//	waitFor ──► try job-<name> ──taken──► drop queue-<name>, status running ──► true
+//	               │  ▲
+//	          held └──┘ every heldPoll        ctx done at any wait ──► false
+//
+// The lock taken, the run gives up its place in line and is running, both
+// under e.mu, so a StartJob that looks sees it queued (holding the queue
+// lock) or running (not), never between. Without a runs dir the lock is
+// always free: only waitFor is waited for, as before the locks.
+func (e *Engine) waitTurn(ctx context.Context, lr *liveRun, job string, waitFor <-chan struct{}) bool {
+	if waitFor != nil {
+		e.line(lr, "", "info", fmt.Sprintf("job %s: waiting for the run before it to end (overlap: queue)", job))
+		select {
+		case <-waitFor:
+		case <-ctx.Done():
+			return false
+		}
+	}
+	told := false // that it waits for another process: said once
+	for {
+		e.mu.Lock()
+		busy, pid, warn := e.holdFileLocked(lockJob, job, lr.id)
+		if !busy {
+			e.dropFileLocked(lockQueue, job, lr.id)
+			lr.mu.Lock()
+			lr.rec.Status, lr.rec.Started = pipeline.Running, time.Now()
+			lr.mu.Unlock()
+		}
+		e.mu.Unlock()
+		if !busy {
+			e.warnLock(lr.id, job, warn)
+			return true
+		}
+		if !told {
+			h := e.elsewhere(lockJob, job, pid)
+			e.line(lr, "", "info", fmt.Sprintf("job %s: waiting for the run before it to end, %s", job, h.said("overlap: queue")))
+			told = true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(heldPoll):
+		}
+	}
+}
+
 func cmpOr(a, b string) string {
 	if a != "" {
 		return a
@@ -349,10 +434,24 @@ func (e *Engine) runStep(ctx context.Context, lr *liveRun, idx int, spec *Spec, 
 	h := holder{run: lr.id, step: st.ID, job: spec.Name}
 	e.mu.Lock()
 	err := e.holdLocked(ps.Name, h)
+	var busy bool
+	var pid string
+	var warn error
+	if err == nil {
+		// the pipeline across processes too (held.go): a step is a real
+		// run of it, as a `dbc pipeline run` from a shell is
+		if busy, pid, warn = e.holdFileLocked(lockPipeline, ps.Name, lr.id); busy {
+			delete(e.pipes, ps.Name)
+		}
+	}
 	e.mu.Unlock()
 	if err != nil {
 		return fail(err)
 	}
+	if busy {
+		return fail(e.pipelineElsewhere(ps.Name, pid))
+	}
+	e.warnLock(lr.id, ps.Name, warn)
 	defer e.release(ps.Name, h)
 
 	// the step's params: each value with the job's params and the run's

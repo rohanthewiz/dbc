@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-319
+**Next ID:** N-320
 
 ## Open
 
@@ -78,31 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-269** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  Overlap rules are per process. `holdLocked` (`jobs/engine.go:471`) and
-  `jobLast` (`jobs/job.go:103`) are in memory, and only scheduled fires
-  are claimed across processes (`jobs/scheduler.go:353`), while the README
-  says the rule "holds everywhere". Scenario: OS cron running
-  `dbc job run X` every 5 minutes with a 7-minute run, or cron beside dbc
-  web, gives two loads into one table. Fix: consult the live on-disk
-  records (heartbeat and PID are already there) or take an `O_EXCL` lock
-  per name. Audit, traced. (RPU plan, phase 2)
-  Updated `2026-1110-2001-rpu-phase-2-n265-n268`: started, no code yet. Plan, from reading the
-  code: hold an OS file lock per name in `runs_dir/.held`
-  (`btypedb.AcquireLock`, as `userdata.lockFile` uses it: flock on Unix,
-  a share mode on Windows, dropped by the OS when the holder dies, so no
-  staleness rule is needed), `pipeline-<name>` and `job-<name>`. Take it
-  after the in-process check (`holdLocked`; for a job only when
-  `jobLast` has no run of it), since this process's own run would make a
-  second flock fail as "another process". Keep the closers in a map
-  under `e.mu`, and release them where `finish` and `release` drop
-  `pipes` and `jobLast`. Overlap `skip`: refuse, naming the holder's PID
-  (the lock error's `holder_pid` field). Overlap `queue`: the run starts
-  queued, and `executeJob` polls the lock before its walk. That is also
-  the path for an in-process queued run once its predecessor lets go.
-  Previews and an engine with no `RunsDir` take no file locks. Keep the
-  `.fires` claims as they are; never unlink the lock files (flock and
-  unlink race).
 - **N-270** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Migrations take no runner lock (`migrate/run.go:262-315`; no advisory
   lock or `GET_LOCK` anywhere in `migrate/`). Two deploys both read
@@ -547,6 +522,19 @@ ten session docs in `ai_docs/claude_sessions/`
   - A different statement run with one of a `CALL`'s set tabs on screen
     replaces that tab alone and leaves its siblings, as a single
     statement does to a run-all's group.
+- **N-319** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  A dead process's run record reads `running` for up to `StaleAfter`
+  (30 s) after its process died, though since N-269 its lock already says
+  so: the OS drops `runs_dir/.held/job-<name>` (or `pipeline-<name>`,
+  `queue-<name>`) at once. Seen while closing N-269: after `kill -9` of a
+  `dbc job run`, the queued run behind it started within a second while
+  `dbc runs` still listed the dead one as running. `liveElsewhere` and
+  `stale` (`jobs/records.go`) could ask the lock: a running job record
+  whose job lock is free has lost its writer. The catch is that testing a
+  flock means taking it, which races a real starter for that instant, so
+  the probe must let go at once and never refuse a start; and a record
+  from an engine without a runs dir has no lock to ask. Raised while
+  closing N-269.
 
 ## Validate
 
@@ -1256,6 +1244,33 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-269** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Overlap rules are per process. `holdLocked` (`jobs/engine.go:471`) and
+  `jobLast` (`jobs/job.go:103`) are in memory, and only scheduled fires
+  are claimed across processes (`jobs/scheduler.go:353`), while the README
+  says the rule "holds everywhere". Scenario: OS cron running
+  `dbc job run X` every 5 minutes with a 7-minute run, or cron beside dbc
+  web, gives two loads into one table. Fix: consult the live on-disk
+  records (heartbeat and PID are already there) or take an `O_EXCL` lock
+  per name. Audit, traced. (RPU plan, phase 2)
+  Updated `2026-1110-2001-rpu-phase-2-n265-n268`: started, no code yet. Plan, from reading the
+  code: hold an OS file lock per name in `runs_dir/.held`
+  (`btypedb.AcquireLock`, as `userdata.lockFile` uses it: flock on Unix,
+  a share mode on Windows, dropped by the OS when the holder dies, so no
+  staleness rule is needed), `pipeline-<name>` and `job-<name>`. Take it
+  after the in-process check (`holdLocked`; for a job only when
+  `jobLast` has no run of it), since this process's own run would make a
+  second flock fail as "another process". Keep the closers in a map
+  under `e.mu`, and release them where `finish` and `release` drop
+  `pipes` and `jobLast`. Overlap `skip`: refuse, naming the holder's PID
+  (the lock error's `holder_pid` field). Overlap `queue`: the run starts
+  queued, and `executeJob` polls the lock before its walk. That is also
+  the path for an in-process queued run once its predecessor lets go.
+  Previews and an engine with no `RunsDir` take no file locks. Keep the
+  `.fires` claims as they are; never unlink the lock files (flock and
+  unlink race).
+  closed 2026-11-13 (RPU plan, phase 2): built as planned, plus a queue lock. `jobs/held.go`: each in-memory hold is mirrored by an OS lock in `runs_dir/.held` (`btypedb.AcquireLock`), `pipeline-<name>`, `job-<name>` and `queue-<name>` (the prefixes differ in their first letter, so no name of one kind can spell another's). `holdFileLocked` runs under `e.mu`, after the in-process check: `StartPipeline` and `runStep` after `holdLocked`, `StartJob` when `jobLast` has no run of the job. The closers live in `Engine.held`, dropped by `release` and by `finish` (`dropRunFilesLocked`; an abandoned run lets go too, as N-268 chose for `pipes`). Skip: refused, the message naming the holder's PID (the lock error's `holder_pid`) and, when a live record says so, its run (`BusyRun`) and for a pipeline the job step running it: "nap is already running as step n of job napjob in another process (pid 9115, run …) — one run of a pipeline at a time". Queue: a queued run, whether it waits behind a run here or in another process, holds `queue-<name>`, so "one waits at most" holds across processes too (otherwise a cron firing every 5 minutes beside a 20-minute run piles up a waiter per fire). `executeJob` → `waitTurn`: waits for the run here (`done`), then polls `job-<name>` every `heldPoll` (1 s); once taken it drops the queue lock and turns running, both under `e.mu`. A lock that cannot be made (read-only runs dir) does not refuse the run; a Notice says only this process's runs are kept apart. A holder in the same process (a `script.run` node's private engine) reads "elsewhere in this process". Lock files are never removed; `.fires` claims kept (they decide which dbc web fires 02:00, which a lock cannot under `queue`). Tests: `jobs/held_test.go`, two or three engines over one runs dir standing for processes (a flock is per open file): `TestPipelineHeldAcrossEngines`, `TestJobOverlapAcrossEngines`, `TestHeldByAHolderWithNoRecord` (a lock taken directly, a waiter canceled, a waiter released). `go test ./jobs -race -count=3`, and `.`, `web`, `tui`, `sdb`, `script` green. Real binary (scratch config, a 4 s and a 30 s `go.action` pipeline): two `dbc job run napjob` 1.5 s apart, the second refused (exit 1) naming the first's PID and run; `dbc pipeline run nap` refused naming step n of napjob; under `queue` a second run waited (its log naming the first), a third was refused naming the waiter, and `kill -9` of the first let the waiter start within a poll. README: the overlap bullet under Jobs, and the crontab paragraph under Jobs headless. Raised N-319.
 
 - **N-289** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Row-returning statements outside `queryVerbs` run as Exec and lose

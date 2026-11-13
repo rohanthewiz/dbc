@@ -843,6 +843,12 @@ func (w *Workspace) failedLocked(set *resultSet, err error, tag string, elapsed 
 		if errors.Is(err, db.ErrSessionLost) {
 			*notes = append(*notes, Note{Warn, "the session was lost with it — its open transaction, SET values and temp tables are gone"})
 		}
+		// On Postgres the session survives a stop, but a transaction the
+		// statement ran in does not: Postgres aborts it, and a stop shows
+		// no error to say so (db.ErrTxAborted).
+		if errors.Is(err, db.ErrTxAborted) {
+			*notes = append(*notes, Note{Warn, "the open transaction was aborted with it — every statement fails until ROLLBACK; SET values and temp tables are kept"})
+		}
 		return
 	}
 	set.lastErr = serr.StringFromErr(err)

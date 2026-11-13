@@ -64,7 +64,30 @@ func (s *Session) guard(ctx context.Context, f func() error) error {
 	}
 	s.used = time.Now()
 	s.reapCanceled(err)
-	return err
+	return s.markAborted(err)
+}
+
+// ErrTxAborted is wrapped around a stop (ErrCanceled) that left the
+// session's Postgres transaction aborted. Postgres keeps the connection
+// through a stop (pgCancelHandler), and ends the canceled statement with an
+// error, which aborts the transaction it ran in as any error would: its
+// work is undone and its locks freed at once, but the transaction block
+// stays open, and every statement but ROLLBACK (or ROLLBACK TO SAVEPOINT)
+// fails until it ends. A stop is not
+// shown as a failure, so without this the user would learn it from the next
+// statement's "current transaction is aborted".
+var ErrTxAborted = errors.New("transaction aborted")
+
+// markAborted wraps err as ErrTxAborted when it is a stop that left the
+// session alive in a failed transaction. A session the stop cost (the
+// grace ran out, or MySQL) is left alone: its transaction is gone with the
+// connection, which ErrSessionLost reports.
+func (s *Session) markAborted(err error) error {
+	if !errors.Is(err, ErrCanceled) || s.pgTxStatus() != 'E' || !s.alive() {
+		return err
+	}
+	return serr.Wrap(fmt.Errorf("%w: %w", ErrTxAborted, err), "conn", s.name,
+		"detail", "the stop aborted the open transaction — ROLLBACK to go on; SET values and temp tables are kept")
 }
 
 // ready checks, before a statement is sent, that the session's connection

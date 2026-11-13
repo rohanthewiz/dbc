@@ -1653,6 +1653,25 @@ cancels it: the statement is aborted on the server (Postgres, MySQL) or
 interrupted in process (SQLite, bytdb), and the run is reported as stopped
 rather than failed.
 
+What a stop costs the editor's session depends on the engine:
+
+- **Postgres** keeps the session, as psql's Ctrl-C does: dbc sends a cancel
+  request and the connection carries on, with its `SET`s, temp tables and
+  prepared statements. A stop inside a transaction aborts the transaction,
+  as any error there would (its work is undone and its locks freed). It
+  stays open, refusing every statement until `ROLLBACK`, and the run says
+  so. If the server has not stopped the statement within two seconds (a
+  pooler that does not forward cancel requests, say), dbc closes the
+  connection instead.
+- **MySQL**: the driver closes the connection to stop the statement, and dbc
+  sends the `KILL` that ends it on the server. The session goes with it. A
+  session that held nothing is replaced without a word; one with an open
+  transaction or `SET`s is reported lost, and its transaction is rolled back.
+
+A stopped `EXPLAIN ANALYZE` of a write leaves nothing behind either way. On
+Postgres its savepoint is rolled back and your own open transaction is as it
+was.
+
 A canceled script unwinds through its own error handling — the query in flight
 is aborted and every later `s.Query`/`s.Exec` fails immediately. A script that
 loops without touching the database can still check `s.Canceled()`, and

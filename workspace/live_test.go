@@ -55,16 +55,26 @@ type liveEngine struct {
 	// statement. MySQL's heavy is CPU work rather than SLEEP, which looks
 	// at its socket every few seconds and so stops by itself.
 	heavy, busy string
+	// set leaves a session setting behind, and get reads it back as
+	// "dbc_kept" while the session that ran set is still the one in use.
+	set, get string
+	// stopKeeps: a stop leaves the session's connection in place. Postgres
+	// stops a statement with a cancel request (db.pgCancelHandler);
+	// go-sql-driver/mysql closes its socket, so the session goes.
+	stopKeeps bool
 }
 
 var liveEngines = []liveEngine{
 	{
 		env: "DBC_LIVE_PG_DSN", driver: "postgres",
-		backend: "SELECT pg_backend_pid()",
-		listed:  "SELECT count(*) FROM pg_stat_activity WHERE pid = %s",
-		kill:    "SELECT pg_terminate_backend(%s)",
-		heavy:   "SELECT pg_sleep(60)",
-		busy:    "SELECT count(*) FROM pg_stat_activity WHERE pid = %s AND state = 'active'",
+		backend:   "SELECT pg_backend_pid()",
+		listed:    "SELECT count(*) FROM pg_stat_activity WHERE pid = %s",
+		kill:      "SELECT pg_terminate_backend(%s)",
+		heavy:     "SELECT pg_sleep(60)",
+		busy:      "SELECT count(*) FROM pg_stat_activity WHERE pid = %s AND state = 'active'",
+		set:       "SET application_name = 'dbc_kept'",
+		get:       "SHOW application_name",
+		stopKeeps: true,
 	},
 	{
 		env: "DBC_LIVE_MYSQL_DSN", driver: "mysql",
@@ -73,6 +83,8 @@ var liveEngines = []liveEngine{
 		kill:    "KILL %s",
 		heavy:   "SELECT BENCHMARK(4000000000, MD5('dbc'))",
 		busy:    "SELECT count(*) FROM information_schema.processlist WHERE id = %s AND command = 'Query'",
+		set:     "SET @dbc_kept = 'dbc_kept'",
+		get:     "SELECT @dbc_kept",
 	},
 }
 
@@ -360,22 +372,37 @@ func TestLiveWorkspaceSessionLost(t *testing.T) {
 
 // CANCEL REACHES THE SERVER: Stop on a long statement lands as stopped (not
 // failed) at once, and the server stops executing it — on MySQL that takes
-// the KILL db.Session sends, as the driver only closes its socket. A stop
-// in a transaction costs the session (the driver drops the connection to
-// abort the statement), which the run says, and the server rolls back what
-// the transaction had done. Either way the next run works.
+// the KILL db.Session sends, as the driver only closes its socket.
+//
+// What the stop costs the session differs by engine (N-271):
+//
+//	                 Postgres (cancel request)        MySQL (socket closed)
+//	stateless        kept                             replaced, silently
+//	after a SET      kept, the setting with it        lost, and the run says so
+//	in a transaction kept; the transaction aborted    lost; the server rolls
+//	                 (its work undone, its locks      the transaction back
+//	                 freed) but open until ROLLBACK,
+//	                 and the run says so
+//
+// Either way the run after the stop (after a ROLLBACK, for an aborted
+// transaction) works.
 func TestLiveWorkspaceCancel(t *testing.T) {
 	cases := []struct {
 		name string
+		set  bool // a session setting made before the stop
 		tx   bool // inside a transaction that has written
 	}{
-		{"stateless", false},
-		{"in a transaction", true},
+		{"stateless", false, false},
+		{"after a SET", true, false},
+		{"in a transaction", false, true},
 	}
 	forLive(t, func(t *testing.T, e liveEngine) {
 		for _, c := range cases {
 			t.Run(c.name, func(t *testing.T) {
 				w, obs := liveWorkspace(t, e)
+				if c.set {
+					run(t, w, e.set)
+				}
 				if c.tx {
 					run(t, w, "BEGIN")
 					run(t, w, `UPDATE `+liveTable+` SET n = 99 WHERE id = 1`)
@@ -404,16 +431,47 @@ func TestLiveWorkspaceCancel(t *testing.T) {
 				if lost := hasNote(ev.Notes, Warn, "the session was lost"); lost != errors.Is(ev.Err, db.ErrSessionLost) {
 					t.Errorf("the notes and the error disagree about the session: %+v / %v", ev.Notes, ev.Err)
 				}
-				if c.tx && !errors.Is(ev.Err, db.ErrSessionLost) {
-					// Not a rule, but what both drivers do today; if one
-					// starts keeping the connection, the rollback check
-					// below no longer holds and this test needs rethinking.
-					t.Fatalf("stopping inside a transaction kept the session: %v", ev.Err)
+				if aborted := hasNote(ev.Notes, Warn, "the open transaction was aborted"); aborted != errors.Is(ev.Err, db.ErrTxAborted) {
+					t.Errorf("the notes and the error disagree about the transaction: %+v / %v", ev.Notes, ev.Err)
 				}
 				// Well inside the statement's own length: only a stop on the
 				// server gets there in time.
 				waitFor(t, obs, fmt.Sprintf(e.busy, id), "0", 3*time.Second)
+
+				stateful := c.set || c.tx
+				switch {
+				case e.stopKeeps:
+					if errors.Is(ev.Err, db.ErrSessionLost) {
+						t.Fatalf("the stop cost the session: %v", ev.Err)
+					}
+					if errors.Is(ev.Err, db.ErrTxAborted) != c.tx {
+						t.Errorf("ErrTxAborted = %v, want %v: %v", !c.tx, c.tx, ev.Err)
+					}
+				case stateful:
+					if !errors.Is(ev.Err, db.ErrSessionLost) {
+						t.Fatalf("the stop kept a session MySQL's driver closes: %v", ev.Err)
+					}
+				}
+
 				if c.tx {
+					// Either way the UPDATE's row lock is gone: Postgres
+					// undoes an aborted transaction's work and frees its
+					// locks at the error, leaving only the open block; a lost
+					// one went when the server ended the session. On Postgres
+					// the block still refuses statements until ROLLBACK.
+					if e.stopKeeps {
+						if rowLocked(t, obs) {
+							t.Error("the aborted transaction still holds its row lock")
+						}
+						ev := run(t, w, `SELECT count(*) FROM `+liveTable)
+						if ev.Err == nil || !strings.Contains(ev.Err.Error(), "25P02") {
+							t.Errorf("a statement in the aborted transaction: err = %v, want 25P02", ev.Err)
+						}
+						if ev := run(t, w, "ROLLBACK"); ev.Err != nil {
+							t.Fatalf("ROLLBACK: %v", ev.Err)
+						}
+					}
+					waitUnlocked(t, obs)
 					if n := obsVal(t, obs, `SELECT n FROM `+liveTable+` WHERE id = 1`); n != "1" {
 						t.Errorf("n = %s, want the stopped transaction rolled back to 1", n)
 					}
@@ -421,9 +479,39 @@ func TestLiveWorkspaceCancel(t *testing.T) {
 				if ev := run(t, w, `SELECT count(*) FROM `+liveTable); ev.Err != nil || ev.Result.Rows[0][0] != "3" {
 					t.Errorf("the run after the stop: %+v", ev)
 				}
+				if same := wsVal(t, w, e.backend) == id; same != e.stopKeeps {
+					t.Errorf("same connection after the stop = %v, want %v", same, e.stopKeeps)
+				}
+				if c.set && e.stopKeeps {
+					if got := wsVal(t, w, e.get); got != "dbc_kept" {
+						t.Errorf("the setting after the stop = %q, want dbc_kept", got)
+					}
+				}
 			})
 		}
 	})
+}
+
+// rowLocked reports whether row 1 of liveTable is locked by someone other
+// than obs: a NOWAIT lock attempt fails at once rather than waiting. Both
+// engines spell it FOR UPDATE NOWAIT (MySQL 8.0+).
+func rowLocked(t *testing.T, obs *db.Manager) bool {
+	t.Helper()
+	_, err := obs.Run("live", `SELECT n FROM `+liveTable+` WHERE id = 1 FOR UPDATE NOWAIT`)
+	return err != nil
+}
+
+// waitUnlocked waits for row 1's lock to be free: a server lets a killed or
+// rolled-back transaction's locks go on its own schedule.
+func waitUnlocked(t *testing.T, obs *db.Manager) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for rowLocked(t, obs) {
+		if time.Now().After(deadline) {
+			t.Fatal("row 1 is still locked: the stopped transaction is still open")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // An EXPLAIN ANALYZE runs its statement, so its Stop must reach the server

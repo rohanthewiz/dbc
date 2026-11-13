@@ -1783,3 +1783,37 @@ func TestSectionsAndViewDDL(t *testing.T) {
 	_, err = w.ViewDDL(db.TableRef{Schema: "main", Name: "nope"})
 	refusal(t, err, Invalid)
 }
+
+// A stop is reported as stopped, not failed, and says what it cost the
+// session (N-271): nothing, the whole session (MySQL; or Postgres once its
+// cancel grace ran out), or — Postgres keeping the session — the open
+// transaction, which the stop aborted and which now needs a ROLLBACK.
+func TestStopNotesSayWhatTheSessionKept(t *testing.T) {
+	stop := fmt.Errorf("%w: %w", db.ErrCanceled, context.Canceled)
+	cases := []struct {
+		name          string
+		err           error
+		lost, aborted bool
+	}{
+		{"plain stop", stop, false, false},
+		{"session lost", fmt.Errorf("%w: %w", db.ErrSessionLost, stop), true, false},
+		{"transaction aborted", fmt.Errorf("%w: %w", db.ErrTxAborted, stop), false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w, set := &Workspace{}, &resultSet{}
+			var notes []Note
+			var status string
+			w.failedLocked(set, c.err, "query", 1500*time.Millisecond, &notes, &status)
+			if status != "stopped after 1.5s" || set.lastErr != "" {
+				t.Errorf("status %q, lastErr %q: a stop is not a failure", status, set.lastErr)
+			}
+			if got := hasNote(notes, Warn, "the session was lost"); got != c.lost {
+				t.Errorf("session-lost note = %v, want %v: %+v", got, c.lost, notes)
+			}
+			if got := hasNote(notes, Warn, "the open transaction was aborted with it — every statement fails until ROLLBACK"); got != c.aborted {
+				t.Errorf("aborted note = %v, want %v: %+v", got, c.aborted, notes)
+			}
+		})
+	}
+}

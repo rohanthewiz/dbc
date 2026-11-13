@@ -2,8 +2,12 @@ package db
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/rohanthewiz/serr"
 
 	"github.com/rohanthewiz/dbc/explain"
 )
@@ -182,5 +186,100 @@ func TestLiveExplainMySQL(t *testing.T) {
 	}
 	if res.Rows[0][0] != "0" {
 		t.Fatalf("explaining the UPDATE ran it")
+	}
+}
+
+// Stopping an EXPLAIN ANALYZE of a write (N-271). The write runs inside
+// dbc's own BEGIN … ROLLBACK, or a savepoint in the user's transaction, and
+// the stop must leave nothing of it behind while saying the right thing
+// about the session:
+//
+//	                   cancel request lands           grace runs out (0 here):
+//	                   (the normal case)              the connection is closed
+//	no transaction     stopped; session kept          stopped; session dropped
+//	                                                  quietly (it held nothing)
+//	user's open tx     stopped; the savepoint undone, stopped; session lost —
+//	                   the user's transaction intact  the user's tx went with it
+//
+// Before N-271 every stop took the right-hand column, and reported it as a
+// failed rollback: "the analyzed write may not have been undone", the
+// session lost — though the server rolls back an open transaction when its
+// connection ends, so nothing could have been kept.
+func TestLiveExplainPostgresStopWrite(t *testing.T) {
+	const slowWrite = "UPDATE dbc_explain.orders SET total = -1 WHERE id <= 100 AND (SELECT true FROM pg_sleep(60))"
+	cases := []struct {
+		name   string
+		grace  time.Duration
+		userTx bool
+		fault  Fault
+	}{
+		{"kept, no transaction", pgCancelGrace, false, FaultNone},
+		{"kept, user transaction", pgCancelGrace, true, FaultNone},
+		{"closed, no transaction", 0, false, FaultDrop},
+		{"closed, user transaction", 0, true, FaultLost},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			old := pgCancelGrace
+			pgCancelGrace = c.grace
+			defer func() { pgCancelGrace = old }()
+			mgr := livePGExplainSetup(t) // its pool's connections take this grace
+			obs := liveMgr(t, "DBC_LIVE_PG_DSN", "postgres")
+			ctx := context.Background()
+			s, err := mgr.Session(ctx, "live")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			id := liveVal(t, onSession(s), "SELECT pg_backend_pid()")
+			if c.userTx {
+				liveVal(t, onSession(s), "SELECT 1") // keep id's read out of the tx
+				for _, q := range []string{"BEGIN", "INSERT INTO dbc_explain.orders VALUES (999999, 1, 5, 'mine')"} {
+					if _, err = s.Run(ctx, q); err != nil {
+						t.Fatalf("%s: %v", q, err)
+					}
+				}
+			}
+
+			sctx, stop := context.WithCancel(ctx)
+			done := make(chan error, 1)
+			go func() {
+				_, err := s.Explain(sctx, slowWrite, ExplainOptions{Analyze: true})
+				done <- err
+			}()
+			waitBusy(t, obs, liveEngines[0], id, "1", 5*time.Second)
+			stop()
+			select {
+			case err = <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the stopped analyze never returned")
+			}
+			if !errors.Is(err, ErrCanceled) {
+				t.Fatalf("err = %v, want ErrCanceled", err)
+			}
+			if s := serr.StringFromErr(err); strings.Contains(s, "may not have been undone") {
+				t.Errorf("reported a write that cannot have been kept: %s", s)
+			}
+			if errors.Is(err, ErrTxAborted) {
+				t.Errorf("the rollback should have closed what the stop aborted: %v", err)
+			}
+			if got := s.Classify(err); got != c.fault {
+				t.Errorf("Classify = %d, want %d", got, c.fault)
+			}
+			waitBusy(t, obs, liveEngines[0], id, "0", 3*time.Second)
+			if n := liveVal(t, onPool(obs), "SELECT count(*) FROM dbc_explain.orders WHERE total = -1"); n != "0" {
+				t.Errorf("the stopped write was kept: %s rows", n)
+			}
+			if c.fault == FaultNone && c.userTx {
+				// the user's transaction is as it was: open, not aborted,
+				// their insert still in it
+				if st := s.pgTxStatus(); st != 'T' {
+					t.Errorf("tx status = %q, want T", st)
+				}
+				if got := liveVal(t, onSession(s), "SELECT status FROM dbc_explain.orders WHERE id = 999999"); got != "mine" {
+					t.Errorf("the user's uncommitted insert: %q", got)
+				}
+			}
+		})
 	}
 }

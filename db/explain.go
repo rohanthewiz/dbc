@@ -217,6 +217,24 @@ func (s *Session) rolledBack(ctx context.Context, f func() (*explain.Plan, error
 	defer cancel()
 	for _, q := range undo {
 		if _, uerr := s.conn.ExecContext(uctx, q); uerr != nil {
+			if !s.alive() {
+				// The connection is gone, and with it the transaction the
+				// write ran in: a server rolls back what a connection had
+				// open when it ends, so nothing was changed. What is left
+				// to report is f's own error — most often the stop that
+				// cost the connection (pgCancelGrace ran out) — and, when
+				// the user had a transaction open (the savepoint case), that
+				// it went too: marked stateful, Classify reports the
+				// session lost.
+				if status == 'T' {
+					s.stateful = true
+				}
+				if err == nil {
+					err = serr.Wrap(uerr, "conn", s.name, "op", "explain rollback",
+						"detail", "the connection was lost after the analyze; the server rolled the write back with it")
+				}
+				return nil, "", err
+			}
 			s.stateful = true
 			return nil, "", serr.Wrap(uerr, "conn", s.name, "op", "explain rollback",
 				"detail", "the analyzed write may not have been undone — check before COMMIT")

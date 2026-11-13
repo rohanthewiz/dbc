@@ -14,6 +14,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgconn/ctxwatch"
 	pgxstdlib "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 
@@ -379,7 +380,53 @@ func openPool(drv, dsn string, t config.TLSOpts, database string) (*sql.DB, erro
 	pcfg.OnNotice = dispatchNotice
 	// The rows-affected count of a statement run as a Query (stmtkind.go).
 	pcfg.Tracer = pgTagTracer{}
+	// A canceled statement is stopped with a cancel request, keeping the
+	// connection (pgCancelHandler).
+	pcfg.BuildContextWatcherHandler = pgCancelHandler
 	return pgxstdlib.OpenDB(*pcfg, pgxstdlib.OptionShouldPing(pgShouldPing)), nil
+}
+
+// pgCancelGrace is how long a canceled Postgres statement has to stop after
+// the cancel request goes out before pgx gives up on the connection and
+// closes it. A server stops a statement within milliseconds of a cancel
+// request — a lock wait, a sleep and a long scan alike — so the grace is
+// for when the request cannot land: a proxy or pooler that does not pass
+// cancel requests on, or a backend busy in code that does not check for
+// interrupts. Then the stop takes this long and costs the session, as every
+// stop did before N-271. A variable so tests can force that fallback (0: the
+// socket times out at once, which is pgx's default behavior); it is read
+// when a connection is made.
+var pgCancelGrace = 2 * time.Second
+
+// pgCancelHandler is what a pgx connection does when the context of the
+// statement it is running ends — the user's Stop, or a deadline.
+//
+// pgx's default (DeadlineContextWatcherHandler, deadline delay 0) times the
+// socket out at once, and pgconn then closes the connection, sending a
+// cancel request on its way out. The statement stops on the server, but the
+// session goes with it: `BEGIN; UPDATE …;` then Stop on a slow SELECT lost
+// the transaction, the SET values and the temp tables, which psql's Ctrl-C
+// keeps. The cancel-request handler sends the cancel request first and
+// leaves the socket be, so the server ends the statement with 57014
+// (query_canceled) and the connection carries on:
+//
+//	ctx ends ──► cancel request (a second connection, TLS as the first)
+//	         │     └─► server: ERROR 57014 ──► statement returns, session kept
+//	         └─► socket deadline now+pgCancelGrace
+//	               └─► no answer by then ──► pgconn closes the connection
+//	                                         (the old behavior)
+//
+// Inside a transaction Postgres aborts it, as after any error: its work is
+// undone and its locks freed, but the block stays open and refuses
+// everything until ROLLBACK (or ROLLBACK TO SAVEPOINT).
+// Session.guard says so (ErrTxAborted). On MySQL nothing changes: the
+// driver closes its socket on cancel, and the session sends a KILL
+// (sessionguard.go).
+//
+// After a cancel, pgx holds the connection back for 100 ms before its next
+// statement, so a cancel request still in flight cannot stop that one.
+func pgCancelHandler(pc *pgconn.PgConn) ctxwatch.Handler {
+	return &pgconn.CancelRequestContextWatcherHandler{Conn: pc, DeadlineDelay: pgCancelGrace}
 }
 
 // pgShouldPing decides whether pgx pings a pooled connection before handing it

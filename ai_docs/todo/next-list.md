@@ -78,23 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-271** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  Stop on Postgres always destroys the pinned session. `openPool`
-  (`db/manager.go:364-377`) leaves pgx's default
-  `DeadlineContextWatcherHandler`, which closes the connection on cancel.
-  Scenario: `BEGIN; UPDATE …;` then Stop on a slow SELECT loses the
-  transaction, the SETs and the temp tables.
-  `workspace/live_test.go:407` pins this as what both drivers do, but on
-  Postgres it is a configuration choice: set
-  `pcfg.BuildContextWatcherHandler` to pgx's
-  `CancelRequestContextWatcherHandler` and the session survives, as in
-  psql. Related (`db/explain.go:215-224`): Stop during EXPLAIN ANALYZE of
-  a write finds the connection closed, the undo `ROLLBACK` returns
-  `ErrBadConn`, `rolledBack` drops the cancel error, and the run lands as
-  a failure with "may not have been undone" and session lost, though the
-  server rolled back on disconnect. If the first error is a cancel and the
-  session is dead, return the cancel. Audit, traced in pgx v5.10.0's
-  source; run the live suites. (RPU plan, phase 2)
 - **N-272** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   `Session.stateful` misses state a "read" sets
   (`db/manager.go:554-565,811`): `SELECT set_config(…, false)`,
@@ -162,6 +145,10 @@ ten session docs in `ai_docs/claude_sessions/`
   (`workspace/run.go:641`) logs "1000 rows" without "truncated". The loop
   read here; the drain is from driver source, not run: measure it on the
   live suites first. Neighbour: N-271. (RPU plan, phase 3)
+  Updated 2026-11-13 (N-271): N-271 landed, so
+  on Postgres a canceled statement now keeps its connection (a cancel
+  request, `db.pgCancelHandler`): the child-context cancel on truncation
+  costs the session nothing there, pool or pinned.
 - **N-277** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Cell cost follows the value's length in both grids. TUI:
   `tui/grid.go:968` calls `truncate(flatten(val))` per visible cell per
@@ -1234,6 +1221,25 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-271** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Stop on Postgres always destroys the pinned session. `openPool`
+  (`db/manager.go:364-377`) leaves pgx's default
+  `DeadlineContextWatcherHandler`, which closes the connection on cancel.
+  Scenario: `BEGIN; UPDATE …;` then Stop on a slow SELECT loses the
+  transaction, the SETs and the temp tables.
+  `workspace/live_test.go:407` pins this as what both drivers do, but on
+  Postgres it is a configuration choice: set
+  `pcfg.BuildContextWatcherHandler` to pgx's
+  `CancelRequestContextWatcherHandler` and the session survives, as in
+  psql. Related (`db/explain.go:215-224`): Stop during EXPLAIN ANALYZE of
+  a write finds the connection closed, the undo `ROLLBACK` returns
+  `ErrBadConn`, `rolledBack` drops the cancel error, and the run lands as
+  a failure with "may not have been undone" and session lost, though the
+  server rolled back on disconnect. If the first error is a cancel and the
+  session is dead, return the cancel. Audit, traced in pgx v5.10.0's
+  source; run the live suites. (RPU plan, phase 2)
+  closed 2026-11-13 (RPU plan, phase 2): built as the item said. `openPool` sets `pcfg.BuildContextWatcherHandler = pgCancelHandler` (`db/manager.go`): pgx's `CancelRequestContextWatcherHandler` with `DeadlineDelay: pgCancelGrace` (2 s; a var so tests can force 0). The delay matters: with the default 0 the socket times out at once and pgconn closes the connection (sending a cancel request on its way out — why the old live tests saw the server stop). Now a Stop sends the cancel request first, the server ends the statement with 57014 and the connection carries on; if nothing lands within the grace (a pooler that drops cancel requests), the old close is the fallback. Applies to every Postgres pool (sessions, catalog, row counts, scripts, ETL). Inside a transaction Postgres aborts it: checked live, its work is undone and its locks freed at the error, only the block stays open until ROLLBACK (the item's "loses the transaction" stays true; the SETs, temp tables and the session do not go). `Session.guard` → `markAborted` wraps such a stop as `ErrTxAborted` (pg status 'E', connection alive), and `failedLocked` adds the note "the open transaction was aborted with it — every statement fails until ROLLBACK; SET values and temp tables are kept". Explain (`rolledBack`): an undo that fails on a dead connection now returns f's error (the stop) instead of "the analyzed write may not have been undone", since the server rolls back an open transaction when its connection ends; stateful is set only in the savepoint case (the user's transaction went too → session lost). With the new handler the normal case never gets there: the savepoint/ROLLBACK runs after the cancel and the user's transaction is intact. MySQL unchanged (the driver closes its socket; KILL as before). Tests: `workspace/live_test.go` `TestLiveWorkspaceCancel` rewritten per engine (stateless / after a SET / in a transaction): Postgres keeps the connection (same backend pid), the SET survives, the tx case gets `ErrTxAborted` + note, 25P02 until ROLLBACK, row lock free; MySQL loses a stateful session as before. All three Postgres cases fail with the old handler. `db/live_explain_test.go` `TestLiveExplainPostgresStopWrite` (cancel lands / grace 0, no tx / user tx); the grace-0 cases fail on the old explain.go ("driver: bad connection"). `workspace_test.go` `TestStopNotesSayWhatTheSessionKept`. Real binary: `dbc web` over its API on postgres:17 — SET, BEGIN, UPDATE, `SELECT pg_sleep(60)`, Stop: "query stopped after 1.694s" and the aborted-transaction note; the next SELECT got 25P02; after ROLLBACK, `SHOW application_name` still read the SET's value. README: "Stopping a long query".
 
 - **N-270** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Migrations take no runner lock (`migrate/run.go:262-315`; no advisory

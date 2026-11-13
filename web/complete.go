@@ -2,11 +2,13 @@ package web
 
 import (
 	"context"
+	"time"
 
 	"github.com/rohanthewiz/rweb"
 	"github.com/rohanthewiz/serr"
 
 	"github.com/rohanthewiz/dbc/sqlcomplete"
+	"github.com/rohanthewiz/dbc/workspace"
 )
 
 // The editor's completions: Monaco's suggest widget asks here as the user
@@ -15,9 +17,28 @@ import (
 //
 //	Monaco ──POST /api/v1/ws/:id/complete {buffer, caret}──► handleComplete
 //	                                                     │
-//	           cache cold? LoadCompletions (blocks this  │
-//	           request only, not the page) then answer   ▼
+//	           cache cold? start LoadCompletions, wait   │
+//	           up to completeWait for it, then answer    ▼
 //	       ◄── {from, to, items[], incomplete, note} ── workspace.Complete
+//
+// A COLD CACHE IS WAITED FOR BRIEFLY, NOT WHOLLY (N-275). A schema read can
+// take a long time on a slow catalog: up to CompletionTimeout for each of
+// its reads. Every request waiting on it holds one of the six connections
+// the browser opens to this server, and the event streams already hold some
+// of those. A few completions that each waited out the read would leave
+// Run, Ctrl+K and saves queued behind them for a minute or more. So a
+// request waits at most completeWait, which is long enough for a quick
+// catalog to answer in full. After that it answers with the dialect's
+// vocabulary, marked incomplete. The read keeps running on a goroutine of
+// its own and fills the cache, and Monaco asks again on the next keystroke
+// because of the incomplete mark. The page also aborts a request Monaco no
+// longer wants (editor.js), which frees its connection at once.
+//
+//	t=0     ask ──► cache cold ──► start the read ──┐
+//	t≤0.5s  ◄── vocabulary, incomplete              │ (still reading)
+//	t=4s    keystroke: ask ──► still reading ───────┤ ◄── vocabulary again
+//	t=9s                                     read lands in the cache
+//	t=10s   keystroke: ask ──► cached ──► the schema's tables and columns
 //
 // Offsets travel in UTF-16 units, as the page counts them; the conversion is
 // here, as for the statement marker (handleStmt).
@@ -43,9 +64,49 @@ type completeItem struct {
 	Cursor int `json:"cursor"` // UTF-16 units into Insert; -1 for after it
 }
 
-// handleComplete answers a completion request. The first request on a
-// connection waits for its schema to load; a load that fails is reported in
-// note (the page logs it once) and the answer is the dialect's vocabulary.
+// completeWait is how long a completion request waits for a schema read it
+// found missing before answering without it (see A COLD CACHE above). It is
+// a variable so that tests can shorten it.
+var completeWait = 500 * time.Millisecond
+
+// The schema reads a completion request starts. They are variables so that
+// tests can swap in a read that is slow on purpose.
+var (
+	loadCompletions = func(ws *workspace.Workspace) error {
+		return ws.LoadCompletions(context.Background())
+	}
+	loadConnCompletions = func(c *workspace.ConnCompletions, conn string) error {
+		return c.Load(context.Background(), conn)
+	}
+)
+
+// awaitLoad runs load on a goroutine of its own and waits up to
+// completeWait for it. landed is false when the load is still running.
+// The load is not cancelled then: it finishes on its own, fills the cache,
+// and a later request is answered from that.
+//
+// A request that arrives while a read is already in flight also starts a
+// goroutine here. Both LoadCompletions and ConnCompletions.Load join the
+// read in flight instead of starting a second one, so that goroutine only
+// waits, and it ends when the read does.
+func awaitLoad(t *tab, load func() error) (landed bool, err error) {
+	done := make(chan error, 1) // buffered: no one may be listening by the time it lands
+	goSafe(t, "a completion's schema read", func() { done <- load() })
+	timer := time.NewTimer(completeWait)
+	defer timer.Stop()
+	select {
+	case err = <-done:
+		return true, err
+	case <-timer.C:
+		return false, nil
+	}
+}
+
+// handleComplete answers a completion request. A cold cache is waited for
+// up to completeWait; past that the answer is the dialect's vocabulary,
+// marked incomplete, and the read goes on. A read that failed, whether
+// during this request or since, is reported in note on every answer while
+// the failure is remembered, and the page logs it once.
 func (s *Server) handleComplete(ctx rweb.Context) error {
 	t, err := s.hub.get(ctx.Request().PathParam("id"))
 	if err != nil {
@@ -60,12 +121,16 @@ func (s *Server) handleComplete(ctx rweb.Context) error {
 	}
 	caret := byteOffset(req.Buffer, req.Caret)
 	res, ready := t.ws.Complete(req.Buffer, caret)
-	note := ""
 	if !ready {
-		if lerr := t.ws.LoadCompletions(context.Background()); lerr != nil {
-			note = "completion is without the schema: " + serr.StringFromErr(lerr)
+		if landed, _ := awaitLoad(t, func() error { return loadCompletions(t.ws) }); landed {
+			// from the cache now; if a drop raced the read, this is the
+			// incomplete vocabulary again and the next keystroke asks anew
+			res, _ = t.ws.Complete(req.Buffer, caret)
 		}
-		res, _ = t.ws.Complete(req.Buffer, caret)
+	}
+	note := ""
+	if lerr := t.ws.CompletionErr(); lerr != nil {
+		note = "completion is without the schema: " + serr.StringFromErr(lerr)
 	}
 	// a query tab's list has the user's snippets too (N-228), by the
 	// TUI's rule; a pipeline field (handleConnComplete) is not where a
@@ -96,10 +161,11 @@ func completeAnswer(buffer string, res sqlcomplete.Result, note string) map[stri
 
 // handleConnComplete is POST /api/v1/conn-complete: handleComplete for an
 // editor on no workspace, against the connection the request names — a
-// pipeline node's sql field and its node's conn. The first ask on a
-// connection waits for its schema (ConnCompletions reads it on the pool);
-// a read that fails is the note, and the answer the dialect's vocabulary.
-// An unknown connection is the same: a node's conn may be half typed.
+// pipeline node's sql field and its node's conn. A missing schema is waited
+// for as handleComplete waits (completeWait, then the vocabulary marked
+// incomplete while ConnCompletions reads it on the pool). A read that
+// failed is the note, and the answer the dialect's vocabulary. An unknown
+// connection is the same: a node's conn may be half typed.
 func (s *Server) handleConnComplete(ctx rweb.Context) error {
 	var req struct {
 		Conn string `json:"conn"`
@@ -111,7 +177,13 @@ func (s *Server) handleConnComplete(ctx rweb.Context) error {
 	if len(req.Buffer) > maxBuffer {
 		return ok(ctx, map[string]any{"items": []completeItem{}})
 	}
-	res, err := s.connCompl.Complete(context.Background(), req.Conn, req.Buffer, byteOffset(req.Buffer, req.Caret))
+	caret := byteOffset(req.Buffer, req.Caret)
+	res, ready, err := s.connCompl.Ask(req.Conn, req.Buffer, caret)
+	if !ready {
+		if landed, _ := awaitLoad(nil, func() error { return loadConnCompletions(s.connCompl, req.Conn) }); landed {
+			res, _, err = s.connCompl.Ask(req.Conn, req.Buffer, caret)
+		}
+	}
 	note := ""
 	if err != nil {
 		note = "completion on " + req.Conn + " is without the schema: " + serr.StringFromErr(err)

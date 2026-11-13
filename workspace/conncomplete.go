@@ -35,8 +35,11 @@ import (
 //	   ├─ a read in flight ─► wait for it
 //	   └─ else ─► read (readCompletions, readRoutines), then answer
 //
-// It blocks for a read, so a caller asks from a goroutine of its own (an
-// HTTP handler's), never an event loop.
+// Complete and Tables block for a read, so a caller asks from a goroutine of
+// its own (an HTTP handler's), never an event loop. Ask is Complete without
+// the read: a workspace's Complete for this cache. dbc web's sql fields use
+// it with Load, waiting only briefly for a read (see Workspace.Complete,
+// N-275).
 type ConnCompletions struct {
 	cfg *config.Config
 	mgr *db.Manager
@@ -82,6 +85,37 @@ func (c *ConnCompletions) Complete(ctx context.Context, conn, buffer string, car
 	}), err
 }
 
+// Ask is Complete without a read. ready is false when conn's entry is
+// missing, stale or still being read, and the answer is then the dialect's
+// vocabulary marked Incomplete, as a workspace's is before its load lands.
+// It is ready, with the error, after a recent failed read and for an
+// unknown connection. Load reads the entry.
+func (c *ConnCompletions) Ask(conn, buffer string, caret int) (res sqlcomplete.Result, ready bool, err error) {
+	c.mu.Lock()
+	st, ready, _ := c.peekLocked(conn)
+	c.mu.Unlock()
+	driver := ""
+	if cc, ok := c.cfg.ConnByName(conn); ok {
+		driver = cc.Driver
+	}
+	res = sqlcomplete.Complete(sqlcomplete.Request{
+		Schema: st.schema, Routines: st.routines, Driver: driver, SearchPath: st.path, Buffer: buffer, Caret: caret,
+	})
+	if !ready {
+		res.Incomplete = true
+		return res, false, nil
+	}
+	return res, true, st.err
+}
+
+// Load reads conn's entry unless it can be answered from already. A read in
+// flight is waited for, not repeated. The error is the read's, the same one
+// a later Ask reports.
+func (c *ConnCompletions) Load(ctx context.Context, conn string) error {
+	_, err := c.load(ctx, conn)
+	return err
+}
+
 // Tables is conn's tables and views as a node's table field takes them:
 // each by its label (erd.Table.Label — bare when the connection has one
 // schema, schema.name when it has several: the sidebar's rule), tables
@@ -108,48 +142,28 @@ func (c *ConnCompletions) Tables(ctx context.Context, conn string) ([]string, er
 // arrives while a read is in flight waits for that one. An unknown
 // connection is an error without a read.
 func (c *ConnCompletions) load(ctx context.Context, conn string) (complState, error) {
-	if _, ok := c.cfg.ConnByName(conn); !ok || conn == "" {
-		return complState{}, &unknownConnError{conn}
-	}
 	c.mu.Lock()
 	for {
-		e := c.entries[conn]
-		switch {
-		case e == nil:
-		case e.loading != nil:
-			wait := e.loading
-			c.mu.Unlock()
-			select {
-			case <-wait:
-			case <-ctx.Done():
-				return complState{}, ctx.Err()
-			}
-			c.mu.Lock()
-			continue // the read landed (or was dropped): look again
-		case e.err != nil && time.Since(e.at) <= complRetry,
-			e.err == nil && time.Since(e.at) <= ConnComplTTL:
-			st := *e
+		st, ready, wait := c.peekLocked(conn)
+		if ready {
 			c.mu.Unlock()
 			return st, st.err
 		}
-		break
-	}
-	// The connection's level of introspection applies here as in a
-	// workspace (complete.go, THE LEVEL): at off nothing is read — there is
-	// no sidebar here whose Refresh could say "read it now", so the answer
-	// stays the dialect's words, and Tables offers none — and below full
-	// the read is scoped from the start. Asked before an entry is made, so
-	// an off connection keeps none, and a level raised in the connection
-	// form takes effect at the next ask.
-	lvl := levelOf(c.cfg, c.mgr, conn)
-	if lvl == levelOff {
+		if wait == nil {
+			break // a read is due: this caller makes it
+		}
 		c.mu.Unlock()
-		return complState{conn: conn}, nil
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return complState{}, ctx.Err()
+		}
+		c.mu.Lock() // the read landed (or was dropped): look again
 	}
 	done := make(chan struct{})
 	mine := &complState{conn: conn, loading: done}
 	c.entries[conn] = mine
-	scoped := c.scoped[conn] || (lvl != levelFull && navigable(c.cfg, conn))
+	scoped := c.scoped[conn] || (levelOf(c.cfg, c.mgr, conn) != levelFull && navigable(c.cfg, conn))
 	c.mu.Unlock()
 
 	sc, path, scope, tooBig, err := readCompletions(ctx, c.mgr, navigable(c.cfg, conn), conn, "", scoped)
@@ -170,6 +184,44 @@ func (c *ConnCompletions) load(ctx context.Context, conn string) (complState, er
 	c.mu.Unlock()
 	close(done)
 	return st, err
+}
+
+// peekLocked is what conn's entry allows without a read. The caller holds
+// mu.
+//
+//	ready  wait  what
+//	─────  ────  ──────────────────────────────────────────────────────────
+//	true   nil   st is the entry: fresh (< ConnComplTTL), or failed
+//	             recently (< complRetry), with its error
+//	true   nil   nothing to read: an unknown connection (st.err says so)
+//	             or introspect = "off" (st empty)
+//	false  set   a read is in flight; wait is closed when it lands
+//	false  nil   a read is due (no entry, or a stale one)
+//
+// The introspection level applies here as in a workspace (complete.go, THE
+// LEVEL): at off nothing is read. There is no sidebar here whose Refresh
+// could ask for a read, so the answer stays the dialect's words and Tables
+// offers none. Below full the read is scoped from the start (load). The
+// level is checked only when a read would otherwise be due, so an off
+// connection never gets an entry, and a level raised in the connection form
+// takes effect at the next ask.
+func (c *ConnCompletions) peekLocked(conn string) (st complState, ready bool, wait chan struct{}) {
+	if _, ok := c.cfg.ConnByName(conn); !ok || conn == "" {
+		return complState{err: &unknownConnError{conn}}, true, nil
+	}
+	e := c.entries[conn]
+	switch {
+	case e == nil:
+	case e.loading != nil:
+		return complState{conn: conn}, false, e.loading
+	case e.err != nil && time.Since(e.at) <= complRetry,
+		e.err == nil && time.Since(e.at) <= ConnComplTTL:
+		return *e, true, nil
+	}
+	if levelOf(c.cfg, c.mgr, conn) == levelOff {
+		return complState{conn: conn}, true, nil
+	}
+	return complState{conn: conn}, false, nil
 }
 
 // unknownConnError is an ask about a connection the config does not have.

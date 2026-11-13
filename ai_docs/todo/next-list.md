@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-323
+**Next ID:** N-324
 
 ## Open
 
@@ -78,17 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-275** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  Completion requests can fill the browser's six connections.
-  `web/complete.go:62-69` blocks each `/complete` on the schema load in
-  flight (30 s a read, `workspace/complete.go:91`);
-  `web/static/js/editor.js:640-653` never aborts a superseded request and
-  `dbc.api` (`web/static/js/core.js:43`) has no timeout. On a slow
-  catalog (N-106's database) five pending completions plus the event
-  stream leave Run, Ctrl+K and saves queued for a minute or more. Fix:
-  answer at once with vocabulary and `incomplete: true` while loading, or
-  abort superseded requests with an `AbortController`. Audit, traced.
-  (RPU plan, phase 2)
 - **N-276** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   A result cut at `max_rows` still streams the whole result.
   `db/manager.go:700-702` breaks out of the fetch loop, then the deferred
@@ -503,6 +492,19 @@ ten session docs in `ai_docs/claude_sessions/`
   expanding, scan as os.Expand does (after `$$` pairs) for a `${` with no
   `}` or a `${}`, and warn with `unsetWarning`'s hint. Raised while
   closing N-273.
+- **N-323** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  A panic inside a completion schema read leaves the cache "loading" for
+  good. `Workspace.LoadCompletions` (`workspace/complete.go`) and
+  `ConnCompletions.load` (`workspace/conncomplete.go`) close the `loading`
+  channel and store the outcome only on a normal return. dbc web runs
+  the read under `goSafe` since N-275, so the process survives, but
+  until a reconnect bumps the generation `Complete` stays not ready (the
+  vocabulary only), and each later ask leaves a goroutine waiting on the
+  channel forever. Before N-275 the handler waited on it, so every later
+  completion request hung. No such panic is known; this is N-260's
+  backstop applied to the cache. Fix: a deferred recover in both loads
+  that records the panic as the read's error (logged with its stack) and
+  closes the channel. Read here. Raised while closing N-275.
 
 ## Validate
 
@@ -1212,6 +1214,19 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-275** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Completion requests can fill the browser's six connections.
+  `web/complete.go:62-69` blocks each `/complete` on the schema load in
+  flight (30 s a read, `workspace/complete.go:91`);
+  `web/static/js/editor.js:640-653` never aborts a superseded request and
+  `dbc.api` (`web/static/js/core.js:43`) has no timeout. On a slow
+  catalog (N-106's database) five pending completions plus the event
+  stream leave Run, Ctrl+K and saves queued for a minute or more. Fix:
+  answer at once with vocabulary and `incomplete: true` while loading, or
+  abort superseded requests with an `AbortController`. Audit, traced.
+  (RPU plan, phase 2)
+  closed 2026-11-13 (RPU plan, phase 2): both halves of the fix. Server: `Workspace.Complete`'s not-ready answer is now the dialect's vocabulary marked `Incomplete` (it was empty; the TUI ignores it and waits for its load as before). `handleComplete` starts the read on a `goSafe` goroutine (`awaitLoad`) and waits at most `completeWait` (500 ms: a quick catalog still answers in full on the first ask). After that it answers with the vocabulary marked incomplete, so Monaco asks again on the next keystroke, and the read carries on into the cache. New `Workspace.CompletionErr` puts a failed read's error on every answer while the failure is remembered, because a read that fails after the answer would otherwise never reach the page (`noteOnce` logs it once). The pipeline fields' `conn-complete` does the same through new `ConnCompletions.Ask` (Complete without a read) and `Load`, with `load`'s checks moved into `peekLocked`. `conn-tables` still waits for a whole read: it is one request per connection, kept 30 s by the page. Page: `dbc.api` takes an optional AbortSignal (still no timeout of its own, since a run, explain or dump may take minutes), and the completion provider ties Monaco's cancellation token to it. Found in Chrome: Ctrl+Space replacing a held ask cancels it, and so does Escape on a "Loading…" list. Escape right after an auto-triggered ask cancels nothing, because Monaco's Escape needs a visible list, and typing while an ask is held asks nothing new, because Monaco filters the answer when it arrives. Tests: `web` `TestCompleteDoesNotWaitOutASlowRead`, `TestCompleteWaitsForAQuickRead`, `TestConnCompleteDoesNotWaitOutASlowRead` (the reads held by swapping `loadCompletions`/`loadConnCompletions`; with the wait unbounded the first one times out); `workspace` `TestCompletionNotReadyIsVocabulary`, `TestCompletionErr`, `TestConnCompletionsAsk`. New e2e step "a stale completion request is aborted" (`web/e2e/complabort_test.go`): `/complete` is held in the page for 30 s; `c.` then Ctrl+Space aborts the first ask, and Escape the second; it fails with the signal removed. Full `./...` green, and the full e2e suite green in 2 of 3 runs. The other run failed once in "share a result with the assistant" (a 20 s wait, message not captured); that step passed 4 of 4 runs alone, and its only completion request is the warm-up ask its connect sends. README (Completion) says a slow read offers the dialect's words until it lands. Raised N-323.
 
 - **N-274** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   dbc web checks Origin on non-GET requests only (`web/auth.go:116`), and

@@ -2,8 +2,10 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/rohanthewiz/dbc/sqlcomplete"
 )
@@ -51,5 +53,50 @@ func TestConnCompletions(t *testing.T) {
 	}
 	if c.schemaOf("nope") != nil {
 		t.Error("an unknown connection was cached")
+	}
+}
+
+// Ask is Complete without a read: before Load, the vocabulary marked
+// Incomplete; after it, the schema. An unknown connection is ready at once
+// with its error, and an off one with the words alone, neither read.
+// Load waits for a read already in flight instead of starting another.
+func TestConnCompletionsAsk(t *testing.T) {
+	w := newTestWorkspace(t)
+	c := NewConnCompletions(w.cfg, w.mgr)
+	has := func(r sqlcomplete.Result, l string) bool {
+		return slices.ContainsFunc(r.Items, func(it sqlcomplete.Item) bool { return it.Label == l })
+	}
+
+	res, ready, err := c.Ask(demo, "SELECT * FROM c", 15)
+	if ready || err != nil || !res.Incomplete || has(res, "cats") {
+		t.Fatalf("before Load: ready=%v err=%v incomplete=%v cats=%v", ready, err, res.Incomplete, has(res, "cats"))
+	}
+	if c.schemaOf(demo) != nil {
+		t.Fatal("Ask read the schema")
+	}
+	if err = c.Load(context.Background(), demo); err != nil {
+		t.Fatal(err)
+	}
+	if res, ready, err = c.Ask(demo, "SELECT * FROM c", 15); !ready || err != nil || res.Incomplete || !has(res, "cats") {
+		t.Fatalf("after Load: ready=%v err=%v incomplete=%v cats=%v", ready, err, res.Incomplete, has(res, "cats"))
+	}
+
+	if res, ready, err = c.Ask("nope", "SELECT coa", 10); !ready || err == nil || res.Incomplete || !has(res, "coalesce") {
+		t.Fatalf("unknown connection: ready=%v err=%v incomplete=%v", ready, err, res.Incomplete)
+	}
+
+	// a read in flight (an entry still loading, set directly): Ask is not
+	// ready, and Load waits on that read rather than starting its own; here
+	// the read never lands, so Load gives up when its context does
+	c.mu.Lock()
+	c.entries[demo] = &complState{conn: demo, loading: make(chan struct{})}
+	c.mu.Unlock()
+	if _, ready, _ = c.Ask(demo, "SELECT ", 7); ready {
+		t.Fatal("Ask was ready while a read was in flight")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err = c.Load(ctx, demo); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Load during a held read: %v, want it to wait (deadline exceeded)", err)
 	}
 }

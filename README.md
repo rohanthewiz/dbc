@@ -691,7 +691,10 @@ choose, `Tab` picks, `Enter` picks only when that changes the text (at the
 end of a word already typed in full it is a new line), `Esc` closes. In dbc
 web it is Monaco's suggest list, fed by the same rules. Running DDL
 (`CREATE`, `ALTER`, `DROP` …) or a script makes the next suggestion read the
-schema again.
+schema again. In dbc web a slow schema read doesn't hold up the editor or
+the rest of the page. Until the read is done, the list offers the dialect's
+keywords and functions, and tables and columns join the list as you keep
+typing once it has finished.
 
 How much of the schema is read follows the connection's
 [`introspect`](#levels-of-introspection). At `full` it is every schema; a

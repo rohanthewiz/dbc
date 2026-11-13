@@ -29,6 +29,14 @@ import (
 //	                      event loop (a tea.Cmd, a handler goroutine) and
 //	                      asks again when it returns
 //
+// A not-ready answer is still an answer: the dialect's vocabulary, marked
+// Incomplete. The TUI drops it and waits for the load. dbc web uses it when
+// the load is slow: it waits only briefly before answering, since every
+// pending request holds one of the browser's six connections (N-275). The
+// load keeps running and fills the cache, and because the answer is marked
+// Incomplete the editor asks again on the next keystroke. That later answer
+// says why, if the load failed (CompletionErr).
+//
 // THE CACHE IS DROPPED (complGen bumped) whenever what it describes may have
 // changed: a connect lands (landConnect — a reconnect to the same connection
 // included), the connection is left (Disconnect), or a run that may have
@@ -170,8 +178,10 @@ func (w *Workspace) dropCompletionsAfterRunLocked(ev *RunDone) {
 // Complete suggests what to type at caret (a byte offset into buffer), from
 // the active connection's cached schema. It never blocks on the database:
 // ready is false when the schema is not cached yet, and the caller then runs
-// LoadCompletions off its event loop and asks again. With no connection, or
-// after a failed load, it is ready with the dialect's vocabulary alone.
+// LoadCompletions off its event loop and asks again. The answer then is the
+// dialect's vocabulary alone, marked Incomplete, for a caller that answers
+// before the load lands (see above). With no connection, or after a failed
+// load, it is ready with the vocabulary alone.
 func (w *Workspace) Complete(buffer string, caret int) (res sqlcomplete.Result, ready bool) {
 	w.mu.Lock()
 	conn, focus := w.active, w.schema
@@ -196,16 +206,37 @@ func (w *Workspace) Complete(buffer string, caret int) (res sqlcomplete.Result, 
 		}
 	}
 	w.mu.Unlock()
-	if !ready {
-		return sqlcomplete.Result{From: caret, To: caret}, false
-	}
 	driver := ""
 	if cc, ok := w.cfg.ConnByName(conn); ok {
 		driver = cc.Driver
 	}
-	return sqlcomplete.Complete(sqlcomplete.Request{
+	// not ready: sc, path and routines are still nil, so this is the
+	// vocabulary alone, as after a failed load
+	res = sqlcomplete.Complete(sqlcomplete.Request{
 		Schema: sc, Routines: routines, Driver: driver, Focus: focus, SearchPath: path, Buffer: buffer, Caret: caret,
-	}), true
+	})
+	if !ready {
+		// an editor that filters a list as the word grows asks again
+		// instead, so it gets the schema's items once the load lands
+		res.Incomplete = true
+	}
+	return res, ready
+}
+
+// CompletionErr is the error the active connection's cached schema read
+// failed with. It is nil when the read did not fail, when it is still
+// running, or when nothing is cached. dbc web answers before a slow read
+// lands (see above), so a failure there would otherwise never reach the
+// page: it puts this error on every answer while the failure is remembered,
+// and the page logs it once.
+func (w *Workspace) CompletionErr() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	c := w.compl
+	if c.conn != w.active || c.gen != w.complGen || c.loading != nil {
+		return nil
+	}
+	return c.err
 }
 
 // Rename renames the alias or CTE under caret in buffer to name

@@ -40,8 +40,16 @@
   // ── the API ────────────────────────────────────────────────────────────
   // Every response is the {success, data, error} envelope. A refusal or a
   // failure throws an Error carrying the status and the server's words.
-  dbc.api = async function (method, path, body) {
+  //
+  // signal (optional) is an AbortSignal. Aborting rejects the call with the
+  // browser's AbortError, and the browser drops the request's connection,
+  // so that connection is free for the next request (N-275). There is no
+  // timeout of its own: a run, an explain or a dump may rightly take
+  // minutes, so only a caller that knows its answer has gone stale (a
+  // superseded completion) aborts.
+  dbc.api = async function (method, path, body, signal) {
     const opts = { method, headers: {} };
+    if (signal) opts.signal = signal;
     if (body !== undefined) {
       opts.headers["Content-Type"] = "application/json";
       opts.body = JSON.stringify(body);

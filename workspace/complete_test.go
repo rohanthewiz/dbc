@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -140,5 +141,62 @@ func TestComplScope(t *testing.T) {
 		if got := strings.Join(complScope(c.focus, c.path), " "); got != c.want {
 			t.Errorf("complScope(%q, %v) = %q, want %q", c.focus, c.path, got, c.want)
 		}
+	}
+}
+
+// Before its schema is read, Complete is not ready, and its answer is the
+// dialect's vocabulary marked Incomplete. dbc web answers with it when a
+// read is slow (N-275), and the editor asks again on the next keystroke.
+func TestCompletionNotReadyIsVocabulary(t *testing.T) {
+	w := newTestWorkspace(t)
+	r, ready := w.Complete("SELECT coa", 10)
+	if ready || !r.Incomplete || !hasLabel(r, "coalesce") {
+		t.Fatalf("before a load: ready=%v incomplete=%v coalesce=%v, want not ready, incomplete, the vocabulary",
+			ready, r.Incomplete, hasLabel(r, "coalesce"))
+	}
+	if r, _ = w.Complete("SELECT * FROM ", 14); hasLabel(r, "cats") {
+		t.Error("a table was offered before the schema was read")
+	}
+	if err := w.LoadCompletions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r, ready = w.Complete("SELECT * FROM ", 14); !ready || r.Incomplete || !hasLabel(r, "cats") {
+		t.Fatalf("after the load: ready=%v incomplete=%v cats=%v", ready, r.Incomplete, hasLabel(r, "cats"))
+	}
+}
+
+// CompletionErr is a failed read's error while the cache holds it, and nil
+// for a good read, a read in flight, or a cache that has been dropped. The
+// failure is set directly: a schema read on sqlite does not fail.
+func TestCompletionErr(t *testing.T) {
+	w := newTestWorkspace(t)
+	if err := w.CompletionErr(); err != nil {
+		t.Fatalf("nothing cached: %v", err)
+	}
+	if err := w.LoadCompletions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.CompletionErr(); err != nil {
+		t.Fatalf("a good read: %v", err)
+	}
+	boom := errors.New("catalog too slow")
+	w.mu.Lock()
+	w.compl.err, w.compl.schema = boom, nil
+	w.mu.Unlock()
+	if err := w.CompletionErr(); err != boom {
+		t.Fatalf("a failed read: %v, want %v", err, boom)
+	}
+	w.mu.Lock()
+	w.compl.loading = make(chan struct{})
+	w.mu.Unlock()
+	if err := w.CompletionErr(); err != nil {
+		t.Fatalf("a read in flight: %v", err)
+	}
+	w.mu.Lock()
+	w.compl.loading = nil
+	w.dropCompletionsLocked()
+	w.mu.Unlock()
+	if err := w.CompletionErr(); err != nil {
+		t.Fatalf("a dropped cache: %v", err)
 	}
 }

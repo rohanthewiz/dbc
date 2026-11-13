@@ -643,13 +643,26 @@
         const mini = minis.get(model);
         const conn = mini ? (mini.conn && mini.conn()) || "" : "";
         if (mini ? !conn : !dbc.state.ws) return { suggestions: [] };
+        if (token.isCancellationRequested) return { suggestions: [] };
+        // Monaco cancels the token when it no longer wants this answer:
+        // a newer ask has replaced it (each keystroke while the list is
+        // incomplete), or the list was closed. Aborting the fetch then
+        // gives its connection back to the browser at once. Otherwise a
+        // run of superseded asks, each waiting on a slow schema read,
+        // could hold most of the browser's six connections to the server,
+        // and Run and saves would queue behind them (N-275).
+        const ac = new AbortController();
+        const sub = token.onCancellationRequested(() => ac.abort());
         let r;
         try {
           const ask = { buffer: model.getValue(), caret: model.getOffsetAt(position) };
-          r = mini ? await dbc.api("POST", "/api/v1/conn-complete", Object.assign({ conn }, ask))
-            : await dbc.api("POST", dbc.wsPath("/complete"), ask);
+          r = mini ? await dbc.api("POST", "/api/v1/conn-complete", Object.assign({ conn }, ask), ac.signal)
+            : await dbc.api("POST", dbc.wsPath("/complete"), ask, ac.signal);
         } catch (_) {
-          return { suggestions: [] }; // a lost server is the status bar's to report
+          // an abort lands here too; a lost server is the status bar's to report
+          return { suggestions: [] };
+        } finally {
+          sub.dispose();
         }
         if (token.isCancellationRequested) return { suggestions: [] };
         noteOnce(r);

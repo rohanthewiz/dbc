@@ -170,11 +170,10 @@ func ExpandTLS(name string, t TLSOpts, base string) (TLSOpts, []string) {
 		if p == "" {
 			return ""
 		}
-		p = os.Expand(p, func(k string) string {
+		p = expandEnv(p, func(k string) string {
 			v, ok := os.LookupEnv(k)
 			if !ok {
-				warns = append(warns, fmt.Sprintf(
-					"connection %q: %s references unset env var $%s (expanded to empty)", name, key, k))
+				warns = append(warns, unsetWarning(fmt.Sprintf("connection %q: %s", name, key), k))
 			}
 			return v
 		})

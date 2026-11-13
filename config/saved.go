@@ -84,7 +84,10 @@ type SavedConn struct {
 }
 
 // savedDoc is the file's shape: [[connection]] tables, like config.toml's,
-// so an entry can be copied from one file to the other as it is.
+// so an entry can be copied from one file to the other as it is — all but
+// a config entry's migrations, which a saved one does not take and is
+// skipped for (strict.go); a saved entry's added goes into a config file
+// unremarked (copiedSavedKeys).
 type savedDoc struct {
 	Connections []SavedConn `toml:"connection"`
 }
@@ -98,7 +101,9 @@ const savedHeader = `# Connections added in dbc web or the TUI. Every dbc (the T
 # ${VAR}s, expanded from the environment of each dbc that reads it; so may
 # tls_ca, tls_cert and tls_key, where a relative path is relative to this file.
 # tls_key_password is only ever a ${VAR}: an encrypted key's passphrase stays
-# in the environment, never in this file.
+# in the environment, never in this file. A literal $ is written $$.
+# An entry with a key dbc does not know is skipped, and the file is not
+# rewritten until it is fixed (a rewrite would drop the key).
 #
 # A postgres or mysql dsn is kept encrypted ("enc:v1:…"), with the key in
 # connections.key beside this file: copy both to move them, and keep the key
@@ -120,33 +125,121 @@ func SavedFile() string {
 // ReadSaved reads the saved connections at path, in file order, their DSNs
 // decrypted (secret.go). A missing file, or path == "", is none and no
 // error: most users never add one.
+//
+// Every entry is listed, one with a key dbc does not know (strict.go)
+// included: dbc web's edit form reads an entry through it, and the file is
+// the user's to fix. LoadSaved is what keeps such an entry out of the
+// running config.
 func ReadSaved(path string) ([]SavedConn, error) {
-	list, _, err := readSaved(path)
-	return list, err
+	f, err := readSaved(path)
+	return f.list, err
 }
 
-// readSaved is ReadSaved, also reporting whether the file held a DSN that
-// should have been encrypted and was not (see openSaved), which only
-// LoadSaved acts on.
-func readSaved(path string) (list []SavedConn, plain bool, err error) {
+// savedRead is what readSaved found in the file beyond the list.
+type savedRead struct {
+	list []SavedConn
+	// plain: a DSN that belongs encrypted was not (see openSaved), which
+	// only LoadSaved acts on
+	plain bool
+	// stray: keys nothing decoded (strayKeys), which keep an entry out of
+	// the config (usable) and the file from being rewritten (strayErr)
+	stray []strayKey
+}
+
+// readSaved is ReadSaved, with what LoadSaved and edit also need to know.
+func readSaved(path string) (savedRead, error) {
 	if path == "" {
-		return nil, false, nil
+		return savedRead{}, nil
 	}
 	bs, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, false, nil
+			return savedRead{}, nil
 		}
-		return nil, false, serr.Wrap(err, "path", path)
+		return savedRead{}, serr.Wrap(err, "path", path)
 	}
 	var doc savedDoc
-	if err = toml.Unmarshal(bs, &doc); err != nil {
-		return nil, false, serr.Wrap(err, "path", path)
+	md, err := toml.Decode(string(bs), &doc)
+	if err != nil {
+		return savedRead{}, serr.Wrap(err, "path", path)
 	}
-	if plain, err = openSaved(path, doc.Connections); err != nil {
-		return nil, false, err
+	plain, err := openSaved(path, doc.Connections)
+	if err != nil {
+		return savedRead{}, err
 	}
-	return doc.Connections, plain, nil
+	return savedRead{list: doc.Connections, plain: plain, stray: strayKeys(md)}, nil
+}
+
+// name is the name of entry i, for a message; "" when there is none.
+func (f savedRead) name(i int) string {
+	if i < len(f.list) {
+		return f.list[i].Name
+	}
+	return ""
+}
+
+// usable is the list less the entries holding a key dbc does not know,
+// with a warning for each of those and for each unknown top-level key.
+//
+// Skipped rather than merged without the key, MergeSaved's reasoning for a
+// bad tls: the key may be the one that was meant to protect the
+// connection (ssl = "verify-full" for tls). An unknown key in an inline
+// array, whose entry cannot be told, keeps every entry of it out: none of
+// them can be known to be the one it was not in.
+func (f savedRead) usable(path string) ([]SavedConn, []string) {
+	var warns []string
+	skip := map[int][]string{}
+	skipAll := false
+	for _, s := range f.stray {
+		switch {
+		case !s.Conn:
+			warns = append(warns, fmt.Sprintf("%s: unknown key %s is ignored", path, s.describe(nil)))
+		case s.Entry < 0:
+			skipAll = true
+			skip[-1] = append(skip[-1], s.describe(savedConnKeys))
+		default:
+			skip[s.Entry] = append(skip[s.Entry], s.describe(savedConnKeys))
+		}
+	}
+	if len(skip) == 0 {
+		return f.list, warns
+	}
+	var keep []SavedConn
+	for i, sc := range f.list {
+		keys, bad := skip[i]
+		if !bad && !skipAll {
+			keep = append(keep, sc)
+			continue
+		}
+		if skipAll {
+			keys = append(keys, skip[-1]...)
+		}
+		warns = append(warns, fmt.Sprintf(
+			"saved connection %q skipped: unknown key %s — fix it in %s (a saved connection takes %s)",
+			sc.Name, strings.Join(keys, ", "), path, strings.Join(savedConnKeys, ", ")))
+	}
+	return keep, warns
+}
+
+// strayErr is edit's refusal to rewrite a file that holds keys dbc does not
+// know, nil when it holds none. The rewrite encodes SavedConn, which would
+// drop them without a word — and an entry skipped for one (usable) would
+// come back on the next start without it.
+func (f savedRead) strayErr(path string) error {
+	if len(f.stray) == 0 {
+		return nil
+	}
+	var keys []string
+	for _, s := range f.stray {
+		k := s.describe(nil)
+		if s.Conn {
+			k = entryName(s, f.name) + ": " + k
+		}
+		keys = append(keys, k)
+	}
+	return serr.New(fmt.Sprintf(
+		"%s has keys dbc does not know (%s), which saving would drop: fix or remove them in the file first",
+		path, strings.Join(keys, "; ")), "path", path)
 }
 
 // LoadSaved merges the saved connections at path into c, after what c
@@ -163,16 +256,24 @@ func readSaved(path string) (list []SavedConn, plain bool, err error) {
 // fails is a warning, and the next start tries again; the connections are
 // listed either way.
 //
+// An entry holding a key dbc does not know is skipped, with a warning
+// naming it (savedRead.usable); the rest of the file is merged as usual.
+//
 // Call it once c is complete (after Load, the demos and any ad-hoc
 // connection), before anything else can see c.
 func (c *Config) LoadSaved(path string, knownDriver func(string) bool) {
-	saved, plain, err := readSaved(path)
+	f, err := readSaved(path)
 	if err != nil {
 		c.Warnings = append(c.Warnings, fmt.Sprintf(
 			"connections added in dbc web could not be read, so they are not listed: %v", err))
 		return
 	}
-	if plain {
+	saved, warns := f.usable(path)
+	c.Warnings = append(c.Warnings, warns...)
+	// With a stray key in the file the rewrite is refused (strayErr), so
+	// the passwords stay plain until it is fixed, and the warning says so
+	// with edit's reason.
+	if f.plain {
 		// an edit that changes nothing: edit re-reads the file under the
 		// lock and writeSaved encrypts on the way out
 		err = OpenSaved(path).edit(func(all []SavedConn) ([]SavedConn, error) { return all, nil })
@@ -351,7 +452,8 @@ func (s *SavedStore) Delete(name string) error {
 //
 // A file that cannot be parsed fails the edit rather than being replaced:
 // it is most likely a hand edit with a typo, and overwriting it would throw
-// away every entry in it.
+// away every entry in it. So does one holding a key dbc does not know
+// (strayErr), which a rewrite would throw away.
 func (s *SavedStore) edit(change func([]SavedConn) ([]SavedConn, error)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -373,11 +475,16 @@ func (s *SavedStore) edit(change func([]SavedConn) ([]SavedConn, error)) error {
 	}
 	defer func() { _ = lock.Close() }()
 
-	all, err := ReadSaved(s.path)
+	f, err := readSaved(s.path)
 	if err != nil {
 		return serr.Wrap(err, "op", "read saved connections before a change")
 	}
-	next, err := change(all)
+	// A key dbc does not know fails the edit as a parse error does, and for
+	// the same reason: writing the file back would lose what is in it.
+	if err = f.strayErr(s.path); err != nil {
+		return err
+	}
+	next, err := change(f.list)
 	if err != nil {
 		return err
 	}

@@ -18,11 +18,11 @@ import (
 // is dbc's to do — the same escaping db.BuildDSN gives a password typed into
 // the field.
 //
-// HOW. The DSN is expanded twice over: first os.Expand, with every reference
-// replaced by a marker (so the reference syntax, $$ and ${} included, stays
-// exactly os.Expand's), then the marked text is walked the way the driver's
-// own parser walks it, and each marker is replaced by its value escaped for
-// the spot it sits in:
+// HOW. The DSN is expanded twice over: first expandEnv, with every reference
+// replaced by a marker (so the reference syntax, ${} included, stays exactly
+// os.Expand's, and a "$$" is already its literal "$"), then the marked text
+// is walked the way the driver's own parser walks it, and each marker is
+// replaced by its value escaped for the spot it sits in:
 //
 //	postgres keyword/value  host=h password='${PW}'  ─► inside '…': \ and ' backslashed
 //	                        password=${PW}           ─► bare: as is if it needs nothing,

@@ -60,17 +60,16 @@ func ResolveScriptsDir(raw, base string) (string, []string) {
 }
 
 // resolvePath settles a path-valued config key as written: ${VAR}s
-// expanded (an unset one warned about, naming key), ~ for the home
+// expanded (an unset one warned about, naming key; $$ a literal $), ~ for the home
 // directory, and a relative path taken relative to base, the config
 // file's directory. scripts_dir and pg_bin share it, so every path in
 // the file follows the same rules.
 func resolvePath(key, raw, base string) (string, []string) {
 	var warns []string
-	p := os.Expand(raw, func(k string) string {
+	p := expandEnv(raw, func(k string) string {
 		v, ok := os.LookupEnv(k)
 		if !ok {
-			warns = append(warns, fmt.Sprintf(
-				"%s references unset env var $%s (expanded to empty)", key, k))
+			warns = append(warns, unsetWarning(key, k))
 		}
 		return v
 	})

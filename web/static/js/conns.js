@@ -132,7 +132,7 @@
     const port = input("cf-port", { inputmode: "numeric", size: "6", class: "port" });
     const user = input("cf-user");
     const password = el("input", { type: "password", id: "cf-password", autocomplete: "new-password",
-      placeholder: "or ${VAR} from the environment" });
+      placeholder: "or ${VAR} from the environment; $$ for a literal $" });
     const database = input("cf-database");
     const file = input("cf-file", { class: "mono" });
     const options = input("cf-options", { class: "mono" });
@@ -177,7 +177,7 @@
       file: row("File", file),
       options: row("Options", options),
       dsn: row("DSN", dsn),
-      dsnHint: [el("span"), el("span", "hint full", "${VAR} is read from dbc web's environment — the way to keep a password out of the saved file.")],
+      dsnHint: [el("span"), el("span", "hint full", "${VAR} is read from dbc web's environment — the way to keep a password out of the saved file. A literal $ is typed $$.")],
       tls: row("TLS", tls),
       tlsCA: row("CA file", tlsCA),
       tlsCert: row("Client cert", tlsCert),
@@ -227,7 +227,7 @@
       port.placeholder = h.port || "";
       file.placeholder = h.file || "";
       options.placeholder = h.options || "";
-      password.placeholder = hasPassword ? "unchanged — type to replace it" : "or ${VAR} from the environment";
+      password.placeholder = hasPassword ? "unchanged — type to replace it" : "or ${VAR} from the environment; $$ for a literal $";
       dsn.placeholder = cur && driver.value === cur.driver
         ? "unchanged — type a DSN to replace it"
         : DRIVERS.find(([x]) => x === d)[1];

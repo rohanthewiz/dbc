@@ -57,7 +57,9 @@ in `~/.config/dbc/connections.toml` and are usable by name too.
 - On Postgres/MySQL, `NAME/otherdb` reaches another database on the same
   server with the connection's credentials.
 - `${VAR}` in a DSN is expanded from the environment; an unset var warns by
-  name.
+  name. A literal `$` is `$$` (`S3cr$$t9`).
+- An unknown config key warns at the top level and fails the load inside a
+  `[[connection]]` (an entry in `connections.toml` is skipped instead).
 - A config file's `dsn = "enc:v1:…"` is decrypted at load with
   `~/.config/dbc/connections.key` (the key `connections.toml` uses); a
   missing or wrong key fails the load. `dbc encrypt` makes one. `--dsn`

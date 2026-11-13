@@ -352,7 +352,7 @@ func (cf *connFormModal) place() {
 	cf.fields[cfPort].placeholder = h.port
 	cf.fields[cfFile].placeholder = h.file
 	cf.fields[cfOptions].placeholder = h.options
-	cf.fields[cfPassword].placeholder = "or ${VAR} from the environment"
+	cf.fields[cfPassword].placeholder = "or ${VAR} from the environment; $$ for a literal $"
 	if cf.hasPassword {
 		cf.fields[cfPassword].placeholder = "unchanged — type to replace it"
 	}
@@ -548,7 +548,7 @@ func (cf *connFormModal) draw(m *Model, s Surface) *caret {
 			s.Put(1, y, "DSN", label)
 			field(cfDSN, cfLabelW, y, fw)
 		case cfDSNHint:
-			s.Put(cfLabelW, y, truncate("${VAR} is read from dbc's environment — keeps a password out of the file", fw), label.Italic())
+			s.Put(cfLabelW, y, truncate("${VAR} is read from dbc's environment — keeps a password out of the file; $$ is a literal $", fw), label.Italic())
 		case cfTLS:
 			s.Put(1, y, "TLS", label)
 			var lines int

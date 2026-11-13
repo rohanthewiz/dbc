@@ -51,6 +51,26 @@ func TestBuildDSNPostgres(t *testing.T) {
 	}
 }
 
+// TestBuildDSNLiteralDollar: a "$" a password needs is typed "$$" in the
+// field — a lone "$" before a name is a ${VAR} reference there, as in any
+// DSN — and the server sees the one "$" (config.expandEnv).
+func TestBuildDSNLiteralDollar(t *testing.T) {
+	dsn, err := BuildDSN("postgres", DSNParts{Host: "h", User: "u", Password: "S3cr$$t9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err := pgx.ParseConfig(expand("postgres", dsn)); err != nil || cfg.Password != "S3cr$t9" {
+		t.Fatalf("postgres %s: password %q, %v", dsn, cfg.Password, err)
+	}
+	dsn, err = BuildDSN("mysql", DSNParts{Host: "h", User: "u", Password: "S3cr$$t9", Database: "d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err := mysql.ParseDSN(expand("mysql", dsn)); err != nil || cfg.Passwd != "S3cr$t9" {
+		t.Fatalf("mysql %s: password %q, %v", dsn, cfg.Passwd, err)
+	}
+}
+
 func TestBuildDSNMySQL(t *testing.T) {
 	t.Setenv("DBC_TEST_PW", "p@ss:w/rd")
 	dsn, err := BuildDSN("mysql", DSNParts{Host: "db.example.com", Port: "3307", User: "app",
@@ -137,6 +157,9 @@ func TestSplitDSNRoundTrip(t *testing.T) {
 		{"postgres", DSNParts{Host: "h", Port: "5432", User: "u", Password: "${PGPASS}", Database: "d",
 			Options: "application_name=dbc options='-c search_path=app'"}},
 		{"postgres", DSNParts{Host: "h", User: "u", Password: `it's \ odd`, Database: "d"}},
+		// a literal "$" as typed in the field: the form shows "$$" again
+		{"postgres", DSNParts{Host: "h", User: "u", Password: "S3cr$$t9", Database: "d"}},
+		{"mysql", DSNParts{Host: "h", User: "u", Password: "S3cr$$t9", Database: "d"}},
 		{"mysql", DSNParts{Host: "h", Port: "3306", User: "u", Password: "p@ss:w/rd", Database: "d",
 			Options: "parseTime=true loc=Local"}},
 		{"mysql", DSNParts{Host: "::1", Port: "3306", User: "u", Database: "d"}},
@@ -207,6 +230,8 @@ func TestIsEnvRef(t *testing.T) {
 	for s, want := range map[string]bool{
 		"${PGPASS}": true, "$PGPASS": true, "": false, "secret": false,
 		"x${PGPASS}": false, "${A}${B}": false,
+		// "$$" makes the rest literal text, a password to withhold
+		"$${PGPASS}": false, "$$PGPASS": false,
 	} {
 		if got := IsEnvRef(s); got != want {
 			t.Errorf("IsEnvRef(%q) = %v, want %v", s, got, want)

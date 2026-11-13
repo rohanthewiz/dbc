@@ -407,8 +407,16 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 	// The defaults above survive decoding for keys the file leaves out, which
 	// is what makes an explicit ai_context_rows = 0 ("send no rows")
 	// distinguishable from an absent key without a pointer field.
-	if _, err := toml.DecodeFile(path, cfg); err != nil {
+	md, err := toml.DecodeFile(path, cfg)
+	if err != nil {
 		return nil, serr.Wrap(err, "config_path", path)
+	}
+	// Keys nothing decoded (strict.go): a warning at the top level, a
+	// failed load inside a [[connection]]. Before the value checks below,
+	// so a misspelled key's warning comes first, beside the defaults it
+	// left in place.
+	if err = cfg.checkStray(md, path); err != nil {
+		return nil, err
 	}
 	cfg.Path = path
 	if cfg.AIContextRows < 0 {
@@ -472,6 +480,49 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 			"default_connection", cfg.DefaultConnection, "config_path", path)
 	}
 	return cfg, nil
+}
+
+// copiedSavedKeys are keys a connections.toml entry has that a config
+// file's [[connection]] takes and ignores: savedDoc's comment promises an
+// entry can be copied from one file to the other as it is, and every saved
+// entry carries its "added" time, which orders dbc web's sidebar and means
+// nothing in a config file. Refusing it would break that copy over a key
+// that cannot change how anything connects.
+var copiedSavedKeys = []string{"added"}
+
+// checkStray reports the keys the config file at path holds that decoded
+// into nothing (strict.go): a top-level one is a warning; any inside a
+// [[connection]] fails the load, all of them named in the one error so they
+// can be fixed together.
+func (c *Config) checkStray(md toml.MetaData, path string) error {
+	var bad []string
+	for _, s := range strayKeys(md) {
+		if !s.Conn {
+			c.Warnings = append(c.Warnings, fmt.Sprintf("%s: unknown key %s is ignored",
+				path, s.describe(configKeys)))
+			continue
+		}
+		if !s.Table && slices.Contains(copiedSavedKeys, s.Key) {
+			continue
+		}
+		bad = append(bad, entryName(s, func(i int) string {
+			if i < len(c.Connections) {
+				return c.Connections[i].Name
+			}
+			return ""
+		})+": "+s.describe(connectionKeys))
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	// The message carries the whole story because a load error is all the
+	// user sees: what is wrong, why it is not just skipped, and what a
+	// connection does take — which is where the tls they meant is listed.
+	return serr.New(fmt.Sprintf(
+		"unknown key in a [[connection]] of %s — %s. dbc does not connect with a setting it would ignore "+
+			"(an ssl or tls_mode in place of tls would connect unverified); a connection takes %s",
+		path, strings.Join(bad, "; "), strings.Join(connectionKeys, ", ")),
+		"config_path", path)
 }
 
 // resolveScripts settles ScriptsDir (see scripts.go) and PGBin against the
@@ -802,10 +853,11 @@ func (c *Config) ReplaceConn(old string, cn Connection) error {
 }
 
 // ExpandDSN expands ${VAR} and $VAR in a DSN from the environment, as Load
-// does for the file's connections. It does this itself rather than via
-// os.ExpandEnv so that a typo'd ${PGPASS} comes back as a warning naming it
-// instead of silently becoming "" and surfacing later as a baffling auth
-// failure. name is the connection's, for the warning.
+// does for the file's connections, and "$$" to a literal "$" (expandEnv). It
+// does this itself rather than via os.ExpandEnv so that a typo'd ${PGPASS}
+// comes back as a warning naming it instead of silently becoming "" and
+// surfacing later as a baffling auth failure. name is the connection's, for
+// the warning.
 //
 // Each value is escaped for where it lands in the DSN of driver (any alias
 // db.Driver accepts): inside a quoted Postgres value, in a URL's password,
@@ -816,18 +868,21 @@ func ExpandDSN(name, driver, dsn string) (string, []string) {
 	lookup := func(key string) string {
 		v, ok := os.LookupEnv(key)
 		if !ok {
-			warns = append(warns, fmt.Sprintf(
-				"connection %q: DSN references unset env var $%s (expanded to empty)", name, key))
+			warns = append(warns, unsetWarning(fmt.Sprintf("connection %q: DSN", name), key))
 		}
 		return v
 	}
 	if strings.Contains(dsn, "\x00") {
 		// the markers below could not be told from the DSN's own text; no
 		// real DSN holds a NUL, so plain expansion loses nothing real
-		return os.Expand(dsn, lookup), warns
+		return expandEnv(dsn, lookup), warns
 	}
+	// A "$$" becomes its "$" in this first pass, as DSN text rather than a
+	// reference: it is what the user wrote, already escaped for its spot as
+	// the rest of their text is, so it gets no marker and fillRefs leaves
+	// it alone.
 	var vals []string
-	marked := os.Expand(dsn, func(key string) string {
+	marked := expandEnv(dsn, func(key string) string {
 		vals = append(vals, lookup(key))
 		return refMark(len(vals) - 1)
 	})

@@ -133,7 +133,10 @@ default_connection = "local-pg"
 [[connection]]
 name   = "local-pg"
 driver = "postgres"
-# Env vars are expanded — keep secrets out of the file
+# Env vars are expanded — keep secrets out of the file. A literal $ (in a
+# password typed here) is written $$: S3cr$$t9 is the password S3cr$t9.
+# A key dbc does not know fails the load in a [[connection]] (a misspelled
+# tls must not connect unverified) and is a warning at the top level.
 dsn    = "postgres://postgres:${PGPASS}@localhost:5432/mydb?sslmode=disable"
 # ...or, to keep an inline password here, encrypted: `dbc encrypt` prints
 # the line, using the key in ~/.config/dbc/connections.key

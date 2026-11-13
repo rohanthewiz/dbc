@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-321
+**Next ID:** N-323
 
 ## Open
 
@@ -78,19 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-273** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  Unknown TOML keys are ignored. `config/config.go:374` and
-  `config/saved.go:138` discard the decoder's metadata; nothing calls
-  `Undecoded`. Scenario: `ssl = "verify-full"` or `tls_mode = …` in place
-  of `tls` connects without verification, while a bad `tls` value fails
-  the load on purpose; `max_row = 50000` is ignored too. Fix: turn
-  `md.Undecoded()` into warnings, and into errors for keys under
-  `[[connection]]`. Same file: a literal `$` in a password cannot be
-  written (`config/config.go:779-801`, `os.Expand`; `db/dsn.go:144`
-  leaves the form's `$` as typed), so `S3cr$t9` loses `$t9` to an "unset
-  env var" warning and authentication fails; make `$$` a literal `$` and
-  say so in the warning. Read here (the discarded metadata); the `$` path
-  audit, traced. (RPU plan, phase 2)
 - **N-274** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   dbc web checks Origin on non-GET requests only (`web/auth.go:116`), and
   SameSite does not tell ports apart, so a page on another
@@ -508,6 +495,24 @@ ten session docs in `ai_docs/claude_sessions/`
   statement holds INTO, past the CTE list (`Verbs().MainAt`, as
   `db.effectOf` does); on MySQL that costs a relist after `INTO @v`,
   unless the dialect is passed in. Raised while closing N-272.
+- **N-321** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  `web` `TestChatEffort` is flaky (`web/chat_test.go:406`): after
+  `/chat/model` switches to "smart", the view and the fake agent are
+  sometimes back at "medium" where the test wants the chosen "high" kept.
+  Alone it failed 6 of 30 runs, then 1 of 30; it failed the same on a
+  clean tree, so it is not N-273's. A red `go test ./...` hides a real
+  failure beside it. Likely a race between the model switch re-applying
+  the preferred effort (`ai_effort`) and the effort chosen before it. The
+  test came in with `34909b9` (ai_effort, 2026-11-12). Raised while
+  closing N-273.
+- **N-322** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  `os.Expand` (behind `config.expandEnv`) drops an unterminated `${` and an
+  empty `${}` without calling the lookup, so no warning is given: a
+  password `ab${cd` connects as `abcd`. `$$` now writes a literal `$`
+  (`ab$${cd`), but nothing tells the user it was needed. Fix: before
+  expanding, scan as os.Expand does (after `$$` pairs) for a `${` with no
+  `}` or a `${}`, and warn with `unsetWarning`'s hint. Raised while
+  closing N-273.
 
 ## Validate
 
@@ -1217,6 +1222,21 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-273** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Unknown TOML keys are ignored. `config/config.go:374` and
+  `config/saved.go:138` discard the decoder's metadata; nothing calls
+  `Undecoded`. Scenario: `ssl = "verify-full"` or `tls_mode = …` in place
+  of `tls` connects without verification, while a bad `tls` value fails
+  the load on purpose; `max_row = 50000` is ignored too. Fix: turn
+  `md.Undecoded()` into warnings, and into errors for keys under
+  `[[connection]]`. Same file: a literal `$` in a password cannot be
+  written (`config/config.go:779-801`, `os.Expand`; `db/dsn.go:144`
+  leaves the form's `$` as typed), so `S3cr$t9` loses `$t9` to an "unset
+  env var" warning and authentication fails; make `$$` a literal `$` and
+  say so in the warning. Read here (the discarded metadata); the `$` path
+  audit, traced. (RPU plan, phase 2)
+  closed 2026-11-13 (RPU plan, phase 2): built as the item said, with a skip in place of an error for `connections.toml`. New `config/strict.go`: `strayKeys(md)` walks `md.Keys()` in document order, counting `[[connection]]` headers, so each undecoded key is placed at the top level or in its entry (Undecoded alone has no entry index: every entry's key is `connection.ssl`); a key under one already listed (`[ai]`'s own keys, `sub.x`) is left out; an inline `connection = [{…}]` has one header for all, so its entry is unnamed. `config.toml`: a top-level stray is a warning ("unknown key max_row (did you mean max_rows?) is ignored"); any inside a `[[connection]]` fails the load, all named in one error with the list of a connection's keys (`demo = true` included: `Demo` is `toml:"-"`). `added` is accepted there and ignored, since savedDoc promises an entry copies across and every saved one has it. `connections.toml`: an entry with a stray key is skipped with a warning (MergeSaved's reasoning for a bad tls), a top-level one warns, `migrations` counts as stray there (SavedConn has no such field), and `SavedStore.edit` refuses to rewrite while any stray key is in the file: the encoder would drop it and the skipped entry would come back without it (so LoadSaved's plain-DSN encrypt rewrite is refused too, with a warning). Suggestions: key lists from the struct tags (`tomlKeys` by reflection), optimal-string-alignment distance (at most 1 edit for keys of up to 4 chars, else 2: "ssl" is 2 from "dsn"), and `keyAliases` for libpq/MySQL TLS names (`ssl`, `sslmode`, `tls_mode`, `sslrootcert`, … → `tls*`). `$`: new `config/envref.go` `expandEnv` is os.Expand with `$$` → `$` (os.Expand reads `$$` as the shell's PID variable, which only ever expanded to ""), used by ExpandDSN (a `$$` is DSN text in the marked pass, so fillRefs leaves it alone), ExpandTLS and resolvePath; `unsetWarning` adds "write $$ for a literal $". The form keeps `$` as typed (a `$VAR` there is a reference by design); its hints and password placeholders (web, TUI) say "$$ for a literal $", and Test/Save show the warning. `db.IsEnvRef("$${X}")` is false, so such a password stays withheld. Tests: `config/strict_test.go`, `config/envref_test.go` (each DSN shape read back by pgconn / go-sql-driver), `db` `TestBuildDSNLiteralDollar`, round-trip and IsEnvRef cases; full `./...` green (no live DSNs: nothing here touches a server). Real binary: `ssl = "verify-full"` fails the load naming `connection "prod": ssl (did you mean tls?)`; `max_row` warns and runs; a sqlite `dsn = "file:${DIR}/a$$b.db"` made `a$b.db`; a saved entry with `sslmode` is skipped, and `-c` on it says unknown connection after the warning. README (Configure connections, saved connections, the form), `dbc.example.toml`, the saved file's header, the dbc skill. Raised N-321, N-322.
 
 - **N-272** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   `Session.stateful` misses state a "read" sets

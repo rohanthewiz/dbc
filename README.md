@@ -109,8 +109,21 @@ in-memory mode, so the DSN is always a real path.
 
 Env vars in DSNs are expanded, so secrets can stay out of the file. A DSN
 referencing an unset var warns by name at startup (a typo'd `${PGPASS}` will
-not silently become an empty password). Duplicate connection names and a
+not silently become an empty password). A `$` that is part of the text — a
+password such as `S3cr$t9` — is written `$$` (`S3cr$$t9`): a lone `$` before
+a name is a reference, so `$t9` would be looked up, and the unset-variable
+warning says so. `$$` works wherever `${VAR}` does: DSNs, the `tls_*` paths,
+`scripts_dir` and the other paths. Duplicate connection names and a
 `default_connection` that names no connection are rejected at load.
+
+A key dbc does not know is reported rather than skipped. At the top level it
+is a warning naming the key, and the nearest real one (`max_row = 50000` is
+ignored — did you mean `max_rows`?). Inside a `[[connection]]` it fails the
+load, naming the connection and the key: a misspelled setting there could be
+the one that was meant to protect the connection (`ssl = "verify-full"` or
+`tls_mode = …` in place of `tls` would connect unverified), so dbc does not
+connect without it. The same holds in `connections.toml`, where such an entry
+is skipped with a warning, and the file is not rewritten until it is fixed.
 
 A password that has to sit in the file can be kept there encrypted instead.
 `dbc encrypt` asks for the DSN (it is not shown as you type, and never goes
@@ -1816,7 +1829,7 @@ and the whole **DSN** as text. From fields, dbc writes the DSN for you and
 handles the quoting and escaping, so a password with `@`, `/` or spaces
 needs nothing special. Options are `key=value` pairs separated by spaces
 or `&` (for example `application_name=dbc` or `parseTime=true`). The password
-may be a `${VAR}`. The TLS section shows for Postgres and MySQL, and its file
+may be a `${VAR}`; a `$` that is part of the password itself is typed `$$`. The TLS section shows for Postgres and MySQL, and its file
 fields appear once a mode other than *disable* is picked. A relative path
 there is relative to `~/.config/dbc`.
 **Test connection** opens the DSN, pings it within `connect_timeout` and
@@ -1831,7 +1844,8 @@ so the TUI, headless runs (`dbc -c name …`), `script`, `migrate` and
 same name, the config file's wins, with a warning. `connections.toml` uses
 the same `[[connection]]` tables as the config file, so an entry can be
 copied across (a Postgres or MySQL one with its `dsn` written out again: in
-`connections.toml` it is encrypted, see below). You may edit it by hand, but dbc rewrites it whole on the
+`connections.toml` it is encrypted, see below; `migrations` is a config-file
+key only, and an entry carrying it is skipped there). You may edit it by hand, but dbc rewrites it whole on the
 next change from the browser, so comments are not kept. A running `dbc web`
 reads it only at startup. A DSN is stored as typed: write `${PGPASS}` and the
 password stays in the environment instead of the file. Each dbc expands it

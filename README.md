@@ -3572,7 +3572,34 @@ current version — the merge-of-two-branches case — unless `--allow-missing` 
 given, exactly as goose does.
 
 Works on all four engines. bytdb runs DDL outside transactions, so there each
-statement commits on its own.
+statement commits on its own. MySQL commits DDL as it runs, so a rollback
+cannot undo a `CREATE` or `ALTER` that came before the failing statement (nor
+anything after one: the session is back in autocommit). When that happens the
+run says which statements stayed, on a `PARTIAL` line and in the error's
+`partly_applied` field — e.g. `statements 1-2 of 3 stay applied` — since
+re-running `up` would only fail on the first of them. The same report comes
+from a `NO TRANSACTION` migration on any engine.
+
+Two runs at once — two deploys, a deploy and a terminal — take turns: every
+command that writes holds a lock for the database while it reads the version
+table and runs, and a run that has to wait says who holds it:
+
+```
+waiting for the migration lock: another run holds it (pid 4242)
+```
+
+On Postgres it is an advisory lock with goose's key, so a dbc run and a goose
+run (with its session locker) exclude each other too; it is polled, not
+waited on, so a `CREATE INDEX CONCURRENTLY` in the running migration does not
+deadlock with the waiter. A transaction-mode pooler (PgBouncer
+`pool_mode=transaction`) cannot hold a session lock: migrate directly or
+through a session-mode pool. On MySQL it is `GET_LOCK` on
+`goose_db_version:<database>`. SQLite has no lock that outlives a
+transaction, so each migration starts with `BEGIN IMMEDIATE` and re-reads its
+version row, skipping (`SKIP … (another run applied it)`) what another run
+did meanwhile; a `NO TRANSACTION` migration there is checked just before it
+runs but not locked. bytdb needs none: only one process can open its file.
+`status` and `version` take no lock, so they show a run's progress.
 
 ## Export formats
 

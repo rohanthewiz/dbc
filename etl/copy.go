@@ -248,6 +248,12 @@ func copyRows(ctx context.Context, src Conn, table, query string, dst Conn, dest
 	// canceling makes the source server stop the query instead. Errors are
 	// still judged against ctx, so this cancel is never reported as the
 	// user's.
+	//
+	// The Reader now stops its own query when it is rolled back part way
+	// (stmtcut, N-276), after a grace for a rest that is nearly in. This
+	// cancel comes first and does not wait: a load that failed has already
+	// cost its time, and on MySQL the cancel closes the connection, which
+	// the pool's connector then kills on the server.
 	rctx, stopRead := context.WithCancel(ctx)
 	rd, err := read(rctx, src, query, sourceSetup(same, opt), opt.Args...)
 	if err != nil {

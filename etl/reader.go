@@ -6,6 +6,9 @@ import (
 	"strings"
 
 	"github.com/rohanthewiz/serr"
+
+	"github.com/rohanthewiz/dbc/sqlsplit"
+	"github.com/rohanthewiz/dbc/stmtcut"
 )
 
 // Reader streams a query's rows one at a time, with typed values. It is the
@@ -30,10 +33,20 @@ import (
 // settings that shape that text (see pgPinOutput): an interval or a date[]
 // reads the same from every server, whatever its DateStyle.
 type Reader struct {
-	ctx     context.Context
-	conn    string
-	tx      *sql.Tx // Postgres: the read's transaction, which scopes pgPinOutput
-	rows    *sql.Rows
+	ctx  context.Context
+	conn string
+	tx   *sql.Tx // Postgres: the read's transaction, which scopes pgPinOutput
+	rows *sql.Rows
+	// cut is the query's stmtcut.Point: the query runs under a context of
+	// its own, so a read that ends before its last row can stop it on the
+	// server rather than have rows.Close read the rest (N-276; see Close).
+	cut *stmtcut.Point
+	// plain: the query only reads (plainRead), so stopping it early loses
+	// nothing a commit would have kept.
+	plain bool
+	// done: the rows ran out (Next saw their end, error or not); there is
+	// nothing left to stop.
+	done    bool
 	cols    []string
 	dbTypes []string // driver type names, upper case ("INT4", "VARCHAR", "")
 	binary  []bool   // column holds raw bytes: keep []byte as []byte
@@ -132,8 +145,22 @@ func read(ctx context.Context, c Conn, query string, setup []string, args ...any
 		rows *sql.Rows
 		err  error
 	)
+	// Only the query runs under the Point's context; the transaction and
+	// the pins keep ctx. A stop then cancels the query alone, and the
+	// transaction is ended by Close or rollback with a ROLLBACK on a live
+	// connection. Had the transaction been begun under the Point's context,
+	// database/sql would roll it back on the cancel by itself and, since
+	// pgx's stdlib conn is no driver.Validator, discard the connection.
+	qctx, cut := stmtcut.Watch(ctx)
 	if c.Engine == Postgres {
+		// A cancel stops a pgx statement on any pool: with dbc's handler by
+		// a cancel request that keeps the connection, with pgx's default by
+		// closing it, which a pooled read can spare. The transaction it
+		// aborts is the read's own. So the Point needs no word from db's
+		// tracer here (which says the same when the pool is dbc's).
+		cut.SetCancels(true)
 		if tx, err = c.DB.BeginTx(ctx, nil); err != nil {
+			cut.Release()
 			return nil, serr.Wrap(canceled(ctx, err), "conn", c.Name, "op", "read", "query", clip(query))
 		}
 		for _, s := range append([]string{pgPinOutput}, setup...) {
@@ -142,12 +169,13 @@ func read(ctx context.Context, c Conn, query string, setup []string, args ...any
 			}
 		}
 		if err == nil {
-			rows, err = tx.QueryContext(ctx, query, args...)
+			rows, err = tx.QueryContext(qctx, query, args...)
 		}
 	} else {
-		rows, err = c.DB.QueryContext(ctx, query, args...)
+		rows, err = c.DB.QueryContext(qctx, query, args...)
 	}
 	if err != nil {
+		cut.Release()
 		if tx != nil {
 			_ = tx.Rollback()
 		}
@@ -156,12 +184,14 @@ func read(ctx context.Context, c Conn, query string, setup []string, args ...any
 	cols, err := rows.Columns()
 	if err != nil {
 		_ = rows.Close()
+		cut.Release()
 		if tx != nil {
 			_ = tx.Rollback()
 		}
 		return nil, serr.Wrap(err, "conn", c.Name, "op", "read columns")
 	}
 	rd := &Reader{ctx: ctx, conn: c.Name, tx: tx, rows: rows, cols: cols,
+		cut: cut, plain: plainRead(query, c.Engine.Dialect()),
 		dbTypes: make([]string, len(cols)), binary: make([]bool, len(cols)),
 		holders: make([]any, len(cols))}
 	// Column types are advisory: a driver that cannot report them leaves the
@@ -192,6 +222,7 @@ func (r *Reader) Next() bool {
 		return false
 	}
 	if !r.rows.Next() {
+		r.done = true
 		if err := r.rows.Err(); err != nil {
 			r.err = serr.Wrap(canceled(r.ctx, err), "conn", r.conn, "op", "read", "after_rows", itoa(r.n))
 		}
@@ -245,14 +276,43 @@ func (r *Reader) Err() error { return r.err }
 // stopped early by the caller), ROLLBACK after a failure. It is safe to
 // call more than once, and a deferred Close after reading to the end costs
 // nothing.
+//
+// Closed before its last row, a read that only reads stops its query on
+// the server instead of reading the rest; a query that writes is read to
+// its end and committed, so its work is kept.
 func (r *Reader) Close() error {
 	if r.closed {
 		return nil
 	}
 	r.closed = true
-	err := r.rows.Close()
+	defer r.cut.Release()
+	// A read closed before its last row stops its query on the server when
+	// the rest is still arriving after stmtcut.Grace — a script that breaks
+	// out of its loop, a pipeline whose rows.limit was met — instead of
+	// reading every remaining row first, which for a large table took as
+	// long as reading it all (N-276):
+	//
+	//	rows ran out ─────────────────► as before (nothing left to read)
+	//	failed (Err) ─────────────────► stop, ROLLBACK
+	//	stopped early, plain read ────► stop; COMMIT if the rest arrived
+	//	                                first, else ROLLBACK (Postgres
+	//	                                aborted the transaction with it)
+	//	stopped early, may write ─────► read to the end, COMMIT: the
+	//	                                write's work completes and is
+	//	                                kept, as Close always promised
+	//
+	// "Plain" is lexical (plainRead), so a SELECT of a function that writes
+	// reads as one: stopped early, its calls so far are rolled back where
+	// they used to run for every row and commit.
+	var err error
+	stopped := false
+	if !r.done && (r.err != nil || r.plain) {
+		stopped = r.cut.Close(r.rows, false)
+	} else {
+		err = r.rows.Close()
+	}
 	if r.tx != nil {
-		if err == nil && r.err == nil {
+		if err == nil && r.err == nil && !stopped {
 			err = r.tx.Commit()
 		} else {
 			_ = r.tx.Rollback()
@@ -265,15 +325,47 @@ func (r *Reader) Close() error {
 // transaction back, whether or not the rows ran out cleanly. It is Copy's
 // way out for a held read (holdTx) whose load did not commit, and a no-op
 // once the Reader is closed.
+//
+// The query is stopped if its rest is still arriving after stmtcut.Grace,
+// whatever it is: nothing it did is to be kept. On Postgres the
+// transaction rolls back anyway. On MySQL the KILL QUERY makes InnoDB undo
+// the statement as a whole, where reading it to the end let a write
+// complete and commit. SQLite and bytdb have nothing to stop: their rows
+// close without reading the rest.
 func (r *Reader) rollback() {
 	if r.closed {
 		return
 	}
 	r.closed = true
-	_ = r.rows.Close()
+	defer r.cut.Release()
+	r.cut.Close(r.rows, false)
 	if r.tx != nil {
 		_ = r.tx.Rollback()
 	}
+}
+
+// readVerbs are the main verbs of a query that only reads, for plainRead.
+var readVerbs = map[string]bool{"select": true, "values": true, "table": true, "show": true}
+
+// plainRead reports whether query only reads, so that stopping it part way
+// — and rolling back its transaction — loses nothing a commit would have
+// kept. It is narrower than db's isRead on purpose, for a package that
+// does not import db: a read verb, no CTE that writes (Postgres's `WITH d
+// AS (DELETE … RETURNING *) SELECT …`), and no INTO after the main verb
+// (SELECT … INTO new_table). Anything else is read to its end on Close, as
+// before. Strings and comments are read as d reads them, so a 'delete' in
+// a literal is not a write.
+func plainRead(query string, d sqlsplit.Dialect) bool {
+	v := d.Verbs(query)
+	if !readVerbs[v.Main] {
+		return false
+	}
+	for _, cte := range v.CTEs {
+		if writeVerbs[cte] {
+			return false
+		}
+	}
+	return !d.HasKeyword(query[v.MainAt:], "into")
 }
 
 // Abort ends the read as a failed one, whatever state it is in: the rows

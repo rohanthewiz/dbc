@@ -287,6 +287,20 @@ func TestRunLogsCompletion(t *testing.T) {
 	}
 }
 
+// A result cut at max_rows says so in the run's done note, as the status
+// bar does: "1000 rows" alone reads as the whole result (N-276).
+func TestDoneNoteSaysTruncated(t *testing.T) {
+	ev := &RunDone{Tag: "query", Conn: "Pilot", Stmts: []string{"SELECT * FROM events"},
+		Elapsed: 120 * time.Millisecond, Result: &model.Result{Rows: make([][]string, 1000), Truncated: true}}
+	if got, want := doneNote(ev, 1).Text, "query completed on Pilot in 120ms — 1000 rows (truncated at max_rows)"; got != want {
+		t.Errorf("cut:\n got %q\nwant %q", got, want)
+	}
+	ev.Result.Truncated = false
+	if got, want := doneNote(ev, 1).Text, "query completed on Pilot in 120ms — 1000 rows"; got != want {
+		t.Errorf("whole:\n got %q\nwant %q", got, want)
+	}
+}
+
 // ONE RUN AT A TIME: a second request is refused in words while the first
 // is in flight — but still recorded in the history.
 func TestBusyRefusal(t *testing.T) {

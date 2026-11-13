@@ -7,6 +7,8 @@ import (
 	"io"
 	"strconv"
 	"sync"
+
+	"github.com/rohanthewiz/dbc/stmtcut"
 )
 
 // STOP REACHES THE SERVER FOR POOLED MYSQL STATEMENTS TOO.
@@ -65,7 +67,21 @@ func (k *mysqlKillConnector) Driver() driver.Driver { return k.inner.Driver() }
 // kill ends connection id on the server, best effort, within killTimeout. A
 // KILL that fails (the connection already gone: "Unknown thread id") changes
 // nothing anyone can act on.
-func (k *mysqlKillConnector) kill(id string) {
+func (k *mysqlKillConnector) kill(id string) { k.send("KILL " + id) }
+
+// killQuery ends the statement connection id is running and leaves the
+// connection be — its session, and any transaction open on it, carry on;
+// InnoDB undoes only the killed statement. It is how a result left part way
+// is stopped (stmtcut, N-276), best effort as kill is. A KILL QUERY that
+// lands after the statement has ended (the connection idle) does not carry
+// over to the connection's next statement: MySQL 8 clears it when the next
+// command arrives (dispatch_command), which TestLiveCutMySQLLateKill checks.
+func (k *mysqlKillConnector) killQuery(id string) { k.send("KILL QUERY " + id) }
+
+// send runs one KILL statement over a fresh connection from the same
+// connector (see the top of this file for why not the pool), within
+// killTimeout.
+func (k *mysqlKillConnector) send(stmt string) {
 	ctx, cancel := context.WithTimeout(context.Background(), killTimeout)
 	defer cancel()
 	c, err := k.inner.Connect(ctx)
@@ -74,7 +90,7 @@ func (k *mysqlKillConnector) kill(id string) {
 	}
 	defer c.Close()
 	if ex, ok := c.(driver.ExecerContext); ok {
-		_, _ = ex.ExecContext(ctx, "KILL "+id, nil)
+		_, _ = ex.ExecContext(ctx, stmt, nil)
 	}
 }
 
@@ -157,6 +173,7 @@ func (c *mysqlKillConn) Begin() (driver.Tx, error)             { return c.inner.
 // driver skips (ErrSkip) its direct path when it would have to interpolate.
 func (c *mysqlKillConn) PrepareContext(ctx context.Context, q string) (driver.Stmt, error) {
 	c.lastCtx = ctx
+	c.noteCut(ctx)
 	return c.inner.(driver.ConnPrepareContext).PrepareContext(ctx, q)
 }
 
@@ -172,7 +189,27 @@ func (c *mysqlKillConn) ExecContext(ctx context.Context, q string, args []driver
 
 func (c *mysqlKillConn) QueryContext(ctx context.Context, q string, args []driver.NamedValue) (driver.Rows, error) {
 	c.lastCtx = ctx
+	c.noteCut(ctx)
 	return c.inner.(driver.QueryerContext).QueryContext(ctx, q, args)
+}
+
+// noteCut tells the statement's stmtcut.Point, when its context carries
+// one, how to end it early: a KILL QUERY on this connection's id. Without
+// an id (CONNECTION_ID() could not be read) the Point is left as it is, and
+// the rest of the result is read to its end as before.
+//
+// Only QueryContext and PrepareContext note it: a Point is only ever put on
+// a statement that returns rows, and those reach the driver by one of the
+// two (PrepareContext when database/sql falls back to prepare-then-execute
+// for arguments the driver will not interpolate).
+func (c *mysqlKillConn) noteCut(ctx context.Context) {
+	if c.id == "" {
+		return
+	}
+	if p := stmtcut.From(ctx); p != nil {
+		id, k := c.id, c.k
+		p.SetKill(func() { k.killQuery(id) })
+	}
 }
 
 func (c *mysqlKillConn) Ping(ctx context.Context) error {

@@ -135,7 +135,7 @@ func readSetsOf(t *testing.T, n, maxRows int) []string {
 	}
 	defer rows.Close()
 	m := NewManager(&config.Config{MaxRows: maxRows})
-	res, err := m.readSets(context.Background(), rows, "c", "CALL p()")
+	res, err := m.readSets(context.Background(), rows, "c", "CALL p()", nil)
 	if err != nil {
 		t.Fatalf("readSets: %v", err)
 	}

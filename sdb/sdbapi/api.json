@@ -1411,7 +1411,7 @@
         {
           "name": "Close",
           "sig": "func (r *Reader) Close() error",
-          "doc": "Close releases the query's connection — on Postgres after ending the\nread's transaction: COMMIT when the read went well (to the end, or\nstopped early by the caller), ROLLBACK after a failure. It is safe to\ncall more than once, and a deferred Close after reading to the end costs\nnothing.",
+          "doc": "Close releases the query's connection — on Postgres after ending the\nread's transaction: COMMIT when the read went well (to the end, or\nstopped early by the caller), ROLLBACK after a failure. It is safe to\ncall more than once, and a deferred Close after reading to the end costs\nnothing.\n\nClosed before its last row, a read that only reads stops its query on\nthe server instead of reading the rest; a query that writes is read to\nits end and committed, so its work is kept.",
           "params": []
         },
         {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/sqlsplit"
+	"github.com/rohanthewiz/dbc/stmtcut"
 )
 
 // A statement has to be sent as a Query or as an Exec before anything is
@@ -127,13 +128,35 @@ const maxMoreSets = 50
 // (readSets). The rows are closed before it returns, not only by a defer:
 // on Postgres the command tag reaches pgTagTracer when the rows close, and
 // runMaybe reads it as soon as query is back.
-func (m *Manager) query(ctx context.Context, ex execQuerier, name, stmt string, args ...any) (*model.Result, error) {
-	rows, err := ex.QueryContext(ctx, stmt, args...)
+//
+// cut says the statement may be stopped on the server once its result is
+// cut at max_rows, rather than read to the end by rows.Close (N-276; see
+// package stmtcut). run passes it for a plain read only (isRead). A write
+// returns its rows as or after it does its work, and stopping it there
+// could undo the work: a DELETE … RETURNING cut at 1,000 rows must still
+// delete every row it matched. (Postgres runs such a write to its end
+// before it sends a row, and does not act on a cancel while it sends them;
+// the rule does not lean on that.) A read that leaves state row by row —
+// SELECT set_config(…) on each row, MySQL's @n := @n + 1 — is no plain
+// read either, and is read to its end so the state is the whole
+// statement's.
+func (m *Manager) query(ctx context.Context, ex execQuerier, name, stmt string, cut bool, args ...any) (*model.Result, error) {
+	// The statement runs under a context of its own when it may be cut, so
+	// the stop (on Postgres, a cancel of that context) reaches it and
+	// nothing else. Errors are still judged against ctx, the caller's: the
+	// cut's own cancel is never reported as the user's Stop.
+	qctx := ctx
+	var pt *stmtcut.Point
+	if cut {
+		qctx, pt = stmtcut.Watch(ctx)
+		defer pt.Release()
+	}
+	rows, err := ex.QueryContext(qctx, stmt, args...)
 	if err != nil {
 		return nil, wrapRunErr(ctx, err, name)
 	}
 	defer rows.Close()
-	res, err := m.readSets(ctx, rows, name, stmt)
+	res, err := m.readSets(ctx, rows, name, stmt, pt)
 	if err != nil {
 		return nil, err
 	}
@@ -156,10 +179,37 @@ func (m *Manager) query(ctx context.Context, ex execQuerier, name, stmt string, 
 //
 // Sets past maxMoreSets are not read into memory: Result.MoreCut is set
 // and the loop stops, leaving rows.Close to discard them.
-func (m *Manager) readSets(ctx context.Context, rows *sql.Rows, name, stmt string) (*model.Result, error) {
+//
+// pt, when not nil, is the statement's stmtcut.Point (query's cut). A first
+// set cut at max_rows is then closed through it: the statement is stopped
+// on the server if the rest is still coming after stmtcut.Grace, instead of
+// rows.Close reading every remaining row — minutes, for a SELECT * over a
+// large table. A plain read has the one set, so nothing past it is lost.
+//
+//	           ┌─ not cut ─────────────────► further sets, rows.Err (as before)
+//	first set ─┤
+//	           └─ cut, pt ─► pt.Close ─┬─ caller's ctx ended ─► its cancel error
+//	                                   └─ else ──────────────► the set, Truncated
+//
+// keepTx is passed to pt.Close: on Postgres a stop is a cancel, which aborts
+// the transaction the statement ran in, and a user's BEGIN must not end
+// because a grid holds only max_rows. Inside one, the rest is read as
+// before; MySQL's KILL QUERY ends only the statement and applies anywhere.
+func (m *Manager) readSets(ctx context.Context, rows *sql.Rows, name, stmt string, pt *stmtcut.Point) (*model.Result, error) {
 	first, err := m.readSet(ctx, rows, name, stmt)
 	if err != nil {
 		return nil, err
+	}
+	if first.Truncated && pt != nil {
+		pt.Close(rows, true)
+		// The rows' error is the stop's own, so it is not looked at; but a
+		// Stop the user pressed meanwhile is theirs to see, as it was when
+		// the drain ended in it — and for a session, the cue for the KILL
+		// its guard sends when the stop cost the connection.
+		if err := ctx.Err(); err != nil {
+			return nil, wrapRunErr(ctx, err, name, "op", "fetch")
+		}
+		return first, nil
 	}
 	// NextResultSet also drops what a set cut at max_rows left unread.
 	for rows.NextResultSet() {
@@ -274,7 +324,7 @@ func (m *Manager) runMaybe(ctx context.Context, ex execQuerier, name, drv, stmt 
 	// pgx reads a QueryExecMode ahead of the arguments as an option; its
 	// database/sql adapter passes arguments through as they are.
 	var tag atomic.Int64
-	res, err := m.query(context.WithValue(ctx, pgTagKey{}, &tag), ex, name, stmt,
+	res, err := m.query(context.WithValue(ctx, pgTagKey{}, &tag), ex, name, stmt, false,
 		append([]any{pgx.QueryExecModeDescribeExec}, args...)...)
 	if err != nil {
 		return nil, err
@@ -300,10 +350,22 @@ type pgTagKey struct{}
 // The holder is atomic because the rows can be closed — and so the tag
 // stored — by database/sql's own goroutine when the context is canceled,
 // while the caller is still reading.
+//
+// It has a second job, at the start of a statement: one whose context
+// carries a stmtcut.Point (a plain read that may be cut at max_rows) learns
+// there that canceling it stops it and keeps the connection — every dbc
+// pool has pgCancelHandler — and whether it went out inside a transaction,
+// which that cancel would abort. The status is pgconn's, from the last
+// ReadyForQuery, so it is read without a round trip.
 type pgTagTracer struct{}
 
 // TraceQueryStart leaves the context as it is: the holder is already in it.
-func (pgTagTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+// It tells a stmtcut.Point, when there is one, how the statement can be
+// stopped (see above).
+func (pgTagTracer) TraceQueryStart(ctx context.Context, conn *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	if p := stmtcut.From(ctx); p != nil {
+		p.SetCancels(conn.PgConn().TxStatus() != 'I')
+	}
 	return ctx
 }
 
@@ -351,7 +413,7 @@ func (m *Manager) mysqlMaybe(ctx context.Context, ex execQuerier, name, stmt str
 // mysqlMaybeOn is one attempt of mysqlMaybe, on a connection that will also
 // run the ROW_COUNT().
 func (m *Manager) mysqlMaybeOn(ctx context.Context, ex execQuerier, name, stmt string, start time.Time, args ...any) (*model.Result, error) {
-	res, err := m.query(ctx, ex, name, stmt, args...)
+	res, err := m.query(ctx, ex, name, stmt, false, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -751,7 +751,9 @@ func (m *Manager) run(ctx context.Context, ex execQuerier, name, stmt string, ar
 		return m.runMaybe(ctx, ex, name, drv, stmt, start, args...)
 	}
 
-	res, err := m.query(ctx, ex, name, stmt, args...)
+	// A plain read may be stopped on the server once it is cut at
+	// max_rows (query's cut); a write's rows are read to the end.
+	res, err := m.query(ctx, ex, name, stmt, isRead(stmt, sqlsplit.DialectOf(drv)), args...)
 	if err != nil {
 		return nil, err
 	}

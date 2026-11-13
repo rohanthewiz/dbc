@@ -1265,6 +1265,20 @@ how many of those the grid shows. The grid is virtualized, so drawing is cheap
 either way, but the cap keeps both UIs showing the same thing; rows past it
 are still in the result and still go into an export or a whole-result copy.
 
+A read cut at `max_rows` is stopped on the server rather than streamed to the
+end, so `SELECT * FROM events` over 100M rows is done once its 1,000 rows are
+in, not when the server has sent the rest. A result that finishes within
+100 ms of the cap is just read to the end. Past that, Postgres gets a cancel
+request and MySQL a `KILL QUERY`. Both keep the session, with its `SET`s and
+temp tables. Two cases are read to the end as before:
+
+- a read inside a Postgres transaction you opened, because a cancel would
+  abort the transaction;
+- a statement that writes or leaves state, such as `DELETE … RETURNING` or
+  `SELECT set_config(…)` per row, so all of its work still happens.
+
+The log line says `1000 rows (truncated at max_rows)`.
+
 Hidden columns are a view of the result, and copies and exports take that
 view (so does the assistant): hide the noisy columns, then copy the table
 into Teams. The header
@@ -2527,6 +2541,12 @@ type, so a numeric column created there is `double precision`: values with
 more than about 15 significant digits get rounded. To keep every digit,
 create the table yourself with a `text` column. That works from Postgres
 and MySQL, whose numerics arrive as text, but not from SQLite.
+
+A `Reader` that is closed or aborted before its last row stops its query
+on the server. Without that, a loop that breaks after 50 rows would still
+wait for the whole table. This also covers a pipeline Preview and
+`rows.limit`. A query that writes (`DELETE … RETURNING`) is the one
+exception: it is read to the end and committed, so its work is kept.
 
 A `Reader` has no `max_rows` cap and keeps values typed: `int64`,
 `float64`, `bool`, `string`, `time.Time`, `[]byte` for binary columns, `nil`

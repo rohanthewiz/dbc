@@ -669,6 +669,10 @@ func plural(n int, one, many string) string {
 // One statement that returned several result sets (a tab each) says so:
 //
 //	query completed on Pilot in 80ms — 3 result sets, showing the last: 12 rows
+//
+// And a result cut at max_rows (N-276):
+//
+//	query completed on Pilot in 120ms — 1000 rows (truncated at max_rows)
 func doneNote(ev *RunDone, shown int) Note {
 	took := ev.Elapsed.Round(time.Millisecond)
 	what := ev.Tag
@@ -678,6 +682,11 @@ func doneNote(ev *RunDone, shown int) Note {
 	summary := ""
 	if r := ev.Result; r != nil {
 		summary = fmt.Sprintf("%d rows", len(r.Rows))
+		// A result cut at max_rows says so, as the status bar does
+		// (ResultStatus): "1000 rows" alone reads as the whole result.
+		if r.Truncated {
+			summary += " (truncated at max_rows)"
+		}
 		if r.IsExec {
 			summary = fmt.Sprintf("%d affected", r.Affected)
 		}

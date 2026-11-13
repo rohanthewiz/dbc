@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-324
+**Next ID:** N-325
 
 ## Open
 
@@ -78,29 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-276** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  A result cut at `max_rows` still streams the whole result.
-  `db/manager.go:700-702` breaks out of the fetch loop, then the deferred
-  `rows.Close()` (`:684`) drains: pgx's `ResultReader.Close` reads until
-  the command concludes, and mysql's `Rows.Close` skips rows to EOF.
-  Scenario: `SELECT * FROM events` over 100M rows keeps 1,000 and stays
-  "running" while the server ships the rest; `Duration` is taken before
-  the drain, so the status shows milliseconds for a run of minutes.
-  `limitedRows` (`db/schema.go:589`) has the same shape at 250k rows, and
-  so does an early `Reader.Close`/`rollback` (`etl/reader.go:211-240`): a
-  50-row pipeline Preview or `rows.limit` over a huge table reads all of
-  it, though `copyRows` adds a private cancel for exactly this
-  (`etl/copy.go:244-256`). Fix: on truncation cancel a statement-scoped
-  child context before Close on Postgres, `KILL QUERY` on MySQL (a
-  context cancel there closes the connection); give `Reader` its own
-  cancel for Abort and early Close. Also `doneNote`
-  (`workspace/run.go:641`) logs "1000 rows" without "truncated". The loop
-  read here; the drain is from driver source, not run: measure it on the
-  live suites first. Neighbour: N-271. (RPU plan, phase 3)
-  Updated `2026-1113-1449-n271-pg-stop-keeps-session`: N-271 landed, so
-  on Postgres a canceled statement now keeps its connection (a cancel
-  request, `db.pgCancelHandler`): the child-context cancel on truncation
-  costs the session nothing there, pool or pinned.
 - **N-277** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Cell cost follows the value's length in both grids. TUI:
   `tui/grid.go:968` calls `truncate(flatten(val))` per visible cell per
@@ -505,6 +482,20 @@ ten session docs in `ai_docs/claude_sessions/`
   backstop applied to the cache. Fix: a deferred recover in both loads
   that records the panic as the read's error (logged with its stack) and
   closes the channel. Read here. Raised while closing N-275.
+- **N-324** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  A read cut at `max_rows` inside a Postgres transaction the user opened
+  still streams the rest of its result. N-276 stops a cut read with a
+  cancel, which would abort the transaction, so `readSets` passes
+  `keepTx` and such a read is read to its end as before (MySQL's
+  `KILL QUERY` ends only the statement and is used everywhere). Scenario:
+  `BEGIN; UPDATE …; SELECT * FROM events;` over 100M rows keeps 1,000 and
+  runs for minutes. Fix options: inside a transaction ('T' at the
+  statement's start, which the tracer already reads), wrap the read in
+  `SAVEPOINT` and, on a cut, cancel and `ROLLBACK TO SAVEPOINT` (two more
+  round trips per read in a transaction, and an error there would then
+  no longer abort the transaction, a change of its own); or fetch through a
+  portal with a row limit (pgconn has no Execute with maxRows; `DECLARE
+  … CURSOR` + `FETCH`). Read here. Raised while closing N-276.
 
 ## Validate
 
@@ -1214,6 +1205,31 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-276** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  A result cut at `max_rows` still streams the whole result.
+  `db/manager.go:700-702` breaks out of the fetch loop, then the deferred
+  `rows.Close()` (`:684`) drains: pgx's `ResultReader.Close` reads until
+  the command concludes, and mysql's `Rows.Close` skips rows to EOF.
+  Scenario: `SELECT * FROM events` over 100M rows keeps 1,000 and stays
+  "running" while the server ships the rest; `Duration` is taken before
+  the drain, so the status shows milliseconds for a run of minutes.
+  `limitedRows` (`db/schema.go:589`) has the same shape at 250k rows, and
+  so does an early `Reader.Close`/`rollback` (`etl/reader.go:211-240`): a
+  50-row pipeline Preview or `rows.limit` over a huge table reads all of
+  it, though `copyRows` adds a private cancel for exactly this
+  (`etl/copy.go:244-256`). Fix: on truncation cancel a statement-scoped
+  child context before Close on Postgres, `KILL QUERY` on MySQL (a
+  context cancel there closes the connection); give `Reader` its own
+  cancel for Abort and early Close. Also `doneNote`
+  (`workspace/run.go:641`) logs "1000 rows" without "truncated". The loop
+  read here; the drain is from driver source, not run: measure it on the
+  live suites first. Neighbour: N-271. (RPU plan, phase 3)
+  Updated `2026-1113-1449-n271-pg-stop-keeps-session`: N-271 landed, so
+  on Postgres a canceled statement now keeps its connection (a cancel
+  request, `db.pgCancelHandler`): the child-context cancel on truncation
+  costs the session nothing there, pool or pinned.
+  closed 2026-11-13 (RPU plan, phase 3): measured first, then built close to the item's fix. Live, before the change: 1,000 rows of a 3M-row `SELECT` took 1.85 s on Postgres 17 and 3.4 s on MySQL 8.4, pool and session alike; 10M rows took 6.5 s and 10.8 s. `Duration` already included the drain (`stamp` runs after the rows close), so that part of the item was stale. New package `stmtcut` holds a per-statement `Point`, carried in the statement's own context (`Watch`). The driver side fills it in. db's pgx tracer (`pgTagTracer.TraceQueryStart`) calls `SetCancels` with whether the statement started inside a transaction. db's MySQL connector (`mysqlKillConn.QueryContext`/`PrepareContext`) calls `SetKill`, a `KILL QUERY <id>` sent over a fresh connection (`mysqlKillConnector.killQuery`; `kill` now shares `send`). A plain context cancel could not work on MySQL: go-sql-driver stops watching the context as soon as `Rows.Close` begins, and before that a cancel closes the connection. `Point.Close(rows, keepTx)` waits `Grace` (100 ms) before stopping. A rest that arrives within it is read as before, because a stop costs a second connection and, on Postgres, pgx's 100 ms hold. Close then waits for the stop to finish, so a KILL in flight cannot land on the next statement. `run` gives a `Point` to plain reads only (`isRead`). `readSets` closes a set cut at max_rows through it and skips the further sets and `rows.Err`, but still returns the caller's own cancel. `keepTx` keeps a Postgres read inside the user's transaction reading to the end, because a cancel would abort the transaction. `limitedRows` cuts at its bound the same way. `etl.Reader` runs only its query under a `Point` (the transaction and pins keep the caller's context, so the stop is followed by a ROLLBACK on a live connection, not a discarded one). It marks Postgres cancelable itself. An early `Close` stops a `plainRead` (lexical: read verb, no writing CTE, no INTO) and commits only if the rest had already arrived; a query that writes is read to the end and committed, as before. `rollback`/`Abort` and a failed read always stop. `copyRows`'s own immediate cancel stays. `doneNote` says `1000 rows (truncated at max_rows)`. Found live: Postgres does not act on a cancel while it sends a `DELETE … RETURNING`'s rows, because it has run the delete to the end first. A cancel during a plain read's send does stop it. On MySQL 8.4, a `KILL QUERY` that reaches an idle connection does not stop its next statement. Tests: `db/live_cut_test.go`: `TestLiveCut` (pool, and a session that keeps its id and SET; nothing left running), `TestLiveCutInTransaction` (Grace 0; the transaction keeps its insert until ROLLBACK), `TestLiveCutOnlyPlainReads` (`set_config` per row / `@n := @n + 1` read to the end; a `DELETE … RETURNING` deletes all), `TestLiveCutMySQLLateKill`, `TestLiveCutCatalogRead`. `etl/live_cut_test.go`: `TestLiveReaderCut` (Close, held Close and Abort on dbc's pools, both engines), `TestLiveReaderCutKeepsAWrite`, `TestLiveReaderCutLeavesNoTransaction` (same backend after the stop, the pinned `extra_float_digits` gone). Unit: `stmtcut` (fake driver: no stop within Grace; a stop after it that Close waits for; the cancel is the statement's own; the stopper table), `etl` `TestPlainRead`, `workspace` `TestDoneNoteSaysTruncated`. Each guard was disabled in turn, and each time a test failed: no stop (6.5–10.8 s), keepTx ignored (25P02), writes and stateful reads cut (setting empty, `@n` 3197), the Reader's stop or its plain check removed. The cut reads now return in ~0.2 s (the Reader's on MySQL in ~0.1 s). README: the `max_rows` paragraph (the cut, the two cases still read to the end) and the Reader section (early Close/Abort stop the query). `sdb/sdbapi/api.json` regenerated (the Reader.Close doc). Raised N-324.
 
 - **N-275** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Completion requests can fill the browser's six connections.

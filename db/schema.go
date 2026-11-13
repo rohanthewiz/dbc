@@ -12,6 +12,7 @@ import (
 	"github.com/rohanthewiz/serr"
 
 	"github.com/rohanthewiz/dbc/erd"
+	"github.com/rohanthewiz/dbc/stmtcut"
 )
 
 // Reading a connection's schema for an entity-relationship diagram: every
@@ -571,8 +572,16 @@ func stringRows(ctx context.Context, dbh *sql.DB, q string) ([][]string, error) 
 // query had more rows than that; the rest are not read. It is the shared
 // reader behind stringRows (where more is an error) and Manager.Catalog
 // (where more is a note), and unlike Run it ignores max_rows.
+//
+// "Not read" holds on the server too: a query past its limit is stopped
+// there (stmtcut) rather than streamed to the end by rows.Close, which a
+// catalog of millions of objects would otherwise do before a read cut at
+// maxSchemaRows could report it (N-276). Every query here is a catalog read
+// on the pool, so stopping one loses nothing.
 func limitedRows(ctx context.Context, dbh *sql.DB, q string, limit int) (cols []string, out [][]string, truncated bool, err error) {
-	rows, err := dbh.QueryContext(ctx, q)
+	qctx, pt := stmtcut.Watch(ctx)
+	defer pt.Release()
+	rows, err := dbh.QueryContext(qctx, q)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -587,6 +596,9 @@ func limitedRows(ctx context.Context, dbh *sql.DB, q string, limit int) (cols []
 	}
 	for rows.Next() {
 		if len(out) >= limit {
+			// The pool's connections are never inside a transaction, so
+			// keepTx changes nothing here.
+			pt.Close(rows, true)
 			return cols, out, true, nil
 		}
 		if err = rows.Scan(ptrs...); err != nil {

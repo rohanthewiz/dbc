@@ -317,6 +317,36 @@ func TestTUI(t *testing.T) {
 		}
 	})
 
+	step(t, "formatting a deeply nested generated query keeps the editor (N-281)", func() {
+		// an ORM's left-nested disjunction, 20,000 deep (~290 KB on one
+		// line), pasted into a tab of its own and formatted. Formatting
+		// runs on the event loop; before N-281 each level that did not fit
+		// measured its whole subtree, and this took ~27 s with the editor
+		// frozen. Now ~50 ms.
+		u.key('t', uv.ModAlt)
+		u.waitFor("Type SQL here")
+		u.click("Type SQL here", 0)
+		const depth = 20000
+		var q strings.Builder
+		q.WriteString("SELECT * FROM t WHERE " + strings.Repeat("(", depth) + "a = 0")
+		for i := 1; i <= depth; i++ {
+			fmt.Fprintf(&q, " OR a = %d)", i)
+		}
+		u.raw("\x1b[200~" + q.String() + "\x1b[201~")
+		// the view follows the caret to the end of the one long line
+		u.waitFor(fmt.Sprintf("OR a = %d)", depth-1))
+		began := time.Now()
+		u.raw("\x1bF") // Alt+Shift+F as a legacy terminal sends it: ESC F
+		u.waitFor("formatted the buffer")
+		took := time.Since(began)
+		t.Logf("formatting a %d-deep OR chain (%d KB) took %s", depth, q.Len()/1024, took.Round(time.Millisecond))
+		if took > 3*time.Second {
+			t.Errorf("formatting a %d-deep query took %s: a measurement per level of its whole subtree again?", depth, took.Round(time.Millisecond))
+		}
+		// the clauses on lines of their own: it was laid out, not refused
+		u.waitFor("SELECT *", "FROM t", "WHERE")
+	})
+
 	step(t, "Ctrl+Q quits", func() {
 		u.quit()
 	})

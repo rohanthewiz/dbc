@@ -255,6 +255,10 @@ const (
 	fmtWidth  = 80   // the column a line breaks before, when it can
 )
 
+// fmtIndents is 64 levels of indent in one string, which nl copies from: a
+// deeper line takes it more than once.
+var fmtIndents = strings.Repeat(fmtIndent, 64)
+
 // ---------------------------------------------------------------------------
 // Unwrap: from a log line or a string literal back to SQL
 // ---------------------------------------------------------------------------
@@ -990,6 +994,13 @@ func clauseHead(nodes []fnode, i int) (int, clKind) {
 // broken anything that cannot sit on one line — a line comment, a text with
 // a line break, a subquery of more than two clauses — so the caller knows
 // to break it instead.
+//
+// A flat measurement stops as soon as its answer is known (done): past
+// limit, or broken, the piece cannot fit, and laying out the rest would not
+// change that. Without the stop, each level of a nesting that does not fit
+// measured its whole subtree, and the layout cost the input's size times its
+// depth (N-281): a generated ((a = 0 OR a = 1) OR …) 5,000 deep took 1.7 s,
+// 20,000 deep 27 s. With it, a measurement writes at most about a line.
 type fmtWriter struct {
 	buf       []byte
 	lineStart int   // where the current line starts in buf
@@ -1000,7 +1011,18 @@ type fmtWriter struct {
 	breakNext bool  // a line comment ended the line: the next token starts a new one
 	flat      bool
 	broken    bool
+	// limit is, in flat mode, the most columns the piece may take: the
+	// width left on the line try measures for
+	limit int
 }
+
+// done reports that a flat measurement already knows its piece does not fit,
+// so nothing more need be written. In flat mode col only grows: nl does
+// nothing there, and the one thing that moves col back — a token holding a
+// line break — sets broken. So once col is past limit it stays past, and
+// broken never clears; either way try's answer is "no" whatever follows.
+// Never true in the normal mode.
+func (w *fmtWriter) done() bool { return w.flat && (w.broken || w.col > w.limit) }
 
 // nl starts a new line at indent level n. On a line that holds nothing yet
 // it only resets the indent, so breaks asked for twice never leave a blank
@@ -1015,7 +1037,17 @@ func (w *fmtWriter) nl(n int) {
 		w.buf = append(w.buf, '\n')
 		w.lineStart = len(w.buf)
 	}
-	w.buf = append(w.buf, strings.Repeat(fmtIndent, n)...)
+	// the indent straight into buf, copied from fmtIndents a run at a time:
+	// strings.Repeat made a string per line first, as much allocation as
+	// the output's indents (most of a deeply nested statement's output),
+	// and appending fmtIndent once per level was slower still at depth. k
+	// and len(fmtIndents) are both multiples of len(fmtIndent), so every
+	// run copied is whole indents.
+	for k := n * len(fmtIndent); k > 0; {
+		c := min(k, len(fmtIndents))
+		w.buf = append(w.buf, fmtIndents[:c]...)
+		k -= c
+	}
 	w.col, w.indent, w.prev, w.glue, w.breakNext = n*len(fmtIndent), n, nil, false, false
 }
 
@@ -1029,7 +1061,7 @@ func (w *fmtWriter) blank() {
 // tok writes one token, with the space before it that its neighbors call
 // for.
 func (w *fmtWriter) tok(t *ftok) {
-	if t == nil {
+	if t == nil || w.done() {
 		return
 	}
 	comment := t.kind == ftLineComment || t.kind == ftBlockComment
@@ -1142,7 +1174,10 @@ func (w *fmtWriter) try(nodes ...fnode) bool {
 	if w.breakNext {
 		w.nl(w.indent) // start the line a comment ended, then measure from it
 	}
-	m := &fmtWriter{flat: true, prev: w.prev, glue: w.glue}
+	// limit makes m stop once it is past the line's end (done); the test
+	// below is m.done() spelled out, as it was before the stop: m.col past
+	// fmtWidth-w.col is w.col+m.col past fmtWidth
+	m := &fmtWriter{flat: true, prev: w.prev, glue: w.glue, limit: fmtWidth - w.col}
 	m.inline(nodes)
 	if m.broken || w.col+m.col > fmtWidth {
 		return false
@@ -1153,9 +1188,14 @@ func (w *fmtWriter) try(nodes ...fnode) bool {
 	return true
 }
 
-// inline writes nodes one after another, each group laid out by its kind.
+// inline writes nodes one after another, each group laid out by its kind. A
+// flat measurement that is done stops here, so the walk ends with the
+// writing: tok alone would skip the text but still visit every node below.
 func (w *fmtWriter) inline(nodes []fnode) {
 	for _, n := range nodes {
+		if w.done() {
+			return
+		}
 		w.node(n)
 	}
 }
@@ -1234,11 +1274,17 @@ func (w *fmtWriter) block(n fnode, items [][]fnode) {
 // n. In flat mode the clauses run on one line, and a query of more than two
 // clauses marks it broken.
 func (w *fmtWriter) seq(nodes []fnode, n int) {
+	if w.done() {
+		return // before cutting clauses, a pass over every node
+	}
 	cls := clauses(nodes)
 	if w.flat && len(cls) > 2 {
 		w.broken = true
 	}
 	for i, c := range cls {
+		if w.done() {
+			return
+		}
 		if i > 0 {
 			w.nl(n)
 		}

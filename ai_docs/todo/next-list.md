@@ -78,15 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-281** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  The formatter is O(tokens × nesting depth)
-  (`sqlsplit/format.go:987-1004`: `try` lays out the whole subtree at
-  every level, with no early exit past column 80). Left-nested
-  `((a=0 OR a=1) OR …)`: depth 5,000 (69 KB) 1.4 s, 10,000 (139 KB)
-  5.9 s, 20,000 (289 KB) 27 s; 100k bare parens 2 m 43 s. A generated
-  query pasted and formatted freezes the editor. Fix: stop the flat
-  measurement once it is over the width, or memoise flat widths per
-  node. Audit, run. (RPU plan, phase 3)
 - **N-282** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   A result is held twice and an export about four times.
   `db/manager.go:707-715` builds `Rows` and `Raw` with two to three
@@ -404,6 +395,15 @@ ten session docs in `ai_docs/claude_sessions/`
   the preferred effort (`ai_effort`) and the effort chosen before it. The
   test came in with `34909b9` (ai_effort, 2026-11-12). Raised while
   closing N-273.
+  Updated `2026-1116 (this session; doc to come)`, with N-281: a full
+  `-race` run reported a data race in the test fake, under
+  `TestChatArchiveNewOpenDelete`. Every chat a test server starts shares
+  one `aitest.Fake` (`chatEnv`, `web/chat_test.go:29`), and `aitest.Start`
+  overwrites its `out` and `cancel` (`ai/aitest/fake.go:55`) while the
+  previous session's `serve` goroutine still reads them (`:123`). A
+  restarted chat's predecessor can so write into the new chat's pipe; a
+  model switch restarts the chat, so this is a likely cause of the flake.
+  Fix: a Fake state per Start that the old goroutine keeps. Not fixed.
 - **N-322** · raised `2026-1113-1541-n273-unknown-keys-dollar-escape` · value low
   `os.Expand` (behind `config.expandEnv`) drops an unterminated `${` and an
   empty `${}` without calling the lookup, so no warning is given: a
@@ -824,10 +824,14 @@ and `raised`.
   `BenchmarkKeyBigBufferNewStep`), and a whole split of it against
   `Splitting.Edit` after one typed byte (`sqlsplit/resplit_test.go`,
   N-279); completion on a 5,000-table catalog, one schema and three
-  (`BenchmarkCompleteBig`, `sqlcomplete/cost_test.go`, N-280).
+  (`BenchmarkCompleteBig`, `sqlcomplete/cost_test.go`, N-280); deep
+  generated SQL through the formatter (`BenchmarkFormatDeep`,
+  `sqlsplit/formatcost_test.go`, N-281).
   The first budget: `TestCompleteCostsWhatItKeeps` (same file, N-280)
   bounds a completion's allocations per table in the catalog — counted,
   not timed, so it runs in the ordinary suite and under -race.
+  The second: `TestFormatCostsWhatItHolds` (N-281) bounds the formatter's
+  bytes allocated per input byte on 8,000-deep nestings.
 - **N-304** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   A linter in CI. `test.yml` runs build, vet and the race tests and no
   static analysis. The local `staticcheck` was built with Go 1.24 and
@@ -1187,6 +1191,17 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-281** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  The formatter is O(tokens × nesting depth)
+  (`sqlsplit/format.go:987-1004`: `try` lays out the whole subtree at
+  every level, with no early exit past column 80). Left-nested
+  `((a=0 OR a=1) OR …)`: depth 5,000 (69 KB) 1.4 s, 10,000 (139 KB)
+  5.9 s, 20,000 (289 KB) 27 s; 100k bare parens 2 m 43 s. A generated
+  query pasted and formatted freezes the editor. Fix: stop the flat
+  measurement once it is over the width, or memoise flat widths per
+  node. Audit, run. (RPU plan, phase 3)
+  closed 2026-11-16 (RPU plan, phase 3): measured first. New `BenchmarkFormatDeep` (`sqlsplit/formatcost_test.go`) over generated nestings. HEAD → now: a left-nested OR chain 1,000 deep 58 ms → 1.6 ms, 5,000 deep 1.7 s and 774 MB → 10 ms and 24 MB, 20,000 deep (the item's 27 s) → 44 ms; right-nested 5,000 deep 1.4 s → 10 ms; 10,000 bare parens 1.7 s → 7.4 ms, 100,000 (the item's 2 m 43 s) → 77–93 ms; two-argument calls nested 1,000 deep 47 ms → 4.3 ms. Linear now, about 2 µs a level. How: a flat measurement (`try`) stops as soon as its answer is known (`fmtWriter.done`: past `limit`, the width left on the line, or broken). In flat mode col only grows — `nl` does nothing there, and the one thing that moves col back, a token holding a line break, sets broken — so once past the limit the answer cannot change. `tok` writes nothing once done, and `inline` and `seq` stop walking, so the walk ends with the writing. Also `nl` writes the indent into the buffer from a 64-level run (`fmtIndents`) instead of a `strings.Repeat` per line (calls 1,000 deep: 25.9 → 22.7 MB; appending one indent per level was slower, 10 ms, and was dropped). Output unchanged: every Format and FormatSpan result over 27,633 inputs × 5 dialects × 3 keyword cases (414,510 calls) is byte-identical to HEAD's — the repo's SQL-looking Go string literals, the committed and cached FuzzFormat/FuzzSplit corpora, 20,000 random statements with names sized to land around column 80, and the deep shapes up to 300 deep (a throwaway test, not committed). Tests: `TestFormatCostsWhatItHolds`, a budget in bytes allocated per input byte at 8,000 deep (at most 2,000; now 351 for the OR chains and 723 for bare parens, HEAD about 18,000), which fails on HEAD and counts the same under -race. TUI e2e step "formatting a deeply nested generated query keeps the editor (N-281)": a 20,000-deep OR chain (282 KB) pasted and formatted with Alt+Shift+F in 105 ms; with HEAD's formatter it times out at 15 s. Full `./...` -race green but for `web` (TestChatEffort, N-321, and a race report in TestChatArchiveNewOpenDelete, recorded on N-321); both passed 5 reruns. FuzzFormat, run for this item, turned up three older problems, closed as N-329, N-330 and N-331 in commits of their own.
 
 - **N-280** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Completion builds every doc before filtering

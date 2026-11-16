@@ -2,6 +2,8 @@ package e2e
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -345,6 +347,55 @@ func TestTUI(t *testing.T) {
 		}
 		// the clauses on lines of their own: it was laid out, not refused
 		u.waitFor("SELECT *", "FROM t", "WHERE")
+	})
+
+	step(t, "a 300,000-row result sorts and exports without freezing the screen (N-282)", func() {
+		// max_rows is raised in this config (writeConfig). Before N-282 a
+		// sort of this many rows of mixed-case text ran in Update, lower-
+		// casing both sides of every comparison: about 1.5 s with the
+		// screen frozen, and the export's projection and render after it.
+		// Now the sort's keys are made once and, past 50,000 rows, the
+		// sort runs off the loop, the strip saying "sorting by …"; the
+		// export is written by a command.
+		u.key('t', uv.ModAlt)
+		u.waitFor("Type SQL here")
+		u.click("Type SQL here", 0)
+		// every label mixed-case, with a long shared prefix: the shape that
+		// made each comparison lower-case two strings and read far into
+		// them (labels like "A1", "b2" sorted in 0.1 s even then). The
+		// numbers are a scramble of i (7919 is prime to 300,000), so each
+		// is used once and the sort has work to do.
+		u.typeText("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 300000) " +
+			"SELECT i AS id, 'Customer ' || ((i * 7919 + 13) % 300000) || ' of Region ' || (i % 37) AS label FROM n;")
+		u.ctrl('r')
+		u.waitFor("300000 rows")
+		began := time.Now()
+		u.click("│ label", 3)
+		u.waitUntil("the strip answers the click", func(s string) bool {
+			return strings.Contains(s, "sorting by label asc…") || strings.Contains(s, "sorted by label asc")
+		})
+		answered := time.Since(began)
+		u.waitFor("sorted by label asc", "│ Customer 0 of Region ")
+		t.Logf("a 300,000-row sort: the strip answered in %s, the rows moved in %s",
+			answered.Round(time.Millisecond), time.Since(began).Round(time.Millisecond))
+		if answered > time.Second {
+			t.Errorf("the screen took %s to answer a header click: is the sort back in Update?", answered.Round(time.Millisecond))
+		}
+
+		path := filepath.Join(e.home, "big.csv")
+		u.ctrl('e')
+		u.typeText(path) // typing on the format row starts the path
+		u.key(uv.KeyEnter)
+		u.waitFor("exported the result (300000 rows)")
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+		// in the grid's order: sorted by label, so Customer 0 first
+		if len(lines) != 300001 || lines[0] != "id,label" || !strings.Contains(lines[1], ",Customer 0 of Region ") {
+			t.Errorf("the export has %d lines, starting %q", len(lines), lines[:min(3, len(lines))])
+		}
 	})
 
 	step(t, "Ctrl+Q quits", func() {

@@ -136,6 +136,10 @@ func (m *Model) parkGrid() {
 	if m.gridFor == 0 {
 		return
 	}
+	// a sort it asked for this message still runs, and lands on it parked
+	if c := m.grid.takeSort(); c != nil {
+		m.parkedSorts = append(m.parkedSorts, c)
+	}
 	if m.rgrids == nil {
 		m.rgrids = map[string]map[int]*grid{}
 	}

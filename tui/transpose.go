@@ -383,21 +383,13 @@ func (g *grid) drawFlip(s Surface, st styles, focused bool) {
 		if g.sortDesc {
 			dir = "desc"
 		}
-		strip.PutRight(strip.W()-1, 0, "sorted by "+g.res.Columns[g.sortCol]+" "+dir, st.muted)
+		label := "sorted by " + g.res.Columns[g.sortCol] + " " + dir
+		if g.sorting {
+			label = "sorting by " + g.res.Columns[g.sortCol] + " " + dir + "…"
+		}
+		strip.PutRight(strip.W()-1, 0, label, st.muted)
 	}
 	g.hbar = strip.Rect()
-}
-
-// selFirst is the 1-based display number of the first row a copy of the
-// selection (or, with whole, of the result) holds — what a transposed copy
-// heads its first record with, so "row 17" in the copy is row 17 in the
-// grid.
-func (g *grid) selFirst(whole bool) int {
-	if whole || g.Rows() == 0 {
-		return 1
-	}
-	r0, _, _, _ := g.bounds()
-	return r0 + 1
 }
 
 // ---------------------------------------------------------------------------
@@ -416,33 +408,56 @@ func (m *Model) transposeGrid() tea.Cmd {
 	return nil
 }
 
-// copyPiece copies a piece of the grid — r, an upright slice in display
-// order, whose first row is display row first (1-based) — the way the grid
-// shows it: upright as it is, transposed turned on its side. That is dbc
-// web's rule (web/grid.go handleCopy): the plain copy (y, Y) carries the
-// values in the grid's orientation with no names, and every formatted copy
-// is export.Transpose's — names down the left, a record per column, a
+// copyPiece copies a piece of the grid — p, an upright rectangle in display
+// order, whose first row is display row p.first (1-based) — the way the
+// grid shows it: upright as it is, transposed turned on its side. That is
+// dbc web's rule (web/grid.go handleCopy): the plain copy (y, Y) carries
+// the values in the grid's orientation with no names, and every formatted
+// copy is export.Transpose's — names down the left, a record per column, a
 // single record as "column | value".
-func (m *Model) copyPiece(r *model.Result, what string, first int, f copyFormat) tea.Cmd {
-	if r == nil {
+//
+// The piece is built, turned and rendered on the copy's command goroutine,
+// not here in Update (piece, renderCopyCmd).
+func (m *Model) copyPiece(p *piece, f copyFormat) tea.Cmd {
+	if p == nil {
 		m.log(logWarn, noResult)
 		return nil
 	}
-	if !m.grid.flip {
-		return m.copyResult(r, what, f)
+	if p.flip && f == copyText {
+		what := p.what + ", transposed"
+		return func() tea.Msg {
+			return writeClip(clip.Content{Text: export.PlainCellsTransposed(p.build())}, what)
+		}
 	}
-	if f == copyText {
-		return clipCmd(clip.Content{Text: export.PlainCellsTransposed(r)}, what+", transposed")
-	}
-	return m.copyResult(export.Transpose(r, first), what, f)
+	return renderCopyCmd(p.buildTurned, p.what, f)
 }
 
-// gridView is what an export takes: the whole result in display order,
-// hidden columns out — and, transposed, on its side, as the grid shows it.
-func (m *Model) gridView() (*model.Result, string) {
-	r, what := m.grid.Selected(true)
-	if r != nil && m.grid.flip {
-		r, what = export.Transpose(r, 1), strings.TrimSuffix(what, ")")+", transposed)"
+// buildTurned is the piece built as the grid shows it: on its side when
+// the grid is transposed.
+func (p *piece) buildTurned() *model.Result {
+	r := p.build()
+	if p.flip {
+		r = export.Transpose(r, p.first)
 	}
-	return r, what
+	return r
+}
+
+// viewPiece is what an export takes: the whole result in display order,
+// hidden columns out — and, transposed, on its side (buildTurned), as the
+// grid shows it — taken now and built off the event loop.
+func (m *Model) viewPiece() *piece {
+	p := m.grid.selectedPiece(true)
+	if p != nil && p.flip {
+		p.what = strings.TrimSuffix(p.what, ")") + ", transposed)"
+	}
+	return p
+}
+
+// gridView is viewPiece built here and now.
+func (m *Model) gridView() (*model.Result, string) {
+	p := m.viewPiece()
+	if p == nil {
+		return nil, ""
+	}
+	return p.buildTurned(), p.what
 }

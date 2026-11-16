@@ -198,7 +198,7 @@ func (m *Manager) query(ctx context.Context, ex execQuerier, name, stmt string, 
 func (m *Manager) readSets(ctx context.Context, rows *sql.Rows, name, stmt string, pt *stmtcut.Point) (*model.Result, error) {
 	first, err := m.readSet(ctx, rows, name, stmt)
 	if err != nil {
-		return nil, err
+		return nil, sinkStop(rows, pt, err)
 	}
 	if first.Truncated && pt != nil {
 		pt.Close(rows, true)
@@ -219,7 +219,7 @@ func (m *Manager) readSets(ctx context.Context, rows *sql.Rows, name, stmt strin
 		}
 		set, err := m.readSet(ctx, rows, name, stmt)
 		if err != nil {
-			return nil, err
+			return nil, sinkStop(rows, nil, err)
 		}
 		first.More = append(first.More, set)
 	}
@@ -232,7 +232,30 @@ func (m *Manager) readSets(ctx context.Context, rows *sql.Rows, name, stmt strin
 	return first, nil
 }
 
-// readSet reads the result set rows is positioned on, up to max_rows of it.
+// sinkStop is what readSets does with a set's read error. A RowSink's own
+// error (sinkErr) means the rows are no longer wanted: a plain read (pt)
+// is stopped on the server, as a cut at max_rows is, instead of drained by
+// rows.Close; and the sink's error is handed back unwrapped. Any other
+// error is the statement's, and passes as it is.
+func sinkStop(rows *sql.Rows, pt *stmtcut.Point, err error) error {
+	var se sinkErr
+	if !errors.As(err, &se) {
+		return err
+	}
+	if pt != nil {
+		pt.Close(rows, true)
+	}
+	return se.err
+}
+
+// readSet reads the result set rows is positioned on, up to max_rows of it:
+// into the Result, or, when ctx carries a RowSink (StreamRows), to the sink
+// one row at a time, leaving the Result its columns alone.
+//
+// Each cell is converted once, by its Scan destination (cell, in cell.go),
+// and the row's display text and raw value share that conversion; the
+// held rows' slices come from a rowSlab. Under a sink one pair of slices
+// serves every row.
 func (m *Manager) readSet(ctx context.Context, rows *sql.Rows, name, stmt string) (*model.Result, error) {
 	cols, err := rows.Columns()
 	if err != nil {
@@ -240,33 +263,75 @@ func (m *Manager) readSet(ctx context.Context, rows *sql.Rows, name, stmt string
 	}
 
 	result := &model.Result{Conn: name, Query: stmt, Columns: cols}
-	holders := make([]any, len(cols))
-	for i := range holders {
-		holders[i] = new(any)
+	cells := make([]cell, len(cols))
+	dest := make([]any, len(cols))
+	for i := range cells {
+		dest[i] = &cells[i]
 	}
+
+	sink := sinkOf(ctx)
+	var slab *rowSlab
+	var sdisp []string // the sink's one row, reused
+	var sraw []any
+	if sink != nil {
+		sdisp, sraw = make([]string, len(cols)), make([]any, len(cols))
+	} else {
+		slab = newRowSlab(len(cols))
+	}
+	// A set reaches the sink once it has a row, or at its end if it has
+	// columns (an empty result still has a header): never the column-less,
+	// row-less first set that tells runMaybe a statement wrote.
+	started := false
+	start := func() error {
+		if started {
+			return nil
+		}
+		started = true
+		if err := sink.Set(cols); err != nil {
+			return sinkErr{err}
+		}
+		return nil
+	}
+
+	n := 0 // rows read; under a sink, result.Rows stays empty
 	for rows.Next() {
 		if err = ctx.Err(); err != nil {
 			return nil, wrapRunErr(ctx, err, name, "op", "fetch")
 		}
-		if len(result.Rows) >= m.cfg.MaxRows {
+		if n >= m.cfg.MaxRows {
 			result.Truncated = true
 			break
 		}
-		if err = rows.Scan(holders...); err != nil {
+		if err = rows.Scan(dest...); err != nil {
 			return nil, wrapRunErr(ctx, err, name, "op", "scan")
 		}
-		disp := make([]string, len(cols))
-		raw := make([]any, len(cols))
-		for i, h := range holders {
-			v := *(h.(*any))
-			disp[i] = renderVal(v)
-			raw[i] = rawVal(v)
+		n++
+		if sink != nil {
+			for i := range cells {
+				sdisp[i], sraw[i] = cells[i].disp, cells[i].raw
+			}
+			if err = start(); err != nil {
+				return nil, err
+			}
+			if err = sink.Row(sdisp, sraw); err != nil {
+				return nil, sinkErr{err}
+			}
+			continue
+		}
+		disp, raw := slab.row(m.cfg.MaxRows - len(result.Rows))
+		for i := range cells {
+			disp[i], raw[i] = cells[i].disp, cells[i].raw
 		}
 		result.Rows = append(result.Rows, disp)
 		result.Raw = append(result.Raw, raw)
 	}
 	if err = rows.Err(); err != nil {
 		return nil, wrapRunErr(ctx, err, name, "op", "iterate")
+	}
+	if sink != nil && len(cols) > 0 {
+		if err = start(); err != nil {
+			return nil, err
+		}
 	}
 	return result, nil
 }

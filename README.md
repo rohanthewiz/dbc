@@ -442,7 +442,7 @@ with no database picker.
 | editor | `Ctrl`+click | go to where the alias or CTE under the pointer is declared |
 | results | click, drag, shift-click | cell, rectangular range, extend |
 | results | row number click | selects the row |
-| results | header click | sorts by that column (again: descending; again: result order) |
+| results | header click | sorts by that column (again: descending; again: result order). A result of more than 50,000 rows sorts in the background: the strip says `sorting by …` until the rows move. Copies and exports of a large result are also rendered in the background |
 | results | header border drag / double-click | resizes the column / fits it to its content (past the 40-cell auto-size cap) |
 | results | header right-click | hide that column (or the selected range's); hidden ones are listed there to show again |
 | results | double-click | inspects the value in full (JSON is pretty-printed) |
@@ -3179,7 +3179,14 @@ the first, if the run has not stopped, dbc says so.
 
 A result cut at `max_rows` says so on stderr (`note: result truncated at 1000
 rows`), so a CSV export that looks complete is not quietly short; `--max-rows
-0` exports all of it (the whole result is held in memory first). A write that
+0` exports all of it. A single statement in `csv` or `tsv` streams: each row
+is written as the database sends it and none is held, so a table of any size
+exports in the memory of one row. The other formats hold the result once
+(the JSON is still written a row at a time), as does a run of several
+statements. A streamed export that fails part way, by a statement error or a
+`Ctrl+C`, has already written its first rows to stdout, and exits non-zero.
+`-o` always writes beside the file and renames it into place when the output
+is complete, so a run that fails leaves the old file as it was. A write that
 fails, such as a full disk under `> file.csv`, exits 1. With no config file,
 a run on a built-in demo connection says on stderr where dbc looked
 (`note: no config file found (looked for …)`), so cron under another `HOME`

@@ -1,13 +1,19 @@
 package export
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	stdhtml "html"
+	"io"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rohanthewiz/element"
 	"github.com/rohanthewiz/serr"
@@ -55,24 +61,55 @@ func ParseFormat(s string) (Format, error) {
 
 // Render produces the result in the requested format.
 func Render(r *model.Result, f Format) (string, error) {
-	if r == nil {
-		return "", serr.New("no result to export")
+	var sb strings.Builder
+	if err := Write(&sb, r, f); err != nil {
+		return "", err
 	}
+	return sb.String(), nil
+}
+
+// Write renders r in format f to w: Render, without the document in
+// memory (N-282). A 1M-row export used to be held as the result, then as
+// the rendered string, then as a []byte copy of it for os.WriteFile — and
+// for JSON, as a map per row and two encoder buffers before that. Written
+// here, the CSV, TSV, Markdown, text and JSON renderings go out a row at a
+// time through one buffer; HTML is still built whole (the element builder
+// holds its document) and written once.
+//
+// The bytes are Render's, exactly: Render is Write into a strings.Builder.
+//
+// A failure part way — w's own, or JSON's refusal of a value (NaN) — is
+// returned, and what was written before it stays written: a caller that
+// must not leave a partial file writes through WriteFile.
+func Write(w io.Writer, r *model.Result, f Format) error {
+	if r == nil {
+		return serr.New("no result to export")
+	}
+	bw := bufio.NewWriter(w)
+	var err error
 	switch f {
 	case CSV:
-		return delimited(r, ',')
+		err = delimited(bw, r, ',')
 	case TSV:
-		return delimited(r, '\t')
+		err = delimited(bw, r, '\t')
 	case Markdown:
-		return markdown(r), nil
+		markdown(bw, r)
 	case HTML:
-		return htmlDoc(r), nil
+		_, _ = bw.WriteString(htmlDoc(r))
 	case JSON:
-		return jsonArr(r)
+		err = jsonArr(bw, r)
 	case Text:
-		return TextTable(r), nil
+		writeText(bw, r)
+	default:
+		return serr.New("unknown format", "format", string(f))
 	}
-	return "", serr.New("unknown format", "format", string(f))
+	// bufio.Writer keeps its first write error and turns every later write
+	// into a no-op, so the renderers need not check each one: Flush reports
+	// it. A renderer's own error comes first, as the cause.
+	if ferr := bw.Flush(); err == nil && ferr != nil {
+		err = serr.Wrap(ferr)
+	}
+	return err
 }
 
 // RenderAll produces one document holding the results of a multi-statement
@@ -98,34 +135,50 @@ func RenderAll(rs []*model.Result, f Format) (string, error) {
 // their own at the statement's position): those are a multi-result
 // document too, each block bannered "1/1".
 func RenderRun(rs []*model.Result, at []int, total int, f Format) (string, error) {
+	var sb strings.Builder
+	if err := WriteRun(&sb, rs, at, total, f); err != nil {
+		return "", err
+	}
+	return sb.String(), nil
+}
+
+// WriteRun is RenderRun to w, as Write is Render: the same bytes, written
+// a block (and within a block, a row) at a time. The arguments are checked
+// before anything is written.
+func WriteRun(w io.Writer, rs []*model.Result, at []int, total int, f Format) error {
 	switch {
 	case len(rs) == 0:
-		return "", serr.New("no result to export")
+		return serr.New("no result to export")
 	case len(at) != len(rs):
-		return "", serr.New("a position is needed for every result",
+		return serr.New("a position is needed for every result",
 			"results", fmt.Sprint(len(rs)), "positions", fmt.Sprint(len(at)))
 	case total == 1 && len(rs) == 1:
-		return Render(rs[0], f)
+		return Write(w, rs[0], f)
 	}
 	switch f {
 	case CSV, TSV, Markdown, Text:
-		// Block formats go through RenderBlock, the same call a streaming
+		// Block formats go through WriteBlock, the same call a streaming
 		// caller makes one result at a time, so the two can never drift.
-		blocks := make([]string, 0, len(rs))
 		for i, r := range rs {
-			b, err := RenderBlock(r, f, at[i], total)
-			if err != nil {
-				return "", err
+			if i > 0 {
+				if _, err := io.WriteString(w, BlockSep); err != nil {
+					return serr.Wrap(err)
+				}
 			}
-			blocks = append(blocks, b)
+			if err := WriteBlock(w, r, f, at[i], total); err != nil {
+				return err
+			}
 		}
-		return strings.Join(blocks, BlockSep), nil
+		return nil
 	case HTML:
-		return htmlDocAll(rs, at, total), nil
+		if _, err := io.WriteString(w, htmlDocAll(rs, at, total)); err != nil {
+			return serr.Wrap(err)
+		}
+		return nil
 	case JSON:
-		return jsonAll(rs)
+		return jsonAll(w, rs)
 	}
-	return "", serr.New("unknown format", "format", string(f))
+	return serr.New("unknown format", "format", string(f))
 }
 
 // RenderOpen produces the document a stream of rs writes when the total was
@@ -199,18 +252,28 @@ func Streamable(f Format) bool {
 // n <= 0 means the total is open-ended — a script's results, which arrive
 // until the script returns — and the banner reads "#i" instead of "i/n".
 func RenderBlock(r *model.Result, f Format, i, n int) (string, error) {
-	pos := Pos(i, n)
-	switch f {
-	case CSV:
-		return delimited(r, ',')
-	case TSV:
-		return delimited(r, '\t')
-	case Markdown:
-		return mdBanner(r, pos) + markdown(r), nil
-	case Text:
-		return textBanner(r, pos) + TextTable(r), nil
+	var sb strings.Builder
+	if err := WriteBlock(&sb, r, f, i, n); err != nil {
+		return "", err
 	}
-	return "", serr.New("format is not a block format", "format", string(f))
+	return sb.String(), nil
+}
+
+// WriteBlock is RenderBlock to w.
+func WriteBlock(w io.Writer, r *model.Result, f Format, i, n int) error {
+	if !Streamable(f) {
+		return serr.New("format is not a block format", "format", string(f))
+	}
+	if f == Markdown || f == Text {
+		banner := textBanner(r, Pos(i, n))
+		if f == Markdown {
+			banner = mdBanner(r, Pos(i, n))
+		}
+		if _, err := io.WriteString(w, banner); err != nil {
+			return serr.Wrap(err)
+		}
+	}
+	return Write(w, r, f)
 }
 
 // durText is a result's duration as the banners and the JSON envelope say
@@ -325,66 +388,221 @@ func PlainCells(r *model.Result) string {
 	return strings.Join(lines, "\n")
 }
 
-// ToFile renders the result and writes it to path.
+// ToFile renders the result and writes it to path, through WriteFile: a
+// failure part way leaves whatever was at path as it was.
 func ToFile(r *model.Result, f Format, path string) error {
-	out, err := Render(r, f)
+	return WriteFile(path, func(w io.Writer) error { return Write(w, r, f) })
+}
+
+// WriteFile writes a document to path as write produces it, without
+// holding it: through a File, which is renamed over path once write has
+// returned and the bytes are on disk. On any error path is left as it was.
+func WriteFile(path string, write func(io.Writer) error) error {
+	f, err := Create(path)
 	if err != nil {
 		return err
 	}
-	if err = os.WriteFile(path, []byte(out), 0644); err != nil {
-		return serr.Wrap(err, "path", path)
+	bw := bufio.NewWriterSize(f, 64<<10)
+	if err = write(bw); err == nil {
+		err = bw.Flush()
+	}
+	if err != nil {
+		f.Abort()
+		return err
+	}
+	return f.Commit()
+}
+
+// File is an export on its way to path: written into a temporary file
+// beside it, and put in its place only by Commit.
+//
+//	Create ─► .<name>.<random>.partial ─► Write … ─► Commit ─► Sync, Close, Chmod, Rename ─► path
+//	                                           └───► Abort ──► the .partial removed; path untouched
+//
+// Writing straight into path would cost nothing more, but an export that
+// fails part way — a full disk, a NaN JSON refuses, a statement that errors
+// after its first thousand rows, a Ctrl+C — would leave a truncated file
+// where the last good one was. os.WriteFile of a rendered string had that
+// only for a write failure, since the render came first; a document
+// written as it is made has it for every failure, so the rename. It is the
+// one the pipeline's csv.write sink and the user-files writer do.
+//
+// The file gets the mode of the one it replaces, or 0644 (CreateTemp makes
+// 0600, which would be a change from os.WriteFile's). A path that is a
+// symlink stays one: the file it points at is replaced. A process killed
+// between Create and Commit leaves its dot-named .partial behind.
+//
+// File does not buffer; its writer does (WriteFile, the headless -o).
+type File struct {
+	path   string // as given, for errors
+	target string // path, its symlinks resolved: what the rename replaces
+	mode   os.FileMode
+	tmp    *os.File
+	done   bool // committed or aborted
+}
+
+// Create starts an export to path. Its directory must exist, as
+// os.WriteFile's had to.
+func Create(path string) (*File, error) {
+	f := &File{path: path, target: path, mode: 0o644}
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		f.target = real
+	}
+	if fi, err := os.Stat(f.target); err == nil {
+		f.mode = fi.Mode().Perm()
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(f.target), "."+filepath.Base(f.target)+".*.partial")
+	if err != nil {
+		return nil, serr.Wrap(err, "path", path)
+	}
+	f.tmp = tmp
+	return f, nil
+}
+
+// Write writes to the temporary file.
+func (f *File) Write(p []byte) (int, error) { return f.tmp.Write(p) }
+
+// Commit puts the file in place of path. On an error it aborts, and path
+// is left as it was.
+func (f *File) Commit() (err error) {
+	if f.done {
+		return serr.New("export file already finished", "path", f.path)
+	}
+	defer func() {
+		if err != nil {
+			f.Abort()
+		}
+	}()
+	// fsync before the rename: otherwise a crash just after it can leave
+	// the name pointing at a file whose blocks never reached the disk
+	if err = f.tmp.Sync(); err != nil {
+		return serr.Wrap(err, "path", f.path)
+	}
+	if err = f.tmp.Close(); err != nil {
+		return serr.Wrap(err, "path", f.path)
+	}
+	if err = os.Chmod(f.tmp.Name(), f.mode); err != nil {
+		return serr.Wrap(err, "path", f.path)
+	}
+	if err = os.Rename(f.tmp.Name(), f.target); err != nil {
+		return serr.Wrap(err, "path", f.path)
+	}
+	f.done = true
+	return nil
+}
+
+// Abort drops the temporary file; path is untouched. A no-op once the
+// file is committed or aborted.
+func (f *File) Abort() {
+	if f.done {
+		return
+	}
+	f.done = true
+	_ = f.tmp.Close() // may be closed already (a Commit that failed after it)
+	_ = os.Remove(f.tmp.Name())
+}
+
+// delimited writes r as CSV, or TSV with comma '\t'. csv.Writer buffers
+// on its own and keeps the first write error; its Error reports it.
+func delimited(w io.Writer, r *model.Result, comma rune) error {
+	cw := csv.NewWriter(w)
+	cw.Comma = comma
+	if err := cw.Write(r.Columns); err != nil {
+		return serr.Wrap(err)
+	}
+	for _, row := range r.Rows {
+		if err := cw.Write(row); err != nil {
+			return serr.Wrap(err)
+		}
+	}
+	cw.Flush()
+	if err := cw.Error(); err != nil {
+		return serr.Wrap(err)
 	}
 	return nil
 }
 
-func delimited(r *model.Result, comma rune) (string, error) {
-	var sb strings.Builder
-	w := csv.NewWriter(&sb)
-	w.Comma = comma
-	if err := w.Write(r.Columns); err != nil {
-		return "", serr.Wrap(err)
-	}
-	if err := w.WriteAll(r.Rows); err != nil {
-		return "", serr.Wrap(err)
-	}
-	return sb.String(), nil
-}
-
-func markdown(r *model.Result) string {
+// markdown writes r as a Markdown table. A cell's pipes are escaped and
+// its line breaks become spaces, so it stays one table row.
+func markdown(w *bufio.Writer, r *model.Result) {
 	esc := func(s string) string {
+		// most cells need none of it: three ReplaceAlls that find nothing
+		// still scan, but allocate nothing
 		s = strings.ReplaceAll(s, "|", `\|`)
 		s = strings.ReplaceAll(s, "\r\n", " ")
 		s = strings.ReplaceAll(s, "\n", " ")
 		return s
 	}
-	var sb strings.Builder
-	sb.WriteString("| ")
+	w.WriteString("| ")
 	for i, c := range r.Columns {
 		if i > 0 {
-			sb.WriteString(" | ")
+			w.WriteString(" | ")
 		}
-		sb.WriteString(esc(c))
+		w.WriteString(esc(c))
 	}
-	sb.WriteString(" |\n|")
+	w.WriteString(" |\n|")
 	for range r.Columns {
-		sb.WriteString(" --- |")
+		w.WriteString(" --- |")
 	}
-	sb.WriteString("\n")
+	w.WriteString("\n")
 	for _, row := range r.Rows {
-		sb.WriteString("| ")
+		w.WriteString("| ")
 		for i, v := range row {
 			if i > 0 {
-				sb.WriteString(" | ")
+				w.WriteString(" | ")
 			}
-			sb.WriteString(esc(v))
+			w.WriteString(esc(v))
 		}
-		sb.WriteString(" |\n")
+		w.WriteString(" |\n")
 	}
-	return sb.String()
 }
 
-func jsonArr(r *model.Result) (string, error) {
-	return marshal(rowMaps(r))
+// jsonArr writes r as a JSON array of row objects, one row at a time —
+// the bytes json.MarshalIndent(rowMaps(r), "", "  ") made of the whole
+// array (TestWriteMatchesRender), without a map per row held or the
+// document twice in buffers:
+//
+//	[\n
+//	  {…row 1, indented one level deeper…},\n
+//	  {…row 2…}\n
+//	]\n
+//
+// Each row is the one map, cleared and refilled, encoded with the array's
+// indent as its prefix: Indent puts the prefix after every newline it
+// writes and none before the first byte, which is where the array's own
+// "  " goes. Keys come out sorted, as a map's always did.
+func jsonArr(w *bufio.Writer, r *model.Result) error {
+	if len(r.Raw) == 0 {
+		w.WriteString("[]\n")
+		return nil
+	}
+	keys := jsonKeys(r.Columns)
+	m := make(map[string]any, len(keys))
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf) // reuses its indent buffer row to row
+	enc.SetIndent("  ", "  ")
+	w.WriteString("[\n")
+	for i, row := range r.Raw {
+		clear(m)
+		for ci, key := range keys {
+			if ci < len(row) {
+				m[key] = row[ci]
+			}
+		}
+		buf.Reset()
+		if err := enc.Encode(m); err != nil {
+			return serr.Wrap(err, "row", strconv.Itoa(i+1))
+		}
+		if i > 0 {
+			w.WriteString(",\n")
+		}
+		w.WriteString("  ")
+		// Encode ends every value with a newline; the array's separator
+		// takes its place
+		w.Write(bytes.TrimSuffix(buf.Bytes(), []byte{'\n'}))
+	}
+	w.WriteString("\n]\n")
+	return nil
 }
 
 // rowMaps turns the typed rows into column-keyed objects.
@@ -422,7 +640,13 @@ func jsonKeys(cols []string) []string {
 // jsonAll wraps each result of a multi-statement run in an envelope naming
 // the statement it came from — a bare concatenation of row arrays would lose
 // which rows belong to which statement.
-func jsonAll(rs []*model.Result) (string, error) {
+//
+// The document is built whole, as it was (its envelopes' keys sort with
+// "rows" between "duration" and "statement", so a row cannot go out before
+// its envelope's head is known), and encoded straight to w: an Encoder
+// with the indent writes MarshalIndent's bytes and the newline marshal
+// adds, without the string and []byte copies of them.
+func jsonAll(w io.Writer, rs []*model.Result) error {
 	out := make([]map[string]any, 0, len(rs))
 	for _, r := range rs {
 		m := map[string]any{
@@ -443,15 +667,12 @@ func jsonAll(rs []*model.Result) (string, error) {
 		}
 		out = append(out, m)
 	}
-	return marshal(out)
-}
-
-func marshal(v any) (string, error) {
-	bs, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return "", serr.Wrap(err)
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(out); err != nil {
+		return serr.Wrap(err)
 	}
-	return string(bs) + "\n", nil
+	return nil
 }
 
 // exportCSS dresses the page in the same muted green as the TUI, surface for
@@ -532,49 +753,96 @@ const maxTextColWidth = 60
 
 // TextTable renders an aligned plain-text table (used for terminal output).
 func TextTable(r *model.Result) string {
+	var sb strings.Builder
+	bw := bufio.NewWriter(&sb)
+	writeText(bw, r)
+	_ = bw.Flush() // a strings.Builder does not fail
+	return sb.String()
+}
+
+// textClip is a value as a text table cell: line breaks as spaces, cut to
+// maxTextColWidth runes with an ellipsis. Its rune count comes along, since
+// the caller pads by it.
+//
+// The table used to hold every cell clipped — a second copy of the
+// result, made through a []rune of each value (four bytes a character) —
+// to measure the widths before writing. It now clips each value twice,
+// once to measure and once to write, and a value with no line break, no
+// invalid UTF-8 and at most maxTextColWidth runes (almost all of them) is
+// its own clip, with no allocation either time. The rest go the old way,
+// []rune and back, which is also what turns an invalid byte into U+FFFD —
+// so the text is the same, byte for byte.
+func textClip(s string) (string, int) {
+	if strings.IndexByte(s, '\n') < 0 && utf8.ValidString(s) {
+		if n := utf8.RuneCountInString(s); n <= maxTextColWidth {
+			return s, n
+		}
+	}
+	rs := []rune(strings.ReplaceAll(s, "\n", " "))
+	if len(rs) > maxTextColWidth {
+		return string(rs[:maxTextColWidth-1]) + "…", maxTextColWidth
+	}
+	return string(rs), len(rs)
+}
+
+// textPad is blanks to pad cells from, a slice at a time, in place of a
+// strings.Repeat per cell.
+const textPad = "                                                                "
+
+// writeText writes r as TextTable lays it out: the widest clipped value of
+// each column (or its header) sets the column's width, every column but
+// the last is padded to it, and columns are two spaces apart.
+func writeText(w *bufio.Writer, r *model.Result) {
 	widths := make([]int, len(r.Columns))
 	for i, c := range r.Columns {
-		widths[i] = len([]rune(c))
+		widths[i] = utf8.RuneCountInString(c)
 	}
-	clip := func(s string) string {
-		rs := []rune(strings.ReplaceAll(s, "\n", " "))
-		if len(rs) > maxTextColWidth {
-			return string(rs[:maxTextColWidth-1]) + "…"
-		}
-		return string(rs)
-	}
-	rows := make([][]string, len(r.Rows))
-	for ri, row := range r.Rows {
-		rows[ri] = make([]string, len(row))
+	for _, row := range r.Rows {
 		for ci, v := range row {
-			v = clip(v)
-			rows[ri][ci] = v
-			if ci < len(widths) && len([]rune(v)) > widths[ci] {
-				widths[ci] = len([]rune(v))
+			if _, n := textClip(v); ci < len(widths) && n > widths[ci] {
+				widths[ci] = n
 			}
 		}
 	}
-	var sb strings.Builder
-	writeRow := func(cells []string) {
+	pad := func(n int) {
+		for n > 0 {
+			k := min(n, len(textPad))
+			w.WriteString(textPad[:k])
+			n -= k
+		}
+	}
+	// a header is written as it is, unclipped, as it always was; values
+	// are clipped
+	writeRow := func(cells []string, clip bool) {
 		for i, c := range cells {
 			if i > 0 {
-				sb.WriteString("  ")
+				w.WriteString("  ")
 			}
-			sb.WriteString(c)
-			if pad := widths[i] - len([]rune(c)); pad > 0 && i < len(cells)-1 {
-				sb.WriteString(strings.Repeat(" ", pad))
+			n := 0
+			if clip {
+				c, n = textClip(c)
+			} else {
+				n = utf8.RuneCountInString(c)
+			}
+			w.WriteString(c)
+			if i < len(cells)-1 {
+				pad(widths[i] - n)
 			}
 		}
-		sb.WriteString("\n")
+		w.WriteString("\n")
 	}
-	writeRow(r.Columns)
-	seps := make([]string, len(r.Columns))
-	for i, w := range widths {
-		seps[i] = strings.Repeat("-", w)
+	writeRow(r.Columns, false)
+	for i, wd := range widths {
+		if i > 0 {
+			w.WriteString("  ")
+		}
+		// a rule is exactly its column's width, so it never needs padding
+		for range wd {
+			w.WriteByte('-')
+		}
 	}
-	writeRow(seps)
-	for _, row := range rows {
-		writeRow(row)
+	w.WriteString("\n")
+	for _, row := range r.Rows {
+		writeRow(row, true)
 	}
-	return sb.String()
 }

@@ -130,7 +130,7 @@ func fragCellStyle(numeric []bool, col int) string {
 // because "007" in a varchar column looks numeric and is not; a column of
 // nothing but NULLs is not numeric, since there is no evidence either way.
 //
-// MySQL hands every value back as bytes, which rawVal turns into strings, so
+// MySQL hands every value back as bytes, which db keeps as strings, so
 // MySQL results stay left-aligned. That is the honest answer given what the
 // driver reports, and it costs only alignment.
 func NumericColumns(r *model.Result) []bool {

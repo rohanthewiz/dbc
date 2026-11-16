@@ -84,23 +84,20 @@ type clipDoneMsg struct {
 	html bool   // an HTML flavor was offered
 	rich bool   // and it landed
 	err  error
+	// failed is a copy that never reached the clipboard: its rendering
+	// failed (a NaN for JSON), on the command goroutine that renders it
+	failed error
 }
 
 // copyGrid copies the grid's selection (or cursor cell), or the whole result
 // — as the grid shows it, so transposed it comes out on its side.
 func (m *Model) copyGrid(f copyFormat, whole bool) tea.Cmd {
-	r, what := m.grid.Selected(whole)
-	if r == nil {
-		m.log(logWarn, noResult)
-		return nil
-	}
-	return m.copyPiece(r, what, m.grid.selFirst(whole), f)
+	return m.copyPiece(m.grid.selectedPiece(whole), f)
 }
 
 // copyRow copies the cursor's row (Y), as the grid shows it.
 func (m *Model) copyRow(f copyFormat) tea.Cmd {
-	r, what := m.grid.RowResult()
-	return m.copyPiece(r, what, m.grid.cur.row+1, f)
+	return m.copyPiece(m.grid.rowPiece(), f)
 }
 
 // copyResult renders r in format f and copies it.
@@ -109,19 +106,31 @@ func (m *Model) copyResult(r *model.Result, what string, f copyFormat) tea.Cmd {
 		m.log(logWarn, noResult)
 		return nil
 	}
-	c, err := renderCopy(r, f)
-	if err != nil {
-		m.logf(logErr, "copy failed: %s", serr.StringFromErr(err))
-		return nil
+	return renderCopyCmd(func() *model.Result { return r }, what, f)
+}
+
+// renderCopyCmd builds a Result, renders it in format f and copies it, all
+// on a command goroutine (N-282). The copy's rendering used to run in
+// Update, before its clipboard write went off the loop: a million rows as
+// a table froze the screen for the render, and the projection before it.
+// build is what to copy — a grid piece's projection, on its side when the
+// grid is — and what names it.
+func renderCopyCmd(build func() *model.Result, what string, f copyFormat) tea.Cmd {
+	return func() tea.Msg {
+		r := build()
+		c, err := renderCopy(r, f)
+		if err != nil {
+			return clipDoneMsg{what: what, failed: err}
+		}
+		if f != copyText {
+			what += " as " + f.name()
+		}
+		if r.Transposed && !strings.Contains(what, "transposed") {
+			// dbc web's words: "the result (8 rows) as a table, transposed"
+			what += ", transposed"
+		}
+		return writeClip(c, what)
 	}
-	if f != copyText {
-		what += " as " + f.name()
-	}
-	if r.Transposed && !strings.Contains(what, "transposed") {
-		// dbc web's words: "the result (8 rows) as a table, transposed"
-		what += ", transposed"
-	}
-	return clipCmd(c, what)
 }
 
 // renderCopy is r in format f as clipboard content.
@@ -157,10 +166,14 @@ var clipWrite = clip.Write
 
 // clipCmd writes c to the clipboard on a command goroutine.
 func clipCmd(c clip.Content, what string) tea.Cmd {
-	return func() tea.Msg {
-		rich, err := clipWrite(c)
-		return clipDoneMsg{what: what, text: c.Text, html: c.HTML != "", rich: rich, err: err}
-	}
+	return func() tea.Msg { return writeClip(c, what) }
+}
+
+// writeClip writes c to the clipboard, there and then: the body of a copy
+// command.
+func writeClip(c clip.Content, what string) clipDoneMsg {
+	rich, err := clipWrite(c)
+	return clipDoneMsg{what: what, text: c.Text, html: c.HTML != "", rich: rich, err: err}
 }
 
 // clipMax bounds an OSC 52 fallback: terminals drop oversized sequences
@@ -171,6 +184,10 @@ const clipMax = 1 << 20
 // clipDone reports a copy, falling back to OSC 52 when the local clipboard
 // was unreachable.
 func (m *Model) clipDone(msg clipDoneMsg) tea.Cmd {
+	if msg.failed != nil {
+		m.logf(logErr, "copy failed: %s", serr.StringFromErr(msg.failed))
+		return nil
+	}
 	if msg.err == nil {
 		how := ""
 		switch {

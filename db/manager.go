@@ -1138,26 +1138,11 @@ func pgContext(where string) string {
 	return strings.Join(frames, " ← ")
 }
 
+// renderVal is a driver value's display text: cellValue's (cell.go), the
+// one conversion a query's rows go through, so EXPLAIN's rows read the
+// same. (Its partner rawVal, the typed half, became cellValue's second
+// result when readSet started converting each cell once — N-282.)
 func renderVal(v any) string {
-	switch t := v.(type) {
-	case nil:
-		return "NULL"
-	case []byte:
-		return string(t)
-	case time.Time:
-		return t.Format(time.RFC3339)
-	default:
-		return fmt.Sprint(t)
-	}
-}
-
-func rawVal(v any) any {
-	switch t := v.(type) {
-	case []byte:
-		return string(t)
-	case time.Time:
-		return t.Format(time.RFC3339)
-	default:
-		return v
-	}
+	disp, _ := cellValue(v)
+	return disp
 }

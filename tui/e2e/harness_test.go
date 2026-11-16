@@ -111,6 +111,9 @@ func (e *env) writeConfig(t *testing.T) {
 	}
 	var b strings.Builder
 	b.WriteString("default_connection = \"lite\"\n")
+	// room for the large-result step (N-282); no step relies on the
+	// default cap of 1,000
+	b.WriteString("max_rows = 300000\n")
 	conn := func(name, dsn string) {
 		fmt.Fprintf(&b, "\n[[connection]]\nname = %q\ndriver = \"sqlite\"\ndsn = %q\n", name, dsn)
 	}

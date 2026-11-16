@@ -32,6 +32,17 @@ import (
 // screen of nothing. A numeric column compares numbers, so 10 sorts after
 // 9; anything else compares its text case-insensitively. The sort is
 // stable, so rows that tie keep the result's order.
+//
+// COST (N-282). Each row's key — its lower-cased text, or its number as a
+// float64 — is computed once, before the sort, not twice per comparison:
+// the comparison used to lower-case both texts (an allocation each, for any
+// text with a capital) and reflect on both numbers, about 40 times a row.
+// At 1,000,000 rows of mixed-case text that was 6.1 s and 53M allocations
+// on the TUI's event loop; with the keys made first it is a few hundred
+// milliseconds. The sort is then pdqsort (slices.SortFunc), not a stable
+// merge sort, with the row's own index as the last tie-break: a total order
+// has one sorted arrangement, so the result is the stable sort's exactly,
+// for less work.
 func SortRows(order []int, r *model.Result, col int, desc bool, numeric []bool) {
 	for i := range order {
 		order[i] = i
@@ -39,39 +50,82 @@ func SortRows(order []int, r *model.Result, col int, desc bool, numeric []bool) 
 	if r == nil || col < 0 || col >= len(r.Columns) {
 		return
 	}
-	num := col < len(numeric) && numeric[col]
-	raw := func(ri int) any {
-		if ri < len(r.Raw) && col < len(r.Raw[ri]) {
-			return r.Raw[ri][col]
-		}
-		return nil
+	n := len(order)
+	// null[ri]: the row has no value here (SQL NULL, or a row too short
+	// to reach col), and sorts last both ways
+	null := make([]bool, n)
+	for ri := range n {
+		null[ri] = ri >= len(r.Raw) || col >= len(r.Raw[ri]) || r.Raw[ri][col] == nil
 	}
-	slices.SortStableFunc(order, func(a, b int) int {
-		ra, rb := raw(a), raw(b)
-		switch {
-		case ra == nil && rb == nil:
-			return 0
-		case ra == nil:
-			return 1
-		case rb == nil:
-			return -1
+	// nulls orders a pair when either is NULL (ok): NULLs last, two NULLs
+	// in the result's order
+	nulls := func(a, b int) (c int, ok bool) {
+		switch na, nb := null[a], null[b]; {
+		case na && nb:
+			return a - b, true
+		case na:
+			return 1, true
+		case nb:
+			return -1, true
 		}
-		var c int
-		if num {
-			c = cmp.Compare(toFloat(ra), toFloat(rb))
-		} else {
-			c = cmp.Compare(strings.ToLower(r.Rows[a][col]), strings.ToLower(r.Rows[b][col]))
-		}
+		return 0, false
+	}
+	// keyed turns c, a's key against b's ascending, into the pair's order:
+	// reversed for desc, and a tie broken by the result's order
+	keyed := func(a, b, c int) int {
 		if desc {
 			c = -c
 		}
+		if c == 0 {
+			return a - b
+		}
 		return c
+	}
+	if col < len(numeric) && numeric[col] {
+		keys := make([]float64, n)
+		for ri := range n {
+			if !null[ri] {
+				keys[ri] = toFloat(r.Raw[ri][col])
+			}
+		}
+		slices.SortFunc(order, func(a, b int) int {
+			if c, ok := nulls(a, b); ok {
+				return c
+			}
+			return keyed(a, b, cmp.Compare(keys[a], keys[b]))
+		})
+		return
+	}
+	keys := make([]string, n)
+	for ri := range n {
+		if !null[ri] && ri < len(r.Rows) && col < len(r.Rows[ri]) {
+			keys[ri] = strings.ToLower(r.Rows[ri][col])
+		}
+	}
+	slices.SortFunc(order, func(a, b int) int {
+		if c, ok := nulls(a, b); ok {
+			return c
+		}
+		return keyed(a, b, strings.Compare(keys[a], keys[b]))
 	})
 }
 
 // toFloat converts a Go number to float64 for comparison. Only called on
-// columns export.NumericColumns vouched for.
+// columns export.NumericColumns vouched for. The types the drivers hand
+// back are switched on first; reflect is for the rest.
 func toFloat(v any) float64 {
+	switch t := v.(type) {
+	case int64:
+		return float64(t)
+	case float64:
+		return t
+	case int32:
+		return float64(t)
+	case float32:
+		return float64(t)
+	case int:
+		return float64(t)
+	}
 	rv := reflect.ValueOf(v)
 	switch rv.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:

@@ -58,7 +58,9 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
@@ -620,7 +622,16 @@ func runQueryHeadless(cfg *config.Config, mgr *db.Manager, sql string, f export.
 		stream = &blockStream{out: os.Stdout, notes: os.Stderr, f: f, total: len(stmts)}
 		hooks.onResult = stream.add
 	}
-	run, runErr := runStatements(ctx, sess, stmts, hooks)
+	// A lone CSV/TSV statement hands its rows to rows as they are read
+	// (rowStreams). Only the statement runs under runCtx: BEGIN and COMMIT
+	// above and below keep ctx, so nothing of theirs reaches the sink.
+	var rows *rowStream
+	runCtx := ctx
+	if rowStreams(f, len(stmts)) {
+		rows = newRowStream(openOut(), f)
+		runCtx = db.StreamRows(ctx, rows)
+	}
+	run, runErr := runStatements(runCtx, sess, stmts, hooks)
 
 	// Settle the transaction before anything can exit: fail and canceled
 	// call os.Exit, which skips the deferred Close. (Were it skipped anyway,
@@ -637,9 +648,20 @@ func runQueryHeadless(cfg *config.Config, mgr *db.Manager, sql string, f export.
 		// the run stopped because output did, not because a statement failed
 		fail(stream.err, "render failed")
 	}
-	// output first: a failing statement 3 does not invalidate results 1 and 2.
-	// A streamed run already wrote them, one at a time.
-	if stream == nil && len(run.results) > 0 {
+	switch {
+	case rows != nil && rows.err != nil:
+		// the statement stopped because output did (a full disk), not
+		// because it failed
+		rows.o.failed(rows.err, "write failed")
+	case rows != nil && runErr != nil:
+		// the rows that went out before the failure stay out on stdout;
+		// the --out file is dropped, and the old one kept
+		rows.o.abort()
+	case rows != nil:
+		rows.end(run, f)
+	case stream == nil && len(run.results) > 0:
+		// output first: a failing statement 3 does not invalidate results 1
+		// and 2. A streamed run already wrote them, one at a time.
 		emitRun(run.results, run.at, len(stmts), f)
 	}
 	switch {
@@ -1016,13 +1038,240 @@ func emit(results []*model.Result, f export.Format) {
 // emitRun is emit for a run of total statements in which not every one
 // produced a result: at[i] is results[i]'s 1-based position, so the banners
 // and notes name the statement they are about (see export.RenderRun).
+//
+// The document is written as it is rendered (export.WriteRun), not held
+// as a string and then copied for os.WriteFile (N-282). The truncation
+// notes follow it on stderr: a note printed first scrolls away above a
+// long output, and a streamed one can only come after.
 func emitRun(results []*model.Result, at []int, total int, f export.Format) {
-	out, err := export.RenderRun(results, at, total, f)
-	if err != nil {
-		fail(err, "render failed")
+	o := openOut()
+	if err := export.WriteRun(o.w, results, at, total, f); err != nil {
+		o.failed(err, "render failed")
 	}
 	warnTruncated(os.Stderr, results, at, total)
-	writeOut(out, results)
+	o.finish(os.Stderr, len(results), countRows(results))
+}
+
+// countRows is the rows the results hold, for the "wrote N rows" line.
+func countRows(results []*model.Result) int {
+	rows := 0
+	for _, r := range results {
+		rows += len(r.Rows)
+	}
+	return rows
+}
+
+// headlessOut is where a headless document goes as it is written: stdout,
+// or with -o an export.File, which takes the --out path's place only when
+// the document is whole (finish); a run that fails leaves the old file.
+//
+//	writer ─► w (64 KB bufio) ─► dest (keeps its first error) ─► os.Stdout
+//	                                                         └─► export.File ─► rename onto --out
+//
+// dest remembers its own write error, so a failure can be reported as the
+// write's ("write failed": a full disk, a read-only stdout) rather than the
+// render's, which is all the renderer's returned error could say.
+type headlessOut struct {
+	w    *bufio.Writer
+	dest *errWriter
+	file *export.File // nil for stdout
+}
+
+// errWriter passes writes through and keeps the first error.
+type errWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (e *errWriter) Write(p []byte) (int, error) {
+	n, err := e.w.Write(p)
+	if err != nil && e.err == nil {
+		e.err = err
+	}
+	return n, err
+}
+
+// openOut opens the run's destination: stdout, or the --out file's
+// temporary twin, before anything runs — so a directory that is not there
+// fails the run before a statement is sent.
+func openOut() *headlessOut {
+	o := &headlessOut{}
+	var to io.Writer = os.Stdout
+	if flagOut != "" {
+		f, err := export.Create(flagOut)
+		if err != nil {
+			fail(err, "write failed")
+		}
+		o.file, to = f, f
+	}
+	o.dest = &errWriter{w: to}
+	o.w = bufio.NewWriterSize(o.dest, 64<<10)
+	return o
+}
+
+// name is the destination for an error's fields.
+func (o *headlessOut) name() string {
+	if o.file != nil {
+		return flagOut
+	}
+	return "stdout"
+}
+
+// failed ends the run on a render or write failure: the --out file is
+// dropped (the old one stays), and the message names the write when it
+// was the destination that failed. On stdout what is still buffered is
+// dropped, not flushed: after a render failure it is more of a document
+// that cannot be finished, and after a write failure it cannot be written.
+func (o *headlessOut) failed(err error, what string) {
+	if o.file != nil {
+		o.file.Abort()
+	} else {
+		o.w.Reset(io.Discard)
+	}
+	if o.dest.err != nil {
+		fail(serr.Wrap(o.dest.err, "to", o.name()), "write failed")
+	}
+	fail(err, what)
+}
+
+// abort is a run's end without its document, when a statement failed or
+// was stopped: the --out file's temporary twin removed, path untouched. On
+// stdout what was written stays written — rows that went out as they
+// arrived cannot be taken back — and what is still buffered goes after it,
+// so the reader has every row that was read.
+func (o *headlessOut) abort() {
+	if o.file != nil {
+		o.file.Abort()
+		return
+	}
+	_ = o.w.Flush()
+}
+
+// finish writes out the rest and, for -o, puts the file in place and says
+// so on note: "wrote 3 rows to x.csv", or "wrote 2 results (5 rows) to
+// x.csv" for a run of several.
+func (o *headlessOut) finish(note io.Writer, results, rows int) {
+	if err := o.w.Flush(); err != nil {
+		o.failed(err, "write failed")
+	}
+	if o.file == nil {
+		return
+	}
+	if err := o.file.Commit(); err != nil {
+		fail(err, "write failed")
+	}
+	noteWrote(note, results, rows)
+}
+
+// noteWrote is the line -o prints once the file is in place.
+func noteWrote(note io.Writer, results, rows int) {
+	if results > 1 {
+		fmt.Fprintf(note, "wrote %d results (%d rows) to %s\n", results, rows, flagOut)
+		return
+	}
+	fmt.Fprintf(note, "wrote %d rows to %s\n", rows, flagOut)
+}
+
+// rowStreams decides whether a headless query streams its rows: written as
+// the driver reads them (db.StreamRows), never held, so `--max-rows 0`
+// exports a table of any size in the memory of one row (N-282). Both must
+// hold:
+//
+//   - one statement: several are written a result at a time already
+//     (streamsResults), each whole; a statement's rows need not be
+//   - CSV or TSV: a row is a line, and a statement's several result sets
+//     (a MySQL CALL) are blocks with nothing between them but BlockSep —
+//     the document export.WriteRun makes, whatever the sets turn out to
+//     be. JSON is not: one set is a bare array of rows, several are an
+//     array of envelopes, and which it is is known only after the first
+//     set's rows have gone. Markdown and text need every row first, for a
+//     banner's count or a column's width.
+//
+// To stdout and -o alike: -o writes into the file's temporary twin.
+func rowStreams(f export.Format, stmts int) bool {
+	return stmts == 1 && (f == export.CSV || f == export.TSV)
+}
+
+// rowStream is the db.RowSink of a streamed statement: each row is a CSV
+// (or TSV) record on o as it arrives. It writes what export.WriteRun would
+// write of the same result (TestRowStreamMatchesCollected): a header per
+// set, the sets a BlockSep apart.
+type rowStream struct {
+	o      *headlessOut
+	cw     *csv.Writer
+	counts []int // rows per set, for the notes
+	err    error // the write failure that stopped the stream
+}
+
+func newRowStream(o *headlessOut, f export.Format) *rowStream {
+	// csv.NewWriter takes o.w as its buffer (a bufio.Writer at least its
+	// default size is used as it is), so there is one buffer, not two
+	cw := csv.NewWriter(o.w)
+	if f == export.TSV {
+		cw.Comma = '\t'
+	}
+	return &rowStream{o: o, cw: cw}
+}
+
+// Set starts a result set: the BlockSep after the last one, and its header.
+func (s *rowStream) Set(cols []string) error {
+	if len(s.counts) > 0 {
+		s.cw.Flush() // the record before goes first
+		if _, err := s.o.w.WriteString(export.BlockSep); err != nil {
+			s.err = err
+			return err
+		}
+	}
+	s.counts = append(s.counts, 0)
+	return s.write(cols)
+}
+
+// Row writes one row, as its display text.
+func (s *rowStream) Row(disp []string, _ []any) error {
+	s.counts[len(s.counts)-1]++
+	return s.write(disp)
+}
+
+func (s *rowStream) write(rec []string) error {
+	if err := s.cw.Write(rec); err != nil {
+		s.err = err
+		return err
+	}
+	return nil
+}
+
+// end writes out the rest of a streamed run once its statement has
+// returned: a result the statement did not stream (an INSERT's rows
+// affected, a SELECT with neither columns nor rows) rendered as it would
+// have been, the truncation notes, and the --out file put in place.
+func (s *rowStream) end(run runOutcome, f export.Format) {
+	s.cw.Flush()
+	if err := s.cw.Error(); err != nil && s.err == nil {
+		s.err = err
+	}
+	if s.err != nil {
+		s.o.failed(s.err, "write failed")
+	}
+	if len(s.counts) == 0 {
+		if len(run.results) > 0 {
+			if err := export.WriteRun(s.o.w, run.results, run.at, 1, f); err != nil {
+				s.o.failed(err, "render failed")
+			}
+		}
+		warnTruncated(os.Stderr, run.results, run.at, 1)
+		s.o.finish(os.Stderr, len(run.results), countRows(run.results))
+		return
+	}
+	rows := 0
+	for i, r := range run.results {
+		n := len(r.Rows)
+		if i < len(s.counts) {
+			n = s.counts[i]
+		}
+		rows += n
+		noteTruncatedAt(os.Stderr, r, "", n)
+	}
+	s.o.finish(os.Stderr, len(run.results), rows)
 }
 
 // writeOut sends a rendered document to stdout, or to the --out file with a
@@ -1043,18 +1292,15 @@ func writeOutTo(note io.Writer, out string, results []*model.Result) {
 		}
 		return
 	}
-	if err := os.WriteFile(flagOut, []byte(out), 0644); err != nil {
+	// beside the path and renamed into place, as every -o is (export.File),
+	// rather than a []byte copy of out for os.WriteFile
+	if err := export.WriteFile(flagOut, func(w io.Writer) error {
+		_, err := io.WriteString(w, out)
+		return err
+	}); err != nil {
 		fail(serr.Wrap(err, "path", flagOut), "write failed")
 	}
-	rows := 0
-	for _, r := range results {
-		rows += len(r.Rows)
-	}
-	if len(results) > 1 {
-		fmt.Fprintf(note, "wrote %d results (%d rows) to %s\n", len(results), rows, flagOut)
-		return
-	}
-	fmt.Fprintf(note, "wrote %d rows to %s\n", rows, flagOut)
+	noteWrote(note, len(results), countRows(results))
 }
 
 // warnTruncated notes on w (stderr) every result that hit the max_rows cap.
@@ -1081,6 +1327,12 @@ func warnTruncated(w io.Writer, results []*model.Result, at []int, total int) {
 // (model.Result.MoreCut, which only a statement's first set carries): the
 // ones dropped are in no output at all, so nothing else would say so.
 func noteTruncated(w io.Writer, r *model.Result, what string) {
+	noteTruncatedAt(w, r, what, len(r.Rows))
+}
+
+// noteTruncatedAt is noteTruncated for a result whose rows were streamed
+// rather than held (rowStream): rows is how many went out.
+func noteTruncatedAt(w io.Writer, r *model.Result, what string, rows int) {
 	if what != "" {
 		what += ": "
 	}
@@ -1092,7 +1344,7 @@ func noteTruncated(w io.Writer, r *model.Result, what string) {
 		return
 	}
 	fmt.Fprintf(w, "note: %sresult truncated at %d rows — --max-rows N (0: no cap) or max_rows in config for more\n",
-		what, len(r.Rows))
+		what, rows)
 }
 
 // runScriptHeadless runs a Go script, a file or a built-in example. The

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -248,8 +249,12 @@ func (e *exportModal) paste(m *Model, s string) { e.onPath = true; e.path.Insert
 func (e *exportModal) run(m *Model, toClipboard bool) (tea.Cmd, bool) {
 	f := e.format()
 	if toClipboard {
-		r, what := m.gridView()
-		return m.copyResult(r, what, copyFormatFor(f)), true
+		p := m.viewPiece()
+		if p == nil {
+			m.log(logWarn, noResult)
+			return nil, true
+		}
+		return renderCopyCmd(p.buildTurned, p.what, copyFormatFor(f)), true
 	}
 	path := strings.TrimSpace(e.path.Text())
 	if path == "" {
@@ -261,17 +266,61 @@ func (e *exportModal) run(m *Model, toClipboard bool) (tea.Cmd, bool) {
 	// beside it — every row, in display order, hidden columns left out — so
 	// the two ways out of this dialog never disagree about what "the
 	// result" is — transposed too, when the grid is.
-	r, what := m.gridView()
-	if r == nil {
+	p := m.viewPiece()
+	if p == nil {
 		m.log(logWarn, noResult)
 		return nil, false
 	}
-	if err := export.ToFile(r, f, path); err != nil {
+	// The file is opened here, so a path that cannot be written (no such
+	// directory, no permission) keeps the dialog open to fix it, as it
+	// always did. The rest — projecting the rows, rendering them, writing
+	// them — runs as a command (N-282): with max_rows raised it took
+	// seconds, and it used to take them here, in Update, with the screen
+	// frozen. The file goes into place when it is whole (export.File).
+	out, err := export.Create(path)
+	if err != nil {
 		m.logf(logErr, "export failed: %s", serr.StringFromErr(err))
 		return nil, false
 	}
-	m.logf(logOk, "exported %s as %s to %s", what, f, path)
-	return nil, true
+	if n := len(p.rows); n > asyncSortRows {
+		m.logf(logInfo, "exporting %s as %s to %s…", p.what, f, path)
+	}
+	return exportCmd(p, f, out, path), true
+}
+
+// exportDoneMsg reports an export to a file that ran as a command.
+type exportDoneMsg struct {
+	what, path string
+	f          export.Format
+	err        error
+}
+
+// exportCmd builds p as the grid shows it, writes it to out in format f
+// and puts the file in place, on a command goroutine.
+func exportCmd(p *piece, f export.Format, out *export.File, path string) tea.Cmd {
+	return func() tea.Msg {
+		bw := bufio.NewWriterSize(out, 64<<10)
+		err := export.Write(bw, p.buildTurned(), f)
+		if err == nil {
+			err = bw.Flush()
+		}
+		if err == nil {
+			err = out.Commit()
+		} else {
+			out.Abort()
+		}
+		return exportDoneMsg{what: p.what, path: path, f: f, err: err}
+	}
+}
+
+// exportDone logs how an export to a file went.
+func (m *Model) exportDone(msg exportDoneMsg) tea.Cmd {
+	if msg.err != nil {
+		m.logf(logErr, "export failed: %s", serr.StringFromErr(msg.err))
+		return nil
+	}
+	m.logf(logOk, "exported %s as %s to %s", msg.what, msg.f, msg.path)
+	return nil
 }
 
 // ---------------------------------------------------------------------------

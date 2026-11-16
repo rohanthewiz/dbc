@@ -57,6 +57,14 @@ type grid struct {
 
 	sortCol  int // result column, -1 = result order
 	sortDesc bool
+	// An off-loop sort (applySort, for a result past asyncSortRows): sortGen
+	// counts sort requests, and an answer is applied only while it is still
+	// the latest (sorted); sorting says one is out, for the header strip;
+	// sortCmd is one waiting to be started, which Update takes on its way
+	// out (Model.gridCmds).
+	sortGen int
+	sorting bool
+	sortCmd tea.Cmd
 
 	cols   []int  // display column → result column (the visible ones, in order)
 	hidden []bool // per result column
@@ -172,6 +180,10 @@ func (g *grid) setResult(r *model.Result, displayCap int, rerun bool) {
 	keep := r != nil && g.res != nil && slices.Equal(g.res.Columns, r.Columns) &&
 		len(g.hidden) == len(r.Columns) && len(g.userW) == len(r.Columns)
 	g.res = r
+	// a sort still out is for the rows that are going: its answer must not
+	// land on these
+	g.sortGen++
+	g.sorting, g.sortCmd = false, nil
 	if !keep || !rerun {
 		g.sortCol, g.sortDesc = -1, false
 	}
@@ -442,8 +454,64 @@ func (g *grid) Sort(col int) {
 // last in both directions, numbers as numbers, text case-insensitively — is
 // workspace.SortRows, shared with dbc web so a sorted copy puts the same
 // rows in the same order from either UI.
+//
+// A result of more than asyncSortRows rows is sorted off the event loop
+// (N-282): SortRows over 1,000,000 rows of text is most of a second even
+// with its keys made once, and a header click must not freeze the screen
+// for it. The rows stay as they were, the strip says "sorting by …", and
+// the new order lands as a sortDoneMsg:
+//
+//	click ─► sortGen++ ─► sortCmd ─► (Update's tail starts it) ─► SortRows into a new order
+//	                                                                   │
+//	        sorted: gen still sortGen? ─ yes ─► order = it ◄── sortDoneMsg
+//	                                  └─ no ──► dropped (re-sorted, or a new result)
+//
+// The goroutine reads the result and numeric, which nothing changes once
+// set (a new result replaces them), and writes only its own slice.
+// Back to the result's order (sortCol -1) is a fill, and is done here.
 func (g *grid) applySort() {
-	workspace.SortRows(g.order, g.res, g.sortCol, g.sortDesc, g.numeric)
+	g.sortGen++
+	g.sortCmd = nil
+	if g.sortCol < 0 || len(g.order) <= asyncSortRows {
+		g.sorting = false
+		workspace.SortRows(g.order, g.res, g.sortCol, g.sortDesc, g.numeric)
+		return
+	}
+	g.sorting = true
+	gen, res, col, desc, numeric, n := g.sortGen, g.res, g.sortCol, g.sortDesc, g.numeric, len(g.order)
+	g.sortCmd = func() tea.Msg {
+		order := make([]int, n)
+		workspace.SortRows(order, res, col, desc, numeric)
+		return sortDoneMsg{g: g, gen: gen, order: order}
+	}
+}
+
+// asyncSortRows is the most rows a sort runs on the event loop: about
+// 15 ms for a text column on an M-series laptop, a frame or so.
+const asyncSortRows = 50_000
+
+// sortDoneMsg is an off-loop sort's answer, for grid g.
+type sortDoneMsg struct {
+	g     *grid
+	gen   int
+	order []int
+}
+
+// sorted applies an off-loop sort's answer if it is still the sort
+// wanted. The cursor stays on its display row, as a sort on the loop
+// leaves it.
+func (g *grid) sorted(msg sortDoneMsg) {
+	if msg.gen != g.sortGen || len(msg.order) != len(g.order) {
+		return
+	}
+	g.order, g.sorting = msg.order, false
+}
+
+// takeSort hands over a sort waiting to be started, if any.
+func (g *grid) takeSort() tea.Cmd {
+	c := g.sortCmd
+	g.sortCmd = nil
+	return c
 }
 
 // ---------------------------------------------------------------------------
@@ -476,45 +544,94 @@ func (g *grid) inSel(row, col int) bool {
 // out: a copy takes what the user sees. That is what makes hiding useful
 // for sharing — hide the noisy columns, then copy the table for Teams.
 func (g *grid) sub(r0, c0, r1, c1 int) *model.Result {
+	return g.piece(r0, c0, r1, c1, "").build()
+}
+
+// piece is a rectangle of the grid taken for a copy or an export, to be
+// built into a Result later, off the event loop (N-282). Projecting a
+// million rows is a pair of slices a row, and rendering them more; both
+// used to run in Update, between a key and the next frame.
+//
+// What it reads later is fixed now: the rows and columns are copies (a
+// sort on the loop rewrites order in place, a hide rebuilds cols), and the
+// result itself is never changed once set, only replaced. Copying the
+// order of a million rows is one 8 MB memmove.
+type piece struct {
+	res        *model.Result
+	rows, cols []int
+	what       string // names it for the log ("the result (8 rows)")
+	flip       bool   // the grid is transposed: the copy goes on its side
+	// first is the 1-based display row of rows[0]: what a transposed copy
+	// heads its first record with, so "row 17" in the copy is row 17 in
+	// the grid (selFirst's job, before the piece carried it)
+	first int
+}
+
+// piece takes the rectangle r0..r1 × c0..c1 (display rows and columns).
+func (g *grid) piece(r0, c0, r1, c1 int, what string) *piece {
 	r1 = min(r1, len(g.order)-1)
 	var rows []int
 	if r0 <= r1 {
-		rows = g.order[r0 : r1+1]
+		rows = slices.Clone(g.order[r0 : r1+1])
 	}
-	return workspace.Project(g.res, rows, g.cols[c0:c1+1])
+	return &piece{res: g.res, rows: rows, cols: slices.Clone(g.cols[c0 : c1+1]),
+		what: what, flip: g.flip, first: r0 + 1}
 }
+
+// build is the piece as a Result, in display order with Raw carried along
+// (workspace.Project).
+func (p *piece) build() *model.Result { return workspace.Project(p.res, p.rows, p.cols) }
 
 // Selected returns what a copy should take: the range selection, or with
 // whole set the entire result in display order. what names it for the log.
 func (g *grid) Selected(whole bool) (r *model.Result, what string) {
-	if g.res == nil || g.Cols() == 0 {
+	p := g.selectedPiece(whole)
+	if p == nil {
 		return nil, ""
 	}
+	return p.build(), p.what
+}
+
+// selectedPiece is Selected, taken but not yet built: what a copy or an
+// export carries off the event loop (piece).
+func (g *grid) selectedPiece(whole bool) *piece {
+	if g.res == nil || g.Cols() == 0 {
+		return nil
+	}
 	if whole || g.Rows() == 0 {
-		what = fmt.Sprintf("the result (%d rows)", len(g.order))
+		what := fmt.Sprintf("the result (%d rows)", len(g.order))
 		if n := g.HiddenCount(); n > 0 {
 			// said out loud, so a shared table missing a column is never a
 			// surprise to the person who hid it last week
 			what = fmt.Sprintf("the result (%d rows, %s hidden)", len(g.order), plural(n, "column"))
 		}
-		return g.sub(0, 0, max(len(g.order)-1, 0), g.Cols()-1), what
+		return g.piece(0, 0, max(len(g.order)-1, 0), g.Cols()-1, what)
 	}
 	r0, c0, r1, c1 := g.bounds()
 	rows, cols := r1-r0+1, c1-c0+1
 	switch {
 	case rows == 1 && cols == 1:
-		return g.sub(r0, c0, r1, c1), fmt.Sprintf("%s of row %d", g.colName(c0), r0+1)
+		return g.piece(r0, c0, r1, c1, fmt.Sprintf("%s of row %d", g.colName(c0), r0+1))
 	default:
-		return g.sub(r0, c0, r1, c1), fmt.Sprintf("%d×%d cells", rows, cols)
+		return g.piece(r0, c0, r1, c1, fmt.Sprintf("%d×%d cells", rows, cols))
 	}
 }
 
 // RowResult returns the cursor's whole row.
 func (g *grid) RowResult() (*model.Result, string) {
-	if g.res == nil || g.Rows() == 0 {
+	p := g.rowPiece()
+	if p == nil {
 		return nil, ""
 	}
-	return g.sub(g.cur.row, 0, g.cur.row, g.Cols()-1), fmt.Sprintf("row %d", g.cur.row+1)
+	return p.build(), p.what
+}
+
+// rowPiece is RowResult, taken but not yet built.
+func (g *grid) rowPiece() *piece {
+	if g.res == nil || g.Rows() == 0 {
+		return nil
+	}
+	return g.piece(g.cur.row, 0, g.cur.row, g.Cols()-1, fmt.Sprintf("row %d", g.cur.row+1))
 }
 
 // ---------------------------------------------------------------------------
@@ -1107,7 +1224,11 @@ func (g *grid) Draw(s Surface, st styles, focused bool, empty string) {
 		if g.sortDesc {
 			dir = "desc"
 		}
-		strip.PutRight(strip.W()-1, 0, "sorted by "+g.res.Columns[g.sortCol]+" "+dir, st.muted)
+		label := "sorted by " + g.res.Columns[g.sortCol] + " " + dir
+		if g.sorting {
+			label = "sorting by " + g.res.Columns[g.sortCol] + " " + dir + "…"
+		}
+		strip.PutRight(strip.W()-1, 0, label, st.muted)
 	}
 	g.hbar = strip.Rect()
 }

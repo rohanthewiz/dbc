@@ -172,6 +172,9 @@ type Model struct {
 	gridConn string
 	gridFor  int
 	rgrids   map[string]map[int]*grid
+	// parkedSorts are off-loop sorts a grid asked for and was parked
+	// before Update's tail could start them (parkGrid, gridCmds)
+	parkedSorts []tea.Cmd
 
 	// sizes the user can change by dragging a pane border
 	sideW  int
@@ -504,7 +507,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	// any message may have edited the editor on screen — a key, a paste,
 	// a pick, a format — so the autosave looks once here, after all of them
-	return m, tea.Batch(cmd, m.noteEdits())
+	return m, tea.Batch(cmd, m.noteEdits(), m.gridCmds())
+}
+
+// gridCmds starts the sorts the grids asked for during this message: a
+// sort of a large result runs off the loop (grid.applySort), and a grid,
+// which has no way to return a command from a header click or from
+// syncResults, leaves it here. A grid parked before Update got here left
+// its sort in m.parkedSorts (parkGrid).
+func (m *Model) gridCmds() tea.Cmd {
+	cmds := m.parkedSorts
+	m.parkedSorts = nil
+	if m.grid != nil {
+		if c := m.grid.takeSort(); c != nil {
+			cmds = append(cmds, c)
+		}
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) route(msg tea.Msg) tea.Cmd {
@@ -580,6 +602,13 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 		return m.tick(msg)
 	case clipDoneMsg:
 		return m.clipDone(msg)
+	case exportDoneMsg:
+		return m.exportDone(msg)
+	case sortDoneMsg:
+		// to the grid that asked, shown or parked: it keeps the answer
+		// only if it is still the sort it wants
+		msg.g.sorted(msg)
+		return nil
 	case clipReadMsg:
 		return m.pasteRead(msg)
 	case tea.ClipboardMsg:

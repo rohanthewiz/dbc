@@ -157,8 +157,15 @@ func FuzzFormat(f *testing.F) {
 			f.Add(s, uint8(d))
 		}
 	}
+	// squeeze is the text without its case, blanks and semicolons, for
+	// "layout only" to compare. It lowers the case first, while the bytes
+	// are still where the text has them: ToLower reads runes, and an
+	// invalid byte becomes U+FFFD. Lowered after the squeeze, two invalid
+	// bytes the blanks or a dropped empty ";" kept apart (";#\xd1\n;\xb0")
+	// came together as a valid rune (\xd1\xb0 is Ѱ), lowered to another,
+	// and a layout-only change read as an edit (N-329).
 	squeeze := func(s string) string {
-		return strings.ReplaceAll(strings.ToLower(strings.Join(strings.Fields(s), "")), ";", "")
+		return strings.ReplaceAll(strings.Join(strings.Fields(strings.ToLower(s)), ""), ";", "")
 	}
 	f.Fuzz(func(t *testing.T, sql string, dn uint8) {
 		d := Dialect(dn % uint8(Bytdb+1))

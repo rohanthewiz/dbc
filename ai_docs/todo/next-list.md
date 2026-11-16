@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-329
+**Next ID:** N-330
 
 ## Open
 
@@ -1191,6 +1191,16 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-329** · raised `2026-1116 (this session; doc to come)` · value low
+  FuzzFormat's "layout only" check read a layout-only change as an edit.
+  `squeeze` (`sqlsplit/fuzz_test.go`) took out the blanks and the `;`s
+  before lower-casing. In `";#\xd1\n;\xb0"` (MySQL) the formatter drops
+  the empty statement's `;` (on purpose), and the two invalid UTF-8
+  bytes it and the line break kept apart came together as a valid rune
+  (`\xd1\xb0` is Ѱ), which ToLower changed. A red fuzz run on no defect.
+  Found by FuzzFormat while closing N-281; HEAD the same.
+  closed 2026-11-16: squeeze lower-cases first, while the bytes are where the text has them, so an invalid byte is U+FFFD before anything is moved. The input is seed `5871c2d2f713d20e`.
 
 - **N-281** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   The formatter is O(tokens × nesting depth)

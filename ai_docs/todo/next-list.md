@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-330
+**Next ID:** N-331
 
 ## Open
 
@@ -1191,6 +1191,17 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-330** · raised `2026-1116 (this session; doc to come)` · value low
+  The formatter turned a comment into code after an exponent with no
+  digit. `fmtLex` took the sign after `e`/`E` whether or not a digit
+  followed (`sqlsplit/format.go`, the number case), so `1e--note` lexed
+  as `1e-` and a `-`, written `1e- -note`: the comment became code, and a
+  `;` in it a statement of its own (`select 1e--note; still the comment`
+  became `SELECT 1e- - note;` and `still the comment …`). The splitter
+  reads `1e` and a comment. Found by FuzzFormat (`0E--;0`: 1 statement
+  in, 2 out) while closing N-281; HEAD the same.
+  closed 2026-11-16: the sign is the exponent's only before a digit. Tests: two `TestFormatOperators` cases (the comment kept whole, `;` and all; `2e-3, 4E+5, 6e7` unchanged), seed `6d888e367eca7e4a`. Over N-281's corpus, N-330 and N-331 together change only the outputs of inputs holding a digitless exponent sign or a `$`/`:` parameter, and take the fuzz invariants' violations from 45 to 30; the 30 left are inputs starting with a BOM, which Format strips on purpose.
 
 - **N-329** · raised `2026-1116 (this session; doc to come)` · value low
   FuzzFormat's "layout only" check read a layout-only change as an edit.

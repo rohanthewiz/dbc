@@ -623,7 +623,12 @@ func fmtLex(sql string, d Dialect) []ftok {
 					j++
 				} else if (d == 'e' || d == 'E') && j+1 < len(sql) {
 					j++
-					if sql[j] == '+' || sql[j] == '-' {
+					// the exponent's sign only before its digit: in
+					// 1E--note the "--" opens a comment, as the splitter
+					// and the engine read it. Taken bare, the sign split
+					// the "--", the comment became code ("1E- -note"),
+					// and a ";" in it a statement of its own (N-330)
+					if (sql[j] == '+' || sql[j] == '-') && j+1 < len(sql) && isDigit(sql[j+1]) {
 						j++
 					}
 				} else {

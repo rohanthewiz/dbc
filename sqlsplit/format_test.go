@@ -258,6 +258,11 @@ func TestFormatOperators(t *testing.T) {
 		{SQLite, "select a from t where a=?", "SELECT a\nFROM t\nWHERE a = ?"},
 		// a comment inside what looks like an operator run ends it
 		{Generic, "select 1+-- note\n2", "SELECT 1 + -- note\n2"},
+		// an exponent with no digit ends its number: the "--" after it is a
+		// comment, ";" and all, as the splitter reads it (N-330); with a
+		// digit the sign is the number's
+		{Generic, "select 1e--note; still the comment\nfrom t", "SELECT 1e --note; still the comment\nFROM t"},
+		{Generic, "select 2e-3, 4E+5, 6e7 from t", "SELECT 2e-3, 4E+5, 6e7\nFROM t"},
 	} {
 		got := c.d.Format(c.sql)
 		if got != c.want {

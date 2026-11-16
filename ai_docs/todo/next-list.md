@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-326
+**Next ID:** N-327
 
 ## Open
 
@@ -1200,6 +1200,16 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-326** · raised `2026-1116 (this session; doc to come)` · value medium
+  Alt+Left, Ctrl+Left, Alt+B, Ctrl+W, Alt+Backspace or Ctrl+Backspace with
+  the caret at the start of a line below a non-empty one ended dbc.
+  `editor.wordLeft` (`tui/editor.go:658`) stepped back over the line break
+  with `left1`, which lands on the line above at its length, then read the
+  rune at that column: one past the line's end. Bubble Tea recovers the
+  panic and exits. There since the TUI's first commit (`ecd044b`). Found by
+  N-278's random edit test.
+  closed 2026-11-16: the first loop takes a column at the line's end as the newline it is, a non-word, so the step crosses the break to the start of the last word above (trailing blanks skipped like any non-word; an empty line above is a stop of its own), and Ctrl+W / Alt+Backspace delete back to there, joining the lines. Tests: `TestEditorWordLeftCrossesALineBreak` (Alt+Left, Ctrl+Left, Alt+B, Alt+Backspace, Ctrl+W, an empty line above). New TUI e2e step "Alt+Left at a line start steps back over the line break": on HEAD dbc exits and the step times out on a frozen screen.
 
 - **N-277** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Cell cost follows the value's length in both grids. TUI:

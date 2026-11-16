@@ -249,6 +249,24 @@ func TestTUI(t *testing.T) {
 		u.waitGone("Enter insert")
 	})
 
+	step(t, "Alt+Left at a line start steps back over the line break (N-326: it ended dbc)", func() {
+		u.key('t', uv.ModAlt)
+		u.waitFor("Type SQL here")
+		u.click("Type SQL here", 0)
+		u.typeText("SELECT 1;")
+		u.key(uv.KeyEnter)
+		u.typeText("SELECT 2;")
+		u.key(uv.KeyHome)
+		u.key(uv.KeyLeft, uv.ModAlt) // over the newline and the ;, to before the 1
+		u.typeText("x")
+		u.waitFor("SELECT x1;", "SELECT 2;")
+		select {
+		case <-u.done:
+			t.Fatal("dbc exited")
+		default:
+		}
+	})
+
 	step(t, "Ctrl+Q quits", func() {
 		u.quit()
 	})

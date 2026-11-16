@@ -124,6 +124,35 @@ func TestEditorWordMotion(t *testing.T) {
 	}
 }
 
+// A word step left from the start of a line crosses the line break to the
+// start of the last word above it, by key and by delete, instead of
+// reading past the line above's end (N-326: a panic, which ended dbc).
+// Trailing blanks above are skipped like any other non-word, and an empty
+// line above is a stop of its own.
+func TestEditorWordLeftCrossesALineBreak(t *testing.T) {
+	for _, k := range []string{"alt+left", "ctrl+left", "alt+b"} {
+		e := edit("SELECT name\nFROM cats")
+		e.move(pos{1, 0}, false)
+		e.HandleKey(keyMsg(k))
+		if e.cur != (pos{0, 7}) {
+			t.Errorf("%s at a line start: caret %v, want {0 7} (start of name)", k, e.cur)
+		}
+	}
+	for _, k := range []string{"alt+backspace", "ctrl+w"} {
+		e := edit("SELECT name  \nFROM cats")
+		e.move(pos{1, 0}, false)
+		e.HandleKey(keyMsg(k))
+		if e.Text() != "SELECT FROM cats" || e.cur != (pos{0, 7}) {
+			t.Errorf("%s at a line start: %q, caret %v", k, e.Text(), e.cur)
+		}
+	}
+	e := edit("SELECT 1\n\nFROM cats")
+	e.move(pos{2, 0}, false)
+	if p := e.wordLeft(e.cur); p != (pos{1, 0}) {
+		t.Errorf("over an empty line: %v, want {1 0}", p)
+	}
+}
+
 // A click maps through display columns, so wide runes before the click point
 // do not throw the caret off.
 func TestEditorClickMapsThroughWideRunes(t *testing.T) {

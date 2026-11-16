@@ -535,9 +535,16 @@ func (e *editor) right1(p pos) pos {
 }
 
 // wordLeft and wordRight skip one word, the way alt+arrow does elsewhere.
+//
+// The first loop reads the rune just stepped over, at p.col. When left1
+// crossed a line break, p.col is the previous line's length and the rune
+// stepped over is the newline, which is no rune of the line: it is taken
+// as the non-word it is, rather than read past the line's end — which
+// panicked, ending dbc on Alt+Left, Ctrl+W or Alt+Backspace at the start
+// of a line below a non-empty one (N-326).
 func (e *editor) wordLeft(p pos) pos {
 	p = e.left1(p)
-	for p.col > 0 && !isWord(e.lines[p.row][p.col]) {
+	for p.col > 0 && (p.col >= len(e.lines[p.row]) || !isWord(e.lines[p.row][p.col])) {
 		p.col--
 	}
 	for p.col > 0 && isWord(e.lines[p.row][p.col-1]) {

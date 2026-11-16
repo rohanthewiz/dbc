@@ -263,6 +263,10 @@ func TestFormatOperators(t *testing.T) {
 		// digit the sign is the number's
 		{Generic, "select 1e--note; still the comment\nfrom t", "SELECT 1e --note; still the comment\nFROM t"},
 		{Generic, "select 2e-3, 4E+5, 6e7 from t", "SELECT 2e-3, 4E+5, 6e7\nFROM t"},
+		// a $ parameter keeps its name: $end is SQLite's, not a "$" and an
+		// END that closes a trigger's body (N-331; the fuzz seed
+		// a7b93633102fc473 holds the trigger)
+		{SQLite, "select $end, $1abc from t where x=$end", "SELECT $end, $1abc\nFROM t\nWHERE x = $end"},
 	} {
 		got := c.d.Format(c.sql)
 		if got != c.want {

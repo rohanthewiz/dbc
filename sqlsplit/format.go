@@ -597,8 +597,20 @@ func fmtLex(sql string, d Dialect) []ftok {
 				i = j
 				continue
 			}
+			// a parameter: $1, and SQLite's $name — the name after the $
+			// is part of it, as the splitter reads it. Digits alone made
+			// $end a "$" and an END, written apart: another token, and an
+			// END that closed a trigger's body early (N-331); $1abc came
+			// out "$1 abc".
+			//
+			// It stops at the next $, though the splitter's word would
+			// not. dollarTag said "no quote" here only for what is glued
+			// on before this $ (a word, a run of $), and the token may be
+			// written after a space: "$$" or "$a$" standing alone opens a
+			// quote, "$a" and a lone "$" never do (FuzzFormat found
+			// "$$0$$$$;0" turned into "$$0$$ $$;" so).
 			j := i + 1
-			for j < len(sql) && isDigit(sql[j]) {
+			for j < len(sql) && fmtWordByte(sql[j]) {
 				j++
 			}
 			add(ftParam, i, j)
@@ -608,8 +620,12 @@ func fmtLex(sql string, d Dialect) []ftok {
 			i++
 		case c == ':' && i+1 < len(sql) && fmtWordByte(sql[i+1]) && !isDigit(sql[i+1]) &&
 			(i == 0 || sql[i-1] != ':'):
+			// a $ past the first byte is the name's, as for any word (and
+			// as the splitter reads :a$$): stopped before it, a $ token
+			// was written apart (":a $$"), where it opens a dollar quote
+			// (N-331)
 			j := i + 1
-			for j < len(sql) && fmtWordByte(sql[j]) {
+			for j < len(sql) && (fmtWordByte(sql[j]) || sql[j] == '$') {
 				j++
 			}
 			add(ftParam, i, j)

@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-331
+**Next ID:** N-332
 
 ## Open
 
@@ -1191,6 +1191,16 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-331** · raised `2026-1116 (this session; doc to come)` · value low
+  The formatter split `$name` parameters. `fmtLex` took only digits after
+  a `$` that is not a dollar quote, so SQLite's `$end` was a `$` and an
+  END keyword written apart (`$ END`): another token, and in a trigger an
+  END that closed the body early (`CreAte trigger Begin 0 $end;0`,
+  SQLite: 1 statement in, 2 out). `$1abc` came out `$1 abc`. The
+  splitter reads the name as the `$`'s. Found by FuzzFormat while closing
+  N-281; HEAD the same.
+  closed 2026-11-16: a `$` parameter takes the word bytes after it, and `:name` takes a `$` as any word does (`:a$$`). The `$` parameter stops at the next `$`: the splitter refuses a dollar quote there only for what is glued on before, and the formatter may write the token after a space, where `$$` or `$a$` opens one. FuzzFormat found that against two first versions of this fix (`0:A$$;0` and `$$0$$$$;0`, 2 statements in, 1 out); both are seeds (`99d704028ebaf9a7`, `628baf3746e8daba`) beside the trigger (`a7b93633102fc473`). Test: a `TestFormatOperators` case (`$end`, `$1abc`). FuzzFormat then ran 180 s (36 M executions) clean.
 
 - **N-330** · raised `2026-1116 (this session; doc to come)` · value low
   The formatter turned a comment into code after an exponent with no

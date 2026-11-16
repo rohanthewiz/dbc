@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -166,5 +167,42 @@ func BenchmarkFrameInspect(b *testing.B) {
 	for b.Loop() {
 		motion(m, i)
 		i++
+	}
+}
+
+// Keystroke cost (N-279). A key typed into the editor is an edit and a
+// frame, and an edit used to cost the whole buffer: the text joined, every
+// line lexed with a Style made per rune, the buffer split for the title and
+// again for completion, and — when the key began a new undo step — the
+// buffer copied for undo. These type into the middle of a 3.5 MB migration
+// at the 200×50 frame, a letter that opens the completion popup.
+
+// keyModel is frameModel with the caret at the start of a word mid-buffer,
+// the frame drawn there once.
+func keyModel(tb testing.TB) *Model {
+	m := frameModel(tb, bigSQL(3_500_000))
+	m.editor.cur = pos{len(m.editor.lines) / 2, 3}
+	m.View()
+	return m
+}
+
+// BenchmarkKeyBigBuffer is typing: each letter merges into the undo step
+// the first one began.
+func BenchmarkKeyBigBuffer(b *testing.B) {
+	m := keyModel(b)
+	for b.Loop() {
+		m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+		m.View()
+	}
+}
+
+// BenchmarkKeyBigBufferNewStep is a letter after a pause, which begins an
+// undo step: before N-279 that copied the whole buffer.
+func BenchmarkKeyBigBufferNewStep(b *testing.B) {
+	m := keyModel(b)
+	for b.Loop() {
+		m.editor.lastAt = time.Time{} // the pause
+		m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+		m.View()
 	}
 }

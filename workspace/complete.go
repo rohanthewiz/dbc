@@ -183,6 +183,15 @@ func (w *Workspace) dropCompletionsAfterRunLocked(ev *RunDone) {
 // before the load lands (see above). With no connection, or after a failed
 // load, it is ready with the vocabulary alone.
 func (w *Workspace) Complete(buffer string, caret int) (res sqlcomplete.Result, ready bool) {
+	return w.CompleteIn(Editor{Text: buffer, Caret: caret})
+}
+
+// CompleteIn is Complete for ed's Text and Caret, taking the statement
+// around the caret from ed's own split when it keeps one (Editor.Split):
+// the TUI asks on every letter typed, and splitting its buffer here each
+// time was a whole-buffer pass per key (N-279).
+func (w *Workspace) CompleteIn(ed Editor) (res sqlcomplete.Result, ready bool) {
+	buffer, caret := ed.Text, ed.Caret
 	w.mu.Lock()
 	conn, focus := w.active, w.schema
 	var sc *erd.Schema
@@ -214,6 +223,7 @@ func (w *Workspace) Complete(buffer string, caret int) (res sqlcomplete.Result, 
 	// vocabulary alone, as after a failed load
 	res = sqlcomplete.Complete(sqlcomplete.Request{
 		Schema: sc, Routines: routines, Driver: driver, Focus: focus, SearchPath: path, Buffer: buffer, Caret: caret,
+		Split: ed.Split,
 	})
 	if !ready {
 		// an editor that filters a list as the word grows asks again

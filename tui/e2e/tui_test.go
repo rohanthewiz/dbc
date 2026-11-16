@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -286,6 +287,33 @@ func TestTUI(t *testing.T) {
 		t.Logf("10,000 prints landed in %s", took.Round(time.Millisecond))
 		if took > 3*time.Second {
 			t.Errorf("10,000 prints took %s: a frame per line again?", took.Round(time.Millisecond))
+		}
+	})
+
+	step(t, "typing into a 3.5 MB buffer keeps up with the keys (N-279)", func() {
+		// a tab of its own, the migration pasted in whole (one bracketed
+		// paste, as a terminal sends one)
+		u.key('t', uv.ModAlt)
+		u.waitFor("Type SQL here")
+		u.click("Type SQL here", 0)
+		var big strings.Builder
+		last := 0
+		for i := 0; big.Len() < 3_500_000; i++ {
+			fmt.Fprintf(&big, "-- step %d\nCREATE TABLE t%d (id integer primary key, name text not null, note text default 'x;y');\n", i, i)
+			last = i
+		}
+		u.raw("\x1b[200~" + big.String() + "\x1b[201~")
+		u.waitFor(fmt.Sprintf("CREATE TABLE t%d (", last))
+		// 60 letters in one burst, as a held key repeats them: each was
+		// ~110 ms before N-279 (the buffer joined, lexed and split twice,
+		// on an M1 Pro), so the burst took seconds; now ~2 ms a letter.
+		began := time.Now()
+		u.raw(strings.Repeat("q", 60))
+		u.waitFor(strings.Repeat("q", 60))
+		took := time.Since(began)
+		t.Logf("60 letters into 3.5 MB landed in %s", took.Round(time.Millisecond))
+		if took > 2*time.Second {
+			t.Errorf("60 letters into a 3.5 MB buffer took %s: the whole buffer per keystroke again?", took.Round(time.Millisecond))
 		}
 	})
 

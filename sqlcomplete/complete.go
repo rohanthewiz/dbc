@@ -130,6 +130,12 @@ type Request struct {
 	// Buffer is the whole editor text and Caret a byte offset into it.
 	Buffer string
 	Caret  int
+	// Split, when set, returns Buffer split into statements as d reads it:
+	// the editor's own split, kept edit by edit, in place of one made here
+	// for the statement around the caret. The TUI asks on each letter
+	// typed, and on a 3.5 MB migration a split here was ~18 ms a key
+	// (N-279). nil splits Buffer here. It must split this Buffer.
+	Split func(d sqlsplit.Dialect) []sqlsplit.Stmt
 }
 
 // Complete answers req. It never fails: a caret inside a string or a
@@ -145,7 +151,13 @@ func Complete(req Request) Result {
 	sd := sqlsplit.DialectOf(req.Driver)
 	res := Result{From: caret, To: caret}
 
-	start, end := stmtWindow(buf, caret, sd)
+	var stmts []sqlsplit.Stmt
+	if req.Split != nil {
+		stmts = req.Split(sd)
+	} else {
+		stmts = sd.Split(buf)
+	}
+	start, end := stmtWindow(buf, caret, stmts)
 	if insideLiteral(buf[start:end], caret-start, sd) {
 		return res
 	}
@@ -241,9 +253,8 @@ func (c *completer) index() {
 // space after the statement's last word (the splitter trims that off). A
 // caret past a statement's semicolon, or before the first word of the next,
 // starts a statement of its own: the window then begins at the caret's word.
-// sd is the engine's reading of strings, as the run's split.
-func stmtWindow(buf string, caret int, sd sqlsplit.Dialect) (start, end int) {
-	stmts := sd.Split(buf)
+// stmts is buf split as the engine reads strings, as the run's split.
+func stmtWindow(buf string, caret int, stmts []sqlsplit.Stmt) (start, end int) {
 	i := sqlsplit.IndexAt(stmts, caret)
 	if i < 0 {
 		return 0, len(buf)

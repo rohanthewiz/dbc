@@ -74,6 +74,31 @@ type chunk struct {
 	hasCode    bool // saw something outside whitespace and comments
 	cmd        bool // a MySQL DELIMITER command's line (and the comments before it): no code
 	custom     bool // scanned under a delimiter of the user's, not ;
+	// delim is the terminator in force where the chunk starts, as an index
+	// into the scan's table of them (delimTable): ; unless a MySQL
+	// DELIMITER command before it changed it. It is all the scan carries
+	// from one chunk into the next (see scanFrom), so it is what a scan
+	// resumed at this chunk's start needs (Splitting.Edit). An index, not
+	// the string: it fits in the padding after the bools, where a string
+	// made every chunk 16 bytes bigger and a whole Split of 3.5 MB 8%
+	// slower, for a value that is ; in all but MySQL scripts.
+	delim uint32
+}
+
+// delimTable is the terminators a scan has met, indexed by chunk.delim;
+// ";" is always 0. It only ever grows, so an index stays good in every
+// later table made from it (Splitting.Edit appends to a clipped copy).
+type delimTable []string
+
+// index returns d's index, adding d when it is new.
+func (t *delimTable) index(d string) uint32 {
+	for i, x := range *t {
+		if x == d {
+			return uint32(i)
+		}
+	}
+	*t = append(*t, d)
+	return uint32(len(*t) - 1)
 }
 
 // Split returns the runnable statements in sql, in buffer order, read as
@@ -83,9 +108,11 @@ func Split(sql string) []Stmt { return Generic.Split(sql) }
 // Split returns the runnable statements in sql, in buffer order, its
 // strings read as d's engine reads them. Spans that hold only whitespace or
 // comments are dropped.
-func (d Dialect) Split(sql string) []Stmt {
-	var out []Stmt
-	for _, c := range scan(sql, d) {
+func (d Dialect) Split(sql string) []Stmt { return d.stmtsOf(sql, scan(sql, d), nil) }
+
+// stmtsOf appends to out the statements of chunks, scanned from sql.
+func (d Dialect) stmtsOf(sql string, chunks []chunk, out []Stmt) []Stmt {
+	for _, c := range chunks {
 		if !c.hasCode {
 			continue
 		}
@@ -511,32 +538,65 @@ func (d Dialect) HasKeyword(sql, word string) bool {
 //	CREATE PROCEDURE p() BEGIN SELECT 1; END //  one statement, // removed
 //	DELIMITER ;                                  back to ;
 func scan(sql string, d Dialect) []chunk {
+	tab := delimTable{";"}
+	out, _ := scanFrom(sql, d, 0, ";", &tab, nil)
+	return out
+}
+
+// scanFrom is scan begun at from, a chunk's start, with delim the
+// terminator in force there — scan itself is scanFrom(sql, d, 0, ";",
+// a fresh table, nil). Each chunk's terminator goes into tab (chunk.delim).
+//
+// A chunk's start is a clean break: the scan holds nothing there but the
+// terminator. hasCode is false and the body tracker reset (cut does both),
+// and every token before it ended before it. So a scan resumed at any
+// chunk's start with that chunk's delim makes the same chunks from there
+// on as the scan from the top did, which is what lets Splitting.Edit
+// split again only around an edit.
+//
+// rejoin, when set, is asked at each chunk start the scan reaches past
+// from (start, the delimiter in force) whether the chunks from there on
+// are known already. When it says yes the scan stops and reports
+// stopped; the caller supplies the rest.
+func scanFrom(sql string, d Dialect, from int, delim string, tab *delimTable, rejoin func(start int, delim string) bool) (out []chunk, stopped bool) {
 	var (
-		out     []chunk
-		start   int
+		start   = from
 		hasCode bool
-		i       int
-		delim   = ";" // what ends a statement; MySQL's DELIMITER changes it
-		b       body  // the statement's body, if it has one
+		i       = from
+		b       body // the statement's body, if it has one
 	)
 	// a UTF-8 byte order mark, which Windows editors put at the head of a
 	// saved .sql file, is no code: kept in, it heads the first statement,
 	// which every engine then refuses (and FirstKeyword reads as no
 	// keyword, so it is classed as a write). It stays outside every chunk.
-	if strings.HasPrefix(sql, bom) {
+	if from == 0 && strings.HasPrefix(sql, bom) {
 		start, i = len(bom), len(bom)
+	}
+	// the terminator in force now, and where the current chunk began, by
+	// their index in tab: looked up when a DELIMITER command changes it,
+	// not per chunk
+	cur := tab.index(delim)
+	startDelim := cur
+	// emit appends a chunk ending at end (its span ending at tail) and
+	// begins the next one at tail, asking rejoin whether it is known
+	emit := func(c chunk) {
+		c.start, c.delim = start, startDelim
+		out = append(out, c)
+		start, hasCode, i = c.tail, false, c.tail
+		startDelim = cur
+		b.reset()
+		if rejoin != nil && rejoin(start, delim) {
+			stopped = true
+		}
 	}
 	// cut ends the chunk at i, just past its terminator of term bytes, and
 	// starts the next one past the terminator's same-line remark. The
 	// remark holds no terminator that could end a statement (its comments
 	// were skipped whole), so the scan resumes past it.
 	cut := func(term int) {
-		tail := remarkEnd(sql, i, d)
-		out = append(out, chunk{start: start, end: i, tail: tail, term: term, hasCode: hasCode, custom: delim != ";"})
-		start, hasCode, i = tail, false, tail
-		b.reset()
+		emit(chunk{end: i, tail: remarkEnd(sql, i, d), term: term, hasCode: hasCode, custom: delim != ";"})
 	}
-	for i < len(sql) {
+	for i < len(sql) && !stopped {
 		c := sql[i]
 		// a delimiter of the user's ends a statement wherever it stands
 		// outside a string or a comment, body or no body, and it is looked
@@ -561,9 +621,11 @@ func scan(sql string, d Dialect) []chunk {
 		// code, which Split drops — it is the client's, never sent.
 		if d == MySQL && !hasCode && (c == 'd' || c == 'D') && atLineStart(sql, i) {
 			if nd, next, ok := delimiterCmd(sql, i); ok {
-				out = append(out, chunk{start: start, end: next, tail: next, cmd: true})
-				delim, start, i = nd, next, next
-				b.reset()
+				// the command's chunk began under the old terminator
+				// (startDelim, which emit records); the chunk after it
+				// begins under the new one
+				delim, cur = nd, tab.index(nd)
+				emit(chunk{end: next, tail: next, cmd: true})
 				continue
 			}
 		}
@@ -624,10 +686,10 @@ func scan(sql string, d Dialect) []chunk {
 			}
 		}
 	}
-	if start < len(sql) {
-		out = append(out, chunk{start: start, end: len(sql), tail: len(sql), hasCode: hasCode, custom: delim != ";"})
+	if !stopped && start < len(sql) {
+		out = append(out, chunk{start: start, end: len(sql), tail: len(sql), hasCode: hasCode, custom: delim != ";", delim: startDelim})
 	}
-	return out
+	return out, stopped
 }
 
 // bom is the UTF-8 byte order mark, U+FEFF.

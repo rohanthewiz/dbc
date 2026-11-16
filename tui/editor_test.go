@@ -215,11 +215,11 @@ func TestHighlightFollowsDialect(t *testing.T) {
 	e := edit("SELECT 'a\\';\nSELECT 2")
 	e.sqlMode = true
 	e.setDialect(sqlsplit.MySQL)
-	if got := e.highlight(st)[1][0]; got != st.synString {
+	if got := e.rowStyles(st, 1)[0]; got != st.synString {
 		t.Errorf("mysql: line 2's SELECT is %v, want the string style ('a\\' runs on there)", got)
 	}
 	e.setDialect(sqlsplit.Postgres)
-	if got := e.highlight(st)[1][0]; got != st.synKeyword {
+	if got := e.rowStyles(st, 1)[0]; got != st.synKeyword {
 		t.Errorf("postgres: line 2's SELECT is %v, want the keyword style ('a\\' ends at its quote)", got)
 	}
 }

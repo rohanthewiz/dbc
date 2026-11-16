@@ -55,9 +55,15 @@ func refPosAt(e *editor, off int) pos {
 
 // editPieces is what the random edits type: multi-byte runes, a ZWJ
 // sequence, newlines in each spelling, statements and a ; inside a string.
+//
+// The halves of tokens that run over lines — an opening /* or ' or $$
+// alone, a closing */ — make the coloring carry from row to row (N-279),
+// and "CREATE TRIGGER … BEGIN" a body the split must carry.
 var editPieces = []string{
 	"a", "é", "中", "😀", "\U0001F468‍\U0001F469", "\n", "\r\n", "\t", "  ",
 	"SELECT 1;", "'x;y'", "-- note\n", "/* c */", "$$ ; $$", "\\'", "BEGIN;\n",
+	"/*", "*/", "'", "$$", "\n'a\n", "/* x\ny */", "\\", "--",
+	"CREATE TRIGGER t AFTER INSERT ON o FOR EACH ROW BEGIN\n UPDATE s SET n = 1;\n",
 }
 
 // randPos is a position in e's buffer (caret positions: col ≤ line length).
@@ -95,10 +101,119 @@ func checkEditorCaches(t *testing.T, e *editor, step string) {
 	if got := e.posAt(-3); got != (pos{}) {
 		t.Fatalf("%s: posAt(-3) = %v", step, got)
 	}
-	for _, d := range []sqlsplit.Dialect{sqlsplit.Postgres, sqlsplit.MySQL} {
-		if got, ref := e.Stmts(d), d.Split(want); !reflect.DeepEqual(got, ref) {
-			t.Fatalf("%s: Stmts(%v) = %+v, want %+v", step, d, got, ref)
+	// the editor's own dialect, so the split is followed edit by edit
+	// (asking for another makes a whole split, which the next check of
+	// this one then follows on from)
+	if got, ref := e.Stmts(e.dialect), e.dialect.Split(want); !reflect.DeepEqual(got, ref) {
+		t.Fatalf("%s: Stmts(%v) = %+v, want %+v", step, e.dialect, got, ref)
+	}
+}
+
+// refKinds is the coloring as the editor made it before N-279: the whole
+// buffer lexed at once, a token kind per rune (-1 for none).
+func refKinds(e *editor) [][]sqlsplit.TokenKind {
+	toks := e.dialect.Lex(refText(e))
+	out := make([][]sqlsplit.TokenKind, len(e.lines))
+	ti, off := 0, 0
+	for r, l := range e.lines {
+		out[r] = make([]sqlsplit.TokenKind, len(l))
+		for i, ch := range l {
+			for ti < len(toks) && toks[ti].End <= off {
+				ti++
+			}
+			out[r][i] = -1
+			if ti < len(toks) && off >= toks[ti].Start && off < toks[ti].End {
+				out[r][i] = toks[ti].Kind
+			}
+			off += len(string(ch))
 		}
+		off++
+	}
+	return out
+}
+
+// checkHighlight lexes the coloring down to row upto, as a frame drawing
+// that far would, and holds every row it knows for certain to the whole
+// buffer's lex. The rows past it are left as they are — tentative or not
+// lexed — for later edits and checks to meet.
+func checkHighlight(t *testing.T, e *editor, upto int, step string) {
+	t.Helper()
+	h := e.highlight(upto)
+	if h.done <= min(upto, len(e.lines)-1) {
+		t.Fatalf("%s: lexed to row %d, asked for %d", step, h.done, upto)
+	}
+	ref := refKinds(e)
+	for r := 0; r < h.done; r++ {
+		got := make([]sqlsplit.TokenKind, len(e.lines[r]))
+		for i := range got {
+			got[i] = -1
+		}
+		for _, tk := range h.ln[r].toks {
+			for i := tk.from; i < tk.to; i++ {
+				got[i] = tk.kind
+			}
+		}
+		if !reflect.DeepEqual(got, ref[r]) {
+			t.Fatalf("%s (%v): row %d %q colored %v, want %v (in %+v)", step, e.dialect, r, string(e.lines[r]), got, ref[r], h.ln[r].in)
+		}
+	}
+}
+
+// undoOracle is what undo must give back, kept beside the editor: the text
+// before each step, recorded as the step opens. An undo must restore that
+// text exactly; a row changed in place under a kept step would not.
+type undoOracle struct {
+	undo, redo []string
+	base       [][]rune // the open step's base last seen, to tell a new step
+}
+
+// before notes the editor's state ahead of an operation; after reads what
+// the operation did to the stacks and checks the text against it.
+func (o *undoOracle) after(t *testing.T, e *editor, text string, nu, nr int, step string) {
+	t.Helper()
+	now := refText(e)
+	// a step that opened is told by its base, a snapshot no step had
+	// before: a redo pushes a closed step, and typing after an undo moves
+	// both stacks by the same counts as a redo would
+	opened := false
+	if len(e.undo) > 0 {
+		top := e.undo[len(e.undo)-1]
+		opened = top.base != nil && (len(o.base) == 0 || &top.base[0] != &o.base[0])
+	}
+	switch {
+	case opened:
+		// its base is the text before this operation
+		o.undo, o.base = append(o.undo, text), e.undo[len(e.undo)-1].base
+		if len(e.redo) == 0 {
+			o.redo = nil
+		}
+	case len(e.undo) == 0 && len(e.redo) == 0:
+		// SetText: a new buffer with no history (an undo leaves a step
+		// on the redo stack, a redo one on the undo stack)
+		o.undo, o.redo = nil, nil
+	case len(e.redo) == nr+1:
+		// an undo: the redo stack grows by the step it undid (the undo
+		// stack may also lose its oldest to the byte cap, below)
+		want := o.undo[len(o.undo)-1]
+		o.undo, o.redo = o.undo[:len(o.undo)-1], append(o.redo, text)
+		if now != want {
+			t.Fatalf("%s: undo gave %q, want %q", step, now, want)
+		}
+	case len(e.redo) == nr-1:
+		want := o.redo[len(o.redo)-1]
+		o.redo, o.undo = o.redo[:len(o.redo)-1], append(o.undo, text)
+		if now != want {
+			t.Fatalf("%s: redo gave %q, want %q", step, now, want)
+		}
+	default:
+		if len(e.redo) == 0 {
+			o.redo = nil
+		}
+	}
+	// the caps drop the oldest steps
+	o.undo = o.undo[max(len(o.undo)-len(e.undo), 0):]
+	if len(o.undo) != len(e.undo) || len(o.redo) != len(e.redo) {
+		t.Fatalf("%s: the oracle holds %d/%d steps, the editor %d/%d", step, len(o.undo), len(o.redo), len(e.undo), len(e.redo))
 	}
 }
 
@@ -111,14 +226,21 @@ func TestEditorCachesFollowEveryEdit(t *testing.T) {
 	keys := []string{"backspace", "delete", "enter", "left", "right", "up", "down",
 		"home", "end", "ctrl+z", "ctrl+y", "shift+left", "shift+right", "shift+down",
 		"alt+backspace", "ctrl+a"}
-	for seed := range uint64(40) {
+	dialects := []sqlsplit.Dialect{sqlsplit.Postgres, sqlsplit.MySQL, sqlsplit.SQLite, sqlsplit.Generic}
+	for seed := range uint64(60) {
 		rng := rand.New(rand.NewPCG(seed, 278))
 		e := newEditor(false)
 		e.sqlMode = true
+		e.setDialect(dialects[seed%uint64(len(dialects))])
 		e.SetText("SELECT 1;\nSELECT 'a;b';\n-- c\nSELECT 2")
+		var o undoOracle
+		var v11text string
 		for i := range 300 {
 			step := fmt.Sprintf("seed %d step %d", seed, i)
-			switch op := rng.IntN(12); op {
+			text, nu, nr := refText(e), len(e.undo), len(e.redo)
+			saved := o
+			op := rng.IntN(12)
+			switch op {
 			case 0, 1, 2:
 				e.Insert(editPieces[rng.IntN(len(editPieces))])
 			case 3:
@@ -154,6 +276,7 @@ func TestEditorCachesFollowEveryEdit(t *testing.T) {
 			case 11:
 				// a console swap and back, the text changed meanwhile
 				v := e.View()
+				v11text = v.text
 				e.SetText("other")
 				e.Text()
 				text := v.text
@@ -162,11 +285,31 @@ func TestEditorCachesFollowEveryEdit(t *testing.T) {
 				}
 				e.Restore(v, text)
 			}
+			if op == 11 {
+				// the swap parks the stacks and puts them back; a changed
+				// text is then one more step
+				o = saved
+				o.base = nil
+				text, nu, nr = v11text, len(e.undo), len(e.redo)
+				if e.Text() != v11text {
+					nu--
+				}
+			}
+			o.after(t, e, text, nu, nr, step)
 			if rng.IntN(3) == 0 {
 				checkEditorCaches(t, e, step)
 			}
+			if rng.IntN(2) == 0 {
+				// a frame: drawn rows near the caret, or anywhere
+				upto := e.cur.row + rng.IntN(10)
+				if rng.IntN(4) == 0 {
+					upto = rng.IntN(len(e.lines) + 3)
+				}
+				checkHighlight(t, e, upto, step)
+			}
 		}
 		checkEditorCaches(t, e, fmt.Sprintf("seed %d end", seed))
+		checkHighlight(t, e, len(e.lines), fmt.Sprintf("seed %d end", seed))
 	}
 }
 
@@ -195,13 +338,13 @@ func TestEditorHighlightFollowsTheTheme(t *testing.T) {
 	e.sqlMode = true
 	e.SetText("SELECT 1")
 	dark := newStyles(theme.Default())
-	if got := e.highlight(dark)[0][0]; got != dark.synKeyword {
+	if got := e.rowStyles(dark, 0)[0]; got != dark.synKeyword {
 		t.Fatalf("keyword = %+v, want %+v", got, dark.synKeyword)
 	}
 	pal := theme.Default()
 	pal.Accent = "#ff0000"
 	other := newStyles(pal)
-	if got := e.highlight(other)[0][0]; got != other.synKeyword {
+	if got := e.rowStyles(other, 0)[0]; got != other.synKeyword {
 		t.Errorf("after a theme change the keyword kept %+v, want %+v", got, other.synKeyword)
 	}
 }
@@ -334,5 +477,44 @@ func TestInspectWrapsOncePerWidth(t *testing.T) {
 	}
 	if !reflect.DeepEqual(in.lines, want) {
 		t.Errorf("after a resize: %d lines, want %d", len(in.lines), len(want))
+	}
+}
+
+// byteEdit, from a row diff, describes the edit exactly: the old text with
+// its bytes [at, oldEnd) replaced by the new text's [at, newEnd) is the
+// new text. Splitting.Edit checks only that the lengths add up, and falls
+// back to a whole split when they do not, so a wrong end there would cost
+// every keystroke a whole split again without failing a split test.
+func TestByteEditDescribesTheEdit(t *testing.T) {
+	for seed := range uint64(40) {
+		rng := rand.New(rand.NewPCG(seed, 2791))
+		e := newEditor(false)
+		e.SetText("SELECT 1;\nSELECT 'a;b';\n-- c\nSELECT 2")
+		for i := range 200 {
+			rows, old := e.snap(), e.Text()
+			// several edits between two reads, as between two frames
+			for range 1 + rng.IntN(3) {
+				switch rng.IntN(5) {
+				case 0, 1:
+					e.Insert(editPieces[rng.IntN(len(editPieces))])
+				case 2:
+					e.Backspace()
+				case 3:
+					e.Delete()
+				default:
+					e.move(randPos(rng, e), false)
+					if rng.IntN(2) == 0 {
+						e.Undo()
+					}
+				}
+			}
+			b := e.buffer()
+			p, s := rowsDiff(rows, b.rows)
+			at, oldEnd, newEnd := b.byteEdit(p, s, len(old))
+			if at < 0 || at > oldEnd || oldEnd > len(old) || at > newEnd || newEnd > len(b.text) ||
+				old[:at]+b.text[at:newEnd]+old[oldEnd:] != b.text {
+				t.Fatalf("seed %d step %d: rows %d|%d, edit [%d,%d)→[%d,%d) does not take %q to %q", seed, i, p, s, at, oldEnd, at, newEnd, old, b.text)
+			}
+		}
 	}
 }

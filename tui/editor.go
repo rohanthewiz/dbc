@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -11,7 +12,6 @@ import (
 	"github.com/rivo/uniseg"
 
 	"github.com/rohanthewiz/dbc/sqlsplit"
-	"github.com/rohanthewiz/dbc/theme"
 )
 
 // editor is a small text editor: the SQL editor, the chat composer, and (with
@@ -38,6 +38,17 @@ import (
 // mapping above would have to special-case; a SQL scratchpad loses nothing by
 // storing spaces.
 type editor struct {
+	// lines is the buffer, a row of runes per line.
+	//
+	// A ROW IS NEVER CHANGED IN PLACE once it is in lines: an edit puts a
+	// new slice where the row was (Insert's head+text+tail, Backspace's
+	// three-index append) and only ever rewrites the outer slice. Undo
+	// steps and the caches below keep the rows they saw by reference, and
+	// tell a changed row from a kept one by identity (rowsDiff), which this
+	// makes sound: the same row slice is the same text. That is what lets
+	// a keystroke cost the rows it changed rather than the buffer (N-279).
+	// TestEditorCachesFollowEveryEdit undoes and redoes every random edit
+	// back to the texts it saw, which an in-place change would corrupt.
 	lines [][]rune
 	cur   pos // the caret
 	anc   pos // the other end of the selection, when sel is true
@@ -59,7 +70,8 @@ type editor struct {
 	// splitter does (workspace.Pick takes the same dialect).
 	dialect sqlsplit.Dialect
 
-	undo, redo []snapshot
+	undo, redo []undoStep
+	undoBytes  int       // what the undo stack holds (undoStep.size), against undoBytesCap
 	lastKind   editKind  // what the previous edit was, for coalescing typing
 	lastAt     time.Time // when it happened
 
@@ -67,29 +79,32 @@ type editor struct {
 	// mouse is mapped from. Zero until the first draw.
 	view Rect
 
-	// version counts edits; the highlighter caches against it, as do buf
-	// and split below.
+	// version counts edits; the caches below are kept against it.
 	version int
 	// savedVer is the edit version the text was last saved at by
 	// autosave (autosave.go): an editor whose version moved past it has
 	// something to save.
 	savedVer int
-	hlVer    int
-	hl       [][]Style
-	// hlPal is the palette hl was colored in: a theme arriving from the
-	// cats host changes every style without an edit, and a highlight kept
-	// across it would paint the buffer in the old colors until the next
-	// keystroke.
-	hlPal theme.Palette
 
-	// buf and split are what a frame reads off the buffer, kept for the
-	// edit version they were made at — see buffer and Stmts. The frame is
-	// redrawn on every message, a pointer motion included, and before
-	// these each one joined the whole buffer into a string about four
-	// times and split it into statements twice: ~100 ms a frame on a
-	// 3.5 MB migration (N-278).
+	// rows is lines as of edit version rowsVer: the outer slice copied
+	// once per version (snap), shared by every cache that keeps "the rows
+	// I was made from" and by the open undo step.
+	rows    [][]rune
+	rowsVer int
+	rowsOK  bool
+
+	// buf, split and hl are what a frame reads off the buffer, kept for
+	// the edit version they were made at — see buffer, Stmts and
+	// highlight.go. The frame is redrawn on every message, a pointer
+	// motion included, and before these each one joined the whole buffer
+	// into a string about four times and split it into statements twice:
+	// ~100 ms a frame on a 3.5 MB migration (N-278). Each is also brought
+	// up to date after an edit from the rows it changed (rowsDiff), not
+	// made again: a keystroke on that migration cost ~117 ms and 139 MB
+	// before, the text joined, the buffer lexed and split twice (N-279).
 	buf   editorBuf
 	split editorSplit
+	hl    hlCache
 
 	// marks are the uses of a symbol (Shift+F12, symbol.go), drawn while
 	// marksVer is still the edit version they were found at.
@@ -123,15 +138,27 @@ type editorBuf struct {
 	ver    int
 	text   string
 	starts []int
+	rows   [][]rune // the rows text was made from (an editor snapshot)
 }
 
-// editorSplit is the buffer split into statements as dialect d reads it,
-// for the edit version ver.
+// rowStart is where row r starts in text+"\n" — every row followed by its
+// newline, the last one too — so r = len(rows) is that string's end. The
+// row arithmetic of a patch is regular in those terms; see patch.
+func (b *editorBuf) rowStart(r int) int {
+	if r < len(b.starts) {
+		return b.starts[r]
+	}
+	return len(b.text) + 1
+}
+
+// editorSplit is the buffer split into statements as dialect sp.Dialect()
+// reads it, for the edit version ver.
 type editorSplit struct {
-	ok    bool
-	ver   int
-	d     sqlsplit.Dialect
-	stmts []sqlsplit.Stmt
+	ok   bool
+	ver  int
+	rows [][]rune // the rows split (an editor snapshot)
+	n    int      // the length of the text split
+	sp   *sqlsplit.Splitting
 }
 
 // editorStamp is an editor's edit version and caret at one moment; the
@@ -157,10 +184,41 @@ type pos struct{ row, col int }
 
 func (p pos) before(q pos) bool { return p.row < q.row || (p.row == q.row && p.col < q.col) }
 
-// snapshot is one undo step.
-type snapshot struct {
-	lines [][]rune
-	cur   pos
+// undoStep is one undo step: the rows the step replaced, by position.
+// Rows [at, at+n) of the buffer after the step took the place of rows
+// (old) of the buffer before it, so undoing it is splicing old back in:
+//
+//	before  │ head │ old (3 rows)  │ tail │
+//	after   │ head │ new (n = 1)   │ tail │     the step keeps old, at and n
+//
+// It used to be a copy of the whole buffer, which a 3.5 MB migration made
+// a 14 MB copy per word typed (N-279). It holds only the replaced rows
+// now, and those by reference: rows are never changed in place (lines).
+//
+// The newest step stays open while typing merges into it, holding base,
+// the whole buffer before it (a snapshot: the outer slice alone). When it
+// closes (closeStep: the next step begins, or Undo, or View), its last
+// edit has landed, and rowsDiff against base gives at, old and n.
+type undoStep struct {
+	at   int
+	old  [][]rune
+	n    int
+	cur  pos // the caret before the step
+	size int // bytes it keeps alive, roughly (stepSize), for undoBytesCap
+
+	base [][]rune // while open: the buffer before the step; nil once closed
+}
+
+// stepSize is roughly what keeping rows costs: four bytes a rune, a slice
+// header a row, and the step itself. A row the buffer still holds counts
+// too — it is that or walking every other step for sharing — so the cap
+// errs toward dropping history early, never toward holding too much.
+func stepSize(rows [][]rune) int {
+	n := 64
+	for _, r := range rows {
+		n += 4*len(r) + 24
+	}
+	return n
 }
 
 // editKind classifies an edit so consecutive typing undoes as one step
@@ -173,10 +231,16 @@ const (
 	editDelete
 )
 
-// undoCap bounds the undo stack. Snapshots are whole-buffer copies, which is
-// cheap at scratchpad sizes and makes undo exact; the cap keeps a long
-// session from holding hundreds of copies of a large buffer.
-const undoCap = 200
+// undoCap and undoBytesCap bound the undo stack, by steps and by what the
+// steps hold (undoStep.size). A step of typing holds a row or two, so the
+// count is what binds in use; the bytes bind on pastes and deletes of whole
+// buffers, where 32 MB keeps two replacements of a 3.5 MB migration (each
+// 14 MB as runes). The newest step is kept whatever its size, so the last
+// edit can always be undone.
+const (
+	undoCap      = 200
+	undoBytesCap = 32 << 20
+)
 
 // coalesceWindow is how long a pause in typing may be before the next
 // keystroke starts a new undo step.
@@ -198,32 +262,140 @@ func (e *editor) Text() string { return e.buffer().text }
 // checkpoint and the edit itself — the same assumption the highlight cache
 // has always made. TestEditorCachesFollowEveryEdit holds every editing
 // path to it, comparing the cached text with a fresh join after each step.
+//
+// After an edit the text is patched rather than joined again: the rows
+// the edit left alone keep their bytes, copied over whole, and only the
+// rows between are encoded (patch). The copy is a memmove of the buffer,
+// ~0.3 ms on 3.5 MB, where encoding it rune by rune was ~12 ms.
 func (e *editor) buffer() *editorBuf {
 	b := &e.buf
 	if b.ok && b.ver == e.version {
 		return b
 	}
-	// one pass for the line starts, which also sizes the string, then one
-	// copy of the runes: Join over a string per line copied every byte
-	// twice and allocated once per line
-	starts := b.starts[:0]
-	n := 0
-	for _, l := range e.lines {
-		starts = append(starts, n)
-		n += runesLen(l) + 1
+	now := e.snap()
+	p, s := 0, 0 // nothing made yet: every row is new
+	if b.ok {
+		p, s = rowsDiff(b.rows, now)
 	}
+	b.patch(now, p, s)
+	b.ok, b.ver, b.rows = true, e.version, now
+	return b
+}
+
+// patch brings b from the rows it was made from to now, where the first p
+// and last s rows are unchanged (rowsDiff). In text+"\n" terms (rowStart)
+// the old rows [p, oldN−s) are one byte range and the new rows [p, nowN−s)
+// take its place:
+//
+//	old  │ rows < p │ old middle │ last s rows │
+//	new  │ rows < p │ new middle │ last s rows │     starts after the middle move by delta
+//
+// The string ends with the last row's newline in those terms, which is cut
+// off at the end; starts are edited in place. Before anything was made
+// (!b.ok) there is no old text, not even the one newline an empty row has,
+// so the old middle is empty and at 0.
+func (b *editorBuf) patch(now [][]rune, p, s int) {
+	oldN, nowN := len(b.starts), len(now)
+	// the old middle in text+"\n", and the bytes after it
+	from, to, tailN := 0, 0, 0
+	if b.ok {
+		from, to = b.rowStart(p), b.rowStart(oldN-s)
+		tailN = len(b.text) + 1 - to
+	}
+	mid := 0
+	for _, l := range now[p : nowN-s] {
+		mid += runesLen(l) + 1
+	}
+	old := b.text
 	var sb strings.Builder
-	sb.Grow(max(n-1, 0))
-	for i, l := range e.lines {
-		if i > 0 {
-			sb.WriteByte('\n')
-		}
+	sb.Grow(from + mid + tailN)
+	if from > len(old) {
+		sb.WriteString(old)
+		sb.WriteByte('\n')
+	} else {
+		sb.WriteString(old[:from])
+	}
+	starts := make([]int, 0, nowN-s-p)
+	at := from
+	for _, l := range now[p : nowN-s] {
+		starts = append(starts, at)
 		for _, r := range l {
 			sb.WriteRune(r)
 		}
+		sb.WriteByte('\n')
+		at += runesLen(l) + 1
 	}
-	*b = editorBuf{ok: true, ver: e.version, text: sb.String(), starts: starts}
-	return b
+	if tailN > 0 {
+		sb.WriteString(old[to:])
+		sb.WriteByte('\n')
+	}
+	t := sb.String()
+	b.text = t[:len(t)-1]
+
+	// the middle's starts replace the old middle's; the tail's move by
+	// what the middle grew or shrank
+	delta := mid - (to - from)
+	b.starts = slices.Replace(b.starts, p, oldN-s, starts...)
+	for i := nowN - s; i < nowN; i++ {
+		b.starts[i] += delta
+	}
+}
+
+// byteEdit is the edit that turned a text of oldLen bytes, made from rows
+// whose first p and last s are those of b's, into b.text: its bytes [at,
+// oldEnd) became b.text[at:newEnd] — the terms sqlsplit's Splitting.Edit
+// takes. Worked out in text+"\n" terms (rowStart), where the unchanged
+// head and tail are whole rows, then cut back to the texts' lengths: only
+// the final newline differs between the two spellings, and it is in the
+// tail when s > 0 and in both middles otherwise.
+func (b *editorBuf) byteEdit(p, s, oldLen int) (at, oldEnd, newEnd int) {
+	at = b.rowStart(p)
+	endT := b.rowStart(len(b.starts) - s)
+	oldEndT := oldLen + 1 - (len(b.text) + 1 - endT)
+	newEnd, oldEnd = min(endT, len(b.text)), min(oldEndT, oldLen)
+	return min(at, newEnd, oldEnd), oldEnd, newEnd
+}
+
+// snap returns lines as of the current edit version: a copy of the outer
+// slice, made once per version and shared — the rows themselves need no
+// copy, never being changed in place (lines). Nothing may change it.
+//
+// Like the caches it serves, it trusts that nothing reads the buffer
+// between an edit's checkpoint (which bumps the version) and the edit
+// itself; checkpoint takes the snapshot it needs before the bump.
+func (e *editor) snap() [][]rune {
+	if !e.rowsOK || e.rowsVer != e.version {
+		e.rows, e.rowsVer, e.rowsOK = slices.Clone(e.lines), e.version, true
+	}
+	return e.rows
+}
+
+// rowsDiff returns how many rows at the head (p) and at the tail (s) of old
+// and now are the same, p+s never more than either holds. A row is the
+// same when it is the same slice — the usual case, a pointer compare,
+// since an edit replaces the rows it changes and leaves the others be — or
+// failing that holds the same runes: a rename or a snippet's mirrors set
+// the whole buffer afresh, and most of it is as it was.
+func rowsDiff(old, now [][]rune) (p, s int) {
+	n := min(len(old), len(now))
+	for p < n && sameRow(old[p], now[p]) {
+		p++
+	}
+	for s < n-p && sameRow(old[len(old)-1-s], now[len(now)-1-s]) {
+		s++
+	}
+	return p, s
+}
+
+// sameRow reports whether a and b hold the same runes, by identity first.
+func sameRow(a, b []rune) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	if len(a) == 0 || &a[0] == &b[0] {
+		return true
+	}
+	return slices.Equal(a, b)
 }
 
 // runesLen is len(string(rs)) without making the string. An invalid rune
@@ -251,13 +423,25 @@ func runeBytes(r rune) int {
 // assistant's context chip a third time, and a caret move changes none of
 // them: only which statement IndexAt picks out of the same list. The slice
 // is shared; callers must not modify it.
+//
+// After an edit the split is redone around the edit only (Splitting.Edit,
+// told the byte range by byteEdit): a whole split of a 3.5 MB buffer was
+// ~18 ms a keystroke, and completion did one more (N-279).
 func (e *editor) Stmts(d sqlsplit.Dialect) []sqlsplit.Stmt {
 	s := &e.split
-	if s.ok && s.ver == e.version && s.d == d {
-		return s.stmts
+	if s.ok && s.ver == e.version && s.sp.Dialect() == d {
+		return s.sp.Stmts()
 	}
-	*s = editorSplit{ok: true, ver: e.version, d: d, stmts: d.Split(e.Text())}
-	return s.stmts
+	b := e.buffer()
+	if s.ok && s.sp.Dialect() == d {
+		p, q := rowsDiff(s.rows, b.rows)
+		at, oldEnd, newEnd := b.byteEdit(p, q, s.n)
+		s.sp = s.sp.Edit(b.text, at, oldEnd, newEnd)
+	} else {
+		s.sp = d.Splitting(b.text)
+	}
+	s.ok, s.ver, s.rows, s.n = true, e.version, b.rows, len(b.text)
+	return s.sp.Stmts()
 }
 
 // SetText replaces the buffer and clears undo — used for loading, not
@@ -266,7 +450,7 @@ func (e *editor) SetText(s string) {
 	e.lines = splitLines(normalize(s, e.single))
 	e.cur, e.sel = pos{}, false
 	e.top, e.left, e.goal = 0, 0, 0
-	e.undo, e.redo = nil, nil
+	e.undo, e.redo, e.undoBytes = nil, nil, 0
 	e.version++
 	e.snip = nil // its stops were offsets into the text just replaced
 }
@@ -280,15 +464,20 @@ type editorView struct {
 	cur, anc        pos
 	sel             bool
 	top, left, goal int
-	undo, redo      []snapshot
+	undo, redo      []undoStep
 }
 
 // View captures the editor's state for a later Restore. The undo stacks
 // are handed over, not copied: the editor is about to get another buffer
 // by SetText or Restore, which drops its own references to them, and no
-// edit writes into a snapshot (swap moves them whole), so nothing mutates
-// them while they are parked.
+// edit writes into a step (swap moves them whole), so nothing mutates
+// them while they are parked. The open step is closed first: its base is
+// this buffer, which is about to go.
+//
+// A step records rows by position (undoStep), so it applies as well to
+// the rows Restore splits afresh from the same text.
 func (e *editor) View() editorView {
+	e.closeStep()
 	return editorView{
 		text: e.Text(), cur: e.cur, anc: e.anc, sel: e.sel,
 		top: e.top, left: e.left, goal: e.goal,
@@ -308,7 +497,7 @@ func (e *editor) Restore(v editorView, text string) {
 	e.lines = splitLines(v.text) // v.text came from Text(): already normalized
 	e.cur, e.anc, e.sel = e.clamp(v.cur), e.clamp(v.anc), v.sel
 	e.top, e.left, e.goal = max(0, min(v.top, len(e.lines)-1)), v.left, v.goal
-	e.undo, e.redo = v.undo, v.redo
+	e.setUndo(v.undo, v.redo)
 	e.lastKind = editOther // what is typed next starts its own undo step
 	e.version++
 	e.snip = nil // another buffer: the stops were offsets into this one's
@@ -383,6 +572,11 @@ func (e *editor) posAt(off int) pos {
 // Caret returns the caret's byte offset.
 func (e *editor) Caret() int { return e.offset(e.cur) }
 
+// lineBeforeCaret is the caret's line from its start to the caret.
+func (e *editor) lineBeforeCaret() string {
+	return string(e.lines[e.cur.row][:min(e.cur.col, len(e.lines[e.cur.row]))])
+}
+
 // Selection returns the selected text and its byte range, or "" when nothing
 // is selected.
 func (e *editor) Selection() (text string, start, end int) {
@@ -408,22 +602,60 @@ func (e *editor) ordered() (pos, pos) {
 
 // checkpoint records an undo step before an edit, merging it into the
 // previous one when it continues a run of the same kind of edit.
+//
+// A merge needs the step it merges into to be open: typing right after
+// SetText (which clears the stacks) or after a step was closed by a View
+// starts a step of its own, where it used to merge into nothing and could
+// not be undone.
 func (e *editor) checkpoint(kind editKind) {
 	now := time.Now()
-	merge := kind != editOther && kind == e.lastKind && now.Sub(e.lastAt) < coalesceWindow
+	open := len(e.undo) > 0 && e.undo[len(e.undo)-1].base != nil
+	merge := open && kind != editOther && kind == e.lastKind && now.Sub(e.lastAt) < coalesceWindow
 	e.lastKind, e.lastAt = kind, now
 	e.redo = nil
+	if !merge {
+		e.closeStep()
+		// the snapshot of the buffer before the edit, taken before the
+		// version moves on (snap)
+		e.undo = append(e.undo, undoStep{base: e.snap(), cur: e.cur})
+		e.trimUndo()
+	}
 	e.version++
-	if merge {
+}
+
+// closeStep turns the open step, if there is one, into the rows it
+// replaced (undoStep), and trims the stack to its caps.
+func (e *editor) closeStep() {
+	if len(e.undo) == 0 || e.undo[len(e.undo)-1].base == nil {
 		return
 	}
-	cp := make([][]rune, len(e.lines))
-	for i, l := range e.lines {
-		cp[i] = append([]rune(nil), l...)
+	st := &e.undo[len(e.undo)-1]
+	p, s := rowsDiff(st.base, e.lines)
+	// a copy of the range: base is a whole snapshot, and a sub-slice of
+	// it would keep every row of it alive
+	st.at, st.n, st.old = p, len(e.lines)-s-p, slices.Clone(st.base[p:len(st.base)-s])
+	st.base = nil
+	st.size = stepSize(st.old)
+	e.undoBytes += st.size
+	e.trimUndo()
+}
+
+// trimUndo drops the oldest steps while the stack is past undoCap steps or
+// undoBytesCap bytes, keeping the newest whatever its size. An open step
+// counts as a step but holds nothing yet: its size is known once closed.
+func (e *editor) trimUndo() {
+	for len(e.undo) > undoCap || (e.undoBytes > undoBytesCap && len(e.undo) > 1) {
+		e.undoBytes -= e.undo[0].size
+		e.undo[0] = undoStep{} // the backing array lives on: let go of its rows
+		e.undo = e.undo[1:]
 	}
-	e.undo = append(e.undo, snapshot{lines: cp, cur: e.cur})
-	if len(e.undo) > undoCap {
-		e.undo = e.undo[len(e.undo)-undoCap:]
+}
+
+// setUndo puts parked stacks back (Restore), with what they hold.
+func (e *editor) setUndo(undo, redo []undoStep) {
+	e.undo, e.redo, e.undoBytes = undo, redo, 0
+	for _, st := range undo {
+		e.undoBytes += st.size
 	}
 }
 
@@ -437,17 +669,52 @@ func (e *editor) Redo() bool { return e.swap(&e.redo, &e.undo) }
 func (e *editor) CanUndo() bool { return len(e.undo) > 0 }
 func (e *editor) CanRedo() bool { return len(e.redo) > 0 }
 
-func (e *editor) swap(from, to *[]snapshot) bool {
+// swap undoes (from undo to redo) or redoes (from redo to undo) one step.
+// The step taken off one stack is spliced back into the buffer, and the
+// rows it displaces go onto the other as the step that redoes (or undoes
+// again) what this one did. The buffer gets a new outer slice: the old one
+// may be a snapshot's, which nothing may change.
+func (e *editor) swap(from, to *[]undoStep) bool {
+	e.closeStep()
 	if len(*from) == 0 {
 		return false
 	}
 	s := (*from)[len(*from)-1]
+	(*from)[len(*from)-1] = undoStep{}
 	*from = (*from)[:len(*from)-1]
-	*to = append(*to, snapshot{lines: e.lines, cur: e.cur})
-	e.lines, e.cur, e.sel = s.lines, s.cur, false
+	if from == &e.undo {
+		e.undoBytes -= s.size
+	}
+	// a step is only ever applied to the buffer it was made against (redo
+	// is dropped by every new edit), so these hold; the clamps keep a
+	// broken promise from becoming a panic
+	at := min(s.at, len(e.lines))
+	n := min(s.n, len(e.lines)-at)
+	back := undoStep{at: at, old: slices.Clone(e.lines[at : at+n]), n: len(s.old), cur: e.cur}
+	back.size = stepSize(back.old)
+	lines := make([][]rune, 0, len(e.lines)-n+len(s.old))
+	lines = append(lines, e.lines[:at]...)
+	lines = append(lines, s.old...)
+	lines = append(lines, e.lines[at+n:]...)
+	if len(lines) == 0 {
+		lines = [][]rune{{}}
+	}
+	e.lines, e.cur, e.sel = lines, e.clampTo(lines, s.cur), false
+	*to = append(*to, back)
+	if to == &e.undo {
+		e.undoBytes += back.size
+		e.trimUndo()
+	}
 	e.lastKind = editOther
 	e.version++
 	return true
+}
+
+// clampTo is clamp against rows other than e.lines.
+func (e *editor) clampTo(rows [][]rune, p pos) pos {
+	p.row = max(0, min(p.row, len(rows)-1))
+	p.col = max(0, min(p.col, len(rows[p.row])))
+	return p
 }
 
 // deleteSelection removes the selected text, leaving the caret where it was.
@@ -976,9 +1243,10 @@ func (e *editor) Draw(s Surface, st styles, bg Style, curStmt [2]int, follow boo
 		text.Put(0, 0, e.placeholder, onBg(st.muted, bg))
 	}
 
-	var hl [][]Style
+	// the coloring, lexed down to the last row drawn (highlight.go)
+	var hl *hlCache
 	if e.sqlMode {
-		hl = e.highlight(st)
+		hl = e.highlight(e.top + s.H() - 1)
 	}
 	stmtA, stmtB := -1, -1
 	if e.sqlMode && curStmt[1] > curStmt[0] {
@@ -1025,10 +1293,23 @@ func (e *editor) Draw(s Surface, st styles, bg Style, curStmt [2]int, follow boo
 			}
 		}
 		x := -e.left
+		var toks []hlTok
+		if hl != nil {
+			toks = hl.ln[row].toks
+		}
+		ti := 0
 		for i, r := range e.lines[row] {
 			cs := bg
-			if hl != nil && i < len(hl[row]) {
-				cs = hl[row][i]
+			if hl != nil {
+				// the row's tokens are in order: step past those that
+				// end before this rune
+				cs = st.base
+				for ti < len(toks) && int(toks[ti].to) <= i {
+					ti++
+				}
+				if ti < len(toks) && int(toks[ti].from) <= i {
+					cs = tokenStyle(st, toks[ti].kind)
+				}
 			}
 			for _, mk := range marks {
 				if inRange(pos{row, i}, mk.a, mk.b) {
@@ -1075,44 +1356,16 @@ func (e *editor) Draw(s Surface, st styles, bg Style, curStmt [2]int, follow boo
 func inRange(p, a, b pos) bool { return !p.before(a) && p.before(b) }
 
 // setDialect sets the engine the buffer is colored as. A change drops the
-// cached highlight, which is keyed on the edit version alone: switching a
-// tab from MySQL to Postgres changes where 'a\' ends without an edit.
+// coloring (highlight.go checks the dialect too): switching a tab from
+// MySQL to Postgres changes where 'a\' ends without an edit.
+//
+// The coloring keeps token kinds, not styles, and the style is looked up
+// as each rune is drawn, so a theme from the cats host recolors the next
+// frame with nothing to drop.
 func (e *editor) setDialect(d sqlsplit.Dialect) {
 	if d != e.dialect {
-		e.dialect, e.hl = d, nil
+		e.dialect, e.hl = d, hlCache{}
 	}
-}
-
-// highlight returns a style per rune per line, from sqlsplit's lexer read
-// as the editor's dialect. It is cached against the edit version and the
-// palette (and dropped by setDialect): the frame redraws on every mouse
-// motion, and relexing an unchanged buffer each time would be waste.
-func (e *editor) highlight(st styles) [][]Style {
-	if e.hl != nil && e.hlVer == e.version && e.hlPal == st.pal {
-		return e.hl
-	}
-	text := e.Text()
-	toks := e.dialect.Lex(text)
-	out := make([][]Style, len(e.lines))
-	ti := 0
-	off := 0
-	for r, l := range e.lines {
-		out[r] = make([]Style, len(l))
-		for i, ch := range l {
-			for ti < len(toks) && toks[ti].End <= off {
-				ti++
-			}
-			stl := st.base
-			if ti < len(toks) && off >= toks[ti].Start && off < toks[ti].End {
-				stl = tokenStyle(st, toks[ti].Kind)
-			}
-			out[r][i] = stl
-			off += len(string(ch))
-		}
-		off++ // the newline
-	}
-	e.hl, e.hlVer, e.hlPal = out, e.version, st.pal
-	return out
 }
 
 func tokenStyle(st styles, k sqlsplit.TokenKind) Style {

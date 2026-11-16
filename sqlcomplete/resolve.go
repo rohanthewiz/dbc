@@ -286,7 +286,7 @@ type resolver struct {
 // reading of strings.
 func newResolver(buf string, caret int, sd sqlsplit.Dialect) (*resolver, int) {
 	caret = min(max(caret, 0), len(buf))
-	start, end := stmtWindow(buf, caret, sd)
+	start, end := stmtWindow(buf, caret, sd.Split(buf))
 	toks := tokenize(buf, start, end, sd)
 	k := -1
 	for i, t := range toks {

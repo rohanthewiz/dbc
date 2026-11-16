@@ -47,15 +47,31 @@ func Lex(sql string) []Token { return Generic.Lex(sql) }
 // and runs with the other draws the statement it runs. Spans not covered by
 // a token are TokText; returning only the interesting ones keeps the slice
 // short for the per-frame redraw that calls this.
-func (d Dialect) Lex(sql string) []Token {
+func (d Dialect) Lex(sql string) []Token { return d.LexRange(sql, 0, len(sql)) }
+
+// LexRange is Lex over part of sql: the tokens the scan meets from byte
+// from until it reaches byte to, with the offsets still into the whole of
+// sql. The last token may run past to, as a comment or a string opened
+// before it does: the scan finishes the token it is in.
+//
+// from must be a byte the whole-buffer scan stops at between tokens, or
+// the tokens would differ from Lex's: 0, a token's Start, or a line's
+// first byte when no token runs over that line's start. An editor that
+// colors only the lines it shows resumes there (tui's highlight cache),
+// reading the earlier lines no more than it has to. Every rule here looks
+// back at most one byte (a :name after a ':', a number after a word), and
+// the scan reads that byte from sql itself, so a resumed scan decides as
+// the whole one did.
+func (d Dialect) LexRange(sql string, from, to int) []Token {
 	var out []Token
 	emit := func(start, end int, k TokenKind) {
 		if end > start {
 			out = append(out, Token{Start: start, End: end, Kind: k})
 		}
 	}
-	i := 0
-	for i < len(sql) {
+	to = min(to, len(sql))
+	i := max(from, 0)
+	for i < to {
 		c := sql[i]
 		if k, j := d.commentAt(sql, i); k != noComment {
 			// the newline that ends a line comment is not part of it

@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/rohanthewiz/dbc/sqlcomplete"
+	"github.com/rohanthewiz/dbc/workspace"
 )
 
 // The editor's completion popup: the columns, tables, join clauses,
@@ -82,7 +83,9 @@ type complLoadedMsg struct{ err error }
 // the schema first. explicit is Ctrl+Space: it opens on an empty prefix and
 // says so when there is nothing to suggest.
 func (m *Model) openCompletion(explicit bool) tea.Cmd {
-	res, ready := m.ws.Complete(m.editor.Text(), m.editor.Caret())
+	// the editor's split, kept edit by edit, for the statement around the
+	// caret (Editor.Split): this runs on each letter typed
+	res, ready := m.ws.CompleteIn(workspace.Editor{Text: m.editor.Text(), Caret: m.editor.Caret(), Split: m.editor.Stmts})
 	if !ready {
 		m.complSt.want, m.complSt.explicit = true, explicit
 		if m.complSt.loading {
@@ -231,8 +234,12 @@ func (m *Model) complAfterKey(k tea.KeyPressMsg, before int) tea.Cmd {
 // complAutoHere reports whether the text before the caret calls for a popup
 // without being asked: right after "." or "::", or two letters into a word —
 // or any length into one while the popup is already open.
+//
+// It reads the caret's line up to the caret (lineBeforeCaret): nothing it
+// looks for crosses a line break, and it runs on every key typed.
 func (m *Model) complAutoHere() bool {
-	text, caret := m.editor.Text(), m.editor.Caret()
+	text := m.editor.lineBeforeCaret()
+	caret := len(text)
 	if caret == 0 {
 		return false
 	}
@@ -252,7 +259,8 @@ func (m *Model) complAutoHere() bool {
 // complInWord reports whether the caret is still in a word, or right after
 // the "." a popup was opened on.
 func (m *Model) complInWord() bool {
-	text, caret := m.editor.Text(), m.editor.Caret()
+	text := m.editor.lineBeforeCaret()
+	caret := len(text)
 	return caret > 0 && (wordLenBefore(text, caret) > 0 || text[caret-1] == '.')
 }
 

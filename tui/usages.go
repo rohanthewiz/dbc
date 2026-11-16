@@ -204,10 +204,6 @@ func (u *usesModal) draw(m *Model, s Surface) *caret {
 	l.ensureVisible()
 
 	e := m.editor
-	var hl [][]Style
-	if e.hlVer == e.version {
-		hl = e.hl // the editor's syntax colours, when they are current
-	}
 	w := s.W()
 	if len(u.uses) > s.H() {
 		w--
@@ -243,15 +239,8 @@ func (u *usesModal) draw(m *Model, s Surface) *caret {
 		if ur.row >= len(e.lines) || ur.b > len(e.lines[ur.row]) {
 			continue // the text moved under the list (stale): the next key closes it
 		}
-		u.drawLine(text, e.lines[ur.row], hlRow(hl, ur.row), ur, rs, i == l.cur, m.st)
-	}
-	return nil
-}
-
-// hlRow is row's syntax styles, or nil.
-func hlRow(hl [][]Style, row int) []Style {
-	if row < len(hl) {
-		return hl[row]
+		// the editor's syntax colors, lexed down to the row if need be
+		u.drawLine(text, e.lines[ur.row], e.rowStyles(m.st, ur.row), ur, rs, i == l.cur, m.st)
 	}
 	return nil
 }

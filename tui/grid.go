@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/rivo/uniseg"
 
 	"github.com/rohanthewiz/dbc/export"
 	"github.com/rohanthewiz/dbc/model"
@@ -192,8 +194,9 @@ func (g *grid) setResult(r *model.Result, displayCap int, rerun bool) {
 	g.widths = make([]int, len(r.Columns))
 	g.valW = make([]int, len(r.Columns))
 	for c := range r.Columns {
-		g.widths[c] = min(g.contentWidth(c), maxColWidth)
-		g.valW[c] = min(g.valuesWidth(c), maxColWidth)
+		// measured only as far as the cap: an auto width is never wider
+		g.widths[c] = min(g.contentWidth(c, maxColWidth), maxColWidth)
+		g.valW[c] = min(g.valuesWidth(c, maxColWidth), maxColWidth)
 	}
 	// The orientation (flip) is NOT reset: as in dbc web it belongs to the
 	// pane, not to one result, so a re-run — or a different query — comes
@@ -215,17 +218,23 @@ func (g *grid) setResult(r *model.Result, displayCap int, rerun bool) {
 }
 
 // contentWidth measures result column c: its header (plus room for the sort
-// arrow) and its values (valuesWidth), uncapped. Auto-sizing caps it; a
-// double-click on the border (fit) does not.
-func (g *grid) contentWidth(c int) int {
-	return max(width(g.res.Columns[c])+2, g.valuesWidth(c)) // +2: room for the sort arrow
+// arrow) and its values (valuesWidth), text values no further than limit.
+// Auto-sizing caps it at maxColWidth; a double-click on the border (fit)
+// asks for maxUserWidth, the widest a column can be.
+func (g *grid) contentWidth(c, limit int) int {
+	return max(width(g.res.Columns[c])+2, g.valuesWidth(c, limit)) // +2: room for the sort arrow
 }
 
 // valuesWidth measures result column c's values alone — the first
-// widthSample of them, or every value of a numeric column — uncapped and
-// at least minColWidth. Split from contentWidth because a transposed
-// record column holds values only: its header is a row number.
-func (g *grid) valuesWidth(c int) int {
+// widthSample of them, or every value of a numeric column — at least
+// minColWidth. A text value is measured no further than limit cells
+// (cellTextWidth): every caller clamps the width to a cap, maxColWidth or
+// maxUserWidth, and passes that cap, so reading further would be for
+// nothing — on arrival, 500 values of 100 KB each were read whole (N-277).
+// A numeric column's widest value is exact, whatever the limit. Split from
+// contentWidth because a transposed record column holds values only: its
+// header is a row number.
+func (g *grid) valuesWidth(c, limit int) int {
 	w := minColWidth
 	if c < len(g.numeric) && g.numeric[c] {
 		// numbers are ASCII, never multi-line: a byte length over every row
@@ -235,7 +244,7 @@ func (g *grid) valuesWidth(c int) int {
 	}
 	for i := 0; i < min(len(g.res.Rows), widthSample); i++ {
 		if c < len(g.res.Rows[i]) {
-			w = max(w, width(flatten(g.res.Rows[i][c])))
+			w = max(w, cellTextWidth(g.res.Rows[i][c], limit))
 		}
 	}
 	return w
@@ -256,7 +265,92 @@ func flatten(s string) string {
 	if !strings.ContainsAny(s, "\n\r\t") {
 		return s
 	}
-	return strings.NewReplacer("\r\n", "↵", "\n", "↵", "\r", "↵", "\t", " ").Replace(s)
+	return flattener.Replace(s)
+}
+
+// flattener is flatten's replacer, built once: a Replacer is safe for
+// concurrent use, and building one per call was an allocation per cell.
+var flattener = strings.NewReplacer("\r\n", "↵", "\n", "↵", "\r", "↵", "\t", " ")
+
+// A grid cell reads only the HEAD of its value (N-277). Every visible cell
+// is flattened, measured and truncated on every frame — a scroll step or a
+// mouse move over the grid is a frame — so a cost that followed the value's
+// length made a column of 100 KB JSON documents sluggish to hover, and
+// sizing its column on arrival read 500 of them whole. A cell is at most
+// maxUserWidth cells wide, so the head that can show in w cells is all
+// that is ever looked at:
+//
+//	value   {"id": 1, "tags": ["a", "b"], "body": "… 100 KB …"}
+//	head    {"id": 1, "tags": ["a", "b"], "bo        cellBytes(w) bytes
+//	cell    {"id": 1, "tags": ["a",…                  w cells, "…" = more
+//
+// Inspect, copy and export still take the value whole (grid.value).
+
+// cellBytes is how much of a value is read to draw it in w cells: 16 bytes
+// a cell. Real text runs well under that — ASCII is 1 byte a cell, CJK 3
+// bytes in 2 cells, an emoji 4 in 2, a flag 8 in 2, a three-person ZWJ
+// family 18 in 2, a CRLF 2 bytes flattened to one "↵" — so the head fills
+// the cell, and it draws exactly as the whole value would. Only longer ZWJ
+// sequences or letters stacked with combining marks can run out first;
+// such a cell shows a shorter head, still ending in "…". The head only
+// bounds the walk (cutAt stops at the cell's edge); even at maxUserWidth
+// it is about 6 KB.
+func cellBytes(w int) int { return 16 * (w + 1) }
+
+// valueHead is the head of s: at most n bytes, cut back to the start of a rune
+// so a multi-byte character is never split. more reports that s goes on.
+func valueHead(s string, n int) (head string, more bool) {
+	if len(s) <= n {
+		return s, false
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n], true
+}
+
+// flatWidth is the width grapheme g (uniseg's width gw) draws at once
+// flattened: a line break — LF, CR or CRLF, each one grapheme — becomes
+// "↵" and a tab a space, one cell each, where uniseg counts these controls
+// as none. Counting this way finds where a value is cut, or how wide it
+// is, without building the flattened copy first. Every other grapheme
+// keeps its width, since controls always stand alone as graphemes and
+// flatten's replacements are plain one-cell characters.
+func flatWidth(g string, gw int) int {
+	switch g {
+	case "\n", "\r", "\r\n", "\t":
+		return 1
+	}
+	return gw
+}
+
+// cellText is value s as a w-cell grid cell draws it: on one line
+// (flatten), cut to w cells with "…" — truncate(flatten(s), w), but reading
+// only cellBytes(w) of s, and flattening only the part drawn.
+func cellText(s string, w int) string {
+	head, more := valueHead(s, cellBytes(w))
+	n, dots := cutAt(head, w, more, true)
+	if dots {
+		return flatten(head[:n]) + "…"
+	}
+	return flatten(head[:n])
+}
+
+// cellTextWidth is the width value s draws at in a cell — width(flatten(s)) —
+// counted no further than limit: a wider value reads as limit. Sizing a
+// column needs no more, since every width is clamped (maxColWidth for
+// auto, maxUserWidth for a fit). The walk stops at limit cells, and the
+// head bounds it for a value of zero-width graphemes.
+func cellTextWidth(s string, limit int) int {
+	head, _ := valueHead(s, cellBytes(limit))
+	w, state := 0, -1
+	for rest := head; rest != "" && w < limit; {
+		var g string
+		var gw int
+		g, rest, gw, state = uniseg.FirstGraphemeClusterInString(rest, state)
+		w += flatWidth(g, gw)
+	}
+	return min(w, limit)
 }
 
 // Rows is how many display rows exist (the display cap applied).
@@ -552,7 +646,7 @@ func (g *grid) Fit(col int) {
 		return
 	}
 	if rc := g.resultCol(col); rc >= 0 {
-		g.setWidth(rc, g.contentWidth(rc))
+		g.setWidth(rc, g.contentWidth(rc, maxUserWidth))
 	}
 }
 
@@ -971,7 +1065,7 @@ func (g *grid) Draw(s Surface, st styles, focused bool, empty string) {
 			}
 			cs := s.Sub(Rect{cx - area.X, y + 1, g.colW[i], 1})
 			cs.Fill(cst)
-			text := truncate(flatten(val), g.colWidth(g.cols[c]))
+			text := cellText(val, g.colWidth(g.cols[c]))
 			if g.numeric[g.cols[c]] && !g.isNull(row, c) {
 				cs.PutRight(cs.W()-1, 0, text, cst)
 			} else {

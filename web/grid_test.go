@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/userdata"
@@ -95,6 +96,126 @@ SELECT v, CASE WHEN v <= 500 THEN 'x' ELSE 'a much longer text value' END AS t F
 	}
 	if pg.Widths[1] != 3 {
 		t.Errorf("text width = %d, want 3 (header + arrow; sampled rows are \"x\")", pg.Widths[1])
+	}
+}
+
+// longSQL has two long multi-line text values (100,000 and 300,000 runes,
+// "é" and a newline repeated) around a NULL, and a short column: the N-277
+// scenario of a column of large documents.
+const longSQL = `SELECT id,
+  CASE id WHEN 2 THEN NULL ELSE replace(hex(zeroblob(50000 * id)), '00', 'é' || char(10)) END AS doc,
+  'short' AS s
+FROM (SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3)`
+
+// A page carries only the first cellClip runes of a long value, and lists
+// the cells it cut; the widths are what they were, and the page stays small
+// however large the values (N-277).
+func TestGridPageClipsLongValues(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	e.runAndWait(id, s, longSQL)
+
+	res := e.req("GET", "/api/v1/ws/"+id+"/result?from=0&n=50", "", nil)
+	raw, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if len(raw) > 8<<10 {
+		t.Errorf("the page is %d bytes; ~450 KB of values should have been clipped to a few KB", len(raw))
+	}
+	var env testEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatal(err)
+	}
+	pg := decodeData[resultPage](t, env)
+	full := strings.Repeat("é\n", 50000)
+	if got := *pg.Cells[0][1]; utf8.RuneCountInString(got) != cellClip || !strings.HasPrefix(full, got) {
+		t.Errorf("row 1's doc is %d runes, want its first %d", utf8.RuneCountInString(got), cellClip)
+	}
+	if pg.Cells[1][1] != nil || *pg.Cells[0][2] != "short" {
+		t.Errorf("NULL and a short value come through as they are: %v %q", pg.Cells[1][1], *pg.Cells[0][2])
+	}
+	if want := [][2]int{{0, 1}, {2, 1}}; !slices.Equal(pg.Cut, want) {
+		t.Errorf("cut = %v, want %v (the two docs, not the NULL or the short column)", pg.Cut, want)
+	}
+	if pg.Widths[1] != maxColWidth || pg.Content[1] != cellClip {
+		t.Errorf("doc width = %d/%d, want the cap %d and content %d", pg.Widths[1], pg.Content[1], maxColWidth, cellClip)
+	}
+	// a page starting further down lists its cuts relative to its own rows
+	if pg2 := e.page(id, "from=2&n=5"); !slices.Equal(pg2.Cut, [][2]int{{0, 1}}) {
+		t.Errorf("cut from row 2 = %v, want [[0 1]]", pg2.Cut)
+	}
+}
+
+// Inspect asks for a cut value whole: GET …/cell names it as the page sees
+// it (a display row under a sort, a result column) and the seq it was drawn
+// from. A copy never saw the clip.
+func TestGridCellIsTheWholeValue(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	e.runAndWait(id, s, longSQL)
+	seq := itoa(e.page(id, "n=1").Seq)
+	cell := func(query string, want int) cellValue {
+		t.Helper()
+		env := e.api("GET", "/api/v1/ws/"+id+"/cell?seq="+seq+"&"+query, "", want)
+		if want != 200 {
+			return cellValue{}
+		}
+		return decodeData[cellValue](t, env)
+	}
+
+	if v := cell("row=0&col=1", 200); v.Value == nil || *v.Value != strings.Repeat("é\n", 50000) {
+		t.Errorf("row 1's doc is not whole (%d bytes)", len(deref(v.Value)))
+	}
+	// sorted by id descending, display row 0 is id 3
+	if v := cell("sort=0&desc=1&row=0&col=1", 200); v.Value == nil || *v.Value != strings.Repeat("é\n", 150000) {
+		t.Errorf("sorted row 0's doc is not id 3's (%d bytes)", len(deref(v.Value)))
+	}
+	if v := cell("row=1&col=1", 200); v.Value != nil {
+		t.Errorf("NULL = %q, want null", *v.Value)
+	}
+	cell("row=3&col=1", 400)
+	cell("row=0&col=3", 400)
+	cell("row=-1&col=0", 400)
+
+	env := e.api("POST", "/api/v1/ws/"+id+"/copy", `{"seq":`+seq+`,"cols":[1],"rows":[0,0],"format":"plain"}`, 200)
+	if out := decodeData[copyOut](t, env); out.Text != strings.Repeat("é\n", 50000) {
+		t.Errorf("copying the cell took %d bytes, want the whole value", len(out.Text))
+	}
+
+	// a result replaced since the page was drawn is refused, as a copy is
+	e.runAndWait(id, s, "SELECT 1 AS a")
+	if env := e.api("GET", "/api/v1/ws/"+id+"/cell?seq="+seq+"&row=0&col=0", "", 409); !strings.Contains(env.Error, "result changed") {
+		t.Errorf("error = %q", env.Error)
+	}
+	id2, _ := e.connected()
+	e.api("GET", "/api/v1/ws/"+id2+"/cell?seq=1&row=0&col=0", "", 400)
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// clipRunes cuts on rune boundaries and reads no further than it must.
+func TestClipRunes(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		n    int
+		want string
+		cut  bool
+	}{
+		{"abc", 5, "abc", false},
+		{"abc", 3, "abc", false},
+		{"abcd", 3, "abc", true},
+		{"ééé", 3, "ééé", false}, // 6 bytes, 3 runes: not cut
+		{"éééé", 3, "ééé", true},
+		{"", 0, "", false},
+		{"a", 0, "", true},
+	} {
+		if got, cut := clipRunes(c.in, c.n); got != c.want || cut != c.cut {
+			t.Errorf("clipRunes(%q, %d) = %q, %v; want %q, %v", c.in, c.n, got, cut, c.want, c.cut)
+		}
 	}
 }
 

@@ -29,6 +29,7 @@ import (
 // keeps it in its grid) and travels with each request that depends on it:
 //
 //	GET  …/result?from=&n=&sort=&desc=   a page of display rows (sorted here)
+//	GET  …/cell?seq=&sort=&desc=&row=&col=  one value whole (Inspect)
 //	POST …/copy   {seq, sort, desc, cols, rows, format, transpose}  → {text, html, what}
 //	GET  …/export?format=&sort=&desc=&cols=&seq=&t=1               → a download
 //
@@ -68,6 +69,21 @@ const (
 	widthSample = 500
 )
 
+// cellClip is how much of a value a page of rows carries: its first 500
+// runes. A grid cell is at most MAX_CH (400) characters wide in the page,
+// so a value past that can never show more than its head — yet whole, a
+// column of 100 KB JSON documents made a 200-row page about 20 MB, and the
+// page flattened, escaped and re-laid-out each visible cell's full string
+// on every scroll frame (N-277). A cut value is listed in the page's Cut,
+// so the grid ends it with "…" and Inspect asks for it whole (GET …/cell);
+// copy and export are rendered here, from the result, and never see the
+// clip.
+//
+//	value  {"id": 1, "body": "…100 KB…"}         in the result, untouched
+//	page   {"id": 1, "body": "…  (500 runes)      cells[i][c], cut: [[i, c]]
+//	cell   {"id": 1, "bo…                         what the column's width shows
+const cellClip = 500
+
 // resultView is a tab's cache of its last result as the grid sees it. The
 // order is re-sorted only when the sort changes, not on every page fetch —
 // sorting 50,000 rows per scroll step would be the slow part of scrolling.
@@ -78,7 +94,7 @@ type resultView struct {
 	seq     int
 	numeric []bool
 	widths  []int // auto widths, capped (colWidths)
-	content []int // content widths, uncapped
+	content []int // content widths, measured to cellClip
 	sortCol int
 	desc    bool
 	order   []int
@@ -133,7 +149,7 @@ type resultPage struct {
 	Columns []string `json:"columns"`
 	Numeric []bool   `json:"numeric"` // right-align these
 	Widths  []int    `json:"widths"`  // auto widths, in characters, capped
-	Content []int    `json:"content"` // content widths, uncapped: "fit"
+	Content []int    `json:"content"` // content widths for "fit", up to cellClip (past the page's MAX_CH)
 
 	Total int  `json:"total"` // display rows: the result's rows, max_display_rows applied
 	Rows  int  `json:"rows"`  // the result's rows
@@ -147,6 +163,9 @@ type resultPage struct {
 
 	From  int         `json:"from"`
 	Cells [][]*string `json:"cells"` // display rows from From; nil is SQL NULL
+	// Cut lists the cells holding only their first cellClip runes, as
+	// [row in Cells, result column] — rare, so a list beats a flag per cell.
+	Cut [][2]int `json:"cut,omitempty"`
 }
 
 // handleResult is a page of the last result's display rows.
@@ -178,13 +197,82 @@ func (s *Server) handleResult(ctx rweb.Context) error {
 		ri := v.order[d]
 		row := make([]*string, len(r.Columns))
 		for c := range r.Columns {
-			if !isNull(r, ri, c) {
-				row[c] = &r.Rows[ri][c]
+			switch {
+			case isNull(r, ri, c):
+				// nil: SQL NULL
+			case c >= len(r.Rows[ri]):
+				row[c] = new(string) // a short row's missing cell draws blank, as in the TUI (grid.value)
+			default:
+				if head, cut := clipRunes(r.Rows[ri][c], cellClip); cut {
+					row[c] = &head
+					pg.Cut = append(pg.Cut, [2]int{d - from, c})
+				} else {
+					row[c] = &r.Rows[ri][c] // whole: no copy
+				}
 			}
 		}
 		pg.Cells = append(pg.Cells, row)
 	}
 	return ok(ctx, pg)
+}
+
+// clipRunes is s cut to its first n runes, and whether that cut anything.
+// Its cost follows n, not len(s): the walk stops at rune n+1. A string of
+// at most n bytes has at most n runes, so most values return at once.
+func clipRunes(s string, n int) (string, bool) {
+	if len(s) <= n {
+		return s, false
+	}
+	i := 0
+	for at := range s { // at: the byte offset of each rune in turn
+		if i == n {
+			return s[:at], true
+		}
+		i++
+	}
+	return s, false // n runes or fewer, multi-byte ones
+}
+
+// cellValue is one value whole, for Inspect: Value nil is SQL NULL.
+type cellValue struct {
+	Value *string `json:"value"`
+}
+
+// handleCell is one value of the grid whole — the cell under the cursor,
+// for Inspect, when its page carried only the head (resultPage.Cut). The
+// cell is named as the page sees it: a display row under a sort, and a
+// result column. Like a copy it names the seq it was drawn from, and a
+// result replaced since is refused (409): Inspect must never show a value
+// from a different result than the one on screen.
+func (s *Server) handleCell(ctx rweb.Context) error {
+	t, err := s.hub.get(ctx.Request().PathParam("id"))
+	if err != nil {
+		return fail(ctx, err)
+	}
+	q := ctx.Request()
+	v := t.view(intParam(q.QueryParam("sort"), -1), q.QueryParam("desc") == "1")
+	if v == nil {
+		return fail(ctx, badRequest("no result — run a query first"))
+	}
+	if intParam(q.QueryParam("seq"), 0) != v.seq {
+		return fail(ctx, &reqError{status: http.StatusConflict,
+			msg: "the result changed since this view was drawn — try again"})
+	}
+	row, col := intParam(q.QueryParam("row"), -1), intParam(q.QueryParam("col"), -1)
+	if row < 0 || row >= s.shown(v.res) || col < 0 || col >= len(v.res.Columns) {
+		return fail(ctx, badRequest("no cell at row %d, column %d in this result", row, col))
+	}
+	ri := v.order[row]
+	var out cellValue
+	switch {
+	case isNull(v.res, ri, col):
+		// nil: SQL NULL
+	case col >= len(v.res.Rows[ri]):
+		out.Value = new(string) // a short row's missing cell, blank as the page drew it
+	default:
+		out.Value = &v.res.Rows[ri][col]
+	}
+	return ok(ctx, out)
 }
 
 // isNull reads a real NULL from Raw: Rows has already turned it into the
@@ -197,7 +285,9 @@ func isNull(r *model.Result, row, col int) bool {
 // room for the sort arrow, and the first widthSample values with newlines
 // flattened to one character — or every value of a numeric column (numeric
 // is export.NumericColumns(r)), since numbers grow down a result. auto is
-// capped at maxColWidth, content not.
+// capped at maxColWidth; content, what "fit" sizes to, is not, though a
+// text value counts no further than cellClip runes — past the widest the
+// page lets a column be (MAX_CH), and all a page carries of it anyway.
 func colWidths(r *model.Result, numeric []bool) (auto, content []int) {
 	auto, content = make([]int, len(r.Columns)), make([]int, len(r.Columns))
 	n := min(len(r.Rows), widthSample)
@@ -207,7 +297,8 @@ func colWidths(r *model.Result, numeric []bool) (auto, content []int) {
 			w = max(w, workspace.WidestNumeric(r, c))
 		} else {
 			for i := 0; i < n; i++ {
-				w = max(w, utf8.RuneCountInString(r.Rows[i][c]))
+				head, _ := clipRunes(r.Rows[i][c], cellClip)
+				w = max(w, utf8.RuneCountInString(head))
 			}
 		}
 		content[c], auto[c] = w, min(w, maxColWidth)

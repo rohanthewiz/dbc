@@ -76,7 +76,7 @@
     vis: [],           // display col → result col
     colX: [], colW: [], width: 0, // layout of the visible columns, px
     rnW: 40,           // the row-number gutter's width
-    pages: new Map(),  // page index → rows (arrays of cells; null is NULL)
+    pages: new Map(),  // page index → { cells: rows (arrays of cells; null is NULL), cut } — see pageOf
     pending: new Set(),
     cur: { row: 0, col: 0 }, anc: { row: 0, col: 0 }, sel: false,
     flip: false,       // transposed: records across, columns down
@@ -105,6 +105,23 @@
   const flat = (s) => (/[\n\r\t]/.test(s) ? s.replace(/\r\n|\n|\r/g, "↵").replace(/\t/g, " ") : s);
 
   // ── loading ────────────────────────────────────────────────────────────
+  // pageOf is what g.pages keeps of a fetched page: its rows, and which of
+  // their cells hold only their head. The server sends a long value's first
+  // 500 characters (cellClip in web/grid.go) — a cell can never show more,
+  // and whole, a column of 100 KB documents made multi-MB pages that were
+  // flattened and escaped on every scroll frame (N-277). d.cut lists those
+  // cells as [row in the page, result column]; cut keys them i × columns +
+  // column, so a draw asks with one Set lookup. null when nothing was cut.
+  function pageOf(d) {
+    const n = d.columns.length;
+    return { cells: d.cells, cut: d.cut && d.cut.length ? new Set(d.cut.map(([i, rc]) => i * n + rc)) : null };
+  }
+
+  // isCut: the value at display row r, result column rc arrived as a head
+  // only (pg is r's page) — drawn with "…", and inspected by asking for it
+  // whole.
+  const isCut = (pg, r, rc) => !!pg.cut && pg.cut.has((r % PAGE) * g.cols.length + rc);
+
   function query(from, sort, desc) {
     return dbc.api("GET", dbc.wsPath("/result?from=" + from + "&n=" + PAGE + "&sort=" + sort + "&desc=" + (desc ? 1 : 0)));
   }
@@ -138,7 +155,7 @@
     if (!d) { clear(); return; }
     if (d.seq === g.seq) {
       g.pages.clear();
-      g.pages.set(0, d.cells);
+      g.pages.set(0, pageOf(d));
       render();
       return;
     }
@@ -167,7 +184,7 @@
       cur: { row: 0, col: 0 }, anc: { row: 0, col: 0 }, sel: false,
     });
     if (!same) { g.hidden = new Set(); g.userW = new Map(); g.recFit = 0; g.fnFit = 0; }
-    g.pages = new Map([[0, d.cells]]);
+    g.pages = new Map([[0, pageOf(d)]]);
     g.pending = new Set();
     if (d.exec) {
       showMsg(d.affected + " rows affected", "exec");
@@ -277,7 +294,7 @@
       const d = await query(p * PAGE, sort, desc);
       if (!d || d.seq !== seq) { load(); return; } // a new result landed: start over
       if (seq !== g.seq || sort !== g.sort || desc !== g.desc) return; // re-sorted since
-      g.pages.set(p, d.cells);
+      g.pages.set(p, pageOf(d));
       render();
     } catch (e) {
       dbc.log("err", "could not load rows: " + e.message);
@@ -287,9 +304,9 @@
   }
 
   function cellAt(row, col) {
-    const rows = g.pages.get(Math.floor(row / PAGE));
-    if (!rows) return undefined;
-    const r = rows[row % PAGE];
+    const pg = g.pages.get(Math.floor(row / PAGE));
+    if (!pg) return undefined;
+    const r = pg.cells[row % PAGE];
     return r ? r[g.vis[col]] : undefined;
   }
 
@@ -397,9 +414,9 @@
     // body
     let b = "";
     for (let r = r0; r <= r1; r++) {
-      const rows = g.pages.get(Math.floor(r / PAGE));
-      if (!rows) page(Math.floor(r / PAGE));
-      const row = rows && rows[r % PAGE];
+      const pg = g.pages.get(Math.floor(r / PAGE));
+      if (!pg) page(Math.floor(r / PAGE));
+      const row = pg && pg.cells[r % PAGE];
       const inRows = r >= s0 && r <= s1;
       b += '<div class="gr' + (r % 2 ? " odd" : "") + '" style="top:' + r * ROW_H + 'px"><div class="rn" style="width:' +
         g.rnW + 'px" data-rn="' + r + '">' + (r + 1) + "</div>";
@@ -409,7 +426,7 @@
         let text;
         if (!row) { text = "…"; cls += " wait"; }
         else if (row[rc] === null) { text = "NULL"; cls += " null"; }
-        else { text = flat(row[rc]); if (g.numeric[rc]) cls += " num"; }
+        else { text = flat(row[rc]) + (isCut(pg, r, rc) ? "…" : ""); if (g.numeric[rc]) cls += " num"; }
         if (inRows && c >= sc0 && c <= sc1) cls += g.sel ? " in" : "";
         if (r === g.cur.row && c === g.cur.col) cls += focused ? " cur" : " cur blur";
         if (hiddenAfter(c)) cls += " gap";
@@ -475,15 +492,15 @@
         ' — click to sort, right-click for more">' + esc(g.cols[rc]) + arrow + "</div>";
       const inCols = i >= sc0 && i <= sc1;
       for (let j = j0; j <= j1; j++) {
-        const rows = g.pages.get(Math.floor(j / PAGE));
-        const row = rows && rows[j % PAGE];
+        const pg = g.pages.get(Math.floor(j / PAGE));
+        const row = pg && pg.cells[j % PAGE];
         // values stay left-aligned on their side: a record column mixes
         // numbers and text, and right-aligning only some would be ragged
         let cls = "gc";
         let text;
         if (!row) { text = "…"; cls += " wait"; }
         else if (row[rc] === null) { text = "NULL"; cls += " null"; }
-        else text = flat(row[rc]);
+        else text = flat(row[rc]) + (isCut(pg, j, rc) ? "…" : "");
         if (g.sel && inCols && j >= s0 && j <= s1) cls += " in";
         if (j === g.cur.row && i === g.cur.col) cls += focused ? " cur" : " cur blur";
         b += '<div class="' + cls + '" style="left:' + (gw + j * W) + "px;width:" + W + 'px">' + esc(text) + "</div>";
@@ -761,10 +778,24 @@
   // inspect shows one value in full — the grid truncates and flattens,
   // which is right for scanning and wrong for reading a JSON document or a
   // long text. JSON is pretty-printed; anything else is shown as it is.
-  function inspect() {
-    const v = cellAt(g.cur.row, g.cur.col);
+  //
+  // A value its page carried only the head of (isCut) is asked for whole
+  // first (GET …/cell), under the seq and sort the grid shows: a result
+  // replaced meanwhile is refused (409) rather than shown in its place.
+  async function inspect() {
+    let v = cellAt(g.cur.row, g.cur.col);
     if (v === undefined) { dbc.log("warn", "no cell selected"); return; }
-    const col = g.cols[g.vis[g.cur.col]], row = g.cur.row;
+    const rc = g.vis[g.cur.col], col = g.cols[rc], row = g.cur.row;
+    if (v !== null && isCut(g.pages.get(Math.floor(row / PAGE)), row, rc)) {
+      try {
+        const d = await dbc.api("GET", dbc.wsPath("/cell?seq=" + g.seq + "&sort=" + g.sort + "&desc=" + (g.desc ? 1 : 0) +
+          "&row=" + row + "&col=" + rc));
+        v = d.value;
+      } catch (e) {
+        dbc.log("err", "could not read the whole value: " + e.message);
+        return;
+      }
+    }
     let text = v, pretty = false;
     if (v !== null) {
       const t = v.trim();

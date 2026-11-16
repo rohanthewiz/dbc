@@ -579,8 +579,8 @@ func TestDragHeaderBorderResizes(t *testing.T) {
 	t.Cleanup(func() { now = time.Now })
 	click(t, m, bx+6, hy)
 	click(t, m, bx+6, hy)
-	if got := m.grid.colWidth(1); got != m.grid.contentWidth(1) {
-		t.Errorf("double-click should fit: %d, want %d", got, m.grid.contentWidth(1))
+	if got := m.grid.colWidth(1); got != m.grid.contentWidth(1, maxUserWidth) {
+		t.Errorf("double-click should fit: %d, want %d", got, m.grid.contentWidth(1, maxUserWidth))
 	}
 }
 

@@ -372,6 +372,7 @@ func (s *Server) routes() {
 	r.Delete("/api/v1/ws/:id", s.handleClose)
 	r.Get("/api/v1/ws/:id/events", s.handleEvents)
 	r.Get("/api/v1/ws/:id/result", s.handleResult)
+	r.Get("/api/v1/ws/:id/cell", s.handleCell)
 	r.Get("/api/v1/ws/:id/export", s.handleExport)
 	r.Post("/api/v1/ws/:id/copy", s.handleCopy)
 	r.Post("/api/v1/ws/:id/connect", s.handleConnect)

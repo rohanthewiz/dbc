@@ -107,7 +107,7 @@ func (g *grid) fitRecords() {
 	}
 	w := len(itoa(max(g.Rows(), 1)))
 	for _, rc := range g.cols {
-		w = max(w, g.valuesWidth(rc))
+		w = max(w, g.valuesWidth(rc, maxUserWidth))
 	}
 	g.recW = clampUserW(w)
 }
@@ -338,7 +338,7 @@ func (g *grid) drawFlip(s Surface, st styles, focused bool) {
 			}
 			cs := s.Sub(Rect{cx - area.X, y + 1, g.colW[i], 1})
 			cs.Fill(cst)
-			text := truncate(flatten(val), rw)
+			text := cellText(val, rw)
 			if g.numeric[rc] && !null {
 				cs.PutRight(cs.W()-1, 0, text, cst)
 			} else {

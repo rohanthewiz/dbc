@@ -409,26 +409,63 @@ func (c *Canvas) Text() string {
 func width(s string) int { return uniseg.StringWidth(s) }
 
 // truncate shortens s to at most w cells, ending in "…" when it had to cut.
+//
+// Its cost follows w, not len(s): one walk over s's graphemes that stops at
+// the first one past w cells, where measuring s whole first (width(s) <= w)
+// would read every byte. The grid truncates every visible cell on every
+// frame, a mouse move included, and a cell can hold a 100 KB JSON document
+// (N-277).
 func truncate(s string, w int) string {
+	n, dots := cutAt(s, w, false, false)
+	if dots {
+		return s[:n] + "…"
+	}
+	return s[:n] // all of s, or nothing when w <= 0
+}
+
+// cutAt is where truncate cuts s to fit w cells: the byte length n of the
+// part that is drawn, and whether a "…" follows it. Two options serve the
+// grid's cells (cellText), which hand it only the head of a value:
+//
+//   - more: s is the head of something longer, so a "…" follows even when
+//     s itself fits — it stands for the part that was never read.
+//   - flat: count each grapheme as flatten would draw it (flatWidth), so
+//     the cut can be found BEFORE flattening, and only the drawn part
+//     need be copied.
+//
+// The walk tracks two things: used, the width so far, and keep, the length
+// of the longest prefix that fits in w-1 cells (what can sit in front of a
+// "…"). keep is fixed at the first grapheme that pushes past w-1; the walk
+// stops at the first that pushes past w, so it reads about w graphemes of
+// s however long s is, and a wide grapheme straddling the edge is dropped
+// whole.
+//
+//	w = 4, s = "ab中cd"   a(1) b(2) 中(4: keep = 2 bytes, "ab") c(5 > w) → "ab…"
+func cutAt(s string, w int, more, flat bool) (n int, dots bool) {
 	if w <= 0 {
-		return ""
+		return 0, false
 	}
-	if width(s) <= w {
-		return s
-	}
-	var b strings.Builder
-	used := 0
-	state := -1
-	for s != "" {
+	used, keep, state := 0, -1, -1
+	for rest := s; rest != ""; {
+		at := len(s) - len(rest) // byte offset of the grapheme about to be read
 		var g string
 		var gw int
-		g, s, gw, state = uniseg.FirstGraphemeClusterInString(s, state)
-		if used+gw > w-1 {
-			break
+		g, rest, gw, state = uniseg.FirstGraphemeClusterInString(rest, state)
+		if flat {
+			gw = flatWidth(g, gw)
 		}
-		b.WriteString(g)
-		used += gw
+		if keep < 0 && used+gw > w-1 {
+			keep = at
+		}
+		if used += gw; used > w {
+			return keep, true
+		}
 	}
-	b.WriteString("…")
-	return b.String()
+	if !more {
+		return len(s), false // all of it fits
+	}
+	if keep < 0 {
+		keep = len(s) // fits in w-1 cells: room for the "…" after all of it
+	}
+	return keep, true
 }

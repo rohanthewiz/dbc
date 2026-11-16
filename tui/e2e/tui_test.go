@@ -267,6 +267,28 @@ func TestTUI(t *testing.T) {
 		}
 	})
 
+	step(t, "a script printing 10,000 lines finishes in a moment, its last lines in the log (N-278)", func() {
+		// one frame per printed line, as before N-278, took 7.2 s here (an
+		// M1 Pro); batched, about 40 ms. The bound leaves slow machines
+		// two orders of magnitude of room and still catches a frame per line.
+		var src strings.Builder
+		src.WriteString("// Prints a lot.\npackage main\n\nimport (\n\t\"fmt\"\n\n\t\"github.com/rohanthewiz/dbc/sdb\"\n)\n\n")
+		src.WriteString("func Run(s *sdb.S) error {\n\tfor i := 0; i < 10000; i++ {\n\t\ts.Print(fmt.Sprintf(\"printed %d\", i))\n\t}\n\treturn nil\n}\n")
+		e.writeScript(t, "chatty.go", src.String())
+		u.ctrl('o')
+		u.waitFor("chatty.go", "Prints a lot.")
+		u.key('/')
+		u.typeText("chatty")
+		u.key(uv.KeyEnter) // in the filter, Enter is the row's action: run
+		began := time.Now()
+		u.waitFor("script chatty.go completed", "printed 9999")
+		took := time.Since(began)
+		t.Logf("10,000 prints landed in %s", took.Round(time.Millisecond))
+		if took > 3*time.Second {
+			t.Errorf("10,000 prints took %s: a frame per line again?", took.Round(time.Millisecond))
+		}
+	})
+
 	step(t, "Ctrl+Q quits", func() {
 		u.quit()
 	})

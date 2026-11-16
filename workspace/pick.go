@@ -16,6 +16,25 @@ type Editor struct {
 	Text      string
 	Caret     int
 	Selection string
+
+	// Split, when set, returns Text split into statements as d reads it —
+	// the UI's own split, kept per edit, in place of one made here per
+	// call. The TUI sets it (tui/editor.go's Stmts): it asks for the
+	// statement under the caret on every frame, a pointer motion
+	// included, and its context chip asks ChatContext on every frame too,
+	// so a split here each time was a whole-buffer pass per frame (N-278).
+	// nil splits Text here. It must split this Text: a UI that cannot
+	// promise that leaves it nil.
+	Split func(d sqlsplit.Dialect) []sqlsplit.Stmt
+}
+
+// stmts is ed.Text split as d reads it: by the UI's split when it keeps
+// one (Split), else here.
+func (ed Editor) stmts(d sqlsplit.Dialect) []sqlsplit.Stmt {
+	if ed.Split != nil {
+		return ed.Split(d)
+	}
+	return d.Split(ed.Text)
 }
 
 // Pick is what Ctrl+R executes: the selection's statements when there is a
@@ -42,7 +61,7 @@ func Pick(ed Editor, d sqlsplit.Dialect) (stmts []string, tag string) {
 		}
 		return stmts, fmt.Sprintf("selection (%d statements)", len(stmts))
 	}
-	all := d.Split(ed.Text)
+	all := ed.stmts(d)
 	if len(all) == 0 {
 		return nil, ""
 	}
@@ -58,7 +77,12 @@ func Pick(ed Editor, d sqlsplit.Dialect) (stmts []string, tag string) {
 // "query", as Pick tags it, since "all" of one says nothing more. d is the
 // engine's reading of strings, as for Pick.
 func PickAll(text string, d sqlsplit.Dialect) (stmts []string, tag string) {
-	for _, p := range d.Split(text) {
+	return pickAll(d.Split(text))
+}
+
+// pickAll is PickAll over a buffer already split.
+func pickAll(all []sqlsplit.Stmt) (stmts []string, tag string) {
+	for _, p := range all {
 		stmts = append(stmts, p.Text)
 	}
 	switch len(stmts) {
@@ -82,7 +106,13 @@ func PickAll(text string, d sqlsplit.Dialect) (stmts []string, tag string) {
 // under the caret — as a caret on a blank line between statements does.
 // d is the engine's reading of strings, as for Pick.
 func StmtRange(text string, caret int, d sqlsplit.Dialect) [2]int {
-	all := d.Split(text)
+	return StmtRangeIn(d.Split(text), caret)
+}
+
+// StmtRangeIn is StmtRange over a buffer the caller has already split (as
+// the engine reads strings, as for StmtRange): the TUI keeps its split per
+// edit and asks for the marker on every frame.
+func StmtRangeIn(all []sqlsplit.Stmt, caret int) [2]int {
 	if len(all) < 2 {
 		return [2]int{}
 	}

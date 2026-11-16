@@ -55,7 +55,7 @@ func init() {
 	autosaveIdle = time.Millisecond
 }
 
-func newTestModel(t *testing.T) *Model {
+func newTestModel(t testing.TB) *Model {
 	t.Helper()
 	// Tests may themselves be running inside a cats pane (the developer's
 	// terminal often is one). Without this, every test run would report
@@ -68,7 +68,7 @@ func newTestModel(t *testing.T) *Model {
 
 // newTestModelInHost is newTestModel without clearing the cats environment,
 // for tests that point it at a fake host first.
-func newTestModelInHost(t *testing.T) *Model {
+func newTestModelInHost(t testing.TB) *Model {
 	t.Helper()
 	return newTestModelCfg(t, nil)
 }
@@ -77,7 +77,7 @@ func newTestModelInHost(t *testing.T) *Model {
 // the model is built (tweak may be nil): the jobs tests point the
 // pipelines, jobs and runs directories at temp dirs, which the engine
 // reads when it is made.
-func newTestModelCfg(t *testing.T, tweak func(*config.Config)) *Model {
+func newTestModelCfg(t testing.TB, tweak func(*config.Config)) *Model {
 	t.Helper()
 	// the SQLite demo's name, since TestScriptRunsFromThePicker runs a shipped
 	// script that queries that connection by name
@@ -116,6 +116,9 @@ func newTestModelCfg(t *testing.T, tweak func(*config.Config)) *Model {
 	// m.send is how a running script reaches the model mid-run; queue what
 	// it sends so drive can deliver it, as Program.Send would.
 	m.send = func(msg tea.Msg) { sent = append(sent, msg) }
+	// and post too: posted from a goroutine (sendLater), a message would
+	// race drive's reading of sent, or miss it
+	m.post = m.send
 	m.editor.SetText("SELECT id, name, breed, age, adopted FROM cats ORDER BY age")
 	drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	drive(t, m, nil, m.Init())
@@ -126,7 +129,7 @@ func newTestModelCfg(t *testing.T, tweak func(*config.Config)) *Model {
 // their messages back in, until the queue is empty. Tick messages are
 // dropped rather than re-armed, so a run's elapsed-time ticker cannot keep
 // the loop alive.
-func drive(t *testing.T, m *Model, msg tea.Msg, cmds ...tea.Cmd) {
+func drive(t testing.TB, m *Model, msg tea.Msg, cmds ...tea.Cmd) {
 	t.Helper()
 	// Bubble Tea calls View after every Update, and the frame it draws is
 	// what the next mouse event is hit-tested against; render the same way,

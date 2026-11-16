@@ -78,26 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-278** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  The TUI's `View()` redoes buffer-sized work on every message, and
-  `MouseModeAllMotion` (`tui/layout.go:273`) makes every pointer cell a
-  message. Editor: `Text()` about four times and two full dialect
-  `Split`s per frame (`tui/editor.go:846`, `tui/run.go:53-55,247`,
-  `tui/layout.go:443`); `offset()` allocates a string per line
-  (`tui/editor.go:237-246`). Log: re-wraps all 2,000 lines and formats
-  each timestamp (`tui/logpane.go:128-137`). Chat: `layoutRows` re-wraps
-  the transcript and re-lexes every code block on each streamed delta
-  (`tui/chat.go:1011,1163`). Inspect: `size()` and `draw()` each split
-  and wrap the whole value (`tui/modals.go:513-524,539-542`). Each
-  `s.Print` is a blocking `p.Send` and one frame, so render time
-  throttles scripts; and a background tab's pending queue
-  (`tui/tabs.go:228`, replayed whole at `:288-292`) grows without bound
-  under a printing script. Fix: cache on `editor.version` (as
-  `highlight` does), on (log generation, width) and on (transcript
-  length, width); coalesce prints; send a background tab's `ScriptPrint`
-  straight to its log and keep only the last `ScriptShow`. Sites audit,
-  traced; a 3.5 MB buffer measured at Split 11 ms and Lex 20 ms.
-  (RPU plan, phase 3)
 - **N-279** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Each keystroke costs the whole buffer. `highlight` re-lexes everything
   and allocates a `Style` per rune on each edit
@@ -481,17 +461,6 @@ ten session docs in `ai_docs/claude_sessions/`
   no longer abort the transaction, a change of its own); or fetch through a
   portal with a row limit (pgconn has no Execute with maxRows; `DECLARE
   … CURSOR` + `FETCH`). Read here. Raised while closing N-276.
-- **N-325** · raised `2026-1116-1153-n277-grid-cells-cost-what-they-show` · value low
-  The TUI's Inspect dialog re-wraps its whole value on every frame.
-  `inspectModal.size` (`tui/modals.go:513`) splits the value and wraps
-  every line, and `modalRect` calls it on each draw, each click and each
-  wheel step (`tui/mouse.go:125,456`). `draw` (`:526`) then wraps it all
-  again. Scenario: Inspect on a large JSON document lags as you scroll it.
-  Timed here: about 3.8 ms a frame for a 95 KB pretty-printed value and
-  38 ms for 1 MB. Fix: wrap once per body width and keep the lines (and
-  the size) on the modal, since the value cannot change while the dialog
-  is open. Raised while closing N-277.
-
 ## Validate
 
 Items whose remaining work is purely testing: hand checks in a real terminal
@@ -841,6 +810,10 @@ and `raised`.
   2,000-line log (N-278), a grid frame over long cells (N-277), and the
   fetch loop's allocations per cell (N-282). Record the numbers before
   and after each phase-3 item. (RPU plan, phase 5)
+  So far, without budgets: the grid frame and arrival over long cells
+  (`tui/gridcell_test.go`, N-277); TUI frames over a large buffer, a full
+  log, a long transcript and Inspect, and a printing script in a real
+  program (`tui/frame_test.go`, `BenchmarkScriptPrints`, N-278).
 - **N-304** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   A linter in CI. `test.yml` runs build, vet and the race tests and no
   static analysis. The local `staticcheck` was built with Go 1.24 and
@@ -1200,6 +1173,40 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-278** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  The TUI's `View()` redoes buffer-sized work on every message, and
+  `MouseModeAllMotion` (`tui/layout.go:273`) makes every pointer cell a
+  message. Editor: `Text()` about four times and two full dialect
+  `Split`s per frame (`tui/editor.go:846`, `tui/run.go:53-55,247`,
+  `tui/layout.go:443`); `offset()` allocates a string per line
+  (`tui/editor.go:237-246`). Log: re-wraps all 2,000 lines and formats
+  each timestamp (`tui/logpane.go:128-137`). Chat: `layoutRows` re-wraps
+  the transcript and re-lexes every code block on each streamed delta
+  (`tui/chat.go:1011,1163`). Inspect: `size()` and `draw()` each split
+  and wrap the whole value (`tui/modals.go:513-524,539-542`). Each
+  `s.Print` is a blocking `p.Send` and one frame, so render time
+  throttles scripts; and a background tab's pending queue
+  (`tui/tabs.go:228`, replayed whole at `:288-292`) grows without bound
+  under a printing script. Fix: cache on `editor.version` (as
+  `highlight` does), on (log generation, width) and on (transcript
+  length, width); coalesce prints; send a background tab's `ScriptPrint`
+  straight to its log and keep only the last `ScriptShow`. Sites audit,
+  traced; a 3.5 MB buffer measured at Split 11 ms and Lex 20 ms.
+  (RPU plan, phase 3)
+  closed 2026-11-16 (RPU plan, phase 3): measured first. New `tui/frame_test.go`: a pointer motion and its 200×50 frame, HEAD → now: a 3.5 MB buffer with a full log 96 ms → 0.27 ms; the full log alone 6.7 → 0.26 ms; the assistant open on 60 answers 8.1 → 0.41 ms, a streamed chunk 8.1 → 0.95 ms; the assistant over the 3.5 MB buffer 129 → 0.39 ms (its context chip's `ChatContext` split the buffer too); Inspect on a 1 MB value 40 → 0.35 ms. What is left of a frame is drawing the canvas and `Canvas.String`. Editor: `Text()` is kept per edit version with each line's byte start (`editor.buffer`), so `offset` is a lookup plus the row's head and `posAt` a binary search, neither making a string per line (an offset inside a rune now goes to its end; the old conversion could put the column past the line). `Stmts(d)` keeps the split per version and dialect. `workspace.Editor` gained `Split` (the UI's own split, used by `Pick`, `RunEditor`'s run-all and so `ChatContext`) and `StmtRangeIn`; the title keeps a selection's pick (`selPick`). The highlight is also kept per palette, so a theme from cats recolors the editor at once (it waited for the next keystroke). Log: rows kept per width and extended as lines arrive (`logPane.wrapped`; `trim` drops the oldest lines' rows; `take` folds the holding log in). Chat: each message's rows kept (`laidMsg`: text, width, palette, dialect, the blank before a question, the copy chip), so a streamed chunk lays out only its answer. Inspect: N-325. Prints: `s.Print` lines go to a queue (`tui/prints.go`) that Update drains before any message, so a run's lines are above its "completed". The wake-up is posted from a goroutine: a Send from the script's own would block until after the frame and batch nothing (tried first: 372 ms, about a frame a line). Past 2,000 waiting lines a push sends and waits, which bounds the queue. A background tab's prints go straight to its connection's log; a show right behind another of the same connection replaces it on the pending list, and a nil show is not queued. A script printing 2,000 lines in a real `tea.Program` over a full log (`BenchmarkScriptPrints`): 4.4 s → 6.5 ms; 10,000 lines in the real binary (TUI e2e): 7.2 s → 42 ms. Tests: `TestEditorCachesFollowEveryEdit` (40 seeds × 300 random edits: keys, pastes, undo/redo, `Replace`, `ApplyEdits`, `SetText`, View/Restore; cached text, offsets, `posAt` and `Stmts` against the uncached code), `TestEditorPosAtMidRuneStaysOnTheLine`, `TestEditorHighlightFollowsTheTheme`, `TestLogWrapCacheMatchesAFullWrap`, `TestChatRowsCacheMatchesAFreshLayout`, `TestInspectWrapsOncePerWidth`, `TestScriptPrintsAreBatched`, `TestScriptPrintsBackpressure`, `TestScriptPrintsLandBeforeItsEnd`, `TestBackgroundScriptPrintsSkipThePendingList`, `TestBackgroundScriptShowsKeepTheLast`; breaking each cache's key fails its test. New TUI e2e step "a script printing 10,000 lines finishes in a moment" (bound 3 s). Full `./...`, `-race` on tui/workspace/web, TUI e2e green. The random test found N-326.
+
+- **N-325** · raised `2026-1116-1153-n277-grid-cells-cost-what-they-show` · value low
+  The TUI's Inspect dialog re-wraps its whole value on every frame.
+  `inspectModal.size` (`tui/modals.go:513`) splits the value and wraps
+  every line, and `modalRect` calls it on each draw, each click and each
+  wheel step (`tui/mouse.go:125,456`). `draw` (`:526`) then wraps it all
+  again. Scenario: Inspect on a large JSON document lags as you scroll it.
+  Timed here: about 3.8 ms a frame for a 95 KB pretty-printed value and
+  38 ms for 1 MB. Fix: wrap once per body width and keep the lines (and
+  the size) on the modal, since the value cannot change while the dialog
+  is open. Raised while closing N-277.
+  closed 2026-11-16 with N-278, whose Inspect part it was: the wrapped lines are kept per body width (`linesW`) and the size per screen (`inspectSize`), so a frame, click or wheel step wraps nothing. `BenchmarkFrameInspect`, a 1 MB value: 40 ms → 0.35 ms a frame. Test: `TestInspectWrapsOncePerWidth`.
 
 - **N-326** · raised `2026-1116 (this session; doc to come)` · value medium
   Alt+Left, Ctrl+Left, Alt+B, Ctrl+W, Alt+Backspace or Ctrl+Backspace with

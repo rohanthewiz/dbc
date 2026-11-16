@@ -16,6 +16,7 @@ import (
 	"github.com/rohanthewiz/dbc/pipeline"
 	"github.com/rohanthewiz/dbc/sdb/sdbapi"
 	"github.com/rohanthewiz/dbc/sqlsplit"
+	"github.com/rohanthewiz/dbc/theme"
 	"github.com/rohanthewiz/dbc/userdata"
 	"github.com/rohanthewiz/dbc/workspace"
 )
@@ -147,6 +148,12 @@ type chatPane struct {
 	top    int
 	follow bool
 	total  int
+
+	// laid is each message's rows as last laid out, by index into msgs,
+	// and flat the whole transcript's rows as last drawn (its backing
+	// array reused frame to frame). See layoutRows.
+	laid []laidMsg
+	flat []chatRow
 
 	// geometry of the last draw, for hit-testing
 	modelChip, newBtn, closeBtn, stopBtn, attachChip, sendBtn Rect
@@ -1261,47 +1268,102 @@ func (p *chatPane) drawRecent(m *Model, s Surface, y, w int) int {
 	return y + 1
 }
 
+// laidMsg is one message's rows, with everything they were laid out from:
+// they are reused while all of it still holds.
+type laidMsg struct {
+	role    chatRole
+	text    string
+	w       int
+	pal     theme.Palette
+	dialect sqlsplit.Dialect
+	lead    bool // a blank row before it: a question after the first message
+	chip    bool // the reply's ⧉ copy row after it: an answer not still streaming
+	rows    []chatRow
+}
+
 // layoutRows turns the transcript into visual rows for a width.
+//
+// It runs on every frame the assistant is open — each pointer motion, and
+// each streamed chunk of an answer — and laying the whole transcript out
+// again each time (every message wrapped, every code block lexed) cost
+// ~8 ms a frame on a 60-answer conversation (N-278). So each message's
+// rows are kept (laid) and laid out again only when what they depend on
+// changed: its text (a streamed chunk makes the answer's a new string),
+// the width, the palette, the dialect its SQL is colored as, or where it
+// sits. While an answer streams, only that answer is laid out again.
+//
+// A kept text is compared with ==, which for the same string — the usual
+// case, an unchanged message — is a pointer check, not a byte walk.
 func (p *chatPane) layoutRows(st styles, w int) []chatRow {
-	var rows []chatRow
-	blank := func() { rows = append(rows, chatRow{}) }
+	if len(p.laid) > len(p.msgs) {
+		p.laid = p.laid[:len(p.msgs)] // a new conversation: msgs started over
+	}
+	rows := p.flat[:0]
 	for i, msg := range p.msgs {
-		switch msg.role {
-		case roleUser:
-			if i > 0 {
-				blank()
+		want := laidMsg{
+			role: msg.role, text: msg.text, w: w, pal: st.pal, dialect: p.dialect,
+			lead: msg.role == roleUser && i > 0,
+			chip: msg.role == roleAgent && !(i == len(p.msgs)-1 && p.streaming),
+		}
+		if i == len(p.laid) {
+			p.laid = append(p.laid, laidMsg{})
+		}
+		if lm := &p.laid[i]; !lm.same(want) {
+			want.rows = p.msgRows(st, msg, want, w)
+			*lm = want
+		}
+		rows = append(rows, p.laid[i].rows...)
+	}
+	rows = append(rows, p.signInRows(st)...)
+	p.flat = rows
+	return rows
+}
+
+// same reports whether l was laid out from what want describes.
+func (l *laidMsg) same(want laidMsg) bool {
+	return l.role == want.role && l.text == want.text && l.w == want.w &&
+		l.pal == want.pal && l.dialect == want.dialect &&
+		l.lead == want.lead && l.chip == want.chip
+}
+
+// msgRows lays out one message: its rows as layoutRows used to make them
+// in its loop, now made only when the message's laidMsg changed.
+func (p *chatPane) msgRows(st styles, msg chatMsg, at laidMsg, w int) []chatRow {
+	var rows []chatRow
+	switch msg.role {
+	case roleUser:
+		if at.lead {
+			rows = append(rows, chatRow{})
+		}
+		for j, line := range wrap(msg.text, w-2) {
+			pre := "  "
+			if j == 0 {
+				pre = "❯ "
 			}
-			for j, line := range wrap(msg.text, w-2) {
-				pre := "  "
-				if j == 0 {
-					pre = "❯ "
-				}
-				rows = append(rows, chatRow{segs: []seg{{pre, st.chatUser}, {line, st.chatUser}}})
-			}
-		case roleAgent:
-			rows = append(rows, p.agentRows(st, msg.text, w)...)
-			last := i == len(p.msgs)-1
-			if !(last && p.streaming) {
-				rows = append(rows, chatRow{
-					segs: []seg{{"⧉ copy reply", st.muted}},
-					tgts: []rowTarget{{0, 12, targetCopyReply, msg.text}},
-				})
-			}
-		case roleTool, roleNote:
-			for _, line := range wrap(msg.text, w) {
-				rows = append(rows, chatRow{segs: []seg{{line, st.chatTool}}})
-			}
-		case roleInfo:
-			for _, line := range wrap(msg.text, w) {
-				rows = append(rows, chatRow{segs: []seg{{line, st.muted.Italic()}}})
-			}
-		case roleErr:
-			for _, line := range wrap(msg.text, w) {
-				rows = append(rows, chatRow{segs: []seg{{line, st.err}}})
-			}
+			rows = append(rows, chatRow{segs: []seg{{pre, st.chatUser}, {line, st.chatUser}}})
+		}
+	case roleAgent:
+		rows = append(rows, p.agentRows(st, msg.text, w)...)
+		if at.chip {
+			rows = append(rows, chatRow{
+				segs: []seg{{"⧉ copy reply", st.muted}},
+				tgts: []rowTarget{{0, 12, targetCopyReply, msg.text}},
+			})
+		}
+	case roleTool, roleNote:
+		for _, line := range wrap(msg.text, w) {
+			rows = append(rows, chatRow{segs: []seg{{line, st.chatTool}}})
+		}
+	case roleInfo:
+		for _, line := range wrap(msg.text, w) {
+			rows = append(rows, chatRow{segs: []seg{{line, st.muted.Italic()}}})
+		}
+	case roleErr:
+		for _, line := range wrap(msg.text, w) {
+			rows = append(rows, chatRow{segs: []seg{{line, st.err}}})
 		}
 	}
-	return append(rows, p.signInRows(st)...)
+	return rows
 }
 
 // agentRows renders an answer: paragraphs wrapped, `inline code` and

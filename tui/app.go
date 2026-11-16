@@ -63,6 +63,11 @@ type Model struct {
 
 	focus  focusID
 	editor *editor
+	// selPick is the last selection stmtsToRun split (run.go), so a frame
+	// over an unchanged selection does not split it again
+	selPick selPickMemo
+	// prints is scripts' s.Print lines waiting for Update (prints.go)
+	prints *printQueue
 	grid   *grid
 	planv  *planView // the results pane's Plan tab
 	// logp is the log on screen: the shown connection's, one of logs
@@ -221,6 +226,11 @@ type Model struct {
 	// the script engine's show/print callbacks, which fire mid-run. Run
 	// installs Program.Send; tests install a recorder.
 	send func(tea.Msg)
+	// post is send without waiting for the event loop to take the message
+	// (sendLater, a goroutine around send): a script's print wake-up
+	// (prints.go). Tests, which drive the model synchronously, make it a
+	// plain send.
+	post func(tea.Msg)
 
 	// cats is everything about the host this may be running inside.
 	cats catsState
@@ -270,9 +280,11 @@ func New(cfg *config.Config, mgr *db.Manager, opt Options) *Model {
 		logH:   7,
 		edFrac: 0.35,
 		send:   func(tea.Msg) {},
+		prints: &printQueue{},
 
 		schemaPicks: map[string]workspace.SchemaPick{},
 	}
+	m.post = m.sendLater
 	m.chat = newChatPane()
 	m.editor.sqlMode = true
 	m.editor.placeholder = "Type SQL here, then Ctrl+R (or ▶ Run) to run it…"
@@ -470,6 +482,9 @@ func (m *Model) shutdown() {
 
 // Update routes one message.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// scripts' printed lines first, whatever the message: what a script
+	// printed before this message was sent belongs above it (prints.go)
+	m.drainPrints()
 	cmd := m.route(msg)
 	// A live snippet follows the buffer whatever changed it — a key, a
 	// paste, a completion's pick, a click away (snippets.go) — so it is
@@ -553,8 +568,12 @@ func (m *Model) route(msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	case *workspace.ScriptPrint:
+		// a print delivered as a message of its own (the sink queues them
+		// instead: prints.go)
 		m.logTo(msg.Conn, logInfo, msg.Text)
 		return nil
+	case printsMsg:
+		return nil // Update has drained the queue already
 	case complLoadedMsg:
 		return m.complLoaded(msg)
 	case tickMsg:

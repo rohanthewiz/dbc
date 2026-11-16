@@ -44,7 +44,7 @@ func (w *Workspace) RunEditor(ed Editor, all bool) (Start, error) {
 	d := w.Dialect()
 	stmts, tag := Pick(ed, d)
 	if all {
-		stmts, tag = PickAll(ed.Text, d)
+		stmts, tag = pickAll(ed.stmts(d))
 	}
 	return w.RunStmts(stmts, tag)
 }

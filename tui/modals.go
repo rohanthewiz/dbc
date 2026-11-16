@@ -478,11 +478,26 @@ type inspectModal struct {
 	null     bool
 	pretty   bool // value was JSON and is shown indented
 	top      int
-	lines    []string
 	view     Rect
 	copyBtn  Rect
 	askBtn   Rect
 	hoverBtn int
+
+	// lines is value wrapped at width linesW, and sz the dialog's size for
+	// a screen of sz.w×sz.h. The value cannot change while the dialog is
+	// open, so each is worked out once per width — not on every frame,
+	// click and wheel step (modalRect asks size on each), which split and
+	// wrapped the whole value every time: ~4 ms a frame at 95 KB, ~40 ms
+	// at 1 MB (N-278, N-325).
+	lines  []string
+	linesW int
+	sz     inspectSize
+}
+
+// inspectSize is the Inspect dialog's size mw×mh for a screen of w×h.
+type inspectSize struct {
+	ok           bool
+	w, h, mw, mh int
 }
 
 func (m *Model) openInspect() {
@@ -511,6 +526,9 @@ func (in *inspectModal) title() string {
 // size fits the dialog to the value: a short value gets a small dialog, and a
 // long one grows up to two thirds of the screen and scrolls from there.
 func (in *inspectModal) size(w, h int) (int, int) {
+	if in.sz.ok && in.sz.w == w && in.sz.h == h {
+		return in.sz.mw, in.sz.mh
+	}
 	widest := 0
 	for _, l := range strings.Split(in.value, "\n") {
 		widest = max(widest, width(l))
@@ -520,7 +538,9 @@ func (in *inspectModal) size(w, h int) (int, int) {
 	for _, l := range strings.Split(in.value, "\n") {
 		rows += len(wrap(l, mw-4))
 	}
-	return mw, max(9, min(rows+6, h*2/3))
+	mh := max(9, min(rows+6, h*2/3))
+	in.sz = inspectSize{ok: true, w: w, h: h, mw: mw, mh: mh}
+	return mw, mh
 }
 
 func (in *inspectModal) draw(m *Model, s Surface) *caret {
@@ -536,9 +556,11 @@ func (in *inspectModal) draw(m *Model, s Surface) *caret {
 	if in.null {
 		body.Put(0, 0, "NULL", onBg(m.st.null, bg))
 	} else {
-		in.lines = in.lines[:0]
-		for _, l := range strings.Split(in.value, "\n") {
-			in.lines = append(in.lines, wrap(l, body.W())...)
+		if in.lines == nil || in.linesW != body.W() {
+			in.lines, in.linesW = in.lines[:0], body.W()
+			for _, l := range strings.Split(in.value, "\n") {
+				in.lines = append(in.lines, wrap(l, body.W())...)
+			}
 		}
 		in.top = max(0, min(in.top, len(in.lines)-body.H()))
 		for y := 0; y < body.H() && in.top+y < len(in.lines); y++ {

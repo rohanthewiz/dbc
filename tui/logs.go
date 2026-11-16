@@ -71,9 +71,7 @@ func (m *Model) syncLog() {
 	}
 	lp := m.logPaneOf(key)
 	if hold := m.logs[""]; key != "" && hold != nil && len(hold.lines) > 0 {
-		lp.lines = append(lp.lines, hold.lines...)
-		lp.trim()
-		hold.lines = nil
+		lp.take(hold)
 		lp.follow = true // what was just moved in is the newest: show it
 	}
 	m.logp, m.logFor = lp, key

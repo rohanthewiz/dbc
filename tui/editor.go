@@ -1,14 +1,17 @@
 package tui
 
 import (
+	"sort"
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/rivo/uniseg"
 
 	"github.com/rohanthewiz/dbc/sqlsplit"
+	"github.com/rohanthewiz/dbc/theme"
 )
 
 // editor is a small text editor: the SQL editor, the chat composer, and (with
@@ -64,7 +67,8 @@ type editor struct {
 	// mouse is mapped from. Zero until the first draw.
 	view Rect
 
-	// version counts edits; the highlighter caches against it.
+	// version counts edits; the highlighter caches against it, as do buf
+	// and split below.
 	version int
 	// savedVer is the edit version the text was last saved at by
 	// autosave (autosave.go): an editor whose version moved past it has
@@ -72,6 +76,20 @@ type editor struct {
 	savedVer int
 	hlVer    int
 	hl       [][]Style
+	// hlPal is the palette hl was colored in: a theme arriving from the
+	// cats host changes every style without an edit, and a highlight kept
+	// across it would paint the buffer in the old colors until the next
+	// keystroke.
+	hlPal theme.Palette
+
+	// buf and split are what a frame reads off the buffer, kept for the
+	// edit version they were made at — see buffer and Stmts. The frame is
+	// redrawn on every message, a pointer motion included, and before
+	// these each one joined the whole buffer into a string about four
+	// times and split it into statements twice: ~100 ms a frame on a
+	// 3.5 MB migration (N-278).
+	buf   editorBuf
+	split editorSplit
 
 	// marks are the uses of a symbol (Shift+F12, symbol.go), drawn while
 	// marksVer is still the edit version they were found at.
@@ -87,6 +105,33 @@ type editor struct {
 	// snip is the live snippet being filled in (snippets.go): its tab
 	// stops, drawn boxed, which Tab steps through. nil when none is.
 	snip *snipSession
+}
+
+// editorBuf is the buffer as Text returns it, with the byte offset each
+// line starts at, for the edit version ver (ok: made at all — version 0
+// is a real version).
+//
+//	lines   [S E L E C T]  [  1 ;]  []  [S E L E C T   2]
+//	text    "SELECT\n  1;\n\nSELECT 2"
+//	starts   0        7     12  13
+//
+// starts turns a position into an offset (offset) and an offset back into
+// a position (posAt) without walking every line before it, and without
+// converting each line to a string just to learn its length in bytes.
+type editorBuf struct {
+	ok     bool
+	ver    int
+	text   string
+	starts []int
+}
+
+// editorSplit is the buffer split into statements as dialect d reads it,
+// for the edit version ver.
+type editorSplit struct {
+	ok    bool
+	ver   int
+	d     sqlsplit.Dialect
+	stmts []sqlsplit.Stmt
 }
 
 // editorStamp is an editor's edit version and caret at one moment; the
@@ -142,12 +187,77 @@ func newEditor(single bool) *editor {
 }
 
 // Text returns the buffer.
-func (e *editor) Text() string {
-	parts := make([]string, len(e.lines))
-	for i, l := range e.lines {
-		parts[i] = string(l)
+func (e *editor) Text() string { return e.buffer().text }
+
+// buffer is the buffer as one string and its line starts, made at most
+// once per edit version.
+//
+// The version is bumped by checkpoint BEFORE the edit it records lands in
+// lines (and by SetText, Restore, swap and the snippet mirrors after
+// theirs). That is safe because nothing reads the buffer between an edit's
+// checkpoint and the edit itself — the same assumption the highlight cache
+// has always made. TestEditorCachesFollowEveryEdit holds every editing
+// path to it, comparing the cached text with a fresh join after each step.
+func (e *editor) buffer() *editorBuf {
+	b := &e.buf
+	if b.ok && b.ver == e.version {
+		return b
 	}
-	return strings.Join(parts, "\n")
+	// one pass for the line starts, which also sizes the string, then one
+	// copy of the runes: Join over a string per line copied every byte
+	// twice and allocated once per line
+	starts := b.starts[:0]
+	n := 0
+	for _, l := range e.lines {
+		starts = append(starts, n)
+		n += runesLen(l) + 1
+	}
+	var sb strings.Builder
+	sb.Grow(max(n-1, 0))
+	for i, l := range e.lines {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		for _, r := range l {
+			sb.WriteRune(r)
+		}
+	}
+	*b = editorBuf{ok: true, ver: e.version, text: sb.String(), starts: starts}
+	return b
+}
+
+// runesLen is len(string(rs)) without making the string. An invalid rune
+// (a lone surrogate, or past U+10FFFF) is written as U+FFFD — three bytes —
+// by that conversion and by WriteRune alike, so it is counted as three.
+func runesLen(rs []rune) int {
+	n := 0
+	for _, r := range rs {
+		n += runeBytes(r)
+	}
+	return n
+}
+
+// runeBytes is the bytes r takes in a string made from runes.
+func runeBytes(r rune) int {
+	if l := utf8.RuneLen(r); l > 0 {
+		return l
+	}
+	return 3 // written as U+FFFD
+}
+
+// Stmts is the buffer split into statements as d reads it, made at most
+// once per edit version and dialect. Every frame asks for it twice — the
+// title's "^R runs statement 2/4" and the gutter's marker — and the
+// assistant's context chip a third time, and a caret move changes none of
+// them: only which statement IndexAt picks out of the same list. The slice
+// is shared; callers must not modify it.
+func (e *editor) Stmts(d sqlsplit.Dialect) []sqlsplit.Stmt {
+	s := &e.split
+	if s.ok && s.ver == e.version && s.d == d {
+		return s.stmts
+	}
+	*s = editorSplit{ok: true, ver: e.version, d: d, stmts: d.Split(e.Text())}
+	return s.stmts
 }
 
 // SetText replaces the buffer and clears undo — used for loading, not
@@ -237,29 +347,37 @@ func splitLines(s string) [][]rune {
 func (e *editor) Empty() bool { return strings.TrimSpace(e.Text()) == "" }
 
 // offset converts a position to a byte offset into Text() — the currency
-// sqlsplit deals in.
+// sqlsplit deals in. A row past the last line is the offset one past the
+// end (every line and its newline counted), as it always was.
 func (e *editor) offset(p pos) int {
-	n := 0
-	for r := 0; r < p.row && r < len(e.lines); r++ {
-		n += len(string(e.lines[r])) + 1
+	b := e.buffer()
+	if p.row >= len(e.lines) {
+		return len(b.text) + 1
 	}
-	if p.row < len(e.lines) {
-		n += len(string(e.lines[p.row][:min(p.col, len(e.lines[p.row]))]))
-	}
-	return n
+	l := e.lines[p.row]
+	return b.starts[p.row] + runesLen(l[:min(p.col, len(l))])
 }
 
-// posAt converts a byte offset back to a position.
+// posAt converts a byte offset back to a position. The row is found by a
+// binary search of the line starts; an offset at a line's end (on its
+// newline) is that line's end, not the next line's start, and one past the
+// buffer's end is the last line's end. An offset inside a rune's bytes is
+// taken to the end of that rune, so the column never runs past the line.
 func (e *editor) posAt(off int) pos {
-	for r, l := range e.lines {
-		lb := len(string(l))
-		if off <= lb {
-			return pos{r, len([]rune(string(l)[:max(off, 0)]))}
-		}
-		off -= lb + 1
+	if off <= 0 {
+		return pos{}
 	}
-	last := len(e.lines) - 1
-	return pos{last, len(e.lines[last])}
+	b := e.buffer()
+	// the last line starting at or before off
+	r := sort.Search(len(b.starts), func(i int) bool { return b.starts[i] > off }) - 1
+	l := e.lines[r]
+	at := off - b.starts[r] // bytes into line r: at most its length, except on the last line
+	col, used := 0, 0
+	for col < len(l) && used < at {
+		used += runeBytes(l[col])
+		col++
+	}
+	return pos{r, col}
 }
 
 // Caret returns the caret's byte offset.
@@ -966,11 +1084,11 @@ func (e *editor) setDialect(d sqlsplit.Dialect) {
 }
 
 // highlight returns a style per rune per line, from sqlsplit's lexer read
-// as the editor's dialect. It is cached against the edit version (and
-// dropped by setDialect): the frame redraws on every mouse motion, and
-// relexing an unchanged buffer each time would be waste.
+// as the editor's dialect. It is cached against the edit version and the
+// palette (and dropped by setDialect): the frame redraws on every mouse
+// motion, and relexing an unchanged buffer each time would be waste.
 func (e *editor) highlight(st styles) [][]Style {
-	if e.hl != nil && e.hlVer == e.version {
+	if e.hl != nil && e.hlVer == e.version && e.hlPal == st.pal {
 		return e.hl
 	}
 	text := e.Text()
@@ -993,7 +1111,7 @@ func (e *editor) highlight(st styles) [][]Style {
 		}
 		off++ // the newline
 	}
-	e.hl, e.hlVer = out, e.version
+	e.hl, e.hlVer, e.hlPal = out, e.version, st.pal
 	return out
 }
 

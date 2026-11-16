@@ -72,6 +72,19 @@ func (e *env) nextEdit(t *testing.T, text string) {
 	}
 }
 
+// writeScript puts a script in the run's scripts_dir (the default,
+// HOME/.config/dbc/scripts), as if the user had saved it there.
+func (e *env) writeScript(t *testing.T, name, src string) {
+	t.Helper()
+	dir := filepath.Join(e.home, ".config", "dbc", "scripts")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // build compiles dbc from this checkout (two levels up), so the run always
 // exercises the code in the working tree.
 func build(t *testing.T, out string) {

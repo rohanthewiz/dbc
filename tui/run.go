@@ -10,6 +10,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/model"
+	"github.com/rohanthewiz/dbc/sqlsplit"
 	"github.com/rohanthewiz/dbc/workspace"
 )
 
@@ -50,9 +51,12 @@ func job(j workspace.Job) tea.Cmd {
 }
 
 // editorState is the editor as the workspace needs it to pick statements.
+// Split hands over the editor's own split, kept per edit (editor.Stmts),
+// so the workspace does not split the whole buffer again on each call —
+// the title and the assistant's context chip each call on every frame.
 func (m *Model) editorState() workspace.Editor {
 	sel, _, _ := m.editor.Selection()
-	return workspace.Editor{Text: m.editor.Text(), Caret: m.editor.Caret(), Selection: sel}
+	return workspace.Editor{Text: m.editor.Text(), Caret: m.editor.Caret(), Selection: sel, Split: m.editor.Stmts}
 }
 
 // note writes one of the workspace's notes to the log.
@@ -287,14 +291,45 @@ func (m *Model) sessionReleased(ev *workspace.SessionReleased) tea.Cmd {
 // stmtsToRun is what Ctrl+R executes: see workspace.Pick. Each of these
 // splits as the active connection's engine reads strings (Dialect), which
 // is how the run itself splits (Workspace.RunEditor).
+//
+// It is asked on every frame (the editor's title says what ^R runs). With
+// no selection that is cheap: the editor keeps its split per edit and the
+// caret only picks from it. A selection is split on its own, so the last
+// one's pick is kept (selPick) until the buffer, the selection or the
+// dialect changes — hovering with a whole 3.5 MB buffer selected would
+// otherwise split it on each pointer motion.
 func (m *Model) stmtsToRun() (stmts []string, tag string) {
-	return workspace.Pick(m.editorState(), m.ws.Dialect())
+	ed, d := m.editorState(), m.ws.Dialect()
+	if ed.Selection == "" {
+		return workspace.Pick(ed, d)
+	}
+	_, a, b := m.editor.Selection()
+	key := selPickMemo{ok: true, ed: m.editor, ver: m.editor.version, a: a, b: b, d: d}
+	if mm := m.selPick; mm.ok && mm.ed == key.ed && mm.ver == key.ver && mm.a == a && mm.b == b && mm.d == d {
+		return mm.stmts, mm.tag
+	}
+	key.stmts, key.tag = workspace.Pick(ed, d)
+	m.selPick = key
+	return key.stmts, key.tag
+}
+
+// selPickMemo is stmtsToRun's pick of a selection, for the editor, edit
+// version, selection range and dialect it was made from. The returned
+// slice is shared with later calls; callers only read it.
+type selPickMemo struct {
+	ok    bool
+	ed    *editor
+	ver   int
+	a, b  int
+	d     sqlsplit.Dialect
+	stmts []string
+	tag   string
 }
 
 // currentStmtRange is the byte range of the statement under the caret, for
-// the editor's gutter marker.
+// the editor's gutter marker — from the editor's split, kept per edit.
 func (m *Model) currentStmtRange() [2]int {
-	return workspace.StmtRange(m.editor.Text(), m.editor.Caret(), m.ws.Dialect())
+	return workspace.StmtRangeIn(m.editor.Stmts(m.ws.Dialect()), m.editor.Caret())
 }
 
 // allStmts is what Ctrl+Shift+R executes: see workspace.PickAll.

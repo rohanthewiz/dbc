@@ -163,7 +163,15 @@ func (m *Model) tag(cmd tea.Cmd) tea.Cmd {
 // catalog read of every schema on every connect.
 func (m *Model) newWorkspace(key int, hist *userdata.History) *workspace.Workspace {
 	return workspace.New(m.cfg, m.mgr, hist, workspace.Options{
-		Sink: func(e workspace.Event) { m.send(tabMsg{key: key, msg: e}) },
+		Sink: func(e workspace.Event) {
+			// s.Print lines are batched rather than sent one message (and
+			// one frame) each: see prints.go
+			if p, ok := e.(*workspace.ScriptPrint); ok {
+				m.scriptPrinted(key, p)
+				return
+			}
+			m.send(tabMsg{key: key, msg: e})
+		},
 		// a script's s.RunJob runs on the session's engine (jobs.go), as
 		// dbc web's script tabs run on the server's: listed in the Runs,
 		// under one job's overlap rule, its lines in the log as every
@@ -229,6 +237,30 @@ func (m *Model) routeTab(tm tabMsg) tea.Cmd {
 		if !ev.Stale {
 			t.done, t.failed = true, ev.Err != nil
 		}
+	case *workspace.ScriptShow:
+		// A script showing results in a loop would queue one replay per
+		// show, and replaying each only puts it in the grid over the one
+		// before: the shows themselves are already in the workspace's
+		// result set (Workspace.RunScript). So a show right behind another
+		// of the same connection's takes its place — only the last is
+		// drawn on the tab's return, as only the last was on screen at the
+		// end. Anything queued between two shows keeps both. A show of
+		// nothing (s.Show(nil)) draws nothing on replay, so it is not
+		// queued at all — nor may it take a real show's place.
+		if ev.Result == nil {
+			return cmd
+		}
+		if n := len(t.pending); n > 0 {
+			if prev, ok := t.pending[n-1].(*workspace.ScriptShow); ok && prev.Conn == ev.Conn {
+				t.pending[n-1] = ev
+				return cmd
+			}
+		}
+	case *workspace.ScriptPrint:
+		// a print delivered as a message (the sink queues them: prints.go)
+		// goes to its connection's log now, as a queued one does
+		m.logTo(ev.Conn, logInfo, ev.Text)
+		return cmd
 	}
 	t.pending = append(t.pending, tm.msg)
 	m.catsAfterTransition() // "working" may have ended with this tab's run

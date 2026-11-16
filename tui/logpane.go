@@ -21,6 +21,23 @@ type logPane struct {
 	follow bool // pinned to the newest line
 	view   Rect
 	total  int // visual rows at the last draw
+
+	// rows is lines[:len(nrows)] wrapped at width rowsW, and nrows how
+	// many rows each of those lines wrapped to. The frame is redrawn on
+	// every message — each pointer motion, each s.Print — and wrapping all
+	// 2,000 lines and formatting each timestamp every time cost ~6 ms a
+	// frame (N-278). Kept instead, and kept up incrementally:
+	//
+	//	add    lines grow at the end; draw wraps only lines[len(nrows):]
+	//	trim   the oldest lines go; their rows (sum of nrows[:over]) go too
+	//	clear  everything goes
+	//	width  a resize, or a dragged border: everything is wrapped again
+	//
+	// Every change to lines goes through add, trim, clear or take, which
+	// keep these in step.
+	rows  []visual
+	nrows []int
+	rowsW int
 }
 
 // logLine is one message.
@@ -59,16 +76,38 @@ func (l *logPane) add(kind logKind, text string) {
 	l.trim()
 }
 
-// trim drops the oldest lines past logMaxLines.
+// trim drops the oldest lines past logMaxLines, and their wrapped rows.
 func (l *logPane) trim() {
-	if over := len(l.lines) - logMaxLines; over > 0 {
-		l.lines = l.lines[over:]
+	over := len(l.lines) - logMaxLines
+	if over <= 0 {
+		return
 	}
+	l.lines = l.lines[over:]
+	if over > len(l.nrows) {
+		// more lines went than were ever wrapped (many added between two
+		// frames): none of the rows kept is still in the log
+		l.rows, l.nrows = nil, nil
+		return
+	}
+	k := 0
+	for _, n := range l.nrows[:over] {
+		k += n
+	}
+	l.rows, l.nrows = l.rows[k:], l.nrows[over:]
 }
 
 // clear empties the log and pins the view back to the newest line.
 func (l *logPane) clear() {
 	l.lines, l.top, l.follow, l.total = nil, 0, true, 0
+	l.rows, l.nrows = nil, nil
+}
+
+// take moves every line of from to the end of l (the holding log folded
+// into a connection's: logs.go), leaving from empty.
+func (l *logPane) take(from *logPane) {
+	l.lines = append(l.lines, from.lines...)
+	l.trim()
+	from.lines, from.rows, from.nrows = nil, nil, nil
 }
 
 // Text returns the whole log as plain text, for "copy log".
@@ -125,16 +164,7 @@ func (l *logPane) draw(s Surface, st styles, bg Style) {
 	const stampW = 9 // "15:04:05 "
 	textW := max(s.W()-stampW-1, 10)
 
-	var rows []visual
-	for _, ln := range l.lines {
-		for i, part := range wrap(ln.text, textW) {
-			v := visual{kind: ln.kind, text: part}
-			if i == 0 {
-				v.stamp = ln.at.Format("15:04:05")
-			}
-			rows = append(rows, v)
-		}
-	}
+	rows := l.wrapped(textW)
 	l.total = len(rows)
 	maxTop := max(len(rows)-s.H(), 0)
 	if l.follow {
@@ -152,6 +182,29 @@ func (l *logPane) draw(s Surface, st styles, bg Style) {
 	if len(rows) > s.H() {
 		drawVBar(s.Sub(Rect{s.W() - 1, 0, 1, s.H()}), st, l.top, s.H(), len(rows))
 	}
+}
+
+// wrapped is the log's visual rows at width w: the rows kept from earlier
+// frames, with the lines added since wrapped onto the end, or every line
+// wrapped again when the width changed.
+func (l *logPane) wrapped(w int) []visual {
+	if w != l.rowsW || len(l.nrows) > len(l.lines) {
+		// the second test is a guard: lines shrank without trim or clear,
+		// so which rows are whose is unknown
+		l.rows, l.nrows, l.rowsW = l.rows[:0], l.nrows[:0], w
+	}
+	for _, ln := range l.lines[len(l.nrows):] {
+		parts := wrap(ln.text, w)
+		for i, part := range parts {
+			v := visual{kind: ln.kind, text: part}
+			if i == 0 {
+				v.stamp = ln.at.Format("15:04:05")
+			}
+			l.rows = append(l.rows, v)
+		}
+		l.nrows = append(l.nrows, len(parts))
+	}
+	return l.rows
 }
 
 func logStyle(st styles, k logKind) Style {

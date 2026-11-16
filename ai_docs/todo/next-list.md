@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-332
+**Next ID:** N-333
 
 ## Open
 
@@ -78,26 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-282** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  A result is held twice and an export about four times.
-  `db/manager.go:707-715` builds `Rows` and `Raw` with two to three
-  allocations a cell (a MySQL `[]byte` cloned by Scan, then stringed for
-  each; strings through `fmt.Sprint`); a headless or `-o` export adds a
-  `strings.Builder` (`export/export.go:337`) and a `[]byte(out)` copy
-  (`main.go:956`). Nothing at 1,000 rows; it multiplies when `max_rows`
-  is raised for an export. Fix: convert once and share the string, with
-  strconv fast paths; a streaming row writer for a single-statement
-  csv/tsv/JSON-lines export (N-267's `--max-rows` needs it). Same cause
-  in the TUI: `export.ToFile` (`tui/modals.go:269`), `renderCopy`
-  (`tui/copy.go:112`) and sort with `ToLower` per compare
-  (`workspace/view.go:63`) run inside `Update` and freeze it once
-  `max_rows` is raised; run them as a `tea.Cmd` with an "exporting…"
-  status. Read here (the loop); the rest audit, traced.
-  (RPU plan, phase 3)
-  Updated `2026-1110-2001-rpu-phase-2-n265-n268`: `--max-rows` landed without the streaming
-  writer (N-267). `--max-rows 0` holds the whole result before writing
-  it, so this item is now what makes a large export cheap, not what
-  makes it possible.
 - **N-283** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Postgres row counts are all-or-nothing (`db/rowcount.go:506-516,
   434-456`). One huge table pushes `PgCountsQuery` past `countBudget`
@@ -466,6 +446,19 @@ ten session docs in `ai_docs/claude_sessions/`
   request (or docs for the first few dozen items only), the TUI by asking
   for the focused item's. Neighbour: N-284. Measured in Go; the browser's
   share (encode, parse) not timed. Raised while closing N-280.
+- **N-332** · raised `2026-1116-1629-n282-a-result-costs-what-it-holds` · value low
+  No streaming JSON export. A lone CSV/TSV statement streams its rows
+  from the driver (N-282), but `-t json` holds the result once (704 MB
+  RSS for 1M rows × 6 columns, against CSV's 42 MB): one result set is a
+  bare array of rows and several (a MySQL CALL) an array of envelopes,
+  and which it is is known only after the first set's rows have gone.
+  N-282 named JSON-lines as the streaming form. A `jsonl` format (one
+  object per row; a set's change a new header object, or each row
+  tagged with its set) would stream, as the pipelines' `jsonl.write`
+  sink already does; it touches the format list, the TUI's and web's
+  pickers and the completions. Or stream `-t json` when the statement
+  cannot return several sets (kindRows), and collect otherwise.
+
 ## Validate
 
 Items whose remaining work is purely testing: hand checks in a real terminal
@@ -832,6 +825,12 @@ and `raised`.
   not timed, so it runs in the ordinary suite and under -race.
   The second: `TestFormatCostsWhatItHolds` (N-281) bounds the formatter's
   bytes allocated per input byte on 8,000-deep nestings.
+  The third: `TestFetchCostsWhatItHolds` (N-282) bounds the fetch loop's
+  allocations per cell beyond the driver's (at most 2.5; 2.0 now, 5.2 on
+  HEAD), with `BenchmarkFetch`/`BenchmarkFetchDriver`
+  (`db/fetchcost_test.go`). N-282 also added `BenchmarkExport`
+  (`export/write_test.go`) and `BenchmarkSortRows`
+  (`workspace/sortcost_test.go`), without budgets.
 - **N-304** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   A linter in CI. `test.yml` runs build, vet and the race tests and no
   static analysis. The local `staticcheck` was built with Go 1.24 and
@@ -1191,6 +1190,28 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-282** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  A result is held twice and an export about four times.
+  `db/manager.go:707-715` builds `Rows` and `Raw` with two to three
+  allocations a cell (a MySQL `[]byte` cloned by Scan, then stringed for
+  each; strings through `fmt.Sprint`); a headless or `-o` export adds a
+  `strings.Builder` (`export/export.go:337`) and a `[]byte(out)` copy
+  (`main.go:956`). Nothing at 1,000 rows; it multiplies when `max_rows`
+  is raised for an export. Fix: convert once and share the string, with
+  strconv fast paths; a streaming row writer for a single-statement
+  csv/tsv/JSON-lines export (N-267's `--max-rows` needs it). Same cause
+  in the TUI: `export.ToFile` (`tui/modals.go:269`), `renderCopy`
+  (`tui/copy.go:112`) and sort with `ToLower` per compare
+  (`workspace/view.go:63`) run inside `Update` and freeze it once
+  `max_rows` is raised; run them as a `tea.Cmd` with an "exporting…"
+  status. Read here (the loop); the rest audit, traced.
+  (RPU plan, phase 3)
+  Updated `2026-1110-2001-rpu-phase-2-n265-n268`: `--max-rows` landed without the streaming
+  writer (N-267). `--max-rows 0` holds the whole result before writing
+  it, so this item is now what makes a large export cheap, not what
+  makes it possible.
+  closed 2026-11-16, `2026-1116-1629-n282-a-result-costs-what-it-holds` (RPU plan, phase 3), commit `02c3aa0`: measured first, HEAD → now. **Fetch loop** (`db/cell.go`, `readSet`): the Scan destination is a `cell`, a `sql.Scanner`, so database/sql hands it the driver's value without the clone it makes for `*any`; it converts once (`cellValue`) and Rows and Raw share the string; strconv for int64/float64/bool/int32/uint64/float32, byte-identical to `fmt.Sprint` (`TestCellValueMatchesSprint`, 2,000 floats by bits and the edges); rows' slices cut from slabs (`rowSlab`, capacity capped per row). `BenchmarkFetch` (`db/fetchcost_test.go`, a fake driver in MySQL's shape — `[]byte` into a reused buffer — and pgx's typed shape), 10,000 rows × 14 columns: MySQL-shaped 19 → 10.5 ms, 740k → 360k allocations (the driver's own boxing is 120k: dbc's part 5.2 → 2.0 a non-NULL cell), 20.8 → 13.5 MB; typed 14 → 8 ms. `TestFetchMatchesOldLoop` holds the new Rows/Raw to the old loop's cell for cell. Budget: `TestFetchCostsWhatItHolds`, at most 2.5 allocations a cell beyond the driver's (2.00 now), same under -race. `rawVal` folded into `cellValue`; `renderVal` (EXPLAIN's rows) calls it. **Streaming**: `db.StreamRows(ctx, sink)` hands a statement's rows to a `RowSink` as read and leaves the Result its columns (`Set` per set with columns or rows, so runMaybe's "it wrote" set never reaches it); a sink error stops a plain read on the server through its stmtcut Point rather than draining it (`sinkStop`). **Export** (`export.Write`, `WriteRun`, `WriteBlock`; `Render*` are those into a strings.Builder): one buffer per write; CSV/TSV/Markdown row by row; JSON a row at a time with one reused map and an Encoder (MarshalIndent's bytes, keys sorted as before); the text table measures then writes, clipping twice with a no-allocation path (`textClip`) instead of holding a clipped copy of every cell; HTML still built whole. Byte-identical to the old renderers over awkward results and a multi-result run (`TestWriteMatchesRender`). `BenchmarkExport`, 100k rows to a file: CSV 39.8 MB → 71 KB allocated, text 67.8 MB → 71 KB (64 → 30 ms), Markdown 49 MB → 71 KB, JSON 164 → 37 MB. `export.File` (`Create`/`Commit`/`Abort`, `WriteFile`): beside the path, fsync, the old file's mode (or 0644), rename; a symlink stays one; `ToFile`, every headless `-o` and `writeOutTo` go through it, so a failed export keeps the old file (`TestWriteFile`). **Headless**: a lone CSV/TSV statement streams (`rowStreams`, `rowStream` in `main.go`) into a 64 KB buffer over stdout or the `-o` twin; JSON, Markdown and text are collected (one set vs several decides JSON's shape, a banner or a width needs every row). Notes follow the document now. A statement failing part way flushes the rows read to stdout and drops the `-o` twin; a render or write failure drops the buffer. Real binary, a 1M-row × 6-column SQLite table, `--max-rows 0`: CSV 1,158 MB → 42 MB RSS (3.6 → 2.6 s; `-o` 45 MB), JSON 1,869 → 704 MB (4.2 → 2.6 s), text 1,398 → 528 MB (2.3 → 1.2 s), each byte-identical to HEAD's output. Tests: `TestRowStreamMatchesCollected` (CSV and TSV, NULLs, quotes, tabs, line breaks, an empty result, a cut one with its note, an UPDATE's count), `TestRowStreamFailures` (children: a statement failing at row 500 keeps the old `-o` file, no `.partial` left, exit 1; a read-only stdout exits 1, write failed). **TUI**: `workspace.SortRows` makes each row's key once (lower-cased text, or a float) and sorts with pdqsort, the row index the last tie-break — the stable sort's order exactly (`TestSortRowsMatchesOld`, 40 random results with ties, NULLs, NaN, short Raw rows, both ways). `BenchmarkSortRows` (`workspace/sortcost_test.go`): 100k rows text 389 → 30 ms, numeric 55 → 18 ms; 1M text 6.1 s → 0.74 s (53M → 1M allocations), numeric 555 → 218 ms. Past `asyncSortRows` (50,000) a grid sorts off the loop: `applySort` leaves a command (`sortCmd`) that Update's tail starts (`gridCmds`; a grid parked first leaves it in `parkedSorts`), the strip says "sorting by … …", and `sortDoneMsg` lands only while its `sortGen` is current (a re-sort or a new result drops it). Copies and file exports take a `piece` (the rows and columns copied, the result immutable) and project, turn, render and write it in a command (`renderCopyCmd`, `exportCmd`); the export opens its file in the dialog, so a bad path still keeps the dialog open. `selFirst` went into `piece.first`. Tests: `TestBigSortRunsOffTheLoop`, `TestBigSortThroughUpdate`, `TestExportRunsAsACommand`. TUI e2e step "a 300,000-row result sorts and exports without freezing the screen (N-282)" (e2e config `max_rows = 300000`): the strip answers the click in 32 ms and the rows move in 115 ms; HEAD answers in 1.185 s and fails the step (labels like `Customer 123 of Region 4`; short half-lower-case labels sorted in 0.1 s even on HEAD, so the first draft of the step passed there). The export writes 300,001 lines in sorted order. Full `./...` -race green. Not done: dbc web's export still renders a string (a render error must be known before the headers; with N-284), a run of several statements holds each result, and HTML is built whole. Raised N-332.
 
 - **N-331** · raised `2026-1116-1525-n281-formatting-costs-what-it-holds` · value low
   The formatter split `$name` parameters. `fmtLex` took only digits after

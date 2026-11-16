@@ -71,7 +71,10 @@ func setReturning(r model.Routine) bool {
 // the tables are indexed.
 func (c *completer) indexRoutines() {
 	c.rbySchema = map[string][]*rgroup{}
+	// byKey is kept (rbyKey) for routineBare's shadowing test: the key is
+	// the exact schema and name, which is what that test compares
 	byKey := map[string]*rgroup{}
+	c.rbyKey = byKey
 	for _, r := range c.req.Routines {
 		key := r.Schema + "\x00" + r.Name
 		g := byKey[key]
@@ -128,14 +131,17 @@ func (c *completer) routineSuggestions(groups []*rgroup, filter routineFilter, r
 	paren := c.caret < len(c.buf) && c.buf[c.caret] == '('
 	for _, g := range groups {
 		ok, up := filter(g)
-		if !ok {
+		// the label is the name, which add matches: a routine the prefix
+		// drops costs no detail, quoting or bare-name test (N-280)
+		if !ok || !c.matches(g.name) {
 			continue
 		}
 		ins := c.d.quote(g.name)
 		if !bare {
 			ins = c.routineRef(g)
 		}
-		it := Item{Label: g.name, Kind: KindFunction, Detail: c.routineDetail(g), Doc: routineDoc(g), Insert: ins, Cursor: -1}
+		// the doc lists every overload, so it waits for the cap (docSrc)
+		it := Item{Label: g.name, Kind: KindFunction, Detail: c.routineDetail(g), Insert: ins, Cursor: -1}
 		if g.kind() == model.RoutineProcedure {
 			it.Kind = KindProcedure
 		}
@@ -146,7 +152,7 @@ func (c *completer) routineSuggestions(groups []*rgroup, filter routineFilter, r
 				it.Cursor = len(ins) + 1
 			}
 		}
-		c.add(it, rank+up)
+		c.addDoc(it, rank+up, docSrc{kind: docRoutine, g: g})
 	}
 }
 
@@ -212,14 +218,15 @@ func (c *completer) routineBare(g *rgroup) bool {
 	if path == nil || (!c.manySchemas && c.req.SearchPath == nil) {
 		return true
 	}
+	// The shadowing test is one lookup of the exact (schema, name) per
+	// earlier schema, not a pass over that schema's routines — which made
+	// offering every routine quadratic, as bare's tables were (N-280).
 	for _, s := range path {
 		if s == g.schema {
 			return true
 		}
-		for _, o := range c.rbySchema[strings.ToLower(s)] {
-			if o.schema == s && o.name == g.name {
-				return false // shadowed by an earlier schema's routine
-			}
+		if c.rbyKey[s+"\x00"+g.name] != nil {
+			return false // shadowed by an earlier schema's routine
 		}
 	}
 	return false

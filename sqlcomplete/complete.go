@@ -40,7 +40,6 @@
 package sqlcomplete
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 
@@ -185,7 +184,7 @@ func Complete(req Request) Result {
 		}
 	}
 
-	c := &completer{req: req, d: d, buf: buf, caret: caret, prefix: res.Prefix}
+	c := &completer{req: req, d: d, buf: buf, caret: caret, prefix: res.Prefix, lowPrefix: strings.ToLower(res.Prefix)}
 	c.index()
 	c.sc = parseScope(toks, c)
 	c.suggest(before)
@@ -200,26 +199,117 @@ type completer struct {
 	buf    string
 	caret  int
 	prefix string
-	sc     *scope
+	// lowPrefix is prefix lower-cased once, for the match test every
+	// candidate goes through (quality)
+	lowPrefix string
+	sc        *scope
 
 	// the catalog, indexed: lower(name) → tables of that name, every
 	// schema's, and lower(schema) → its tables
 	byName   map[string][]*erd.Table
 	bySchema map[string][]*erd.Table
 	schemas  []string // distinct schema names, in catalog order
+	// fromRels is the foreign keys out of each table whose doc is shown,
+	// by child table (finish fills it, relsFrom reads it). A pass over
+	// every relationship per doc was most of N-280's 32 ms.
+	fromRels map[*erd.Table][]*erd.Rel
 
 	// the routines, grouped by schema and name (routines.go): in catalog
-	// order, and by lower(schema)
+	// order, by lower(schema), and by exact schema + "\x00" + name
 	routines  []*rgroup
 	rbySchema map[string][]*rgroup
+	rbyKey    map[string]*rgroup
 	// manySchemas reports that the tables and routines together span more
 	// than one schema, so a routine's schema is worth showing and its
 	// bare name may resolve elsewhere. The tables' own test stays
 	// len(schemas) > 1: a routine-only schema changes nothing about them.
 	manySchemas bool
 
-	items []Item
+	items []cand
 	seen  map[string]bool // Kind + Insert, so one thing is offered once
+}
+
+// cand is an item on its way to the result, with what its Doc will be made
+// from once the sort and the cap have decided it is shown (finish).
+type cand struct {
+	Item
+	doc docSrc
+}
+
+// docSrc is what an item's documentation is made from, held back until the
+// item survives the cap (N-280).
+//
+// A table's doc is its DDL and a column's its declaration, and both name the
+// foreign keys out of the table. Built for every candidate up front — before
+// add had even matched the prefix — each was a pass over all of the schema's
+// relationships: on 5,000 tables, 32 ms a keystroke for "SELECT col▮" with 5
+// items back. Now a candidate the prefix drops costs a name compare, and a
+// doc is built for at most MaxItems items, from relationships indexed by
+// child table, for the tables kept, in one pass (indexRels).
+//
+//	catalog ─► matches(name)? ─no─► dropped: no item, no quoting, no doc
+//	              │yes
+//	              ▼
+//	           addDoc: Item (label, detail, insert, sort key) + docSrc
+//	              │
+//	           finish: sort ─► cap at MaxItems ─► indexRels ─► doc(docSrc)
+//	                                                           for those kept
+type docSrc struct {
+	kind docKind
+	t    *erd.Table  // docTable, docColumn
+	col  *erd.Column // docColumn
+	g    *rgroup     // docRoutine
+}
+
+type docKind uint8
+
+const (
+	docNone    docKind = iota // the Item's own Doc, if any, stands
+	docTable                  // t's DDL
+	docColumn                 // col of t: its declaration, what it references
+	docRoutine                // g's kind, schema and every overload
+)
+
+// doc builds the documentation src describes.
+func (c *completer) doc(src docSrc) string {
+	switch src.kind {
+	case docTable:
+		return ddl(src.t, c.relsFrom(src.t))
+	case docColumn:
+		return colDoc(src.col, src.t, c.relsFrom(src.t))
+	case docRoutine:
+		return routineDoc(src.g)
+	}
+	return ""
+}
+
+// relsFrom is the foreign keys out of t (t the child), in the schema's order.
+// t must be a table indexRels was given.
+func (c *completer) relsFrom(t *erd.Table) []*erd.Rel { return c.fromRels[t] }
+
+// indexRels fills fromRels for the tables whose docs the kept items show, in
+// one pass over the schema's relationships.
+//
+// Only those tables are indexed. Indexing all of them cost an entry and an
+// append per relationship — on 5,000, more than the per-column scans it
+// replaced when the scope's two tables were all the docs needed. Here a
+// relationship costs one lookup in a map of at most MaxItems tables, and
+// only a kept table's own keys are appended.
+func (c *completer) indexRels(kept []cand) {
+	c.fromRels = map[*erd.Table][]*erd.Rel{}
+	for _, cd := range kept {
+		if cd.doc.kind == docTable || cd.doc.kind == docColumn {
+			c.fromRels[cd.doc.t] = nil
+		}
+	}
+	if len(c.fromRels) == 0 || c.req.Schema == nil {
+		return
+	}
+	for _, r := range c.req.Schema.Rels {
+		if rels, ok := c.fromRels[r.Child]; ok {
+			c.fromRels[r.Child] = append(rels, r)
+		}
+	}
 }
 
 func (c *completer) index() {
@@ -679,6 +769,13 @@ func (c *completer) joinClauses() {
 			default:
 				continue
 			}
+			// the clause is matched by the joined table's name (its
+			// Filter), and so is the table offered alone below: a name the
+			// prefix drops needs neither built. newAlias is pure, so the
+			// aliases of the clauses kept do not depend on this.
+			if !c.matches(other.Name) {
+				continue
+			}
 			alias := c.sc.newAlias(other.Name)
 			name := c.tableRef(other)
 			var conds []string
@@ -686,8 +783,8 @@ func (c *completer) joinClauses() {
 				conds = append(conds, alias+"."+c.d.quote(theirs[i])+" = "+r.qualifier(c.d)+"."+c.d.quote(mine[i]))
 			}
 			text := name + " " + alias + " ON " + strings.Join(conds, " AND ")
-			c.add(Item{Label: text, Kind: KindJoin, Detail: "join on " + rel.Name, Filter: other.Name,
-				Doc: ddl(other, c.req.Schema), Insert: text}, 0)
+			c.addDoc(Item{Label: text, Kind: KindJoin, Detail: "join on " + rel.Name, Filter: other.Name,
+				Insert: text}, 0, docSrc{kind: docTable, t: other})
 			// the related table alone also comes before the rest
 			c.table(other, 1, false)
 		}
@@ -742,6 +839,12 @@ func (c *completer) joinConditions() {
 // table adds t at rank. bare inserts the name unqualified (it follows a
 // schema the user typed).
 func (c *completer) table(t *erd.Table, rank int, bare bool) {
+	// the label is the name, which add would match: asked first, a table
+	// the prefix drops costs no detail, quoting or bare-name test — the
+	// loops over every table in the catalog call this
+	if !c.matches(t.Name) {
+		return
+	}
 	kind, what := KindTable, "table"
 	if t.View {
 		kind, what = KindView, "view"
@@ -754,7 +857,7 @@ func (c *completer) table(t *erd.Table, rank int, bare bool) {
 	if !bare {
 		ins = c.tableRef(t)
 	}
-	c.add(Item{Label: t.Name, Kind: kind, Detail: detail, Doc: ddl(t, c.req.Schema), Insert: ins}, rank)
+	c.addDoc(Item{Label: t.Name, Kind: kind, Detail: detail, Insert: ins}, rank, docSrc{kind: docTable, t: t})
 }
 
 // tableRef is how a statement names t: bare where the bare name resolves
@@ -799,11 +902,17 @@ func (c *completer) bare(t *erd.Table) bool {
 	if path == nil || (len(c.schemas) <= 1 && c.req.SearchPath == nil) {
 		return true
 	}
+	// The shadowing test looks among the tables of t's name (byName), not
+	// at every table of each earlier schema: that was a pass over a whole
+	// schema per table offered — quadratic, 67 ms on 5,000 tables over
+	// three schemas with nothing typed. Both find the same tables (exact
+	// schema s, exact name t.Name); byName holds every table of the name.
+	same := c.byName[strings.ToLower(t.Name)]
 	for _, s := range path {
 		if s == t.Schema {
 			return true
 		}
-		for _, o := range c.bySchema[strings.ToLower(s)] {
+		for _, o := range same {
 			if o.Schema == s && o.Name == t.Name {
 				return false // shadowed by an earlier schema's table
 			}
@@ -817,13 +926,18 @@ func (c *completer) bare(t *erd.Table) bool {
 // scope to say which table they come from.
 func (c *completer) columnsOf(t *erd.Table, qual string, rank int) {
 	for _, col := range t.Cols {
-		it := c.column(col, t)
+		// matched by the bare name whether or not it is qualified (the
+		// label, or the Filter below)
+		if !c.matches(col.Name) {
+			continue
+		}
+		it, doc := c.column(col, t)
 		if qual != "" {
 			it.Label = qual + "." + col.Name
 			it.Insert = c.d.quote(qual) + "." + c.d.quote(col.Name)
 			it.Filter = col.Name
 		}
-		c.add(it, rank)
+		c.addDoc(it, rank, doc)
 	}
 }
 
@@ -832,9 +946,18 @@ func (c *completer) columnsOf(t *erd.Table, qual string, rank int) {
 // reference's alias or name.
 func (c *completer) refColumns(r *ref, rank int, dup ...map[string]int) {
 	for _, col := range r.cols() {
+		// matched by the bare name, qualified or not (see columnsOf)
+		if !c.matches(col.Name) {
+			continue
+		}
 		var it Item
+		var doc docSrc
 		if r.table != nil {
-			it = c.column(r.table.Col(col.Name), r.table)
+			// col is one of r.table.Cols (r.cols), so it is used as it is:
+			// looking it up again by name (Table.Col, a scan) made this
+			// quadratic in a wide table's columns. Of two columns of one
+			// name, add keeps the first either way (same Kind + Insert).
+			it, doc = c.column(col, r.table)
 		} else {
 			it = Item{Label: col.Name, Kind: KindColumn, Detail: r.describe(), Insert: c.d.quote(col.Name), Cursor: -1}
 		}
@@ -844,15 +967,17 @@ func (c *completer) refColumns(r *ref, rank int, dup ...map[string]int) {
 			it.Insert = q + "." + c.d.quote(col.Name)
 			it.Filter = col.Name
 		}
-		c.add(it, rank)
+		c.addDoc(it, rank, doc)
 	}
 }
 
-// column is col of table t as an item: its type and keys in the detail, its
-// whole declaration and any foreign key it is part of in the doc.
-func (c *completer) column(col *erd.Column, t *erd.Table) Item {
+// column is col of table t as an item: its type and keys in the detail, and
+// in the doc — built only if the item is shown (docSrc) — its whole
+// declaration and any foreign key it is part of.
+func (c *completer) column(col *erd.Column, t *erd.Table) (Item, docSrc) {
 	return Item{Label: col.Name, Kind: KindColumn, Detail: colDetail(col) + " · " + t.Name,
-		Doc: colDoc(col, t, c.req.Schema), Insert: c.d.quote(col.Name), Cursor: -1}
+			Insert: c.d.quote(col.Name), Cursor: -1},
+		docSrc{kind: docColumn, t: t, col: col}
 }
 
 // resolve finds the table a name's parts ([schema,] name) refer to:
@@ -916,18 +1041,28 @@ func (c *completer) resolve(parts []string) *erd.Table {
 //
 // so the context's own candidates (rank 0: the scope's columns, the clause's
 // keywords) come before the general vocabulary, and within a rank a prefix
-// match comes before a match inside the word.
-func (c *completer) add(it Item, rank int) {
-	key := string(it.Kind) + "\x00" + it.Insert
-	if c.seen[key] {
-		return
-	}
+// match comes before a match inside the word. it carries its own Doc, if
+// any; see addDoc for one built later.
+func (c *completer) add(it Item, rank int) { c.addDoc(it, rank, docSrc{}) }
+
+// addDoc is add for an item whose Doc is built from doc, and only if the item
+// is still in the list after the cap (finish).
+//
+// The prefix is matched before the item is looked up in seen: the key is an
+// allocation, and the outcome is the same either way round — an item is kept
+// when it matches and nothing of its Kind + Insert was kept before, and only
+// a kept item is marked seen.
+func (c *completer) addDoc(it Item, rank int, doc docSrc) {
 	filter := it.Filter
 	if filter == "" {
 		filter = it.Label
 	}
-	q, ok := matchQuality(filter, c.prefix)
+	q, ok := quality(filter, c.lowPrefix)
 	if !ok {
+		return
+	}
+	key := string(it.Kind) + "\x00" + it.Insert
+	if c.seen[key] {
 		return
 	}
 	c.seen[key] = true
@@ -936,8 +1071,30 @@ func (c *completer) add(it Item, rank int) {
 	if it.Cursor == 0 {
 		it.Cursor = -1
 	}
-	it.Sort = fmt.Sprintf("%d%d%s", min(rank, 9), q, strings.ToLower(it.Label))
-	c.items = append(c.items, it)
+	it.Sort = sortKey(rank, q, it.Label)
+	c.items = append(c.items, cand{Item: it, doc: doc})
+}
+
+// sortKey is add's "rank · match quality · label" key: one digit each for the
+// rank (capped at 9; no rank is negative) and the quality (0–2), then the
+// label lower-cased. Written without fmt, as a single allocation: with
+// nothing typed, every table of a large catalog gets one.
+func sortKey(rank, q int, label string) string {
+	low := strings.ToLower(label)
+	var b strings.Builder
+	b.Grow(2 + len(low))
+	b.WriteByte('0' + byte(min(max(rank, 0), 9)))
+	b.WriteByte('0' + byte(q))
+	b.WriteString(low)
+	return b.String()
+}
+
+// matches reports whether word passes the typed prefix: add's own test, for
+// the loops over the catalog to ask before building an item, so a name the
+// prefix drops costs a compare and nothing else (N-280).
+func (c *completer) matches(word string) bool {
+	_, ok := quality(word, c.lowPrefix)
+	return ok
 }
 
 // matchQuality scores how word matches prefix, case-insensitively: 0 a
@@ -945,10 +1102,17 @@ func (c *completer) add(it Item, rank int) {
 // 2 the prefix's letters in order (cid → customer_id). ok is false for no
 // match. An empty prefix matches everything.
 func matchQuality(word, prefix string) (q int, ok bool) {
-	if prefix == "" {
+	return quality(word, strings.ToLower(prefix))
+}
+
+// quality is matchQuality with the prefix already lower-cased (p), as the
+// completer keeps it: lowering it per candidate allocated on every name
+// once the user typed a capital.
+func quality(word, p string) (q int, ok bool) {
+	if p == "" {
 		return 0, true
 	}
-	w, p := strings.ToLower(word), strings.ToLower(prefix)
+	w := strings.ToLower(word)
 	if strings.HasPrefix(w, p) {
 		return 0, true
 	}
@@ -975,13 +1139,24 @@ func matchQuality(word, prefix string) (q int, ok bool) {
 	return 2, j == len(p)
 }
 
-// finish sorts the items and applies the cap.
+// finish sorts the items, applies the cap, and builds the docs of the items
+// kept — at most MaxItems of them, however many the catalog offered (see
+// docSrc). No items is a nil list, as before the docs were deferred.
 func (c *completer) finish() ([]Item, bool) {
-	slices.SortStableFunc(c.items, func(a, b Item) int { return strings.Compare(a.Sort, b.Sort) })
-	if len(c.items) > MaxItems {
-		return c.items[:MaxItems], true
+	slices.SortStableFunc(c.items, func(a, b cand) int { return strings.Compare(a.Sort, b.Sort) })
+	n := min(len(c.items), MaxItems)
+	if n == 0 {
+		return nil, false
 	}
-	return c.items, false
+	c.indexRels(c.items[:n])
+	out := make([]Item, n)
+	for i, cd := range c.items[:n] {
+		out[i] = cd.Item
+		if cd.doc.kind != docNone {
+			out[i].Doc = c.doc(cd.doc)
+		}
+	}
+	return out, len(c.items) > MaxItems
 }
 
 // kwCase writes a keyword in the case the user is typing in: lower when the

@@ -525,7 +525,10 @@ func trailingName(toks []tok) (parts []string, before int) {
 //	  customer_id bigint NOT NULL,   -- → customers(id)
 //	  PRIMARY KEY (id)
 //	)
-func ddl(t *erd.Table, s *erd.Schema) string {
+//
+// rels holds the foreign keys out of t (completer.relsFrom); any others in it
+// are skipped.
+func ddl(t *erd.Table, rels []*erd.Rel) string {
 	if t == nil {
 		return ""
 	}
@@ -533,7 +536,7 @@ func ddl(t *erd.Table, s *erd.Schema) string {
 	if t.View {
 		what = "VIEW"
 	}
-	refs := outgoing(t, s)
+	refs := outgoing(t, rels)
 	w := 0
 	for _, c := range t.Cols {
 		w = max(w, len(c.Name))
@@ -571,13 +574,13 @@ func ddl(t *erd.Table, s *erd.Schema) string {
 }
 
 // outgoing maps each of t's foreign-key columns to what it references,
-// "customers(id)".
-func outgoing(t *erd.Table, s *erd.Schema) map[string]string {
+// "customers(id)", from rels: t's own foreign keys as completer.relsFrom
+// gives them, though any list will do — a relationship whose child is not t
+// is skipped. Taking the schema's whole Rels here, once per table or column
+// offered, was N-280's cost.
+func outgoing(t *erd.Table, rels []*erd.Rel) map[string]string {
 	out := map[string]string{}
-	if s == nil {
-		return out
-	}
-	for _, r := range s.Rels {
+	for _, r := range rels {
 		if r.Child != t {
 			continue
 		}
@@ -627,7 +630,8 @@ func colDetail(c *erd.Column) string {
 }
 
 // colDoc is a column's documentation: its declaration and what it references.
-func colDoc(c *erd.Column, t *erd.Table, s *erd.Schema) string {
+// rels is t's foreign keys, as for ddl.
+func colDoc(c *erd.Column, t *erd.Table, rels []*erd.Rel) string {
 	if c == nil {
 		return ""
 	}
@@ -638,7 +642,7 @@ func colDoc(c *erd.Column, t *erd.Table, s *erd.Schema) string {
 	if c.PK {
 		doc += "\nprimary key"
 	}
-	if r := outgoing(t, s)[c.Name]; r != "" {
+	if r := outgoing(t, rels)[c.Name]; r != "" {
 		doc += "\nreferences " + r
 	}
 	return doc

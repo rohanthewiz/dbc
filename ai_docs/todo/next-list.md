@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-328
+**Next ID:** N-329
 
 ## Open
 
@@ -78,16 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-280** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  Completion builds every doc before filtering
-  (`sqlcomplete/complete.go:733-747,842-845`; `scope.go:521,568,623`):
-  `ddl()` and `colDoc()` each call `outgoing()`, which scans all Rels and
-  allocates a map, for every table or column before `add` checks the
-  prefix. Measured: 5,000 tables × 20 columns, 32–34 ms a request even
-  for `SELECT col▮` returning 5 items; 2,000 tables, 7–9 ms; up to 183 KB
-  of doc text out per keystroke. Fix: match the prefix first, build a doc
-  only for the items kept (≤400), and index rels by child once.
-  Neighbour: N-106. Audit, run. (RPU plan, phase 3)
 - **N-281** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   The formatter is O(tokens × nesting depth)
   (`sqlsplit/format.go:987-1004`: `try` lays out the whole subtree at
@@ -464,6 +454,18 @@ ten session docs in `ai_docs/claude_sessions/`
   spans are byte offsets; `editorBuf.starts` maps them to rows) and splice
   those into `lines`, and compare the head as rows. Read, not timed.
   Raised while closing N-279.
+- **N-328** · raised `2026-1116 (this session; doc to come)` · value low
+  Completion still builds, and dbc web still sends, a doc for every item
+  it keeps — up to `MaxItems` (400) — though each UI shows one at a time.
+  After N-280 it is the part of a request that still grows with the
+  catalog: on 5,000 tables `SELECT * FROM ▮` carries 177 KB of DDL
+  (`BenchmarkCompleteBig`, its `docB` metric), sent as JSON again on each
+  keystroke while the result is Incomplete; the TUI builds the 400 and
+  reads one (`Items[cur].Doc`, `tui/complete.go:382`). Fix: docs on
+  demand — dbc web through Monaco's `resolveCompletionItem` and a doc
+  request (or docs for the first few dozen items only), the TUI by asking
+  for the focused item's. Neighbour: N-284. Measured in Go; the browser's
+  share (encode, parse) not timed. Raised while closing N-280.
 ## Validate
 
 Items whose remaining work is purely testing: hand checks in a real terminal
@@ -821,7 +823,11 @@ and `raised`.
   typed into a 3.5 MB buffer with its frame (`BenchmarkKeyBigBuffer`,
   `BenchmarkKeyBigBufferNewStep`), and a whole split of it against
   `Splitting.Edit` after one typed byte (`sqlsplit/resplit_test.go`,
-  N-279).
+  N-279); completion on a 5,000-table catalog, one schema and three
+  (`BenchmarkCompleteBig`, `sqlcomplete/cost_test.go`, N-280).
+  The first budget: `TestCompleteCostsWhatItKeeps` (same file, N-280)
+  bounds a completion's allocations per table in the catalog — counted,
+  not timed, so it runs in the ordinary suite and under -race.
 - **N-304** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   A linter in CI. `test.yml` runs build, vet and the race tests and no
   static analysis. The local `staticcheck` was built with Go 1.24 and
@@ -1181,6 +1187,18 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-280** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Completion builds every doc before filtering
+  (`sqlcomplete/complete.go:733-747,842-845`; `scope.go:521,568,623`):
+  `ddl()` and `colDoc()` each call `outgoing()`, which scans all Rels and
+  allocates a map, for every table or column before `add` checks the
+  prefix. Measured: 5,000 tables × 20 columns, 32–34 ms a request even
+  for `SELECT col▮` returning 5 items; 2,000 tables, 7–9 ms; up to 183 KB
+  of doc text out per keystroke. Fix: match the prefix first, build a doc
+  only for the items kept (≤400), and index rels by child once.
+  Neighbour: N-106. Audit, run. (RPU plan, phase 3)
+  closed 2026-11-16 (RPU plan, phase 3): measured first. New `BenchmarkCompleteBig` (`sqlcomplete/cost_test.go`): 5,000 tables × 20 columns, each table with a foreign key to the one before. HEAD → now: `SELECT col▮` (5 items) 31–34 ms → 0.73 ms; `SELECT * FROM ▮` (400 of 5,000) 32 ms → 3.1 ms; `FROM t_012▮` 31 → 1.6 ms; after `JOIN` 33–52 → 3.1 ms; two tables in scope 0.94 → 0.75 ms. Found while measuring: with a reported search path and the tables over three schemas, `bare()` scanned every table of each earlier schema for each table offered (quadratic), 67 ms → 3.5 ms with nothing typed and 65 → 0.73 ms with a prefix; `routineBare` scanned routines the same way. How: the loops over the catalog ask `matches(name)` before building an item (`table`, `columnsOf`, `refColumns`, `joinClauses`, `routineSuggestions`). An item carries a `docSrc` (table, column or routine group) instead of its Doc, and `finish` builds the docs after the sort and the cap, for at most 400 items. `indexRels` collects the foreign keys of just those tables in one pass over Rels. Indexing every child table instead was slower than the old per-column scans when the scope's two tables were all the docs needed (0.93 → 1.11 ms), so the index was narrowed. `ddl`, `colDoc` and `outgoing` take the table's rels instead of the schema. `bare` looks among the tables of the same name (byName); `routineBare` looks up the exact (schema, name) map indexRoutines already built, now kept as `rbyKey`. `add` matches before it builds the seen key, the sort key is written without fmt, the prefix is lower-cased once, and `refColumns` uses the column it iterates instead of `Table.Col` (a scan per column). Output unchanged: every Result (docs, inserts, sort keys) compared byte for byte, HEAD against now, over 218,160 requests — 37 buffers at every caret × 4 drivers × 3 focus schemas × 5 search paths × 4 catalogs, shadowed tables and routines included (a throwaway test, not committed). Tests: `TestDocsOfKeptItems` (foreign keys in a table's DDL, a join clause's doc) and `TestCompleteCostsWhatItKeeps`, the first budget under N-303: allocations on 2,000 tables, at most 4 a table for `SELECT col▮` (HEAD 21.4, now 1.3) and 12 for `SELECT * FROM ▮` (HEAD 23.1, now 7.1). It fails on HEAD and counts the same under -race. FuzzComplete 60 s clean; full `./...` -race green but for TestChatEffort once (N-321, passed 3 reruns); e2e completion steps green. What remains per request is `index()` (byName and bySchema over every table, ~0.7 ms at 5,000), left as it is. Raised N-328.
 
 - **N-279** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Each keystroke costs the whole buffer. `highlight` re-lexes everything

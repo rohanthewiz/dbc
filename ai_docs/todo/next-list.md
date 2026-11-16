@@ -395,7 +395,7 @@ ten session docs in `ai_docs/claude_sessions/`
   the preferred effort (`ai_effort`) and the effort chosen before it. The
   test came in with `34909b9` (ai_effort, 2026-11-12). Raised while
   closing N-273.
-  Updated `2026-1116 (this session; doc to come)`, with N-281: a full
+  Updated `2026-1116-1525-n281-formatting-costs-what-it-holds`, with N-281: a full
   `-race` run reported a data race in the test fake, under
   `TestChatArchiveNewOpenDelete`. Every chat a test server starts shares
   one `aitest.Fake` (`chatEnv`, `web/chat_test.go:29`), and `aitest.Start`
@@ -1192,7 +1192,7 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
-- **N-331** · raised `2026-1116 (this session; doc to come)` · value low
+- **N-331** · raised `2026-1116-1525-n281-formatting-costs-what-it-holds` · value low
   The formatter split `$name` parameters. `fmtLex` took only digits after
   a `$` that is not a dollar quote, so SQLite's `$end` was a `$` and an
   END keyword written apart (`$ END`): another token, and in a trigger an
@@ -1200,9 +1200,9 @@ written up in the session docs themselves.
   SQLite: 1 statement in, 2 out). `$1abc` came out `$1 abc`. The
   splitter reads the name as the `$`'s. Found by FuzzFormat while closing
   N-281; HEAD the same.
-  closed 2026-11-16: a `$` parameter takes the word bytes after it, and `:name` takes a `$` as any word does (`:a$$`). The `$` parameter stops at the next `$`: the splitter refuses a dollar quote there only for what is glued on before, and the formatter may write the token after a space, where `$$` or `$a$` opens one. FuzzFormat found that against two first versions of this fix (`0:A$$;0` and `$$0$$$$;0`, 2 statements in, 1 out); both are seeds (`99d704028ebaf9a7`, `628baf3746e8daba`) beside the trigger (`a7b93633102fc473`). Test: a `TestFormatOperators` case (`$end`, `$1abc`). FuzzFormat then ran 180 s (36 M executions) clean.
+  closed 2026-11-16, `2026-1116-1525-n281-formatting-costs-what-it-holds`, commit `a82ff06`: a `$` parameter takes the word bytes after it, and `:name` takes a `$` as any word does (`:a$$`). The `$` parameter stops at the next `$`: the splitter refuses a dollar quote there only for what is glued on before, and the formatter may write the token after a space, where `$$` or `$a$` opens one. FuzzFormat found that against two first versions of this fix (`0:A$$;0` and `$$0$$$$;0`, 2 statements in, 1 out); both are seeds (`99d704028ebaf9a7`, `628baf3746e8daba`) beside the trigger (`a7b93633102fc473`). Test: a `TestFormatOperators` case (`$end`, `$1abc`). FuzzFormat then ran 180 s (36 M executions) clean.
 
-- **N-330** · raised `2026-1116 (this session; doc to come)` · value low
+- **N-330** · raised `2026-1116-1525-n281-formatting-costs-what-it-holds` · value low
   The formatter turned a comment into code after an exponent with no
   digit. `fmtLex` took the sign after `e`/`E` whether or not a digit
   followed (`sqlsplit/format.go`, the number case), so `1e--note` lexed
@@ -1211,9 +1211,9 @@ written up in the session docs themselves.
   became `SELECT 1e- - note;` and `still the comment …`). The splitter
   reads `1e` and a comment. Found by FuzzFormat (`0E--;0`: 1 statement
   in, 2 out) while closing N-281; HEAD the same.
-  closed 2026-11-16: the sign is the exponent's only before a digit. Tests: two `TestFormatOperators` cases (the comment kept whole, `;` and all; `2e-3, 4E+5, 6e7` unchanged), seed `6d888e367eca7e4a`. Over N-281's corpus, N-330 and N-331 together change only the outputs of inputs holding a digitless exponent sign or a `$`/`:` parameter, and take the fuzz invariants' violations from 45 to 30; the 30 left are inputs starting with a BOM, which Format strips on purpose.
+  closed 2026-11-16, `2026-1116-1525-n281-formatting-costs-what-it-holds`, commit `e36291f`: the sign is the exponent's only before a digit. Tests: two `TestFormatOperators` cases (the comment kept whole, `;` and all; `2e-3, 4E+5, 6e7` unchanged), seed `6d888e367eca7e4a`. Over N-281's corpus, N-330 and N-331 together change only the outputs of inputs holding a digitless exponent sign or a `$`/`:` parameter, and take the fuzz invariants' violations from 45 to 30; the 30 left are inputs starting with a BOM, which Format strips on purpose.
 
-- **N-329** · raised `2026-1116 (this session; doc to come)` · value low
+- **N-329** · raised `2026-1116-1525-n281-formatting-costs-what-it-holds` · value low
   FuzzFormat's "layout only" check read a layout-only change as an edit.
   `squeeze` (`sqlsplit/fuzz_test.go`) took out the blanks and the `;`s
   before lower-casing. In `";#\xd1\n;\xb0"` (MySQL) the formatter drops
@@ -1221,7 +1221,7 @@ written up in the session docs themselves.
   bytes it and the line break kept apart came together as a valid rune
   (`\xd1\xb0` is Ѱ), which ToLower changed. A red fuzz run on no defect.
   Found by FuzzFormat while closing N-281; HEAD the same.
-  closed 2026-11-16: squeeze lower-cases first, while the bytes are where the text has them, so an invalid byte is U+FFFD before anything is moved. The input is seed `5871c2d2f713d20e`.
+  closed 2026-11-16, `2026-1116-1525-n281-formatting-costs-what-it-holds`, commit `4c7ae14`: squeeze lower-cases first, while the bytes are where the text has them, so an invalid byte is U+FFFD before anything is moved. The input is seed `5871c2d2f713d20e`.
 
 - **N-281** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   The formatter is O(tokens × nesting depth)
@@ -1232,7 +1232,7 @@ written up in the session docs themselves.
   query pasted and formatted freezes the editor. Fix: stop the flat
   measurement once it is over the width, or memoise flat widths per
   node. Audit, run. (RPU plan, phase 3)
-  closed 2026-11-16 (RPU plan, phase 3): measured first. New `BenchmarkFormatDeep` (`sqlsplit/formatcost_test.go`) over generated nestings. HEAD → now: a left-nested OR chain 1,000 deep 58 ms → 1.6 ms, 5,000 deep 1.7 s and 774 MB → 10 ms and 24 MB, 20,000 deep (the item's 27 s) → 44 ms; right-nested 5,000 deep 1.4 s → 10 ms; 10,000 bare parens 1.7 s → 7.4 ms, 100,000 (the item's 2 m 43 s) → 77–93 ms; two-argument calls nested 1,000 deep 47 ms → 4.3 ms. Linear now, about 2 µs a level. How: a flat measurement (`try`) stops as soon as its answer is known (`fmtWriter.done`: past `limit`, the width left on the line, or broken). In flat mode col only grows — `nl` does nothing there, and the one thing that moves col back, a token holding a line break, sets broken — so once past the limit the answer cannot change. `tok` writes nothing once done, and `inline` and `seq` stop walking, so the walk ends with the writing. Also `nl` writes the indent into the buffer from a 64-level run (`fmtIndents`) instead of a `strings.Repeat` per line (calls 1,000 deep: 25.9 → 22.7 MB; appending one indent per level was slower, 10 ms, and was dropped). Output unchanged: every Format and FormatSpan result over 27,633 inputs × 5 dialects × 3 keyword cases (414,510 calls) is byte-identical to HEAD's — the repo's SQL-looking Go string literals, the committed and cached FuzzFormat/FuzzSplit corpora, 20,000 random statements with names sized to land around column 80, and the deep shapes up to 300 deep (a throwaway test, not committed). Tests: `TestFormatCostsWhatItHolds`, a budget in bytes allocated per input byte at 8,000 deep (at most 2,000; now 351 for the OR chains and 723 for bare parens, HEAD about 18,000), which fails on HEAD and counts the same under -race. TUI e2e step "formatting a deeply nested generated query keeps the editor (N-281)": a 20,000-deep OR chain (282 KB) pasted and formatted with Alt+Shift+F in 105 ms; with HEAD's formatter it times out at 15 s. Full `./...` -race green but for `web` (TestChatEffort, N-321, and a race report in TestChatArchiveNewOpenDelete, recorded on N-321); both passed 5 reruns. FuzzFormat, run for this item, turned up three older problems, closed as N-329, N-330 and N-331 in commits of their own.
+  closed 2026-11-16, `2026-1116-1525-n281-formatting-costs-what-it-holds` (RPU plan, phase 3), commit `3eb44d3`: measured first. New `BenchmarkFormatDeep` (`sqlsplit/formatcost_test.go`) over generated nestings. HEAD → now: a left-nested OR chain 1,000 deep 58 ms → 1.6 ms, 5,000 deep 1.7 s and 774 MB → 10 ms and 24 MB, 20,000 deep (the item's 27 s) → 44 ms; right-nested 5,000 deep 1.4 s → 10 ms; 10,000 bare parens 1.7 s → 7.4 ms, 100,000 (the item's 2 m 43 s) → 77–93 ms; two-argument calls nested 1,000 deep 47 ms → 4.3 ms. Linear now, about 2 µs a level. How: a flat measurement (`try`) stops as soon as its answer is known (`fmtWriter.done`: past `limit`, the width left on the line, or broken). In flat mode col only grows — `nl` does nothing there, and the one thing that moves col back, a token holding a line break, sets broken — so once past the limit the answer cannot change. `tok` writes nothing once done, and `inline` and `seq` stop walking, so the walk ends with the writing. Also `nl` writes the indent into the buffer from a 64-level run (`fmtIndents`) instead of a `strings.Repeat` per line (calls 1,000 deep: 25.9 → 22.7 MB; appending one indent per level was slower, 10 ms, and was dropped). Output unchanged: every Format and FormatSpan result over 27,633 inputs × 5 dialects × 3 keyword cases (414,510 calls) is byte-identical to HEAD's — the repo's SQL-looking Go string literals, the committed and cached FuzzFormat/FuzzSplit corpora, 20,000 random statements with names sized to land around column 80, and the deep shapes up to 300 deep (a throwaway test, not committed). Tests: `TestFormatCostsWhatItHolds`, a budget in bytes allocated per input byte at 8,000 deep (at most 2,000; now 351 for the OR chains and 723 for bare parens, HEAD about 18,000), which fails on HEAD and counts the same under -race. TUI e2e step "formatting a deeply nested generated query keeps the editor (N-281)": a 20,000-deep OR chain (282 KB) pasted and formatted with Alt+Shift+F in 105 ms; with HEAD's formatter it times out at 15 s. Full `./...` -race green but for `web` (TestChatEffort, N-321, and a race report in TestChatArchiveNewOpenDelete, recorded on N-321); both passed 5 reruns. FuzzFormat, run for this item, turned up three older problems, closed as N-329, N-330 and N-331 in commits of their own.
 
 - **N-280** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Completion builds every doc before filtering

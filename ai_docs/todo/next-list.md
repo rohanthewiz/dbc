@@ -78,17 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-294** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  Colour-only signals in the TUI. The editor's selection
-  (`tui/editor.go:921`) and the grid's range and hover
-  (`tui/grid.go:959-964`) are background-only; log levels differ by
-  colour alone, and `ok` equals `accent` (`tui/theme.go`); `AttrReverse`
-  exists and is never set (`tui/canvas.go:67`). Bubble Tea's colour
-  profile strips colour under `NO_COLOR` and downsamples on 16-colour
-  terminals, so selections disappear. Fix: reverse video for selections
-  below ANSI256 (`ColorProfileMsg`), and a glyph before warn and error
-  log lines. Not N-117 (the light/dark switch). Audit, traced.
-  (RPU plan, phase 4)
 - **N-296** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   `truncate` is skipped when a transform sits before the sink and no
   rows arrive (`pipeline/run.go:539-551`): a nightly reload whose source
@@ -1073,6 +1062,19 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-294** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Colour-only signals in the TUI. The editor's selection
+  (`tui/editor.go:921`) and the grid's range and hover
+  (`tui/grid.go:959-964`) are background-only; log levels differ by
+  colour alone, and `ok` equals `accent` (`tui/theme.go`); `AttrReverse`
+  exists and is never set (`tui/canvas.go:67`). Bubble Tea's colour
+  profile strips colour under `NO_COLOR` and downsamples on 16-colour
+  terminals, so selections disappear. Fix: reverse video for selections
+  below ANSI256 (`ColorProfileMsg`), and a glyph before warn and error
+  log lines. Not N-117 (the light/dark switch). Audit, traced.
+  (RPU plan, phase 4)
+  closed 2026-11-18, `@SESS@`, commit `@N-294@`. Selections: `tea.ColorProfileMsg` sets `Model.lowColor` when the profile is below ANSI256 (`Ascii` is NO_COLOR's). It is copied into `styles.lowColor`, and again at both places the styles are rebuilt for a theme. `styles.picked` then draws a selected cell in reverse video (`Style.Reverse`, the first use of `AttrReverse`) instead of the selection background, for the grid's cursor cell and range and the editor's selection (and its end-of-line cell). At 256 colours and above nothing changes. Log: `logGlyph` puts `⚠ ` before a warning and `✗ ` before an error. It is drawn, not stored (wrapped at draw time), so a copy of the log and a find see the message as logged. Not done: `ok` still equals `accent` in the palette, and the grid's hover and cursor-row tint stay background-only; both are faint aids, not states. Tests: `TestLowColorSelections` (TrueColor and ANSI256 keep the background; ANSI and Ascii reverse the grid's cursor cell and the editor's selection), `TestLogGlyphs`, and `TestLogWrapCacheMatchesAFullWrap`, whose reference wrap now carries the glyph. The TUI suite and the pty e2e pass. `go mod tidy` made `colorprofile` a direct dependency.
 
 - **N-293** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Keys are hard to find. F1 is about 130 rows with no filter

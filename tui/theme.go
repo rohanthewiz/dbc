@@ -12,6 +12,14 @@ import "github.com/rohanthewiz/dbc/theme"
 type styles struct {
 	pal theme.Palette
 
+	// lowColor is set when the terminal shows fewer than 256 colours, or
+	// none (NO_COLOR): Bubble Tea's colour profile then strips or
+	// downsamples the palette, and a selection drawn as a background alone
+	// can vanish into the cells around it. picked draws it in reverse
+	// video instead (N-294). It is the Model's (Update's ColorProfileMsg),
+	// kept across a theme change.
+	lowColor bool
+
 	base   Style // text on the deepest surface (editor, grid)
 	panel  Style // text on the sidebar/log surface
 	raised Style // text on the status bar / modal fields
@@ -123,3 +131,13 @@ func onBg(st Style, bg Style) Style { return st.WithBg(bg.Bg) }
 
 // themeDefault is theme.Default, named for call sites that build styles.
 func themeDefault() theme.Palette { return theme.Default() }
+
+// picked is cs as a selected cell: on bg, the selection's background, or
+// in reverse video where colours may not show (lowColor), so a selection
+// stays visible under NO_COLOR and on a 16-colour terminal (N-294).
+func (st styles) picked(cs Style, bg Color) Style {
+	if st.lowColor {
+		return cs.Reverse()
+	}
+	return cs.WithBg(bg)
+}

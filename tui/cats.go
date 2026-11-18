@@ -170,6 +170,7 @@ func (m *Model) catsFrame(ev cats.Event) tea.Cmd {
 		// that did not change costs nothing
 		if p, ok := theme.FromHost(t.Colors); ok && p != m.st.pal {
 			m.st = newStyles(p)
+			m.st.lowColor = m.lowColor
 			name := t.Name
 			if name == "" {
 				name = "host"

@@ -1172,9 +1172,9 @@ func (g *grid) Draw(s Surface, st styles, focused bool, empty string) {
 			}
 			switch {
 			case focused && row == g.cur.row && c == g.cur.col:
-				cst = cst.WithBg(st.sel.Bg).Bold()
+				cst = st.picked(cst, st.sel.Bg).Bold()
 			case g.sel && row >= r0 && row <= r1 && c >= c0 && c <= c1:
-				cst = cst.WithBg(st.selRange.Bg)
+				cst = st.picked(cst, st.selRange.Bg)
 			case row == g.cur.row:
 				cst = cst.WithBg(st.hover.Bg) // the cursor's row, faintly
 			case g.hover.row == row && g.hover.col == c:

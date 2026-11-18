@@ -356,7 +356,7 @@ func TestLogWrapCacheMatchesAFullWrap(t *testing.T) {
 	full := func(l *logPane, w int) []visual {
 		var rows []visual
 		for _, ln := range l.lines {
-			for i, part := range wrap(ln.text, w) {
+			for i, part := range wrap(logGlyph(ln.kind)+ln.text, w) {
 				v := visual{kind: ln.kind, text: part}
 				if i == 0 {
 					v.stamp = ln.at.Format("15:04:05")

@@ -529,6 +529,11 @@ scroll sideways rather than wrap, so a click lands exactly where you point.
 In terminals that deliver the kitty keyboard protocol, `⌘E`, `⌘P`, and
 `⌘G` are equivalents for export, history, and handing to an agent.
 
+Nothing rests on colour alone: a warning in the log starts with `⚠` and an
+error with `✗`, and on a terminal with fewer than 256 colours, or with
+`NO_COLOR` set, the editor's selection and the grid's cursor and range are
+drawn in reverse video rather than by their background.
+
 #### Adding connections in the terminal
 
 `a` in the Connections pane, or **Add a connection…** in its right-click

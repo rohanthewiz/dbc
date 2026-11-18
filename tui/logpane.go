@@ -209,7 +209,7 @@ func (l *logPane) wrapped(w int) []visual {
 		l.rows, l.nrows, l.rowsW = l.rows[:0], l.nrows[:0], w
 	}
 	for _, ln := range l.lines[len(l.nrows):] {
-		parts := wrap(ln.text, w)
+		parts := wrap(logGlyph(ln.kind)+ln.text, w)
 		for i, part := range parts {
 			v := visual{kind: ln.kind, text: part}
 			if i == 0 {
@@ -286,4 +286,19 @@ func cutWidth(s string, w int) (head, rest string) {
 		used += rw
 	}
 	return s, ""
+}
+
+// logGlyph marks a warning or an error with a glyph before its text, so the
+// kind does not rest on colour alone (N-294): under NO_COLOR or on a
+// 16-colour terminal a warning and an error read as any other line. It is
+// drawn, not stored, so a copy of the log (Text) and a find (find) see the
+// message as it was logged.
+func logGlyph(k logKind) string {
+	switch k {
+	case logWarn:
+		return "⚠ "
+	case logErr:
+		return "✗ "
+	}
+	return ""
 }

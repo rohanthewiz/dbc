@@ -1328,7 +1328,7 @@ func (e *editor) Draw(s Surface, st styles, bg Style, curStmt [2]int, follow boo
 				}
 			}
 			if hasSel && inRange(pos{row, i}, selA, selB) {
-				cs = cs.WithBg(st.selRange.Bg)
+				cs = st.picked(cs, st.selRange.Bg)
 			}
 			if e.mask != 0 {
 				r = e.mask
@@ -1341,7 +1341,7 @@ func (e *editor) Draw(s Surface, st styles, bg Style, curStmt [2]int, follow boo
 		// a selection that runs past the end of a line shows one cell of
 		// highlight there, so a selected newline is visible
 		if hasSel && inRange(pos{row, len(e.lines[row])}, selA, selB) && row < selB.row {
-			text.Put(x, y, " ", bg.WithBg(st.selRange.Bg))
+			text.Put(x, y, " ", st.picked(bg, st.selRange.Bg))
 		}
 	}
 

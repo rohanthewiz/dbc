@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/rohanthewiz/dbc/ai"
 	"github.com/rohanthewiz/dbc/config"
@@ -84,6 +85,9 @@ type Model struct {
 	// gfind, lfind and efind are the find lines of the grid, the log and
 	// the editor (find.go); nil while closed
 	gfind, lfind, efind *findLine
+	// lowColor: the terminal's colour profile is below ANSI256 (N-294);
+	// kept here so a theme change (newStyles) does not drop it
+	lowColor bool
 	chat  *chatPane
 
 	// Overlays, drawn on top of everything. At most one menu and one modal;
@@ -405,6 +409,7 @@ func Run(cfg *config.Config, mgr *db.Manager) error {
 	m := New(cfg, mgr, Options{})
 	if p, ok := catsStartupPalette(); ok {
 		m.st = newStyles(p)
+		m.st.lowColor = m.lowColor
 	}
 	p := tea.NewProgram(m)
 	m.send = p.Send
@@ -534,6 +539,13 @@ func (m *Model) gridCmds() tea.Cmd {
 
 func (m *Model) route(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
+	case tea.ColorProfileMsg:
+		// fewer than 256 colours (or NO_COLOR): selections in reverse video
+		// (styles.picked), since a background alone may not survive the
+		// downsampling (N-294)
+		m.lowColor = msg.Profile < colorprofile.ANSI256
+		m.st.lowColor = m.lowColor
+		return nil
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		m.menu = nil // a menu placed for the old size may now be off screen

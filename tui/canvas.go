@@ -79,6 +79,7 @@ func (s Style) Bold() Style      { s.Attr |= AttrBold; return s }
 func (s Style) Italic() Style    { s.Attr |= AttrItalic; return s }
 func (s Style) Underline() Style { s.Attr |= AttrUnderline; return s }
 func (s Style) Dim() Style       { s.Attr |= AttrDim; return s }
+func (s Style) Reverse() Style   { s.Attr |= AttrReverse; return s }
 
 // WithFg and WithBg return a copy with one color replaced.
 func (s Style) WithFg(c Color) Style { s.Fg = c; return s }

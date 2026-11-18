@@ -42,8 +42,14 @@ func fakeDumpTool(t *testing.T, secs string) {
 		t.Skip("the fake pg_dump is a shell script")
 	}
 	tool := filepath.Join(t.TempDir(), "pg_dump")
+	// exec, so the sleep IS the process Stop signals, as pg_dump would be.
+	// A non-interactive sh waiting on a foreground child holds a SIGINT
+	// until the child ends (dash and macOS's sh alike: 6 s for a 6 s
+	// sleep, 0.5 s with exec), so the stop could wait out cmd.WaitDelay
+	// (10 s) and race the test's own 10 s wait for the end event; it went
+	// red on CI's Linux runner.
 	script := "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in --file=*) out=\"${a#--file=}\";; esac; done\n" +
-		"echo '-- dumped' > \"$out\"\nsleep " + secs + "\n"
+		"echo '-- dumped' > \"$out\"\nexec sleep " + secs + "\n"
 	if err := os.WriteFile(tool, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

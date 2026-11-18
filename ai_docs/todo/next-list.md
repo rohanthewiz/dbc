@@ -589,14 +589,6 @@ and `raised`.
   (`db/fetchcost_test.go`). N-282 also added `BenchmarkExport`
   (`export/write_test.go`) and `BenchmarkSortRows`
   (`workspace/sortcost_test.go`), without budgets.
-- **N-304** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  A linter in CI. `test.yml` runs build, vet and the race tests and no
-  static analysis. The local `staticcheck` was built with Go 1.24 and
-  refuses the Go 1.26 module, and on 2026-11-10 running a current one
-  was not permitted in the review session, so the code has had nothing
-  past `go vet`. Add a step that builds staticcheck (or golangci-lint)
-  with the module's Go, run it once, and triage what it reports into
-  fixes or a recorded ignore list. (RPU plan, phase 5)
 - **N-308** · raised `2026-1110-1909-rpu-phase-1` · value low
   Three tests fail in a full run, none from a product change, found while
   running the live suites for N-251–N-253 (each also fails on `e62b012`,
@@ -941,6 +933,16 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-304** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  A linter in CI. `test.yml` runs build, vet and the race tests and no
+  static analysis. The local `staticcheck` was built with Go 1.24 and
+  refuses the Go 1.26 module, and on 2026-11-10 running a current one
+  was not permitted in the review session, so the code has had nothing
+  past `go vet`. Add a step that builds staticcheck (or golangci-lint)
+  with the module's Go, run it once, and triage what it reports into
+  fixes or a recorded ignore list. (RPU plan, phase 5)
+  closed 2026-11-18, `@SESS@`, commit `@N-304@`: staticcheck 2026.2.2, built with the module's Go 1.26, found 14 things, all dealt with. **Fixed:** the never-used values (SA4006: `grid.dragTo`'s and `flipDragTo`'s first row/col, and `TestHeaderClickSorts`'s first y), `strings.Index(…) < 0` written as `!strings.Contains` (S1003), a literal zero-width joiner written as `‍` (ST1018), and a test helper's error moved last (ST1008). **Removed:** unexported code nothing referenced (U1000): `Model.copyResult`, `grid.sub` and `Model.gridView`, left behind when N-282 moved copies and exports to `piece`; `FragmentBuilder.seq`; and the test helper `levelValues`. **Kept, with a `//lint:ignore SA1019 <reason>` beside each:** the legacy PEM decryption in `db/tlskey.go`, which reads a key the user already has, and `driver.Conn.Begin` in `db/mysqlkill.go`, which the interface still requires. CI's test job runs a "Staticcheck" step on Linux after Vet, pinned to that version, so a new release's checks arrive as a change of their own. Clean here; full suite green; gofmt run on five files this session had left unformatted.
 
 - **N-305** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   The live Postgres and MySQL suites in CI. `db/live_*`,

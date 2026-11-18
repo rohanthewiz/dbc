@@ -181,7 +181,9 @@ func decryptKeyPEM(keyPEM, pass []byte) ([]byte, error) {
 	// check), hence the nolint. They are used only to READ a key the user
 	// already has in that format, as pgx's sslpassword does; nothing here
 	// writes one.
+	//lint:ignore SA1019 reading a legacy key the user already has, see above
 	case x509.IsEncryptedPEMBlock(block): //nolint:staticcheck // reading a legacy key, see above
+		//lint:ignore SA1019 reading a legacy key the user already has, see above
 		der, err := x509.DecryptPEMBlock(block, pass) //nolint:staticcheck // reading a legacy key, see above
 		if err != nil {
 			return nil, errWrongPassphrase

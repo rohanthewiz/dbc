@@ -188,7 +188,7 @@ func TestAssistantFollowsTheGridSort(t *testing.T) {
 	// that lookup synchronously, so this is checked on the context itself.)
 	ctx, _ := m.chatContext("")
 	m.grid.Sort(3) // back to the query's order
-	if q := ai.Build("", ctx, false).Text; strings.Index(q, "Milo") < 0 || strings.Contains(q, "Oliver") {
+	if q := ai.Build("", ctx, false).Text; !strings.Contains(q, "Milo") || strings.Contains(q, "Oliver") {
 		t.Errorf("a re-sort reached into an earlier context:\n%s", q)
 	}
 }

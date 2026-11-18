@@ -66,7 +66,6 @@ type FragmentBuilder struct {
 	b    *Builder
 	i    int
 	last string // the node Then wires from
-	seq  int
 }
 
 func (f *FragmentBuilder) frag() *Fragment { return &f.b.spec.Fragments[f.i] }

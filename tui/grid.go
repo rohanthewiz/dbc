@@ -536,17 +536,6 @@ func (g *grid) inSel(row, col int) bool {
 	return row >= r0 && row <= r1 && col >= c0 && col <= c1
 }
 
-// sub builds a Result holding a rectangle of the grid, in display order, with
-// Raw carried along — so a copied selection exports exactly like a whole
-// result: NULLs stay NULLs, numbers stay right-aligned in HTML.
-//
-// The rectangle is in display columns, so a hidden column inside it is left
-// out: a copy takes what the user sees. That is what makes hiding useful
-// for sharing — hide the noisy columns, then copy the table for Teams.
-func (g *grid) sub(r0, c0, r1, c1 int) *model.Result {
-	return g.piece(r0, c0, r1, c1, "").build()
-}
-
 // piece is a rectangle of the grid taken for a copy or an export, to be
 // built into a Result later, off the event loop (N-282). Projecting a
 // million rows is a pair of slices a row, and rendering them more; both
@@ -1011,7 +1000,10 @@ func (g *grid) dragTo(x, y int) {
 		g.flipDragTo(x, y)
 		return
 	}
-	row, col := g.cur.row, g.cur.col
+	// row is set by every case below; col keeps the cursor's when the
+	// pointer is over no column (a gap)
+	var row int
+	col := g.cur.col
 	switch {
 	case y < g.view.Y:
 		row = g.top - 1

@@ -7,15 +7,6 @@ import (
 	"testing"
 )
 
-// levelValues lists an Effort's level values, for compact comparisons.
-func levelValues(e Effort) []string {
-	var out []string
-	for _, l := range e.Levels {
-		out = append(out, l.Value)
-	}
-	return out
-}
-
 // awaitEffort reads events until an EventEffort satisfies ok, and returns
 // it. Effort events are whole states, so the last one is what counts; a
 // test waits for the state it expects rather than counting events.

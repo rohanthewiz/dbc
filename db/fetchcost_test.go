@@ -498,7 +498,7 @@ func (s *recSink) Row(disp []string, raw []any) error {
 // cuts them; a sink's error ends the statement with that error; a set
 // with neither columns nor rows does not reach the sink.
 func TestStreamRows(t *testing.T) {
-	run := func(dsn string, maxRows int, sink *recSink) (*Manager, error, int) {
+	run := func(dsn string, maxRows int, sink *recSink) (*Manager, int, error) {
 		dbh, err := sql.Open("dbc-cells", dsn)
 		if err != nil {
 			t.Fatal(err)
@@ -516,14 +516,14 @@ func TestStreamRows(t *testing.T) {
 				t.Errorf("%s: the Result held %d rows under a sink", dsn, len(res.Rows))
 			}
 			if res.Truncated {
-				return m, err, -1
+				return m, -1, err
 			}
 		}
-		return m, err, 0
+		return m, 0, err
 	}
 
 	s := &recSink{}
-	if _, err, trunc := run("typed:50:3", 1000, s); err != nil || trunc != 0 {
+	if _, trunc, err := run("typed:50:3", 1000, s); err != nil || trunc != 0 {
 		t.Fatalf("typed:50:3: %v, truncated %v", err, trunc != 0)
 	}
 	if len(s.sets) != 1 || strings.Join(s.sets[0], ",") != "c0,c1,c2" || len(s.rows) != 50 {
@@ -534,29 +534,29 @@ func TestStreamRows(t *testing.T) {
 	}
 
 	s = &recSink{}
-	if _, err, trunc := run("typed:50:3", 20, s); err != nil || trunc != -1 || len(s.rows) != 20 {
+	if _, trunc, err := run("typed:50:3", 20, s); err != nil || trunc != -1 || len(s.rows) != 20 {
 		t.Errorf("max_rows 20: %v, truncated %v, %d rows", err, trunc != 0, len(s.rows))
 	}
 
 	full := errors.New("disk full")
 	s = &recSink{fail: full, at: 7}
-	if _, err, _ := run("bytes:50:3", 1000, s); !errors.Is(err, full) || len(s.rows) != 7 {
+	if _, _, err := run("bytes:50:3", 1000, s); !errors.Is(err, full) || len(s.rows) != 7 {
 		t.Errorf("a failing sink: %v after %d rows, want disk full after 7", err, len(s.rows))
 	}
 
 	// no columns and no rows: what runMaybe reads as "it wrote"
 	s = &recSink{}
-	if _, err, _ := run("typed:0:0", 1000, s); err != nil || len(s.sets) != 0 {
+	if _, _, err := run("typed:0:0", 1000, s); err != nil || len(s.sets) != 0 {
 		t.Errorf("an empty column-less set reached the sink: %v, %v", err, s.sets)
 	}
 	// columns and no rows: the header still goes out
 	s = &recSink{}
-	if _, err, _ := run("typed:0:2", 1000, s); err != nil || len(s.sets) != 1 || len(s.rows) != 0 {
+	if _, _, err := run("typed:0:2", 1000, s); err != nil || len(s.sets) != 1 || len(s.rows) != 0 {
 		t.Errorf("an empty set with columns: %v, sets %v, %d rows", err, s.sets, len(s.rows))
 	}
 	// rows and no columns (Postgres's SELECT FROM t): each row, empty
 	s = &recSink{}
-	if _, err, _ := run("typed:3:0", 1000, s); err != nil || len(s.sets) != 1 || len(s.rows) != 3 {
+	if _, _, err := run("typed:3:0", 1000, s); err != nil || len(s.sets) != 1 || len(s.rows) != 3 {
 		t.Errorf("rows with no columns: %v, sets %v, %d rows", err, s.sets, len(s.rows))
 	}
 }

@@ -166,7 +166,9 @@ var (
 )
 
 func (c *mysqlKillConn) Prepare(q string) (driver.Stmt, error) { return c.inner.Prepare(q) }
-func (c *mysqlKillConn) Begin() (driver.Tx, error)             { return c.inner.Begin() }
+
+//lint:ignore SA1019 driver.Conn still requires Begin; database/sql calls BeginTx, which this conn also passes on
+func (c *mysqlKillConn) Begin() (driver.Tx, error) { return c.inner.Begin() }
 
 // PrepareContext records ctx too: a statement with arguments is run by
 // database/sql as prepare-then-execute under the same context, since the

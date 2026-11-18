@@ -60,7 +60,7 @@ func refPosAt(e *editor, off int) pos {
 // alone, a closing */ — make the coloring carry from row to row (N-279),
 // and "CREATE TRIGGER … BEGIN" a body the split must carry.
 var editPieces = []string{
-	"a", "é", "中", "😀", "\U0001F468‍\U0001F469", "\n", "\r\n", "\t", "  ",
+	"a", "é", "中", "😀", "\U0001F468\u200d\U0001F469", "\n", "\r\n", "\t", "  ",
 	"SELECT 1;", "'x;y'", "-- note\n", "/* c */", "$$ ; $$", "\\'", "BEGIN;\n",
 	"/*", "*/", "'", "$$", "\n'a\n", "/* x\ny */", "\\", "--",
 	"CREATE TRIGGER t AFTER INSERT ON o FOR EACH ROW BEGIN\n UPDATE s SET n = 1;\n",

@@ -211,7 +211,10 @@ func (g *grid) flipHitAt(x, y int) gridHit {
 // screen column a record, and a drag past any edge keeps selecting that
 // way — the records run sideways, so past the side edges too.
 func (g *grid) flipDragTo(x, y int) {
-	col, rec := g.cur.col, g.cur.row
+	// col is set by every case below; rec keeps the cursor's when the
+	// pointer is over no record's column (a gap)
+	var col int
+	rec := g.cur.row
 	switch {
 	case y < g.view.Y:
 		col = g.top - 1
@@ -451,13 +454,4 @@ func (m *Model) viewPiece() *piece {
 		p.what = strings.TrimSuffix(p.what, ")") + ", transposed)"
 	}
 	return p
-}
-
-// gridView is viewPiece built here and now.
-func (m *Model) gridView() (*model.Result, string) {
-	p := m.viewPiece()
-	if p == nil {
-		return nil, ""
-	}
-	return p.buildTurned(), p.what
 }

@@ -82,7 +82,7 @@ func copyCommand() *cli.Command {
 			&cli.StringFlag{Name: "where",
 				Usage: "copy only the source rows matching this SQL `CONDITION`", Destination: &flagWhere},
 			&cli.BoolFlag{Name: "dry-run",
-				Usage: "say what the copy would do — columns, rows, the CREATE, the truncate — and write nothing",
+				Usage:       "say what the copy would do — columns, rows, the CREATE, the truncate — and write nothing",
 				Destination: &flagDryRun},
 		},
 		Action: copyAction,

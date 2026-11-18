@@ -50,6 +50,17 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # staticcheck (N-304), built with the module's Go — a binary built
+      # with an older Go refuses this module. Pinned, so a new release's
+      # checks arrive as a change of their own. A finding is fixed, or kept
+      # with a //lint:ignore <check> <reason> beside it (the legacy PEM
+      # decryption in db/tlskey.go, driver.Conn's Begin in db/mysqlkill.go).
+      - name: Staticcheck
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
+          "$(go env GOPATH)/bin/staticcheck" ./...
+
       - name: Test
         run: go test -race ./...
 

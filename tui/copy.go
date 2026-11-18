@@ -100,15 +100,6 @@ func (m *Model) copyRow(f copyFormat) tea.Cmd {
 	return m.copyPiece(m.grid.rowPiece(), f)
 }
 
-// copyResult renders r in format f and copies it.
-func (m *Model) copyResult(r *model.Result, what string, f copyFormat) tea.Cmd {
-	if r == nil {
-		m.log(logWarn, noResult)
-		return nil
-	}
-	return renderCopyCmd(func() *model.Result { return r }, what, f)
-}
-
 // renderCopyCmd builds a Result, renders it in format f and copies it, all
 // on a command goroutine (N-282). The copy's rendering used to run in
 // Update, before its clipboard write went off the loop: a million rows as

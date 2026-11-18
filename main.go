@@ -1229,8 +1229,8 @@ type rowStream struct {
 	o      *headlessOut
 	cw     *csv.Writer
 	rec    []string // the record a row is written from, reused (NULLs empty)
-	counts []int // rows per set, for the notes
-	err    error // the write failure that stopped the stream
+	counts []int    // rows per set, for the notes
+	err    error    // the write failure that stopped the stream
 }
 
 func newRowStream(o *headlessOut, f export.Format) *rowStream {

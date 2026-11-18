@@ -249,8 +249,8 @@ func TestCopyKeys(t *testing.T) {
 func TestHeaderClickSorts(t *testing.T) {
 	m := newTestModel(t)
 	key(t, m, "ctrl+r")
-	x, y := findText(t, frame(m), "name")
-	y = m.grid.head.Y
+	x, _ := findText(t, frame(m), "name")
+	y := m.grid.head.Y
 	click(t, m, x+1, y)
 	if v, _, _ := m.grid.value(0, 1); v != "Bella" {
 		t.Errorf("first after sorting by name = %q", v)

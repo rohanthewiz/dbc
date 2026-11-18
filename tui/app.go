@@ -88,7 +88,7 @@ type Model struct {
 	// lowColor: the terminal's colour profile is below ANSI256 (N-294);
 	// kept here so a theme change (newStyles) does not drop it
 	lowColor bool
-	chat  *chatPane
+	chat     *chatPane
 
 	// Overlays, drawn on top of everything. At most one menu and one modal;
 	// a menu may sit over a modal (a right-click inside it), never the

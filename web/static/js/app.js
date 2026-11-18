@@ -1395,7 +1395,8 @@
       case "busy":
       case "tick":
         setBusy(true);
-        setStatus(d.status || d.tag + "…", "warn");
+        // a tick is the same run's time so far: shown, not spoken (setStatus)
+        setStatus(d.status || d.tag + "…", "warn", ev.type === "tick");
         break;
       case "run": {
         setBusy(false);
@@ -3115,7 +3116,8 @@
       const t = tabOf(r.origin);
       if (!t || t !== state.tab || f.status === "queued") return;
       setStatus((r.preview ? "preview of " : "") + r.name + " · " + f.name + " " + f.status + " · " +
-        (f.rows || (f.nodes || []).reduce((n, x) => Math.max(n, x.out || 0), 0)) + " rows", f.status === "failed" ? "err" : "warn");
+        (f.rows || (f.nodes || []).reduce((n, x) => Math.max(n, x.out || 0), 0)) + " rows", f.status === "failed" ? "err" : "warn",
+        true); // progress mid-run: shown, not spoken (a failure still is)
     },
   });
 

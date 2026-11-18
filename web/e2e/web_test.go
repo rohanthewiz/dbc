@@ -89,6 +89,7 @@ func TestWeb(t *testing.T) {
 		{"a page on another port is refused", otherPortRefused},
 		{"a stale completion request is aborted", staleCompletionAborted},
 		{"long values: heads in the grid, whole in Inspect", longValues},
+		{"a11y: dialogs keep Tab, the grid's roles, the status spoken, contrast, topbar, retried pages", a11yBasics},
 	}
 	// DBC_E2E_STEPS narrows a run to the steps whose names contain one of
 	// its comma-separated words (plus the sign-in and boot every step

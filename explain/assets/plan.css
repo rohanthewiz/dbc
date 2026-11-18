@@ -9,7 +9,7 @@
    /theme.css. The light variant is a second set of values on the root. */
 .dbc-plan[data-theme="light"] {
   --bg:#f6f8f6; --panel:#ffffff; --panel2:#eef2ee; --sel:#d7e8dc; --line:#d3dbd4;
-  --fg:#1f2a22; --muted:#5f7066; --accent:#2e8f5f; --warn:#b7791f; --err:#c53d3d;
+  --fg:#1f2a22; --muted:#5f7066; --accent:#277a51; --warn:#946219; --err:#c53d3d;
 }
 .dbc-plan, .dbc-plan * { box-sizing: border-box; }
 .dbc-plan {

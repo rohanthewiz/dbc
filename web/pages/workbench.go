@@ -131,7 +131,11 @@ func (p Workbench) Render() string {
 						),
 						b.DivClass("rpane", "id", "rpane-results").R(
 							b.DivClass("grid-msg", "id", "grid-msg").R(),
+							// role=grid: grid.js draws its rows and cells with
+							// the matching roles and indices, and moves
+							// aria-activedescendant with the cursor
 							b.DivClass("grid", "id", "grid", "tabindex", "0", "hidden", "hidden",
+								"role", "grid", "aria-readonly", "true", "aria-multiselectable", "true",
 								"aria-label", "Result grid — arrows move, Shift extends, y copies, Enter inspects").R(),
 						),
 						// the plan view (explain/assets/plan.js) is mounted here
@@ -162,6 +166,9 @@ func (p Workbench) Render() string {
 				p.chat(b),
 				b.FooterClass("statusbar").R(
 					b.Span("id", "status").T("starting…"),
+					// the status line's spoken copy: a live region the
+					// ticking status bar can't be (dbc.setStatus, core.js)
+					b.SpanClass("sr-only", "id", "announce", "role", "status", "aria-live", "polite", "aria-atomic", "true").R(),
 					b.SpanClass("keys").T("Ctrl+Enter run · Ctrl+X explain · Ctrl+K stop · Ctrl+P history · Ctrl+I assistant · Alt+T new tab"),
 					b.ButtonClass("help-btn", "id", "help-btn", "type", "button", "title", "Every key (F1 or ?)").T("⌨ keys"),
 				),

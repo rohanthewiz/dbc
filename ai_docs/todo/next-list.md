@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-337
+**Next ID:** N-338
 
 ## Open
 
@@ -78,21 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-300** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  dbc web usability basics. Modals have no focus trap, so Tab reaches the
-  page behind the shade (`web/static/js/ui.js:90-111`). The grid is a
-  `tabindex` div with no grid/row/cell roles or `aria-activedescendant`
-  (`web/pages/workbench.go:134`). `#status` is not a live region
-  (`:164`), so "disconnected" and errors are not announced. Light-theme
-  warn and accent text compute to about 3.6–3.8:1
-  (`theme/palette.go:52-53`). The topbar's ten `nowrap` buttons do not
-  wrap until 700 px (`web/static/css/app.css:50-59,101,696`), so widths
-  of roughly 700–1100 px probably overflow (from the CSS, not rendered):
-  wrap, or an overflow menu. A failed grid page fetch leaves "…" cells
-  with no retry and logs an error per scroll frame while the server is
-  down (`web/static/js/grid.js:272-287`). Audit, traced.
-  (RPU plan, phase 4)
-  Updated 2026-11-18 (`@SESS@`, from N-166's check): the light theme's `--warn` (#b7791f) is 3.41:1 against the editor background (#f6f8f6) and 3.64:1 on the white panel. A script's or pipeline field's warning notes are drawn in it, below the 4.5:1 small text needs. `--err` (#c53d3d) is 4.79:1 and reads.
 - **N-307** · raised `2026-1110-1909-rpu-phase-1` · value low
   The formatter lays out a compound body as separate statements: it cuts
   its tree on every `;` (`fmtStatements`) and reads the trigger head's
@@ -666,6 +651,19 @@ and `raised`.
   - Postgres, in either UI: `BEGIN; DECLARE c CURSOR FOR …; FETCH 5 FROM
     c` shows rows, and a `CALL` of a procedure with an INOUT parameter
     its one row.
+- **N-337** · raised `@SESS@` · value low
+  The web e2e step "a stale completion request is aborted"
+  (`web/e2e/complabort_test.go:66`) failed once in a full run while
+  N-300 was checked: it timed out waiting for a completion request
+  because the active tab was the Go script `e2e_pipe.go` (status
+  "e2e_pipe.go — Ctrl+Enter saves and runs it"), where no SQL completion
+  is asked. The rerun passed, as had every full run earlier that day. The
+  step assumes a SQL console is active and doesn't make sure of it. The
+  steps before it (`saveTrouble`, `logJournal`) open and reload a second
+  page on the shared tabs, so either one of them sometimes leaves `p` on
+  the script tab, or `p` switches tabs on its own after a tab event. Find
+  which. If it's the test's assumption, pick a SQL console at the step's
+  start; if the page switched by itself, that is a product bug.
 
 ## Roadmap
 
@@ -907,6 +905,37 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-300** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  dbc web usability basics. Modals have no focus trap, so Tab reaches the
+  page behind the shade (`web/static/js/ui.js:90-111`). The grid is a
+  `tabindex` div with no grid/row/cell roles or `aria-activedescendant`
+  (`web/pages/workbench.go:134`). `#status` is not a live region
+  (`:164`), so "disconnected" and errors are not announced. Light-theme
+  warn and accent text compute to about 3.6–3.8:1
+  (`theme/palette.go:52-53`). The topbar's ten `nowrap` buttons do not
+  wrap until 700 px (`web/static/css/app.css:50-59,101,696`), so widths
+  of roughly 700–1100 px probably overflow (from the CSS, not rendered):
+  wrap, or an overflow menu. A failed grid page fetch leaves "…" cells
+  with no retry and logs an error per scroll frame while the server is
+  down (`web/static/js/grid.js:272-287`). Audit, traced.
+  (RPU plan, phase 4)
+  Updated 2026-11-18 (`@SESS@`, from N-166's check): the light theme's `--warn` (#b7791f) is 3.41:1 against the editor background (#f6f8f6) and 3.64:1 on the white panel. A script's or pipeline field's warning notes are drawn in it, below the 4.5:1 small text needs. `--err` (#c53d3d) is 4.79:1 and reads.
+  closed 2026-11-18, `@SESS@`, commit `@N-300@`: all six parts done.
+- **Focus trap** (`ui.js` `trapTab`): Tab off a dialog's last control wraps to its first, Shift+Tab the other way. Focus outside the box is brought back. A control that uses Tab itself (Monaco, a code textarea) keeps it, because the wrap listens on the box in the bubble phase and skips a cancelled Tab.
+- **Grid roles:** the grid is `role=grid` with `aria-rowcount`/`aria-colcount` for the whole result; the rows and cells drawn carry `aria-rowindex`/`aria-colindex`, `aria-selected` and `aria-sort`. `aria-activedescendant` follows the cursor through a position-named id. The transposed grid gets the same.
+- **Status spoken:** `#announce` is a visually hidden `role=status` copy of the status line. `setStatus` takes a `quiet` flag that the per-tick and pipeline-progress writers pass, so a run is heard as its first and last lines, and an error always.
+- **Contrast:** light `--accent` #2e8f5f → #277a51 and `--warn` #b7791f → #946219 (palette.go and plan.css), the same hue darkened to `--muted`'s level, about 4.9:1 on the background and 4.6:1 on panel2.
+- **Topbar:** it and `.actions` wrap at every width.
+- **Retry:** a failed grid page backs off 1 s doubling to 16 s, redraws itself when the wait is up, and logs the outage once and its end once ("rows load again").
+
+New web e2e step `a11y…` (`web/e2e/a11y_test.go`) checks each part. It fails on the old code for each:
+- Tab left the dialog at press 15;
+- light accent and warn 3.2–3.8:1;
+- the topbar's ◐ off screen at 900 px, and three buttons at 760 px;
+- 26 fetches and 26 log lines in ~3 s against 2 and 1.
+
+The full web e2e passed (one run hit the N-337 flake, the rerun passed); the full suite, vet and staticcheck are clean.
 
 - **N-220** · raised `2026-1019-1305-query-folding-result-tab-rename` · value low
   The web e2e step "pipeline tabs" fails whenever `DBC_E2E_SHOTS` is set:

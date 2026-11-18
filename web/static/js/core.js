@@ -229,12 +229,34 @@
 
   // setStatus writes the status bar — the active query tab's — and keeps
   // it with the tab, so switching back shows what it last said.
-  dbc.setStatus = function (text, level) {
+  //
+  // It also hands the text to announce, for a screen reader. The visible
+  // bar is not itself a live region: a running query rewrites it on every
+  // tick (the time so far) and a pipeline run on every node's progress,
+  // which a reader would speak over and over. Those callers pass quiet, and
+  // their spell is heard as its first line ("running…") and its last
+  // ("done · 3 rows"). An error is spoken even when quiet.
+  dbc.setStatus = function (text, level, quiet) {
     const s = $("status");
     s.textContent = text;
     s.className = level || "";
     if (dbc.state.tab) Object.assign(dbc.state.tab, { status: text, level: level || "" });
+    if (!quiet || level === "err") announce(text);
   };
+
+  // announce writes text into #announce, a visually hidden role=status
+  // region (polite: spoken when the reader is idle, not over what it is
+  // reading). A region speaks a CHANGE, so the same line twice in a row —
+  // two runs that both end "done · 1 row" — would be heard once; the copy
+  // alternates a trailing no-break space so every call differs from the
+  // last.
+  let announceFlip = false;
+  function announce(text) {
+    const a = $("announce");
+    if (!a) return;
+    announceFlip = !announceFlip;
+    a.textContent = text + (announceFlip ? "\u00a0" : "");
+  }
 
   // el builds an element: el("div", "cls", "text") or el("div", {class, title, …}, child…)
   dbc.el = function (tag, attrs, ...kids) {

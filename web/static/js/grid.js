@@ -59,8 +59,16 @@
   const root = document.getElementById("grid");
   const msg = document.getElementById("grid-msg");
   const info = document.getElementById("grid-info");
-  const head = el("div", "gh");
-  const body = el("div", "gb");
+  // ARIA: the root is a role=grid (workbench.go), the header line its
+  // first row, and the body a rowgroup of the rows in view. The drawing is
+  // virtual — only the rows and columns on screen exist — so every row and
+  // cell carries its aria-rowindex / aria-colindex in the whole result, and
+  // the root the whole result's counts (setCounts), which is how a screen
+  // reader says "row 5,000 of 120,000" of a grid it never sees whole. The
+  // cursor is not DOM focus (the root keeps it) but aria-activedescendant
+  // naming the current cell (activeCell).
+  const head = el("div", { class: "gh", role: "row", "aria-rowindex": "1" });
+  const body = el("div", { class: "gb", role: "rowgroup" });
   root.append(head, body);
 
   // g is the grid's whole state.
@@ -286,18 +294,39 @@
 
   // page fetches one page of display rows under the current sort; drawn
   // when it lands, unless the view moved on meanwhile.
+  //
+  // A fetch that fails (the server down, the network gone) is retried with
+  // a backoff rather than on the next frame. draw asks for every missing
+  // page in view on every frame, so without one a dead server meant a
+  // request and a logged error per scroll frame, and a still view never
+  // asked again at all — its "…" cells stayed until the user scrolled.
+  // Now a failed page waits RETRY_MIN, doubling to RETRY_MAX, and a timer
+  // redraws when the wait is up, so the view fills in by itself once the
+  // server is back. The log hears of the outage once and of its end once.
+  const RETRY_MIN = 1000, RETRY_MAX = 16000; // ms
+  const failed = new Map(); // page → { key, until, wait } (key: the result and sort it was asked under)
+  let fetchDown = false;    // an outage is logged: say so once more when a page lands
   async function page(p) {
     if (g.pending.has(p)) return;
+    const seq = g.seq, sort = g.sort, desc = g.desc, key = seq + "/" + sort + "/" + desc;
+    const f = failed.get(p);
+    if (f && f.key === key && performance.now() < f.until) return; // backing off
     g.pending.add(p);
-    const seq = g.seq, sort = g.sort, desc = g.desc;
     try {
       const d = await query(p * PAGE, sort, desc);
+      failed.delete(p);
+      if (fetchDown) { fetchDown = false; dbc.log("ok", "rows load again"); }
       if (!d || d.seq !== seq) { load(); return; } // a new result landed: start over
       if (seq !== g.seq || sort !== g.sort || desc !== g.desc) return; // re-sorted since
       g.pages.set(p, pageOf(d));
       render();
     } catch (e) {
-      dbc.log("err", "could not load rows: " + e.message);
+      // the wait doubles only for the same question; a new result or sort
+      // starts again from RETRY_MIN
+      const wait = f && f.key === key ? Math.min(f.wait * 2, RETRY_MAX) : RETRY_MIN;
+      failed.set(p, { key, until: performance.now() + wait, wait });
+      setTimeout(render, wait + 50); // past until, which a timer can undershoot by a tick
+      if (!fetchDown) { fetchDown = true; dbc.log("err", "could not load rows: " + e.message + " — retrying"); }
     } finally {
       g.pending.delete(p);
     }
@@ -394,7 +423,8 @@
     const focused = document.activeElement === root;
 
     // header
-    let h = '<div class="rn hrn"' + ' style="width:' + g.rnW + 'px">#</div>';
+    setCounts(g.total + 1, g.vis.length + 1);
+    let h = '<div class="rn hrn" role="columnheader" aria-colindex="1" style="width:' + g.rnW + 'px">#</div>';
     for (let c = c0; c <= c1; c++) {
       const rc = g.vis[c];
       let cls = "hc";
@@ -403,7 +433,9 @@
       if (c >= sc0 && c <= sc1 && g.sel) cls += " in";
       if (hiddenAfter(c)) cls += " gap";
       const arrow = rc === g.sort ? (g.desc ? " ▼" : " ▲") : "";
-      h += '<div class="' + cls + '" data-c="' + c + '" style="left:' + (g.rnW + g.colX[c]) + "px;width:" + g.colW[c] +
+      h += '<div class="' + cls + '" role="columnheader" aria-colindex="' + (c + 2) + '"' +
+        (rc === g.sort ? ' aria-sort="' + (g.desc ? "descending" : "ascending") + '"' : "") +
+        ' data-c="' + c + '" style="left:' + (g.rnW + g.colX[c]) + "px;width:" + g.colW[c] +
         'px" title="' + esc(g.cols[rc]) + ' — click to sort, right-click for more"><span class="hn">' + esc(g.cols[rc]) + arrow +
         '</span><span class="rz" data-rz="' + c + '" title="Drag to resize · double-click to fit"></span></div>';
     }
@@ -418,8 +450,8 @@
       if (!pg) page(Math.floor(r / PAGE));
       const row = pg && pg.cells[r % PAGE];
       const inRows = r >= s0 && r <= s1;
-      b += '<div class="gr' + (r % 2 ? " odd" : "") + '" style="top:' + r * ROW_H + 'px"><div class="rn" style="width:' +
-        g.rnW + 'px" data-rn="' + r + '">' + (r + 1) + "</div>";
+      b += '<div class="gr' + (r % 2 ? " odd" : "") + '" role="row" aria-rowindex="' + (r + 2) + '" style="top:' + r * ROW_H +
+        'px"><div class="rn" role="rowheader" aria-colindex="1" style="width:' + g.rnW + 'px" data-rn="' + r + '">' + (r + 1) + "</div>";
       for (let c = c0; c <= c1; c++) {
         const rc = g.vis[c];
         let cls = "gc";
@@ -427,15 +459,49 @@
         if (!row) { text = "…"; cls += " wait"; }
         else if (row[rc] === null) { text = "NULL"; cls += " null"; }
         else { text = flat(row[rc]) + (isCut(pg, r, rc) ? "…" : ""); if (g.numeric[rc]) cls += " num"; }
-        if (inRows && c >= sc0 && c <= sc1) cls += g.sel ? " in" : "";
-        if (r === g.cur.row && c === g.cur.col) cls += focused ? " cur" : " cur blur";
+        const sel = g.sel && inRows && c >= sc0 && c <= sc1;
+        if (sel) cls += " in";
+        const cur = r === g.cur.row && c === g.cur.col;
+        if (cur) cls += focused ? " cur" : " cur blur";
         if (hiddenAfter(c)) cls += " gap";
-        b += '<div class="' + cls + '" style="left:' + (g.rnW + g.colX[c]) + "px;width:" + g.colW[c] + 'px">' + esc(text) + "</div>";
+        b += '<div class="' + cls + '" role="gridcell" aria-colindex="' + (c + 2) + '"' + cellAria(sel, cur, !row) +
+          ' style="left:' + (g.rnW + g.colX[c]) + "px;width:" + g.colW[c] + 'px">' + esc(text) + "</div>";
       }
       b += "</div>";
     }
     if (b !== lastBody) body.innerHTML = lastBody = b;
+    activeCell();
     drawInfo();
+  }
+
+  // ── ARIA bookkeeping (see head and body, above) ───────────────────────
+  // setCounts writes the root's aria-rowcount / aria-colcount — the whole
+  // result's, header line and gutter included — when they change.
+  function setCounts(rows, cols) {
+    if (root.getAttribute("aria-rowcount") !== String(rows)) root.setAttribute("aria-rowcount", rows);
+    if (root.getAttribute("aria-colcount") !== String(cols)) root.setAttribute("aria-colcount", cols);
+  }
+
+  // cellAria is a data cell's state attributes: selected when in the range,
+  // the cursor's id when it is the current cell (activeCell points the
+  // root at it), busy while its page is still being fetched.
+  function cellAria(sel, cur, waiting) {
+    return (sel ? ' aria-selected="true"' : "") + (cur ? ' id="' + curID() + '"' : "") + (waiting ? ' aria-busy="true"' : "");
+  }
+
+  // curID names the current cell by position (and result), not one fixed
+  // id: a screen reader speaks a move when aria-activedescendant CHANGES,
+  // and a fixed id on a redrawn node would read as no move at all.
+  const curID = () => "gcur-" + g.seq + "-" + g.cur.row + "-" + g.cur.col;
+
+  // activeCell points aria-activedescendant at the current cell when it is
+  // drawn, and drops it when the cursor is scrolled out of the drawn rows
+  // (an id that names nothing is an error to assistive tech).
+  function activeCell() {
+    const id = curID();
+    if (document.getElementById(id)) {
+      if (root.getAttribute("aria-activedescendant") !== id) root.setAttribute("aria-activedescendant", id);
+    } else root.removeAttribute("aria-activedescendant");
   }
 
   // drawFlip is draw on its side: screen line i is display column i (its
@@ -468,11 +534,14 @@
     // resize handles, as upright: the corner's widens the names gutter
     // (data-rzn), a record's widens EVERY record (data-rzr = its index,
     // which the drag needs to keep that record's left edge in place)
-    let h = '<div class="rn hrn fn" style="width:' + gw + 'px">column' +
+    // ARIA, turned: a screen row is a display column, a screen column a
+    // record — the indices follow the screen, as a reader walks it
+    setCounts(nf + 1, g.total + 1);
+    let h = '<div class="rn hrn fn" role="columnheader" aria-colindex="1" style="width:' + gw + 'px">column' +
       '<span class="rz" data-rzn="1" title="Drag to resize the names · double-click to fit the longest"></span></div>';
     for (let j = j0; j <= j1; j++) {
       const cls = "hc rec" + (g.sel && j >= s0 && j <= s1 ? " in" : "");
-      h += '<div class="' + cls + '" data-r="' + j + '" style="left:' + (gw + j * W) + "px;width:" + W +
+      h += '<div class="' + cls + '" role="columnheader" aria-colindex="' + (j + 2) + '" data-r="' + j + '" style="left:' + (gw + j * W) + "px;width:" + W +
         'px" title="Row ' + (j + 1) + ' — click to select it, right-click for more">' + (j + 1) +
         '<span class="rz" data-rzr="' + j + '" title="Drag to resize every row · double-click to fit"></span></div>';
     }
@@ -487,8 +556,10 @@
       const arrow = rc === g.sort ? (g.desc ? " ▼" : " ▲") : "";
       // a hidden column between this line and the next: the upright ║,
       // turned — a heavier rule under the line (.gr.gap)
-      b += '<div class="gr' + (i % 2 ? " odd" : "") + (hiddenAfter(i) ? " gap" : "") + '" style="top:' + i * ROW_H +
-        'px"><div class="' + ncls + '" style="width:' + gw + 'px" data-fn="' + i + '" title="' + esc(g.cols[rc]) +
+      b += '<div class="gr' + (i % 2 ? " odd" : "") + (hiddenAfter(i) ? " gap" : "") + '" role="row" aria-rowindex="' + (i + 2) +
+        '" style="top:' + i * ROW_H + 'px"><div class="' + ncls + '" role="rowheader" aria-colindex="1"' +
+        (rc === g.sort ? ' aria-sort="' + (g.desc ? "descending" : "ascending") + '"' : "") +
+        ' style="width:' + gw + 'px" data-fn="' + i + '" title="' + esc(g.cols[rc]) +
         ' — click to sort, right-click for more">' + esc(g.cols[rc]) + arrow + "</div>";
       const inCols = i >= sc0 && i <= sc1;
       for (let j = j0; j <= j1; j++) {
@@ -501,13 +572,17 @@
         if (!row) { text = "…"; cls += " wait"; }
         else if (row[rc] === null) { text = "NULL"; cls += " null"; }
         else text = flat(row[rc]) + (isCut(pg, j, rc) ? "…" : "");
-        if (g.sel && inCols && j >= s0 && j <= s1) cls += " in";
-        if (j === g.cur.row && i === g.cur.col) cls += focused ? " cur" : " cur blur";
-        b += '<div class="' + cls + '" style="left:' + (gw + j * W) + "px;width:" + W + 'px">' + esc(text) + "</div>";
+        const sel = g.sel && inCols && j >= s0 && j <= s1;
+        if (sel) cls += " in";
+        const cur = j === g.cur.row && i === g.cur.col;
+        if (cur) cls += focused ? " cur" : " cur blur";
+        b += '<div class="' + cls + '" role="gridcell" aria-colindex="' + (j + 2) + '"' + cellAria(sel, cur, !row) +
+          ' style="left:' + (gw + j * W) + "px;width:" + W + 'px">' + esc(text) + "</div>";
       }
       b += "</div>";
     }
     if (b !== lastBody) body.innerHTML = lastBody = b;
+    activeCell();
     drawInfo();
   }
 

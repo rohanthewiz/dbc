@@ -47,10 +47,19 @@ func Default() Palette {
 // background, so the TUI never needs one). The values are the ones the
 // standalone plan page's light toggle uses (explain/assets/plan.css), so a
 // plan opened from a light workbench looks like the workbench it came from.
+//
+// Accent and Warn are darker than the dark palette's hues would suggest:
+// both are drawn as small text (a warning note, the status bar's "running…",
+// a link), and at #2e8f5f and #b7791f they measured 3.6–3.8:1 and 3.2–3.4:1
+// against Bg and Panel2, under the 4.5:1 that small text needs (WCAG AA).
+// They keep their hue and saturation and are darkened to the level Muted
+// already sits at — about 4.9:1 on Bg, 4.6:1 on Panel2 — so every text
+// colour of the light theme reads about alike. Err (4.8:1) was already
+// there.
 func Light() Palette {
 	return Palette{
 		Bg: "#f6f8f6", Panel: "#ffffff", Panel2: "#eef2ee", Sel: "#d7e8dc", Line: "#d3dbd4",
-		Fg: "#1f2a22", Muted: "#5f7066", Accent: "#2e8f5f", Warn: "#b7791f", Err: "#c53d3d",
+		Fg: "#1f2a22", Muted: "#5f7066", Accent: "#277a51", Warn: "#946219", Err: "#c53d3d",
 	}
 }
 

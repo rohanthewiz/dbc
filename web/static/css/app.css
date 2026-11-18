@@ -47,11 +47,19 @@ button:focus-visible, textarea:focus-visible, li:focus-visible { outline: 1px so
   height: 100vh;
 }
 
+/* The topbar wraps at every width, not only below 700px: its ten buttons
+   are about 750px of nowrap labels, so between 700px and roughly 1100px
+   (the name of a long script beside them) they ran off the right edge,
+   out of reach. Wrapped, .actions (margin-left: auto) drops to a line of
+   its own, right-aligned as before; narrower than its buttons, it wraps
+   them in turn (see .actions). The bar's row is "auto" in .app's grid, so
+   a second line takes its height from the work area. */
 .topbar {
   grid-area: top;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 6px 12px;
   padding: 6px 12px;
   background: var(--panel2);
   border-bottom: 1px solid var(--line);
@@ -98,7 +106,7 @@ button:focus-visible, textarea:focus-visible, li:focus-visible { outline: 1px so
 }
 .busy { color: var(--warn); animation: pulse 1s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .3; } }
-.actions { margin-left: auto; display: flex; gap: 6px; }
+.actions { margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 #run { border-color: var(--accent); }
 
 /* The column is a flex stack of Connections, a drag bar, and Tables; each
@@ -763,6 +771,14 @@ button.primary { border-color: var(--accent); }
 .statusbar .keys { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 #status.err { color: var(--err); }
 #status.warn { color: var(--warn); }
+/* sr-only: in the accessibility tree, not on screen (the status line's
+   spoken copy, #announce). Absolute, so it is no flex item and takes no
+   gap in the status bar; clipped to nothing rather than display:none or
+   visibility:hidden, which would drop it from the tree too. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
 
 /* narrow screens: the sidebar goes above the work column */
 @media (max-width: 700px) {

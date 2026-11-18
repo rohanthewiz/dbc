@@ -99,15 +99,56 @@
       shade, back: document.activeElement, onClose: opts.onClose,
       keys: (e) => {
         if (opts.onKey && opts.onKey(e)) { e.preventDefault(); e.stopPropagation(); return; }
-        if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeModal(); }
+        if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeModal(); return; }
+        // Tab from outside the box (trapTab's other half, below)
+        if (isTab(e) && !box.contains(document.activeElement)) trapTab(box, e);
       },
     };
+    // The wrap at the box's ends listens in the bubble phase, on the box:
+    // a control that uses Tab itself (Monaco indenting, a code textarea)
+    // handles it first and cancels it, and a cancelled Tab is not a move.
+    box.addEventListener("keydown", (e) => { if (isTab(e) && !e.defaultPrevented) trapTab(box, e); });
     close.addEventListener("click", closeModal);
     shade.addEventListener("pointerdown", (e) => { if (e.target === shade) closeModal(); });
     document.addEventListener("keydown", m.keys, true);
     modal = m;
     (opts.focus || close).focus();
     return { close: closeModal };
+  }
+
+  // trapTab keeps Tab inside the dialog, the other half of "a modal owns
+  // the keyboard": without it, Tab walked out of the box into the page
+  // behind the shade — the editor, the grid — which can be typed into but
+  // not seen. Tab off the last control wraps to the first, Shift+Tab off
+  // the first to the last; between them the browser's own order stands,
+  // so a dialog's tab order is still its DOM order. Focus that is
+  // somewhere else entirely (a click on the shade's edge, say) is brought
+  // back to the first control.
+  //
+  // A control that uses Tab itself keeps it (see the box's listener in
+  // openModal): Monaco indents, and its own Ctrl+M switches Tab to moving
+  // focus, which this then wraps.
+  const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+  const isTab = (e) => e.key === "Tab" && !e.ctrlKey && !e.altKey && !e.metaKey;
+  function trapTab(box, e) {
+    const a = document.activeElement;
+    const els = [...box.querySelectorAll(FOCUSABLE)].filter((x) =>
+      !x.disabled && !x.closest("[hidden], [inert]") && x.getClientRects().length > 0);
+    if (!els.length) { e.preventDefault(); return; }
+    const first = els[0], last = els[els.length - 1];
+    let to = null;
+    if (!box.contains(a)) to = e.shiftKey ? last : first;
+    else if (!els.includes(a)) {
+      // focus on something in the box that is no tab stop itself (the box,
+      // a tabindex=-1 list focused by script): the stop after it, or before
+      // it with Shift — wrapping, as from the ends
+      const F = Node.DOCUMENT_POSITION_FOLLOWING, P = Node.DOCUMENT_POSITION_PRECEDING;
+      to = e.shiftKey
+        ? els.findLast((x) => a.compareDocumentPosition(x) & P) || last
+        : els.find((x) => a.compareDocumentPosition(x) & F) || first;
+    } else if (e.shiftKey && a === first) to = last;
+    else if (!e.shiftKey && a === last) to = first;
+    if (to) { e.preventDefault(); to.focus(); }
   }
 
   function closeModal() {

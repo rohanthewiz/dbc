@@ -488,6 +488,7 @@ dragging.
 | `Alt+T` · `Alt+W` · `Alt+1`…`9` | A new query tab · close the tab · go to tab N (see [Query tabs](#query-tabs)) |
 | `Alt+N` · `Alt+C` | A new console of the database · the database's next console (see [Consoles](#consoles-and-multi-statement-buffers)) |
 | `F12` · `Shift+F12` · `F2` | *(editor)* On an alias, a CTE name or a column the query names: go to its declaration · mark and list its uses · rename it (see [Go to definition, usages and rename](#go-to-definition-usages-and-rename)) |
+| `Ctrl+F` | Find in the focused pane — the editor, the results or the log: typing jumps to the first match from the cursor, `Enter` / `Shift+Enter` the next / previous (wrapping), `Esc` closes and leaves the cursor on the match. In the editor the match is selected, and `:42` goes to line 42 |
 | `Ctrl+Space` | *(editor)* Suggestions at the caret — they also open by themselves after `.`, `::` and two letters of a word (see below) |
 | `Ctrl+T` | List the tables and views on the active connection |
 | `Ctrl+L` | Jump to the connections list |
@@ -511,6 +512,8 @@ dragging.
 | `A` | *(plan)* Send the plan to the chat: it goes with every question until stopped from the plan menu, and a question about it is drafted (see [Sending a plan](#ai-assistant)) |
 | `[` / `]` | *(results)* After a script that showed several results (`s.Show`): the previous / next one within its result tab — also a click on its number in "Result 1 · 2 · 3" on the results title |
 | `z` | *(results)* Give the results pane the whole column / give it back |
+| `/` · `n` / `N` | *(results, log)* Find (as `Ctrl+F`) · the next / previous match of the last find. In the results, a cell's text, any case, row by row over the shown columns; in the log, a line's message, lit where it is |
+| `o` | *(results)* Sort by the cursor's column: ascending, descending, the result's order — a header click from the keyboard |
 | `y` · `x` | *(log)* Copy the connection's log · clear it |
 | `Tab` / `Shift+Tab` | Cycle focus through the panes |
 | `Esc` | Close a dialog or menu |

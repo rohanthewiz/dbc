@@ -38,6 +38,10 @@ type logPane struct {
 	rows  []visual
 	nrows []int
 	rowsW int
+
+	// mark is the line a find is on (find.go), an index into lines, or -1:
+	// draw lights its rows. Trimming the oldest lines shifts it with them.
+	mark int
 }
 
 // logLine is one message.
@@ -62,7 +66,7 @@ const (
 // logMaxLines bounds the log so a chatty script cannot grow it forever.
 const logMaxLines = 2000
 
-func newLogPane() *logPane { return &logPane{follow: true} }
+func newLogPane() *logPane { return &logPane{follow: true, mark: -1} }
 
 func (l *logPane) add(kind logKind, text string) {
 	// one message per line: a multi-line error keeps its shape
@@ -83,6 +87,9 @@ func (l *logPane) trim() {
 		return
 	}
 	l.lines = l.lines[over:]
+	if l.mark >= 0 {
+		l.mark = max(l.mark-over, -1) // the marked line may have gone with them
+	}
 	if over > len(l.nrows) {
 		// more lines went than were ever wrapped (many added between two
 		// frames): none of the rows kept is still in the log
@@ -100,6 +107,7 @@ func (l *logPane) trim() {
 func (l *logPane) clear() {
 	l.lines, l.top, l.follow, l.total = nil, 0, true, 0
 	l.rows, l.nrows = nil, nil
+	l.mark = -1
 }
 
 // take moves every line of from to the end of l (the holding log folded
@@ -172,12 +180,19 @@ func (l *logPane) draw(s Surface, st styles, bg Style) {
 	}
 	l.top = min(l.top, maxTop)
 
+	markFrom, markTo := l.markRows()
 	for y := 0; y < s.H() && l.top+y < len(rows); y++ {
 		v := rows[l.top+y]
-		if v.stamp != "" {
-			s.Put(0, y, v.stamp, onBg(st.muted, bg))
+		rowBg := bg
+		if r := l.top + y; r >= markFrom && r < markTo {
+			// the find's line: the selection's background across the row
+			rowBg = st.sel
+			s.Sub(Rect{0, y, s.W(), 1}).Fill(rowBg)
 		}
-		s.Put(stampW, y, v.text, onBg(logStyle(st, v.kind), bg))
+		if v.stamp != "" {
+			s.Put(0, y, v.stamp, onBg(st.muted, rowBg))
+		}
+		s.Put(stampW, y, v.text, onBg(logStyle(st, v.kind), rowBg))
 	}
 	if len(rows) > s.H() {
 		drawVBar(s.Sub(Rect{s.W() - 1, 0, 1, s.H()}), st, l.top, s.H(), len(rows))

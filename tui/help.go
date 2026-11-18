@@ -58,6 +58,7 @@ var keyGroups = []keyGroup{
 		{"^E", "export the result (file or clipboard)"},
 		{"^O", "scripts and plugin files — run, edit ($EDITOR), make from a template, examples, trash"},
 		{"^J", "pipelines & jobs — run, edit the JSON ($EDITOR), new, examples, trash"},
+		{"^F", "find in the editor (the match selected; :42 goes to line 42), the results or the log · Enter / ⇧Enter next / previous · Esc closes"},
 		{"⌥J", "the runs: every pipeline and job run, live and recorded; Enter opens one"},
 		{"^T", "list the tables and views"},
 		{"^A", "the assistant — and back"},
@@ -113,7 +114,8 @@ var keyGroups = []keyGroup{
 		{"< · > · =", "narrow · widen · fit the column"},
 		{"- · +", "hide the column (or the range's) · show every hidden one"},
 		{"t", "transpose — each row a column; copies and exports follow"},
-		{"click a header", "sort: ascending, descending, off"},
+		{"click a header · o", "sort (o: by the cursor's column): ascending, descending, off"},
+		{"/ · ^F · n · N", "find a cell by its text (Enter / ⇧Enter step, Esc closes) · next · previous match"},
 		{"p", "the plan, when there is one"},
 		{"[ · ]", "a script's previous · next shown result (or click a number on the title)"},
 		{"{ · }", "the connection's previous · next result tab (or click one on the bottom border)"},
@@ -137,6 +139,7 @@ var keyGroups = []keyGroup{
 	{"Log", [][2]string{
 		{"y · x", "copy the connection's log · clear it (or ⧉ copy / ✕ clear on its title)"},
 		{"↑↓ · PgUp/PgDn · g/G", "scroll · to the top / the newest line"},
+		{"/ · ^F · n · N", "find a line by its text (lit where it is) · next · previous match"},
 	}},
 	{"Sidebar", [][2]string{
 		{"Enter · click", "connect · preview a table's rows"},

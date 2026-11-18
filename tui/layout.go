@@ -353,14 +353,21 @@ func (m *Model) render() (*Canvas, *caret) {
 	}
 
 	m.drawPane(c, l.editor, m.editorTitle(), focusEditor, m.st.base, func(s Surface) {
-		// colored as the connection's engine reads strings, as the
-		// marker's statement (currentStmtRange) is split
-		m.editor.setDialect(m.ws.Dialect())
-		x, y, ok := m.editor.Draw(s, m.st, m.st.base, m.currentStmtRange(), m.drag.follow)
-		m.drag.follow = false
-		if ok && m.focus == focusEditor && m.modal == nil && m.menu == nil {
-			cur = &caret{x, y}
-			complAt = cur
+		// the find line (find.go), when open, takes the body's last row
+		p := m.withFind(m.efind, s, m.focus == focusEditor, func(s Surface) {
+			// colored as the connection's engine reads strings, as the
+			// marker's statement (currentStmtRange) is split
+			m.editor.setDialect(m.ws.Dialect())
+			x, y, ok := m.editor.Draw(s, m.st, m.st.base, m.currentStmtRange(), m.drag.follow)
+			m.drag.follow = false
+			typingFind := m.efind != nil && m.efind.editing
+			if ok && m.focus == focusEditor && m.modal == nil && m.menu == nil && !typingFind {
+				cur = &caret{x, y}
+				complAt = cur
+			}
+		})
+		if p != nil {
+			cur = p
 		}
 	})
 	// the script-result switcher (resultsets.go) is laid out before the
@@ -383,7 +390,12 @@ func (m *Model) render() (*Canvas, *caret) {
 			m.planv.draw(s, m.st, m.focus == focusGrid)
 			return
 		}
-		m.grid.Draw(s, m.st, m.focus == focusGrid, "run a query with Ctrl+R or ▶ Run — results appear here")
+		p := m.withFind(m.gfind, s, m.focus == focusGrid, func(s Surface) {
+			m.grid.Draw(s, m.st, m.focus == focusGrid, "run a query with Ctrl+R or ▶ Run — results appear here")
+		})
+		if p != nil {
+			cur = p
+		}
 	})
 	m.drawTabs(c)
 	m.drawResultsTabs(c, l.results, partsWidth(sets))
@@ -392,7 +404,12 @@ func (m *Model) render() (*Canvas, *caret) {
 	m.lay.logCopy, m.lay.logClear = Rect{}, Rect{}
 	if !l.logR.Empty() {
 		m.drawPane(c, l.logR, m.logTitle(), focusLog, m.st.base, func(s Surface) {
-			m.logp.draw(s, m.st, m.st.base)
+			p := m.withFind(m.lfind, s, m.focus == focusLog, func(s Surface) {
+				m.logp.draw(s, m.st, m.st.base)
+			})
+			if p != nil {
+				cur = p
+			}
 		})
 		m.drawLogControls(c, l.logR)
 	}

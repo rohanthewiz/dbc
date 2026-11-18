@@ -291,6 +291,9 @@ func (m *Model) park(t *queryTab) {
 
 // load copies t's fields into the Model (the tab coming on screen).
 func (m *Model) load(t *queryTab) {
+	// a find is about the grid, log and buffer that were on screen, and
+	// these are another tab's (find.go)
+	m.dropFinds()
 	m.ws, m.editor, m.grid, m.planv, m.tables, m.tfind = t.ws, t.editor, t.grid, t.planv, t.tables, t.tfind
 	m.resTab, m.schemaLoading, m.status, m.complSt = t.resTab, t.schemaLoading, t.status, t.complSt
 	m.console, m.consoleName, m.consoleText, m.consoleDB = t.console, t.consoleName, t.consoleText, t.consoleDB

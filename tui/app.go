@@ -81,6 +81,9 @@ type Model struct {
 	// tfind is the Tables pane's type-to-find (tablefind.go), per tab as
 	// tables is; nil until the first /
 	tfind *tableFind
+	// gfind, lfind and efind are the find lines of the grid, the log and
+	// the editor (find.go); nil while closed
+	gfind, lfind, efind *findLine
 	chat  *chatPane
 
 	// Overlays, drawn on top of everything. At most one menu and one modal;
@@ -700,6 +703,13 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 
 	// a snippet's name before the caret, or a live snippet's stops, take
 	// Tab ahead of the popup and the focus cycle (snippets.go says when)
+	// a find line being typed in takes its keys ahead of the snippet,
+	// completion and app chords; findLineKey passes on the chords it has
+	// no use for (Ctrl+R still runs, Ctrl+Q still quits)
+	if f := m.findEditingLine(); f != nil && findLineKey(k) {
+		return m.findKey(f, k)
+	}
+
 	if cmd, used := m.snippetKey(k); used {
 		return cmd
 	}
@@ -716,6 +726,11 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+space":
 		if m.focus == focusEditor {
 			return m.openCompletion(true)
+		}
+	case "ctrl+f":
+		// find in the focused pane: the editor, the grid or the log
+		if m.openFind() {
+			return nil
 		}
 	case "ctrl+r":
 		return m.runQuery()
@@ -826,6 +841,9 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		if m.resTab == tabPlan && m.planv.plan != nil {
 			return m.planKey(k)
 		}
+		if m.findPaneKey(findGrid, k) {
+			return nil
+		}
 		return m.gridKey(k)
 	case focusConns:
 		switch k.String() {
@@ -884,6 +902,9 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		}
 		return m.listKey(m.tables, k, m.tablePicked)
 	case focusLog:
+		if m.findPaneKey(findLog, k) {
+			return nil
+		}
 		return m.logKeyPress(k)
 	case focusChat:
 		return m.chatKey(k)
@@ -916,6 +937,11 @@ func (m *Model) gridKey(k tea.KeyPressMsg) tea.Cmd {
 		return m.copyRow(copyText)
 	case "t":
 		return m.transposeGrid()
+	case "o":
+		// sort by the cursor's column: ascending, descending, off — a
+		// header click from the keyboard (N-292)
+		m.sortByCursor()
+		return nil
 	case "c", "menu":
 		x, y := m.grid.cursorScreen()
 		m.openGridMenu(x, y+1) // just below the cell, so it stays visible
@@ -1004,6 +1030,8 @@ func (m *Model) paste(s string) tea.Cmd {
 		m.chat.input.Insert(s)
 	case m.findEditing():
 		m.tableFindPaste(s)
+	case m.findEditingLine() != nil:
+		m.findPaste(m.findEditingLine(), s)
 	case m.focus == focusEditor:
 		m.editor.Insert(s)
 		m.drag.follow = true

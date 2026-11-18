@@ -125,14 +125,6 @@ ten session docs in `ai_docs/claude_sessions/`
   the tables mentioned have more columns than `max_rows`, or it was
   lowered, later tables reach the assistant with some or none of their
   columns. Fix: use `stringRows`. Audit, traced. (RPU plan, phase 4)
-- **N-292** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  The TUI has no find. Editor: no Ctrl+F and no go-to-line
-  (`tui/editor.go:651-749`). Grid: no search, filter or jump to row
-  (`tui/grid.go:652-700`). Log: no search. Sort has no key, only a
-  header click or a menu row (`tui/mouse.go:273`, `tui/menu.go:229`).
-  Fix: `/` in the grid and the log reusing the `tableFind` line, with
-  n/N; Ctrl+F in the editor; a sort key. Absent by grep 2026-11-10.
-  (RPU plan, phase 4)
 - **N-293** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Keys are hard to find. F1 is about 130 rows with no filter
   (`tui/help.go`), there is no command palette, and the status bar's
@@ -1156,6 +1148,16 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-292** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  The TUI has no find. Editor: no Ctrl+F and no go-to-line
+  (`tui/editor.go:651-749`). Grid: no search, filter or jump to row
+  (`tui/grid.go:652-700`). Log: no search. Sort has no key, only a
+  header click or a menu row (`tui/mouse.go:273`, `tui/menu.go:229`).
+  Fix: `/` in the grid and the log reusing the `tableFind` line, with
+  n/N; Ctrl+F in the editor; a sort key. Absent by grep 2026-11-10.
+  (RPU plan, phase 4)
+  closed 2026-11-18, `@SESS@`, commit `@N-292@`: one find line (`tui/find.go`) serves the editor, the grid and the log. `/` (grid, log) or `Ctrl+F` (those and the editor) opens it on the pane's last row; the pane gives that row up (`withFind`), so nothing is hidden under it. Typing jumps to the first match from the cursor, case-insensitive: a cell's display text in reading order over the shown columns (`grid.find`), a log line's message (`logPane.find`, the line lit with the selection colour via `mark`, scrolled a third of the way down), or the buffer (`editorFind`, the match selected, so typing replaces it). `Enter`/`↓`/`Ctrl+F` step to the next match and `⇧Enter`/`↑` to the previous one, wrapping with a "wrapped to the top" note; a miss turns the line the error colour and says "no match". `Esc` closes the line and leaves the cursor on the match. `Tab` leaves the line with the find kept, and `n`/`N` then repeat it from the grid or log. In the editor, `:42` goes to line 42 (Ctrl+G is the cats agents' key). Chords the line has no use for pass through (`findLineKey`), so Ctrl+R still runs with it open. `o` in the grid sorts by the cursor's column, the header click's cycle (`sortByCursor`, with a log line). Matching is `indexFold`, a byte scan with no allocation for ASCII, which matters for a large result tested per keystroke. Finds drop on every tab load (`dropFinds` in `load`). F1 and the README's keys table list the new keys; `^F` sits in F1's "Anywhere" group so the dialog's first screen still shows `^J`. Tests: `TestGridFind`, `TestEditorFind` (selection, wrap both ways, typing over the match, `:2`), `TestLogFind` (mark, scroll, Esc), `TestGridSortKey`, `TestFindLinePassesChords`, `TestTabSwitchDropsFinds`, `TestIndexFold`. The `tui` suite and the TUI pty e2e pass. Not done: a hand check in a real terminal, and the editor's search is a forward scan over the buffer (`lastIndexFold` scans from the start for a step back), untimed on a 3.5 MB buffer.
 
 - **N-291** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   A failed query's message is only in the log. The grid keeps the

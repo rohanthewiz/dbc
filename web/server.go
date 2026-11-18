@@ -623,7 +623,14 @@ var sharedAssets = map[string][]byte{
 // assetVersion hashes every embedded asset: any change to any file busts
 // every cached one, which for a handful of small files is simpler than
 // tracking them one by one.
-func assetVersion() string {
+//
+// Computed once per process (N-284): the assets are embedded, so the hash
+// cannot change while it runs, and it hashes about 4.7 MB. It was
+// recomputed for every sign-in and error page — pages an unauthenticated
+// client can ask for as often as it likes.
+var assetVersion = sync.OnceValue(hashAssets)
+
+func hashAssets() string {
 	h := sha256.New()
 	for _, name := range []string{"js/plan.js", "css/plan.css"} {
 		_, _ = io.WriteString(h, name)

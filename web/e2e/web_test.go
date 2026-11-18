@@ -1579,10 +1579,12 @@ func tabsSurviveReload(t *testing.T, _ *env, p *rod.Page) {
 	p.Keyboard.MustType(input.Enter)
 
 	// wait for the server to hold both, rather than for a debounce's worth
-	// of time: the reload must not race the save
+	// of time: the reload must not race the save. The tab row names its
+	// console and holds no text of its own: the console's file has it
+	// (N-284; the row used to hold a copy)
 	waitFor(t, p, "the tab saved", `async () => {
 	  const r = await (await fetch("/api/v1/tabs")).json();
-	  return (r.data || []).some((t) => t.title === "Renamed tab" && t.buffer === "SELECT 42 AS answer");
+	  return (r.data || []).some((t) => t.title === "Renamed tab" && !!t.console && t.buffer === "");
 	}`)
 	// and its console file, which is what a reload reads the text from.
 	// Checked before the reload on purpose: the page's goodbye also saves

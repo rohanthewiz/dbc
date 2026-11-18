@@ -133,10 +133,15 @@ type consoleSaved struct {
 // consoleEvent is the window-level "console" event: a console's new text,
 // for the other windows showing it. Win is the window that saved it, which
 // already has it.
+//
+// It carries the new revision, not the text (N-284): every window hears it,
+// the saving one included, and most have the console closed or edits of
+// their own, so the whole buffer went out to each on every typing pause
+// for nothing. A window that will take the new text (onConsoleSaved) asks
+// for it with a GET.
 type consoleEvent struct {
 	userdata.ConsoleDB
 	Name string `json:"name"`
-	Text string `json:"text"`
 	Rev  string `json:"rev"`
 	Win  string `json:"win"`
 }
@@ -180,7 +185,7 @@ func (s *Server) saveConsole(winID string, d userdata.ConsoleDB, name, path stri
 	}
 	text, exists := userdata.LoadConsole(path) // an empty never-saved console stays fileless
 	rev = userdata.ConsoleRev(text, exists)
-	s.hub.broadcast("console", consoleEvent{ConsoleDB: d, Name: name, Text: text, Rev: rev, Win: winID})
+	s.hub.broadcast("console", consoleEvent{ConsoleDB: d, Name: name, Rev: rev, Win: winID})
 	return consoleSaved{Rev: rev}, nil
 }
 

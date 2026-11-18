@@ -2762,12 +2762,18 @@
   }
 
   // onConsoleSaved is another window's save: loaded here unless this window
-  // has edits of its own to the console still unsaved.
+  // has edits of its own to the console still unsaved. The event names the
+  // revision only (N-284), so the text is read here, by the windows that
+  // will take it, and taken only if nothing changed while it was read.
   function onConsoleSaved(d) {
     if (d.win === state.win) return;
-    const c = cons.get(ckey(d, d.name));
-    if (!c || c.saving || (dbc.editor.docText(ckey(d, d.name)) ?? c.text) !== c.saved) return;
-    adopt(c, d.text, d.rev);
+    const k = ckey(d, d.name);
+    const c = cons.get(k);
+    const clean = () => c && !c.saving && (dbc.editor.docText(k) ?? c.text) === c.saved;
+    if (!clean() || c.rev === d.rev) return;
+    api("GET", cpath(c.cdb, c.name)).then((r) => {
+      if (cons.get(k) === c && clean() && r.rev !== c.rev) adopt(c, r.text, r.rev);
+    }, () => {}); // not read: the next save meets the conflict and loads it then
   }
 
   // leaveDoc is for document k once no tab here shows it. Its text is
@@ -4289,8 +4295,11 @@
 
   // tabBody is what a save sends for t: its text (the editor's when it is
   // on screen) and the console it shows. With a console the text is the
-  // console's, kept in the tab's buffer too, so a dbc from before consoles
-  // still opens the tab as it was.
+  // console's file's alone, and the row's buffer is empty (N-284): it used
+  // to hold the console's text too, so every typing pause sent and stored
+  // the buffer twice. A dbc from before consoles then opens such a tab
+  // empty, and a console that cannot be read at load opens its tab empty
+  // (the text is in the console's file, which the log line names).
   //
   // The connection is always t.conn, never state.active, even for the tab
   // on screen. The two agree once the tab's state has landed (the "conn"
@@ -4312,9 +4321,10 @@
       return { title: t.title, conn: t.conn || "", buffer: t.buffer || "", console: "", design: JSON.stringify(t.design),
         designName: t.designName || "", designRev: t.designRev || "" };
     }
+    if (t.console) return { title: t.title, conn: t.conn || "", buffer: "", console: t.console };
     const active = t === state.tab;
     return { title: t.title, conn: t.conn || "",
-      buffer: active ? dbc.editor.text() : textOf(t), console: t.console || "" };
+      buffer: active ? dbc.editor.text() : textOf(t), console: "" };
   }
 
   // winQuery names this window on a save, a delete or a layout write: the
@@ -5405,10 +5415,15 @@
           designName: t.designName || "", designRev: t.designRev || "" };
       });
       // each tab's console, read before any is shown; one that cannot be
-      // read leaves its tab on the buffer saved with it, and the tab's
-      // connection gives it a console once it lands
+      // read leaves its tab on the buffer saved with it — empty since
+      // N-284, so it says where the text is — and the tab's connection
+      // gives it a console once it lands
       await Promise.all(tabs.filter((t) => t.console).map((t) => loadConsole(t.cdb, t.console)
-        .then((c) => { t.buffer = c.text; }, () => { t.console = ""; t.cdb = null; })));
+        .then((c) => { t.buffer = c.text; }, (e) => {
+          log("warn", "could not read console " + t.console + " of " + (t.cdb.label || t.cdb.database) + " (" + e.message +
+            ") — tab " + t.title + " opens without it; its text is in that console's file");
+          t.console = ""; t.cdb = null;
+        })));
       // each script tab's file (and any draft of it kept here); one that
       // cannot be read is tried again when its tab is shown
       await Promise.all(tabs.filter((t) => t.script).map((t) => scriptKit.load(t.script)

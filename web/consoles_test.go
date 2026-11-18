@@ -159,7 +159,8 @@ func TestConsoleSaveRevisions(t *testing.T) {
 	}
 }
 
-// A save is told to every window, so one showing the console can load it.
+// A save is told to every window, so one showing the console can load it:
+// its revision, not its text (N-284), which that window then reads.
 func TestConsoleSaveBroadcast(t *testing.T) {
 	e, _ := consoleEnv(t)
 	_, s := e.open()
@@ -171,8 +172,14 @@ func TestConsoleSaveBroadcast(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Host != "memory" || got.Database != "demo-sqlite" || got.Name != "console" ||
-		got.Text != "SELECT 'shared'" || got.Win != "elsewhere" || got.Rev == "" {
+		got.Win != "elsewhere" || got.Rev == "" {
 		t.Errorf("console event = %+v", got)
+	}
+	if strings.Contains(string(ev.Data), "shared") {
+		t.Errorf("the event carries the text: %s", ev.Data)
+	}
+	if c := decodeData[consoleText](t, e.api("GET", demoConsoles+"/console", "", 200)); c.Text != "SELECT 'shared'" || c.Rev != got.Rev {
+		t.Errorf("the text at the event's revision = %+v", c)
 	}
 }
 

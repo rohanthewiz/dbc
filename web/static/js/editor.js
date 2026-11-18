@@ -503,7 +503,13 @@
   // ── the statement marker ───────────────────────────────────────────────
   // Debounced: a caret held down on an arrow key asks once it rests. The
   // textarea has no gutter, so the marker is Monaco's alone.
+  //
+  // A caret move inside the statement already marked, with the text and
+  // the driver as they were, cannot change the marker: no request then
+  // (N-284). Before, every caret move asked, the whole buffer in the body
+  // — on a 3 MB migration, 3 MB per arrow key at rest.
   let markTimer = 0, markSeq = 0;
+  let marked = null; // {text, driver, range}: the last answer, while it stands
   function scheduleMark() {
     if (!ed) return;
     clearTimeout(markTimer);
@@ -512,13 +518,18 @@
   async function mark() {
     const seq = ++markSeq;
     // a script is Go: there is no statement to mark
-    if (api.isScript()) { decos.set([]); return; }
-    const text = ed.getValue();
+    if (api.isScript()) { decos.set([]); marked = null; return; }
+    const text = ed.getValue(), caret = api.caret(), driver = dbc.state.driver;
+    if (marked && marked.text === text && marked.driver === driver &&
+        marked.range[1] > marked.range[0] && caret >= marked.range[0] && caret <= marked.range[1]) {
+      return; // still inside the marked statement: the marker stands
+    }
     let r;
     try {
-      r = await dbc.api("POST", "/api/v1/stmt", { buffer: text, caret: api.caret(), driver: dbc.state.driver });
+      r = await dbc.api("POST", "/api/v1/stmt", { buffer: text, caret, driver });
     } catch (_) { return; }
     if (seq !== markSeq || !ed || ed.getValue() !== text) return; // stale
+    marked = { text, driver, range: r };
     const m = ed.getModel();
     const list = [];
     if (r[1] > r[0]) {

@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-335
+**Next ID:** N-336
 
 ## Open
 
@@ -78,22 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-284** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  dbc web does whole-buffer work on small events. A typing pause PUTs the
-  tab and the console (`web/static/js/app.js:3896`), the tab row
-  duplicates the console's text in bytdb, and the console's full text is
-  broadcast to every window, the saver included (`web/consoles.go:183`);
-  `/stmt` runs 150 ms after every caret move
-  (`web/static/js/editor.js:507-520`) and `/folds` on each change.
-  `assetVersion()` re-hashes about 4.7 MB of embedded assets on every
-  sign-in or error page, reachable unauthenticated (`web/server.go:534`,
-  `web/auth.go:219-228`). A window with no stream keeps every tab's
-  result sets for 24 h (`web/hub.go:63,265-276`); cells have no size cap,
-  so `max_rows` bounds rows, not bytes. Fix: no buffer on console-backed
-  tab rows, the revision alone in the event, skip `/stmt` when the text
-  is unchanged and the caret is inside the last range, use the cached
-  `s.ver`, drop results at the idle release. Audit, traced.
-  (RPU plan, phase 3)
 - **N-285** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Every headless job or pipeline run parses every run record.
   `newHeadlessEngine` → `Recover` (`jobscmd.go:156`,
@@ -402,6 +386,21 @@ ten session docs in `ai_docs/claude_sessions/`
   (raw a string, not a number: `-5` from an int column must stay `-5`)
   behind its own option. They touch `export.delimited`, `rowStream`, the
   TUI's and web's export dialogs. Split out of N-288 while closing it.
+- **N-335** · raised `@SESS@` · value low
+  Drop a dbc web tab's result sets at the idle release? This is the part
+  of N-284 not done, because it changes what a returning user sees. A
+  window with no stream keeps every tab's result sets until it is
+  forgotten (`forgetAfter`, 24 h; `web/hub.go` `reap`). Cells have no
+  size cap, so `max_rows` bounds the rows held, not the bytes. N-284's
+  fix was to drop them at the idle release, which is `conn_idle_timeout`,
+  1 h by default. A browser tab closed for good would then free its
+  results after an hour, not a day. But a laptop asleep over lunch would
+  come back to empty result tabs: a rerun (`r`) refills each one, but
+  the rows are gone. The question for the user: drop them at the
+  release, drop only past some size, or keep the day? If they go, the
+  page needs telling, as `sayReleased` tells it of a session: a note,
+  and result tabs that show "released — r reruns" rather than a grid
+  whose pages 404.
 
 ## Validate
 
@@ -1108,6 +1107,29 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-284** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  dbc web does whole-buffer work on small events. A typing pause PUTs the
+  tab and the console (`web/static/js/app.js:3896`), the tab row
+  duplicates the console's text in bytdb, and the console's full text is
+  broadcast to every window, the saver included (`web/consoles.go:183`);
+  `/stmt` runs 150 ms after every caret move
+  (`web/static/js/editor.js:507-520`) and `/folds` on each change.
+  `assetVersion()` re-hashes about 4.7 MB of embedded assets on every
+  sign-in or error page, reachable unauthenticated (`web/server.go:534`,
+  `web/auth.go:219-228`). A window with no stream keeps every tab's
+  result sets for 24 h (`web/hub.go:63,265-276`); cells have no size cap,
+  so `max_rows` bounds rows, not bytes. Fix: no buffer on console-backed
+  tab rows, the revision alone in the event, skip `/stmt` when the text
+  is unchanged and the caret is inside the last range, use the cached
+  `s.ver`, drop results at the idle release. Audit, traced.
+  (RPU plan, phase 3)
+  closed 2026-11-18, `@SESS@`, commit `@N-284@`, all of it but dropping results at the idle release, which is raised as N-335. Done:
+- **The asset hash.** `assetVersion` is a `sync.OnceValue` over `hashAssets`, so the 4.7 MB is hashed once per process, not on each sign-in or error page.
+- **The statement marker.** The editor skips `/stmt` (`marked`) when the text and the driver are unchanged and the caret is still inside the statement already marked.
+- **The console event.** It carries the revision, not the text. `onConsoleSaved` reads the text with a GET only in a window that will take it (the console open there, no unsaved edits), and takes it only if that still holds when the answer lands.
+- **The tab row.** A console-backed tab row saves an empty buffer (`tabBody`), so the console's text is sent and stored once. A console that cannot be read at load now logs where the text is.
+`/folds` was left alone: Monaco already debounces it and cancels a request the text has moved past. Tests: `TestConsoleSaveBroadcast` (the event holds no text; the GET at its revision does), the `web` suite, and the full web e2e. Its step "tabs survive a reload" now wants the row to name its console with an empty buffer; it failed first because it checked the old copy, and passes now.
 
 - **N-290** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   `Manager.Columns` is the one catalog read still cut at `max_rows`

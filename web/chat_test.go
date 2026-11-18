@@ -401,10 +401,32 @@ func TestChatEffort(t *testing.T) {
 	e.api("POST", "/api/v1/ws/"+id+"/chat/effort", `{"id":"max"}`, 400) // Fast Model has no max
 
 	e.api("POST", "/api/v1/ws/"+id+"/chat/model", `{"id":"smart"}`, 200)
-	v = awaitChat(t, s, func(v chatView) bool { return v.ModelID == "smart" && len(v.Efforts) == 4 })
-	if v.Effort != "high" || f.Effort() != "high" {
-		t.Errorf("after the switch: view %q, agent %q — want the choice kept", v.Effort, f.Effort())
+	// The agent's side is settled when the request returns: SetModel
+	// re-applies the chosen level before it does.
+	if f.Effort() != "high" {
+		t.Errorf("after the switch the agent is at %q — want the choice kept", f.Effort())
 	}
+	// The view is not, yet. setModel sends a state as soon as SetModel
+	// returns, while the agent's two effort reports — the switch's reset to
+	// medium, then the re-applied level — reach it through the event pump,
+	// which may lag behind (N-321):
+	//
+	//	request goroutine:  SetModel ─► modelID=smart ─► state{smart, ?}
+	//	pump goroutine:     EventEffort(medium, 4 levels) ─► EventEffort(high)
+	//
+	// so a state can read {smart, 4 levels, medium} for a moment. Wait for
+	// the view to settle on the chosen level; if it never does, the await
+	// times out and the last view seen says where it stopped.
+	var last chatView
+	defer func() {
+		if t.Failed() {
+			t.Logf("last view after the switch: model %q, effort %q, %d levels", last.ModelID, last.Effort, len(last.Efforts))
+		}
+	}()
+	awaitChat(t, s, func(v chatView) bool {
+		last = v
+		return v.ModelID == "smart" && len(v.Efforts) == 4 && v.Effort == "high"
+	})
 	e.api("POST", "/api/v1/ws/"+id+"/chat/effort", `{"id":"max"}`, 200)
 	awaitChat(t, s, func(v chatView) bool { return v.Effort == "max" })
 }

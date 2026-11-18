@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-333
+**Next ID:** N-334
 
 ## Open
 
@@ -365,25 +365,6 @@ ten session docs in `ai_docs/claude_sessions/`
   statement holds INTO, past the CTE list (`Verbs().MainAt`, as
   `db.effectOf` does); on MySQL that costs a relist after `INTO @v`,
   unless the dialect is passed in. Raised while closing N-272.
-- **N-321** · raised `2026-1113-1541-n273-unknown-keys-dollar-escape` · value medium
-  `web` `TestChatEffort` is flaky (`web/chat_test.go:406`): after
-  `/chat/model` switches to "smart", the view and the fake agent are
-  sometimes back at "medium" where the test wants the chosen "high" kept.
-  Alone it failed 6 of 30 runs, then 1 of 30; it failed the same on a
-  clean tree, so it is not N-273's. A red `go test ./...` hides a real
-  failure beside it. Likely a race between the model switch re-applying
-  the preferred effort (`ai_effort`) and the effort chosen before it. The
-  test came in with `34909b9` (ai_effort, 2026-11-12). Raised while
-  closing N-273.
-  Updated `2026-1116-1525-n281-formatting-costs-what-it-holds`, with N-281: a full
-  `-race` run reported a data race in the test fake, under
-  `TestChatArchiveNewOpenDelete`. Every chat a test server starts shares
-  one `aitest.Fake` (`chatEnv`, `web/chat_test.go:29`), and `aitest.Start`
-  overwrites its `out` and `cancel` (`ai/aitest/fake.go:55`) while the
-  previous session's `serve` goroutine still reads them (`:123`). A
-  restarted chat's predecessor can so write into the new chat's pipe; a
-  model switch restarts the chat, so this is a likely cause of the flake.
-  Fix: a Fake state per Start that the old goroutine keeps. Not fixed.
 - **N-322** · raised `2026-1113-1541-n273-unknown-keys-dollar-escape` · value low
   `os.Expand` (behind `config.expandEnv`) drops an unterminated `${` and an
   empty `${}` without calling the lookup, so no warning is given: a
@@ -458,6 +439,18 @@ ten session docs in `ai_docs/claude_sessions/`
   sink already does; it touches the format list, the TUI's and web's
   pickers and the completions. Or stream `-t json` when the statement
   cannot return several sets (kindRows), and collect otherwise.
+- **N-333** · raised `@SESS@` · value low
+  `aitest.Fake` races when one Fake serves a restarted chat. Every chat a
+  web test server starts shares one Fake (`chatEnv`,
+  `web/chat_test.go:29`), and `aitest.Start` overwrites its `out` and
+  `cancel` (`ai/aitest/fake.go:55`) while the previous session's `serve`
+  goroutine still reads them (`:123`), so the old session can write into
+  the new chat's pipe. `-race` reports it under
+  `TestChatArchiveNewOpenDelete` (seen with N-281). Not the cause of
+  N-321's flake (no restart there). Fix: give each Start its own state
+  (pipe, cancel channel, model and effort) that its `serve` goroutine
+  keeps, with the Fake's accessors reading the newest. Split out of N-321
+  while closing it.
 
 ## Validate
 
@@ -1190,6 +1183,27 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-321** · raised `2026-1113-1541-n273-unknown-keys-dollar-escape` · value medium
+  `web` `TestChatEffort` is flaky (`web/chat_test.go:406`): after
+  `/chat/model` switches to "smart", the view and the fake agent are
+  sometimes back at "medium" where the test wants the chosen "high" kept.
+  Alone it failed 6 of 30 runs, then 1 of 30; it failed the same on a
+  clean tree, so it is not N-273's. A red `go test ./...` hides a real
+  failure beside it. Likely a race between the model switch re-applying
+  the preferred effort (`ai_effort`) and the effort chosen before it. The
+  test came in with `34909b9` (ai_effort, 2026-11-12). Raised while
+  closing N-273.
+  Updated `2026-1116-1525-n281-formatting-costs-what-it-holds`, with N-281: a full
+  `-race` run reported a data race in the test fake, under
+  `TestChatArchiveNewOpenDelete`. Every chat a test server starts shares
+  one `aitest.Fake` (`chatEnv`, `web/chat_test.go:29`), and `aitest.Start`
+  overwrites its `out` and `cancel` (`ai/aitest/fake.go:55`) while the
+  previous session's `serve` goroutine still reads them (`:123`). A
+  restarted chat's predecessor can so write into the new chat's pipe; a
+  model switch restarts the chat, so this is a likely cause of the flake.
+  Fix: a Fake state per Start that the old goroutine keeps. Not fixed.
+  closed 2026-11-17, `@SESS@`, commit `@N-321@`: the race was the test's, not the product's. Reproduced at 4 of 40 runs, always `view "medium", agent "high"`: the agent kept the choice, the view was read mid-switch. `assistant.setModel` sends a state as soon as `Chat.SetModel` returns, while the agent's two effort reports (the switch's reset to medium with smart's four levels, then the re-applied high) reach `a.effort` through the event pump, which can lag it; so one state read `{smart, 4 levels, medium}` and the test took it. The page settles on high either way. The test now checks the agent right after the request (settled by then: SetModel re-applies before it returns) and waits for the view to reach `{smart, 4 levels, high}`, logging the last view seen if it never does. 200 runs clean; with `reapplyEffort` removed from `SetModel` it fails (agent at medium, last view medium). Upstream's update above (the fake's shared `out`/`cancel`) was not this flake's cause: `setModel` only calls `SetModel` and never restarts the chat, and the test opens one chat. That race is real and is raised on its own as N-333.
 
 - **N-282** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   A result is held twice and an export about four times.

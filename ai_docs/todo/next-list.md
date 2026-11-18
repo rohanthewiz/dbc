@@ -185,19 +185,6 @@ ten session docs in `ai_docs/claude_sessions/`
   the probe must let go at once and never refuse a start; and a record
   from an engine without a runs dir has no lock to ask. Raised while
   closing N-269.
-- **N-323** · raised `2026-1113-1657-n274-n275-api-origin-completion-aborts` · value low
-  A panic inside a completion schema read leaves the cache "loading" for
-  good. `Workspace.LoadCompletions` (`workspace/complete.go`) and
-  `ConnCompletions.load` (`workspace/conncomplete.go`) close the `loading`
-  channel and store the outcome only on a normal return. dbc web runs
-  the read under `goSafe` since N-275, so the process survives, but
-  until a reconnect bumps the generation `Complete` stays not ready (the
-  vocabulary only), and each later ask leaves a goroutine waiting on the
-  channel forever. Before N-275 the handler waited on it, so every later
-  completion request hung. No such panic is known; this is N-260's
-  backstop applied to the cache. Fix: a deferred recover in both loads
-  that records the panic as the read's error (logged with its stack) and
-  closes the channel. Read here. Raised while closing N-275.
 - **N-324** · raised `2026-1113-1804-n276-cut-reads-stop-on-server` · value low
   A read cut at `max_rows` inside a Postgres transaction the user opened
   still streams the rest of its result. N-276 stops a cut read with a
@@ -1012,6 +999,21 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-323** · raised `2026-1113-1657-n274-n275-api-origin-completion-aborts` · value low
+  A panic inside a completion schema read leaves the cache "loading" for
+  good. `Workspace.LoadCompletions` (`workspace/complete.go`) and
+  `ConnCompletions.load` (`workspace/conncomplete.go`) close the `loading`
+  channel and store the outcome only on a normal return. dbc web runs
+  the read under `goSafe` since N-275, so the process survives, but
+  until a reconnect bumps the generation `Complete` stays not ready (the
+  vocabulary only), and each later ask leaves a goroutine waiting on the
+  channel forever. Before N-275 the handler waited on it, so every later
+  completion request hung. No such panic is known; this is N-260's
+  backstop applied to the cache. Fix: a deferred recover in both loads
+  that records the panic as the read's error (logged with its stack) and
+  closes the channel. Read here. Raised while closing N-275.
+  closed 2026-11-18, `@SESS@`, commit `@N-323@`: both loaders now read through `readCompletionsSafely`, which is readCompletions then readRoutines with a deferred recover. It turns a panic into the read's error: `internal error reading the schema for completion: <value>`, with `conn` and the `stack` as serr fields for whoever logs it. The panic is caught in the read rather than in each loader's own defers, so each loader's normal path still stores the outcome and closes its `loading` channel. `readCompletionsFn` is the seam. `TestCompletionReadPanics`: with the read made to panic, `LoadCompletions` returns the panic as its error and a second load returns rather than waiting on the first's channel; the same holds for `ConnCompletions.Tables`, twice. Full suite green.
 
 - **N-322** · raised `2026-1113-1541-n273-unknown-keys-dollar-escape` · value low
   `os.Expand` (behind `config.expandEnv`) drops an unterminated `${` and an

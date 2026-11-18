@@ -166,11 +166,10 @@ func (c *ConnCompletions) load(ctx context.Context, conn string) (complState, er
 	scoped := c.scoped[conn] || (levelOf(c.cfg, c.mgr, conn) != levelFull && navigable(c.cfg, conn))
 	c.mu.Unlock()
 
-	sc, path, scope, tooBig, err := readCompletions(ctx, c.mgr, navigable(c.cfg, conn), conn, "", scoped)
-	st := complState{conn: conn, schema: sc, path: path, scope: scope, err: err, at: time.Now()}
-	if err == nil {
-		st.routines = readRoutines(ctx, c.mgr, conn, scope)
-	}
+	// a panic in the read is its error (readCompletionsSafely, N-323), so
+	// the entry below always lands and done always closes
+	sc, path, scope, tooBig, routines, err := readCompletionsSafely(ctx, c.mgr, navigable(c.cfg, conn), conn, "", scoped)
+	st := complState{conn: conn, schema: sc, path: path, scope: scope, routines: routines, err: err, at: time.Now()}
 
 	c.mu.Lock()
 	if tooBig {

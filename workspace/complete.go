@@ -3,6 +3,8 @@ package workspace
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime/debug"
 	"slices"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/sqlcomplete"
 	"github.com/rohanthewiz/dbc/sqlsplit"
+	"github.com/rohanthewiz/serr"
 )
 
 // Completion: the editor's suggestions, from the active connection's schema.
@@ -308,7 +311,7 @@ func (w *Workspace) LoadCompletions(ctx context.Context) error {
 	w.compl = complState{conn: conn, gen: gen, loading: done}
 	w.mu.Unlock()
 
-	sc, path, scope, tooBig, err := readCompletions(ctx, w.mgr, navigable(w.cfg, conn), conn, focus, scoped)
+	sc, path, scope, tooBig, routines, err := readCompletionsSafely(ctx, w.mgr, navigable(w.cfg, conn), conn, focus, scoped)
 	if tooBig {
 		w.mu.Lock()
 		if w.complScoped == nil {
@@ -316,10 +319,6 @@ func (w *Workspace) LoadCompletions(ctx context.Context) error {
 		}
 		w.complScoped[conn] = true
 		w.mu.Unlock()
-	}
-	var routines []model.Routine
-	if err == nil {
-		routines = readRoutines(ctx, w.mgr, conn, scope)
 	}
 
 	w.mu.Lock()
@@ -332,6 +331,35 @@ func (w *Workspace) LoadCompletions(ctx context.Context) error {
 	close(done)
 	return err
 }
+
+// readCompletionsSafely is readCompletions and then (when it succeeded)
+// readRoutines, with a panic in either turned into the read's error
+// (N-323). Both loaders (LoadCompletions, ConnCompletions.load) close
+// their loading channel and store the outcome only on a normal return; a
+// panic between left the cache "loading" for good — completion stuck on
+// the vocabulary until a reconnect, and every later ask leaving a
+// goroutine waiting on a channel that never closes. No such panic is
+// known; this is the backstop dbc web's goSafe is for its goroutines
+// (N-260), applied where the state lives. The stack goes with the error
+// as a field, for whoever logs it.
+func readCompletionsSafely(ctx context.Context, mgr *db.Manager, navigable bool, conn, focus string, scoped bool) (
+	sc *erd.Schema, path, scope []string, tooBig bool, routines []model.Routine, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			sc, path, scope, tooBig, routines = nil, nil, nil, false, nil
+			err = serr.New(fmt.Sprintf("internal error reading the schema for completion: %v", p),
+				"conn", conn, "stack", string(debug.Stack()))
+		}
+	}()
+	sc, path, scope, tooBig, err = readCompletionsFn(ctx, mgr, navigable, conn, focus, scoped)
+	if err == nil {
+		routines = readRoutines(ctx, mgr, conn, scope)
+	}
+	return sc, path, scope, tooBig, routines, err
+}
+
+// readCompletionsFn is readCompletions, a var so a test can make it panic.
+var readCompletionsFn = readCompletions
 
 // readCompletions reads what a completion cache holds: the schema, whole
 // or scoped (see A CATALOG TOO BIG above), and the search path. scope is

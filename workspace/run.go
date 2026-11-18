@@ -204,6 +204,9 @@ func (w *Workspace) runLocked(stmts []string, tag string, again *resultTab) (Sta
 		return resultTitle(tag, stmt)
 	}
 	conn, gen := w.active, w.runGen
+	// as the connection's engine reads SQL: a Postgres SELECT … INTO makes
+	// a table, which runEffects and the write log must see (N-320)
+	dialect := w.dialectLocked()
 	w.runStep, w.runSteps = 0, len(stmts)
 	// read now, under mu: no more results than this can be on screen at
 	// once, so the job keeps no more (see rows below)
@@ -212,7 +215,7 @@ func (w *Workspace) runLocked(stmts []string, tag string, again *resultTab) (Sta
 		var res *model.Result
 		var err error
 		var notes []Note // the server's notices, in the order raised
-		var eff runEffects
+		eff := runEffects{d: dialect}
 		// rows are the results that get a tab each (results.go): every
 		// statement's that returned rows, the last limit of them — the
 		// earlier ones would only be dropped at landing by the cap, and
@@ -222,7 +225,7 @@ func (w *Workspace) runLocked(stmts []string, tag string, again *resultTab) (Sta
 		over := 0
 		// a write gets no tab, so its count is logged instead — in a run
 		// of several statements only; a single one's is in the done note
-		wl := writeLog{on: len(stmts) > 1}
+		wl := writeLog{on: len(stmts) > 1, d: dialect}
 		for i, stmt := range stmts {
 			w.stepTo(gen, i+1)
 			var notices []db.Notice
@@ -310,11 +313,12 @@ const writeLines = 5
 // a stopped or failed run still gets it, for the writes that went
 // through.
 type writeLog struct {
-	on       bool  // the run has several statements
-	logged   int   // writes given a line of their own
-	folded   int   // writes past writeLines
-	affected int64 // the folded writes' affected rows, summed
-	last     int   // the last folded write's statement number
+	d        sqlsplit.Dialect // the connection's, for countless
+	on       bool             // the run has several statements
+	logged   int              // writes given a line of their own
+	folded   int              // writes past writeLines
+	affected int64            // the folded writes' affected rows, summed
+	last     int              // the last folded write's statement number
 }
 
 // see logs (or folds) statement n of total, which ran with result res.
@@ -324,7 +328,7 @@ func (l *writeLog) see(n, total int, stmt string, res *model.Result) []Note {
 	}
 	if l.logged >= writeLines {
 		l.folded++
-		if !countless(stmt) {
+		if !countless(stmt, l.d) {
 			l.affected += max(res.Affected, 0)
 		}
 		l.last = n
@@ -332,7 +336,7 @@ func (l *writeLog) see(n, total int, stmt string, res *model.Result) []Note {
 	}
 	l.logged++
 	what := fmt.Sprintf("%d affected", res.Affected)
-	if countless(stmt) {
+	if countless(stmt, l.d) {
 		what = "done"
 	}
 	return []Note{notef(Info, "statement %d/%d: %s — %s", n, total, what, Preview(stmt))}
@@ -349,8 +353,9 @@ func (l *writeLog) see(n, total int, stmt string, res *model.Result) []Note {
 //     driver says 0; MySQL's CALL reports only the last statement inside
 //     the procedure's. A line still says it ran, between the notices it
 //     raised.
-func countless(stmt string) bool {
-	if sqlsplit.ChangesCatalog(stmt) {
+func countless(stmt string, d sqlsplit.Dialect) bool {
+	if d.ChangesCatalog(stmt) {
+		// a SELECT … INTO on Postgres too: like CREATE TABLE … AS
 		return true
 	}
 	v := sqlsplit.FirstKeyword(stmt)
@@ -509,6 +514,9 @@ func (w *Workspace) runningStatusLocked() string {
 // shows, gathered from the statements it reached — the failing one
 // included, since a failed statement may still have done its work in part.
 type runEffects struct {
+	// d is how the connection's engine reads SQL (see), zero for a
+	// script's run, which sees no statements
+	d sqlsplit.Dialect
 	// wrote: a statement may have changed rows (db.ChangesRows), or it
 	// was a script — for the sidebar's counts (recountLocked).
 	wrote bool
@@ -527,7 +535,7 @@ type runEffects struct {
 func (e *runEffects) see(stmt string) {
 	e.wrote = e.wrote || db.ChangesRows(stmt)
 	switch {
-	case sqlsplit.ChangesCatalog(stmt):
+	case e.d.ChangesCatalog(stmt):
 		e.catalog, e.open = true, true
 	case commitVerbs[sqlsplit.FirstKeyword(stmt)]:
 		e.committed, e.open = true, false

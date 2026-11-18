@@ -1591,3 +1591,18 @@ func TestLiveWorkspaceResultSets(t *testing.T) {
 		t.Errorf("a writing CALL: %+v, err %v; want 5 affected", ev.Result, ev.Err)
 	}
 }
+
+// A Postgres SELECT … INTO makes a table, and the run relists the catalog
+// for it as it does for a CREATE TABLE (N-320).
+func TestLiveSelectIntoRelists(t *testing.T) {
+	w, obs := liveWorkspace(t, liveEngines[0])
+	obsExec(t, obs, `DROP TABLE IF EXISTS dbc_live_selinto`)
+	t.Cleanup(func() { obsExec(t, obs, `DROP TABLE IF EXISTS dbc_live_selinto`) })
+	done := run(t, w, `SELECT id, n INTO dbc_live_selinto FROM `+liveTable)
+	if done.Err != nil || done.Relist == nil {
+		t.Fatalf("SELECT INTO: %+v, want a Relist", done)
+	}
+	if re := done.Relist().(*Connected); re.Err != nil || !hasTable(w, "dbc_live_selinto") {
+		t.Errorf("relist: %+v; dbc_live_selinto listed %v", re, hasTable(w, "dbc_live_selinto"))
+	}
+}

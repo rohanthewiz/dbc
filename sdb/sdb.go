@@ -134,8 +134,9 @@ func (s *S) LogDDL() *S {
 func (s *S) logDDL(conn, stmt string) bool {
 	logged := false
 	drv, _ := s.mgr.DriverOf(conn)
-	for _, st := range sqlsplit.DialectOf(drv).Split(stmt) {
-		if sqlsplit.ChangesCatalog(st.Text) {
+	d := sqlsplit.DialectOf(drv)
+	for _, st := range d.Split(stmt) {
+		if d.ChangesCatalog(st.Text) {
 			s.noteCatalog(conn)
 		}
 		if s.ddl && sqlsplit.IsDDL(st.Text) {

@@ -185,16 +185,6 @@ ten session docs in `ai_docs/claude_sessions/`
   the probe must let go at once and never refuse a start; and a record
   from an engine without a runs dir has no lock to ask. Raised while
   closing N-269.
-- **N-320** · raised `2026-1113-1510-n272-reads-that-leave-state` · value low
-  `sqlsplit.ChangesCatalog` goes by the first keyword alone, so Postgres
-  `SELECT … INTO newtable` (and `INTO TEMP`) leaves the sidebar and
-  completion without the table it made until a refresh; `countless`
-  (`workspace/run.go:352`) reads its rows-affected line by the same rule.
-  N-272 made it count for the session (stateful) and for row counts
-  (`db.ChangesRows`), not for the catalog. Fix: count a SELECT whose main
-  statement holds INTO, past the CTE list (`Verbs().MainAt`, as
-  `db.effectOf` does); on MySQL that costs a relist after `INTO @v`,
-  unless the dialect is passed in. Raised while closing N-272.
 - **N-322** · raised `2026-1113-1541-n273-unknown-keys-dollar-escape` · value low
   `os.Expand` (behind `config.expandEnv`) drops an unterminated `${` and an
   empty `${}` without calling the lookup, so no warning is given: a
@@ -1029,6 +1019,18 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-320** · raised `2026-1113-1510-n272-reads-that-leave-state` · value low
+  `sqlsplit.ChangesCatalog` goes by the first keyword alone, so Postgres
+  `SELECT … INTO newtable` (and `INTO TEMP`) leaves the sidebar and
+  completion without the table it made until a refresh; `countless`
+  (`workspace/run.go:352`) reads its rows-affected line by the same rule.
+  N-272 made it count for the session (stateful) and for row counts
+  (`db.ChangesRows`), not for the catalog. Fix: count a SELECT whose main
+  statement holds INTO, past the CTE list (`Verbs().MainAt`, as
+  `db.effectOf` does); on MySQL that costs a relist after `INTO @v`,
+  unless the dialect is passed in. Raised while closing N-272.
+  closed 2026-11-18, `@SESS@`, commit `@N-320@`: `sqlsplit.Dialect.ChangesCatalog` is the verb rule plus, on Postgres, bytdb and Generic, a SELECT whose main statement (past the CTE list, `Verbs().MainAt`) holds INTO, which makes a table (`INTO newtable`, `INTO TEMP t`). On MySQL and SQLite a SELECT … INTO makes no table, so the verb decides alone and `INTO @v` costs no relist. The workspace's run reads its connection's dialect (`dialectLocked`) into `runEffects.d` (the relist) and `writeLog.d` (`countless`: a SELECT INTO's line is "done", as a CREATE TABLE … AS's is), and `sdb.S.logDDL` uses the split's dialect. The package-level `ChangesCatalog` stays for callers without one. Tests: `sqlsplit.TestChangesCatalogSelectInto` (INTO in a string or comment, INSERT INTO, MySQL `INTO @v` and `INTO OUTFILE`); live `TestLiveSelectIntoRelists` on postgres:17 (the run ends with a Relist that lists the new table; on the old code it fails, "want a Relist"). Full suite green.
 
 - **N-313** · raised `2026-1112-1610-n311-introspection-levels` · value low
   The TUI's database and schema pickers give the wrong reason while a

@@ -237,6 +237,27 @@ func ChangesCatalog(stmt string) bool {
 	return catalogVerbs[FirstKeyword(stmt)]
 }
 
+// ChangesCatalog is the package's ChangesCatalog read as d reads SQL: a
+// Postgres (or bytdb) SELECT whose main statement holds INTO — past any
+// CTE list, as Verbs finds it — makes a table (`SELECT … INTO newtable`,
+// `INTO TEMP t`), so it changes the catalog too (N-320); the verb alone
+// said no, and the new table was missing from the sidebar and completion
+// until a refresh. MySQL's and SQLite's SELECT … INTO make no table
+// (MySQL's fills variables or a file; SQLite has none), so on those the
+// verb decides alone, and a MySQL `SELECT … INTO @v` costs no relist. An
+// unknown engine (Generic) counts it: a needless relist is cheap, a
+// missing table is not.
+func (d Dialect) ChangesCatalog(stmt string) bool {
+	if ChangesCatalog(stmt) {
+		return true
+	}
+	if d == MySQL || d == SQLite {
+		return false
+	}
+	v := d.Verbs(stmt)
+	return v.Main == "select" && d.HasKeyword(stmt[v.MainAt:], "into")
+}
+
 // StmtVerbs is the shape of a statement's verbs: what it does at the top
 // level, and — for a WITH — what each of its CTEs does.
 type StmtVerbs struct {

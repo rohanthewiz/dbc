@@ -430,3 +430,32 @@ func TestSplitBlanks(t *testing.T) {
 		}
 	}
 }
+
+// A Postgres SELECT … INTO makes a table, so it changes the catalog; a
+// MySQL or SQLite one makes none (N-320).
+func TestChangesCatalogSelectInto(t *testing.T) {
+	cases := []struct {
+		d    Dialect
+		stmt string
+		want bool
+	}{
+		{Postgres, "SELECT * INTO archive FROM orders", true},
+		{Postgres, "SELECT * INTO TEMP t FROM orders", true},
+		{Postgres, "WITH x AS (SELECT 1 AS a) SELECT a INTO t2 FROM x", true},
+		{Bytdb, "select 1 into t", true},
+		{Generic, "SELECT 1 INTO t", true},
+		{Postgres, "SELECT 'into' FROM orders", false},
+		{Postgres, "SELECT * FROM orders -- into", false},
+		{Postgres, "INSERT INTO t SELECT 1", false},
+		{Postgres, "CREATE TABLE t (a int)", true},
+		{MySQL, "SELECT 1 INTO @v", false},
+		{MySQL, "SELECT * FROM t INTO OUTFILE '/tmp/x'", false},
+		{SQLite, "SELECT 1", false},
+		{MySQL, "CREATE TABLE t (a int)", true},
+	}
+	for _, c := range cases {
+		if got := c.d.ChangesCatalog(c.stmt); got != c.want {
+			t.Errorf("%v %q: %v, want %v", c.d, c.stmt, got, c.want)
+		}
+	}
+}

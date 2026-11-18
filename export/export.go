@@ -8,6 +8,7 @@ import (
 	"fmt"
 	stdhtml "html"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -503,15 +504,22 @@ func (f *File) Abort() {
 }
 
 // delimited writes r as CSV, or TSV with comma '\t'. csv.Writer buffers
-// on its own and keeps the first write error; its Error reports it.
+// on its own and keeps the first write error; its Error reports it. A SQL
+// NULL is an empty field (DelimitedRecord).
 func delimited(w io.Writer, r *model.Result, comma rune) error {
 	cw := csv.NewWriter(w)
 	cw.Comma = comma
 	if err := cw.Write(r.Columns); err != nil {
 		return serr.Wrap(err)
 	}
-	for _, row := range r.Rows {
-		if err := cw.Write(row); err != nil {
+	var rec []string
+	for i, row := range r.Rows {
+		var raw []any
+		if i < len(r.Raw) {
+			raw = r.Raw[i]
+		}
+		rec = DelimitedRecord(rec, row, raw)
+		if err := cw.Write(rec); err != nil {
 			return serr.Wrap(err)
 		}
 	}
@@ -520,6 +528,56 @@ func delimited(w io.Writer, r *model.Result, comma rune) error {
 		return serr.Wrap(err)
 	}
 	return nil
+}
+
+// DelimitedRecord is a row as a CSV or TSV record: its display text, with a
+// SQL NULL (a nil raw value) as an empty field. The text "NULL" a NULL
+// displays as is the same as the string 'NULL' in a text column, which a
+// reader of the file could not tell apart; an empty field is how CSV says
+// "no value" to spreadsheets, COPY … CSV and LOAD DATA alike. (An empty
+// string is an empty field too: CSV has no way to tell those two apart
+// without quoting rules no reader agrees on.)
+//
+// dst is reused when it has room, so a caller writing row after row
+// allocates one record; disp is never written to. A row with no raw values
+// (a result built by hand) is its text as it is.
+func DelimitedRecord(dst, disp []string, raw []any) []string {
+	dst = append(dst[:0], disp...)
+	for i := range dst {
+		if i < len(raw) && raw[i] == nil {
+			dst[i] = ""
+		}
+	}
+	return dst
+}
+
+// jsonValue is a raw value as a JSON export writes it. encoding/json
+// refuses a NaN or an infinite float, which used to fail the whole -t json
+// render after the query had run; Postgres keeps those in float columns as
+// values, not NULLs, so they are written as the strings it spells them
+// with ("NaN", "Infinity", "-Infinity"). Every other value is itself.
+func jsonValue(v any) any {
+	switch f := v.(type) {
+	case float64:
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return nonFinite(f)
+		}
+	case float32:
+		if g := float64(f); math.IsNaN(g) || math.IsInf(g, 0) {
+			return nonFinite(g)
+		}
+	}
+	return v
+}
+
+func nonFinite(f float64) string {
+	switch {
+	case math.IsNaN(f):
+		return "NaN"
+	case f > 0:
+		return "Infinity"
+	}
+	return "-Infinity"
 }
 
 // markdown writes r as a Markdown table. A cell's pipes are escaped and
@@ -586,7 +644,7 @@ func jsonArr(w *bufio.Writer, r *model.Result) error {
 		clear(m)
 		for ci, key := range keys {
 			if ci < len(row) {
-				m[key] = row[ci]
+				m[key] = jsonValue(row[ci])
 			}
 		}
 		buf.Reset()
@@ -613,7 +671,7 @@ func rowMaps(r *model.Result) []map[string]any {
 		m := make(map[string]any, len(keys))
 		for i, key := range keys {
 			if i < len(row) {
-				m[key] = row[i]
+				m[key] = jsonValue(row[i])
 			}
 		}
 		out = append(out, m)

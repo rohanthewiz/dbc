@@ -8,12 +8,11 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/rohanthewiz/serr"
 
 	"github.com/rohanthewiz/dbc/model"
 )
@@ -21,6 +20,8 @@ import (
 // The renderers as they were before they wrote to an io.Writer (N-282),
 // kept as the reference the writers must match byte for byte.
 
+// oldDelimited carries N-288's one change to the old renderer: a NULL (a
+// nil raw value) is an empty field, not the text "NULL".
 func oldDelimited(r *model.Result, comma rune) (string, error) {
 	var sb strings.Builder
 	w := csv.NewWriter(&sb)
@@ -28,7 +29,16 @@ func oldDelimited(r *model.Result, comma rune) (string, error) {
 	if err := w.Write(r.Columns); err != nil {
 		return "", err
 	}
-	if err := w.WriteAll(r.Rows); err != nil {
+	rows := make([][]string, len(r.Rows))
+	for i, row := range r.Rows {
+		rows[i] = slices.Clone(row)
+		for j := range rows[i] {
+			if i < len(r.Raw) && j < len(r.Raw[i]) && r.Raw[i][j] == nil {
+				rows[i][j] = ""
+			}
+		}
+	}
+	if err := w.WriteAll(rows); err != nil {
 		return "", err
 	}
 	return sb.String(), nil
@@ -254,16 +264,48 @@ func TestWriteMatchesRender(t *testing.T) {
 	}
 }
 
-// A value JSON cannot hold fails the export, as it did, and says which row.
-func TestWriteJSONRefusesNaN(t *testing.T) {
-	r := &model.Result{Columns: []string{"x"}, Rows: [][]string{{"1"}, {"NaN"}},
-		Raw: [][]any{{1.0}, {math.NaN()}}}
-	_, err := Render(r, JSON)
-	if err == nil || !strings.Contains(err.Error(), "NaN") {
-		t.Fatalf("err = %v, want the encoder's NaN refusal", err)
+// A float JSON has no number for — NaN, ±Inf, which Postgres keeps as
+// values — is written as the string Postgres spells it with, in a lone
+// result and in a run's envelopes alike, rather than failing the whole
+// export after the query ran (N-288; it used to fail, naming the row).
+func TestWriteJSONNonFinite(t *testing.T) {
+	r := &model.Result{Columns: []string{"x"}, Rows: [][]string{{"1"}, {"NaN"}, {"Infinity"}, {"-Infinity"}},
+		Raw: [][]any{{1.0}, {math.NaN()}, {math.Inf(1)}, {float32(math.Inf(-1))}}}
+	got, err := Render(r, JSON)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(serr.StringFromErr(err), "row") {
-		t.Errorf("err %q does not name the row", serr.StringFromErr(err))
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(got), &rows); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, got)
+	}
+	want := []any{1.0, "NaN", "Infinity", "-Infinity"}
+	for i, w := range want {
+		if rows[i]["x"] != w {
+			t.Errorf("row %d = %#v, want %#v", i, rows[i]["x"], w)
+		}
+	}
+	all, err := RenderRun([]*model.Result{r, r}, []int{1, 2}, 2, JSON)
+	if err != nil || !strings.Contains(all, `"x": "NaN"`) {
+		t.Errorf("a run's envelopes: %v\n%.300s", err, all)
+	}
+	// the result itself is untouched: the grid and a sort still see floats
+	if f, ok := r.Raw[1][0].(float64); !ok || !math.IsNaN(f) {
+		t.Errorf("Raw changed: %#v", r.Raw[1][0])
+	}
+}
+
+// A NULL is an empty CSV/TSV field; the string 'NULL' stays the text.
+func TestDelimitedNull(t *testing.T) {
+	r := &model.Result{Columns: []string{"a", "b"}, Rows: [][]string{{"NULL", "NULL"}},
+		Raw: [][]any{{nil, "NULL"}}}
+	for f, want := range map[Format]string{CSV: "a,b\n,NULL\n", TSV: "a\tb\n\tNULL\n"} {
+		if got, err := Render(r, f); err != nil || got != want {
+			t.Errorf("%s: %q, %v; want %q", f, got, err, want)
+		}
+	}
+	if r.Rows[0][0] != "NULL" {
+		t.Errorf("the display text was written to: %q", r.Rows[0][0])
 	}
 }
 

@@ -1213,6 +1213,7 @@ func rowStreams(f export.Format, stmts int) bool {
 type rowStream struct {
 	o      *headlessOut
 	cw     *csv.Writer
+	rec    []string // the record a row is written from, reused (NULLs empty)
 	counts []int // rows per set, for the notes
 	err    error // the write failure that stopped the stream
 }
@@ -1240,10 +1241,12 @@ func (s *rowStream) Set(cols []string) error {
 	return s.write(cols)
 }
 
-// Row writes one row, as its display text.
-func (s *rowStream) Row(disp []string, _ []any) error {
+// Row writes one row, as its display text with a NULL as an empty field
+// (export.DelimitedRecord, as a collected CSV writes it).
+func (s *rowStream) Row(disp []string, raw []any) error {
 	s.counts[len(s.counts)-1]++
-	return s.write(disp)
+	s.rec = export.DelimitedRecord(s.rec, disp, raw)
+	return s.write(s.rec)
 }
 
 func (s *rowStream) write(rec []string) error {

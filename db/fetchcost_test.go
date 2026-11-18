@@ -355,10 +355,27 @@ func TestCellValueMatchesSprint(t *testing.T) {
 	}
 	for _, v := range vals {
 		disp, raw := cellValue(v)
-		if want := oldRenderVal(v); disp != want {
-			t.Errorf("cellValue(%#v) text = %q, want %q", v, disp, want)
+		// N-288 changed the text of floats and times (and of bytes that
+		// are not UTF-8, none here); TestCellValueText holds those. Every
+		// other type still reads as fmt.Sprint wrote it.
+		switch f := v.(type) {
+		case float64:
+			checkFloatText(t, f, 64, disp)
+		case float32:
+			checkFloatText(t, float64(f), 32, disp)
+		case time.Time:
+			if want := f.Format(time.RFC3339Nano); disp != want {
+				t.Errorf("cellValue(%v) text = %q, want %q", f, disp, want)
+			}
+		default:
+			if want := oldRenderVal(v); disp != want {
+				t.Errorf("cellValue(%#v) text = %q, want %q", v, disp, want)
+			}
 		}
 		want := oldRawVal(v)
+		if tm, ok := v.(time.Time); ok {
+			want = tm.Format(time.RFC3339Nano)
+		}
 		if f, ok := want.(float64); ok && math.IsNaN(f) {
 			if g, ok := raw.(float64); !ok || !math.IsNaN(g) {
 				t.Errorf("cellValue(%#v) raw = %#v, want NaN", v, raw)
@@ -373,6 +390,82 @@ func TestCellValueMatchesSprint(t *testing.T) {
 		}
 		if !reflect.DeepEqual(raw, want) {
 			t.Errorf("cellValue(%#v) raw = %#v, want %#v", v, raw, want)
+		}
+	}
+}
+
+// checkFloatText holds a float's text to FloatText's rules without
+// calling it: the text parses back to the value at its precision; it has
+// no exponent between 1e-7 and 1e21 in magnitude and one outside; and the
+// non-finite ones are Postgres's words.
+func checkFloatText(t *testing.T, f float64, bits int, got string) {
+	t.Helper()
+	switch {
+	case math.IsNaN(f):
+		if got != "NaN" {
+			t.Errorf("NaN text = %q", got)
+		}
+		return
+	case math.IsInf(f, 1):
+		if got != "Infinity" {
+			t.Errorf("+Inf text = %q", got)
+		}
+		return
+	case math.IsInf(f, -1):
+		if got != "-Infinity" {
+			t.Errorf("-Inf text = %q", got)
+		}
+		return
+	}
+	back, err := strconv.ParseFloat(got, bits)
+	if err != nil || back != f {
+		t.Errorf("float%d %v text %q parses back as %v (%v)", bits, f, got, back, err)
+	}
+	a := math.Abs(f)
+	plain := a == 0 || (a >= 1e-7 && a < 1e21)
+	if hasExp := strings.ContainsAny(got, "eE"); hasExp == plain {
+		t.Errorf("float%d %v text %q: exponent %v, want %v", bits, f, got, hasExp, !plain)
+	}
+}
+
+// The text N-288 gave floats, dates, float4 columns and bytes, and the
+// raw value a JSON export writes from.
+func TestCellValueText(t *testing.T) {
+	cases := []struct {
+		v        any
+		k        colKind
+		disp     string
+		raw      any
+		describe string
+	}{
+		{1234567.0, kindPlain, "1234567", 1234567.0, "a float8 whole number is not 1.234567e+06"},
+		{1e21, kindPlain, "1e+21", 1e21, "past 1e21 an exponent"},
+		{1e-8, kindPlain, "1e-08", 1e-8, "below 1e-7 an exponent"},
+		{0.000123, kindPlain, "0.000123", 0.000123, "small but plain"},
+		{float64(float32(0.1)), kindFloat32, "0.1", float32(0.1), "a widened float4 reads as stored"},
+		{0.1, kindFloat32, "0.1", 0.1, "a float64 that is not a float32 is left alone"},
+		{math.Inf(-1), kindPlain, "-Infinity", math.Inf(-1), "Postgres's spelling"},
+		{time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC), kindDate, "2026-11-10", "2026-11-10", "a date"},
+		{time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC), kindPlain, "2026-11-10T00:00:00Z", "2026-11-10T00:00:00Z",
+			"a timestamp at midnight stays a timestamp"},
+		{time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC), kindDate, "2026-11-10T09:00:00Z", "2026-11-10T09:00:00Z",
+			"a date column's non-midnight time is not cut"},
+		{time.Date(2026, 11, 10, 12, 0, 0, 250_000_000, time.UTC), kindPlain, "2026-11-10T12:00:00.25Z",
+			"2026-11-10T12:00:00.25Z", "fractional seconds kept"},
+		{[]byte{0xff, 0x00, 0x10}, kindPlain, `\xff0010`, `\xff0010`, "bytes that are not UTF-8 are hex"},
+		{[]byte("héllo"), kindPlain, "héllo", "héllo", "UTF-8 bytes are text"},
+		{[]byte{}, kindPlain, "", "", "no bytes, no text"},
+	}
+	for _, c := range cases {
+		disp, raw := cellValueAs(c.v, c.k)
+		if disp != c.disp || !reflect.DeepEqual(raw, c.raw) {
+			t.Errorf("%s: cellValueAs(%#v, %d) = %q, %#v; want %q, %#v", c.describe, c.v, c.k, disp, raw, c.disp, c.raw)
+		}
+	}
+	for name, want := range map[string]colKind{"DATE": kindDate, "date": kindDate, "FLOAT4": kindFloat32,
+		"FLOAT": kindFloat32, "FLOAT8": kindPlain, "REAL": kindPlain, "TIMESTAMPTZ": kindPlain, "": kindPlain} {
+		if got := colKindOf(name); got != want {
+			t.Errorf("colKindOf(%q) = %d, want %d", name, got, want)
 		}
 	}
 }

@@ -247,9 +247,9 @@ func TestGridPagesAndDisplayCap(t *testing.T) {
 	}
 }
 
-// A range copy is a real Result in display order, Raw carried along (NULL
-// stays NULL), and it leaves out a column the grid hides — the page just
-// does not list it.
+// A range copy is a real Result in display order, Raw carried along (a NULL
+// stays a NULL: an empty CSV field since N-288, not the text "NULL"), and
+// it leaves out a column the grid hides — the page just does not list it.
 func TestGridCopyRangeAndHidden(t *testing.T) {
 	e := newTestEnv(t)
 	id, s := e.connected()
@@ -259,7 +259,7 @@ func TestGridCopyRangeAndHidden(t *testing.T) {
 	// sorted by name: Bella, Leo, Luna, Simba, Whiskers; rows 1–2, cols name+age
 	out := decodeData[copyOut](t, e.api("POST", "/api/v1/ws/"+id+"/copy",
 		`{"seq":`+seq+`,"sort":1,"cols":[1,2],"rows":[1,2],"format":"csv"}`, 200))
-	if out.Text != "name,age\nLeo,NULL\nLuna,NULL\n" || out.What != "2×2 cells as CSV" {
+	if out.Text != "name,age\nLeo,\nLuna,\n" || out.What != "2×2 cells as CSV" {
 		t.Errorf("range = %q (%s)", out.Text, out.What)
 	}
 

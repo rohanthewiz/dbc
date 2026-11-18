@@ -265,8 +265,14 @@ func (m *Manager) readSet(ctx context.Context, rows *sql.Rows, name, stmt string
 	result := &model.Result{Conn: name, Query: stmt, Columns: cols}
 	cells := make([]cell, len(cols))
 	dest := make([]any, len(cols))
+	// a column's database type decides how a DATE or a float4 reads
+	// (cellValueAs); nil when the driver cannot say, and every cell is plain
+	kinds := columnKinds(rows)
 	for i := range cells {
 		dest[i] = &cells[i]
+		if i < len(kinds) {
+			cells[i].kind = kinds[i]
+		}
 	}
 
 	sink := sinkOf(ctx)

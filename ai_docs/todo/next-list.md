@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-334
+**Next ID:** N-335
 
 ## Open
 
@@ -119,23 +119,6 @@ ten session docs in `ai_docs/claude_sessions/`
   or `DBC_CONN`; connect failures and SQL errors both exit 1, so a script
   cannot tell "could not reach the database" from "the statement failed".
   Each is small with urfave/cli v3. Audit, grep. (RPU plan, phase 4)
-- **N-288** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  Values lose detail on the way out (`db/manager.go:1098-1120`, feeding
-  `export/export.go:337,388,446`). `time.Time` is formatted `RFC3339` in
-  both `renderVal` and `rawVal`, so fractional seconds are dropped in the
-  grid, CSV and JSON, and a Postgres `date` shows as
-  `2026-11-10T00:00:00Z`. `float64` goes through `fmt.Sprint`, so
-  `1234567.0` shows as `1.234567e+06`, and pgx widens `float4`, so
-  `0.1::real` shows as `0.10000000149011612`. `bytea` becomes a raw-byte
-  string: invalid UTF-8 in CSV, U+FFFD in JSON. NULL is the text `NULL`
-  in CSV and TSV, the same as the string 'NULL'. A float `NaN` or
-  `Infinity` fails `json.MarshalIndent` for the whole `-t json` render
-  after the query ran. There is no CSV formula guard and no BOM option.
-  Fix: `RFC3339Nano`, date-only for a date column,
-  `strconv.FormatFloat(v, 'f', -1, bits)`, hex for bytes that are not
-  UTF-8, a typed NULL (empty in CSV), NaN and Inf as null or a string.
-  Read here (`renderVal`, `rawVal`); the export paths audit, traced.
-  (RPU plan, phase 4)
 - **N-290** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   `Manager.Columns` is the one catalog read still cut at `max_rows`
   (`db/catalog.go:601` uses `RunContext` and ignores `Truncated`). When
@@ -438,6 +421,18 @@ ten session docs in `ai_docs/claude_sessions/`
   (pipe, cancel channel, model and effort) that its `serve` goroutine
   keeps, with the Fake's accessors reading the newest. Split out of N-321
   while closing it.
+- **N-334** · raised `@SESS@` · value low
+  CSV has no formula guard and no BOM option, the two parts of N-288's
+  audit it did not do (its "Fix:" named neither). A text cell starting
+  with `=`, `+`, `-`, `@` (or a tab or CR) is read as a formula by Excel
+  and Sheets when the file is opened, which matters for an export of
+  user-entered text sent to someone else; Excel also reads a UTF-8 CSV
+  with no BOM as the system code page, so `é` shows as `Ã©`. Both change
+  the bytes written, so options rather than defaults: a `csv_bom` config
+  key or a `--bom` flag, and a guard that prefixes `'` to a text cell
+  (raw a string, not a number: `-5` from an int column must stay `-5`)
+  behind its own option. They touch `export.delimited`, `rowStream`, the
+  TUI's and web's export dialogs. Split out of N-288 while closing it.
 
 ## Validate
 
@@ -1170,6 +1165,25 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-288** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Values lose detail on the way out (`db/manager.go:1098-1120`, feeding
+  `export/export.go:337,388,446`). `time.Time` is formatted `RFC3339` in
+  both `renderVal` and `rawVal`, so fractional seconds are dropped in the
+  grid, CSV and JSON, and a Postgres `date` shows as
+  `2026-11-10T00:00:00Z`. `float64` goes through `fmt.Sprint`, so
+  `1234567.0` shows as `1.234567e+06`, and pgx widens `float4`, so
+  `0.1::real` shows as `0.10000000149011612`. `bytea` becomes a raw-byte
+  string: invalid UTF-8 in CSV, U+FFFD in JSON. NULL is the text `NULL`
+  in CSV and TSV, the same as the string 'NULL'. A float `NaN` or
+  `Infinity` fails `json.MarshalIndent` for the whole `-t json` render
+  after the query ran. There is no CSV formula guard and no BOM option.
+  Fix: `RFC3339Nano`, date-only for a date column,
+  `strconv.FormatFloat(v, 'f', -1, bits)`, hex for bytes that are not
+  UTF-8, a typed NULL (empty in CSV), NaN and Inf as null or a string.
+  Read here (`renderVal`, `rawVal`); the export paths audit, traced.
+  (RPU plan, phase 4)
+  closed 2026-11-18, `@SESS@`, commit `@N-288@`: in `db/cell.go`, each column's database type (`rows.ColumnTypes`, once per set: `columnKinds`, `colKindOf`) now sets how a DATE or a single-precision float reads, and `cellValueAs` writes: a time as `RFC3339Nano` (a whole second reads as before), and a DATE column's midnight as `2026-11-10`; a float through `FloatText`, which gives plain decimal with the shortest round-trip digits between 1e-7 and 1e21 (JavaScript's and encoding/json's rule, so 1e300 is not 300 digits) and an exponent outside that, with `NaN`/`Infinity`/`-Infinity` in Postgres's spelling; a float4 widened by pgx narrowed back to float32, raw too, so JSON writes `0.1` (only when it fits 32 bits exactly). Bytes that are not UTF-8 are `\x…` hex, as psql shows a bytea; UTF-8 bytes (every MySQL text-protocol value) stay text. `export.DelimitedRecord` makes a NULL an empty CSV/TSV field, in the collected writer and the streamed `rowStream` alike; the display text stays `NULL`. JSON writes a non-finite float as its string (`jsonValue`, lone result and envelopes) and leaves `Raw` alone, so the grid and sort still see floats. Real binary: Postgres 17 `1234567.0::float8, 0.1::real, 'NaN', '-Infinity', date, timestamp …12:00:00.25, '\xff00'::bytea, NULL, 'NULL'` gives `1234567,0.1,NaN,-Infinity,2026-11-10,2026-11-10T12:00:00.25Z,\xff00,,NULL` in CSV, and in JSON `0.1`, `"NaN"`, `null`, `"NULL"`; MySQL 8.4 FLOAT 0.1, a DATE with and without `parseTime`, `unhex('ff00')` in a BLOB, NULL; SQLite DATE, REAL 1234567, `x'ff00'`, `1e300` gives `1e+300`. Tests: `TestCellValueText`, `checkFloatText` (round trip and exponent rule over the 2,000 floats of `TestCellValueMatchesSprint`, which still holds every other type to fmt.Sprint), `TestWriteJSONNonFinite` (was `TestWriteJSONRefusesNaN`), `TestDelimitedNull`; `TestWriteMatchesRender`'s reference and web `TestGridCopyRangeAndHidden` take the empty NULL. README "Export formats" says how values are written. The formula guard and BOM option are raised as N-334.
 
 - **N-286** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Headless errors print as raw log lines. `main.go:1116-1120` → `fail` →

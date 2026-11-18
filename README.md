@@ -3702,6 +3702,17 @@ offered as the clipboard's HTML flavor, so it pastes into Teams, Outlook and
 Docs as a table (see *Copying results* above). That holds for a script's
 `s.Export(r, "html", "")` too.
 
+How values are written, in every format and in the grid: a timestamp keeps
+its fraction of a second (`2026-11-10T12:00:00.25Z`) and a `date` column is
+the date alone (`2026-11-10`); a float is plain decimal (`1234567`, not
+`1.234567e+06`) between 1e-7 and 1e21 and has an exponent outside that, and
+a Postgres `real` reads as stored (`0.1`); `NaN`, `Infinity` and
+`-Infinity` take Postgres's spelling, and in JSON they are strings (JSON has
+no number for them); bytes that are not UTF-8 (a `bytea`, a binary `BLOB`)
+are hex as psql shows them (`\xff00`). A SQL NULL is an empty field in CSV
+and TSV — the text `NULL` there would be the same as the string `'NULL'` —
+`null` in JSON, and `NULL` in the grid, text and Markdown.
+
 The HTML page wears the same muted green as the TUI, surface for surface.
 Both read the palette from [`theme/`](theme/theme.go), so a change to those
 constants reaches the app and its exports together.

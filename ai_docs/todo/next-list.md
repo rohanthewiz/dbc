@@ -721,6 +721,7 @@ and `raised`.
   clean runs followed, one under concurrent load. Run it with its full
   output kept when it next fails.
   Updated 2026-11-18 (`2026-1118-0133-n294-n296-n297-low-color-empty-loads-dry-runs`): one more, on CI's Linux runner (run 44258040615, commit 2476452). `web.TestDumpOneAtATimeAndStop` failed after 10.03 s with "stream closed waiting for "dump"": the test client's 10 s timeout ended the event stream before the stopped dump's end event. It passed five times under `-race` here and in a `golang:1.26.1` Linux container, old and new. The fake pg_dump now `exec`s its sleep, so the stop signals the sleeping process as it would signal pg_dump. A non-interactive `sh` waiting on a foreground child holds a SIGINT until the child ends (measured: dash and macOS sh, 6 s for a 6 s sleep, 0.5 s with exec), so the old fake could leave the stop to `cmd.WaitDelay` (10 s). Watch the next CI runs.
+  Updated 2026-11-18 (`@SESS@`): the "pipeline slow … was stopped" failure in `tui` was seen again, in a full `go test ./...` after N-320's change (which touched `workspace/run.go`, not `tui`). Its output was cut by a `| tail` once more, so the failing test's name is still unknown. `./tui` alone then passed three times, and two full runs with the whole output kept (`> file`) passed. Next time, keep the whole log.
 - **N-312** · raised `2026-1112-1538-lazy-catalog-after-connect` · value low
   Hand checks of the gap between a connect landing and its catalog
   landing (`8ffc279`), which local databases close in milliseconds and no

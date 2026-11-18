@@ -5,6 +5,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -46,8 +48,12 @@ func listenUnix(t *testing.T, name string, reply func(req map[string]any) any) *
 			}
 			go func() {
 				defer conn.Close()
+				// numbers as json.Number: a report's seq is a uint64 seeded
+				// from the clock, past what a float64 holds exactly
 				var req map[string]any
-				if json.NewDecoder(conn).Decode(&req) != nil {
+				dec := json.NewDecoder(conn)
+				dec.UseNumber()
+				if dec.Decode(&req) != nil {
 					return
 				}
 				s.mu.Lock()
@@ -65,15 +71,33 @@ func listenUnix(t *testing.T, name string, reply func(req map[string]any) any) *
 	return s
 }
 
+// states is the reported states in the order the reporter made them — by
+// each report's seq, as the cats server orders them — not the order they
+// arrived in: ReportState sends each report on a goroutine of its own, so
+// a run's "idle" can reach the socket before its "working" did. Read in
+// arrival order, TestCatsReportsRunTransitions saw idle, idle, working
+// now and then under a full suite's load, and timed out waiting for a
+// "working then idle" it had in fact been sent (N-209).
 func (s *sockRecorder) states() [][2]string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var out [][2]string
+	type report struct {
+		seq   uint64
+		state [2]string
+	}
+	var rs []report
 	for _, r := range s.reqs {
 		p, _ := r["params"].(map[string]any)
 		st, _ := p["state"].(string)
 		cs, _ := p["custom_status"].(string)
-		out = append(out, [2]string{st, cs})
+		n, _ := p["seq"].(json.Number)
+		seq, _ := strconv.ParseUint(string(n), 10, 64)
+		rs = append(rs, report{seq, [2]string{st, cs}})
+	}
+	sort.SliceStable(rs, func(i, j int) bool { return rs[i].seq < rs[j].seq })
+	out := make([][2]string, len(rs))
+	for i, r := range rs {
+		out[i] = r.state
 	}
 	return out
 }
@@ -179,7 +203,7 @@ func TestCatsAgentPickerStagesTheStatement(t *testing.T) {
 	}
 	key(t, m, "enter") // codex, the blocked one
 	sent := ctl.requestsFor(cats.MethodPaneSendIn)
-	if len(sent) != 1 || sent[0]["pane"] != float64(4) || sent[0]["submit"] == true ||
+	if len(sent) != 1 || sent[0]["pane"] != json.Number("4") || sent[0]["submit"] == true ||
 		!strings.Contains(sent[0]["text"].(string), "FROM cats ORDER BY age") {
 		t.Errorf("send_input = %v", sent)
 	}

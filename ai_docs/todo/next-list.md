@@ -465,16 +465,6 @@ and `raised`.
   e2e step passed against postgres:17 that way). The hand check can use
   one, and should look at the log's "with pg_dump 17 (in Docker,
   postgres:17)" line and the restore hint's version note.
-- **N-209** · raised `2026-1011-0054-n179-n203-n208` · value low
-  `tui.TestCatsReportsRunTransitions` failed once in a full `go test
-  ./...` ("timed out waiting for working then idle"; it got idle, idle,
-  working) and passed alone three times and in a `./tui/` run. Its 5 s
-  wait looks too tight for the full suite's parallel load. Make the wait
-  follow the reports it expects rather than a fixed window, or lengthen
-  it, and run the full suite a few times to see it hold.
-  Updated `2026-1031-0204-n239-summary-no-columns-stars`: failed again the
-  same way in a full `go test ./...` (5.17 s; idle, idle, working), with
-  `tui` untouched by the session, and passed in three runs alone.
 
 - **N-212** · raised `2026-1014-1547-failed-connects-groups-conn-clicks` · value low
   Hand-check a first connect that fails, with a real Postgres in Docker
@@ -987,6 +977,18 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-209** · raised `2026-1011-0054-n179-n203-n208` · value low
+  `tui.TestCatsReportsRunTransitions` failed once in a full `go test
+  ./...` ("timed out waiting for working then idle"; it got idle, idle,
+  working) and passed alone three times and in a `./tui/` run. Its 5 s
+  wait looks too tight for the full suite's parallel load. Make the wait
+  follow the reports it expects rather than a fixed window, or lengthen
+  it, and run the full suite a few times to see it hold.
+  Updated `2026-1031-0204-n239-summary-no-columns-stars`: failed again the
+  same way in a full `go test ./...` (5.17 s; idle, idle, working), with
+  `tui` untouched by the session, and passed in three runs alone.
+  closed 2026-11-18, `@SESS@`, commit `@N-209@`: the window was not the cause; the order was. `cats.Reporter.ReportState` sends each report on a goroutine of its own, so a run's "idle" can reach the socket before its "working". The failure's "idle, idle, working" was exactly that, and no wait long enough could see "working then idle" in arrival order. The cats server orders reports by their `seq` token, and the test's recorder now does too: `sockRecorder.states` sorts by `params.seq`. The recorder decodes with `UseNumber`, since a seq is a clock-seeded uint64 past what a float64 holds exactly, so consecutive seqs would compare equal; `TestCatsAgentPickerStagesTheStatement` reads its pane number as a `json.Number` to match. The cats tests passed 10 runs (the transitions test 20), and two full `go test ./...` runs with the whole log kept passed.
 
 - **N-333** · raised `2026-1118-0042-n321-n286-n288-n291-plain-errors-value-text-status-error` · value low
   `aitest.Fake` races when one Fake serves a restarted chat. Every chat a

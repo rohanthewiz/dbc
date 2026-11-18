@@ -3551,6 +3551,22 @@ A run stops at the first statement that fails — later statements are skipped �
 but the results before it are still written, and the error names the one that
 broke (`statement=2/3`). Exit status is 1 for a failure, 130 for a Ctrl+C.
 
+A failure is one plain line on stderr — what failed, the error, then the
+error's own fields in brackets:
+
+```text
+$ dbc "selec 1"
+dbc: query failed: SQL logic error: near "selec": syntax error (1) [conn=lite]
+```
+
+`DBC_LOG_ERRORS=1` prints the structured log line instead (`time=…
+level=error msg=… error=…`, with the call locations), for a log collector or
+a bug report. A `-c` name the config does not have is a usage error (exit
+2) that lists the names it does have, and a lone word that is neither a
+command nor SQL (`dbc wbe`) is refused with the nearest command
+(`did you mean "dbc web"?`) rather than sent to the database; end it with a
+`;` to run it as SQL anyway.
+
 With `-k` (`--keep-going`) a failed statement is reported on stderr as it
 happens and the run goes on to the next. Each result keeps its statement's
 number (`-- 3/3` after a failed `2/3`), and the run exits 1 at the end if any

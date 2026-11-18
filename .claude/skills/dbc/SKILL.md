@@ -102,7 +102,9 @@ Rules that trip people up:
   written); the error names it (`statement=2/3`).
 - Results are capped at `max_rows` (config, default 1000); a capped result is
   noted on **stderr**, so check stderr before trusting a count.
-- Errors are logged on stderr as structured lines (`level=error msg=… error=…`).
+- An error is one plain line on stderr: `dbc: query failed: <error> [conn=… statement=2/3]`
+  (`DBC_LOG_ERRORS=1` for the old structured `level=error msg=… error=…` line).
+  An unknown `-c` exits 2 and lists the configured names.
   Postgres `NOTICE`s also go to stderr.
 
 Exit codes: `0` ok, `1` failure, `2` bad usage (incl. unknown connection),

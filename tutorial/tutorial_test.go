@@ -186,6 +186,13 @@ func TestLastLine(t *testing.T) {
 	if got := lastLine("bad.go:15:3: warning: map\n", "x"); got != "bad.go:15:3: warning: map" {
 		t.Errorf("plain line = %q", got)
 	}
+	plain := `dbc: query failed: no such table: customers [conn=warehouse stmt="SELECT 1"]`
+	if got := lastLine("noise\n"+plain+"\n", "x"); got != "query failed: no such table: customers" {
+		t.Errorf("plain dbc line = %q", got)
+	}
+	if got := lastLine("dbc: bad [x] here", "x"); got != "bad [x] here" {
+		t.Errorf("brackets inside the text = %q", got)
+	}
 	if got := lastLine(" \n", "none"); got != "none" {
 		t.Errorf("empty = %q", got)
 	}

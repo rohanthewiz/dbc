@@ -199,8 +199,8 @@ func copyRequest(args []string) (copyReq, error) {
 func checkCopyConns(cfg *config.Config, req copyReq) error {
 	for _, name := range []string{req.from, req.to} {
 		if _, ok := cfg.ConnByName(name); !ok {
-			return fmt.Errorf("no connection named %q (see the config file, or use --driver/--dsn for one named %q)",
-				name, adHocConnName)
+			// the same words as a query's -c (pickConn): the names there are
+			return errors.New(unknownConn(cfg, name))
 		}
 	}
 	return nil

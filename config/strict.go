@@ -205,6 +205,11 @@ func nearKey(key string, known []string) string {
 	return best
 }
 
+// EditDistance is editDistance for the command line's "did you mean" (a
+// mistyped subcommand, main.nearestCommand): one measure of a typo for
+// config keys and commands alike.
+func EditDistance(a, b string) int { return editDistance(a, b) }
+
 // editDistance is the optimal-string-alignment distance between a and b:
 // Levenshtein's insert, delete and substitute, plus a swap of two adjacent
 // characters as one edit — the commonest slip at a keyboard ("dns" for

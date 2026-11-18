@@ -355,7 +355,7 @@ destination still has exactly its six rows. It is never half-loaded:
 
 ```text
 $ dbc copy --from shop --to warehouse orders
-level=error msg="duplicate primary key" ... from="shop:orders" to="warehouse:orders"
+dbc: copy failed: duplicate primary key [… from=shop:orders to=warehouse:orders]
 $ dbc -c warehouse -t csv "SELECT count(*) FROM orders"
 count(*)
 6

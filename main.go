@@ -277,6 +277,13 @@ func rootAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		usage(err.Error())
 	}
+	// `dbc wbe` reaches here as the SQL "wbe": refuse a lone bare word
+	// before any config is read or connection opened (checkBareWord).
+	if cmd.Args().Len() == 1 {
+		if err = checkBareWord(cmd.Args().First(), cmd.Root().Commands); err != nil {
+			usage(err.Error())
+		}
+	}
 	demos := demoForRun
 	if !headless {
 		demos = demoAll
@@ -753,7 +760,7 @@ func endTx(ctx context.Context, sess *db.Session, ok bool) error {
 	rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	if _, err := sess.Run(rbCtx, "ROLLBACK"); err != nil {
-		logger.LogErr(err, "rollback failed — the connection is being dropped, which rolls back too")
+		reportErr(err, "rollback failed — the connection is being dropped, which rolls back too")
 	}
 	fmt.Fprintln(os.Stderr, "note: transaction rolled back — nothing this run changed was kept")
 	return nil
@@ -775,7 +782,7 @@ func printNotices(w io.Writer, ns []db.Notice) {
 // happens, in the same shape fail uses for the one that ends a run. The
 // error already carries the statement's position.
 func reportFailed(_ int, err error) {
-	logger.LogErr(err, "statement failed")
+	reportErr(err, "statement failed")
 }
 
 // pickConn decides which connection a headless run uses: -c, else the
@@ -795,6 +802,13 @@ func pickConn(cfg *config.Config) string {
 	}
 	if conn == "" {
 		usage("multiple connections configured — pick one with -c <name>")
+	}
+	// A name the config does not have is a usage error (exit 2), checked
+	// here, before anything opens: the manager's own "unknown connection"
+	// would be a run failure (exit 1) that names none of the connections
+	// there are. A default_connection is checked when the config loads.
+	if _, ok := cfg.ConnByName(conn); !ok {
+		usage(unknownConn(cfg, conn))
 	}
 	noteDemo(cfg, conn)
 	return conn
@@ -1508,8 +1522,10 @@ func canceled(what string) {
 	os.Exit(130) // conventional exit status for an interrupt
 }
 
+// fail reports err (see errLine: one plain line on stderr, or the
+// structured log line under DBC_LOG_ERRORS) and exits 1.
 func fail(err error, msg string) {
-	logger.LogErr(err, msg)
+	reportErr(err, msg)
 	logger.CloseLog()
 	os.Exit(1)
 }

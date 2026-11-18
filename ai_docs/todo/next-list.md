@@ -113,19 +113,6 @@ ten session docs in `ai_docs/claude_sessions/`
   (`jobscmd.go:723-777`). Fix: a small head sidecar or live-marker file;
   one transaction for the load. Path audit, traced; the cost is not
   measured. (RPU plan, phase 3)
-- **N-286** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  Headless errors print as raw log lines. `main.go:1116-1120` → `fail` →
-  `logger.LogErr` → logrus's text formatter, so `dbc "selec 1"` prints
-  `time="…" level=error msg="SQL logic error: near \"selec\": syntax
-  error (1)" conn=dsn error="…" fields.msg="query failed" function="main.fail
-  -> dbc/db.wrapRunErr" location="dbc/main.go:1117 -> db/manager.go:996"`
-  (run 2026-11-10), with newlines escaped. Fix: plain
-  `dbc: <message>: <error>` on stderr, the structured line behind a flag
-  or env var. An unknown `-c NAME` says "unknown connection" and lists
-  none of the configured names (`main.go:697` likewise). A mistyped
-  subcommand (`dbc wbe`) is sent to the default connection as SQL: refuse
-  a single bare word that is not SQL, and suggest the nearest command.
-  (RPU plan, phase 4)
 - **N-287** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   CLI discoverability. There is no `dbc conns` to list connections; no
   shell completion (`EnableShellCompletion` is not set); no `DBC_CONFIG`
@@ -1183,6 +1170,21 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-286** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  Headless errors print as raw log lines. `main.go:1116-1120` → `fail` →
+  `logger.LogErr` → logrus's text formatter, so `dbc "selec 1"` prints
+  `time="…" level=error msg="SQL logic error: near \"selec\": syntax
+  error (1)" conn=dsn error="…" fields.msg="query failed" function="main.fail
+  -> dbc/db.wrapRunErr" location="dbc/main.go:1117 -> db/manager.go:996"`
+  (run 2026-11-10), with newlines escaped. Fix: plain
+  `dbc: <message>: <error>` on stderr, the structured line behind a flag
+  or env var. An unknown `-c NAME` says "unknown connection" and lists
+  none of the configured names (`main.go:697` likewise). A mistyped
+  subcommand (`dbc wbe`) is sent to the default connection as SQL: refuse
+  a single bare word that is not SQL, and suggest the nearest command.
+  (RPU plan, phase 4)
+  closed 2026-11-18, `@SESS@`, commit `@N-286@`: a headless failure is one plain line on stderr, `dbc: <msg>: <wraps>: <error> [k=v …]` (`errline.go` `errLine`): the wrap messages outermost first, then the error's own fields from serr's `UserFields` (the frame `location`/`function` fields dropped, a repeated pair said once, a value with a space or quote Go-quoted), in brackets at the end since an error's text often ends in a parenthesis. `DBC_LOG_ERRORS=1` brings back the logrus line through `logger.LogErr` (`reportErr`, which `fail`, `reportFailed` and the rollback note share). An unknown `-c` is now a usage error (exit 2) from `pickConn`, before anything opens, listing the configured names (`unknownConn`, which `dbc copy`'s check now uses too). A lone bare word that is neither a command nor a one-word statement (`begin`, `commit`, `vacuum`, `analyze`, …) is refused before the config is read, with the nearest command by `config.EditDistance` (`dbc wbe` → `did you mean "dbc web"?`) and the hint that a trailing `;` runs it as SQL. Real binary on a scratch SQLite: `dbc "selec 1"` → `dbc: query failed: SQL logic error: near "selec": syntax error (1) [conn=lite]`; `-k` gives `[conn=lite statement=2/3]`; a copy's duplicate key `[op=insert batch_rows=1 conn=other table=t op=commit from=lite:t to=other:t]`. Tests: `TestErrLine`, `TestCheckBareWord`, `TestUnknownConn`, `TestStructuredErrorsEnv`; `tutorial.lastLine` reads the plain line too (its test extended). README, the dbc skill and the ETL tutorial's sample line updated. Split out to N-287 as listed there: exit codes that tell a connect failure from a statement's.
 
 - **N-321** · raised `2026-1113-1541-n273-unknown-keys-dollar-escape` · value medium
   `web` `TestChatEffort` is flaky (`web/chat_test.go:406`): after

@@ -203,15 +203,26 @@ func all(tests ...func(*Env) error) func(*Env) error {
 }
 
 // lastLine is the last non-empty line of s, or def. A dbc failure's last
-// line on stderr is the one that names it. A structured log line
-// (time=… level=error msg="…" … error="…" plus a stack of fields) is cut
-// down to its msg and error, which are what a learner needs.
+// line on stderr is the one that names it. dbc's plain error line
+// ("dbc: query failed: no such table [conn=warehouse]") loses its "dbc: "
+// and its bracketed fields; a structured log line (DBC_LOG_ERRORS=1:
+// time=… level=error msg="…" … error="…" plus a stack of fields) is cut
+// down to its msg and error. Both leave what a learner needs.
 func lastLine(s, def string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		l := strings.TrimSpace(lines[i])
 		if l == "" {
 			continue
+		}
+		if rest, ok := strings.CutPrefix(l, "dbc: "); ok {
+			// the fields are the last " [" group; an error's own text may
+			// hold brackets earlier on, so cut at the last one only when
+			// the line ends with its "]"
+			if j := strings.LastIndex(rest, " ["); j >= 0 && strings.HasSuffix(rest, "]") {
+				rest = rest[:j]
+			}
+			return rest
 		}
 		if m := logField.FindAllStringSubmatch(l, -1); m != nil {
 			var msg, errText string

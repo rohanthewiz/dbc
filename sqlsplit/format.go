@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -43,7 +44,9 @@ import (
 // the clause-per-line shape is what makes a subquery readable.
 //
 // Nothing is reordered or dropped: the output holds the input's tokens,
-// comments included, in the input's order. A word that is not on the
+// comments included, in the input's order. A statement with a body (a
+// trigger's BEGIN … END, BEGIN ATOMIC, a rule's action list) is kept as
+// written, since its inner ;s are no statement breaks (keptBodies). A word that is not on the
 // keyword list keeps its case, so identifiers (which Postgres folds and
 // MySQL may not) are never rewritten; nor is a keyword written as part of a
 // dotted name (t.key).
@@ -126,12 +129,25 @@ func (d Dialect) formatWith(sql string, o FormatOptions) string {
 	// written text, so the choice changes the words and nothing about where
 	// the lines break — keywords are ASCII, so their width is the same in
 	// any case.
-	nodes := fmtParse(o.Keywords.apply(fmtLex(sql, d)))
+	toks := o.Keywords.apply(fmtLex(sql, d))
+	kept := keptBodies(sql, d, toks)
+	nodes := fmtParse(toks)
 	w := &fmtWriter{}
-	for i, st := range fmtStatements(nodes) {
+	stmts := fmtStatements(nodes)
+	for i := 0; i < len(stmts); i++ {
+		st := stmts[i]
 		if i > 0 {
 			w.nl(0)
 			w.blank()
+		}
+		// a statement with a body: the pieces fmtStatements cut it into on
+		// its inner ;s are written back as the one statement they are, as
+		// written (keptBodies)
+		if j, text, ok := keptStatement(sql, kept, stmts, i); ok {
+			last := stmts[j].lastTok()
+			w.raw(text, last)
+			i = j
+			continue
 		}
 		w.seq(st.nodes, 0)
 		for _, t := range st.tail {
@@ -139,6 +155,131 @@ func (d Dialect) formatWith(sql string, o FormatOptions) string {
 		}
 	}
 	return strings.TrimRight(string(w.buf), " \n")
+}
+
+// keptSpan is a statement the scan reads whole although a ";" falls inside
+// it: [start, end) is its chunk (the terminator included), tail past a
+// remark on the terminator's line, as chunk has them.
+type keptSpan struct{ start, end, tail int }
+
+// keptBodies finds the statements Format keeps as written: those with a
+// body — a trigger's or routine's BEGIN … END, Postgres's BEGIN ATOMIC, a
+// rule's ( … ; … ) action list — which the scan (and so Split, and the
+// server) reads as ONE statement around the ;s inside it.
+//
+// The layout has no notion of a body. It cuts its tree on every ";" at the
+// top level (fmtStatements) and reads the words in each piece as clauses,
+// so `create trigger t after delete on o begin delete from i …; update s
+// …; end;` came out as three "statements" with blank lines between, the
+// head's AFTER DELETE read as a DELETE clause. Laying a body out properly
+// is a procedural formatter's job, a different thing from this one; what
+// this one can do is leave it alone — what formatAroundDelimiters already
+// does with a MySQL routine under DELIMITER — and lay out everything
+// around it. The kept text keeps its keyword case too: none of it passes
+// through the layout.
+//
+// The scan's chunks are the authority on where a statement ends, and toks
+// (fmtLex over the same sql, on the same scanner, so a ";" in a string or
+// comment is in neither) say where the ;s are: a chunk with a ";" token
+// before its own terminator is a body statement. One pass over each.
+//
+// A body needs a ";" with code after it, so a buffer whose only ";" is its
+// last token (one statement, the commonest thing formatted) skips the scan
+// — the scan was 3–5% of BenchmarkFormatDeep's time.
+func keptBodies(sql string, d Dialect, toks []ftok) []keptSpan {
+	semis := 0
+	for i := range toks {
+		if toks[i].kind == ftSemi {
+			semis++
+		}
+	}
+	if semis == 0 || semis == 1 && toks[len(toks)-1].kind == ftSemi {
+		return nil
+	}
+	var out []keptSpan
+	k := 0
+	for _, c := range scan(sql, d) {
+		for k < len(toks) && toks[k].start < c.start {
+			k++
+		}
+		for j := k; j < len(toks) && toks[j].start < c.end-c.term; j++ {
+			if toks[j].kind == ftSemi {
+				out = append(out, keptSpan{c.start, c.end, c.tail})
+				break
+			}
+		}
+	}
+	return out
+}
+
+// keptStatement reports whether stmts[i] starts inside a kept span: if so,
+// j is the last of the pieces fmtStatements cut that statement into, and
+// text the statement as written, from its first token through the remark
+// after its terminator.
+//
+// The pieces must all end inside the span. A bracket left open in a body
+// (`begin select (1; end;`) folds the statements after it into its node,
+// so the last piece runs on past the span — and writing the span alone
+// would drop them. That case is laid out as before: Format never drops a
+// token.
+func keptStatement(sql string, kept []keptSpan, stmts []fmtStmt, i int) (j int, text string, ok bool) {
+	if len(kept) == 0 {
+		return 0, "", false
+	}
+	first := stmts[i].firstTok()
+	if first == nil {
+		return 0, "", false
+	}
+	// the span holding first, by binary search: the spans are in order
+	at, _ := slices.BinarySearchFunc(kept, first.start, func(s keptSpan, x int) int {
+		switch {
+		case s.end <= x:
+			return -1
+		case s.start > x:
+			return 1
+		}
+		return 0
+	})
+	if at == len(kept) || kept[at].start > first.start || first.start >= kept[at].end {
+		return 0, "", false
+	}
+	ks := kept[at]
+	j = i
+	for j+1 < len(stmts) {
+		next := stmts[j+1].firstTok()
+		if next == nil || next.start >= ks.end {
+			break
+		}
+		j++
+	}
+	if last := stmts[j].lastTok(); last == nil || last.start >= ks.tail {
+		return 0, "", false
+	}
+	return j, strings.TrimRightFunc(sql[first.start:ks.tail], unicode.IsSpace), true
+}
+
+// firstTok is the statement's first token: its first node's, or its tail's
+// when it has no nodes (a lone ";").
+func (st fmtStmt) firstTok() *ftok {
+	if len(st.nodes) > 0 {
+		return st.nodes[0].firstTok()
+	}
+	if len(st.tail) > 0 {
+		return st.tail[0]
+	}
+	return nil
+}
+
+// lastTok is the statement's last token: its tail's last (the ";" or the
+// remark after it), or its last node's.
+func (st fmtStmt) lastTok() *ftok {
+	if len(st.tail) > 0 {
+		return st.tail[len(st.tail)-1]
+	}
+	if len(st.nodes) > 0 {
+		return st.nodes[len(st.nodes)-1].lastTok()
+	}
+	return nil
 }
 
 // FormatSpan is Format for a piece of an editor's buffer — a selection, or
@@ -756,6 +897,28 @@ type fnode struct {
 
 func (n fnode) group() bool { return n.open != nil }
 
+// firstTok is the first token under n: n's own, or its group's opener.
+func (n fnode) firstTok() *ftok {
+	if n.tok != nil {
+		return n.tok
+	}
+	return n.open
+}
+
+// lastTok is the last token under n: n's own, its group's closer, or — a
+// group left unclosed — its last kid's (the opener's, with none).
+func (n fnode) lastTok() *ftok {
+	switch {
+	case n.tok != nil:
+		return n.tok
+	case n.close != nil:
+		return n.close
+	case len(n.kids) > 0:
+		return n.kids[len(n.kids)-1].lastTok()
+	}
+	return n.open
+}
+
 // kw returns the lower-case keyword n is, or "".
 func (n fnode) kw() string {
 	if n.tok != nil && n.tok.kind == ftKeyword {
@@ -1070,6 +1233,23 @@ func (w *fmtWriter) nl(n int) {
 		k -= c
 	}
 	w.col, w.indent, w.prev, w.glue, w.breakNext = n*len(fmtIndent), n, nil, false, false
+}
+
+// raw writes s as it is — a statement kept as written (keptBodies) —
+// leaving the writer as tok would after writing last, s's last token: on
+// s's last line, at its end, so the next nl breaks after it.
+func (w *fmtWriter) raw(s string, last *ftok) {
+	if w.prev != nil && !w.flat {
+		w.nl(w.indent)
+	}
+	w.buf = append(w.buf, s...)
+	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
+		w.lineStart = len(w.buf) - (len(s) - i - 1)
+		w.col = utf8.RuneCountInString(s[i+1:])
+	} else {
+		w.col += utf8.RuneCountInString(s)
+	}
+	w.prev, w.glue, w.breakNext = last, false, last != nil && last.kind == ftLineComment
 }
 
 // blank writes an empty line (between statements).

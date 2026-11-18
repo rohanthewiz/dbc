@@ -203,8 +203,9 @@ func TestBodyConstructs(t *testing.T) {
 // no DELIMITER, so a script using it is formatted around it — the command
 // lines and the routines under them as written, the ; stretches laid out
 // — where it used to space `//` out and join `DELIMITER ;` onto the END.
-// A body statement is laid out as statements (it is not a procedural
-// formatter) but still splits as the one statement it was.
+// A body statement is kept as written (keptBodies: this is no procedural
+// formatter), the statements around it laid out, and it still splits as
+// the one statement it was.
 func TestBodyFormat(t *testing.T) {
 	script := "select 1;\nDELIMITER //\nCREATE PROCEDURE p()\nBEGIN\n  SELECT 1;\nEND //\nDELIMITER ;\nselect 2;"
 	want := "SELECT 1;\nDELIMITER //\nCREATE PROCEDURE p()\nBEGIN\n  SELECT 1;\nEND //\nDELIMITER ;\nSELECT 2;"
@@ -233,6 +234,46 @@ func TestBodyFormat(t *testing.T) {
 		before := len(c.d.Split(c.sql))
 		if after := c.d.Split(c.d.Format(c.sql)); len(after) != before {
 			t.Errorf("%v: %d statements before Format, %d after: %q", c.d, before, len(after), texts(after))
+		}
+	}
+
+	// N-307: the body statement as written — its head's AFTER DELETE no
+	// DELETE clause, its inner ;s no statement breaks — with the comment
+	// before it and the remark after its ; kept with it; the statements
+	// around it laid out as ever
+	for _, c := range []struct {
+		d         Dialect
+		sql, want string
+	}{
+		{SQLite,
+			"select a,b from t where x=1;\n-- the trigger\ncreate trigger t after delete on o begin delete from i where oid = old.id; update s set n = n - 1; end; -- after\nselect 1;",
+			"SELECT a, b\nFROM t\nWHERE x = 1;\n\n-- the trigger\ncreate trigger t after delete on o begin delete from i where oid = old.id; update s set n = n - 1; end; -- after\n\nSELECT 1;"},
+		{Postgres,
+			"create function f(a int) returns int language sql\nbegin atomic\n  insert into t values (a);\nend;\nselect 2;",
+			"create function f(a int) returns int language sql\nbegin atomic\n  insert into t values (a);\nend;\n\nSELECT 2;"},
+		{Postgres,
+			"create rule r as on insert to t do also (insert into a values (1); insert into b values (2)); select 1",
+			"create rule r as on insert to t do also (insert into a values (1); insert into b values (2));\n\nSELECT 1"},
+		{MySQL, // no DELIMITER: the scan still reads the routine whole
+			"create procedure p() begin select 1; select 2; end;\nselect   3",
+			"create procedure p() begin select 1; select 2; end;\n\nSELECT 3"},
+		{SQLite, // unterminated, last in the buffer
+			"select 1; create trigger t after delete on o begin delete from i; end",
+			"SELECT 1;\n\ncreate trigger t after delete on o begin delete from i; end"},
+	} {
+		if got := c.d.Format(c.sql); got != c.want {
+			t.Errorf("%v.Format:\n%s\nwant\n%s", c.d, got, c.want)
+		}
+	}
+
+	// a bracket left open in a body folds what follows into its node: the
+	// span alone would drop "select 2", so that statement is laid out
+	// instead, and every word is still there
+	open := "create trigger t after insert on o begin select (1; end;\nselect 2;"
+	got := SQLite.Format(open)
+	for _, w := range []string{"trigger", "(1", "END", "SELECT 2"} {
+		if !strings.Contains(got, w) {
+			t.Errorf("SQLite.Format(%q) lost %q:\n%s", open, w, got)
 		}
 	}
 }

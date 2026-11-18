@@ -78,17 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-307** · raised `2026-1110-1909-rpu-phase-1` · value low
-  The formatter lays out a compound body as separate statements: it cuts
-  its tree on every `;` (`fmtStatements`) and reads the trigger head's
-  `AFTER DELETE` as a DELETE clause, so `create trigger t after delete on
-  o begin delete from i …; update s …; end;` comes out as `CREATE trigger
-  t after⏎DELETE ON o BEGIN⏎DELETE FROM i …;⏎⏎UPDATE s …;⏎⏎END;`. The
-  meaning is kept (`TestBodyFormat` re-splits it to the one statement),
-  only the layout is poor; it was the same before N-248. Fix: have
-  `fmtStatements` take its statements from the scan (`body`), and lay a
-  body's statements out indented under its BEGIN, or keep the statement
-  as written. Raised while closing N-248.
 
 - **N-314** · raised `2026-1112-1610-n311-introspection-levels` · value low
   Two calls inside N-311's adaptive default were the session's, made
@@ -905,6 +894,33 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-307** · raised `2026-1110-1909-rpu-phase-1` · value low
+  The formatter lays out a compound body as separate statements: it cuts
+  its tree on every `;` (`fmtStatements`) and reads the trigger head's
+  `AFTER DELETE` as a DELETE clause, so `create trigger t after delete on
+  o begin delete from i …; update s …; end;` comes out as `CREATE trigger
+  t after⏎DELETE ON o BEGIN⏎DELETE FROM i …;⏎⏎UPDATE s …;⏎⏎END;`. The
+  meaning is kept (`TestBodyFormat` re-splits it to the one statement),
+  only the layout is poor; it was the same before N-248. Fix: have
+  `fmtStatements` take its statements from the scan (`body`), and lay a
+  body's statements out indented under its BEGIN, or keep the statement
+  as written. Raised while closing N-248.
+  closed 2026-11-18, `@SESS@`, commit `@N-307@`: took the item's second option. A statement with a body is now kept as written, as `formatAroundDelimiters` already keeps a MySQL routine under DELIMITER. A procedural layout of the body would be a different formatter.
+- **How spans are found.** `keptBodies` takes the scan's chunks, the same authority Split uses. A chunk with a `;` token before its own terminator is a kept span.
+- **How it's written.** `keptStatement` merges the pieces `fmtStatements` cut that statement into, and writes it from its first token (a comment heading it included) through the remark after its `;`, via `fmtWriter.raw`.
+- **The fallback.** If a piece runs past the span (a bracket left open in a body swallows what follows), the statement is laid out as before, so nothing is dropped.
+- **The fast path.** A buffer whose only `;` is its last token skips the scan. BenchmarkFormatDeep stays within noise; it was 3–5% slower without the fast path.
+
+`TestBodyFormat` now asserts the exact output for:
+- a SQLite trigger between laid-out statements, with its comment and its remark;
+- BEGIN ATOMIC;
+- a rule's action list;
+- a MySQL routine with no DELIMITER;
+- an unterminated trigger;
+- and that the open-bracket case loses no word.
+
+The full suite, vet, staticcheck and the web "format SQL" e2e step pass.
 
 - **N-300** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   dbc web usability basics. Modals have no focus trap, so Tab reaches the

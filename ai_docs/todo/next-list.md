@@ -181,7 +181,7 @@ The question for the user: which, if any? A cursor seems the least surprising, i
   Each part is independent. The flags are small, a multi-table copy is a
   loop with one summary line each, and the job resume is a design
   question of its own. Neighbour: N-151.
-- **N-338** · raised `@SESS@` · value low
+- **N-338** · raised `2026-1118-0337-n245-n225-n303-e2e-waits-scan-budgets` · value low
   `Folds` does a whole Split and a whole Lex of its own on every call
   (`sqlsplit/folds.go:53`), and dbc web asks for folds after each edit,
   debounced, with the whole buffer (`editor.js` `provideFoldingRanges`
@@ -851,7 +851,7 @@ written up in the session docs themselves.
   (`db/fetchcost_test.go`). N-282 also added `BenchmarkExport`
   (`export/write_test.go`) and `BenchmarkSortRows`
   (`workspace/sortcost_test.go`), without budgets.
-  closed 2026-11-18, `@SESS@`, commit `@N-303@`: every benchmark the item lists now exists.
+  closed 2026-11-18, `2026-1118-0337-n245-n225-n303-e2e-waits-scan-budgets`, commit `a80fdb4`: every benchmark the item lists now exists.
 - **New benchmarks.** The last two, `BenchmarkLexBig` and `BenchmarkFoldsBig` (`sqlsplit/bigcost_test.go`), run on the 3.5 MB migration `BenchmarkSplitBig` splits. They measured 19.5 ms / 45 MB and 47 ms / 78 MB; Split is 16 ms / 21 MB.
 - **A fourth budget.** `TestScanCostsWhatItHolds` counts allocations rather than timing, joining Complete's, Format's and the fetch loop's. It allows Split 0.75 allocs a statement, Lex 0.45 a token and Folds 6 a statement, against 0.50, 0.31 and 4.0 measured (flat from 50 KB to 800 KB). It passes under -race.
 - **Before and after numbers** for each phase-3 item are in those items' closed entries (N-277–N-282).
@@ -868,7 +868,7 @@ Folds finding no folds at 47 ms, a Split and a Lex of its own per debounced edit
   session (with the new "live snippets" step) passed every step, "editor
   menu" and "tabs survive a reload" included. One clean run says little
   about a flake that hit two times in five.
-  closed 2026-11-18, `@SESS@`, commit `@N-225@`: three races in the tests, repaired.
+  closed 2026-11-18, `2026-1118-0337-n245-n225-n303-e2e-waits-scan-budgets`, commit `39292bc`: three races in the tests, repaired.
 - **"editor menu".** N-245's `waitResult` substring match (fixed there).
 - **The nil-pointer panic in "tabs survive a reload", 0.14 s in.** The rename's double-click was aimed through an element held from before the typing. The typing redraws the tab strip (its dirty mark), so that element could be the detached old one, whose `MustShape().Box()` is nil. It's now aimed by `moveAt`, which measures the tab in the page. No other `MustShape().Box()` is left.
 - **Found in the next full run:** "copy out of the columns grid" failed with "copied 1 lines, want 4: sentinel". Its wait took the step before's "copied" log line, so it read the clipboard before `y`'s write landed. It now waits for a new "copied" line and for the clipboard to change. The two other copy waits in the result-tabs step ("copied the log", "copied the query") also wait for the clipboard.
@@ -882,7 +882,7 @@ Two full web e2e runs passed after all three.
   (`DBC_E2E_STEPS`) and a third full run passed. Likely a startup race
   (the grid's result from `run a query` read as the menu run's). Repair
   the wait in `editormenu_test.go` / `buildbadge_test.go`.
-  closed 2026-11-18, `@SESS@`, commit `@N-245@`: the editor-menu half is repaired.
+  closed 2026-11-18, `2026-1118-0337-n245-n225-n303-e2e-waits-scan-budgets`, commit `efe02cd`: the editor-menu half is repaired.
 - **The cause.** `waitResult` matched column names as substrings. The count's `n` matched the step before's `name`, so any 3-row result with a new seq passed as the menu run's ("grid info = 3 rows, want the count's 1 row"), for example a restored tab's result landing after `gridSeq` was read.
 - **The fix.** `waitResult` now matches each header's name whole (its `.hn`, less a sort arrow). Every caller passes whole names.
 - **Build badge.** Its waits were read through and no race was found. It passed in all 12 full web e2e runs this session; reopen with its output if it times out again.

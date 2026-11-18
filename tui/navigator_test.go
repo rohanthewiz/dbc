@@ -458,3 +458,43 @@ func baseDatabase(m *Model) string {
 	cc, _ := m.cfg.ConnByName("live")
 	return db.DefaultDatabase(cc)
 }
+
+// While a Postgres connect's catalog is still being read, the pickers say
+// so, not "could not be listed" or "has one schema" (N-313). Opt-in:
+// DBC_LIVE_PG_DSN.
+func TestLivePickersWhileTheCatalogLoads(t *testing.T) {
+	dsn := os.Getenv("DBC_LIVE_PG_DSN")
+	if dsn == "" {
+		t.Skip("set DBC_LIVE_PG_DSN to run against a live Postgres")
+	}
+	for _, k := range []string{cats.EnvMarker, cats.EnvPaneID, cats.EnvControlSocket, cats.EnvHookSocket} {
+		t.Setenv(k, "")
+	}
+	cfg := &config.Config{
+		MaxRows: 1000, MaxDisplayRows: 2000, AIContextRows: config.DefaultAIContextRows,
+		Connections: []config.Connection{{Name: "live", Driver: "postgres", DSN: dsn}},
+	}
+	mgr := db.NewManager(cfg)
+	t.Cleanup(mgr.Close)
+	m := New(cfg, mgr, Options{NoPersist: true})
+	t.Cleanup(m.shutdown)
+	drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	ev := m.ws.Connect("live").Job().(*workspace.Connected)
+	if ev.Err != nil || ev.Load == nil {
+		t.Fatalf("connect: %+v", ev)
+	}
+	_, cmd := m.Update(ev) // the landing alone: the catalog read held back
+	if !m.ws.CatalogLoading() {
+		t.Fatal("the catalog is not loading")
+	}
+	for _, what := range []string{"databases", "schemas"} {
+		if got := m.pickWhy(what); !strings.Contains(got, "still reading live's catalog") {
+			t.Errorf("mid-load %s: %q", what, got)
+		}
+	}
+	drive(t, m, nil, cmd)
+	if m.ws.CatalogLoading() {
+		t.Error("still loading after the read")
+	}
+}

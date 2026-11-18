@@ -131,14 +131,6 @@ ten session docs in `ai_docs/claude_sessions/`
   script's `Run` through `ExecuteWithContext` of a compiled call, or have
   the workspace abandon a run a minute after Stop as the engine does
   (free the slot, say the session stays busy). Raised while closing N-268.
-- **N-313** · raised `2026-1112-1610-n311-introspection-levels` · value low
-  The TUI's database and schema pickers give the wrong reason while a
-  connect's catalog is still loading (`CatalogLoading`, since `8ffc279`).
-  `d` then logs "the server's databases could not be listed" and `s`
-  "this database has one schema — its tables are all listed"
-  (`tui/navigator.go` `pickWhy`): neither is true, the lists are on their
-  way. Add a loading case beside the unread one N-311 added ("still
-  reading <conn>'s catalog"). Seen while wording the unread case; not run.
 - **N-314** · raised `2026-1112-1610-n311-introspection-levels` · value low
   Two calls inside N-311's adaptive default were the session's, made
   without the user's word, and stand until the user says otherwise: a
@@ -1037,6 +1029,16 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-313** · raised `2026-1112-1610-n311-introspection-levels` · value low
+  The TUI's database and schema pickers give the wrong reason while a
+  connect's catalog is still loading (`CatalogLoading`, since `8ffc279`).
+  `d` then logs "the server's databases could not be listed" and `s`
+  "this database has one schema — its tables are all listed"
+  (`tui/navigator.go` `pickWhy`): neither is true, the lists are on their
+  way. Add a loading case beside the unread one N-311 added ("still
+  reading <conn>'s catalog"). Seen while wording the unread case; not run.
+  closed 2026-11-18, `@SESS@`, commit `@N-313@`: `pickWhy` (`tui/navigator.go`) has a loading case, after the driver's own rule (a SQLite or MySQL connection truly has no schemas to pick) and before the unread one: "still reading <conn>'s catalog — its databases are on their way" (or schemas). `TestLivePickersWhileTheCatalogLoads` (opt-in, postgres:17) lands a connect with its catalog read held back, as the running program has it in flight, and both pickers say so; after the read lands the catalog is no longer loading. `TestLiveNavigatorPostgres`, the SQLite mid-load test and the full suite pass.
 
 - **N-301** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   A wide plan draws as an unreadable strip

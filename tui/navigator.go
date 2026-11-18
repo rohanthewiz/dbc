@@ -309,6 +309,11 @@ func (m *Model) pickWhy(what string) string {
 	case what == "databases" && !m.hasDatabases(),
 		what == "schemas" && !m.navigable():
 		return m.ws.Active() + " lists its tables whole — there are no " + what + " to pick"
+	case m.ws.CatalogLoading():
+		// the catalog is read after the connect lands (8ffc279): until it
+		// does, neither "could not be listed" nor "one schema" is true,
+		// the lists are on their way (N-313)
+		return "still reading " + m.ws.Active() + "'s catalog — its " + what + " are on their way"
 	case m.ws.CatalogUnread():
 		// neither "could not be listed" nor "has one schema" would be true:
 		// nothing was asked (introspect = "off"), and a refresh asks

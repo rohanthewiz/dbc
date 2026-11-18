@@ -56,22 +56,25 @@ func (d Dialect) Folds(sql string) []Fold {
 		return nil
 	}
 	// The spans no bracket can live in, in buffer order, for a cursor that
-	// only moves forward across the statements below.
+	// only moves forward across the statements below: from the lexer's own
+	// scan (the reading d.Lex gives), keeping only these kinds as they come
+	// rather than building every token first (N-338).
 	var opaque []Token
-	for _, t := range d.Lex(sql) {
-		switch t.Kind {
+	d.lexEach(sql, 0, len(sql), func(start, end int, k TokenKind) {
+		switch k {
 		case TokString, TokIdent, TokComment:
-			opaque = append(opaque, t)
+			opaque = append(opaque, Token{Start: start, End: end, Kind: k})
 		}
-	}
+	})
 	var out []Fold
-	k := 0 // next opaque span not yet behind the scan
+	var open []int // offsets of the "(" not yet closed, innermost last; one stack, emptied per statement
+	k := 0         // next opaque span not yet behind the scan
 	for _, st := range stmts {
 		// the statement's code: its heading comments are not folded with it
 		if end := st.End - 1; multiLine(sql, st.CodeStart, end) {
 			out = append(out, Fold{Start: lineStart(sql, st.CodeStart), End: end})
 		}
-		var open []int // offsets of the "(" not yet closed, innermost last
+		open = open[:0]
 		for i := st.CodeStart; i < st.End; i++ {
 			for k < len(opaque) && opaque[k].End <= i {
 				k++

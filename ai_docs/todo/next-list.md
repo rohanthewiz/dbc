@@ -181,19 +181,6 @@ The question for the user: which, if any? A cursor seems the least surprising, i
   Each part is independent. The flags are small, a multi-table copy is a
   loop with one summary line each, and the job resume is a design
   question of its own. Neighbour: N-151.
-- **N-338** · raised `2026-1118-0337-n245-n225-n303-e2e-waits-scan-budgets` · value low
-  `Folds` does a whole Split and a whole Lex of its own on every call
-  (`sqlsplit/folds.go:53`), and dbc web asks for folds after each edit,
-  debounced, with the whole buffer (`editor.js` `provideFoldingRanges`
-  → `web/grid.go:682`). On the 3.5 MB migration that's 47 ms, 78 MB and
-  174k allocs a request (`BenchmarkFoldsBig`), where Split alone is
-  16 ms / 21 MB and Lex 19 ms / 45 MB. The Lex is only there to find the
-  string, identifier and comment spans no bracket can be in, yet it
-  builds all 349k tokens. Fix: take those spans from one scan, the
-  split's own if it can report them or a scanner that keeps only them,
-  and reuse one `open` stack across statements. Then tighten Folds'
-  budget in `TestScanCostsWhatItHolds` (6 allocs a statement; 4.0 now).
-  Raised while closing N-303.
 
 ## Validate
 
@@ -819,6 +806,30 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-338** · raised `2026-1118-0337-n245-n225-n303-e2e-waits-scan-budgets` · value low
+  `Folds` does a whole Split and a whole Lex of its own on every call
+  (`sqlsplit/folds.go:53`), and dbc web asks for folds after each edit,
+  debounced, with the whole buffer (`editor.js` `provideFoldingRanges`
+  → `web/grid.go:682`). On the 3.5 MB migration that's 47 ms, 78 MB and
+  174k allocs a request (`BenchmarkFoldsBig`), where Split alone is
+  16 ms / 21 MB and Lex 19 ms / 45 MB. The Lex is only there to find the
+  string, identifier and comment spans no bracket can be in, yet it
+  builds all 349k tokens. Fix: take those spans from one scan, the
+  split's own if it can report them or a scanner that keeps only them,
+  and reuse one `open` stack across statements. Then tighten Folds'
+  budget in `TestScanCostsWhatItHolds` (6 allocs a statement; 4.0 now).
+  Raised while closing N-303.
+  closed 2026-11-18, `@SESS@`, commit `@N-338@`: Folds no longer builds every token.
+- **Folds.** It takes its opaque spans from `lexEach`, the lexer's scan with a callback (`LexRange` now collects through it), keeping only strings, quoted names and comments as they come. It reuses one bracket stack across statements.
+- **Lex itself.** Its one allocation per capitalized word was `strings.ToLower` in the keyword lookup; `isKeyword` now lowers into a stack buffer and indexes the map without a copy.
+
+| Benchmark | Before | After |
+|---|---|---|
+| `BenchmarkLexBig` | 19.5 ms, 109k allocs | 14.2 ms, 34 allocs |
+| `BenchmarkFoldsBig` | 47 ms, 78 MB, 174k allocs | 40 ms, 32 MB, 21.9k (its Split's) |
+
+`TestScanCostsWhatItHolds` is tightened to Lex 0.01 allocs a token and Folds 0.8 a statement; `TestKeywordsFitTheLookup` checks every keyword fits the buffer. Folds' remaining time is its Split (16 ms) and the scan; an incremental split for the folds endpoint would be the next step if it matters. The full suite, vet, staticcheck and the web "statement folding" e2e step pass.
 
 - **N-303** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Benchmarks with budgets. There are three benchmarks in the repo, all

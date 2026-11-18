@@ -64,9 +64,20 @@ func (d Dialect) Lex(sql string) []Token { return d.LexRange(sql, 0, len(sql)) }
 // the whole one did.
 func (d Dialect) LexRange(sql string, from, to int) []Token {
 	var out []Token
+	d.lexEach(sql, from, to, func(start, end int, k TokenKind) {
+		out = append(out, Token{Start: start, End: end, Kind: k})
+	})
+	return out
+}
+
+// lexEach is LexRange's scan, handing each token to emit (never an empty
+// one) instead of collecting them: LexRange collects every token, and
+// Folds keeps only the few kinds it needs (the spans no bracket is in),
+// where building all of them first was most of its cost (N-338).
+func (d Dialect) lexEach(sql string, from, to int, yield func(start, end int, k TokenKind)) {
 	emit := func(start, end int, k TokenKind) {
 		if end > start {
-			out = append(out, Token{Start: start, End: end, Kind: k})
+			yield(start, end, k)
 		}
 	}
 	to = min(to, len(sql))
@@ -136,7 +147,7 @@ func (d Dialect) LexRange(sql string, from, to int) []Token {
 			for j < len(sql) && (isWordByte(sql[j]) || sql[j] == '$') {
 				j++
 			}
-			if keywords[strings.ToLower(sql[i:j])] {
+			if isKeyword(sql[i:j]) {
 				emit(i, j, TokKeyword)
 			}
 			i = j
@@ -144,7 +155,29 @@ func (d Dialect) LexRange(sql string, from, to int) []Token {
 			i++
 		}
 	}
-	return out
+}
+
+// isKeyword reports whether w is on the keyword list, in any case, without
+// allocating. strings.ToLower makes a new string for every word holding a
+// capital — every keyword of a SELECT written the usual way — which was
+// the lexer's one allocation per token: 0.31 a token, 109k on a 3.5 MB
+// migration (N-338). The word is lowered into a buffer on the stack
+// instead, and the map is indexed with string(buf[:n]), a conversion the
+// compiler does not copy for a map lookup. No keyword is longer than the
+// buffer, so a longer word is no keyword.
+func isKeyword(w string) bool {
+	var buf [24]byte
+	if len(w) > len(buf) {
+		return false
+	}
+	for i := 0; i < len(w); i++ {
+		c := w[i]
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		buf[i] = c
+	}
+	return keywords[string(buf[:len(w)])]
 }
 
 // keywords is the highlighted vocabulary: the common reserved words of the

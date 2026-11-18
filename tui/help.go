@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -165,11 +167,20 @@ var keyGroups = []keyGroup{
 }
 
 // helpModal is the keys dialog.
+//
+// It filters (N-293): about 130 rows are too many to scroll for one key,
+// so typing narrows them to the rows whose key or description holds the
+// text, any case, each under its group's heading — "sort" finds the
+// grid's o and the header click, "copy" every copy key. The letters are
+// the filter's, so the dialog scrolls by the arrows, PgUp/PgDn and
+// Home/End only; Esc clears a filter first and closes the dialog
+// second.
 type helpModal struct {
 	modalBase
-	top   int
-	lines []helpLine
-	view  Rect
+	top    int
+	lines  []helpLine
+	view   Rect
+	filter *editor // the filter line, made on open
 }
 
 // helpLine is one laid-out line: a group heading, or a row's key (on its
@@ -182,7 +193,13 @@ type helpLine struct {
 // keyGroups, so the descriptions line up.
 const keyColW = 28
 
-func (m *Model) openHelp() { m.openModal(&helpModal{}) }
+func (m *Model) openHelp() { m.openModal(&helpModal{filter: newEditor(true)}) }
+
+// helpMatch reports whether a row holds q (folded), in its key or its
+// description.
+func helpMatch(r [2]string, q string) bool {
+	return q == "" || containsFold(r[0], q) || containsFold(r[1], q)
+}
 
 func (h *helpModal) title() string { return "Keys · F1 or ?" }
 
@@ -195,12 +212,25 @@ func (h *helpModal) size(w, hh int) (int, int) {
 func (h *helpModal) layout(w int) {
 	h.lines = h.lines[:0]
 	descW := max(10, w-keyColW-2)
-	for gi, g := range keyGroups {
-		if gi > 0 {
+	q := ""
+	if h.filter != nil {
+		q = foldLower(strings.TrimSpace(h.filter.Text()))
+	}
+	for _, g := range keyGroups {
+		var rows [][2]string
+		for _, r := range g.rows {
+			if helpMatch(r, q) || (q != "" && containsFold(g.name, q)) {
+				rows = append(rows, r)
+			}
+		}
+		if len(rows) == 0 {
+			continue // a group with no match goes, heading and all
+		}
+		if len(h.lines) > 0 {
 			h.lines = append(h.lines, helpLine{})
 		}
 		h.lines = append(h.lines, helpLine{head: g.name})
-		for _, r := range g.rows {
+		for _, r := range rows {
 			for i, part := range wrap(r[1], descW) {
 				l := helpLine{what: part}
 				if i == 0 {
@@ -214,9 +244,23 @@ func (h *helpModal) layout(w int) {
 
 func (h *helpModal) draw(m *Model, s Surface) *caret {
 	bg := m.st.panel
-	body := s.Sub(Rect{1, 0, s.W() - 3, s.H() - 1})
+	// the filter line on the first row, the keys below it
+	fl := s.Sub(Rect{1, 0, s.W() - 3, 1})
+	fl.Fill(m.st.raised)
+	fl.Put(1, 0, "⌕", m.st.raised.WithFg(m.st.accent.Fg))
+	var cur *caret
+	if h.filter != nil {
+		h.filter.placeholder = "type to filter the keys"
+		if cx, cy, ok := h.filter.Draw(fl.Sub(Rect{3, 0, max(fl.W()-4, 1), 1}), m.st, m.st.raised, [2]int{}, true); ok {
+			cur = &caret{cx, cy}
+		}
+	}
+	body := s.Sub(Rect{1, 1, s.W() - 3, s.H() - 2})
 	h.view = body.Rect()
 	h.layout(body.W())
+	if len(h.lines) == 0 {
+		body.Put(2, 0, "no key matches — Esc clears the filter", onBg(m.st.muted, bg))
+	}
 	h.top = max(0, min(h.top, len(h.lines)-body.H()))
 	for y := 0; y < body.H() && h.top+y < len(h.lines); y++ {
 		l := h.lines[h.top+y]
@@ -228,30 +272,59 @@ func (h *helpModal) draw(m *Model, s Surface) *caret {
 		body.Put(keyColW+2, y, l.what, onBg(m.st.base, bg))
 	}
 	if len(h.lines) > body.H() {
-		drawVBar(s.Sub(Rect{s.W() - 1, 0, 1, s.H() - 1}), m.st, h.top, body.H(), len(h.lines))
+		drawVBar(s.Sub(Rect{s.W() - 1, 1, 1, s.H() - 2}), m.st, h.top, body.H(), len(h.lines))
 	}
-	s.PutRight(s.W()-1, s.H()-1, "↑↓ PgUp PgDn scroll · Esc closes", onBg(m.st.muted, bg))
-	return nil
+	s.PutRight(s.W()-1, s.H()-1, "type to filter · ↑↓ PgUp PgDn scroll · Esc closes", onBg(m.st.muted, bg))
+	return cur
 }
 
 func (h *helpModal) key(m *Model, k tea.KeyPressMsg) (tea.Cmd, bool) {
 	switch k.String() {
-	case "esc", "q", "f1", "?", "enter":
+	case "esc":
+		if h.filter != nil && h.filter.Text() != "" {
+			h.filter.SetText("")
+			h.top = 0
+			return nil, false
+		}
 		return nil, true
-	case "up", "k":
+	case "f1", "enter":
+		return nil, true
+	case "up":
 		h.top = max(h.top-1, 0)
-	case "down", "j":
+		return nil, false
+	case "down":
 		h.top++ // clamped by the next draw
+		return nil, false
 	case "pgup":
 		h.top = max(h.top-h.view.H, 0)
-	case "pgdown", "space":
+		return nil, false
+	case "pgdown":
 		h.top += h.view.H
-	case "home", "g":
+		return nil, false
+	case "home":
 		h.top = 0
-	case "end", "G":
+		return nil, false
+	case "end":
 		h.top = len(h.lines)
+		return nil, false
+	}
+	if h.filter == nil {
+		return nil, false
+	}
+	before := h.filter.Text()
+	h.filter.HandleKey(k)
+	if h.filter.Text() != before {
+		h.top = 0 // a new filter starts at its first match
 	}
 	return nil, false
+}
+
+// paste puts pasted text in the filter.
+func (h *helpModal) paste(m *Model, s string) {
+	if h.filter != nil {
+		h.filter.Insert(strings.TrimSpace(strings.ReplaceAll(s, "\n", " ")))
+		h.top = 0
+	}
 }
 
 func (h *helpModal) click(m *Model, x, y, clicks int, shift bool) (tea.Cmd, bool) {

@@ -78,14 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-293** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  Keys are hard to find. F1 is about 130 rows with no filter
-  (`tui/help.go`), there is no command palette, and the status bar's
-  hints are fixed, not per focused pane (`tui/layout.go:595`), so the
-  grid's keys (`t - + < > P S z`) are learnable only from F1 or the
-  startup log line. Fix: a filterable palette built from `keyGroups`
-  (the history modal's filter and list fit), and hints that follow
-  focus. Audit, traced. (RPU plan, phase 4)
 - **N-294** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Colour-only signals in the TUI. The editor's selection
   (`tui/editor.go:921`) and the grid's range and hover
@@ -1081,6 +1073,19 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-293** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Keys are hard to find. F1 is about 130 rows with no filter
+  (`tui/help.go`), there is no command palette, and the status bar's
+  hints are fixed, not per focused pane (`tui/layout.go:595`), so the
+  grid's keys (`t - + < > P S z`) are learnable only from F1 or the
+  startup log line. Fix: a filterable palette built from `keyGroups`
+  (the history modal's filter and list fit), and hints that follow
+  focus. Audit, traced. (RPU plan, phase 4)
+  closed 2026-11-18, `@SESS@`, commit `@N-293@`. Both parts:
+- **The F1 dialog filters.** A filter line sits on its first row. Typing narrows it to the rows whose key or description holds the text (`containsFold`), each under its group's heading; a group with no match goes, and "no key matches" says so. Esc clears the filter, then closes. The letters now belong to the filter, so the dialog scrolls with ↑↓, PgUp/PgDn and Home/End only (j/k, g/G, space and q no longer scroll or close), and `?` types. A paste goes into the filter.
+- **The status bar's hints follow focus** (`focusHints`): one list each for the editor, the grid (and the plan view), the log, the connections, the tables and the assistant. Each leads with that pane's own keys and ends with `F1 keys`, and the bar still drops hints from the end to fit.
+A command palette that runs the action was not built: the filterable dialog is the item's "palette built from keyGroups". Tests: `TestHelpFilter`, `TestHintsFollowFocus`, the existing `TestHelpDialog`, and the TUI pty e2e (F1 and Esc) all pass. The README's F1 row says it filters.
 
 - **N-287** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   CLI discoverability. There is no `dbc conns` to list connections; no

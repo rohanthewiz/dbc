@@ -493,7 +493,7 @@ dragging.
 | `Ctrl+T` | List the tables and views on the active connection |
 | `Ctrl+L` | Jump to the connections list |
 | `Ctrl+B` | Fold the sidebar away / bring it back (also the `‹` on the Connections box and the `›` left on the edge) |
-| `F1` · `?` | Every key, in a dialog (`?` outside the editor and the assistant's input) |
+| `F1` · `?` | Every key, in a dialog (`?` outside the editor and the assistant's input): type to filter it to the keys whose name or description holds the text (`Esc` clears, then closes). The status bar's hints follow the focused pane |
 | `x` | *(connections)* Disconnect without picking another connection. If the session may hold a transaction, dbc asks first, because disconnecting rolls it back |
 | `r` | *(connections)* Refresh the active connection: read its databases, schemas and tables again, on the schema the list shows now. The session, and any transaction open on it, stays; if the tables cannot be read, the old list stays up |
 | `a` · `+` · `e` | *(connections)* Add a connection · a menu of **Add a connection…** and **Postgres in Docker…** · edit the one under the cursor (see [Adding connections](#adding-connections-in-the-terminal)) |

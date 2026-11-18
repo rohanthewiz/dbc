@@ -609,7 +609,7 @@ func (m *Model) drawStatus(s Surface) {
 		}
 	}
 
-	hints := []string{"^R run", "^X explain", "^K stop", "^A ask", "^E export", "^P history", "^Q quit"}
+	hints := m.focusHints()
 	for len(hints) > 0 {
 		h := strings.Join(hints, "  ") + " "
 		if end-x-3 >= width(h) {
@@ -618,6 +618,32 @@ func (m *Model) drawStatus(s Surface) {
 		}
 		hints = hints[:len(hints)-1]
 	}
+}
+
+// focusHints are the status bar's key hints for the pane with the keyboard
+// (N-293). They were one fixed list, the editor's, wherever the focus
+// was, so a pane's own keys — the grid's t - + < > P S z, the sidebar's
+// d s # — were learnable only from F1 or the startup log line. Each
+// list leads with what that pane is for and ends with F1, which has the
+// rest; drawStatus drops hints from the end until they fit, so the first
+// ones are the ones a narrow terminal keeps.
+func (m *Model) focusHints() []string {
+	switch m.focus {
+	case focusGrid:
+		if m.resTab == tabPlan && m.planv.plan != nil {
+			return []string{"1 2 3 views", "e explain again", "a analyze", "y copy", "p results", "F1 keys"}
+		}
+		return []string{"/ find", "o sort", "y copy", "Enter inspect", "t transpose", "- hide", "z zoom", "F1 keys"}
+	case focusLog:
+		return []string{"/ find", "y copy", "x clear", "g/G top/end", "F1 keys"}
+	case focusConns:
+		return []string{"Enter connect", "a add", "e edit", "r refresh", "x disconnect", "F1 keys"}
+	case focusTables:
+		return []string{"/ find", "Enter preview", "c columns", "e diagram", "# counts", "d s pick", "F1 keys"}
+	case focusChat:
+		return []string{"Enter send", "⇧Enter newline", "^K stop", "Esc editor", "F1 keys"}
+	}
+	return []string{"^R run", "^X explain", "^K stop", "^F find", "^A ask", "^E export", "^P history", "F1 keys", "^Q quit"}
 }
 
 // drawSplitterHover lights the border under the mouse when it can be dragged,

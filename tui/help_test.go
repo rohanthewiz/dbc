@@ -53,6 +53,58 @@ func TestHelpDialog(t *testing.T) {
 	}
 }
 
+// Typing in the keys dialog narrows it to the rows that hold the text,
+// under their groups; Esc clears the filter, then closes (N-293).
+func TestHelpFilter(t *testing.T) {
+	m := newTestModel(t)
+	drive(t, m, tea.KeyPressMsg{Code: tea.KeyF1})
+	h := m.modal.(*helpModal)
+	full := frame(m).Text()
+	all := len(h.lines)
+	typeText(t, m, "transpose")
+	txt := frame(m).Text()
+	if !strings.Contains(txt, "Results grid") || !strings.Contains(txt, "transpose — each row a column") {
+		t.Errorf("the grid's t should be listed:\n%s", txt)
+	}
+	if strings.Contains(txt, "Assistant") || len(h.lines) >= all {
+		t.Errorf("a filter should leave the groups with no match out (%d of %d lines)", len(h.lines), all)
+	}
+	if !strings.Contains(full, "type to filter") {
+		t.Error("the dialog should say it filters")
+	}
+	typeText(t, m, "zzqq")
+	if !strings.Contains(frame(m).Text(), "no key matches") {
+		t.Error("an empty filter result should say so")
+	}
+	key(t, m, "esc")
+	if m.modal == nil || h.filter.Text() != "" {
+		t.Fatalf("the first Esc clears the filter and keeps the dialog: modal %v, filter %q", m.modal, h.filter.Text())
+	}
+	key(t, m, "esc")
+	if m.modal != nil {
+		t.Fatal("the second Esc closes it")
+	}
+}
+
+// The status bar's key hints are the focused pane's (N-293).
+func TestHintsFollowFocus(t *testing.T) {
+	m := newTestModelCfg(t, nil)
+	drive(t, m, tea.WindowSizeMsg{Width: 160, Height: 40})
+	last := func() string { return frame(m).Line(39) }
+	m.focus = focusEditor
+	if !strings.Contains(last(), "^R run") {
+		t.Errorf("editor: %q", last())
+	}
+	m.focus = focusGrid
+	if l := last(); !strings.Contains(l, "/ find") || !strings.Contains(l, "o sort") || strings.Contains(l, "^R run") {
+		t.Errorf("grid: %q", l)
+	}
+	m.focus = focusTables
+	if l := last(); !strings.Contains(l, "Enter preview") || !strings.Contains(l, "# counts") {
+		t.Errorf("tables: %q", l)
+	}
+}
+
 // ^B folds the sidebar away and back; a click on the › tab brings it back
 // too, and the keyboard leaves a pane that folded away.
 func TestSidebarFold(t *testing.T) {

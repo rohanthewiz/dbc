@@ -329,20 +329,6 @@ and `raised`.
   the built-in dark one, and the write confirm opened from the bottom
   border stays on screen.
 
-- **N-166** · raised `2026-1008-1518-script-goto-def-usages-inline-diags` · value low
-  The script tab's inline error notes (gutter dot, box, end-of-line
-  message: `editor.js` `diagDecos`, `.diag-*` in `app.css`) were seen in
-  headless Chrome on the dark theme only. Check them on the light theme
-  (does `--warn` read on a light background?), and with a long yaegi
-  message on a narrow editor (cut at 160 characters, then scrolls
-  horizontally).
-  Updated 2026-10-10 (`/next-list`): the same marks (`diagDecos`,
-  `NOTE_MAX`) are now drawn in the pipeline inspector's small editors too
-  (N-175). The inspector is 280px by default (its edge widens it since
-  N-194), so a Go field there at the default width is the natural
-  narrow-editor case for the long-message check, on both themes.
-  Updated 2026-11-18 (`2026-1118-0304-n166-n300-n307-light-notes-web-a11y-kept-bodies`): looked at in headless Chrome through a temporary probe in the web e2e "script tabs" step (not committed). The error note (`.diag-note.err`, "× undefined: nope") is 5.28:1 against the dark editor background and 4.79:1 on light: it reads, and the screenshot shows it plainly. A warning note uses `--warn`, which on the light theme is 3.41:1 against the editor background (#b7791f on #f6f8f6; 3.64:1 on the white panel), below the 4.5:1 small text needs. That is N-300's light-theme warn colour, measured here for the notes. A 211-character message is cut at 160 characters with an ellipsis (Monaco draws it as 50-character spans); a 200-letter name's box is drawn in Monaco's 50-character segments too, which is cosmetic. Still to look at: the same in the pipeline inspector's narrow Go field (280 px by default), on both themes, and its horizontal scroll.
-
 - **N-168** · raised `2026-1008-1939-tui-tab-groups` · value low
   Hand-check the TUI's tab groups in a real terminal (and inside cats with a
   light host theme). The tests read the canvas, not a screen. Checks: a
@@ -806,6 +792,26 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-166** · raised `2026-1008-1518-script-goto-def-usages-inline-diags` · value low
+  The script tab's inline error notes (gutter dot, box, end-of-line
+  message: `editor.js` `diagDecos`, `.diag-*` in `app.css`) were seen in
+  headless Chrome on the dark theme only. Check them on the light theme
+  (does `--warn` read on a light background?), and with a long yaegi
+  message on a narrow editor (cut at 160 characters, then scrolls
+  horizontally).
+  Updated 2026-10-10 (`/next-list`): the same marks (`diagDecos`,
+  `NOTE_MAX`) are now drawn in the pipeline inspector's small editors too
+  (N-175). The inspector is 280px by default (its edge widens it since
+  N-194), so a Go field there at the default width is the natural
+  narrow-editor case for the long-message check, on both themes.
+  Updated 2026-11-18 (`2026-1118-0304-n166-n300-n307-light-notes-web-a11y-kept-bodies`): looked at in headless Chrome through a temporary probe in the web e2e "script tabs" step (not committed). The error note (`.diag-note.err`, "× undefined: nope") is 5.28:1 against the dark editor background and 4.79:1 on light: it reads, and the screenshot shows it plainly. A warning note uses `--warn`, which on the light theme is 3.41:1 against the editor background (#b7791f on #f6f8f6; 3.64:1 on the white panel), below the 4.5:1 small text needs. That is N-300's light-theme warn colour, measured here for the notes. A 211-character message is cut at 160 characters with an ellipsis (Monaco draws it as 50-character spans); a 200-letter name's box is drawn in Monaco's 50-character segments too, which is cosmetic. Still to look at: the same in the pipeline inspector's narrow Go field (280 px by default), on both themes, and its horizontal scroll.
+  closed 2026-11-18, `@SESS@`: every check is done. The last one, the pipeline inspector's Go field at its default width, was looked at through a temporary probe in the web e2e pipeline step (not committed).
+- **Width.** The field is 259 px wide in the 280 px inspector.
+- **Contrast.** The error note reads at 5.28:1 on dark and 4.79:1 on light, against the field's own background (the editor's: #1f2420 dark, #f6f8f6 light). The light theme's warning colour is now #946219, about 4.9:1 on that background, since N-300 (`fca15d7`); it was 3.41:1.
+- **A long message.** An undefined 200-letter name gives a note cut at 160 characters plus "…". The field scrolls horizontally (scroll width 1,727 px against 235 px of content; the horizontal scrollbar is shown), and scrolled to the end the note's tail and ellipsis show. Screenshots were taken on both themes, at rest and scrolled.
+
+No defect found.
 
 - **N-338** · raised `2026-1118-0337-n245-n225-n303-e2e-waits-scan-budgets` · value low
   `Folds` does a whole Split and a whole Lex of its own on every call

@@ -534,8 +534,15 @@ func copyColumnsGrid(t *testing.T, _ *env, p *rod.Page) {
 	setClipboard(t, p, "sentinel")
 	chord(t, p, modMeta, "a", "KeyA", 65) // the grid's own select-all (no editing command: it is the page's)
 	waitFor(t, p, "the whole grid selected", `() => dbc.grid.view().sel`)
+	// this copy's own log line and clipboard, not any: the step before
+	// logs "copied" lines too, and a wait that took one of those read the
+	// clipboard before y's write landed ("copied 1 lines, want 4:
+	// sentinel")
+	copied := `() => [...document.querySelectorAll("#log > div")].filter((d) => d.textContent.includes("copied")).length`
+	logged := evalNum(t, p, copied)
 	p.Keyboard.MustType(input.KeyY)
-	waitFor(t, p, "the copy logged", `() => [...document.querySelectorAll("#log > div")].some((d) => d.textContent.includes("copied"))`)
+	waitFor(t, p, "the copy logged", copied+` > `+fmt.Sprint(logged))
+	waitFor(t, p, "the copy in the clipboard", `() => navigator.clipboard.readText().then((s) => s !== "sentinel")`)
 
 	lines := strings.Split(strings.TrimRight(clipboard(t, p), "\n"), "\n")
 	if len(lines) != len(catsColumns) {
@@ -783,6 +790,9 @@ func resultTabsPerConn(t *testing.T, _ *env, p *rod.Page) {
 	setClipboard(t, p, "sentinel")
 	p.MustElement("#log-copy").MustClick()
 	waitFor(t, p, "the log copied", `() => [...document.querySelectorAll("#log > div")].some((d) => d.textContent.includes("copied the log"))`)
+	// the clipboard itself: a line from an earlier copy would pass the
+	// wait above before this write landed (as in copyColumnsGrid)
+	waitFor(t, p, "the log copied to the clipboard", `() => navigator.clipboard.readText().then((s) => s !== "sentinel")`)
 	if got := clipboard(t, p); !strings.Contains(got, "completed on lite") || strings.Contains(got, "on lite2") {
 		t.Fatalf("the copied log = %q", got)
 	}
@@ -806,6 +816,9 @@ func resultTabsPerConn(t *testing.T, _ *env, p *rod.Page) {
 	setClipboard(t, p, "sentinel")
 	menuPick(t, p, "⧉ Copy query")
 	waitFor(t, p, "the query copied", `() => [...document.querySelectorAll("#log > div")].some((d) => d.textContent.includes("copied the query"))`)
+	// the clipboard itself: a line from an earlier copy would pass the
+	// wait above before this write landed (as in copyColumnsGrid)
+	waitFor(t, p, "the query copied to the clipboard", `() => navigator.clipboard.readText().then((s) => s !== "sentinel")`)
 	if got := clipboard(t, p); got != "SELECT name, age FROM cats ORDER BY id" {
 		t.Fatalf("the copied query = %q", got)
 	}
@@ -1568,10 +1581,12 @@ func tabsSurviveReload(t *testing.T, _ *env, p *rod.Page) {
 	p.MustInsertText("SELECT 42 AS answer")
 
 	// a double-click renames: two presses, the second with clickCount 2,
-	// which is how Chrome tells a double-click from two clicks
-	tab := p.MustElement("#qtabs .qtab.on .qt")
-	shape := tab.MustShape().Box()
-	p.Mouse.MustMoveTo(shape.X+shape.Width/2, shape.Y+shape.Height/2)
+	// which is how Chrome tells a double-click from two clicks. Aimed by
+	// moveAt, which measures the tab in the page as it is: the typing above
+	// redraws the strip (its dirty mark), and an element held from a moment
+	// before could be the detached old one — no box, and the nil Box()
+	// panicked here once, 0.14 s into the step (N-225).
+	moveAt(t, p, "#qtabs .qtab.on .qt", "double-click")
 	p.Mouse.MustClick(proto.InputMouseButtonLeft)
 	if err := p.Mouse.Click(proto.InputMouseButtonLeft, 2); err != nil {
 		t.Fatal(err)

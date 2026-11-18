@@ -424,16 +424,6 @@ and `raised`.
   test only drives the key message. Paste a real logged query (quoted, `\n`
   escapes, a label in front) and judge the layout on real queries — long
   SELECT lists, CASE, window functions, MySQL and SQLite dialect bits.
-- **N-225** · raised `2026-1024-1437-sql-format` · value low
-  The full web e2e (`DBC_E2E=1`) flaked twice in five runs this session,
-  each time in a step that passes alone: once "editor menu" (output lost)
-  and once a nil-pointer panic in "tabs survive a reload"
-  (`web_test.go:107`, 0.14 s in). Find the race in the test and repair it.
-  Not yet checked against the commit before this session.
-  Updated `2026-1027-1934-live-snippets` (`/next-list`): one full run that
-  session (with the new "live snippets" step) passed every step, "editor
-  menu" and "tabs survive a reload" included. One clean run says little
-  about a flake that hit two times in five.
 - **N-227** · raised `2026-1027-1934-live-snippets` · value medium
   Hand-check live snippets in a real terminal (and inside cats) and in a
   real browser and `dbc.app`. The unit tests, the TUI pty e2e step and the
@@ -847,6 +837,23 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-225** · raised `2026-1024-1437-sql-format` · value low
+  The full web e2e (`DBC_E2E=1`) flaked twice in five runs this session,
+  each time in a step that passes alone: once "editor menu" (output lost)
+  and once a nil-pointer panic in "tabs survive a reload"
+  (`web_test.go:107`, 0.14 s in). Find the race in the test and repair it.
+  Not yet checked against the commit before this session.
+  Updated `2026-1027-1934-live-snippets` (`/next-list`): one full run that
+  session (with the new "live snippets" step) passed every step, "editor
+  menu" and "tabs survive a reload" included. One clean run says little
+  about a flake that hit two times in five.
+  closed 2026-11-18, `@SESS@`, commit `@N-225@`: three races in the tests, repaired.
+- **"editor menu".** N-245's `waitResult` substring match (fixed there).
+- **The nil-pointer panic in "tabs survive a reload", 0.14 s in.** The rename's double-click was aimed through an element held from before the typing. The typing redraws the tab strip (its dirty mark), so that element could be the detached old one, whose `MustShape().Box()` is nil. It's now aimed by `moveAt`, which measures the tab in the page. No other `MustShape().Box()` is left.
+- **Found in the next full run:** "copy out of the columns grid" failed with "copied 1 lines, want 4: sentinel". Its wait took the step before's "copied" log line, so it read the clipboard before `y`'s write landed. It now waits for a new "copied" line and for the clipboard to change. The two other copy waits in the result-tabs step ("copied the log", "copied the query") also wait for the clipboard.
+
+Two full web e2e runs passed after all three.
 
 - **N-245** · raised `2026-1103-1604-sidebar-sections-views-routines` · value low
   The full web e2e suite flakes early on: `editor_menu` ("grid info = 3

@@ -14,6 +14,8 @@ import (
 
 	pgxstdlib "github.com/jackc/pgx/v5/stdlib"
 	"github.com/rohanthewiz/serr"
+
+	"github.com/rohanthewiz/dbc/pgerr"
 )
 
 // WriteOptions shape a Writer's load.
@@ -212,10 +214,16 @@ func (w *Writer) Write(row []any) error {
 	}
 	if len(row) != len(w.cols) {
 		return w.fail(serr.New("etl: row has the wrong number of values",
-			"table", w.table, "want", itoa(int64(len(w.cols))), "got", itoa(int64(len(row)))))
+			"table", w.table, "row", itoa(w.n+1), "want", itoa(int64(len(w.cols))), "got", itoa(int64(len(row)))))
 	}
 	if err := w.impl.write(row); err != nil {
-		return w.fail(serr.Wrap(err, "conn", w.conn, "table", w.table, "row", itoa(w.n+1)))
+		// No "row" field here: the loader sends rows in batches, so the
+		// row in hand is only the one that filled a batch, not the one
+		// that failed. The loader says which (N-295): an INSERT batch its
+		// rows' range ("rows", "1001-1500"), a COPY the server's own
+		// CONTEXT ("COPY t, line 1234, column c"), and "sent" is how far
+		// the load had got.
+		return w.fail(serr.Wrap(err, "conn", w.conn, "table", w.table, "sent", itoa(w.n+1)))
 	}
 	w.n++
 	return nil
@@ -357,7 +365,10 @@ func newPGCopy(ctx context.Context, c Conn, table string, cols []string, setup [
 		} else {
 			pr.CloseWithError(io.ErrClosedPipe)
 		}
-		w.done <- copyResult{n: n, err: err}
+		// the server's DETAIL and CONTEXT on the way out (N-295): a
+		// duplicate key's "Key (id)=(42) already exists" and the COPY's
+		// "COPY t, line 1234, column c", which is the failing row
+		w.done <- copyResult{n: n, err: pgerr.WithDetail(err)}
 	}()
 	return w, nil
 }
@@ -431,7 +442,7 @@ func (w *pgCopy) commit() (int64, error) {
 		w.trace(w.merge)
 		if _, err := w.conn.ExecContext(w.ctx, w.merge); err != nil {
 			endTx(w.conn, "ROLLBACK")
-			return 0, serr.Wrap(canceled(w.ctx, err), "op", "upsert", "stmt", clip(w.merge))
+			return 0, serr.Wrap(canceled(w.ctx, pgerr.WithDetail(err)), "op", "upsert", "stmt", clip(w.merge))
 		}
 	}
 	if err := endTx(w.conn, "COMMIT"); err != nil {
@@ -676,7 +687,11 @@ func (w *inserter) flush() error {
 		_, err = w.tx.ExecContext(w.ctx, w.insertSQL(w.pending), w.args...)
 	}
 	if err != nil {
-		return serr.Wrap(err, "op", "insert", "batch_rows", itoa(int64(w.pending)))
+		// which rows: the batch's range in the load, since one INSERT of
+		// many rows fails as a whole and the engine seldom says which of
+		// them (Postgres's DETAIL names a key, when there is one)
+		return serr.Wrap(pgerr.WithDetail(err), "op", "insert", "rows",
+			itoa(w.n+1)+"-"+itoa(w.n+int64(w.pending)), "batch_rows", itoa(int64(w.pending)))
 	}
 	w.n += int64(w.pending)
 	w.args = w.args[:0]

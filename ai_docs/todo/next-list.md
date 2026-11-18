@@ -114,15 +114,6 @@ ten session docs in `ai_docs/claude_sessions/`
   below ANSI256 (`ColorProfileMsg`), and a glyph before warn and error
   log lines. Not N-117 (the light/dark switch). Audit, traced.
   (RPU plan, phase 4)
-- **N-295** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  Load errors drop Postgres's detail. The etl path never appends
-  `PgError.Detail`/`Where`; only `db.withPgDetail` does
-  (`db/manager.go:1017`). A load fails with "duplicate key … (SQLSTATE
-  23505)" and no "Key (id)=(42)" or "COPY t, line N, column c". The
-  `row` field (`etl/writer.go:146`) is the flush position, not the
-  failing row, and the inserter gives only `batch_rows` (`:607`). Fix:
-  append Detail and Where in etl; report a row range for an INSERT
-  batch. Audit, traced. (RPU plan, phase 4)
 - **N-296** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   `truncate` is skipped when a transform sits before the sink and no
   rows arrive (`pipeline/run.go:539-551`): a nightly reload whose source
@@ -1107,6 +1098,17 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-295** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Load errors drop Postgres's detail. The etl path never appends
+  `PgError.Detail`/`Where`; only `db.withPgDetail` does
+  (`db/manager.go:1017`). A load fails with "duplicate key … (SQLSTATE
+  23505)" and no "Key (id)=(42)" or "COPY t, line N, column c". The
+  `row` field (`etl/writer.go:146`) is the flush position, not the
+  failing row, and the inserter gives only `batch_rows` (`:607`). Fix:
+  append Detail and Where in etl; report a row range for an INSERT
+  batch. Audit, traced. (RPU plan, phase 4)
+  closed 2026-11-18, `@SESS@`, commit `@N-295@`: `db.withPgDetail`/`pgContext` moved, word for word, into a new leaf package `pgerr` (`WithDetail`, `Context`, `ContextFrames`, `ContextRunes`). `db` keeps thin wrappers, so its callers and tests are unchanged, and `etl` uses it without importing `db`. In etl the server's DETAIL/HINT/CONTEXT are added where the driver's error first appears: the COPY goroutine's result (every path that reports the COPY's failure), the upsert merge, and the INSERT flush. A batched INSERT's failure names its rows (`rows=4-6`, beside `batch_rows`). `Writer.Write`'s `row` field, the row that filled the batch rather than the one that failed, is now `sent`; a wrong-length row still names its `row`. Tests: `TestInsertFailureNamesTheBatchRows` (SQLite, batches of 3, a duplicate at row 5 → `rows=4-6`, no `row` field). Live `TestLiveCopyFailureCarriesDetail` on postgres:17 gives `… (SQLSTATE 23505) — DETAIL: Key (id)=(42) already exists. — CONTEXT: COPY dbc_live_loaderr, line 51`, and a CHECK failure names `line 2`.
 
 - **N-284** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   dbc web does whole-buffer work on small events. A typing pause PUTs the

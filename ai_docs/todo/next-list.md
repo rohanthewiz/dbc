@@ -377,7 +377,7 @@ ten session docs in `ai_docs/claude_sessions/`
   (raw a string, not a number: `-5` from an int column must stay `-5`)
   behind its own option. They touch `export.delimited`, `rowStream`, the
   TUI's and web's export dialogs. Split out of N-288 while closing it.
-- **N-335** · raised `@SESS@` · value low
+- **N-335** · raised `2026-1118-0111-n284-n290-n295-web-small-events-columns-load-errors` · value low
   Drop a dbc web tab's result sets at the idle release? This is the part
   of N-284 not done, because it changes what a returning user sees. A
   window with no stream keeps every tab's result sets until it is
@@ -1108,7 +1108,7 @@ written up in the session docs themselves.
   failing row, and the inserter gives only `batch_rows` (`:607`). Fix:
   append Detail and Where in etl; report a row range for an INSERT
   batch. Audit, traced. (RPU plan, phase 4)
-  closed 2026-11-18, `@SESS@`, commit `@N-295@`: `db.withPgDetail`/`pgContext` moved, word for word, into a new leaf package `pgerr` (`WithDetail`, `Context`, `ContextFrames`, `ContextRunes`). `db` keeps thin wrappers, so its callers and tests are unchanged, and `etl` uses it without importing `db`. In etl the server's DETAIL/HINT/CONTEXT are added where the driver's error first appears: the COPY goroutine's result (every path that reports the COPY's failure), the upsert merge, and the INSERT flush. A batched INSERT's failure names its rows (`rows=4-6`, beside `batch_rows`). `Writer.Write`'s `row` field, the row that filled the batch rather than the one that failed, is now `sent`; a wrong-length row still names its `row`. Tests: `TestInsertFailureNamesTheBatchRows` (SQLite, batches of 3, a duplicate at row 5 → `rows=4-6`, no `row` field). Live `TestLiveCopyFailureCarriesDetail` on postgres:17 gives `… (SQLSTATE 23505) — DETAIL: Key (id)=(42) already exists. — CONTEXT: COPY dbc_live_loaderr, line 51`, and a CHECK failure names `line 2`.
+  closed 2026-11-18, `2026-1118-0111-n284-n290-n295-web-small-events-columns-load-errors`, commit `963b6c3`: `db.withPgDetail`/`pgContext` moved, word for word, into a new leaf package `pgerr` (`WithDetail`, `Context`, `ContextFrames`, `ContextRunes`). `db` keeps thin wrappers, so its callers and tests are unchanged, and `etl` uses it without importing `db`. In etl the server's DETAIL/HINT/CONTEXT are added where the driver's error first appears: the COPY goroutine's result (every path that reports the COPY's failure), the upsert merge, and the INSERT flush. A batched INSERT's failure names its rows (`rows=4-6`, beside `batch_rows`). `Writer.Write`'s `row` field, the row that filled the batch rather than the one that failed, is now `sent`; a wrong-length row still names its `row`. Tests: `TestInsertFailureNamesTheBatchRows` (SQLite, batches of 3, a duplicate at row 5 → `rows=4-6`, no `row` field). Live `TestLiveCopyFailureCarriesDetail` on postgres:17 gives `… (SQLSTATE 23505) — DETAIL: Key (id)=(42) already exists. — CONTEXT: COPY dbc_live_loaderr, line 51`, and a CHECK failure names `line 2`.
 
 - **N-284** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   dbc web does whole-buffer work on small events. A typing pause PUTs the
@@ -1126,7 +1126,7 @@ written up in the session docs themselves.
   is unchanged and the caret is inside the last range, use the cached
   `s.ver`, drop results at the idle release. Audit, traced.
   (RPU plan, phase 3)
-  closed 2026-11-18, `@SESS@`, commit `@N-284@`, all of it but dropping results at the idle release, which is raised as N-335. Done:
+  closed 2026-11-18, `2026-1118-0111-n284-n290-n295-web-small-events-columns-load-errors`, commit `b6f5d49`, all of it but dropping results at the idle release, which is raised as N-335. Done:
 - **The asset hash.** `assetVersion` is a `sync.OnceValue` over `hashAssets`, so the 4.7 MB is hashed once per process, not on each sign-in or error page.
 - **The statement marker.** The editor skips `/stmt` (`marked`) when the text and the driver are unchanged and the caret is still inside the statement already marked.
 - **The console event.** It carries the revision, not the text. `onConsoleSaved` reads the text with a GET only in a window that will take it (the console open there, no unsaved edits), and takes it only if that still holds when the answer lands.
@@ -1139,7 +1139,7 @@ written up in the session docs themselves.
   the tables mentioned have more columns than `max_rows`, or it was
   lowered, later tables reach the assistant with some or none of their
   columns. Fix: use `stringRows`. Audit, traced. (RPU plan, phase 4)
-  closed 2026-11-18, `@SESS@`, commit `@N-290@`: `Manager.Columns` reads through `stringRows` on the pool (`DBContext`), which is bounded by `maxSchemaRows` and fails past it rather than answering short, instead of `RunContext`, which cut at `max_rows`. Errors are wrapped with `op=read columns`. `TestColumnsIgnoreMaxRows` (SQLite, max_rows 2, two 3-column tables) fails on the old code with `[[a1 a2] []]` and passes now. `TestLiveColumnsPostgres` and `TestLiveColumnsMySQL` pass on postgres:17 and mysql:8.4.
+  closed 2026-11-18, `2026-1118-0111-n284-n290-n295-web-small-events-columns-load-errors`, commit `719431f`: `Manager.Columns` reads through `stringRows` on the pool (`DBContext`), which is bounded by `maxSchemaRows` and fails past it rather than answering short, instead of `RunContext`, which cut at `max_rows`. Errors are wrapped with `op=read columns`. `TestColumnsIgnoreMaxRows` (SQLite, max_rows 2, two 3-column tables) fails on the old code with `[[a1 a2] []]` and passes now. `TestLiveColumnsPostgres` and `TestLiveColumnsMySQL` pass on postgres:17 and mysql:8.4.
 
 - **N-283** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Postgres row counts are all-or-nothing (`db/rowcount.go:506-516,

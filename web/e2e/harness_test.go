@@ -526,13 +526,19 @@ func gridSeq(t *testing.T, p *rod.Page) int {
 // waitResult waits for a result other than the one whose seq is after
 // (see gridSeq), whose header holds every column in cols, and returns its
 // grid-info line ("3 rows").
+//
+// The names are matched whole (the header's name, less a sort arrow), not
+// as substrings. Matched as substrings, a wait for the count's "n" took
+// the step before's "SELECT id, name, age" — "name" holds an n — whenever
+// that result landed after gridSeq was read, and the editor-menu step
+// failed with "grid info = 3 rows, want the count's 1 row" (N-245).
 func waitResult(t *testing.T, p *rod.Page, after int, cols ...string) string {
 	t.Helper()
 	waitFor(t, p, fmt.Sprintf("a result with columns %v", cols), `(after, cols) => {
 	  const seq = dbc.grid.view().seq;
 	  if (!seq || seq === after || document.getElementById("grid").hidden) return false;
-	  const head = [...document.querySelectorAll("#grid .gh .hc")].map((h) => h.textContent);
-	  return cols.every((c) => head.some((h) => h.includes(c)));
+	  const head = [...document.querySelectorAll("#grid .gh .hc .hn")].map((h) => h.textContent.replace(/ [▲▼]$/, ""));
+	  return cols.every((c) => head.includes(c));
 	}`, after, cols)
 	return evalStr(t, p, `() => document.getElementById("grid-info").textContent`)
 }

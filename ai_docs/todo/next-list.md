@@ -465,13 +465,6 @@ and `raised`.
     - Does the catalog read stay quick on a big catalog?
   - Whether the story and the guide's wording read well to someone who
     did not write them.
-- **N-245** · raised `2026-1103-1604-sidebar-sections-views-routines` · value low
-  The full web e2e suite flakes early on: `editor_menu` ("grid info = 3
-  rows, want the count's 1 row") failed twice in a row on the branch and
-  `build_badge` timed out once on a clean `main`; both pass alone
-  (`DBC_E2E_STEPS`) and a third full run passed. Likely a startup race
-  (the grid's result from `run a query` read as the menu run's). Repair
-  the wait in `editormenu_test.go` / `buildbadge_test.go`.
 - **N-246** · raised `2026-1103-1915-n218-tui-editor-menu-parity` · value low
   The TUI editor menu's Paste (`tui/paste.go`) has only unit tests, with
   the clipboard reader stubbed. Check it in the real binary: locally (macOS
@@ -854,6 +847,20 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-245** · raised `2026-1103-1604-sidebar-sections-views-routines` · value low
+  The full web e2e suite flakes early on: `editor_menu` ("grid info = 3
+  rows, want the count's 1 row") failed twice in a row on the branch and
+  `build_badge` timed out once on a clean `main`; both pass alone
+  (`DBC_E2E_STEPS`) and a third full run passed. Likely a startup race
+  (the grid's result from `run a query` read as the menu run's). Repair
+  the wait in `editormenu_test.go` / `buildbadge_test.go`.
+  closed 2026-11-18, `@SESS@`, commit `@N-245@`: the editor-menu half is repaired.
+- **The cause.** `waitResult` matched column names as substrings. The count's `n` matched the step before's `name`, so any 3-row result with a new seq passed as the menu run's ("grid info = 3 rows, want the count's 1 row"), for example a restored tab's result landing after `gridSeq` was read.
+- **The fix.** `waitResult` now matches each header's name whole (its `.hn`, less a sort arrow). Every caller passes whole names.
+- **Build badge.** Its waits were read through and no race was found. It passed in all 12 full web e2e runs this session; reopen with its output if it times out again.
+
+Four full runs passed after the change.
 
 - **N-337** · raised `2026-1118-0304-n166-n300-n307-light-notes-web-a11y-kept-bodies` · value low
   The web e2e step "a stale completion request is aborted"

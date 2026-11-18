@@ -868,7 +868,7 @@ written up in the session docs themselves.
   the script tab, or `p` switches tabs on its own after a tab event. Find
   which. If it's the test's assumption, pick a SQL console at the step's
   start; if the page switched by itself, that is a product bug.
-  closed 2026-11-18, `@SESS@`, commit `@N-337@`: it was the test's assumption.
+  closed 2026-11-18, `2026-1118-0327-n327-n328-n337-snippet-splice-docs-on-demand-e2e-tab`, commit `3238920`: it was the test's assumption.
 - **What was happening.** I logged the active tab after every step over two full runs (both failing; 4 of 5 runs failed that day once the a11y and docs steps were added). In both, `p` was on `e2e_pipe.go` from the "query designer" step on. That step opens a query tab of its own and closes it at the end, leaving its neighbour, the pipeline step's Go script, active.
 - **Why the step failed.** It typed SQL into that Go editor, where no SQL completion is asked. Why earlier runs had a SQL tab there wasn't found. Nothing showed the page switching tabs by itself.
 - **The fix.** The step now opens a query tab of its own on `lite` (Alt+T, then a click on `lite`), as `queryDesigner` already does for the same reason. Two full web e2e runs passed after it.
@@ -885,7 +885,7 @@ written up in the session docs themselves.
   request (or docs for the first few dozen items only), the TUI by asking
   for the focused item's. Neighbour: N-284. Measured in Go; the browser's
   share (encode, parse) not timed. Raised while closing N-280.
-  closed 2026-11-18, `@SESS@`, commit `@N-328@`: docs on demand, as the item's Fix put it.
+  closed 2026-11-18, `2026-1118-0327-n327-n328-n337-snippet-splice-docs-on-demand-e2e-tab`, commit `0199a3b`: docs on demand, as the item's Fix put it.
 - **sqlcomplete.** A kept item with a catalog object's doc (table DDL, column declaration, routine overloads) carries a `heldDoc` on its result's `docBook` instead of the text. `Item.Documentation()` builds it on first read (once, shared by copies), and the book indexes the relationships on the first doc read, not before. `DocPending` says a doc is held. `BenchmarkCompleteBig/from-empty`: 2.8 → 2.3 ms, docs carried 177 KB → 0, allocs 27k → 15k.
 - **TUI.** The popup reads only the focused row's doc.
 - **dbc web.** An answer carries the docs of its first 20 items (`docsAhead`) and marks the rest `docLater`. Monaco's `resolveCompletionItem` asks for a focused one with `docOf {index, label, kind}` on the same request. The server keeps no list: it runs the request again and reads the item at the index, or finds it by label and kind if the list moved. `conn-complete` answers `docOf` the same way.
@@ -912,7 +912,7 @@ The full suite, vet, staticcheck, `-race` on sqlcomplete and web, the TUI e2e an
   spans are byte offsets; `editorBuf.starts` maps them to rows) and splice
   those into `lines`, and compare the head as rows. Read, not timed.
   Raised while closing N-279.
-  closed 2026-11-18, `@SESS@`, commit `@N-327@`: a key typed into a mirrored stop now rewrites only the rows the mirrors are on.
+  closed 2026-11-18, `2026-1118-0327-n327-n328-n337-snippet-splice-docs-on-demand-e2e-tab`, commit `f8a04fd`: a key typed into a mirrored stop now rewrites only the rows the mirrors are on.
 - **`spliceMirrors`** builds the stretch from the first mirror to the last with every use holding the value, re-splits only the buffer rows that stretch is on, and splices them into `lines`. Every other row keeps its slice, so the text cache, the undo diff and the highlighter find them by identity.
 - **`relay`** (was `rebuild`) counts the spans' offsets and builds the whole text only for the undo-shape test.
 - **`mirrorsDiffer`** tests the mirrors by their values, not by comparing whole texts.

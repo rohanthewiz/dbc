@@ -757,6 +757,19 @@ func pipelineLaneDrag(t *testing.T, p *rod.Page) {
 	// same at the top edge carries it back first.
 	setJSON(manyLanesPipeline(12))
 	waitFor(t, p, "twelve lanes", `() => document.querySelectorAll("#pipe .plane").length === 12`)
+	// ⊡ Fit first: the view keeps its pan across a new spec, and the
+	// drags above may have left it panned — b held near the canvas's
+	// bottom edge auto-pans the stage for as long as it is held, which a
+	// screenshot taken then (DBC_E2E_SHOTS) made long enough to carry l00's
+	// header above the canvas, where the press below missed it and no drag
+	// began (N-220). Fit puts the pipeline's top VIEW_PAD below the
+	// canvas's; twelve lanes still overflow at the zoom it keeps.
+	clickAt(t, p, `#pipe button[data-act="fit"]`, proto.InputMouseButtonLeft)
+	waitFor(t, p, "l00's header in the canvas after fit", `() => {
+	  const h = document.querySelector('#pipe .plane[data-frag="l00"] .lname').getBoundingClientRect(),
+	        c = document.querySelector("#pipe .pcanvas").getBoundingClientRect();
+	  return h.top >= c.top && h.bottom <= c.bottom;
+	}`)
 	if evalNum(t, p, `() => document.querySelector('#pipe .plane[data-frag="l11"]').getBoundingClientRect().bottom -
 	  document.querySelector("#pipe .pcanvas").getBoundingClientRect().bottom`) <= 0 {
 		t.Fatal("the last lane is already in view: the pipeline does not overflow the canvas, so nothing tests the auto-pan")

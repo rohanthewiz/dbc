@@ -453,15 +453,6 @@ and `raised`.
   `readText` may be missing or refused — the row should then log "paste
   with Ctrl+V", never fail silently. Also try a right-click inside the find
   box (Ctrl+F): the browser's own menu should still open there.
-- **N-220** · raised `2026-1019-1305-query-folding-result-tab-rename` · value low
-  The web e2e step "pipeline tabs" fails whenever `DBC_E2E_SHOTS` is set:
-  `pipelines_test.go:775` times out waiting for "the stage panned to the
-  pipeline's end, 12px above the canvas's". It passes without screenshots,
-  and fails the same way on the commit before this session's, so it is the
-  test's, not a product change. Likely a screenshot (`shot`) taken while
-  the lane auto-pan runs stalls its animation frames. Repair the test (no
-  shot mid-drag, or wait out the pan before one) so a screenshot run is
-  usable for visual checks.
 - **N-223** · raised `2026-1022-1450-auto-tab-groups-per-connection` · value low
   Hand-check automatic tab groups per connection in a real terminal (and
   inside cats) and in a real browser. Open a second tab, then move tabs
@@ -908,6 +899,17 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-220** · raised `2026-1019-1305-query-folding-result-tab-rename` · value low
+  The web e2e step "pipeline tabs" fails whenever `DBC_E2E_SHOTS` is set:
+  `pipelines_test.go:775` times out waiting for "the stage panned to the
+  pipeline's end, 12px above the canvas's". It passes without screenshots,
+  and fails the same way on the commit before this session's, so it is the
+  test's, not a product change. Likely a screenshot (`shot`) taken while
+  the lane auto-pan runs stalls its animation frames. Repair the test (no
+  shot mid-drag, or wait out the pan before one) so a screenshot run is
+  usable for visual checks.
+  closed 2026-11-18, `@SESS@`, commit `@N-220@`: the guess (a shot stalling the auto-pan's animation frames) was not it. Skipping one shot at a time found the culprit: `pipeline-lane-drag`, taken while `b` is held near the canvas's bottom edge. For as long as `b` is held there, the edge auto-pans the three-lane stage, and the screenshot made the hold long enough to pan it 17 px more (ty -21.95 against -4.51). The view keeps its pan across a new spec, so in the twelve-lane section `l00`'s header sat above the canvas's top. The press missed it, no drag began (`lifted` false, the transform frozen), and the wait for the pan timed out. The test now clicks ⊡ Fit after loading the twelve lanes and waits for `l00`'s header to be inside the canvas before the drags. Fit puts the pipeline's top 12 px below the canvas's, and twelve lanes still overflow at the zoom it keeps. The step passed twice with `DBC_E2E_SHOTS` set and once without; the full web e2e passed. A test fix: the product's behaviour was right.
 
 - **N-319** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   A dead process's run record reads `running` for up to `StaleAfter`

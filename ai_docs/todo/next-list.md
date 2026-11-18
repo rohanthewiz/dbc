@@ -92,6 +92,7 @@ ten session docs in `ai_docs/claude_sessions/`
   with no retry and logs an error per scroll frame while the server is
   down (`web/static/js/grid.js:272-287`). Audit, traced.
   (RPU plan, phase 4)
+  Updated 2026-11-18 (`@SESS@`, from N-166's check): the light theme's `--warn` (#b7791f) is 3.41:1 against the editor background (#f6f8f6) and 3.64:1 on the white panel. A script's or pipeline field's warning notes are drawn in it, below the 4.5:1 small text needs. `--err` (#c53d3d) is 4.79:1 and reads.
 - **N-307** · raised `2026-1110-1909-rpu-phase-1` · value low
   The formatter lays out a compound body as separate statements: it cuts
   its tree on every `;` (`fmtStatements`) and reads the trigger head's
@@ -393,6 +394,7 @@ and `raised`.
   (N-175). The inspector is 280px by default (its edge widens it since
   N-194), so a Go field there at the default width is the natural
   narrow-editor case for the long-message check, on both themes.
+  Updated 2026-11-18 (`@SESS@`): looked at in headless Chrome through a temporary probe in the web e2e "script tabs" step (not committed). The error note (`.diag-note.err`, "× undefined: nope") is 5.28:1 against the dark editor background and 4.79:1 on light: it reads, and the screenshot shows it plainly. A warning note uses `--warn`, which on the light theme is 3.41:1 against the editor background (#b7791f on #f6f8f6; 3.64:1 on the white panel), below the 4.5:1 small text needs. That is N-300's light-theme warn colour, measured here for the notes. A 211-character message is cut at 160 characters with an ellipsis (Monaco draws it as 50-character spans); a 200-letter name's box is drawn in Monaco's 50-character segments too, which is cosmetic. Still to look at: the same in the pipeline inspector's narrow Go field (280 px by default), on both themes, and its horizontal scroll.
 
 - **N-168** · raised `2026-1008-1939-tui-tab-groups` · value low
   Hand-check the TUI's tab groups in a real terminal (and inside cats with a

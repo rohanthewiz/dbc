@@ -14,6 +14,7 @@ import (
 
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
+	"github.com/rohanthewiz/dbc/etl"
 	"github.com/rohanthewiz/dbc/sdb"
 )
 
@@ -123,7 +124,7 @@ func copyAction(ctx context.Context, cmd *cli.Command) error {
 		// the plan, on stdout as the summary would be; a copy that would
 		// fail before its first row (a missing table without --create)
 		// exits 1, so a script can check a copy before it runs it (N-297)
-		plan, err := sdb.New(mgr, nil, nil).WithContext(runCtx).PlanCopy(req.from, req.to, req.table, req.opts)
+		plan, err := planCopy(runCtx, mgr, req)
 		if err != nil {
 			if sdb.IsCanceled(err) {
 				canceled("copy")
@@ -227,6 +228,23 @@ func checkCopyConns(cfg *config.Config, req copyReq) error {
 		}
 	}
 	return nil
+}
+
+// planCopy is the copy's dry run (etl.PlanCopy) on the connections a
+// script's s.Copy would use. It is the CLI's, not a script method: the
+// script API's summary, sent to the assistant, has a size budget, and a
+// script can check a copy by reading the tables itself.
+func planCopy(ctx context.Context, mgr *db.Manager, req copyReq) (etl.CopyPlan, error) {
+	s := sdb.New(mgr, nil, nil).WithContext(ctx)
+	from, err := s.ETLConn(req.from)
+	if err != nil {
+		return etl.CopyPlan{}, err
+	}
+	to, err := s.ETLConn(req.to)
+	if err != nil {
+		return etl.CopyPlan{}, err
+	}
+	return etl.PlanCopy(ctx, from, req.table, to, req.opts)
 }
 
 // runCopy does the copy through sdb.S.Copy, the call a script would make.

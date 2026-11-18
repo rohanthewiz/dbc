@@ -68,8 +68,11 @@ Tests:
 
 ## N-297: dry runs for the headless movers (`3f1d690`)
 
-**`dbc copy --dry-run`.** New `etl/plan.go` adds `PlanCopy`, reached
-through `sdb.S.PlanCopy`. It reports:
+**`dbc copy --dry-run`.** New `etl/plan.go` adds `PlanCopy`, called from
+`copycmd.go` `planCopy`. It was `sdb.S.PlanCopy` at first; that made
+`sdb/sdbapi/api.json` stale, which failed CI, and once regenerated it
+pushed the assistant's API summary past its 14 KB budget. It is the
+CLI's now, not a script method. It reports:
 
 - the source SELECT (`copySource`);
 - its columns and types: Parse on Postgres (`describe`), the query

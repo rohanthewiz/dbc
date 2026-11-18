@@ -368,7 +368,7 @@ and `raised`.
   (N-175). The inspector is 280px by default (its edge widens it since
   N-194), so a Go field there at the default width is the natural
   narrow-editor case for the long-message check, on both themes.
-  Updated 2026-11-18 (`@SESS@`): looked at in headless Chrome through a temporary probe in the web e2e "script tabs" step (not committed). The error note (`.diag-note.err`, "× undefined: nope") is 5.28:1 against the dark editor background and 4.79:1 on light: it reads, and the screenshot shows it plainly. A warning note uses `--warn`, which on the light theme is 3.41:1 against the editor background (#b7791f on #f6f8f6; 3.64:1 on the white panel), below the 4.5:1 small text needs. That is N-300's light-theme warn colour, measured here for the notes. A 211-character message is cut at 160 characters with an ellipsis (Monaco draws it as 50-character spans); a 200-letter name's box is drawn in Monaco's 50-character segments too, which is cosmetic. Still to look at: the same in the pipeline inspector's narrow Go field (280 px by default), on both themes, and its horizontal scroll.
+  Updated 2026-11-18 (`2026-1118-0304-n166-n300-n307-light-notes-web-a11y-kept-bodies`): looked at in headless Chrome through a temporary probe in the web e2e "script tabs" step (not committed). The error note (`.diag-note.err`, "× undefined: nope") is 5.28:1 against the dark editor background and 4.79:1 on light: it reads, and the screenshot shows it plainly. A warning note uses `--warn`, which on the light theme is 3.41:1 against the editor background (#b7791f on #f6f8f6; 3.64:1 on the white panel), below the 4.5:1 small text needs. That is N-300's light-theme warn colour, measured here for the notes. A 211-character message is cut at 160 characters with an ellipsis (Monaco draws it as 50-character spans); a 200-letter name's box is drawn in Monaco's 50-character segments too, which is cosmetic. Still to look at: the same in the pipeline inspector's narrow Go field (280 px by default), on both themes, and its horizontal scroll.
 
 - **N-168** · raised `2026-1008-1939-tui-tab-groups` · value low
   Hand-check the TUI's tab groups in a real terminal (and inside cats with a
@@ -640,7 +640,7 @@ and `raised`.
   - Postgres, in either UI: `BEGIN; DECLARE c CURSOR FOR …; FETCH 5 FROM
     c` shows rows, and a `CALL` of a procedure with an INOUT parameter
     its one row.
-- **N-337** · raised `@SESS@` · value low
+- **N-337** · raised `2026-1118-0304-n166-n300-n307-light-notes-web-a11y-kept-bodies` · value low
   The web e2e step "a stale completion request is aborted"
   (`web/e2e/complabort_test.go:66`) failed once in a full run while
   N-300 was checked: it timed out waiting for a completion request
@@ -906,7 +906,7 @@ written up in the session docs themselves.
   `fmtStatements` take its statements from the scan (`body`), and lay a
   body's statements out indented under its BEGIN, or keep the statement
   as written. Raised while closing N-248.
-  closed 2026-11-18, `@SESS@`, commit `@N-307@`: took the item's second option. A statement with a body is now kept as written, as `formatAroundDelimiters` already keeps a MySQL routine under DELIMITER. A procedural layout of the body would be a different formatter.
+  closed 2026-11-18, `2026-1118-0304-n166-n300-n307-light-notes-web-a11y-kept-bodies`, commit `2a5dac7`: took the item's second option. A statement with a body is now kept as written, as `formatAroundDelimiters` already keeps a MySQL routine under DELIMITER. A procedural layout of the body would be a different formatter.
 - **How spans are found.** `keptBodies` takes the scan's chunks, the same authority Split uses. A chunk with a `;` token before its own terminator is a kept span.
 - **How it's written.** `keptStatement` merges the pieces `fmtStatements` cut that statement into, and writes it from its first token (a comment heading it included) through the remark after its `;`, via `fmtWriter.raw`.
 - **The fallback.** If a piece runs past the span (a bracket left open in a body swallows what follows), the statement is laid out as before, so nothing is dropped.
@@ -936,8 +936,8 @@ The full suite, vet, staticcheck and the web "format SQL" e2e step pass.
   with no retry and logs an error per scroll frame while the server is
   down (`web/static/js/grid.js:272-287`). Audit, traced.
   (RPU plan, phase 4)
-  Updated 2026-11-18 (`@SESS@`, from N-166's check): the light theme's `--warn` (#b7791f) is 3.41:1 against the editor background (#f6f8f6) and 3.64:1 on the white panel. A script's or pipeline field's warning notes are drawn in it, below the 4.5:1 small text needs. `--err` (#c53d3d) is 4.79:1 and reads.
-  closed 2026-11-18, `@SESS@`, commit `@N-300@`: all six parts done.
+  Updated 2026-11-18 (`2026-1118-0304-n166-n300-n307-light-notes-web-a11y-kept-bodies`, from N-166's check): the light theme's `--warn` (#b7791f) is 3.41:1 against the editor background (#f6f8f6) and 3.64:1 on the white panel. A script's or pipeline field's warning notes are drawn in it, below the 4.5:1 small text needs. `--err` (#c53d3d) is 4.79:1 and reads.
+  closed 2026-11-18, `2026-1118-0304-n166-n300-n307-light-notes-web-a11y-kept-bodies`, commit `fca15d7`: all six parts done.
 - **Focus trap** (`ui.js` `trapTab`): Tab off a dialog's last control wraps to its first, Shift+Tab the other way. Focus outside the box is brought back. A control that uses Tab itself (Monaco, a code textarea) keeps it, because the wrap listens on the box in the bubble phase and skips a cancelled Tab.
 - **Grid roles:** the grid is `role=grid` with `aria-rowcount`/`aria-colcount` for the whole result; the rows and cells drawn carry `aria-rowindex`/`aria-colindex`, `aria-selected` and `aria-sort`. `aria-activedescendant` follows the cursor through a position-named id. The transposed grid gets the same.
 - **Status spoken:** `#announce` is a visually hidden `role=status` copy of the status line. `setStatus` takes a `quiet` flag that the per-tick and pipeline-progress writers pass, so a run is heard as its first and last lines, and an error always.

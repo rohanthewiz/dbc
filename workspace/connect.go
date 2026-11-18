@@ -944,8 +944,39 @@ func (w *Workspace) countsJobLocked(name string, gen int, tables []db.TableRef) 
 			return ev
 		}
 		w.rowCounts, ev.Counts = counts, counts
+		if n := uncounted(tables, counts); n > 0 {
+			// say so: a table with no number reads as "not counted yet"
+			// otherwise, and the counting is cached for minutes (N-283)
+			ev.Notes = append(ev.Notes, notef(Muted,
+				"row counts: %d of %d tables left without a number — a count(*) ran past its %s, or the table cannot be read",
+				n, countable(tables), db.CountTimeout()))
+		}
 		return ev
 	}
+}
+
+// uncounted is how many of tables (views aside: they are never counted)
+// have no count in counts.
+func uncounted(tables []db.TableRef, counts map[db.TableRef]db.RowCount) int {
+	n := 0
+	for _, t := range tables {
+		if _, ok := counts[t]; !ok && !t.View {
+			n++
+		}
+	}
+	return n
+}
+
+// countable is how many of tables a counting counts: the tables, not the
+// views.
+func countable(tables []db.TableRef) int {
+	n := 0
+	for _, t := range tables {
+		if !t.View {
+			n++
+		}
+	}
+	return n
 }
 
 // CancelConnect abandons the connect in flight. It reports false when there

@@ -1851,3 +1851,17 @@ func TestStatusErr(t *testing.T) {
 		t.Errorf("serr: %q", got)
 	}
 }
+
+// The note on a counting that left tables without a number counts the
+// tables asked for, never the views (which are not counted), nor tables
+// a merged cache holds from another schema (N-283).
+func TestUncounted(t *testing.T) {
+	a, b, v := db.TableRef{Name: "a"}, db.TableRef{Name: "b"}, db.TableRef{Name: "v", View: true}
+	counts := map[db.TableRef]db.RowCount{a: {N: 1}, {Name: "other"}: {N: 2}}
+	if n := uncounted([]db.TableRef{a, b, v}, counts); n != 1 {
+		t.Errorf("uncounted = %d, want 1 (b)", n)
+	}
+	if n := countable([]db.TableRef{a, b, v}); n != 2 {
+		t.Errorf("countable = %d, want 2", n)
+	}
+}

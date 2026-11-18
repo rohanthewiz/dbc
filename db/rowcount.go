@@ -37,7 +37,8 @@ import (
 //	Postgres  one statement for the whole list (PgCountsQuery): query_to_xml
 //	          runs a count(*) per table server-side, one round trip
 //	   │
-//	   └─ fails (a table without SELECT privilege, say)
+//	   └─ fails (a table without SELECT privilege, say), or runs past half
+//	      of countBudget (one huge table)
 //	         └─► per-table count(*), as below, so one table cannot blank the rest
 //
 //	others    per-table count(*), a few at once on MySQL, one at a time on
@@ -67,15 +68,14 @@ const (
 	// switch away and back instant without leaving yesterday's numbers up.
 	rowCountTTL = 2 * time.Minute
 
-	// countTimeout bounds one table's count(*) in the per-table path;
-	// countBudget bounds the whole counting (Postgres's one statement
+	// countTimeout (below) bounds one table's count(*) in the per-table
+	// path; countBudget bounds the whole counting (Postgres's one statement
 	// included), so a catalog of thousands of tables still settles. Both
 	// are generous since the counts are exact and asked for: a count(*) of
 	// tens of millions of rows takes seconds, and cutting it off would
 	// leave exactly the big tables, the ones worth knowing, without a
 	// number. Unticking the box cancels a counting still running.
-	countTimeout = 30 * time.Second
-	countBudget  = 2 * time.Minute
+	countBudget = 2 * time.Minute
 
 	// networkCountWorkers is how many counts run at once on a networked
 	// server, where each count is mostly a round trip. The embedded
@@ -84,6 +84,19 @@ const (
 	// (memSQLiteMaxOpen) that the counting must not hog.
 	networkCountWorkers = 4
 )
+
+// countTimeout bounds one table's count(*) in the per-table path, and
+// pgStatementShare is how much of countBudget Postgres's one counting
+// statement may take before the counting falls back to table by table
+// (countRows). Vars, so a test can shorten them.
+var (
+	countTimeout     = 30 * time.Second
+	pgStatementShare = countBudget / 2
+)
+
+// CountTimeout is how long one table's count may run, for a note that
+// names it.
+func CountTimeout() time.Duration { return countTimeout }
 
 // RowCount is a table's number of rows. Estimate reports a number taken from
 // the database's statistics rather than counted; the sidebar's counting no
@@ -502,22 +515,33 @@ func (m *Manager) countRows(ctx context.Context, name string, tables []TableRef)
 		return out, nil
 	}
 
-	// Postgres: the whole list in one statement. Its failure is not the
-	// counting's — only the caller's ctx is (see above) — but which way it
-	// failed decides what comes next:
+	// Postgres: the whole list in one statement, under its share of the
+	// budget (pgStatementShare). Its failure is not the counting's — only
+	// the caller's ctx is (see above) — and every other failure falls back
+	// to counting table by table, below:
 	//
-	//	ctx canceled ─────────────► error, nothing cached
-	//	countBudget spent ────────► no numbers; no time left to retry
-	//	anything else (privilege) ► count table by table, below
+	//	ctx canceled ───────────────────► error, nothing cached
+	//	its share spent (a huge table) ─► per table, the rest of the budget:
+	//	                                  the huge one runs out its
+	//	                                  countTimeout alone, the others count
+	//	anything else (privilege) ──────► per table, as above
+	//
+	// The one statement is all or nothing: a single table whose count(*)
+	// outlasts the budget used to leave EVERY table without a number, and
+	// that empty answer was cached for rowCountTTL as if it were the
+	// counting (N-283). Its share is half the budget, so the per-table
+	// pass always has the other half.
 	if drv == "pgx" {
-		counts, err := pgCounts(bctx, dbh, todo)
+		pctx, pcancel := context.WithTimeout(bctx, pgStatementShare)
+		counts, err := pgCounts(pctx, dbh, todo)
+		pcancel()
 		switch {
 		case err == nil:
 			return counts, nil
 		case ctx.Err() != nil:
 			return nil, ctx.Err()
 		case bctx.Err() != nil:
-			return out, nil
+			return out, nil // the whole budget spent (a share as long as it): nothing left to retry with
 		}
 	}
 

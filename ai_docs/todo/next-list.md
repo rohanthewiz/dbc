@@ -78,14 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-283** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  Postgres row counts are all-or-nothing (`db/rowcount.go:506-516,
-  434-456`). One huge table pushes `PgCountsQuery` past `countBudget`
-  (2 min); the result is an empty map with a nil error, cached as
-  covering every table for `rowCountTTL`, with no note. The per-table
-  path (30 s each, 4 workers) would have counted the rest. Fix: chunk
-  the statement, or fall back to per-table on a budget timeout, and say
-  so when cut. Audit, traced. (RPU plan, phase 3)
 - **N-284** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   dbc web does whole-buffer work on small events. A typing pause PUTs the
   tab and the console (`web/static/js/app.js:3896`), the tab row
@@ -1122,6 +1114,16 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-283** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Postgres row counts are all-or-nothing (`db/rowcount.go:506-516,
+  434-456`). One huge table pushes `PgCountsQuery` past `countBudget`
+  (2 min); the result is an empty map with a nil error, cached as
+  covering every table for `rowCountTTL`, with no note. The per-table
+  path (30 s each, 4 workers) would have counted the rest. Fix: chunk
+  the statement, or fall back to per-table on a budget timeout, and say
+  so when cut. Audit, traced. (RPU plan, phase 3)
+  closed 2026-11-18, `@SESS@`, commit `@N-283@`: Postgres's one counting statement now runs under its own share of the budget, `pgStatementShare` (half of `countBudget`, 1 min). When that share runs out, or the statement fails for any other reason, the counting falls back to the per-table path with the rest of the budget. There a huge table runs out its own `countTimeout` (30 s) while the other workers count the rest. Before, it waited out the whole 2 min and returned an empty map with a nil error, cached as covering every table. Chunking was not needed once the fallback is bounded. `countTimeout` and `pgStatementShare` are vars so a test can shorten them (`db.CountTimeout()` names the limit). "Say so when cut": the workspace's counts job notes, muted, `row counts: N of M tables left without a number — a count(*) ran past its 30s, or the table cannot be read`, counting only the tables asked for, never views (`uncounted`, `countable`; `TestUncounted`). Live test `TestLiveRowCountsOneSlowTable` on postgres:17: another session holds `ACCESS EXCLUSIVE` on one table, with a 500 ms share and a 1 s count timeout. The other table's 42 rows come back, the locked one has no count, in 1.7 s. With the old path it would have been no counts at all after the whole budget.
 
 - **N-302** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Fuzz targets for the hand-written parsers. The repo has no `func Fuzz`

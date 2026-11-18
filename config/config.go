@@ -864,7 +864,7 @@ func (c *Config) ReplaceConn(old string, cn Connection) error {
 // in a MySQL param — see dsnexpand.go. So a password kept in the environment
 // may hold any character, as one typed into the DSN form's field may.
 func ExpandDSN(name, driver, dsn string) (string, []string) {
-	var warns []string
+	warns := braceWarnings(fmt.Sprintf("connection %q: DSN", name), dsn)
 	lookup := func(key string) string {
 		v, ok := os.LookupEnv(key)
 		if !ok {

@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 // expandEnv expands the environment references in s — ${NAME} and $NAME —
@@ -49,4 +50,35 @@ func expandEnv(s string, value func(name string) string) string {
 func unsetWarning(where, name string) string {
 	return fmt.Sprintf("%s references unset env var $%s (expanded to empty; write $$ for a literal $)",
 		where, name)
+}
+
+// braceWarnings are warnings for what os.Expand drops without a lookup, and
+// so without unsetWarning's word (N-322): an unterminated "${" (it eats the
+// two bytes: a password ab${cd connects as abcd) and an empty "${}" (eaten
+// whole). where says what held them, as unsetWarning's does. The scan is
+// os.Expand's own: a "$$" pair is a literal and skipped first, so ab$${cd
+// (the escape for a literal "${") is no warning.
+func braceWarnings(where, s string) []string {
+	var out []string
+	for i := 0; i+1 < len(s); i++ {
+		if s[i] != '$' {
+			continue
+		}
+		switch s[i+1] {
+		case '$':
+			i++ // "$$": a literal "$", and the pair is spent
+		case '{':
+			end := strings.IndexByte(s[i+2:], '}')
+			if end < 0 {
+				// os.Expand eats the "${" and reads on; one warning says it
+				return append(out, fmt.Sprintf(`%s has a "${" with no "}" — it is dropped and the text after it kept; `+
+					`write $${ for a literal ${`, where))
+			}
+			if end == 0 {
+				out = append(out, fmt.Sprintf(`%s has an empty "${}" — it is dropped; write $${} for it literally`, where))
+			}
+			i += 2 + end
+		}
+	}
+	return out
 }

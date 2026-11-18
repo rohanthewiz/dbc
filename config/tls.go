@@ -170,6 +170,7 @@ func ExpandTLS(name string, t TLSOpts, base string) (TLSOpts, []string) {
 		if p == "" {
 			return ""
 		}
+		warns = append(warns, braceWarnings(fmt.Sprintf("connection %q: %s", name, key), p)...)
 		p = expandEnv(p, func(k string) string {
 			v, ok := os.LookupEnv(k)
 			if !ok {

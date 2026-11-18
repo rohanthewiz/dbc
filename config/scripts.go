@@ -65,7 +65,7 @@ func ResolveScriptsDir(raw, base string) (string, []string) {
 // file's directory. scripts_dir and pg_bin share it, so every path in
 // the file follows the same rules.
 func resolvePath(key, raw, base string) (string, []string) {
-	var warns []string
+	warns := braceWarnings(key, raw)
 	p := expandEnv(raw, func(k string) string {
 		v, ok := os.LookupEnv(k)
 		if !ok {

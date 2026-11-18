@@ -185,14 +185,6 @@ ten session docs in `ai_docs/claude_sessions/`
   the probe must let go at once and never refuse a start; and a record
   from an engine without a runs dir has no lock to ask. Raised while
   closing N-269.
-- **N-322** · raised `2026-1113-1541-n273-unknown-keys-dollar-escape` · value low
-  `os.Expand` (behind `config.expandEnv`) drops an unterminated `${` and an
-  empty `${}` without calling the lookup, so no warning is given: a
-  password `ab${cd` connects as `abcd`. `$$` now writes a literal `$`
-  (`ab$${cd`), but nothing tells the user it was needed. Fix: before
-  expanding, scan as os.Expand does (after `$$` pairs) for a `${` with no
-  `}` or a `${}`, and warn with `unsetWarning`'s hint. Raised while
-  closing N-273.
 - **N-323** · raised `2026-1113-1657-n274-n275-api-origin-completion-aborts` · value low
   A panic inside a completion schema read leaves the cache "loading" for
   good. `Workspace.LoadCompletions` (`workspace/complete.go`) and
@@ -1020,6 +1012,16 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-322** · raised `2026-1113-1541-n273-unknown-keys-dollar-escape` · value low
+  `os.Expand` (behind `config.expandEnv`) drops an unterminated `${` and an
+  empty `${}` without calling the lookup, so no warning is given: a
+  password `ab${cd` connects as `abcd`. `$$` now writes a literal `$`
+  (`ab$${cd`), but nothing tells the user it was needed. Fix: before
+  expanding, scan as os.Expand does (after `$$` pairs) for a `${` with no
+  `}` or a `${}`, and warn with `unsetWarning`'s hint. Raised while
+  closing N-273.
+  closed 2026-11-18, `@SESS@`, commit `@N-322@`: `config.braceWarnings` scans a value as os.Expand does, skipping a `$$` pair first, and warns about what os.Expand drops without a lookup: an unterminated `${` (one warning; `ab${cd` connects as `abcd`) and an empty `${}`. Each warning names the `$${` escape. `ExpandDSN`, `ExpandTLS` and `resolvePath` (the `*_dir` and `pg_bin` paths) add it beside `unsetWarning`'s. Real binary: a config with `scripts_dir = "/tmp/a${b"` and a DSN password `ab${cd` prints `warning: scripts_dir has a "${" with no "}" — it is dropped and the text after it kept; write $${ for a literal ${` and the same for `connection "pgx": DSN`. `TestBraceWarnings` covers the escape, a reference, several empties, an open one after `$$`, and `$$$${` (two literal `$`, no warning). Full suite green.
 
 - **N-320** · raised `2026-1113-1510-n272-reads-that-leave-state` · value low
   `sqlsplit.ChangesCatalog` goes by the first keyword alone, so Postgres

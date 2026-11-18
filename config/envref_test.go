@@ -96,3 +96,28 @@ dsn = "host=h user=app password='S3cr$$t9'"
 		t.Fatalf("dsn %q, warnings %q", cfg.Connections[0].DSN, cfg.Warnings)
 	}
 }
+
+// What os.Expand drops without a lookup gets a warning of its own (N-322);
+// the $$ escape and well-formed references get none.
+func TestBraceWarnings(t *testing.T) {
+	for s, want := range map[string]int{
+		"ab${cd":       1,
+		"a${}b":        1,
+		"a${}b${}c":    2,
+		"ab$${cd":      0, // the escape for a literal ${
+		"${PGPASS}":    0,
+		"a$b${C}d":     0,
+		"x${A}y${":     1,
+		"$$${unclosed": 1, // $$ (a literal $), then an open ${
+		"$$$${literal": 0, // two literal $, then {literal
+		"100$":         0,
+	} {
+		if got := braceWarnings("dsn", s); len(got) != want {
+			t.Errorf("%q: %d warnings %q, want %d", s, len(got), got, want)
+		}
+	}
+	_, warns := ExpandDSN("pg", "postgres", "postgres://u:ab${cd@h/db")
+	if len(warns) != 1 || !strings.Contains(warns[0], `connection "pg": DSN has a "${" with no "}"`) {
+		t.Errorf("ExpandDSN warnings = %q", warns)
+	}
+}

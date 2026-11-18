@@ -78,17 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-285** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  Every headless job or pipeline run parses every run record.
-  `newHeadlessEngine` → `Recover` (`jobscmd.go:156`,
-  `jobs/records.go:158`) → `parseHead` reads each file whole
-  (`userdata/runs.go:249`): up to 200 records a name, each with up to
-  2,000 log lines, and a one-shot process has an empty head cache.
-  `dbc runs --sql` skips `--limit` (`jobscmd.go:439-443`), globs per id
-  (`runs.go:359`) and inserts row by row in autocommit
-  (`jobscmd.go:723-777`). Fix: a small head sidecar or live-marker file;
-  one transaction for the load. Path audit, traced; the cost is not
-  measured. (RPU plan, phase 3)
 - **N-287** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   CLI discoverability. There is no `dbc conns` to list connections; no
   shell completion (`EnableShellCompletion` is not set); no `DBC_CONFIG`
@@ -1098,6 +1087,19 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-285** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Every headless job or pipeline run parses every run record.
+  `newHeadlessEngine` → `Recover` (`jobscmd.go:156`,
+  `jobs/records.go:158`) → `parseHead` reads each file whole
+  (`userdata/runs.go:249`): up to 200 records a name, each with up to
+  2,000 log lines, and a one-shot process has an empty head cache.
+  `dbc runs --sql` skips `--limit` (`jobscmd.go:439-443`), globs per id
+  (`runs.go:359`) and inserts row by row in autocommit
+  (`jobscmd.go:723-777`). Fix: a small head sidecar or live-marker file;
+  one transaction for the load. Path audit, traced; the cost is not
+  measured. (RPU plan, phase 3)
+  closed 2026-11-18, `@SESS@`, commit `@N-285@`: `Engine.Recover` now reads each record's status alone (`userdata.RunStatuses`, new `userdata/runstatus.go`). It decodes the file's top-level keys in order through a 2 KB buffered reader and stops at `"status"`, which jobs writes before the pipelines and their logs. A record without it among its first 32 keys is read whole. Only running or queued records are read whole (`ReadRunAt`). `BenchmarkRecoverRead`, 200 records of 2,000 log lines, no head cache (a one-shot process): 115 ms and 30 MB before, 3.3 ms and 1.2 MB now. No sidecar was needed. `dbc runs --sql`: the load runs in one transaction on one session (`loadAndQuery`); the records come through `Engine.Records`, which uses one `userdata.RunIndex` of the runs directory, not `ReadRun`'s glob per id (`Get` is now `inMemory`, then `fromDisk`); and a `--limit` given on the command line bounds it (`cmd.IsSet`). The default 50 does not, since that would change what an existing query answers. Tests: `TestRunStatuses` (agrees with `ListRuns`' heads; a late status read whole; a non-record skipped; `RunIndex`, `ReadRunAt`), `Engine.Records` in the job record test, and the existing `runs --sql` test, now in one transaction.
 
 - **N-295** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Load errors drop Postgres's detail. The etl path never appends

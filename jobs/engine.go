@@ -1048,6 +1048,15 @@ func (e *Engine) Cancel(id string) error {
 // Get is a run's record — live, among the finished ones kept, or read back
 // from the runs directory — with its log.
 func (e *Engine) Get(id string) (Run, bool) {
+	if r, ok := e.inMemory(id); ok {
+		return r, true
+	}
+	return e.fromDisk(id)
+}
+
+// inMemory is Get's first two places: a live run, or a finished one this
+// engine keeps.
+func (e *Engine) inMemory(id string) (Run, bool) {
 	e.mu.Lock()
 	lr, live := e.live[id]
 	var fin *Run
@@ -1067,7 +1076,7 @@ func (e *Engine) Get(id string) (Run, bool) {
 	case fin != nil:
 		return fin.clone(), true
 	}
-	return e.fromDisk(id)
+	return Run{}, false
 }
 
 // Running is the live runs, newest first, without their logs.

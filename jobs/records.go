@@ -147,24 +147,72 @@ func (e *Engine) fromDisk(id string) (Run, bool) {
 	return r, true
 }
 
+// Records is Get for many runs at once, in the order of ids, leaving out
+// the ones not found: the live and recent ones from memory, the others
+// read from disk through one index of the runs directory
+// (userdata.RunIndex) rather than a glob per id, which lists every
+// kind and name directory each time (N-285; `dbc runs --sql` reads every
+// record it loads).
+func (e *Engine) Records(ids []string) []Run {
+	out := make([]Run, 0, len(ids))
+	var index map[string]string // made on the first record not in memory
+	for _, id := range ids {
+		if r, ok := e.inMemory(id); ok {
+			out = append(out, r)
+			continue
+		}
+		if e.opt.RunsDir == "" {
+			continue
+		}
+		if index == nil {
+			var err error
+			if index, err = userdata.RunIndex(e.opt.RunsDir); err != nil {
+				index = map[string]string{}
+			}
+		}
+		path, ok := index[id]
+		if !ok {
+			continue
+		}
+		bs, mod, err := userdata.ReadRunAt(path)
+		if err != nil {
+			continue
+		}
+		var r Run
+		if json.Unmarshal(bs, &r) != nil {
+			continue
+		}
+		if e.stale(&r, mod) {
+			interrupt(&r, mod)
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
 // Recover rewrites as interrupted every record a dead process left
 // running or queued — so a listing that does not settle records (a plain
 // `cat`, jq) reads the truth too. A host calls it once when it starts.
 // It returns how many it rewrote.
+//
+// It reads each record's status alone (userdata.RunStatuses: the front of
+// the file), not its head: every headless run calls this, and a head is
+// parsed from the whole record — every record a name keeps, with its log
+// lines — where only a running or queued one is read whole (N-285).
 func (e *Engine) Recover() (int, error) {
 	if e.opt.RunsDir == "" {
 		return 0, nil
 	}
-	heads, err := userdata.ListRuns(e.opt.RunsDir, userdata.RunFilter{})
+	sts, err := userdata.RunStatuses(e.opt.RunsDir)
 	if err != nil {
 		return 0, err
 	}
 	n := 0
-	for _, h := range heads {
+	for _, h := range sts {
 		if h.Status != string(pipeline.Running) && h.Status != string(pipeline.Queued) {
 			continue
 		}
-		bs, mod, err := userdata.ReadRun(e.opt.RunsDir, h.ID)
+		bs, mod, err := userdata.ReadRunAt(h.Path)
 		if err != nil {
 			continue
 		}

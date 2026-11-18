@@ -410,6 +410,12 @@ func TestJobRecords(t *testing.T) {
 	if err != nil || len(hs) != 2 || hs[0].ID != head.ID || hs[1].Status != string(pipeline.Interrupted) {
 		t.Errorf("history = %+v %v", hs, err)
 	}
+	// Records reads many at once (dbc runs --sql), settled as Get does,
+	// in the order asked and leaving out an id with no record
+	if rs := je.Records([]string{dead.ID, "20261001-020000-none", head.ID}); len(rs) != 2 ||
+		rs[0].ID != dead.ID || rs[0].Status != pipeline.Interrupted || rs[1].ID != head.ID {
+		t.Errorf("records = %d", len(rs))
+	}
 	if n, err := je.Recover(); n != 1 || err != nil {
 		t.Errorf("recover = %d %v", n, err)
 	}

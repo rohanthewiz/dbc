@@ -437,6 +437,13 @@ func runsAction(ctx context.Context, cmd *cli.Command) error {
 	f := outFormat()
 	e := jobs.New(cfg, nil, jobs.Options{RunsDir: cfg.RunsDir})
 	if flagRunsSQL != "" {
+		// --sql queries every record by default, so a count or a sum is over
+		// them all; a --limit given on the command line bounds it too, the
+		// newest N, and the records read (N-285). The default 50 does not:
+		// it would change what an existing query answers.
+		if cmd.IsSet("limit") {
+			filter.Limit = flagRunsLimit
+		}
 		runsSQL(cfg, e, filter, flagRunsSQL, f)
 		return nil
 	}
@@ -717,17 +724,30 @@ func runsSQL(cfg *config.Config, e *jobs.Engine, filter userdata.RunFilter, sql 
 }
 
 // loadAndQuery fills the tables and runs the statements.
+//
+// The load runs in one transaction on one session (N-285): the INSERTs —
+// a row per run, pipeline, fragment and node — each committed alone
+// before, a write and a sync apiece. The records are read through one
+// index of the runs directory (Engine.Records), not a glob per id.
 func loadAndQuery(mgr *db.Manager, conn string, e *jobs.Engine, heads []jobs.Summary, stmts []sqlsplit.Stmt) ([]*model.Result, error) {
 	ctx, stop := interruptible()
 	defer stop()
+	sess, err := mgr.Session(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	defer sess.Close()
 	exec := func(q string, args ...any) error {
-		_, err := mgr.RunContext(ctx, conn, q, args...)
+		_, err := sess.Run(ctx, q, args...)
 		return err
 	}
 	for _, ddl := range runsTables {
 		if err := exec(ddl); err != nil {
 			return nil, err
 		}
+	}
+	if err := exec("BEGIN"); err != nil {
+		return nil, err
 	}
 	at := func(t time.Time) any {
 		if t.IsZero() {
@@ -741,11 +761,11 @@ func loadAndQuery(mgr *db.Manager, conn string, e *jobs.Engine, heads []jobs.Sum
 		}
 		return b.Sub(a).Seconds()
 	}
-	for _, h := range heads {
-		r, ok := e.Get(h.ID)
-		if !ok {
-			continue
-		}
+	ids := make([]string, len(heads))
+	for i, h := range heads {
+		ids[i] = h.ID
+	}
+	for _, r := range e.Records(ids) {
 		var rows int64
 		for _, p := range r.Pipelines {
 			rows += p.Rows()
@@ -776,10 +796,13 @@ func loadAndQuery(mgr *db.Manager, conn string, e *jobs.Engine, heads []jobs.Sum
 			}
 		}
 	}
+	if err := exec("COMMIT"); err != nil {
+		return nil, err
+	}
 	fmt.Fprintf(os.Stderr, "%d run(s) loaded as tables runs, pipelines, fragments, nodes\n", len(heads))
 	var results []*model.Result
 	for _, st := range stmts {
-		res, err := mgr.RunContext(ctx, conn, st.Text)
+		res, err := sess.Run(ctx, st.Text)
 		if err != nil {
 			return nil, err
 		}

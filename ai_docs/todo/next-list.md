@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-338
+**Next ID:** N-339
 
 ## Open
 
@@ -181,6 +181,19 @@ The question for the user: which, if any? A cursor seems the least surprising, i
   Each part is independent. The flags are small, a multi-table copy is a
   loop with one summary line each, and the job resume is a design
   question of its own. Neighbour: N-151.
+- **N-338** · raised `@SESS@` · value low
+  `Folds` does a whole Split and a whole Lex of its own on every call
+  (`sqlsplit/folds.go:53`), and dbc web asks for folds after each edit,
+  debounced, with the whole buffer (`editor.js` `provideFoldingRanges`
+  → `web/grid.go:682`). On the 3.5 MB migration that's 47 ms, 78 MB and
+  174k allocs a request (`BenchmarkFoldsBig`), where Split alone is
+  16 ms / 21 MB and Lex 19 ms / 45 MB. The Lex is only there to find the
+  string, identifier and comment spans no bracket can be in, yet it
+  builds all 349k tokens. Fix: take those spans from one scan, the
+  split's own if it can report them or a scanner that keeps only them,
+  and reuse one `open` stack across statements. Then tighten Folds'
+  budget in `TestScanCostsWhatItHolds` (6 allocs a statement; 4.0 now).
+  Raised while closing N-303.
 
 ## Validate
 
@@ -462,37 +475,6 @@ and `raised`.
   to an OSC 52 read. Note which terminals answer that read (kitty and
   Ghostty ask first; iTerm2 and tmux refuse by default and so never answer,
   which leaves only the log line).
-- **N-303** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  Benchmarks with budgets. There are three benchmarks in the repo, all
-  in `script/plugins_bench_test.go`. Add ones for Split, Lex and Folds
-  on a 3.5 MB buffer (measured 2026-11-10 at 11, 20 and 45 ms), Complete
-  on a 5,000-table schema (32–34 ms before N-280), Format on a nested
-  expression (N-281), one TUI `View()` frame with a large buffer and a
-  2,000-line log (N-278), a grid frame over long cells (N-277), and the
-  fetch loop's allocations per cell (N-282). Record the numbers before
-  and after each phase-3 item. (RPU plan, phase 5)
-  So far, without budgets: the grid frame and arrival over long cells
-  (`tui/gridcell_test.go`, N-277); TUI frames over a large buffer, a full
-  log, a long transcript and Inspect, and a printing script in a real
-  program (`tui/frame_test.go`, `BenchmarkScriptPrints`, N-278); a key
-  typed into a 3.5 MB buffer with its frame (`BenchmarkKeyBigBuffer`,
-  `BenchmarkKeyBigBufferNewStep`), and a whole split of it against
-  `Splitting.Edit` after one typed byte (`sqlsplit/resplit_test.go`,
-  N-279); completion on a 5,000-table catalog, one schema and three
-  (`BenchmarkCompleteBig`, `sqlcomplete/cost_test.go`, N-280); deep
-  generated SQL through the formatter (`BenchmarkFormatDeep`,
-  `sqlsplit/formatcost_test.go`, N-281).
-  The first budget: `TestCompleteCostsWhatItKeeps` (same file, N-280)
-  bounds a completion's allocations per table in the catalog — counted,
-  not timed, so it runs in the ordinary suite and under -race.
-  The second: `TestFormatCostsWhatItHolds` (N-281) bounds the formatter's
-  bytes allocated per input byte on 8,000-deep nestings.
-  The third: `TestFetchCostsWhatItHolds` (N-282) bounds the fetch loop's
-  allocations per cell beyond the driver's (at most 2.5; 2.0 now, 5.2 on
-  HEAD), with `BenchmarkFetch`/`BenchmarkFetchDriver`
-  (`db/fetchcost_test.go`). N-282 also added `BenchmarkExport`
-  (`export/write_test.go`) and `BenchmarkSortRows`
-  (`workspace/sortcost_test.go`), without budgets.
 - **N-308** · raised `2026-1110-1909-rpu-phase-1` · value low
   Three tests fail in a full run, none from a product change, found while
   running the live suites for N-251–N-253 (each also fails on `e62b012`,
@@ -837,6 +819,44 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-303** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Benchmarks with budgets. There are three benchmarks in the repo, all
+  in `script/plugins_bench_test.go`. Add ones for Split, Lex and Folds
+  on a 3.5 MB buffer (measured 2026-11-10 at 11, 20 and 45 ms), Complete
+  on a 5,000-table schema (32–34 ms before N-280), Format on a nested
+  expression (N-281), one TUI `View()` frame with a large buffer and a
+  2,000-line log (N-278), a grid frame over long cells (N-277), and the
+  fetch loop's allocations per cell (N-282). Record the numbers before
+  and after each phase-3 item. (RPU plan, phase 5)
+  So far, without budgets: the grid frame and arrival over long cells
+  (`tui/gridcell_test.go`, N-277); TUI frames over a large buffer, a full
+  log, a long transcript and Inspect, and a printing script in a real
+  program (`tui/frame_test.go`, `BenchmarkScriptPrints`, N-278); a key
+  typed into a 3.5 MB buffer with its frame (`BenchmarkKeyBigBuffer`,
+  `BenchmarkKeyBigBufferNewStep`), and a whole split of it against
+  `Splitting.Edit` after one typed byte (`sqlsplit/resplit_test.go`,
+  N-279); completion on a 5,000-table catalog, one schema and three
+  (`BenchmarkCompleteBig`, `sqlcomplete/cost_test.go`, N-280); deep
+  generated SQL through the formatter (`BenchmarkFormatDeep`,
+  `sqlsplit/formatcost_test.go`, N-281).
+  The first budget: `TestCompleteCostsWhatItKeeps` (same file, N-280)
+  bounds a completion's allocations per table in the catalog — counted,
+  not timed, so it runs in the ordinary suite and under -race.
+  The second: `TestFormatCostsWhatItHolds` (N-281) bounds the formatter's
+  bytes allocated per input byte on 8,000-deep nestings.
+  The third: `TestFetchCostsWhatItHolds` (N-282) bounds the fetch loop's
+  allocations per cell beyond the driver's (at most 2.5; 2.0 now, 5.2 on
+  HEAD), with `BenchmarkFetch`/`BenchmarkFetchDriver`
+  (`db/fetchcost_test.go`). N-282 also added `BenchmarkExport`
+  (`export/write_test.go`) and `BenchmarkSortRows`
+  (`workspace/sortcost_test.go`), without budgets.
+  closed 2026-11-18, `@SESS@`, commit `@N-303@`: every benchmark the item lists now exists.
+- **New benchmarks.** The last two, `BenchmarkLexBig` and `BenchmarkFoldsBig` (`sqlsplit/bigcost_test.go`), run on the 3.5 MB migration `BenchmarkSplitBig` splits. They measured 19.5 ms / 45 MB and 47 ms / 78 MB; Split is 16 ms / 21 MB.
+- **A fourth budget.** `TestScanCostsWhatItHolds` counts allocations rather than timing, joining Complete's, Format's and the fetch loop's. It allows Split 0.75 allocs a statement, Lex 0.45 a token and Folds 6 a statement, against 0.50, 0.31 and 4.0 measured (flat from 50 KB to 800 KB). It passes under -race.
+- **Before and after numbers** for each phase-3 item are in those items' closed entries (N-277–N-282).
+
+Folds finding no folds at 47 ms, a Split and a Lex of its own per debounced edit in dbc web, is raised as N-338.
 
 - **N-225** · raised `2026-1024-1437-sql-format` · value low
   The full web e2e (`DBC_E2E=1`) flaked twice in five runs this session,

@@ -15,6 +15,7 @@ import (
 	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/export"
+	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
 // N-282: a lone CSV/TSV statement streams its rows from the driver to the
@@ -87,8 +88,16 @@ break', '', -0.25)`,
 		nums,
 		`UPDATE t SET score = score + 1 WHERE id < 3`,
 	} {
-		for _, f := range []export.Format{export.CSV, export.TSV} {
-			if !rowStreams(f, 1) {
+		for _, f := range []export.Format{export.CSV, export.TSV, export.JSON} {
+			switch {
+			case f == export.JSON:
+				// a query streams (N-332); the UPDATE has no set to stream
+				// and is collected, its document the same either way
+				isQuery := !strings.HasPrefix(stmt, "UPDATE")
+				if jsonStreams(cfg, "lite", f, sqlsplitOne(stmt)) != isQuery {
+					t.Fatalf("%q: json streams %v, want %v", stmt, !isQuery, isQuery)
+				}
+			case !rowStreams(f, 1):
 				t.Fatalf("%s does not stream", f)
 			}
 			res, err := mgr.Run("lite", stmt)
@@ -116,6 +125,9 @@ break', '', -0.25)`,
 		}
 	}
 }
+
+// sqlsplitOne is stmt as the one-statement split jsonStreams is handed.
+func sqlsplitOne(stmt string) []sqlsplit.Stmt { return sqlsplit.SQLite.Split(stmt) }
 
 // The child processes below call runQueryHeadless, which ends in os.Exit
 // on any failure.

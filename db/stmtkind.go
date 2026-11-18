@@ -86,6 +86,19 @@ var execVerbs = map[string]bool{
 	"install": true, "uninstall": true, "reassign": true, "security": true, "import": true,
 }
 
+// OneRowSet reports whether stmt, on a connection of driver (any name
+// db.Driver accepts), is known to return rows and only one set of them: a
+// query (kindRows) — not a CALL, which may return several, nor a statement
+// whose kind only its result tells. A headless -t json export streams such
+// a statement's rows, its document being one array whatever comes (N-332).
+func OneRowSet(stmt, driver string) bool {
+	drv, err := driverFor(driver)
+	if err != nil {
+		return false
+	}
+	return kindOf(stmt, sqlsplit.DialectOf(driver), drv) == kindRows
+}
+
 // kindOf says how run sends stmt on an engine whose driver is drv (the
 // canonical name: pgx, mysql, sqlite, bytdb) and which reads SQL as d.
 //

@@ -3189,10 +3189,12 @@ A result cut at `max_rows` says so on stderr (`note: result truncated at 1000
 rows`), so a CSV export that looks complete is not quietly short; `--max-rows
 0` exports all of it. A single statement in `csv` or `tsv` streams: each row
 is written as the database sends it and none is held, so a table of any size
-exports in the memory of one row. The other formats hold the result once
-(the JSON is still written a row at a time), as does a run of several
-statements. A streamed export that fails part way, by a statement error or a
-`Ctrl+C`, has already written its first rows to stdout, and exits non-zero.
+exports in the memory of one row. So does a single query in `json` — a
+SELECT, WITH or VALUES, whose document is one array of rows whatever comes;
+a `CALL`, which may return several sets (each an envelope), is held, as are
+the other formats and a run of several statements. A streamed export that
+fails part way, by a statement error or a `Ctrl+C`, has already written its
+first rows to stdout (a JSON array closed after them), and exits non-zero.
 `-o` always writes beside the file and renames it into place when the output
 is complete, so a run that fails leaves the old file as it was. A write that
 fails, such as a full disk under `> file.csv`, exits 1. With no config file,

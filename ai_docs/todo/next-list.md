@@ -199,18 +199,6 @@ ten session docs in `ai_docs/claude_sessions/`
   request (or docs for the first few dozen items only), the TUI by asking
   for the focused item's. Neighbour: N-284. Measured in Go; the browser's
   share (encode, parse) not timed. Raised while closing N-280.
-- **N-332** · raised `2026-1116-1629-n282-a-result-costs-what-it-holds` · value low
-  No streaming JSON export. A lone CSV/TSV statement streams its rows
-  from the driver (N-282), but `-t json` holds the result once (704 MB
-  RSS for 1M rows × 6 columns, against CSV's 42 MB): one result set is a
-  bare array of rows and several (a MySQL CALL) an array of envelopes,
-  and which it is is known only after the first set's rows have gone.
-  N-282 named JSON-lines as the streaming form. A `jsonl` format (one
-  object per row; a set's change a new header object, or each row
-  tagged with its set) would stream, as the pipelines' `jsonl.write`
-  sink already does; it touches the format list, the TUI's and web's
-  pickers and the completions. Or stream `-t json` when the statement
-  cannot return several sets (kindRows), and collect otherwise.
 - **N-334** · raised `2026-1118-0042-n321-n286-n288-n291-plain-errors-value-text-status-error` · value low
   CSV has no formula guard and no BOM option, the two parts of N-288's
   audit it did not do (its "Fix:" named neither). A text cell starting
@@ -933,6 +921,20 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-332** · raised `2026-1116-1629-n282-a-result-costs-what-it-holds` · value low
+  No streaming JSON export. A lone CSV/TSV statement streams its rows
+  from the driver (N-282), but `-t json` holds the result once (704 MB
+  RSS for 1M rows × 6 columns, against CSV's 42 MB): one result set is a
+  bare array of rows and several (a MySQL CALL) an array of envelopes,
+  and which it is is known only after the first set's rows have gone.
+  N-282 named JSON-lines as the streaming form. A `jsonl` format (one
+  object per row; a set's change a new header object, or each row
+  tagged with its set) would stream, as the pipelines' `jsonl.write`
+  sink already does; it touches the format list, the TUI's and web's
+  pickers and the completions. Or stream `-t json` when the statement
+  cannot return several sets (kindRows), and collect otherwise.
+  closed 2026-11-18, `@SESS@`, commit `@N-332@`, by the item's second way, with no new format. A lone `-t json` statement known to return one set of rows (new `db.OneRowSet`, i.e. kindRows: a SELECT, WITH or VALUES, not a CALL or a statement whose kind only its result tells) streams through `rowStream` as CSV does (`jsonStreams`). Its document is a bare array whatever comes. New `export.JSONRows` writes that array a row at a time; `jsonArr` is now built on it, so the streamed and collected bytes cannot differ (`TestWriteMatchesRender` unchanged and passing). A statement that fails part way closes the array on stdout before exiting 1, so what went out parses. `TestRowStreamMatchesCollected` covers JSON: the rows, an empty result, a cut one (its notes), and an UPDATE, which is collected. Real binary, 1M rows × 6 columns on SQLite, `-t json --max-rows 0`: 688 MB RSS and 2.43 s before, 43 MB and 1.78 s now, byte-identical output (110 MB). README's export paragraph updated. A `jsonl` format was not added, since streaming `-t json` covers the memory case; a CALL's several sets are still held.
 
 - **N-304** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   A linter in CI. `test.yml` runs build, vet and the race tests and no

@@ -617,50 +617,86 @@ func markdown(w *bufio.Writer, r *model.Result) {
 
 // jsonArr writes r as a JSON array of row objects, one row at a time —
 // the bytes json.MarshalIndent(rowMaps(r), "", "  ") made of the whole
-// array (TestWriteMatchesRender), without a map per row held or the
-// document twice in buffers:
+// array (TestWriteMatchesRender) — through JSONRows, the writer a
+// streamed export uses too, so the two cannot differ.
+func jsonArr(w *bufio.Writer, r *model.Result) error {
+	j := NewJSONRows(w, r.Columns)
+	for _, row := range r.Raw {
+		if err := j.Row(row); err != nil {
+			return err
+		}
+	}
+	return j.End()
+}
+
+// JSONRows writes one result set's rows as a JSON array of row objects, a
+// row at a time, as they are handed to it — what a lone -t json statement
+// streams from the driver (N-332), and what jsonArr writes of a held
+// result:
 //
 //	[\n
 //	  {…row 1, indented one level deeper…},\n
 //	  {…row 2…}\n
 //	]\n
 //
-// Each row is the one map, cleared and refilled, encoded with the array's
-// indent as its prefix: Indent puts the prefix after every newline it
-// writes and none before the first byte, which is where the array's own
-// "  " goes. Keys come out sorted, as a map's always did.
-func jsonArr(w *bufio.Writer, r *model.Result) error {
-	if len(r.Raw) == 0 {
-		w.WriteString("[]\n")
-		return nil
+// and "[]\n" for no rows. Each row is the one map, cleared and refilled,
+// encoded with the array's indent as its prefix: Indent puts the prefix
+// after every newline it writes and none before the first byte, which is
+// where the array's own "  " goes. Keys come out sorted, as a map's always
+// did; duplicate column names are suffixed (jsonKeys); a non-finite float
+// is its string (jsonValue).
+type JSONRows struct {
+	w    io.Writer
+	keys []string
+	m    map[string]any
+	buf  bytes.Buffer
+	enc  *json.Encoder
+	n    int
+}
+
+// NewJSONRows starts a JSON array of rows with columns cols on w.
+func NewJSONRows(w io.Writer, cols []string) *JSONRows {
+	j := &JSONRows{w: w, keys: jsonKeys(cols)}
+	j.m = make(map[string]any, len(j.keys))
+	j.enc = json.NewEncoder(&j.buf) // reuses its indent buffer row to row
+	j.enc.SetIndent("  ", "  ")
+	return j
+}
+
+// Row writes one row of raw values, in the columns' order.
+func (j *JSONRows) Row(row []any) error {
+	clear(j.m)
+	for ci, key := range j.keys {
+		if ci < len(row) {
+			j.m[key] = jsonValue(row[ci])
+		}
 	}
-	keys := jsonKeys(r.Columns)
-	m := make(map[string]any, len(keys))
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf) // reuses its indent buffer row to row
-	enc.SetIndent("  ", "  ")
-	w.WriteString("[\n")
-	for i, row := range r.Raw {
-		clear(m)
-		for ci, key := range keys {
-			if ci < len(row) {
-				m[key] = jsonValue(row[ci])
-			}
-		}
-		buf.Reset()
-		if err := enc.Encode(m); err != nil {
-			return serr.Wrap(err, "row", strconv.Itoa(i+1))
-		}
-		if i > 0 {
-			w.WriteString(",\n")
-		}
-		w.WriteString("  ")
-		// Encode ends every value with a newline; the array's separator
-		// takes its place
-		w.Write(bytes.TrimSuffix(buf.Bytes(), []byte{'\n'}))
+	j.buf.Reset()
+	if err := j.enc.Encode(j.m); err != nil {
+		return serr.Wrap(err, "row", strconv.Itoa(j.n+1))
 	}
-	w.WriteString("\n]\n")
-	return nil
+	sep := ",\n  "
+	if j.n == 0 {
+		sep = "[\n  "
+	}
+	j.n++
+	if _, err := io.WriteString(j.w, sep); err != nil {
+		return err
+	}
+	// Encode ends every value with a newline; the array's separator takes
+	// its place
+	_, err := j.w.Write(bytes.TrimSuffix(j.buf.Bytes(), []byte{'\n'}))
+	return err
+}
+
+// End closes the array: "[]\n" when no row was written.
+func (j *JSONRows) End() error {
+	end := "\n]\n"
+	if j.n == 0 {
+		end = "[]\n"
+	}
+	_, err := io.WriteString(j.w, end)
+	return err
 }
 
 // rowMaps turns the typed rows into column-keyed objects.

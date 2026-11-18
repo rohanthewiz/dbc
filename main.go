@@ -644,7 +644,7 @@ func runQueryHeadless(cfg *config.Config, mgr *db.Manager, sql string, f export.
 	// above and below keep ctx, so nothing of theirs reaches the sink.
 	var rows *rowStream
 	runCtx := ctx
-	if rowStreams(f, len(stmts)) {
+	if rowStreams(f, len(stmts)) || jsonStreams(cfg, conn, f, stmts) {
 		rows = newRowStream(openOut(), f)
 		runCtx = db.StreamRows(ctx, rows)
 	}
@@ -672,7 +672,12 @@ func runQueryHeadless(cfg *config.Config, mgr *db.Manager, sql string, f export.
 		rows.o.failed(rows.err, "write failed")
 	case rows != nil && runErr != nil:
 		// the rows that went out before the failure stay out on stdout;
-		// the --out file is dropped, and the old one kept
+		// the --out file is dropped, and the old one kept. A JSON array
+		// on stdout is closed first, so what went out parses (the exit
+		// status says the run failed)
+		if rows.jrows != nil && rows.o.file == nil {
+			_ = rows.jrows.End()
+		}
 		rows.o.abort()
 	case rows != nil:
 		rows.end(run, f)
@@ -1227,13 +1232,33 @@ func rowStreams(f export.Format, stmts int) bool {
 // set, the sets a BlockSep apart.
 type rowStream struct {
 	o      *headlessOut
-	cw     *csv.Writer
-	rec    []string // the record a row is written from, reused (NULLs empty)
-	counts []int    // rows per set, for the notes
-	err    error    // the write failure that stopped the stream
+	cw     *csv.Writer // CSV/TSV; nil for JSON
+	json   bool
+	jrows  *export.JSONRows // JSON: the one set's array, once it starts
+	rec    []string         // the record a row is written from, reused (NULLs empty)
+	counts []int            // rows per set, for the notes
+	err    error            // the write failure that stopped the stream
+}
+
+// jsonStreams is rowStreams for -t json (N-332): one statement known to
+// return one set of rows (db.OneRowSet: a query, not a CALL), so the
+// document is a bare array of rows whatever arrives, and it can be written
+// as the rows are read rather than held — 704 MB of RSS for a million rows
+// of six columns, where CSV streamed in 42. A statement that may return
+// several sets, or none, is collected as before: one set is an array,
+// several are envelopes, and which is known only at the end.
+func jsonStreams(cfg *config.Config, conn string, f export.Format, stmts []sqlsplit.Stmt) bool {
+	if f != export.JSON || len(stmts) != 1 {
+		return false
+	}
+	cc, ok := cfg.ConnByName(conn)
+	return ok && db.OneRowSet(stmts[0].Text, cc.Driver)
 }
 
 func newRowStream(o *headlessOut, f export.Format) *rowStream {
+	if f == export.JSON {
+		return &rowStream{o: o, json: true}
+	}
 	// csv.NewWriter takes o.w as its buffer (a bufio.Writer at least its
 	// default size is used as it is), so there is one buffer, not two
 	cw := csv.NewWriter(o.w)
@@ -1244,7 +1269,17 @@ func newRowStream(o *headlessOut, f export.Format) *rowStream {
 }
 
 // Set starts a result set: the BlockSep after the last one, and its header.
+// For JSON, the one set's array (jsonStreams allows no other).
 func (s *rowStream) Set(cols []string) error {
+	if s.json {
+		if s.jrows != nil {
+			s.err = errors.New("a second result set from a statement streamed as one JSON array")
+			return s.err
+		}
+		s.jrows = export.NewJSONRows(s.o.w, cols)
+		s.counts = append(s.counts, 0)
+		return nil
+	}
 	if len(s.counts) > 0 {
 		s.cw.Flush() // the record before goes first
 		if _, err := s.o.w.WriteString(export.BlockSep); err != nil {
@@ -1260,6 +1295,13 @@ func (s *rowStream) Set(cols []string) error {
 // (export.DelimitedRecord, as a collected CSV writes it).
 func (s *rowStream) Row(disp []string, raw []any) error {
 	s.counts[len(s.counts)-1]++
+	if s.json {
+		if err := s.jrows.Row(raw); err != nil {
+			s.err = err
+			return err
+		}
+		return nil
+	}
 	s.rec = export.DelimitedRecord(s.rec, disp, raw)
 	return s.write(s.rec)
 }
@@ -1277,9 +1319,17 @@ func (s *rowStream) write(rec []string) error {
 // affected, a SELECT with neither columns nor rows) rendered as it would
 // have been, the truncation notes, and the --out file put in place.
 func (s *rowStream) end(run runOutcome, f export.Format) {
-	s.cw.Flush()
-	if err := s.cw.Error(); err != nil && s.err == nil {
-		s.err = err
+	if s.json {
+		if s.jrows != nil && s.err == nil {
+			if err := s.jrows.End(); err != nil {
+				s.err = err
+			}
+		}
+	} else {
+		s.cw.Flush()
+		if err := s.cw.Error(); err != nil && s.err == nil {
+			s.err = err
+		}
 	}
 	if s.err != nil {
 		s.o.failed(s.err, "write failed")

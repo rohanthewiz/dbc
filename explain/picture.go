@@ -9,6 +9,8 @@ import (
 	"image/jpeg"
 	"image/png"
 	"math"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/rohanthewiz/serr"
@@ -100,6 +102,13 @@ const (
 	// starts folded below depth 5, so the first view is a map, not a wall.
 	picFoldAt    = 120
 	picFoldDepth = 5
+	// picMaxKids caps a step's children drawn side by side (N-301): an
+	// Append over 200 partitions laid them out in one row, a 20000×199 px
+	// strip (over 1,000, 20000×40) once maxSide scaled it down. A step with
+	// more shows its picShowKids heaviest children, in their plan order,
+	// and one "+N more" box that says what the rest hold.
+	picMaxKids  = 8
+	picShowKids = 6
 	// stmtMaxLines caps the statement in the header; a 400-line generated
 	// query would otherwise push the plan off the first screen.
 	stmtMaxLines = 14
@@ -271,9 +280,13 @@ type picLayout struct {
 	ops    []func(*painter)
 
 	collapsed map[int]bool
-	pos       map[int][2]float64
-	treeW     float64
-	treeH     float64
+	// more is, for a step whose children were capped (picMaxKids), the
+	// children left out of the drawing; morePos is where their box goes
+	more    map[int][]*Node
+	morePos map[int][2]float64
+	pos     map[int][2]float64
+	treeW   float64
+	treeH   float64
 }
 
 func (l *picLayout) op(f func(*painter)) { l.ops = append(l.ops, f) }
@@ -289,6 +302,7 @@ func (l *picLayout) build(compare string) (w, h float64) {
 			}
 		}
 	}
+	l.capKids()
 	l.layoutTree()
 
 	w = math.Max(l.treeW+2*picMargin, picMinW)
@@ -399,17 +413,71 @@ func (l *picLayout) header(y, w float64, compare string) float64 {
 	return y
 }
 
+// capKids picks, for every step with more than picMaxKids children, the
+// ones the drawing leaves out: all but the picShowKids heaviest by the
+// picture's metric (the earlier one on a tie), so the steps that matter
+// are drawn and a long run of light siblings becomes one box.
+func (l *picLayout) capKids() {
+	l.more = map[int][]*Node{}
+	var walk func(n *Node)
+	walk = func(n *Node) {
+		if len(n.Children) > picMaxKids {
+			idx := make([]int, len(n.Children))
+			for i := range idx {
+				idx[i] = i
+			}
+			sort.SliceStable(idx, func(a, b int) bool {
+				return n.Children[idx[a]].Inclusive(l.metric) > n.Children[idx[b]].Inclusive(l.metric)
+			})
+			keep := map[int]bool{}
+			for _, i := range idx[:picShowKids] {
+				keep[i] = true
+			}
+			for i, c := range n.Children {
+				if !keep[i] {
+					l.more[n.ID] = append(l.more[n.ID], c)
+				}
+			}
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(l.plan.Root)
+}
+
+// shownKids is n's children as drawn: none when n is folded, the ones
+// capKids kept when it capped them, else all.
+func (l *picLayout) shownKids(n *Node) []*Node {
+	if l.collapsed[n.ID] {
+		return nil
+	}
+	hidden := l.more[n.ID]
+	if len(hidden) == 0 {
+		return n.Children
+	}
+	out := make([]*Node, 0, len(n.Children)-len(hidden))
+	for _, c := range n.Children {
+		if !slices.Contains(hidden, c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // layoutTree is plan.js's computeLayout: each subtree gets the width its
 // visible leaves need, and a parent is centered over its first and last
 // child. Subtrees own disjoint horizontal spans, so cards never overlap
 // and every edge stays short.
 func (l *picLayout) layoutTree() {
 	span := map[int]float64{}
-	kids := func(n *Node) []*Node {
-		if l.collapsed[n.ID] {
-			return nil
+	kids := l.shownKids
+	// a capped step's "+N more" box takes a card's slot after its children
+	moreW := func(n *Node) float64 {
+		if l.collapsed[n.ID] || len(l.more[n.ID]) == 0 {
+			return 0
 		}
-		return n.Children
+		return picHGap + picCardW
 	}
 	var measure func(n *Node) float64
 	measure = func(n *Node) float64 {
@@ -420,12 +488,14 @@ func (l *picLayout) layoutTree() {
 			}
 			s += measure(c)
 		}
+		s += moreW(n)
 		span[n.ID] = math.Max(picCardW, s)
 		return span[n.ID]
 	}
 	measure(l.plan.Root)
 
 	l.pos = map[int][2]float64{}
+	l.morePos = map[int][2]float64{}
 	maxY := 0.0
 	var place func(n *Node, x0 float64, depth int)
 	place = func(n *Node, x0 float64, depth int) {
@@ -436,7 +506,7 @@ func (l *picLayout) layoutTree() {
 			l.pos[n.ID] = [2]float64{x0 + (span[n.ID]-picCardW)/2, y}
 			return
 		}
-		total := 0.0
+		total := moreW(n)
 		for i, c := range ks {
 			if i > 0 {
 				total += picHGap
@@ -449,6 +519,12 @@ func (l *picLayout) layoutTree() {
 			cx += span[c.ID] + picHGap
 		}
 		a, b := l.pos[ks[0].ID], l.pos[ks[len(ks)-1].ID]
+		if moreW(n) > 0 {
+			cy := float64(depth+1) * (picCardH + picVGap)
+			l.morePos[n.ID] = [2]float64{cx, cy}
+			maxY = math.Max(maxY, cy)
+			b = l.morePos[n.ID]
+		}
 		l.pos[n.ID] = [2]float64{(a[0] + b[0]) / 2, y}
 	}
 	place(l.plan.Root, 0, 0)
@@ -478,7 +554,15 @@ func (l *picLayout) tree(ox, oy float64) {
 			})
 			return
 		}
-		for _, ch := range n.Children {
+		if hidden := l.more[n.ID]; len(hidden) > 0 {
+			cards = append(cards, l.moreBox(n, hidden, ox, oy))
+			mp := l.morePos[n.ID]
+			mx, my := ox+mp[0], oy+mp[1]
+			edges = append(edges, func(pt *painter) {
+				curve(pt, x+picCardW/2, y+picCardH, mx+picCardW/2, my, 1.5, c.line)
+			})
+		}
+		for _, ch := range l.shownKids(n) {
 			cx, cy := at(ch)
 			x1, y1, x2, y2 := x+picCardW/2, y+picCardH, cx+picCardW/2, cy
 			// edge weight: log of the rows flowing up, so a 200,000-row
@@ -513,6 +597,44 @@ func (l *picLayout) tree(ox, oy float64) {
 	walk(p.Root)
 	l.ops = append(l.ops, edges...)
 	l.ops = append(l.ops, cards...)
+}
+
+// moreBox is a capped step's box for the children not drawn: how many,
+// and what they hold together — their share of the metric and the rows
+// they send up — so a heavy tail is not hidden by the cap.
+func (l *picLayout) moreBox(n *Node, hidden []*Node, ox, oy float64) func(*painter) {
+	p, c, m := l.plan, l.pal, l.metric
+	mp := l.morePos[n.ID]
+	x, y := ox+mp[0], oy+mp[1]
+	share, rows := 0.0, 0.0
+	total := p.Root.Inclusive(m)
+	for _, h := range hidden {
+		if total > 0 {
+			share += h.Inclusive(m) / total
+		}
+		rows += h.RowsOut
+	}
+	head := fmt.Sprintf("+%d more", len(hidden))
+	sub := fmt.Sprintf("of the %d steps under %s", len(n.Children), n.Op)
+	var stat []string
+	if rows > 0 {
+		stat = append(stat, FmtRows(rows)+" rows")
+	}
+	if share > 0 {
+		stat = append(stat, fmt.Sprintf("%.0f%% together", share*100))
+	}
+	f := l.meas
+	inner := picCardW - 20
+	sub = f.Fit(tSum, sub, inner)
+	line := f.Fit(tSum, strings.Join(stat, " · "), inner)
+	return func(pt *painter) {
+		pt.Box(x, y, picCardW, picCardH, 10, 1, c.muted, c.bg)
+		pt.Text(tOp, c.fg, x+10, y+10, head)
+		pt.Text(tSum, c.muted, x+10, y+10+tOp.LineH()+4, sub)
+		if line != "" {
+			pt.Text(tSum, c.muted, x+10, y+10+tOp.LineH()+4+tSum.LineH()+2, line)
+		}
+	}
 }
 
 // card is one step's card, plan.js's cardHTML drawn: heat border and tint,

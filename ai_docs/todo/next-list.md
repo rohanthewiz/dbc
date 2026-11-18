@@ -92,12 +92,6 @@ ten session docs in `ai_docs/claude_sessions/`
   with no retry and logs an error per scroll frame while the server is
   down (`web/static/js/grid.js:272-287`). Audit, traced.
   (RPU plan, phase 4)
-- **N-301** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  A wide plan draws as an unreadable strip
-  (`explain/picture.go:406-456`): siblings are laid out in one row and
-  folding is by depth only, so an `Append` over 200 partitions gives a
-  20000×199 px image and over 1,000 a 20000×40 one. Fix: collapse or
-  wrap a run of siblings past N. Audit, run. (RPU plan, phase 4)
 - **N-307** · raised `2026-1110-1909-rpu-phase-1` · value low
   The formatter lays out a compound body as separate statements: it cuts
   its tree on every `;` (`fmtStatements`) and reads the trigger head's
@@ -1043,6 +1037,14 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-301** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  A wide plan draws as an unreadable strip
+  (`explain/picture.go:406-456`): siblings are laid out in one row and
+  folding is by depth only, so an `Append` over 200 partitions gives a
+  20000×199 px image and over 1,000 a 20000×40 one. Fix: collapse or
+  wrap a run of siblings past N. Audit, run. (RPU plan, phase 4)
+  closed 2026-11-18, `@SESS@`, commit `@N-301@`: the picture (`explain/picture.go`) caps a step's children at `picMaxKids` (8). A step with more draws its `picShowKids` (6) heaviest by the picture's metric (`capKids`; inclusive, the earlier on a tie), in plan order, and one dashed-border "+N more" box after them: "of the 200 steps under Append", with their rows and their share together, so a heavy tail is not hidden. `shownKids` drives the layout and the walk; the box takes a card's slot (`morePos`), and the parent centres over its children and the box. Folding by depth (`picFoldAt`/`picFoldDepth`) is unchanged; the text tree and the HTML view (plan.js) are untouched. `TestPictureCapsSiblings`: an Append over 200 or 1,000 partitions is now about eight cards wide at full scale and full height (it was a 20000×199 or 20000×40 strip); the kept scans are the heaviest; at 8 children nothing is capped. A 200-partition sample was rendered and looked at.
 
 - **N-298** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Completion gaps. Nothing is offered inside an open quoted name:

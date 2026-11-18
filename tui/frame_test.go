@@ -7,6 +7,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/rohanthewiz/dbc/userdata"
 )
 
 // Frame cost. Bubble Tea calls View after every message, and the TUI asks
@@ -204,5 +206,31 @@ func BenchmarkKeyBigBufferNewStep(b *testing.B) {
 		m.editor.lastAt = time.Time{} // the pause
 		m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
 		m.View()
+	}
+}
+
+// BenchmarkKeySnippetStop is a letter typed into a live snippet's stop
+// that has a mirror (N-327): the cnt snippet expanded mid-way through the
+// 3.5 MB migration, on its column stop (used in SELECT and GROUP BY). The
+// edit is absorbed from the text and the mirror rewritten, so this is the
+// snippet path's cost on top of BenchmarkKeyBigBuffer's.
+func BenchmarkKeySnippetStop(b *testing.B) {
+	m := keyModel(b)
+	e := m.editor
+	at := e.Caret()
+	if !m.insertSnippet(userdata.StarterSnippets[1], at, at) {
+		b.Fatal("cnt did not expand")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // to VAR2, the column
+	m.View()
+	if sn := e.liveSnip(); sn == nil || len(sn.stops[sn.cur].Spans) != 2 {
+		b.Fatal("not on the mirrored stop")
+	}
+	for b.Loop() {
+		m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+		m.View()
+	}
+	if e.liveSnip() == nil {
+		b.Fatal("the session ended while typing")
 	}
 }

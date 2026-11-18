@@ -365,3 +365,67 @@ func TestSnippetFormLang(t *testing.T) {
 		t.Fatalf("edit form lang %q", f.lang)
 	}
 }
+
+// N-327: a key typed into a mirrored stop rewrites only the rows the
+// stop's uses are on. Every other row keeps its slice (so the caches find
+// it by identity), the text is what laying the whole buffer out again
+// gave, and undo still takes the mirrored letters back as one.
+func TestSnippetMirrorsSplice(t *testing.T) {
+	m := newTestModel(t)
+	m.focus = focusEditor
+	head := strings.Repeat("-- before\n", 40)
+	tail := strings.Repeat("\n-- after", 40)
+	m.editor.SetText(head + tail)
+	at := len(head)
+	if !m.insertSnippet(userdata.StarterSnippets[1], at, at) { // cnt
+		t.Fatal("cnt did not expand")
+	}
+	key(t, m, "tab") // VAR2, the column: SELECT … and GROUP BY …
+	e := m.editor
+	firstRow, lastRow := &e.lines[0][0], &e.lines[len(e.lines)-1][0]
+
+	expect := func(col string) string {
+		return head + "SELECT " + col + ", count(*) AS n\nFROM table\nGROUP BY " + col + "\nORDER BY n DESC" + tail
+	}
+	check := func(what, col string) {
+		t.Helper()
+		want := expect(col)
+		if got := e.Text(); got != want {
+			t.Fatalf("%s: text =\n%q\nwant\n%q", what, got, want)
+		}
+		// the rows themselves, not only the cached text made from them
+		if got := joinRows(e.lines); got != want {
+			t.Fatalf("%s: rows join to\n%q\nwant\n%q", what, got, want)
+		}
+		if &e.lines[0][0] != firstRow || &e.lines[len(e.lines)-1][0] != lastRow {
+			t.Fatalf("%s: a row outside the snippet was made again", what)
+		}
+		if sp := e.liveSnip(); sp == nil {
+			t.Fatalf("%s: the session ended", what)
+		}
+	}
+
+	drive(t, m, tea.KeyPressMsg{Code: 'q', Text: "q"})
+	check("a letter", "q")
+	// a value over lines: the mirror's row becomes three
+	pasteText(t, m, "\na\nb")
+	check("a paste with newlines", "q\na\nb")
+	drive(t, m, tea.KeyPressMsg{Code: 'z', Text: "z"})
+	check("a letter after it", "q\na\nbz")
+	for _, back := range []string{"q\na\nb", "q"} {
+		key(t, m, "ctrl+z")
+		if got := e.Text(); got != expect(back) {
+			t.Fatalf("^Z: text =\n%q\nwant both uses %q", got, back)
+		}
+	}
+}
+
+// joinRows is the rows as one string, joined afresh (not the editor's
+// cached Text).
+func joinRows(rows [][]rune) string {
+	s := make([]string, len(rows))
+	for i, r := range rows {
+		s[i] = string(r)
+	}
+	return strings.Join(s, "\n")
+}

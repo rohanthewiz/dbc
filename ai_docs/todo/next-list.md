@@ -140,21 +140,6 @@ ten session docs in `ai_docs/claude_sessions/`
 - **Leave it.** A cut read inside a transaction reads to the end, as now: slow on a huge table, but correct.
 
 The question for the user: which, if any? A cursor seems the least surprising, if a different plan inside a transaction is acceptable.
-- **N-327** · raised `2026-1116-1423-n279-a-keystroke-costs-what-it-changes` · value low
-  A key typed into a snippet's stop still costs the whole buffer, which
-  N-279 made every other keystroke stop doing. While a snippet session is
-  live, each edit is absorbed from the whole text (`snipAbsorb`,
-  `tui/snippets.go:171`: the old text's head compared with the new one's,
-  then `snipSession.rebuild` lays the whole text out again with the
-  mirrors), and when a mirror changed the buffer is set afresh with
-  `splitLines(r.text)` (`:205`), every row a new slice. The caches then
-  find the unchanged rows by comparing their runes instead of their
-  identity (`rowsDiff`), and the undo step's diff does too. Scenario: a
-  snippet expanded into a 3.5 MB migration lags per letter typed into its
-  stop. Fix: rebuild only the rows the current stop's spans are on (the
-  spans are byte offsets; `editorBuf.starts` maps them to rows) and splice
-  those into `lines`, and compare the head as rows. Read, not timed.
-  Raised while closing N-279.
 - **N-328** · raised `2026-1116-1446-n280-completion-costs-what-it-keeps` · value low
   Completion still builds, and dbc web still sends, a doc for every item
   it keeps — up to `MaxItems` (400) — though each UI shows one at a time.
@@ -894,6 +879,30 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-327** · raised `2026-1116-1423-n279-a-keystroke-costs-what-it-changes` · value low
+  A key typed into a snippet's stop still costs the whole buffer, which
+  N-279 made every other keystroke stop doing. While a snippet session is
+  live, each edit is absorbed from the whole text (`snipAbsorb`,
+  `tui/snippets.go:171`: the old text's head compared with the new one's,
+  then `snipSession.rebuild` lays the whole text out again with the
+  mirrors), and when a mirror changed the buffer is set afresh with
+  `splitLines(r.text)` (`:205`), every row a new slice. The caches then
+  find the unchanged rows by comparing their runes instead of their
+  identity (`rowsDiff`), and the undo step's diff does too. Scenario: a
+  snippet expanded into a 3.5 MB migration lags per letter typed into its
+  stop. Fix: rebuild only the rows the current stop's spans are on (the
+  spans are byte offsets; `editorBuf.starts` maps them to rows) and splice
+  those into `lines`, and compare the head as rows. Read, not timed.
+  Raised while closing N-279.
+  closed 2026-11-18, `@SESS@`, commit `@N-327@`: a key typed into a mirrored stop now rewrites only the rows the mirrors are on.
+- **`spliceMirrors`** builds the stretch from the first mirror to the last with every use holding the value, re-splits only the buffer rows that stretch is on, and splices them into `lines`. Every other row keeps its slice, so the text cache, the undo diff and the highlighter find them by identity.
+- **`relay`** (was `rebuild`) counts the spans' offsets and builds the whole text only for the undo-shape test.
+- **`mirrorsDiffer`** tests the mirrors by their values, not by comparing whole texts.
+
+New `BenchmarkKeySnippetStop` (`cnt` expanded mid-way through the 3.5 MB buffer, typing into its column stop) went from 11.6 ms, 41 MB and 69k allocs a key to about 2.0 ms, 19 MB and 3.3k. Plain typing is 1.25 ms. The rest is a second text patch for the mirrors' own version, which the item's "compare the head as rows" would also save; left, as the path is now near plain typing.
+
+New `TestSnippetMirrorsSplice` covers a letter, a multi-line paste and undo. It checks that rows outside the snippet keep their slice, which fails on the old code. The full suite, vet, staticcheck and the TUI pty e2e (its snippet step) pass.
 
 - **N-307** · raised `2026-1110-1909-rpu-phase-1` · value low
   The formatter lays out a compound body as separate statements: it cuts

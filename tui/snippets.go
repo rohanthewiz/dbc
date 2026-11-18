@@ -184,27 +184,27 @@ func (e *editor) snipAbsorb() bool {
 	switch {
 	case len(now) >= first.From+tail && old[first.To:] == now[len(now)-tail:]:
 		val = now[first.From : len(now)-tail]
-		r = sn.rebuild(val)
+		r = sn.relay(val, false)
+		if sn.mirrorsDiffer(val) {
+			// the edit itself was already an undo step (or merged into the
+			// typing before it); the mirrors join it, so one Ctrl+Z takes
+			// the letter back from every use at once
+			e.spliceMirrors(val)
+			e.version++
+		}
 	case uses > 1 && delta%uses == 0:
 		n := first.To - first.From + delta/uses
 		if n < 0 || first.From+n > len(now) {
 			return false
 		}
 		val = now[first.From : first.From+n]
-		if r = sn.rebuild(val); r.text != now {
+		if r = sn.relay(val, true); r.text != now {
 			return false
 		}
 	default:
 		return false
 	}
 
-	if r.text != now {
-		// the edit itself was already an undo step (or merged into the
-		// typing before it); the mirrors join it, so one Ctrl+Z takes the
-		// letter back from every use at once
-		e.lines = splitLines(r.text)
-		e.version++
-	}
 	for i := range sn.stops {
 		sn.stops[i].Spans = r.spans[i]
 	}
@@ -212,22 +212,117 @@ func (e *editor) snipAbsorb() bool {
 	e.sel = false
 	e.cur = e.posAt(sn.stops[sn.cur].Spans[0].From + max(0, min(caret, len(val))))
 	e.goal = e.dispCol(e.cur)
-	sn.text, sn.ver = r.text, e.version
+	// the buffer as the session now knows it: unchanged when no mirror
+	// was rewritten, else patched from the spliced rows (buffer: the rows
+	// spliceMirrors left alone are copied over whole) — the text the
+	// layout's spans are into, never built a second time here
+	sn.text, sn.ver = e.Text(), e.version
 	return true
 }
 
+// mirrorsDiffer reports whether some use of the current stop other than
+// the first — the one typed into, which holds val already — holds
+// something else in the session's text: whether the mirrors need writing.
+func (sn *snipSession) mirrorsDiffer(val string) bool {
+	for _, sp := range sn.stops[sn.cur].Spans[1:] {
+		if sn.text[sp.From:sp.To] != val {
+			return true
+		}
+	}
+	return false
+}
+
+// spliceMirrors writes val into every use of the current stop but the
+// first, which an edit just gave it, changing only the rows those uses
+// are on (N-327).
+//
+// The whole buffer used to be laid out again and set afresh with
+// splitLines: every row a new slice, so a key typed into a mirrored stop
+// cost what N-279 had made other keys stop costing — the text decoded to
+// runes again, then every row compared rune by rune to find the unchanged
+// ones (rowsDiff, in the text cache, the undo step and the highlighter's
+// cache alike): ~12 ms and 41 MB a letter on a 3.5 MB buffer
+// (BenchmarkKeySnippetStop). A snippet's uses all lie in its own few
+// lines, so only those rows need making again:
+//
+//	old  │ … │ row of lo: …▒col▒…  ┐                            │ … │
+//	     │   │ …                   │ the stretch lo..hi, from    │   │
+//	     │   │ row of hi: …▒col▒…  ┘ the first mirror to the last │   │
+//	new  │ … │ the same rows, split again from the stretch       │ … │
+//	                                 with every use holding val
+//
+// Everything outside the stretch is the same in the buffer now and after
+// (the first use already holds val: the edit put it there), so the rows
+// before the stretch's first row and after its last keep their slices,
+// and the caches find them by identity.
+func (e *editor) spliceMirrors(val string) {
+	sn := e.snip
+	old, now := sn.text, e.Text()
+	uses := sn.stops[sn.cur].Spans
+	first := uses[0]
+	// an offset into the session's text, in the buffer now: after the
+	// first use, moved by what the edit made it grow or shrink
+	d := len(val) - (first.To - first.From)
+	toNow := func(x int) int {
+		if x >= first.To {
+			return x + d
+		}
+		return x
+	}
+	lo, hi := len(old), 0
+	for _, sp := range uses[1:] {
+		lo, hi = min(lo, sp.From), max(hi, sp.To)
+	}
+	// the stretch with every use of the stop in it holding val — the first
+	// use too, should it lie between two mirrors. Spans never overlap, so
+	// in order of start they are in text order.
+	in := make([]snippet.Span, 0, len(uses))
+	for _, sp := range uses {
+		if sp.From >= lo && sp.To <= hi {
+			in = append(in, sp)
+		}
+	}
+	slices.SortFunc(in, func(a, b snippet.Span) int { return a.From - b.From })
+	var mid strings.Builder
+	at := lo
+	for _, sp := range in {
+		mid.WriteString(old[at:sp.From])
+		mid.WriteString(val)
+		at = sp.To
+	}
+	mid.WriteString(old[at:hi])
+
+	// the buffer's rows the stretch is on, whole: the stretch's bytes in
+	// the buffer now are [toNow(lo), toNow(hi)), and the row of an offset
+	// is the last row starting at or before it (posAt)
+	b := e.buffer()
+	loN, hiN := toNow(lo), toNow(hi)
+	ra, rb := e.posAt(loN).row, e.posAt(hiN).row
+	from, to := b.starts[ra], min(b.rowStart(rb+1)-1, len(now))
+	rows := splitLines(now[from:loN] + mid.String() + now[hiN:to])
+	e.lines = slices.Replace(e.lines, ra, rb+1, rows...)
+}
+
 // snipLayout is the session's text with the current stop holding a new
-// value: the text, every stop's spans in it, and the end mark.
+// value: every stop's spans in it, the end mark, and the text itself when
+// relay was asked for it.
 type snipLayout struct {
 	text  string
 	spans [][]snippet.Span // by stop, as sn.stops
 	end   int
 }
 
-// rebuild lays the session's text out again with every use of the current
-// stop holding val and every other span as it was. It works from the text
-// the offsets are into (sn.text) and changes nothing on the session.
-func (sn *snipSession) rebuild(val string) snipLayout {
+// relay lays the session's text out again with every use of the current
+// stop holding val and every other span as it was: the spans and the end
+// mark, and — withText — the text itself. It works from the text the
+// offsets are into (sn.text) and changes nothing on the session.
+//
+// The text is wanted only to test an edit's shape (snipAbsorb's undo
+// case). A key typed into a stop needs only the spans, and building a
+// copy of the whole buffer for each one was most of what such a key cost
+// before the rows were spliced (spliceMirrors), so the offsets are counted
+// rather than read off the builder.
+func (sn *snipSession) relay(val string, withText bool) snipLayout {
 	old := sn.text
 	type ref struct{ stop, span int }
 	var order []ref
@@ -243,26 +338,33 @@ func (sn *snipSession) rebuild(val string) snipLayout {
 	slices.SortFunc(order, func(a, b ref) int { return start(a) - start(b) })
 
 	var b strings.Builder
-	at, shift := 0, 0
+	at, shift, n := 0, 0, 0 // n: the new text's length so far
 	for _, r := range order {
 		sp := sn.stops[r.stop].Spans[r.span]
-		b.WriteString(old[at:sp.From])
-		from := b.Len()
+		v := old[sp.From:sp.To]
 		if r.stop == sn.cur {
-			b.WriteString(val)
-		} else {
-			b.WriteString(old[sp.From:sp.To])
+			v = val
 		}
+		if withText {
+			b.WriteString(old[at:sp.From])
+			b.WriteString(v)
+		}
+		n += sp.From - at
+		from := n
+		n += len(v)
 		// the end mark moves with the spans before it; one at a span's own
 		// start stays in front of it, one at its end follows it
 		if sp.To <= sn.end {
-			shift += b.Len() - from - (sp.To - sp.From)
+			shift += len(v) - (sp.To - sp.From)
 		}
 		at = sp.To
-		out.spans[r.stop][r.span] = snippet.Span{From: from, To: b.Len()}
+		out.spans[r.stop][r.span] = snippet.Span{From: from, To: n}
 	}
-	b.WriteString(old[at:])
-	out.text, out.end = b.String(), sn.end+shift
+	if withText {
+		b.WriteString(old[at:])
+		out.text = b.String()
+	}
+	out.end = sn.end + shift
 	return out
 }
 

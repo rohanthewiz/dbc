@@ -103,19 +103,6 @@ ten session docs in `ai_docs/claude_sessions/`
   `fmtStatements` take its statements from the scan (`body`), and lay a
   body's statements out indented under its BEGIN, or keep the statement
   as written. Raised while closing N-248.
-- **N-309** · raised `2026-1110-1909-rpu-phase-1` · value low
-  A script that reads a table with `s.Reader` and loads it back with
-  `s.Writer(…, WriteOpts{Truncate: true})` on the same Postgres database
-  should hang as N-253's pipeline did: the Reader's transaction holds
-  ACCESS SHARE until its rows run out, and the Writer's TRUNCATE, opened
-  before the loop, waits on it forever, on the script's own goroutine
-  (`sdb/etl.go:112,129`: plain `etl.Read`, plain `etl.NewWriter`). N-253
-  gave pipelines the same-database rules through
-  `etl.NewSameDatabaseWriter`; scripts have no held read and no such
-  writer. Fix: in `s.Writer`, when an open Reader of the script shares
-  the Writer's database, take the same-database rules — or document
-  `s.Copy` for a same-table rewrite (it handles it). Traced, not run.
-  Raised while working N-251–N-253.
 
 - **N-310** · raised `2026-1110-2001-rpu-phase-2-n265-n268` · value low
   A script run in the TUI or dbc web that ignores Stop has no backstop.
@@ -978,6 +965,21 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-309** · raised `2026-1110-1909-rpu-phase-1` · value low
+  A script that reads a table with `s.Reader` and loads it back with
+  `s.Writer(…, WriteOpts{Truncate: true})` on the same Postgres database
+  should hang as N-253's pipeline did: the Reader's transaction holds
+  ACCESS SHARE until its rows run out, and the Writer's TRUNCATE, opened
+  before the loop, waits on it forever, on the script's own goroutine
+  (`sdb/etl.go:112,129`: plain `etl.Read`, plain `etl.NewWriter`). N-253
+  gave pipelines the same-database rules through
+  `etl.NewSameDatabaseWriter`; scripts have no held read and no such
+  writer. Fix: in `s.Writer`, when an open Reader of the script shares
+  the Writer's database, take the same-database rules — or document
+  `s.Copy` for a same-table rewrite (it handles it). Traced, not run.
+  Raised while working N-251–N-253.
+  closed 2026-11-18, `@SESS@`, commit `@N-309@`: reproduced first. New live `sdb.TestLiveReaderWriterSameTable` (postgres:17): `s.Reader` on a table, then `s.Writer(…, Truncate)` on it, rewriting each row. On the old code the Writer's TRUNCATE waited until the test's 20 s context ended ("context deadline exceeded"). Now `s.Writer` asks `heldOn`: whether a Reader this script opened still holds its transaction (`etl.ReadHeld`: not closed, not run out, or held for a load) on the Writer's Postgres database (`etl.SameDatabase`: one pool, or two names for one database). If one does, it opens through `etl.NewSameDatabaseWriter`, so the truncate is a DELETE, and with `fromQuery` when such a Reader's query may write, so lock waits are bounded. `sdb` keeps each open Reader's connection beside it (`openSet.readerConns`, trimmed with the readers on release). `ReadHeld` is a package function, not Reader methods: Reader is a script type, its methods go into the assistant's API summary, and two methods pushed that past its 14 KB budget (`sdbapi.TestSummary`). The test passes with the Writer on the Reader's pool and on a second connection name to the same database. Full suite, `sdbapi`, and etl's live suite pass.
 
 - **N-209** · raised `2026-1011-0054-n179-n203-n208` · value low
   `tui.TestCatsReportsRunTransitions` failed once in a full `go test

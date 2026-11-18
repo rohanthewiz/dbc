@@ -262,6 +262,21 @@ func (r *Reader) Next() bool {
 	return true
 }
 
+// ReadHeld reports whether r still holds its query open — and on
+// Postgres its transaction, with the ACCESS SHARE locks it took: neither
+// closed nor run out (or, held for a load, not ended by its owner) — and
+// whether its query may write (not a plain read), when its row locks too
+// are held until it commits (NewSameDatabaseWriter's fromQuery). A load
+// into a table the read touches must not TRUNCATE it meanwhile; sdb's
+// Writer asks this of a script's open Readers (N-309).
+//
+// A function, not methods: Reader is a script's type (sdb.Reader), and
+// its methods are listed in the script API the assistant is sent, which
+// has a size budget; this is for hosts.
+func ReadHeld(r *Reader) (held, mayWrite bool) {
+	return !r.closed && (!r.done || r.holdTx), !r.plain
+}
+
 // Row returns the current row. Each call to Next makes a new slice.
 func (r *Reader) Row() []any { return r.row }
 

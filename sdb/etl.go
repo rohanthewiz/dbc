@@ -49,7 +49,10 @@ type WriteOpts = etl.WriteOptions
 type openSet struct {
 	mu      sync.Mutex
 	readers []*etl.Reader
-	writers []*etl.Writer
+	// readerConns[i] is readers[i]'s connection, for Writer's
+	// same-database check (N-309); the two slices move together
+	readerConns []etl.Conn
+	writers     []*etl.Writer
 }
 
 // ETLConn resolves a connection name to the etl package's view of it: the
@@ -115,6 +118,7 @@ func (s *S) Reader(conn, query string, args ...any) (*Reader, error) {
 	}
 	s.st.open.mu.Lock()
 	s.st.open.readers = append(s.st.open.readers, rd)
+	s.st.open.readerConns = append(s.st.open.readerConns, c)
 	s.st.open.mu.Unlock()
 	return rd, nil
 }
@@ -126,7 +130,17 @@ func (s *S) Writer(conn, table string, cols []string, opt WriteOpts) (*Writer, e
 	if err != nil {
 		return nil, err
 	}
-	w, err := etl.NewWriter(s.Ctx(), c, table, cols, opt)
+	var w *etl.Writer
+	if held, fromQuery := s.heldOn(c); held {
+		// a Reader of this script still holds its transaction on the
+		// Writer's Postgres database: the same-database rules, so the
+		// load's truncate is a DELETE rather than a TRUNCATE, which would
+		// wait on the read's ACCESS SHARE for good — the script reads its
+		// rows inside the loop that would have to end first (N-309)
+		w, err = etl.NewSameDatabaseWriter(s.Ctx(), c, table, cols, opt, fromQuery)
+	} else {
+		w, err = etl.NewWriter(s.Ctx(), c, table, cols, opt)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -134,6 +148,36 @@ func (s *S) Writer(conn, table string, cols []string, opt WriteOpts) (*Writer, e
 	s.st.open.writers = append(s.st.open.writers, w)
 	s.st.open.mu.Unlock()
 	return w, nil
+}
+
+// heldOn reports whether a Reader this script opened is still holding its
+// transaction on c's Postgres database (etl.SameDatabase: one pool, or two
+// names for one database), and whether any such Reader's query may write
+// (NewSameDatabaseWriter's fromQuery: its lock waits are then bounded).
+// Off Postgres no read holds a lock a load waits on: false.
+func (s *S) heldOn(c etl.Conn) (held, fromQuery bool) {
+	if c.Engine != etl.Postgres {
+		return false, false
+	}
+	o := &s.st.open
+	o.mu.Lock()
+	var conns []etl.Conn
+	var writes []bool
+	for i, rd := range o.readers {
+		h, w := etl.ReadHeld(rd)
+		if h && i < len(o.readerConns) && o.readerConns[i].Engine == etl.Postgres {
+			conns, writes = append(conns, o.readerConns[i]), append(writes, w)
+		}
+	}
+	o.mu.Unlock()
+	for i, rc := range conns {
+		// the lookup runs off the lock: it may ask both servers
+		if etl.SameDatabase(s.Ctx(), rc, c) {
+			held = true
+			fromQuery = fromQuery || writes[i]
+		}
+	}
+	return held, fromQuery
 }
 
 // Release closes every Reader and rolls back every Writer the script left
@@ -168,6 +212,7 @@ func (s *S) releaseFrom(r, w int) {
 	readers := append([]*etl.Reader(nil), o.readers[r:]...)
 	writers := append([]*etl.Writer(nil), o.writers[w:]...)
 	o.readers, o.writers = o.readers[:r], o.writers[:w]
+	o.readerConns = o.readerConns[:min(r, len(o.readerConns))]
 	o.mu.Unlock()
 	for _, w := range writers {
 		_ = w.Abort()

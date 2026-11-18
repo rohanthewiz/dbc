@@ -67,14 +67,18 @@ func routinesQuery(driver string, scope []string) (string, error) {
 		}
 		// pg_get_function_arguments renders defaults and modes as
 		// declared ("a integer, VARIADIC b text[]"); pg_get_function_result
-		// renders SETOF and TABLE(…) results, and is NULL for a procedure
+		// renders SETOF and TABLE(…) results, and is NULL for a procedure.
+		// Overloads come fewest arguments first, then by their text: the
+		// first is what completion shows (the rest are "+N overloads"),
+		// and by name alone Postgres returned them in storage order,
+		// which changed between servers (N-308)
 		return `SELECT n.nspname, p.proname, p.prokind::text,
        pg_catalog.pg_get_function_arguments(p.oid), pg_catalog.pg_get_function_result(p.oid),
        p.oid::text
 FROM pg_catalog.pg_proc p
 JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
 WHERE n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\_%'` + where + `
-ORDER BY 1, 2`, nil
+ORDER BY 1, 2, p.pronargs, 4`, nil
 	case "mysql":
 		// a procedure's parameters are IN, OUT or INOUT, and say so; a
 		// function's can only be IN, which MySQL reports (8.4) or leaves

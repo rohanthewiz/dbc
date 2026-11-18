@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rohanthewiz/serr"
@@ -412,8 +413,14 @@ func (w *Workspace) RunScript(path string) (Start, error) {
 	}
 	gen, conn := w.runGen, w.active
 	w.runTarget = target
+	// abandoned: the run was written off (scriptStopped); what the script
+	// still sends afterwards — it runs on — is dropped, not shown
+	var abandoned atomic.Bool
 	s := sdb.New(w.mgr,
 		func(r *model.Result) {
+			if abandoned.Load() {
+				return
+			}
 			if r != nil {
 				w.mu.Lock()
 				// a straggling show from a run already written off (Stop,
@@ -425,11 +432,16 @@ func (w *Workspace) RunScript(path string) (Start, error) {
 			}
 			w.emit(&ScriptShow{Result: r, Conn: conn})
 		},
-		func(msg string) { w.emit(&ScriptPrint{Text: msg, Conn: conn}) },
+		func(msg string) {
+			if !abandoned.Load() {
+				w.emit(&ScriptPrint{Text: msg, Conn: conn})
+			}
+		},
 	).WithContext(ctx).WithPaths(sdb.Paths{ScriptsDir: w.cfg.ScriptsDir, PipelinesDir: w.cfg.PipelinesDir,
 		JobsDir: w.cfg.JobsDir, RunsDir: w.cfg.RunsDir, FilesDir: w.cfg.FilesDir}).WithJobs(w.jobs)
 	job := func() Event {
-		ev := &RunDone{Tag: tag, Conn: conn, Script: true, ScriptPath: path, Err: script.Run(path, s)}
+		notes, err := scriptStopped(ctx, func() error { return script.Run(path, s) }, &abandoned)
+		ev := &RunDone{Tag: tag, Conn: conn, Script: true, ScriptPath: path, Err: err, Notes: notes}
 		// which rows a script wrote is not known here, so it is taken to
 		// have written: a script is more often a data chore than a
 		// report. Whether it changed the catalog is known — S notes each
@@ -442,6 +454,53 @@ func (w *Workspace) RunScript(path string) (Start, error) {
 		return ev
 	}
 	return Start{Tag: tag, Gen: gen, Job: job, Notes: []Note{notef(Info, "running %s", tag)}}, nil
+}
+
+// scriptAbandonAfter is how long a stopped script has to return before its
+// run is written off (scriptStopped): the jobs engine's AbandonAfter for a
+// stuck node, the same minute. A var, so a test can shorten it.
+var scriptAbandonAfter = time.Minute
+
+// scriptStopped runs a script's Run and returns its error — or, when the
+// run was stopped (ctx ended) and Run has not returned scriptAbandonAfter
+// later, gives up waiting on it (N-310). A script that ignores Stop — a
+// loop that never asks s.Ctx(), a blocking call with no context — used to
+// hold its tab busy for good: Stop did nothing more, and only closing the
+// tab or quitting freed it. Go cannot stop the goroutine, so it runs on,
+// and what it holds (a pooled connection, a lock or a transaction on the
+// server) stays held until it returns or dbc exits; the note says so.
+// Abandoning is marked in abandoned, so the script's late shows and
+// prints are dropped, and the error is a stop's (db.ErrCanceled), so the
+// run lands as stopped.
+//
+//	Run returns ─────────────────────────────────────► its error
+//	Stop ─► wait scriptAbandonAfter ─┬─ Run returns ─► its error (a stop)
+//	                                 └─ still going ─► abandoned: stopped, with the note
+//
+// The other way the item offered — stopping the interpreted Run through
+// yaegi's ExecuteWithContext — would swap the interpreter's done channel
+// under the running frames (a race in yaegi), so the run is let go here,
+// as the jobs engine lets a stuck node go.
+func scriptStopped(ctx context.Context, run func() error, abandoned *atomic.Bool) ([]Note, error) {
+	done := make(chan error, 1)
+	go func() { done <- run() }()
+	select {
+	case err := <-done:
+		return nil, err
+	case <-ctx.Done():
+	}
+	t := time.NewTimer(scriptAbandonAfter)
+	defer t.Stop()
+	select {
+	case err := <-done:
+		return nil, err
+	case <-t.C:
+		abandoned.Store(true)
+		return []Note{notef(Warn, "the script was still running %s after it was stopped — it is not heeding the stop "+
+			"(a loop that never checks s.Ctx(), a call with no context). This tab is free again; the script "+
+			"runs on, and any connection, lock or transaction it holds stays busy until it returns or dbc exits",
+			scriptAbandonAfter)}, fmt.Errorf("%w: abandoned %s after Stop", db.ErrCanceled, scriptAbandonAfter)
+	}
 }
 
 // stepTo records that run gen has reached statement step, for the status

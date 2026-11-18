@@ -2375,7 +2375,7 @@ passes. See [Scripts headless](#scripts-headless).
 | `s.Export(r, format, path)` | Export a result; empty path → clipboard; a relative path is in `files_dir` |
 | `s.Path(p) string` | Where file `p` is: a relative path in `files_dir`, `~/` and absolute as written — open your own files through it |
 | `s.Canceled() bool` | True once the user has stopped this run |
-| `s.Ctx() context.Context` | The run's context, for `select` on `Done()` |
+| `s.Ctx() context.Context` | The run's context, for `select` on `Done()`. A script run in the TUI or dbc web that never looks at it, nor passes it to a call, cannot be stopped: a minute after Stop its tab is freed and the run lands as stopped, while the script runs on in the background, holding what it holds, until it returns or dbc exits |
 | `sdb.IsCanceled(err) bool` | Tells a stop apart from a real query failure |
 
 `sdb.Result` gives you `Columns []string`, `Rows [][]string`, `Raw [][]any`,

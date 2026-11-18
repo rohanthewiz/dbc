@@ -104,20 +104,6 @@ ten session docs in `ai_docs/claude_sessions/`
   body's statements out indented under its BEGIN, or keep the statement
   as written. Raised while closing N-248.
 
-- **N-310** · raised `2026-1110-2001-rpu-phase-2-n265-n268` · value low
-  A script run in the TUI or dbc web that ignores Stop has no backstop.
-  N-268 gave the jobs engine one (a run still going a minute after its
-  stop is abandoned) and headless a second Ctrl+C, but a workspace's
-  script run (`workspace` Job, `script.Run` on the tab's session) waits
-  on the interpreted `Run` for as long as it spins: the tab stays busy,
-  Stop does nothing more, and only closing the tab (dbc web) or quitting
-  frees it. A script gets a fresh interpreter per run, so stopping it is
-  possible in principle (yaegi's run id, `EvalWithContext`'s `stop()`),
-  but only through `EvalWithContext`/`ExecuteWithContext`, which swap
-  `interp.done` under the running frames (a race). Options: call the
-  script's `Run` through `ExecuteWithContext` of a compiled call, or have
-  the workspace abandon a run a minute after Stop as the engine does
-  (free the slot, say the session stays busy). Raised while closing N-268.
 - **N-314** · raised `2026-1112-1610-n311-introspection-levels` · value low
   Two calls inside N-311's adaptive default were the session's, made
   without the user's word, and stand until the user says otherwise: a
@@ -965,6 +951,22 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-310** · raised `2026-1110-2001-rpu-phase-2-n265-n268` · value low
+  A script run in the TUI or dbc web that ignores Stop has no backstop.
+  N-268 gave the jobs engine one (a run still going a minute after its
+  stop is abandoned) and headless a second Ctrl+C, but a workspace's
+  script run (`workspace` Job, `script.Run` on the tab's session) waits
+  on the interpreted `Run` for as long as it spins: the tab stays busy,
+  Stop does nothing more, and only closing the tab (dbc web) or quitting
+  frees it. A script gets a fresh interpreter per run, so stopping it is
+  possible in principle (yaegi's run id, `EvalWithContext`'s `stop()`),
+  but only through `EvalWithContext`/`ExecuteWithContext`, which swap
+  `interp.done` under the running frames (a race). Options: call the
+  script's `Run` through `ExecuteWithContext` of a compiled call, or have
+  the workspace abandon a run a minute after Stop as the engine does
+  (free the slot, say the session stays busy). Raised while closing N-268.
+  closed 2026-11-18, `@SESS@`, commit `@N-310@`. Of the item's two options, abandoning the run was taken: the jobs engine does the same, and the other, `ExecuteWithContext`, races yaegi's `done` under the running frames. `Workspace.RunScript` now runs the script's `Run` through `scriptStopped`, on an inner goroutine. When the run is stopped (its context ends) and `Run` has not returned `scriptAbandonAfter` later (a minute, as the engine's `AbandonAfter`), the run lands as stopped (`db.ErrCanceled`). A Warn note says the script is not heeding the stop and runs on, and that its connection, lock or transaction stays busy until it returns or dbc exits. The tab is free for the next run. An `abandoned` flag drops the script's later shows and prints. Scripts run on the pool, not the tab's session, so no session is held. `TestScriptIgnoringStopIsAbandoned`: a script that sleeps 3 s without asking `s.Ctx()`, stopped at 100 ms with a 300 ms window, lands as stopped with the note; the next run goes through at once; and the script's late show, once it wakes, lands nowhere. The README's `s.Ctx()` row says it. Full suite green.
 
 - **N-309** · raised `2026-1110-1909-rpu-phase-1` · value low
   A script that reads a table with `s.Reader` and loads it back with

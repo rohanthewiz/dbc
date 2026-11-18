@@ -250,7 +250,8 @@ func TestNothingInLiterals(t *testing.T) {
 		"SELECT 'a b▮c' FROM orders",
 		"SELECT 1 -- from ord▮",
 		"SELECT /* ord▮ */ 1",
-		`SELECT "ord▮`,
+		// a quoted name being typed is completed since N-298
+		// (TestCompleteInsideQuotedName); a string still is not
 		"SELECT 12▮",
 	} {
 		if r := at(t, "postgres", buf); len(r.Items) != 0 {

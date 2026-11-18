@@ -78,14 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-298** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  Completion gaps. Nothing is offered inside an open quoted name:
-  `FROM "User▮`, `WHERE "Em▮` and MySQL ``FROM `ord▮`` return no items
-  (`insideLiteral`, `sqlcomplete/complete.go:272`), which hits
-  mixed-case Postgres schemas. `ALTER TABLE orders DROP COLUMN ▮` offers
-  clause keywords (AND, ASC…), not the table's columns.
-  `CREATE INDEX ON orders (▮` offers every catalog column, qualified.
-  Audit, run. (RPU plan, phase 4)
 - **N-300** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   dbc web usability basics. Modals have no focus trap, so Tab reaches the
   page behind the shade (`web/static/js/ui.js:90-111`). The grid is a
@@ -1051,6 +1043,16 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-298** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Completion gaps. Nothing is offered inside an open quoted name:
+  `FROM "User▮`, `WHERE "Em▮` and MySQL ``FROM `ord▮`` return no items
+  (`insideLiteral`, `sqlcomplete/complete.go:272`), which hits
+  mixed-case Postgres schemas. `ALTER TABLE orders DROP COLUMN ▮` offers
+  clause keywords (AND, ASC…), not the table's columns.
+  `CREATE INDEX ON orders (▮` offers every catalog column, qualified.
+  Audit, run. (RPU plan, phase 4)
+  closed 2026-11-18, `@SESS@`, commit `@N-298@`. **Inside a quoted name being typed** (`FROM "User▮`, `WHERE "Em▮`, MySQL ``FROM `ord▮``), `openQuotedName` finds the open quote, since the caret is inside a quoted identifier not closed before it. The word then starts at the quote (`Result.From`) and the name after it is what is matched; `completer.from` replaced the `caret-len(prefix)` arithmetic, so `sales."Inv▮` works after a dot too. Only names are kept: keywords, types, joins, snippets and routines are dropped. Each item replaces the quote with the name as it needs writing, and its `Filter` gets the quote in front, because Monaco filters against the typed range, quote included. The scope is tokenized with the name closed at the caret: an open quote otherwise ran on to the next quote (`SELECT i."Am▮ FROM sales."Invoices" i` lost its FROM). An escaped quote inside the typed name is left alone. **`ALTER TABLE t DROP COLUMN ▮`** (and ALTER, RENAME, MODIFY, CHANGE COLUMN; IF EXISTS, ONLY and a schema allowed) offers t's columns (`alterTableTarget`). **`CREATE [UNIQUE] INDEX [name] ON t (▮`** and **`REFERENCES t (▮`** offer t's columns, bare, like `INSERT INTO t (▮` (`insertTarget`). A join's `ON (` is unchanged. Tests: `TestCompleteInsideQuotedName`, `TestCompleteDDLColumnLists`; `TestNothingInLiterals` no longer lists `SELECT "ord▮`. `FuzzComplete` ran 60 s, 1.47M execs, clean; the sqlcomplete, designer, web and tui suites pass.
 
 - **N-299** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Reserved-word quoting is one small list for all engines

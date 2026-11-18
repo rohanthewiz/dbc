@@ -157,22 +157,45 @@ func Complete(req Request) Result {
 		stmts = sd.Split(buf)
 	}
 	start, end := stmtWindow(buf, caret, stmts)
-	if insideLiteral(buf[start:end], caret-start, sd) {
-		return res
-	}
 
 	// The word being typed: back from the caret over identifier bytes. A
-	// word starting with a digit is a number, not a name.
+	// word starting with a digit is a number, not a name. Inside a quoted
+	// name still open (`FROM "User▮`, MySQL ``FROM `ord▮``) the word is
+	// the name after the quote, and the quote is replaced with the rest
+	// (N-298): a mixed-case Postgres schema is typed quoted, and nothing
+	// was offered there, since a quoted name was read as a literal.
 	from := caret
-	for from > start && isWordByte(buf[from-1]) {
-		from--
-	}
-	if from < caret && isDigit(buf[from]) {
+	quote := byte(0)
+	if qs, ok := openQuotedName(buf[start:end], caret-start, sd); ok {
+		from, quote = start+qs, buf[start+qs]
+	} else if insideLiteral(buf[start:end], caret-start, sd) {
 		return res
+	} else {
+		for from > start && isWordByte(buf[from-1]) {
+			from--
+		}
+		if from < caret && isDigit(buf[from]) {
+			return res
+		}
 	}
 	res.From, res.Prefix = from, buf[from:caret]
+	prefix := res.Prefix
+	if quote != 0 {
+		prefix = prefix[1:] // what is matched: the name, without its quote
+	}
 
-	toks := tokenize(buf, start, end, sd)
+	// Inside a quoted name being typed, the scope is read with the name
+	// closed at the caret: an open quote otherwise runs on to the next one
+	// — `SELECT i."Am▮ FROM sales."Invoices" i` lexes `"Am FROM sales."`
+	// as one name — and the FROM after the caret, which the columns come
+	// from, is lost. Tokens past the caret sit one byte later than in buf;
+	// only their order and kinds are read (parseScope), and the ones
+	// before it, which suggest reads by offset, are where they were.
+	tbuf, tend := buf, end
+	if quote != 0 {
+		tbuf, tend = buf[:caret]+string(quote)+buf[caret:], end+1
+	}
+	toks := tokenize(tbuf, start, tend, sd)
 	// The word under the caret is what is being typed, not a name the
 	// statement uses: leaving it out keeps "FROM ord▮" from adding a table
 	// "ord" to the scope and "SELECT o▮" from finding an alias "o".
@@ -184,20 +207,85 @@ func Complete(req Request) Result {
 		}
 	}
 
-	c := &completer{req: req, d: d, buf: buf, caret: caret, prefix: res.Prefix, lowPrefix: strings.ToLower(res.Prefix)}
+	c := &completer{req: req, d: d, buf: buf, caret: caret, from: from, prefix: prefix, lowPrefix: strings.ToLower(prefix)}
 	c.index()
 	c.sc = parseScope(toks, c)
 	c.suggest(before)
 	res.Items, res.Incomplete = c.finish()
+	if quote != 0 {
+		res.Items = quotedItems(res.Items, quote)
+	}
 	return res
+}
+
+// openQuotedName reports whether offset (into stmt) is inside a quoted
+// identifier that is still being typed — one that is not closed yet, or
+// whose closing quote is still ahead of the caret — and where its opening
+// quote is. A name holding an escaped quote ("a""b) is left alone: what
+// to replace would be guesswork.
+func openQuotedName(stmt string, offset int, sd sqlsplit.Dialect) (int, bool) {
+	for _, t := range sd.Lex(stmt) {
+		if t.Start >= offset {
+			break
+		}
+		if t.Kind != sqlsplit.TokIdent || offset > t.End {
+			continue
+		}
+		body := stmt[t.Start:t.End]
+		if offset == t.End && closed(body) {
+			return 0, false // after the closing quote: not inside
+		}
+		q := body[0]
+		if q != '"' && q != '`' {
+			return 0, false // a [bracketed] name, or another kind of quote
+		}
+		typed := stmt[t.Start+1 : offset]
+		if strings.IndexByte(typed, q) >= 0 {
+			return 0, false
+		}
+		return t.Start, true
+	}
+	return 0, false
+}
+
+// quotedItems keeps, of what a word inside a quoted name was offered, the
+// names — tables, views, schemas, columns, aliases — and drops the
+// vocabulary (keywords, types, join clauses, functions), which cannot be
+// typed inside quotes. Each item replaces the quote too, its Insert already
+// quoted as the name needs (or bare, which is the same name); its Filter
+// gets the quote in front, so an editor that matches the typed text
+// against it (Monaco's filterText) sees `"Inv` match `"Invoices`.
+func quotedItems(items []Item, q byte) []Item {
+	out := items[:0]
+	for _, it := range items {
+		switch it.Kind {
+		case KindKeyword, KindJoin, KindType, KindSnippet, KindFunction, KindProcedure:
+			// the vocabulary and the routines: a quoted name in a
+			// statement's text is a table's, a column's, a schema's or an
+			// alias's (a routine named with capitals is rare, and the
+			// builtins would crowd the list)
+			continue
+		}
+		f := it.Filter
+		if f == "" {
+			f = it.Label
+		}
+		it.Filter = string(q) + f
+		out = append(out, it)
+	}
+	return out
 }
 
 // completer holds one request's working state.
 type completer struct {
-	req    Request
-	d      *dialect
-	buf    string
-	caret  int
+	req   Request
+	d     *dialect
+	buf   string
+	caret int
+	// from is where the word being typed starts: its first letter, or the
+	// opening quote of a quoted name (openQuotedName), which the prefix
+	// leaves out
+	from   int
 	prefix string
 	// lowPrefix is prefix lower-cased once, for the match test every
 	// candidate goes through (quality)
@@ -442,7 +530,7 @@ func (c *completer) suggest(before []tok) {
 
 	// qualified: o.▮, orders.▮, public.▮, public.orders.▮ — the dot must
 	// touch the word being typed
-	if p.isPunct(".") && p.end == c.caret-len(c.prefix) {
+	if p.isPunct(".") && p.end == c.from {
 		q := prev(2)
 		if n < 2 || !q.isName() {
 			return // `.▮` with nothing before the dot: no qualifier
@@ -470,6 +558,19 @@ func (c *completer) suggest(before []tok) {
 		// name: DROP FUNCTION IF EXISTS, CREATE FUNCTION's new name
 		c.keywords(5)
 		return
+	}
+
+	// ALTER TABLE t DROP COLUMN ▮ (and ALTER, RENAME, MODIFY, CHANGE
+	// COLUMN): t's columns, where the clause words used to be offered
+	// (N-298)
+	if p.kind == tWord && p.low == "column" && n >= 2 {
+		switch prev(2).low {
+		case "drop", "alter", "rename", "modify", "change":
+			if tbl := c.alterTableTarget(before); tbl != nil {
+				c.columnsOf(tbl, "", 0)
+				return
+			}
+		}
 	}
 
 	switch {
@@ -579,11 +680,68 @@ func (c *completer) afterParen(before []tok) {
 	c.expression(0)
 }
 
-// insertTarget is the table an INSERT INTO t ( names, when toks ends with
-// INTO t (any qualifier allowed); nil otherwise.
+// insertTarget is the table whose column list the parenthesis after toks
+// opens, when toks ends with one of (any qualifier allowed):
+//
+//	INSERT INTO t (                     the columns given values
+//	CREATE [UNIQUE] INDEX [name] ON t ( the columns indexed (N-298)
+//	… REFERENCES t (                    a foreign key's target columns
+//
+// nil otherwise. Each wants t's own columns, bare: CREATE INDEX ON t (▮
+// used to offer every catalog column, qualified, as in an expression.
 func (c *completer) insertTarget(toks []tok) *erd.Table {
 	parts, i := trailingName(toks)
-	if len(parts) == 0 || i < 0 || toks[i].kind != tWord || toks[i].low != "into" {
+	if len(parts) == 0 || i < 0 || toks[i].kind != tWord {
+		return nil
+	}
+	switch toks[i].low {
+	case "into", "references":
+	case "on":
+		// ON t ( is an index's only in CREATE … INDEX; elsewhere ON is a
+		// join's condition (ON x (…) is no table's column list)
+		if !createIndex(toks[:i]) {
+			return nil
+		}
+	default:
+		return nil
+	}
+	return c.resolve(parts)
+}
+
+// createIndex reports whether toks begin a CREATE [UNIQUE] INDEX statement.
+func createIndex(toks []tok) bool {
+	if len(toks) < 2 || toks[0].low != "create" {
+		return false
+	}
+	for _, t := range toks[1:min(len(toks), 4)] {
+		if t.kind == tWord && t.low == "index" {
+			return true
+		}
+	}
+	return false
+}
+
+// alterTableTarget is the table an ALTER TABLE [IF EXISTS] [ONLY] t names
+// at the start of toks, or nil.
+func (c *completer) alterTableTarget(toks []tok) *erd.Table {
+	if len(toks) < 3 || toks[0].low != "alter" || toks[1].low != "table" {
+		return nil
+	}
+	i := 2
+	for i < len(toks) && toks[i].kind == tWord && (toks[i].low == "if" || toks[i].low == "exists" || toks[i].low == "only") {
+		i++
+	}
+	var parts []string
+	for i < len(toks) && toks[i].isName() {
+		parts = append(parts, toks[i].text)
+		i++
+		if i+1 < len(toks) && toks[i].isPunct(".") && toks[i+1].isName() {
+			i++
+			continue
+		}
+		break
+	}
+	if len(parts) == 0 {
 		return nil
 	}
 	return c.resolve(parts)

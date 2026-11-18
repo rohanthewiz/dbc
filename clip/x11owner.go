@@ -102,7 +102,11 @@ func writeX11(c Content) error {
 	if err != nil {
 		return serr.Wrap(err, "op", "clipboard-x11")
 	}
-	payload, err := json.Marshal(x11Payload{Text: c.Text, HTML: c.HTML})
+	// a conversion, not a literal (staticcheck S1016): the two structs hold
+	// the same fields, x11Payload only adding the wire's JSON names — and
+	// should Content gain a flavor, this stops compiling until the helper's
+	// payload carries it too
+	payload, err := json.Marshal(x11Payload(c))
 	if err != nil {
 		return serr.Wrap(err, "op", "clipboard-x11")
 	}

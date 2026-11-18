@@ -52,3 +52,23 @@ jobs:
 
       - name: Test
         run: go test -race ./...
+
+      # A brief run of every fuzz target (N-302), Linux only: `go test`
+      # above already replays their seeds and testdata/fuzz corpora; this
+      # explores a little past them on every push. `-fuzz` takes one
+      # target per package per run, hence the loop. A failure leaves its
+      # input under testdata/fuzz in the log's path, to be committed as a
+      # seed with the fix. Longer runs are by hand (each target's doc).
+      - name: Fuzz (brief)
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          set -e
+          for t in sqlsplit:FuzzSplit sqlsplit:FuzzFormat sqlsplit:FuzzSplitEdit \
+                   sqlcomplete:FuzzComplete designer:FuzzImport \
+                   explain:FuzzParsePostgresJSON explain:FuzzParsePostgresText \
+                   explain:FuzzParseMySQLTree explain:FuzzParseTabular jobs:FuzzParseCron; do
+            pkg=${t%%:*}; fn=${t##*:}
+            echo "::group::$fn"
+            go test -run '^$' -fuzz "^${fn}\$" -fuzztime 10s "./$pkg"
+            echo "::endgroup::"
+          done

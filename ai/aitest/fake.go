@@ -39,22 +39,35 @@ type Fake struct {
 	mu      sync.Mutex
 	prompts []string
 	cancels int
-	signIns int // device codes handed out
-	model   string
-	effort  string
+	signIns int      // device codes handed out
+	cur     *session // the newest Start's, which the accessors read
+}
 
+// session is one Start's own state, kept by its serve goroutine and the
+// turns it runs (N-333). One Fake serves every chat a test server starts,
+// and a model switch or a new chat starts another while the previous
+// session's goroutine may still be answering; with the pipe, the cancel
+// channel, the model and the effort on the Fake itself, Start overwrote
+// them under that goroutine (a data race -race reported), and the old
+// session could write into the new chat's pipe. model and effort are
+// guarded by the Fake's mu.
+type session struct {
 	out     *io.PipeWriter
 	writeMu sync.Mutex
 	cancel  chan struct{}
+	model   string
+	effort  string
 }
 
-// Start runs a Chat against a new Fake.
+// Start runs a Chat against f, on a session of its own.
 func Start(agent ai.Agent, opt ai.Options, f *Fake) *ai.Chat {
 	c2aR, c2aW := io.Pipe()
 	a2cR, a2cW := io.Pipe()
-	f.out = a2cW
-	f.cancel = make(chan struct{}, 4)
-	go f.serve(bufio.NewReader(c2aR))
+	s := &session{out: a2cW, cancel: make(chan struct{}, 4)}
+	f.mu.Lock()
+	f.cur = s
+	f.mu.Unlock()
+	go f.serve(s, bufio.NewReader(c2aR))
 	return ai.StartPipes(agent, opt, a2cR, c2aW)
 }
 
@@ -69,14 +82,17 @@ var Levels = map[string][]string{
 func (f *Fake) Effort() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.effort
+	if f.cur == nil {
+		return ""
+	}
+	return f.cur.effort
 }
 
 // configOptionsLocked is the session's settings list: the effort option
 // when the model has one. Level names are capitalized, as an agent may name
 // them, so a UI showing a value where a name belongs is caught.
-func (f *Fake) configOptionsLocked() []any {
-	levels := Levels[f.model]
+func (s *session) configOptionsLocked() []any {
+	levels := Levels[s.model]
 	if levels == nil {
 		return []any{}
 	}
@@ -85,7 +101,7 @@ func (f *Fake) configOptionsLocked() []any {
 		opts = append(opts, map[string]any{"value": l, "name": strings.ToUpper(l[:1]) + l[1:]})
 	}
 	return []any{map[string]any{"type": "select", "id": "reasoning_effort", "name": "Reasoning effort",
-		"category": "thought_level", "currentValue": f.effort, "options": opts}}
+		"category": "thought_level", "currentValue": s.effort, "options": opts}}
 }
 
 // Prompts returns the prompt texts received so far.
@@ -108,19 +124,19 @@ type msg struct {
 	Params json.RawMessage `json:"params,omitempty"`
 }
 
-func (f *Fake) write(v any) {
+func (s *session) write(v any) {
 	b, _ := json.Marshal(v)
-	f.writeMu.Lock()
-	defer f.writeMu.Unlock()
-	_, _ = f.out.Write(append(b, '\n'))
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	_, _ = s.out.Write(append(b, '\n'))
 }
 
-func (f *Fake) reply(id *int64, result any) {
-	f.write(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+func (s *session) reply(id *int64, result any) {
+	s.write(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
 }
 
-func (f *Fake) serve(in *bufio.Reader) {
-	defer f.out.Close()
+func (f *Fake) serve(s *session, in *bufio.Reader) {
+	defer s.out.Close()
 	for {
 		line, err := in.ReadBytes('\n')
 		if err != nil {
@@ -132,22 +148,22 @@ func (f *Fake) serve(in *bufio.Reader) {
 		}
 		switch m.Method {
 		case "initialize":
-			f.reply(m.ID, map[string]any{"protocolVersion": 1})
+			s.reply(m.ID, map[string]any{"protocolVersion": 1})
 		case "session/new":
 			f.mu.Lock()
 			out := f.SignedOut
 			f.mu.Unlock()
 			if out {
 				// the language server's words and code for this refusal
-				f.write(map[string]any{"jsonrpc": "2.0", "id": m.ID,
+				s.write(map[string]any{"jsonrpc": "2.0", "id": m.ID,
 					"error": map[string]any{"code": -32000, "message": "Authentication required"}})
 				continue
 			}
 			f.mu.Lock()
-			f.model, f.effort = "fast", "medium" // each session starts at the defaults
-			opts := f.configOptionsLocked()
+			s.model, s.effort = "fast", "medium" // each session starts at the defaults
+			opts := s.configOptionsLocked()
 			f.mu.Unlock()
-			f.reply(m.ID, map[string]any{"sessionId": "s1", "models": map[string]any{
+			s.reply(m.ID, map[string]any{"sessionId": "s1", "models": map[string]any{
 				"currentModelId": "fast",
 				"availableModels": []any{
 					map[string]any{"modelId": "fast", "name": "Fast Model", "_meta": map[string]any{"copilotUsage": "0x"}},
@@ -160,11 +176,11 @@ func (f *Fake) serve(in *bufio.Reader) {
 			}
 			_ = json.Unmarshal(m.Params, &p)
 			f.mu.Lock()
-			f.model, f.effort = p.ModelID, "medium"
-			opts := f.configOptionsLocked()
+			s.model, s.effort = p.ModelID, "medium"
+			opts := s.configOptionsLocked()
 			f.mu.Unlock()
-			f.reply(m.ID, map[string]any{})
-			f.write(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{
+			s.reply(m.ID, map[string]any{})
+			s.write(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{
 				"sessionId": "s1",
 				"update":    map[string]any{"sessionUpdate": "config_option_update", "configOptions": opts},
 			}})
@@ -175,30 +191,30 @@ func (f *Fake) serve(in *bufio.Reader) {
 			}
 			_ = json.Unmarshal(m.Params, &p)
 			f.mu.Lock()
-			ok := p.ConfigID == "reasoning_effort" && slices.Contains(Levels[f.model], p.Value)
+			ok := p.ConfigID == "reasoning_effort" && slices.Contains(Levels[s.model], p.Value)
 			if ok {
-				f.effort = p.Value
+				s.effort = p.Value
 			}
-			opts := f.configOptionsLocked()
+			opts := s.configOptionsLocked()
 			f.mu.Unlock()
 			if !ok {
-				f.write(map[string]any{"jsonrpc": "2.0", "id": m.ID, "error": map[string]any{"code": -32603,
+				s.write(map[string]any{"jsonrpc": "2.0", "id": m.ID, "error": map[string]any{"code": -32603,
 					"message": "Reasoning effort '" + p.Value + "' is not supported"}})
 				continue
 			}
-			f.reply(m.ID, map[string]any{"configOptions": opts})
+			s.reply(m.ID, map[string]any{"configOptions": opts})
 		case "session/cancel":
 			f.mu.Lock()
 			f.cancels++
 			f.mu.Unlock()
-			f.cancel <- struct{}{}
+			s.cancel <- struct{}{}
 		case "session/prompt":
-			go f.turn(m)
+			go f.turn(s, m)
 		}
 	}
 }
 
-func (f *Fake) turn(m msg) {
+func (f *Fake) turn(s *session, m msg) {
 	var p struct {
 		Prompt []struct {
 			Text string `json:"text"`
@@ -214,8 +230,8 @@ func (f *Fake) turn(m msg) {
 	f.mu.Unlock()
 
 	if strings.Contains(text, "SLOW") {
-		<-f.cancel
-		f.reply(m.ID, map[string]any{"stopReason": "cancelled"})
+		<-s.cancel
+		s.reply(m.ID, map[string]any{"stopReason": "cancelled"})
 		return
 	}
 	chunks := []string{"echo: " + lastLine(text)}
@@ -223,13 +239,13 @@ func (f *Fake) turn(m msg) {
 		chunks = f.Reply(text)
 	}
 	for _, c := range chunks {
-		f.write(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{
+		s.write(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{
 			"sessionId": "s1",
 			"update": map[string]any{"sessionUpdate": "agent_message_chunk",
 				"content": map[string]any{"type": "text", "text": c}},
 		}})
 	}
-	f.reply(m.ID, map[string]any{"stopReason": "end_turn"})
+	s.reply(m.ID, map[string]any{"stopReason": "end_turn"})
 }
 
 func lastLine(s string) string {

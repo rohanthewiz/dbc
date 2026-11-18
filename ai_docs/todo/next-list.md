@@ -238,18 +238,6 @@ ten session docs in `ai_docs/claude_sessions/`
   sink already does; it touches the format list, the TUI's and web's
   pickers and the completions. Or stream `-t json` when the statement
   cannot return several sets (kindRows), and collect otherwise.
-- **N-333** · raised `2026-1118-0042-n321-n286-n288-n291-plain-errors-value-text-status-error` · value low
-  `aitest.Fake` races when one Fake serves a restarted chat. Every chat a
-  web test server starts shares one Fake (`chatEnv`,
-  `web/chat_test.go:29`), and `aitest.Start` overwrites its `out` and
-  `cancel` (`ai/aitest/fake.go:55`) while the previous session's `serve`
-  goroutine still reads them (`:123`), so the old session can write into
-  the new chat's pipe. `-race` reports it under
-  `TestChatArchiveNewOpenDelete` (seen with N-281). Not the cause of
-  N-321's flake (no restart there). Fix: give each Start its own state
-  (pipe, cancel channel, model and effort) that its `serve` goroutine
-  keeps, with the Fake's accessors reading the newest. Split out of N-321
-  while closing it.
 - **N-334** · raised `2026-1118-0042-n321-n286-n288-n291-plain-errors-value-text-status-error` · value low
   CSV has no formula guard and no BOM option, the two parts of N-288's
   audit it did not do (its "Fix:" named neither). A text cell starting
@@ -999,6 +987,20 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-333** · raised `2026-1118-0042-n321-n286-n288-n291-plain-errors-value-text-status-error` · value low
+  `aitest.Fake` races when one Fake serves a restarted chat. Every chat a
+  web test server starts shares one Fake (`chatEnv`,
+  `web/chat_test.go:29`), and `aitest.Start` overwrites its `out` and
+  `cancel` (`ai/aitest/fake.go:55`) while the previous session's `serve`
+  goroutine still reads them (`:123`), so the old session can write into
+  the new chat's pipe. `-race` reports it under
+  `TestChatArchiveNewOpenDelete` (seen with N-281). Not the cause of
+  N-321's flake (no restart there). Fix: give each Start its own state
+  (pipe, cancel channel, model and effort) that its `serve` goroutine
+  keeps, with the Fake's accessors reading the newest. Split out of N-321
+  while closing it.
+  closed 2026-11-18, `@SESS@`, commit `@N-333@`: each `aitest.Start` now makes a `session` of its own (its pipe, write lock, cancel channel, model and effort). Its serve goroutine and the turns it runs keep that session, and `Fake.cur` names the newest one for the accessors (`Effort`). model and effort stay under the Fake's mu; prompts, cancels and sign-ins stay the Fake's. New `ai.TestOneFakeManyChats`: six chats start on one Fake at once, and each must get its own echo on its own pipe. Under `-race` it passes. Run in a scratch worktree at HEAD against the old fake, it reported 5 DATA RACEs and hung until its 90 s timeout, the sessions' answers crossing pipes. The web chat tests under `-race` (20 runs) and the full suite pass.
 
 - **N-323** · raised `2026-1113-1657-n274-n275-api-origin-completion-aborts` · value low
   A panic inside a completion schema read leaves the cache "loading" for

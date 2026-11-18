@@ -718,16 +718,6 @@ and `raised`.
     - Does the catalog read stay quick on a big catalog?
   - Whether the story and the guide's wording read well to someone who
     did not write them.
-- **N-243** · raised `2026-1103-1604-sidebar-sections-views-routines` · value medium
-  Check the new sidebar sections on live servers (Docker was down, so
-  only the unit tests on the SQL text ran): a view's DDL on Postgres (a
-  plain view, a materialized one — `CREATE MATERIALIZED VIEW`, no OR
-  REPLACE — and a mixed-case or spaced name quoted by `pgIdent`) and on
-  MySQL (`SHOW CREATE VIEW`, column 2; a user without SHOW VIEW gets the
-  server's error). Run `db/viewddl_test.go`-style checks under the
-  `live_*` recipe, the rewritten web e2e step `pgRoutines` (Routines
-  header folded, opened by a click, folded again) and
-  `tui.TestLiveRoutinesPanePostgres` with `DBC_LIVE_PG_DSN`.
 - **N-245** · raised `2026-1103-1604-sidebar-sections-views-routines` · value low
   The full web e2e suite flakes early on: `editor_menu` ("grid info = 3
   rows, want the count's 1 row") failed twice in a row on the branch and
@@ -1148,6 +1138,18 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-243** · raised `2026-1103-1604-sidebar-sections-views-routines` · value medium
+  Check the new sidebar sections on live servers (Docker was down, so
+  only the unit tests on the SQL text ran): a view's DDL on Postgres (a
+  plain view, a materialized one — `CREATE MATERIALIZED VIEW`, no OR
+  REPLACE — and a mixed-case or spaced name quoted by `pgIdent`) and on
+  MySQL (`SHOW CREATE VIEW`, column 2; a user without SHOW VIEW gets the
+  server's error). Run `db/viewddl_test.go`-style checks under the
+  `live_*` recipe, the rewritten web e2e step `pgRoutines` (Routines
+  header folded, opened by a click, folded again) and
+  `tui.TestLiveRoutinesPanePostgres` with `DBC_LIVE_PG_DSN`.
+  closed 2026-11-18, `@SESS@`, commit `@N-243@`: run on postgres:17 and mysql:8.4 in Docker. New `db/live_viewddl_test.go`. `TestLiveViewDDLPostgres` reads a plain view (`CREATE OR REPLACE VIEW dbc_live_v.big_orders AS` then pg_get_viewdef's pretty query), a materialized view (`CREATE MATERIALIZED VIEW …`, no OR REPLACE) and a spaced, mixed-case name (`CREATE OR REPLACE VIEW "DbcLive V"."Big Orders" AS`). Each statement is run again under another name to prove the server takes it, and a missing view says "no such view". `TestLiveViewDDLMySQL` reads SHOW CREATE VIEW's second column (`CREATE ALGORITHM=UNDEFINED DEFINER=… VIEW \`dbc_live_v_big\` AS select …;`). A user granted SELECT on the view without SHOW VIEW gets the server's own `Error 1142 (42000): SHOW VIEW command denied to user …`. Also passing: `tui.TestLiveRoutinesPanePostgres` and `TestLiveNavigatorPostgres` with `DBC_LIVE_PG_DSN`, and the web e2e step "postgres routines" (`DBC_E2E_STEPS='postgres routines'`), which folds, opens and folds the Routines header.
 
 - **N-292** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   The TUI has no find. Editor: no Ctrl+F and no go-to-line

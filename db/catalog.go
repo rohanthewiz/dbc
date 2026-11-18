@@ -598,9 +598,19 @@ func (m *Manager) Columns(ctx context.Context, name string, tables []TableRef) (
 	if err != nil {
 		return nil, err
 	}
-	res, err := m.RunContext(ctx, name, q)
+	// stringRows, not RunContext: a run is cut at max_rows, which here cut
+	// the later tables' columns off without a word once the tables
+	// mentioned had more columns than that (or max_rows was lowered) —
+	// the assistant was then shown some or none of them (N-290). A
+	// catalog read is bounded by maxSchemaRows instead, and past it fails
+	// rather than answers short.
+	dbh, err := m.DBContext(ctx, name)
 	if err != nil {
 		return nil, err
+	}
+	rows, err := stringRows(ctx, dbh, q)
+	if err != nil {
+		return nil, wrapRunErr(ctx, err, name, "op", "read columns")
 	}
 	// Group by (schema, table). A schema that does not match exactly falls
 	// back to the name alone: MySQL reports the database under table_schema
@@ -608,7 +618,7 @@ func (m *Manager) Columns(ctx context.Context, name string, tables []TableRef) (
 	type key struct{ schema, name string }
 	bySchema := map[key][]Column{}
 	byName := map[string][]Column{}
-	for _, row := range res.Rows {
+	for _, row := range rows {
 		if len(row) < 4 {
 			continue
 		}

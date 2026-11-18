@@ -111,12 +111,6 @@ ten session docs in `ai_docs/claude_sessions/`
   or `DBC_CONN`; connect failures and SQL errors both exit 1, so a script
   cannot tell "could not reach the database" from "the statement failed".
   Each is small with urfave/cli v3. Audit, grep. (RPU plan, phase 4)
-- **N-290** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  `Manager.Columns` is the one catalog read still cut at `max_rows`
-  (`db/catalog.go:601` uses `RunContext` and ignores `Truncated`). When
-  the tables mentioned have more columns than `max_rows`, or it was
-  lowered, later tables reach the assistant with some or none of their
-  columns. Fix: use `stringRows`. Audit, traced. (RPU plan, phase 4)
 - **N-293** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Keys are hard to find. F1 is about 130 rows with no filter
   (`tui/help.go`), there is no command palette, and the status bar's
@@ -1114,6 +1108,14 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-290** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  `Manager.Columns` is the one catalog read still cut at `max_rows`
+  (`db/catalog.go:601` uses `RunContext` and ignores `Truncated`). When
+  the tables mentioned have more columns than `max_rows`, or it was
+  lowered, later tables reach the assistant with some or none of their
+  columns. Fix: use `stringRows`. Audit, traced. (RPU plan, phase 4)
+  closed 2026-11-18, `@SESS@`, commit `@N-290@`: `Manager.Columns` reads through `stringRows` on the pool (`DBContext`), which is bounded by `maxSchemaRows` and fails past it rather than answering short, instead of `RunContext`, which cut at `max_rows`. Errors are wrapped with `op=read columns`. `TestColumnsIgnoreMaxRows` (SQLite, max_rows 2, two 3-column tables) fails on the old code with `[[a1 a2] []]` and passes now. `TestLiveColumnsPostgres` and `TestLiveColumnsMySQL` pass on postgres:17 and mysql:8.4.
 
 - **N-283** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Postgres row counts are all-or-nothing (`db/rowcount.go:506-516,

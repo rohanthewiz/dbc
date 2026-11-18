@@ -331,6 +331,36 @@ func TestColumnsOnSqlite(t *testing.T) {
 	}
 }
 
+// max_rows does not cut the columns read (N-290): with it at 2, every
+// table mentioned still has all its columns. Columns went through
+// RunContext, cut at max_rows, so the later tables got some or none.
+func TestColumnsIgnoreMaxRows(t *testing.T) {
+	cfg := &config.Config{
+		MaxRows: 2,
+		Connections: []config.Connection{{
+			Name: "demo", Driver: "sqlite",
+			DSN: "file:columnsmaxrows?mode=memory&cache=shared",
+		}},
+	}
+	mgr := NewManager(cfg)
+	defer mgr.Close()
+	for _, s := range []string{
+		"CREATE TABLE a (a1 int, a2 int, a3 int)",
+		"CREATE TABLE b (b1 int, b2 int, b3 int)",
+	} {
+		if _, err := mgr.Run("demo", s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cols, err := mgr.Columns(context.Background(), "demo", []TableRef{{Schema: "main", Name: "a"}, {Schema: "main", Name: "b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cols) != 2 || len(cols[0]) != 3 || len(cols[1]) != 3 {
+		t.Errorf("columns at max_rows 2 = %v, want three each", cols)
+	}
+}
+
 func TestColumnsOnBytdb(t *testing.T) {
 	mgr := bytdbMgr(t)
 	if _, err := mgr.Run("bd", "CREATE TABLE cats (id int PRIMARY KEY, name text, age int)"); err != nil {

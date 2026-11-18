@@ -79,7 +79,11 @@ func (e *Engine) liveElsewhere(h userdata.RunHead) bool {
 	if h.Status != string(pipeline.Running) && h.Status != string(pipeline.Queued) {
 		return false
 	}
-	return time.Since(h.Mod) < e.opt.StaleAfter || e.isLive(h.ID)
+	if e.isLive(h.ID) {
+		return true
+	}
+	// fresh by its heartbeat, unless its lock says its process is gone
+	return time.Since(h.Mod) < e.opt.StaleAfter && !e.lockSaysDead(h.Kind, h.Name, h.Status)
 }
 
 func (e *Engine) isLive(id string) bool {
@@ -92,8 +96,12 @@ func (e *Engine) isLive(id string) bool {
 // stale reports whether a record last written at mod, saying running or
 // queued, has lost its writer.
 func (e *Engine) stale(r *Run, mod time.Time) bool {
-	return (r.Status == pipeline.Running || r.Status == pipeline.Queued) &&
-		time.Since(mod) >= e.opt.StaleAfter && !e.isLive(r.ID)
+	if (r.Status != pipeline.Running && r.Status != pipeline.Queued) || e.isLive(r.ID) {
+		return false
+	}
+	// the heartbeat's rule, or at once when the run's lock is free: its
+	// process is gone (lockSaysDead)
+	return time.Since(mod) >= e.opt.StaleAfter || e.lockSaysDead(r.Kind, r.Name, string(r.Status))
 }
 
 // interrupt rewrites a dead run's record as interrupted: the run, and

@@ -87,6 +87,66 @@ const (
 // var so the tests need not wait that long.
 var heldPoll = time.Second
 
+// heldRetries and heldRetryGap are how long a start tries again for a
+// lock it found taken (holdFileLocked), outlasting a liveness probe's hold
+// (lockSaysDead), which is an open, a flock and a close.
+const (
+	heldRetries  = 3
+	heldRetryGap = 2 * time.Millisecond
+)
+
+// lockSaysDead reports whether a running or queued record of kind and name
+// has lost its writer, by its lock rather than its heartbeat (N-319): the
+// lock such a run holds — job-<name> or pipeline-<name> while it runs,
+// queue-<name> while it waits — is dropped by the OS the moment its
+// process ends (kill -9 included), where the record goes on saying
+// "running" until StaleAfter (30 s) has passed since its last write. Seen:
+// a queued run started within a second of `kill -9` of the run ahead of
+// it, while `dbc runs` listed the dead one as running.
+//
+// Asking a flock is taking it: the lock is taken and let go at once, and
+// a start that meets it in that instant tries again (holdFileLocked's
+// retries) rather than reading it as another holder. False — no word
+// either way, the heartbeat decides — when there is no runs dir (a test's
+// engine: no locks), when the lock file was never made (a record from
+// before N-269, or from an engine that could not make it), when this
+// engine holds it (its own run, which isLive answers), and when the lock
+// is held: by the run, or by a newer run of the same name, which says
+// nothing about this one.
+func (e *Engine) lockSaysDead(kind, name, status string) bool {
+	if e.opt.RunsDir == "" || !pipeline.ValidName(name) {
+		return false
+	}
+	var key string
+	switch {
+	case status == string(pipeline.Queued) && kind == KindJob:
+		key = lockQueue + name
+	case kind == KindJob:
+		key = lockJob + name
+	case kind == KindPipeline:
+		key = lockPipeline + name
+	default:
+		return false
+	}
+	e.mu.Lock()
+	_, mine := e.held[key]
+	e.mu.Unlock()
+	if mine {
+		return false
+	}
+	path := filepath.Join(e.opt.RunsDir, heldDir, key)
+	// AcquireLock locks a sidecar, path+".lock" (the .held/*.lock files)
+	if _, err := os.Stat(path + ".lock"); err != nil {
+		return false // never made: nothing to ask, and nothing made by asking
+	}
+	c, err := btypedb.AcquireLock(path)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
+}
+
 // heldLock is one file lock the engine holds, and the run it holds it for.
 type heldLock struct {
 	run string
@@ -121,6 +181,14 @@ func (e *Engine) holdFileLocked(prefix, name, run string) (busy bool, pid string
 		return false, "", serr.Wrap(err, "op", "make the run locks' directory", "dir", dir)
 	}
 	c, err := btypedb.AcquireLock(filepath.Join(dir, key))
+	// A lock found taken is tried again for a moment before it counts as
+	// another holder's: lockSaysDead takes a lock to see whether it is
+	// free and lets go at once, and a start must never be refused for
+	// that instant (N-319). heldRetries × heldRetryGap is the moment.
+	for i := 0; i < heldRetries && errors.Is(err, btypedb.ErrLocked); i++ {
+		time.Sleep(heldRetryGap)
+		c, err = btypedb.AcquireLock(filepath.Join(dir, key))
+	}
 	switch {
 	case err == nil:
 		e.held[key] = heldLock{run: run, c: c}

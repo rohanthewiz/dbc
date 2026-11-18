@@ -145,19 +145,6 @@ ten session docs in `ai_docs/claude_sessions/`
   - A different statement run with one of a `CALL`'s set tabs on screen
     replaces that tab alone and leaves its siblings, as a single
     statement does to a run-all's group.
-- **N-319** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  A dead process's run record reads `running` for up to `StaleAfter`
-  (30 s) after its process died, though since N-269 its lock already says
-  so: the OS drops `runs_dir/.held/job-<name>` (or `pipeline-<name>`,
-  `queue-<name>`) at once. Seen while closing N-269: after `kill -9` of a
-  `dbc job run`, the queued run behind it started within a second while
-  `dbc runs` still listed the dead one as running. `liveElsewhere` and
-  `stale` (`jobs/records.go`) could ask the lock: a running job record
-  whose job lock is free has lost its writer. The catch is that testing a
-  flock means taking it, which races a real starter for that instant, so
-  the probe must let go at once and never refuse a start; and a record
-  from an engine without a runs dir has no lock to ask. Raised while
-  closing N-269.
 - **N-324** · raised `2026-1113-1804-n276-cut-reads-stop-on-server` · value low
   A read cut at `max_rows` inside a Postgres transaction the user opened
   still streams the rest of its result. N-276 stops a cut read with a
@@ -921,6 +908,21 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-319** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  A dead process's run record reads `running` for up to `StaleAfter`
+  (30 s) after its process died, though since N-269 its lock already says
+  so: the OS drops `runs_dir/.held/job-<name>` (or `pipeline-<name>`,
+  `queue-<name>`) at once. Seen while closing N-269: after `kill -9` of a
+  `dbc job run`, the queued run behind it started within a second while
+  `dbc runs` still listed the dead one as running. `liveElsewhere` and
+  `stale` (`jobs/records.go`) could ask the lock: a running job record
+  whose job lock is free has lost its writer. The catch is that testing a
+  flock means taking it, which races a real starter for that instant, so
+  the probe must let go at once and never refuse a start; and a record
+  from an engine without a runs dir has no lock to ask. Raised while
+  closing N-269.
+  closed 2026-11-18, `@SESS@`, commit `@N-319@`: `stale` and `liveElsewhere` (`jobs/records.go`) also ask `lockSaysDead` (`jobs/held.go`). For a running or queued record that is not this engine's own live run, it takes the lock such a run holds (`job-<name>` or `pipeline-<name>` while running, `queue-<name>` while queued) and lets go at once. If the lock was free, the run's process is gone, and the record reads interrupted (`Recover` rewrites it) without waiting out StaleAfter. It gives no word, and the heartbeat decides, when there is no runs dir, when the `.lock` sidecar was never made (it never creates one), when this engine holds the lock, or when the lock is held (by the run, or by a newer run of the same name). The race the item named, a probe taking the lock for an instant, is met on the starting side: `holdFileLocked` tries a lock it found taken again, `heldRetries` × `heldRetryGap` (3 × 2 ms), before counting it as another holder's, so a start is never refused for a probe. Tests: `TestLockSaysDead`, with real flocks: a fresh record with no lock file reads running; with its lock held by a second open, still running; once released, interrupted, and Recover rewrites it. `TestStartOutlastsAProbe`: a lock released within the retry window does not refuse a start. jobs passes three times under `-race`; full suite and staticcheck clean. Not repeated with a `kill -9` of a real `dbc job run`.
 
 - **N-332** · raised `2026-1116-1629-n282-a-result-costs-what-it-holds` · value low
   No streaming JSON export. A lone CSV/TSV statement streams its rows

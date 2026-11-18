@@ -147,6 +147,17 @@ type Sink interface {
 	Abort() error
 }
 
+// EmptyLoader is a Sink that can do what an empty load does — empty its
+// table — when no batch reached it and the columns are unknown (a
+// transform stood between it and its source, so the source's columns may
+// not be the rows'). The runner calls it in place of Open and Commit, and
+// it reports whether it did anything (N-296): sql.write with truncate
+// empties the table, so a nightly reload from an empty source leaves an
+// empty table rather than yesterday's rows.
+type EmptyLoader interface {
+	LoadEmpty(e *Env) (bool, error)
+}
+
 // Action is a fragment without rows: a statement, a script, a check. It
 // is the only node of its fragment.
 type Action interface {

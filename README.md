@@ -2627,7 +2627,7 @@ plugins, and the fields each takes, are listed by `dbc plugins`:
 | `rows.limit` | transform | The first N rows, then the source stops |
 | `lookup` | transform | A side query on any connection, read once and held in memory (`max_rows`): rows matched on `key` = `match` (compared as text) get its `add` columns; no match is NULL, dropped or a failure (`missing`) |
 | `go.transform` | transform | `func Apply(b *sdb.Batch) (*sdb.Batch, error)`, per batch |
-| `sql.write` | sink | A table, by COPY on Postgres and batched INSERT elsewhere, in one transaction; `create`, `truncate`, `key`, `setup`, and `mode: upsert` (Postgres and SQLite: a row whose `key` is there updates it, the last of a repeated key wins) |
+| `sql.write` | sink | A table, by COPY on Postgres and batched INSERT elsewhere, in one transaction; `create`, `truncate`, `key`, `setup`, and `mode: upsert` (Postgres and SQLite: a row whose `key` is there updates it, the last of a repeated key wins). With `truncate`, a run in which no rows reach it still empties the table, transforms or not — a reload from an empty source leaves an empty table, not yesterday's rows (a table that does not exist yet is left for the first run with rows to create) |
 | `csv.write` · `jsonl.write` | sink | A file, written beside its path and renamed into place when the fragment commits — a failed run leaves the old file alone; publishes `rows` and `path` |
 | `preview` | sink | The first N rows to the results view; nothing written |
 | `discard` | sink | Counts the rows and writes nothing: for timing a source or a transform |

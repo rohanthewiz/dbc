@@ -588,7 +588,11 @@ func (fr *fragRun) stream(src *nodeInst) (err error) {
 	}
 	// a sink no batch reached: opened with the source's columns when
 	// nothing between could have changed them, so its truncate and create
-	// still happen (a reload from an empty source empties the table)
+	// still happen (a reload from an empty source empties the table). With
+	// a transform between, the columns are unknown; a sink that can load
+	// nothing without them (EmptyLoader: sql.write's truncate) still
+	// empties its table, where it used to keep yesterday's rows and report
+	// success (N-296).
 	for _, s := range sinks {
 		if s.opened {
 			continue
@@ -598,9 +602,21 @@ func (fr *fragRun) stream(src *nodeInst) (err error) {
 				return fr.nodeErr(s, err)
 			}
 			s.opened = true
-		} else {
-			fr.r.log(fmt.Sprintf("[%s/%s] no rows reached it; nothing written", fr.f.Name, s.id))
+			continue
 		}
+		if el, ok := s.impl.(EmptyLoader); ok {
+			t0 := time.Now()
+			did, eerr := el.LoadEmpty(s.env)
+			s.stats.Elapsed += time.Since(t0)
+			if eerr != nil {
+				return fr.nodeErr(s, eerr)
+			}
+			if did {
+				fr.r.log(fmt.Sprintf("[%s/%s] no rows reached it; the table was emptied (truncate)", fr.f.Name, s.id))
+				continue
+			}
+		}
+		fr.r.log(fmt.Sprintf("[%s/%s] no rows reached it; nothing written", fr.f.Name, s.id))
 	}
 	var wrote, shown int64
 	wroteAny := false

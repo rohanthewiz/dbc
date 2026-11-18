@@ -387,6 +387,40 @@ func TestRunEmptySourceStillTruncates(t *testing.T) {
 	}
 }
 
+// With a transform between, the columns are unknown when no rows come,
+// but a truncating sql.write still empties its table (N-296): a nightly
+// reload whose rows are all filtered out used to keep yesterday's rows
+// and report success. A table that does not exist is left so, and a sink
+// without truncate writes nothing, as before.
+func TestRunEmptyThroughTransformStillTruncates(t *testing.T) {
+	h := newTestHost(t)
+	h.exec(t, "b", `CREATE TABLE out (id INTEGER, name TEXT); INSERT INTO out VALUES (1, 'yesterday')`)
+	h.exec(t, "b", `CREATE TABLE kept (id INTEGER, name TEXT); INSERT INTO kept VALUES (1, 'stays')`)
+	spec := mustParse(t, `{"name": "e", "fragments": [{"name": "f", "nodes": [
+	  {"id": "src", "plugin": "sql.read", "cfg": {"conn": "a", "query": "SELECT id, name FROM cats"}},
+	  {"id": "none", "plugin": "rows.filter", "cfg": {"rules": "id > 100000"}},
+	  {"id": "dst", "plugin": "sql.write", "cfg": {"conn": "b", "table": "out", "truncate": "true"}},
+	  {"id": "keep", "plugin": "sql.write", "cfg": {"conn": "b", "table": "kept"}},
+	  {"id": "new", "plugin": "sql.write", "cfg": {"conn": "b", "table": "not_yet", "create": "true", "truncate": "true"}}
+	], "edges": [["src", "none"], ["none", "dst"], ["none", "keep"], ["none", "new"]]}]}`)
+	var lines []string
+	if _, err := Run(context.Background(), h, spec, Options{Log: func(l string) { lines = append(lines, l) }}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.rows(t, "b", "SELECT count(*) FROM out"); got[0][0] != "0" {
+		t.Errorf("out kept yesterday's rows: %v", got)
+	}
+	if got := h.rows(t, "b", "SELECT count(*) FROM kept"); got[0][0] != "1" {
+		t.Errorf("a sink without truncate changed its table: %v", got)
+	}
+	log := strings.Join(lines, "\n")
+	if !strings.Contains(log, "[f/dst] no rows reached it; the table was emptied (truncate)") ||
+		!strings.Contains(log, "[f/keep] no rows reached it; nothing written") ||
+		!strings.Contains(log, "[f/new] no rows reached it; nothing written") {
+		t.Errorf("log:\n%s", log)
+	}
+}
+
 // rows.filter's operators, on a batch in memory.
 func TestRowsFilter(t *testing.T) {
 	cols := ColsOf([]string{"n", "s", "x"}, nil)

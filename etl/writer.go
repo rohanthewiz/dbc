@@ -112,14 +112,7 @@ func NewWriter(ctx context.Context, c Conn, table string, cols []string, opt Wri
 			}
 		}
 	}
-	setup := opt.Setup
-	truncate := c.Engine.truncateStmt(table)
-	if opt.sameDB && c.Engine == Postgres {
-		setup, truncate = sameDatabaseSetup(setup, table, opt.fromQuery)
-	}
-	if opt.Truncate {
-		setup = append(append([]string(nil), setup...), truncate)
-	}
+	setup := loadSetup(c, table, opt)
 	var (
 		impl loader
 		err  error
@@ -133,6 +126,72 @@ func NewWriter(ctx context.Context, c Conn, table string, cols []string, opt Wri
 		return nil, serr.Wrap(canceled(ctx, err), "conn", c.Name, "table", table)
 	}
 	return &Writer{ctx: ctx, conn: c.Name, table: table, cols: cols, impl: impl}, nil
+}
+
+// loadSetup is what a load runs in its transaction before the first row:
+// opt.Setup, then — with opt.Truncate — the statement that empties the
+// table (a DELETE on the same Postgres database as a held read, see
+// sameDatabaseSetup).
+func loadSetup(c Conn, table string, opt WriteOptions) []string {
+	setup := opt.Setup
+	truncate := c.Engine.truncateStmt(table)
+	if opt.sameDB && c.Engine == Postgres {
+		setup, truncate = sameDatabaseSetup(setup, table, opt.fromQuery)
+	}
+	if opt.Truncate {
+		setup = append(append([]string(nil), setup...), truncate)
+	}
+	return setup
+}
+
+// Empty is a load of no rows: what NewWriter and Close would do with
+// nothing written in between — opt.Setup and, with opt.Truncate, the table
+// emptied — in one transaction, without the columns a Writer needs. A
+// pipeline sink that no batch reached uses it, where the columns its
+// rows would have had are unknown, so that a reload from an empty source
+// still empties its table (N-296). A table that does not exist is not
+// an error: there is nothing to empty, and with no columns there is
+// nothing to create it from; Empty reports false then.
+func Empty(ctx context.Context, c Conn, table string, opt WriteOptions) (bool, error) {
+	return emptyLoad(ctx, c, table, opt)
+}
+
+// EmptySameDatabase is Empty under the same-database rules
+// (NewSameDatabaseWriter).
+func EmptySameDatabase(ctx context.Context, c Conn, table string, opt WriteOptions, fromQuery bool) (bool, error) {
+	opt.sameDB, opt.fromQuery = true, fromQuery
+	return emptyLoad(ctx, c, table, opt)
+}
+
+func emptyLoad(ctx context.Context, c Conn, table string, opt WriteOptions) (bool, error) {
+	// the probe runs on the pool, outside the transaction: a failed
+	// statement in a Postgres transaction would abort it
+	if _, err := c.DB.ExecContext(ctx, "SELECT 1 FROM "+c.Engine.QuoteTable(table)+" WHERE 1 = 0"); err != nil {
+		if ctx.Err() != nil {
+			return false, canceled(ctx, err)
+		}
+		return false, nil
+	}
+	setup := loadSetup(c, table, opt)
+	if len(setup) == 0 {
+		return false, nil
+	}
+	tx, err := c.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, serr.Wrap(canceled(ctx, err), "conn", c.Name, "table", table, "op", "begin")
+	}
+	for _, st := range setup {
+		c.trace(st)
+		if _, err = tx.ExecContext(ctx, st); err != nil {
+			_ = tx.Rollback()
+			return false, serr.Wrap(canceled(ctx, pgerr.WithDetail(err)), "conn", c.Name, "table", table,
+				"op", "setup", "stmt", clip(st))
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return false, serr.Wrap(canceled(ctx, err), "conn", c.Name, "table", table, "op", "commit")
+	}
+	return true, nil
 }
 
 // NewSameDatabaseWriter is NewWriter for a load whose rows come from a

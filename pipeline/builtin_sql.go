@@ -327,6 +327,31 @@ func (s *sqlWrite) Open(e *Env, cols []Col) error {
 	return nil
 }
 
+// LoadEmpty is the load of no rows (EmptyLoader): with truncate, the
+// table emptied in a transaction of its own — Setup first, and the same-
+// database rules a load would take — so that an empty source empties the
+// table whatever stood between them. Without truncate there is nothing to
+// do. A table that does not exist yet is left so (etl.Empty): with no
+// columns, create has nothing to make it from.
+func (s *sqlWrite) LoadEmpty(e *Env) (bool, error) {
+	if !s.truncate {
+		return false, nil
+	}
+	c, err := e.S.ETLConn(s.conn)
+	if err != nil {
+		return false, err
+	}
+	var setup []string
+	for _, st := range c.Engine.Dialect().Split(s.setup) {
+		setup = append(setup, st.Text)
+	}
+	opt := etl.WriteOptions{Setup: setup, Truncate: true}
+	if s.sameDB {
+		return etl.EmptySameDatabase(e.Ctx, c, s.table, opt, s.fromQuery)
+	}
+	return etl.Empty(e.Ctx, c, s.table, opt)
+}
+
 func (s *sqlWrite) Write(e *Env, b *Batch) error {
 	if len(b.Cols) != s.ncols {
 		return serr.New("the columns changed between batches", "table", s.table,

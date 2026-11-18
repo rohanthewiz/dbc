@@ -78,14 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-296** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  `truncate` is skipped when a transform sits before the sink and no
-  rows arrive (`pipeline/run.go:539-551`): a nightly reload whose source
-  is empty or fully filtered keeps yesterday's rows and reports success
-  with 0 rows, with only a log line to say so. `pipelines.md:851`
-  covers the no-transform case only. Fix: open the sink with the last
-  known columns, or fail, or warn in the run's status. Audit, traced.
-  (RPU plan, phase 4)
 - **N-297** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   No dry run on the headless movers. `dbc copy` (`copycmd.go:72-81`) has
   no `--dry-run`, `--columns`, `--query` or `--batch`, takes one table a
@@ -1062,6 +1054,16 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-296** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  `truncate` is skipped when a transform sits before the sink and no
+  rows arrive (`pipeline/run.go:539-551`): a nightly reload whose source
+  is empty or fully filtered keeps yesterday's rows and reports success
+  with 0 rows, with only a log line to say so. `pipelines.md:851`
+  covers the no-transform case only. Fix: open the sink with the last
+  known columns, or fail, or warn in the run's status. Audit, traced.
+  (RPU plan, phase 4)
+  closed 2026-11-18, `@SESS@`, commit `@N-296@`. Of the item's three options, "open the sink with the last known columns" was taken, in the form that needs no columns. A sink no batch reached, whose columns are unknown because a transform stands above it, gets the runner's new `EmptyLoader` hook in place of Open and Commit. `sql.write` implements it (`LoadEmpty`): with `truncate` it empties the table through new `etl.Empty`/`EmptySameDatabase`, which is NewWriter's setup and truncate with no rows, in one transaction. `loadSetup` was factored out of NewWriter, so both use the same statements: Setup first, and a DELETE under the same-database rules. Without truncate it does nothing, as before. A table that does not exist yet is left so (a probe on the pool; with no columns `create` has nothing to make it from), and that is no error. The log says `no rows reached it; the table was emptied (truncate)` or, as before, `nothing written`. Tests: `TestRunEmptyThroughTransformStillTruncates` (a filter that drops every row: the truncating sink's table is emptied, the one without truncate keeps its row, the not-yet-created one is no error, and each logs its line) and `etl.TestEmpty` (SQLite and bytdb: setup ran, rows gone, a missing table false). The etl, pipeline, jobs and sdb suites and etl's live suite on postgres:17 pass. The README's `sql.write` row says it.
 
 - **N-294** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Colour-only signals in the TUI. The editor's selection

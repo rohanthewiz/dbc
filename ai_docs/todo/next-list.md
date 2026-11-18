@@ -613,19 +613,6 @@ and `raised`.
   - Postgres, in either UI: `BEGIN; DECLARE c CURSOR FOR …; FETCH 5 FROM
     c` shows rows, and a `CALL` of a procedure with an INOUT parameter
     its one row.
-- **N-337** · raised `2026-1118-0304-n166-n300-n307-light-notes-web-a11y-kept-bodies` · value low
-  The web e2e step "a stale completion request is aborted"
-  (`web/e2e/complabort_test.go:66`) failed once in a full run while
-  N-300 was checked: it timed out waiting for a completion request
-  because the active tab was the Go script `e2e_pipe.go` (status
-  "e2e_pipe.go — Ctrl+Enter saves and runs it"), where no SQL completion
-  is asked. The rerun passed, as had every full run earlier that day. The
-  step assumes a SQL console is active and doesn't make sure of it. The
-  steps before it (`saveTrouble`, `logJournal`) open and reload a second
-  page on the shared tabs, so either one of them sometimes leaves `p` on
-  the script tab, or `p` switches tabs on its own after a tab event. Find
-  which. If it's the test's assumption, pick a SQL console at the step's
-  start; if the page switched by itself, that is a product bug.
 
 ## Roadmap
 
@@ -867,6 +854,24 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-337** · raised `2026-1118-0304-n166-n300-n307-light-notes-web-a11y-kept-bodies` · value low
+  The web e2e step "a stale completion request is aborted"
+  (`web/e2e/complabort_test.go:66`) failed once in a full run while
+  N-300 was checked: it timed out waiting for a completion request
+  because the active tab was the Go script `e2e_pipe.go` (status
+  "e2e_pipe.go — Ctrl+Enter saves and runs it"), where no SQL completion
+  is asked. The rerun passed, as had every full run earlier that day. The
+  step assumes a SQL console is active and doesn't make sure of it. The
+  steps before it (`saveTrouble`, `logJournal`) open and reload a second
+  page on the shared tabs, so either one of them sometimes leaves `p` on
+  the script tab, or `p` switches tabs on its own after a tab event. Find
+  which. If it's the test's assumption, pick a SQL console at the step's
+  start; if the page switched by itself, that is a product bug.
+  closed 2026-11-18, `@SESS@`, commit `@N-337@`: it was the test's assumption.
+- **What was happening.** I logged the active tab after every step over two full runs (both failing; 4 of 5 runs failed that day once the a11y and docs steps were added). In both, `p` was on `e2e_pipe.go` from the "query designer" step on. That step opens a query tab of its own and closes it at the end, leaving its neighbour, the pipeline step's Go script, active.
+- **Why the step failed.** It typed SQL into that Go editor, where no SQL completion is asked. Why earlier runs had a SQL tab there wasn't found. Nothing showed the page switching tabs by itself.
+- **The fix.** The step now opens a query tab of its own on `lite` (Alt+T, then a click on `lite`), as `queryDesigner` already does for the same reason. Two full web e2e runs passed after it.
 
 - **N-328** · raised `2026-1116-1446-n280-completion-costs-what-it-keeps` · value low
   Completion still builds, and dbc web still sends, a doc for every item

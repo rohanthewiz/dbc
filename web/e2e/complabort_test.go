@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/input"
+	"github.com/go-rod/rod/lib/proto"
 )
 
 // staleCompletionAborted: a completion request Monaco no longer wants is
@@ -36,6 +37,16 @@ import (
 // the requests that pile up are those replaced by a new ask or dropped by
 // a closed list, and those are the ones the page aborts.
 func staleCompletionAborted(t *testing.T, _ *env, p *rod.Page) {
+	// The steps before can leave a script or pipeline tab on screen — the
+	// query designer closes its own query tab, and the tab beside it was
+	// e2e_pipe.go in most runs — where the SQL typed below is Go to the
+	// editor and no SQL completion is asked (N-337). So: a query tab of our
+	// own, on lite, as queryDesigner starts.
+	chord(t, p, modAlt, "t", "KeyT", 84)
+	waitFor(t, p, "a new query tab", `() => !!dbc.state.ws && !dbc.state.tab.pipeline && !dbc.state.tab.job && !dbc.state.tab.script`)
+	clickAt(t, p, `#conns .conn-item[data-conn="lite"]`, proto.InputMouseButtonLeft)
+	waitConnected(t, p, "lite")
+
 	eval(t, p, `() => {
 	  const f = window.fetch; // the probe's wrapper, put back at the end
 	  const s = window.__compl = { asked: 0, signalled: 0, aborted: 0, restore: () => { window.fetch = f; } };

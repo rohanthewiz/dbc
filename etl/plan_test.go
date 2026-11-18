@@ -1,0 +1,50 @@
+package etl
+
+import (
+	"context"
+	"strings"
+	"testing"
+)
+
+// PlanCopy says what Copy would do and writes nothing (N-297): the source
+// query and its rows, the CREATE for a missing table with Create, the
+// truncate, and the problem when the table is missing without Create.
+func TestPlanCopy(t *testing.T) {
+	ctx := context.Background()
+	src, dst := fileConn(t, SQLite, "src.db"), fileConn(t, SQLite, "dst.db")
+	mustExec(t, src, "CREATE TABLE cats (id INTEGER PRIMARY KEY, name TEXT)")
+	mustExec(t, src, "INSERT INTO cats VALUES (1, 'a'), (2, 'b'), (3, 'c')")
+	mustExec(t, dst, "CREATE TABLE cats (id INTEGER PRIMARY KEY, name TEXT)")
+	mustExec(t, dst, "INSERT INTO cats VALUES (9, 'kept')")
+
+	p, err := PlanCopy(ctx, src, "cats", dst, CopyOptions{Where: "id > 1", Truncate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Rows != 2 || !p.DestThere || p.Truncate != `DELETE FROM "cats"` || p.Problem != "" || p.Direct ||
+		strings.Join(p.Columns, ",") != "id,name" {
+		t.Errorf("plan = %+v", p)
+	}
+	if got := dump(t, dst, "SELECT count(*) FROM cats")[0][0]; got != "1" {
+		t.Errorf("the dry run changed the destination: %s rows", got)
+	}
+
+	p, err = PlanCopy(ctx, src, "cats", dst, CopyOptions{To: "fresh", Create: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.DestThere || !strings.HasPrefix(p.Create, `CREATE TABLE IF NOT EXISTS "fresh"`) || p.Truncate != "" {
+		t.Errorf("create plan = %+v", p)
+	}
+	if _, err := dst.DB.Exec(`SELECT 1 FROM "fresh"`); err == nil {
+		t.Error("the dry run created the table")
+	}
+
+	p, err = PlanCopy(ctx, src, "cats", dst, CopyOptions{To: "fresh"})
+	if err != nil || !strings.Contains(p.Problem, "does not exist") {
+		t.Errorf("missing without Create: %+v %v", p, err)
+	}
+	if !strings.Contains(p.String(), "problem:") || !strings.Contains(p.String(), "nothing was written") {
+		t.Errorf("String:\n%s", p.String())
+	}
+}

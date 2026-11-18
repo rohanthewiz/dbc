@@ -349,6 +349,34 @@ func (m *Migrator) upTo(ctx context.Context, c *sql.Conn, target int64) ([]Migra
 		return nil, err
 	}
 	current := highest(app)
+	pending, err := m.toApply(app, target)
+	if err != nil {
+		return nil, err
+	}
+
+	var done []Migration
+	for _, mig := range pending {
+		ran, err := m.runOne(ctx, c, mig, mig.Up, true)
+		if err != nil {
+			return done, err
+		}
+		if !ran {
+			continue // another run applied it first (SQLite only)
+		}
+		done = append(done, mig)
+		m.logf("OK   %s", mig.Name)
+	}
+	if len(done) == 0 {
+		m.logf("no migrations to run. current version: %d", current)
+	}
+	return done, nil
+}
+
+// toApply is what upTo would apply given the applied set: the pending
+// migrations through target (negative: all), in version order. One older
+// than the current version is refused unless AllowMissing, as goose does.
+func (m *Migrator) toApply(app map[int64]Status, target int64) ([]Migration, error) {
+	current := highest(app)
 	var pending, missing []Migration
 	for _, mig := range m.migs {
 		if app[mig.Version].Applied {
@@ -371,23 +399,25 @@ func (m *Migrator) upTo(ctx context.Context, c *sql.Conn, target int64) ([]Migra
 			"re-run with -allow-missing to apply them anyway",
 			"current", fmt.Sprint(current), "missing", strings.Join(names, ", "))
 	}
+	return pending, nil
+}
 
-	var done []Migration
-	for _, mig := range pending {
-		ran, err := m.runOne(ctx, c, mig, mig.Up, true)
-		if err != nil {
-			return done, err
-		}
-		if !ran {
-			continue // another run applied it first (SQLite only)
-		}
-		done = append(done, mig)
-		m.logf("OK   %s", mig.Name)
+// Pending is what Up would apply now, without applying it — the `pending`
+// command, a dry run of `up` (N-297). Like Statuses it takes no lock and
+// writes nothing (not even the version table: a database that has none
+// has every migration pending). It refuses as Up would, so a dry run says
+// what the real run will say.
+func (m *Migrator) Pending(ctx context.Context) ([]Migration, error) {
+	if !m.hasTable(ctx, m.db) {
+		// applied would create the version table; a dry run creates
+		// nothing, and with no table every migration is pending
+		return m.toApply(map[int64]Status{}, -1)
 	}
-	if len(done) == 0 {
-		m.logf("no migrations to run. current version: %d", current)
+	app, err := m.applied(ctx, m.db)
+	if err != nil {
+		return nil, err
 	}
-	return done, nil
+	return m.toApply(app, -1)
 }
 
 // UpByOne applies just the next pending migration.

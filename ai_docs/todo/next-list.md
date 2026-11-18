@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-336
+**Next ID:** N-337
 
 ## Open
 
@@ -78,14 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-297** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  No dry run on the headless movers. `dbc copy` (`copycmd.go:72-81`) has
-  no `--dry-run`, `--columns`, `--query` or `--batch`, takes one table a
-  call, and shows a bare row count with no rate or estimate.
-  `dbc migrate` (`migrate.go:40-52`) cannot print the pending SQL.
-  `dbc dump --dry-run` and `pipeline`/`job check` exist already. A job
-  re-run always starts at the root; there is no "from the failed step".
-  Neighbour: N-151. Audit, traced. (RPU plan, phase 4)
 - **N-298** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Completion gaps. Nothing is offered inside an open quoted name:
   `FROM "User▮`, `WHERE "Em▮` and MySQL ``FROM `ord▮`` return no items
@@ -348,6 +340,20 @@ ten session docs in `ai_docs/claude_sessions/`
   page needs telling, as `sayReleased` tells it of a session: a note,
   and result tabs that show "released — r reruns" rather than a grid
   whose pages 404.
+- **N-336** · raised `@SESS@` · value low
+  What N-297 listed besides the dry runs (it closed with `copy --dry-run`
+  and `migrate pending`):
+  - `dbc copy` has no `--columns`, `--query` or `--batch`, though
+    `etl.CopyOptions` takes all three (Columns, Query with To, BatchSize).
+  - It takes one table per call.
+  - It prints a bare row count, with no rate and no estimate before it
+    starts. The dry run's count could feed a progress percentage.
+  - A job re-run always starts at the root; there is no "from the failed
+    step" (`jobs` would need to know which pipelines' outputs a later
+    step can reuse).
+  Each part is independent. The flags are small, a multi-table copy is a
+  loop with one summary line each, and the job resume is a design
+  question of its own. Neighbour: N-151.
 
 ## Validate
 
@@ -1055,6 +1061,16 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-297** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  No dry run on the headless movers. `dbc copy` (`copycmd.go:72-81`) has
+  no `--dry-run`, `--columns`, `--query` or `--batch`, takes one table a
+  call, and shows a bare row count with no rate or estimate.
+  `dbc migrate` (`migrate.go:40-52`) cannot print the pending SQL.
+  `dbc dump --dry-run` and `pipeline`/`job check` exist already. A job
+  re-run always starts at the root; there is no "from the failed step".
+  Neighbour: N-151. Audit, traced. (RPU plan, phase 4)
+  closed 2026-11-18, `@SESS@`, commit `@N-297@`, the dry runs it is titled for. The rest is raised as N-336. **`dbc copy --dry-run`**: new `etl.PlanCopy` (`etl/plan.go`, through `sdb.S.PlanCopy`) reads what Copy would read and writes nothing. It gives the source SELECT (`copySource`); its columns and types (Postgres's Parse via `describe`, elsewhere the query wrapped `WHERE 1 = 0`); its rows counted within 30 s; whether the destination exists; the `CREATE TABLE` `--create` would run (`createDDL`, Copy's own); the statement `--truncate` would empty it with (`loadSetup`, so a same-database copy shows its DELETE); and the path, direct COPY or row by row. A missing table without `--create` is reported as the problem and exits 1. **`dbc migrate pending`**: `Migrator.Pending` is up's selection (`toApply`, factored out of `upTo`, refusal included), read with no lock and without creating goose's version table. It prints each pending file's statements under a comment (a NO TRANSACTION one marked) and a count on stderr; `-t json` lists each migration's statements. Real binary: SQLite to SQLite (exists, create, truncate, missing → exit 1); postgres:17 to itself with `--where`, `--create` and `--truncate` (90 rows, direct, `numeric(10,2) NOT NULL` from the catalog); Postgres to SQLite (mapped types); `migrate pending` before and after `up-by-one`, and no `goose_db_version` left behind. Tests: `etl.TestPlanCopy`, `migrate.TestPending`. README (copy's flag table, Migrations) and the dbc skill.
 
 - **N-296** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   `truncate` is skipped when a transform sits before the sink and no

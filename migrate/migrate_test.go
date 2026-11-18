@@ -423,3 +423,40 @@ func TestCreate(t *testing.T) {
 		t.Error("empty name accepted")
 	}
 }
+
+// Pending is up's dry run (N-297): what up would apply, the same refusal
+// up would give, and nothing written — not even the version table.
+func TestPending(t *testing.T) {
+	ctx := context.Background()
+	dir := writeMigrations(t, map[string]string{"10_a.sql": migA, "30_c.sql": migC})
+	dbh := engines(t)["sqlite"]
+	m, err := New(dbh, SQLite, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pend, err := m.Pending(ctx)
+	if err != nil || len(pend) != 2 || pend[0].Version != 10 || pend[1].Version != 30 {
+		t.Fatalf("pending on a fresh database = %+v, %v", pend, err)
+	}
+	if m.hasTable(ctx, dbh) {
+		t.Error("Pending created the version table")
+	}
+	if _, err = m.Up(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if pend, err = m.Pending(ctx); err != nil || len(pend) != 0 {
+		t.Errorf("pending after up = %+v, %v", pend, err)
+	}
+	// an older one landing: refused as up would refuse it, unless allowed
+	if err = os.WriteFile(filepath.Join(dir, "20_b.sql"), []byte(migB), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m, _ = New(dbh, SQLite, dir)
+	if _, err = m.Pending(ctx); err == nil || !strings.Contains(err.Error(), "allow-missing") {
+		t.Errorf("pending with a missing one = %v, want up's refusal", err)
+	}
+	m.AllowMissing = true
+	if pend, err = m.Pending(ctx); err != nil || len(pend) != 1 || pend[0].Version != 20 {
+		t.Errorf("pending, missing allowed = %+v, %v", pend, err)
+	}
+}

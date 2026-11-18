@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/x/term"
+	"github.com/rohanthewiz/logger"
 	"github.com/urfave/cli/v3"
 
 	"github.com/rohanthewiz/dbc/config"
@@ -51,6 +52,7 @@ var (
 	flagCreate   bool
 	flagTruncate bool
 	flagWhere    string
+	flagDryRun   bool
 )
 
 // copyProgressEvery is how often the terminal progress line is printed. It
@@ -78,6 +80,9 @@ func copyCommand() *cli.Command {
 				Usage: "empty the destination table first (rolled back if the copy fails)", Destination: &flagTruncate},
 			&cli.StringFlag{Name: "where",
 				Usage: "copy only the source rows matching this SQL `CONDITION`", Destination: &flagWhere},
+			&cli.BoolFlag{Name: "dry-run",
+				Usage: "say what the copy would do — columns, rows, the CREATE, the truncate — and write nothing",
+				Destination: &flagDryRun},
 		},
 		Action: copyAction,
 	}
@@ -114,6 +119,24 @@ func copyAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	runCtx, stop := interruptible()
 	defer stop()
+	if flagDryRun {
+		// the plan, on stdout as the summary would be; a copy that would
+		// fail before its first row (a missing table without --create)
+		// exits 1, so a script can check a copy before it runs it (N-297)
+		plan, err := sdb.New(mgr, nil, nil).WithContext(runCtx).PlanCopy(req.from, req.to, req.table, req.opts)
+		if err != nil {
+			if sdb.IsCanceled(err) {
+				canceled("copy")
+			}
+			fail(err, "copy plan failed")
+		}
+		fmt.Print(plan.String())
+		if plan.Problem != "" {
+			logger.CloseLog()
+			os.Exit(1)
+		}
+		return nil
+	}
 	st, err := runCopy(runCtx, mgr, req, progress)
 	if err != nil {
 		if sdb.IsCanceled(err) {
@@ -164,7 +187,7 @@ func checkCopyFlags() error {
 // The names are compared as typed, so `orders` against `public.orders` is
 // not caught; that is a guard against the slip, not a proof.
 func copyRequest(args []string) (copyReq, error) {
-	const use = "usage: dbc copy --from <conn> --to <conn> [--create] [--truncate] [--where SQL] <table> [dest-table]"
+	const use = "usage: dbc copy --from <conn> --to <conn> [--create] [--truncate] [--where SQL] [--dry-run] <table> [dest-table]"
 	switch {
 	case flagFrom == "" || flagTo == "":
 		return copyReq{}, errors.New("copy needs both --from and --to\n" + use)

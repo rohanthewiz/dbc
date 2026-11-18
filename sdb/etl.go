@@ -102,6 +102,21 @@ func (s *S) Copy(src, dst, table string, opt CopyOpts) (CopyStats, error) {
 	return etl.Copy(s.Ctx(), from, table, to, opt)
 }
 
+// PlanCopy is Copy's dry run: what Copy(src, dst, table, opt) would read,
+// create, empty and load, with nothing written on either side
+// (etl.PlanCopy; `dbc copy --dry-run`).
+func (s *S) PlanCopy(src, dst, table string, opt CopyOpts) (etl.CopyPlan, error) {
+	from, err := s.ETLConn(src)
+	if err != nil {
+		return etl.CopyPlan{}, err
+	}
+	to, err := s.ETLConn(dst)
+	if err != nil {
+		return etl.CopyPlan{}, err
+	}
+	return etl.PlanCopy(s.Ctx(), from, table, to, opt)
+}
+
 // Reader runs query on conn and streams its rows. Use the placeholder style
 // of the connection's driver ($1 postgres/bytdb, ? mysql/sqlite).
 func (s *S) Reader(conn, query string, args ...any) (*Reader, error) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -41,6 +42,7 @@ const migrateUsage = `usage: dbc [-c conn | --driver d --dsn s] [--dir path] mig
 
 commands:
   status           show each migration and when it was applied
+  pending          print the SQL up would run, without running it
   version          print the highest applied version
   up               apply every pending migration
   up-by-one        apply the next pending migration
@@ -94,6 +96,11 @@ func runMigrate(cfg *config.Config, mgr *db.Manager, args []string, f export.For
 				Rows:    [][]string{{strconv.FormatInt(v, 10)}},
 				Raw:     [][]any{{v}},
 			}}, f)
+		}
+	case "pending":
+		var pend []migrate.Migration
+		if pend, err = m.Pending(ctx); err == nil {
+			printPending(pend, f)
 		}
 	case "up":
 		_, err = m.Up(ctx)
@@ -166,6 +173,56 @@ func openMigrator(mgr *db.Manager, cfg *config.Config, conn, dir string) *migrat
 	m.AllowMissing = flagMissing
 	m.Log = func(s string) { fmt.Println(s) }
 	return m
+}
+
+// printPending is `migrate pending`: the dry run of `up` (N-297). Text is
+// the SQL itself, file by file under a comment naming it — a script a
+// person can read, or pipe to psql by hand — and a closing count on
+// stderr; -t json is one object per migration, its statements as a list.
+// NO TRANSACTION migrations are marked, since up runs those statements
+// one by one, not in one transaction.
+func printPending(pend []migrate.Migration, f export.Format) {
+	if f == export.JSON {
+		type item struct {
+			Version    int64    `json:"version"`
+			Name       string   `json:"name"`
+			NoTx       bool     `json:"no_transaction,omitempty"`
+			Statements []string `json:"statements"`
+		}
+		out := make([]item, 0, len(pend))
+		for _, m := range pend {
+			out = append(out, item{Version: m.Version, Name: m.Name, NoTx: m.NoTx, Statements: m.Up})
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(out); err != nil {
+			fail(err, "write failed")
+		}
+		return
+	}
+	for i, m := range pend {
+		if i > 0 {
+			fmt.Println()
+		}
+		tx := "in one transaction"
+		if m.NoTx {
+			tx = "NO TRANSACTION: each statement on its own"
+		}
+		fmt.Printf("-- %s (%s)\n", m.Name, tx)
+		for _, st := range m.Up {
+			st = strings.TrimSpace(st)
+			if !strings.HasSuffix(st, ";") {
+				st += ";"
+			}
+			fmt.Println(st)
+		}
+	}
+	switch len(pend) {
+	case 0:
+		fmt.Fprintln(os.Stderr, "no migrations pending: up would do nothing")
+	default:
+		fmt.Fprintf(os.Stderr, "%d migration(s) pending; nothing was run (dbc migrate up applies them)\n", len(pend))
+	}
 }
 
 func versionArg(args []string) (int64, error) {

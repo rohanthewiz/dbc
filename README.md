@@ -3223,6 +3223,7 @@ pipeline:
 | `--from NAME`, `--to NAME` | source and destination connections (both required; may be the same one, copying to a different table). A `<conn>/<database>` name works as it does in `s.Copy` |
 | `--create` | create the destination table when it does not exist (see `Create` under [ETL](#etl-across-connections)) |
 | `--truncate` | empty the destination first, in the load's transaction |
+| `--dry-run` | write nothing: print the source query, its columns and row count, whether the destination exists, the `CREATE TABLE` `--create` would run and the statement `--truncate` would empty it with; exit 1 when the copy would fail before its first row (a missing table without `--create`) |
 | `--where CONDITION` | copy only the source rows that match, written in the source's SQL |
 
 A second table name is the destination table; without it, the destination
@@ -3646,14 +3647,19 @@ carries straight over, and the goose binary stops being a thing to install.
 
 ```sh
 ./dbc -c local-pg migrate status                  # each file, applied or pending
+./dbc -c local-pg migrate pending                 # the SQL up would run, not run
 ./dbc -c local-pg migrate up                      # apply everything pending
 ./dbc -c local-pg migrate down                    # roll back the latest
 ./dbc -c local-pg migrate create add_users_table  # new timestamped file
 ./dbc -c local-pg -t json migrate version         # for scripts
 ```
 
-Verbs: `status`, `version`, `up`, `up-by-one`, `up-to VERSION`, `down`,
-`down-to VERSION`, `redo`, `create NAME`.
+Verbs: `status`, `version`, `pending`, `up`, `up-by-one`, `up-to VERSION`,
+`down`, `down-to VERSION`, `redo`, `create NAME`. `pending` is `up`'s dry run:
+the statements of every migration `up` would apply, file by file (a NO
+TRANSACTION one marked), with `up`'s own refusal of an older unapplied
+migration; it writes nothing, not even goose's version table, and `-t json`
+lists each migration's statements.
 
 The migrations directory is `--dir`, else the connection's `migrations` setting
 in the config, else the working directory:

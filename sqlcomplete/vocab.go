@@ -3,6 +3,8 @@ package sqlcomplete
 import (
 	"strings"
 	"sync"
+
+	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
 // dialect is one engine's vocabulary and naming rules.
@@ -64,7 +66,8 @@ func (d *dialect) quote(name string) string {
 			plain = false
 		}
 	}
-	if plain && !reserved[strings.ToLower(name)] && !quoteWords[strings.ToLower(name)] {
+	low := strings.ToLower(name)
+	if plain && !reserved[low] && !quoteWords[low] && !sqlsplit.IsReserved(d.name, low) {
 		return name
 	}
 	if d.backtick {

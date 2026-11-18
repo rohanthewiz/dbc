@@ -86,16 +86,6 @@ ten session docs in `ai_docs/claude_sessions/`
   clause keywords (AND, ASC…), not the table's columns.
   `CREATE INDEX ON orders (▮` offers every catalog column, qualified.
   Audit, run. (RPU plan, phase 4)
-- **N-299** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  Reserved-word quoting is one small list for all engines
-  (`designer/catalog.go:454-493`, `sqlcomplete/vocab.go:53-84`). The
-  designer writes `FROM rank r` on MySQL, and completion inserts
-  `groups`, `rank`, `condition`, `range` and `interval` bare, all
-  reserved in MySQL 8. On a real SQLite the designer's
-  `SELECT r.transaction`, `r.foreign` and `r.commit` each fail with
-  `near "transaction": syntax error`. Fix: per-dialect reserved sets, or
-  quote on any keyword hit. SQLite audit, run; MySQL by its reserved
-  list, no server run. (RPU plan, phase 4)
 - **N-300** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   dbc web usability basics. Modals have no focus trap, so Tab reaches the
   page behind the shade (`web/static/js/ui.js:90-111`). The grid is a
@@ -1061,6 +1051,18 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-299** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  Reserved-word quoting is one small list for all engines
+  (`designer/catalog.go:454-493`, `sqlcomplete/vocab.go:53-84`). The
+  designer writes `FROM rank r` on MySQL, and completion inserts
+  `groups`, `rank`, `condition`, `range` and `interval` bare, all
+  reserved in MySQL 8. On a real SQLite the designer's
+  `SELECT r.transaction`, `r.foreign` and `r.commit` each fail with
+  `near "transaction": syntax error`. Fix: per-dialect reserved sets, or
+  quote on any keyword hit. SQLite audit, run; MySQL by its reserved
+  list, no server run. (RPU plan, phase 4)
+  closed 2026-11-18, `@SESS@`, commit `@N-299@`: new `sqlsplit/reserved.go`, `IsReserved(engine, word)`, holds each engine's own list: MySQL 8.4's reserved words (8.0's kept), SQLite's keywords (all of them, since which ones a fallback lets stand bare depends on where they stand), and Postgres's reserved and "reserved (can be function or type)" words, which bytdb shares. Completion's `dialect.quote` and the designer's `dialect.ident` both consult it on top of their shared lists. Over-quoting is harmless, so the lists err long. Checked on mysql:8.4: `SELECT 1 AS rank` (and groups, condition, range, interval, qualify) is a syntax error bare and fine quoted. On SQLite, `SELECT 1 AS transaction` (and foreign, commit) is a syntax error. Tests: `sqlcomplete.TestQuoteEngineReserved` and `designer.TestIdentEngineReserved` (MySQL rank/groups/condition backticked, Postgres rank bare, SQLite transaction/commit quoted, bytdb foreign quoted).
 
 - **N-297** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   No dry run on the headless movers. `dbc copy` (`copycmd.go:72-81`) has

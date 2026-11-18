@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/rohanthewiz/dbc/erd"
+	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
 // Catalog is what the designer knows of the connection: its schema (tables,
@@ -485,7 +486,9 @@ func (d dialect) ident(name string) string {
 			plain = false
 		}
 	}
-	if plain && !reserved[strings.ToLower(name)] {
+	// the shared list, and the engine's own reserved words (N-299): MySQL
+	// reserves rank and groups, SQLite transaction and foreign
+	if plain && !reserved[strings.ToLower(name)] && !sqlsplit.IsReserved(d.name, name) {
 		return name
 	}
 	if d.backtick {

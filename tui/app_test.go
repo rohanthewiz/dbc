@@ -149,6 +149,25 @@ func TestErrorsAreLoggedAndOfferedToTheAssistant(t *testing.T) {
 	}
 }
 
+// In a terminal too short for the log pane (under 18 rows), a failed
+// statement's error is still on screen: its first line is in the status
+// bar (N-291). Before, the grid kept the last result and the bar said only
+// "error after …", so a short pane showed stale rows and no word of why.
+func TestShortTerminalShowsTheError(t *testing.T) {
+	m := newTestModel(t)
+	drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 14})
+	m.editor.SetText("SELEC nonsense")
+	key(t, m, "ctrl+r")
+	f := frame(m)
+	last := f.Line(13)
+	if !strings.Contains(last, "error after") || !strings.Contains(last, `near "SELEC": syntax error`) {
+		t.Errorf("status bar should carry the error: %q", last)
+	}
+	if strings.Contains(last, "conn=") || strings.Contains(last, "location=") {
+		t.Errorf("status bar should hold the error's text, not its fields: %q", last)
+	}
+}
+
 // Click a cell, drag to another: a range selection, visible in the frame.
 func TestClickAndDragSelectsARange(t *testing.T) {
 	m := newTestModel(t)

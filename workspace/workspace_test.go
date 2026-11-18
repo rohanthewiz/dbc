@@ -17,6 +17,7 @@ import (
 	"github.com/rohanthewiz/dbc/db"
 	"github.com/rohanthewiz/dbc/model"
 	"github.com/rohanthewiz/dbc/sqlsplit"
+	"github.com/rohanthewiz/serr"
 )
 
 // These tests exercise the workspace's rules directly, with no UI: start a
@@ -1829,5 +1830,24 @@ func TestStopNotesSayWhatTheSessionKept(t *testing.T) {
 				t.Errorf("aborted note = %v, want %v: %+v", got, c.aborted, notes)
 			}
 		})
+	}
+}
+
+// statusErr is the first line of the error's text, clipped (N-291).
+func TestStatusErr(t *testing.T) {
+	long := strings.Repeat("x", statusErrMax+40)
+	for _, c := range []struct{ in, want string }{
+		{"near \"selec\": syntax error", "near \"selec\": syntax error"},
+		{"ERROR: boom (SQLSTATE 42000) — DETAIL: a\nCONTEXT: b", "ERROR: boom (SQLSTATE 42000) — DETAIL: a …"},
+		{"  padded  ", "padded"},
+		{long, strings.Repeat("x", statusErrMax-1) + "…"},
+	} {
+		if got := statusErr(errors.New(c.in)); got != c.want {
+			t.Errorf("statusErr(%.40q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	// serr's fields stay out: the error's own text is all the line says
+	if got := statusErr(serr.Wrap(errors.New("no such table: t"), "conn", "lite")); got != "no such table: t" {
+		t.Errorf("serr: %q", got)
 	}
 }

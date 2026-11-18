@@ -125,15 +125,6 @@ ten session docs in `ai_docs/claude_sessions/`
   the tables mentioned have more columns than `max_rows`, or it was
   lowered, later tables reach the assistant with some or none of their
   columns. Fix: use `stringRows`. Audit, traced. (RPU plan, phase 4)
-- **N-291** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
-  A failed query's message is only in the log. The grid keeps the
-  previous result and its title, and the status bar says "error after
-  12ms — ✦ ask the assistant why" (`workspace/run.go:800-802`); the log
-  is hidden under 18 terminal rows (`tui/layout.go:179`) and under `z`
-  zoom (`:188`). In a short split pane the user sees stale rows and no
-  error text. Fix: an error banner in the results pane, or the error's
-  first line in the status bar. Audit, traced; check in `tui/e2e`.
-  (RPU plan, phase 4)
 - **N-292** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   The TUI has no find. Editor: no Ctrl+F and no go-to-line
   (`tui/editor.go:651-749`). Grid: no search, filter or jump to row
@@ -1165,6 +1156,17 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-291** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
+  A failed query's message is only in the log. The grid keeps the
+  previous result and its title, and the status bar says "error after
+  12ms — ✦ ask the assistant why" (`workspace/run.go:800-802`); the log
+  is hidden under 18 terminal rows (`tui/layout.go:179`) and under `z`
+  zoom (`:188`). In a short split pane the user sees stale rows and no
+  error text. Fix: an error banner in the results pane, or the error's
+  first line in the status bar. Audit, traced; check in `tui/e2e`.
+  (RPU plan, phase 4)
+  closed 2026-11-18, `@SESS@`, commit `@N-291@`: the status line a failure leaves (`workspace.failedLocked`, both UIs) now carries the error: `error after 12ms: near "SELEC": syntax error (1) — ✦ ask the assistant why`. `statusErr` takes the first line of the error's own text (no serr fields; a Postgres error's DETAIL/CONTEXT lines and a quoted statement after the first newline become ` …`), clipped to 160 runes. The status bar was chosen over a banner in the results pane: the bar is drawn at every size and under `z` zoom, and it needs no new pane state. The `error after` prefix is kept, so the TUI's colouring (`strings.HasPrefix(m.status, "error")`) and the tests that read it still hold. Tests: `workspace.TestStatusErr`; `tui.TestShortTerminalShowsTheError`, a 120×14 frame (the log hidden), where the bottom line holds the error and none of its fields. Unit, workspace, tui and web suites pass. Not run in `tui/e2e` or a real terminal: on an 80-column bar a long error now pushes the `✦ ask the assistant why` hint off the right edge, since the bar clips. That trade (the error over the hint) is deliberate.
 
 - **N-288** · raised `2026-1110-1643-reliability-performance-usability-plan` · value medium
   Values lose detail on the way out (`db/manager.go:1098-1120`, feeding

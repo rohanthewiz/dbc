@@ -862,7 +862,31 @@ func (w *Workspace) failedLocked(set *resultSet, err error, tag string, elapsed 
 	}
 	set.lastErr = serr.StringFromErr(err)
 	*notes = append(*notes, Note{Err, set.lastErr})
-	*status = fmt.Sprintf("error after %s — ✦ ask the assistant why", took)
+	*status = fmt.Sprintf("error after %s: %s — ✦ ask the assistant why", took, statusErr(err))
+}
+
+// statusErrMax bounds the error text a status line carries, in runes. The
+// TUI clips its status bar to the terminal anyway; dbc web's status line
+// would wrap a long one into the page.
+const statusErrMax = 160
+
+// statusErr is the part of a failure the status bar shows (N-291): the
+// first line of the error's own text, without serr's fields — the whole
+// error is in the log, whose pane may be hidden (under 18 terminal rows, or
+// a zoomed results pane), and the grid keeps the previous result, so
+// without this a short pane showed stale rows and no word of what failed.
+// The first line, since a Postgres error goes on with its DETAIL and
+// CONTEXT and a SQLite one may quote the statement; clipped to
+// statusErrMax runes with an ellipsis.
+func statusErr(err error) string {
+	msg := strings.TrimSpace(err.Error())
+	if i := strings.IndexAny(msg, "\r\n"); i >= 0 {
+		msg = strings.TrimSpace(msg[:i]) + " …"
+	}
+	if r := []rune(msg); len(r) > statusErrMax {
+		msg = string(r[:statusErrMax-1]) + "…"
+	}
+	return msg
 }
 
 // Cancel is Ctrl+K and the Stop button: it stops the run in flight or,

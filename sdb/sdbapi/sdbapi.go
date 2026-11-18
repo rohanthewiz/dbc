@@ -119,11 +119,12 @@ const (
 // session (New), attaches the stop (WithContext), turns on the DDL log
 // (LogDDL), releases what Run left open (Release) and asks afterwards
 // whether the sidebar needs relisting (CatalogChanged), hands in its job
-// runner (WithJobs) and lends its connections to one (Manager). Offering them in
+// runner (WithJobs), lends its connections to one (Manager) and hands in
+// its CSV options (WithCSV). Offering them in
 // completion would invite a script to break its own run. TestHostOnlyExist
 // keeps the list in step with sdb.
 var hostOnly = []string{"New", "WithContext", "LogDDL", "Release", "OpenScope", "CatalogChanged", "WithPaths", "ETLConn",
-	"WithJobs", "Manager", "ForFiles"}
+	"WithJobs", "Manager", "ForFiles", "WithCSV"}
 
 // connParams are the parameter names that mean "a connection name".
 var connParams = []string{"conn", "src", "dst"}

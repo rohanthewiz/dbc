@@ -17,6 +17,7 @@ import (
 	// but the standard library, so it can never close a cycle back to
 	// config, and the format_keywords spellings stay in one place
 	// (sqlsplit.ParseKeywordCase) rather than being repeated here.
+	"github.com/rohanthewiz/dbc/export"
 	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
@@ -333,6 +334,18 @@ type Config struct {
 	// names, warning on anything else; read it through FormatOptions.
 	FormatKeywords string `toml:"format_keywords"`
 
+	// CSVBOM and CSVFormulaGuard are a CSV or TSV export's two options
+	// (export.CSVOptions, N-334): a UTF-8 byte order mark first, so Excel
+	// reads the file as UTF-8, and a ' before a text cell a spreadsheet
+	// would read as a formula. Both change the bytes written, so both are
+	// off unless set. They apply to every export dbc writes to a file or
+	// stdout — the CLI's -t csv, the TUI's and dbc web's export dialogs, a
+	// script's s.Export — never to a copy: read them through CSVOptions.
+	// Config keys rather than a choice per export because they follow who
+	// the files are for, which is the same from one export to the next.
+	CSVBOM          bool `toml:"csv_bom"`
+	CSVFormulaGuard bool `toml:"csv_formula_guard"`
+
 	DefaultConnection string `toml:"default_connection"`
 
 	// Connections is written freely while the config is being built (Load,
@@ -615,6 +628,16 @@ func (c *Config) FormatOptions() sqlsplit.FormatOptions {
 	}
 	k, _ := sqlsplit.ParseKeywordCase(c.FormatKeywords)
 	return sqlsplit.FormatOptions{Keywords: k}
+}
+
+// CSVOptions are the options a CSV or TSV export to a file or stdout runs
+// with, from csv_bom and csv_formula_guard. A nil Config gets none: the
+// export as it always was.
+func (c *Config) CSVOptions() export.CSVOptions {
+	if c == nil {
+		return export.CSVOptions{}
+	}
+	return export.CSVOptions{BOM: c.CSVBOM, FormulaGuard: c.CSVFormulaGuard}
 }
 
 // checkResultTabs keeps result_tabs within 1…MaxResultTabs, saying so when

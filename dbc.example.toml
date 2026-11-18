@@ -104,6 +104,18 @@ plan_theme = "dark"
 # and comments are never re-cased, whichever you pick.
 # format_keywords = "upper"
 
+# CSV and TSV exports, to a file or stdout (-t csv, the export dialogs, a
+# script's s.Export; never a copy to the clipboard). Both are off by
+# default because both change the bytes written.
+#   csv_bom: start the file with a UTF-8 byte order mark, so Excel opens
+#     it as UTF-8 (without one it reads the system code page: é as Ã©).
+#   csv_formula_guard: put a ' before a text cell starting with = + - @
+#     (or a tab or CR), which Excel and Sheets would run as a formula —
+#     for exports of text people typed, sent on to others. Numbers, -5
+#     included, are never touched.
+# csv_bom = false
+# csv_formula_guard = false
+
 # AI assistant. dbc runs an Agent Client Protocol agent as a subprocess and
 # never holds a credential itself: "copilot" (the default) is GitHub's
 # copilot-language-server, signed in once from any editor that uses it;

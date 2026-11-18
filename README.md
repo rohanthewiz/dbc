@@ -3742,6 +3742,20 @@ are hex as psql shows them (`\xff00`). A SQL NULL is an empty field in CSV
 and TSV — the text `NULL` there would be the same as the string `'NULL'` —
 `null` in JSON, and `NULL` in the grid, text and Markdown.
 
+Two config keys change what a CSV or TSV file holds, for files headed to a
+spreadsheet. Both are off by default, because both change the bytes:
+
+```toml
+csv_bom = true            # a UTF-8 byte order mark first, so Excel reads é as é, not Ã©
+csv_formula_guard = true  # a ' before a text cell starting with = + - @ (or a tab or CR)
+```
+
+The guard keeps Excel and Sheets from running a cell like
+`=HYPERLINK(…)` from an export of text people typed. Numbers are never
+touched, `-5` included, even when a driver sends them as text. Both keys
+apply to every export to a file or stdout: `-t csv`, the export dialogs and
+`s.Export`. They never apply to a copy to the clipboard.
+
 The HTML page wears the same muted green as the TUI, surface for surface.
 Both read the palette from [`theme/`](theme/theme.go), so a change to those
 constants reaches the app and its exports together.

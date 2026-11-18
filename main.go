@@ -574,12 +574,22 @@ func outFormat() export.Format {
 }
 
 // warnConfig prints load-time config warnings for the headless paths; the TUI
-// shows them in its log pane instead.
+// shows them in its log pane instead. Being the one call every headless
+// path makes once its config is loaded, it also takes the config's CSV
+// options for the output writers (csvOut).
 func warnConfig(cfg *config.Config) {
 	for _, w := range cfg.Warnings {
 		fmt.Fprintln(os.Stderr, "warning: "+w)
 	}
+	csvOut = cfg.CSVOptions()
 }
+
+// csvOut is the config's CSV options (csv_bom, csv_formula_guard; N-334)
+// for a headless command's CSV or TSV output, stdout and --out alike: set
+// by warnConfig as the output flags (flagFormat, flagOut) are set by
+// parsing. The zero value, for a path that loads no config, is the output
+// as it always was.
+var csvOut export.CSVOptions
 
 // runQueryHeadless runs the SQL buffer given on the command line. It may hold
 // several statements: they run in order on one connection, stopping at the
@@ -1023,16 +1033,24 @@ type blockStream struct {
 // add writes result i (0-based). Its signature fits runStatements' onResult.
 func (b *blockStream) add(i int, r *model.Result) error {
 	noun, pos := b.where(i + 1)
-	block, err := export.RenderBlock(r, b.f, i+1, b.total)
-	if err != nil {
+	// the block, after the separator from the one before — or, first, the
+	// document's BOM when csv_bom asks for one; csv_formula_guard in each
+	// block (csvOut)
+	var sb strings.Builder
+	if b.wrote > 0 {
+		sb.WriteString(export.BlockSep)
+	} else {
+		_ = export.WriteBOM(&sb, b.f, csvOut) // a strings.Builder does not fail
+	}
+	o := csvOut
+	o.BOM = false
+	if err := export.WriteBlockWith(&sb, r, b.f, i+1, b.total, o); err != nil {
 		b.err = serr.Wrap(err, noun, pos)
 		return b.err
 	}
-	if b.wrote > 0 {
-		block = export.BlockSep + block
-	}
+	block := sb.String()
 	b.wrote++
-	if _, err = io.WriteString(b.out, block); err != nil {
+	if _, err := io.WriteString(b.out, block); err != nil {
 		b.err = serr.Wrap(err, noun, pos)
 		return b.err
 	}
@@ -1079,7 +1097,7 @@ func emit(results []*model.Result, f export.Format) {
 // long output, and a streamed one can only come after.
 func emitRun(results []*model.Result, at []int, total int, f export.Format) {
 	o := openOut()
-	if err := export.WriteRun(o.w, results, at, total, f); err != nil {
+	if err := export.WriteRunWith(o.w, results, at, total, f, csvOut); err != nil {
 		o.failed(err, "render failed")
 	}
 	warnTruncated(os.Stderr, results, at, total)
@@ -1259,6 +1277,9 @@ func newRowStream(o *headlessOut, f export.Format) *rowStream {
 	if f == export.JSON {
 		return &rowStream{o: o, json: true}
 	}
+	// the document's BOM, when csv_bom asks for one, before anything: a
+	// write error surfaces at the first row's, as any later one does
+	_ = export.WriteBOM(o.w, f, csvOut)
 	// csv.NewWriter takes o.w as its buffer (a bufio.Writer at least its
 	// default size is used as it is), so there is one buffer, not two
 	cw := csv.NewWriter(o.w)
@@ -1292,7 +1313,8 @@ func (s *rowStream) Set(cols []string) error {
 }
 
 // Row writes one row, as its display text with a NULL as an empty field
-// (export.DelimitedRecord, as a collected CSV writes it).
+// (export.DelimitedRecord, as a collected CSV writes it), and with
+// csv_formula_guard a formula-like text cell quoted (export.GuardRecord).
 func (s *rowStream) Row(disp []string, raw []any) error {
 	s.counts[len(s.counts)-1]++
 	if s.json {
@@ -1303,6 +1325,9 @@ func (s *rowStream) Row(disp []string, raw []any) error {
 		return nil
 	}
 	s.rec = export.DelimitedRecord(s.rec, disp, raw)
+	if csvOut.FormulaGuard {
+		export.GuardRecord(s.rec, raw)
+	}
 	return s.write(s.rec)
 }
 
@@ -1336,7 +1361,10 @@ func (s *rowStream) end(run runOutcome, f export.Format) {
 	}
 	if len(s.counts) == 0 {
 		if len(run.results) > 0 {
-			if err := export.WriteRun(s.o.w, run.results, run.at, 1, f); err != nil {
+			// the BOM, if any, went out when the stream began
+			o := csvOut
+			o.BOM = false
+			if err := export.WriteRunWith(s.o.w, run.results, run.at, 1, f, o); err != nil {
 				s.o.failed(err, "render failed")
 			}
 		}
@@ -1464,7 +1492,7 @@ func runScriptHeadless(cfg *config.Config, mgr *db.Manager, ref config.ScriptRef
 	s := sdb.New(mgr, show,
 		func(msg string) { fmt.Fprintln(logOut, msg) },
 	).WithContext(ctx).WithPaths(sdb.Paths{ScriptsDir: cfg.ScriptsDir, PipelinesDir: cfg.PipelinesDir,
-		JobsDir: cfg.JobsDir, RunsDir: cfg.RunsDir, FilesDir: cfg.FilesDir})
+		JobsDir: cfg.JobsDir, RunsDir: cfg.RunsDir, FilesDir: cfg.FilesDir}).WithCSV(cfg.CSVOptions())
 
 	var err error
 	if ref.Example != nil {
@@ -1512,7 +1540,7 @@ func emitScript(results []*model.Result, f export.Format) {
 		emit(results, f)
 		return
 	}
-	out, err := export.RenderOpen(results, f)
+	out, err := export.RenderOpenWith(results, f, csvOut)
 	if err != nil {
 		fail(err, "render failed")
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rohanthewiz/dbc/export"
 	"github.com/rohanthewiz/dbc/sqlsplit"
 )
 
@@ -374,6 +375,38 @@ dsn = "a.db"
 	var none *Config
 	if got := none.FormatOptions(); got != (sqlsplit.FormatOptions{}) {
 		t.Errorf("nil Config's FormatOptions = %+v, want the zero options", got)
+	}
+}
+
+// csv_bom and csv_formula_guard (N-334) are off unless set, each on its
+// own, and CSVOptions carries them to the exporters; a nil Config has none.
+func TestLoadCSVOptions(t *testing.T) {
+	conn := `
+[[connection]]
+name = "db"
+driver = "sqlite"
+dsn = "a.db"
+`
+	for _, c := range []struct {
+		name, body string
+		want       export.CSVOptions
+	}{
+		{"absent", conn, export.CSVOptions{}},
+		{"bom", "csv_bom = true\n" + conn, export.CSVOptions{BOM: true}},
+		{"guard", "csv_formula_guard = true\n" + conn, export.CSVOptions{FormulaGuard: true}},
+		{"both", "csv_bom = true\ncsv_formula_guard = true\n" + conn, export.CSVOptions{BOM: true, FormulaGuard: true}},
+	} {
+		cfg, err := Load(writeConfig(t, c.body))
+		if err != nil {
+			t.Fatalf("%s: load: %v", c.name, err)
+		}
+		if got := cfg.CSVOptions(); got != c.want {
+			t.Errorf("%s: CSVOptions = %+v, want %+v", c.name, got, c.want)
+		}
+	}
+	var none *Config
+	if got := none.CSVOptions(); got != (export.CSVOptions{}) {
+		t.Errorf("nil Config's CSVOptions = %+v, want none", got)
 	}
 }
 

@@ -80,6 +80,9 @@ dbc -- "-- leading comment\nSELECT 1"     # -- before SQL starting with a commen
 ```
 
 Formats (`-t`): `text` (default), `csv`, `tsv`, `markdown`, `html`, `json`.
+For CSV/TSV files headed to Excel, two config keys (off by default):
+`csv_bom = true` (a UTF-8 BOM first) and `csv_formula_guard = true` (a `'`
+before text cells starting `= + - @`; numbers untouched).
 Prefer `json` for reading results programmatically: one statement gives an
 array of row objects; several give an array of envelopes
 `{"statement","conn","duration","columns","rows"}` (or `"rows_affected"`).

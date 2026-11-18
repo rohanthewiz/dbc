@@ -438,7 +438,7 @@ func (w *Workspace) RunScript(path string) (Start, error) {
 			}
 		},
 	).WithContext(ctx).WithPaths(sdb.Paths{ScriptsDir: w.cfg.ScriptsDir, PipelinesDir: w.cfg.PipelinesDir,
-		JobsDir: w.cfg.JobsDir, RunsDir: w.cfg.RunsDir, FilesDir: w.cfg.FilesDir}).WithJobs(w.jobs)
+		JobsDir: w.cfg.JobsDir, RunsDir: w.cfg.RunsDir, FilesDir: w.cfg.FilesDir}).WithJobs(w.jobs).WithCSV(w.cfg.CSVOptions())
 	job := func() Event {
 		notes, err := scriptStopped(ctx, func() error { return script.Run(path, s) }, &abandoned)
 		ev := &RunDone{Tag: tag, Conn: conn, Script: true, ScriptPath: path, Err: err, Notes: notes}

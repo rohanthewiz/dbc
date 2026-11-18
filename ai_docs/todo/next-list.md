@@ -140,18 +140,6 @@ ten session docs in `ai_docs/claude_sessions/`
 - **Leave it.** A cut read inside a transaction reads to the end, as now: slow on a huge table, but correct.
 
 The question for the user: which, if any? A cursor seems the least surprising, if a different plan inside a transaction is acceptable.
-- **N-334** · raised `2026-1118-0042-n321-n286-n288-n291-plain-errors-value-text-status-error` · value low
-  CSV has no formula guard and no BOM option, the two parts of N-288's
-  audit it did not do (its "Fix:" named neither). A text cell starting
-  with `=`, `+`, `-`, `@` (or a tab or CR) is read as a formula by Excel
-  and Sheets when the file is opened, which matters for an export of
-  user-entered text sent to someone else; Excel also reads a UTF-8 CSV
-  with no BOM as the system code page, so `é` shows as `Ã©`. Both change
-  the bytes written, so options rather than defaults: a `csv_bom` config
-  key or a `--bom` flag, and a guard that prefixes `'` to a text cell
-  (raw a string, not a number: `-5` from an int column must stay `-5`)
-  behind its own option. They touch `export.delimited`, `rowStream`, the
-  TUI's and web's export dialogs. Split out of N-288 while closing it.
 - **N-335** · raised `2026-1118-0111-n284-n290-n295-web-small-events-columns-load-errors` · value low
   Drop a dbc web tab's result sets at the idle release? This is the part
   of N-284 not done, because it changes what a returning user sees. A
@@ -792,6 +780,33 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-334** · raised `2026-1118-0042-n321-n286-n288-n291-plain-errors-value-text-status-error` · value low
+  CSV has no formula guard and no BOM option, the two parts of N-288's
+  audit it did not do (its "Fix:" named neither). A text cell starting
+  with `=`, `+`, `-`, `@` (or a tab or CR) is read as a formula by Excel
+  and Sheets when the file is opened, which matters for an export of
+  user-entered text sent to someone else; Excel also reads a UTF-8 CSV
+  with no BOM as the system code page, so `é` shows as `Ã©`. Both change
+  the bytes written, so options rather than defaults: a `csv_bom` config
+  key or a `--bom` flag, and a guard that prefixes `'` to a text cell
+  (raw a string, not a number: `-5` from an int column must stay `-5`)
+  behind its own option. They touch `export.delimited`, `rowStream`, the
+  TUI's and web's export dialogs. Split out of N-288 while closing it.
+  closed 2026-11-18, `@SESS@`, commit `@N-334@`: both options, off by default, as the item asked.
+- **The keys.** `csv_bom` and `csv_formula_guard` (`config.CSVOptions` → `export.CSVOptions`) apply to every CSV or TSV export to a file or stdout: the CLI's `-t csv` on all three of its paths (a lone statement's streamed rows, a run collected into `-o`, a run's blocks streamed to stdout), the TUI's export dialog, dbc web's download, and a script's `s.Export` (a host-only `S.WithCSV`, so the script API and its budget are unchanged). They never apply to a clipboard copy.
+- **The BOM** is written once, at the document's start (`WriteBOM`; the run, block and open-document writers pass BOM off after it).
+- **The guard** (`GuardFormula`) puts a `'` before a cell starting with `=`, `+`, `-`, `@`, a tab or a CR, unless the cell is a number: a raw Go number, or text that parses as one. MySQL's text protocol sends an INT's -5 as text, so "raw is a string" alone would have guarded it. The header row is never guarded.
+- **Dialogs.** I decided against a per-export checkbox: who the files are for is the same from one export to the next, so a config key fits better. The dialogs honour the keys.
+- **Docs.** README's "Export formats", `dbc.example.toml` and the dbc skill.
+
+Tests:
+- `TestGuardFormula` and `TestCSVOptions` (the zero options unchanged; one BOM in a run; other formats unaffected).
+- `TestHeadlessCSVOptions`: every CLI path matches the collected export, and stdout equals `-o`.
+- `TestLoadCSVOptions`.
+- `TestGridExportCSVOptions`: the download takes them, a copy doesn't.
+
+The full suite, vet, staticcheck and `-race` on export, sdb and main pass.
 
 - **N-166** · raised `2026-1008-1518-script-goto-def-usages-inline-diags` · value low
   The script tab's inline error notes (gutter dot, box, end-of-line

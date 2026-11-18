@@ -61,9 +61,12 @@ func ParseFormat(s string) (Format, error) {
 }
 
 // Render produces the result in the requested format.
-func Render(r *model.Result, f Format) (string, error) {
+func Render(r *model.Result, f Format) (string, error) { return RenderWith(r, f, CSVOptions{}) }
+
+// RenderWith is Render with a CSV or TSV export's options (CSVOptions).
+func RenderWith(r *model.Result, f Format, o CSVOptions) (string, error) {
 	var sb strings.Builder
-	if err := Write(&sb, r, f); err != nil {
+	if err := WriteWith(&sb, r, f, o); err != nil {
 		return "", err
 	}
 	return sb.String(), nil
@@ -82,24 +85,29 @@ func Render(r *model.Result, f Format) (string, error) {
 // A failure part way — w's own, or JSON's refusal of a value (NaN) — is
 // returned, and what was written before it stays written: a caller that
 // must not leave a partial file writes through WriteFile.
-func Write(w io.Writer, r *model.Result, f Format) error {
+func Write(w io.Writer, r *model.Result, f Format) error { return WriteWith(w, r, f, CSVOptions{}) }
+
+// WriteWith is Write with a CSV or TSV export's options (CSVOptions): a
+// BOM before the document, formulas guarded in its cells.
+func WriteWith(w io.Writer, r *model.Result, f Format, o CSVOptions) error {
 	if r == nil {
 		return serr.New("no result to export")
 	}
 	bw := bufio.NewWriter(w)
-	var err error
-	switch f {
-	case CSV:
-		err = delimited(bw, r, ',')
-	case TSV:
-		err = delimited(bw, r, '\t')
-	case Markdown:
+	err := WriteBOM(bw, f, o)
+	switch {
+	case err != nil:
+	case f == CSV:
+		err = delimited(bw, r, ',', o.FormulaGuard)
+	case f == TSV:
+		err = delimited(bw, r, '\t', o.FormulaGuard)
+	case f == Markdown:
 		markdown(bw, r)
-	case HTML:
+	case f == HTML:
 		_, _ = bw.WriteString(htmlDoc(r))
-	case JSON:
+	case f == JSON:
 		err = jsonArr(bw, r)
-	case Text:
+	case f == Text:
 		writeText(bw, r)
 	default:
 		return serr.New("unknown format", "format", string(f))
@@ -147,6 +155,12 @@ func RenderRun(rs []*model.Result, at []int, total int, f Format) (string, error
 // a block (and within a block, a row) at a time. The arguments are checked
 // before anything is written.
 func WriteRun(w io.Writer, rs []*model.Result, at []int, total int, f Format) error {
+	return WriteRunWith(w, rs, at, total, f, CSVOptions{})
+}
+
+// WriteRunWith is WriteRun with a CSV or TSV export's options: the BOM
+// once, before the first block, and formulas guarded in every block.
+func WriteRunWith(w io.Writer, rs []*model.Result, at []int, total int, f Format, o CSVOptions) error {
 	switch {
 	case len(rs) == 0:
 		return serr.New("no result to export")
@@ -154,19 +168,23 @@ func WriteRun(w io.Writer, rs []*model.Result, at []int, total int, f Format) er
 		return serr.New("a position is needed for every result",
 			"results", fmt.Sprint(len(rs)), "positions", fmt.Sprint(len(at)))
 	case total == 1 && len(rs) == 1:
-		return Write(w, rs[0], f)
+		return WriteWith(w, rs[0], f, o)
 	}
 	switch f {
 	case CSV, TSV, Markdown, Text:
 		// Block formats go through WriteBlock, the same call a streaming
 		// caller makes one result at a time, so the two can never drift.
+		if err := WriteBOM(w, f, o); err != nil {
+			return err
+		}
+		o.BOM = false // the document's, written: not each block's
 		for i, r := range rs {
 			if i > 0 {
 				if _, err := io.WriteString(w, BlockSep); err != nil {
 					return serr.Wrap(err)
 				}
 			}
-			if err := WriteBlock(w, r, f, at[i], total); err != nil {
+			if err := WriteBlockWith(w, r, f, at[i], total, o); err != nil {
 				return err
 			}
 		}
@@ -190,21 +208,31 @@ func WriteRun(w io.Writer, rs []*model.Result, at []int, total int, f Format) er
 // would make `> file` and `-o file` differ. Only Streamable formats have such
 // a document; HTML and JSON are collected whole, so RenderAll serves them.
 func RenderOpen(rs []*model.Result, f Format) (string, error) {
+	return RenderOpenWith(rs, f, CSVOptions{})
+}
+
+// RenderOpenWith is RenderOpen with a CSV or TSV export's options: the
+// BOM once, before the first block, as a stream writes it; formulas
+// guarded in every block.
+func RenderOpenWith(rs []*model.Result, f Format, o CSVOptions) (string, error) {
 	if len(rs) == 0 {
 		return "", serr.New("no result to export")
 	}
 	if !Streamable(f) {
 		return "", serr.New("format is not a block format", "format", string(f))
 	}
-	blocks := make([]string, 0, len(rs))
+	var sb strings.Builder
+	_ = WriteBOM(&sb, f, o) // a strings.Builder does not fail
+	o.BOM = false
 	for i, r := range rs {
-		b, err := RenderBlock(r, f, i+1, 0)
-		if err != nil {
+		if i > 0 {
+			sb.WriteString(BlockSep)
+		}
+		if err := WriteBlockWith(&sb, r, f, i+1, 0, o); err != nil {
 			return "", err
 		}
-		blocks = append(blocks, b)
 	}
-	return strings.Join(blocks, BlockSep), nil
+	return sb.String(), nil
 }
 
 // Pos formats block i's place for a banner or a note: "i/n" against a known
@@ -262,6 +290,13 @@ func RenderBlock(r *model.Result, f Format, i, n int) (string, error) {
 
 // WriteBlock is RenderBlock to w.
 func WriteBlock(w io.Writer, r *model.Result, f Format, i, n int) error {
+	return WriteBlockWith(w, r, f, i, n, CSVOptions{})
+}
+
+// WriteBlockWith is WriteBlock with a CSV or TSV export's options. A
+// block is not the document's start, so a streaming caller wants its BOM
+// written once by WriteBOM and passes o with BOM off (WriteRunWith).
+func WriteBlockWith(w io.Writer, r *model.Result, f Format, i, n int, o CSVOptions) error {
 	if !Streamable(f) {
 		return serr.New("format is not a block format", "format", string(f))
 	}
@@ -274,7 +309,7 @@ func WriteBlock(w io.Writer, r *model.Result, f Format, i, n int) error {
 			return serr.Wrap(err)
 		}
 	}
-	return Write(w, r, f)
+	return WriteWith(w, r, f, o)
 }
 
 // durText is a result's duration as the banners and the JSON envelope say
@@ -392,7 +427,12 @@ func PlainCells(r *model.Result) string {
 // ToFile renders the result and writes it to path, through WriteFile: a
 // failure part way leaves whatever was at path as it was.
 func ToFile(r *model.Result, f Format, path string) error {
-	return WriteFile(path, func(w io.Writer) error { return Write(w, r, f) })
+	return ToFileWith(r, f, path, CSVOptions{})
+}
+
+// ToFileWith is ToFile with a CSV or TSV export's options (CSVOptions).
+func ToFileWith(r *model.Result, f Format, path string, o CSVOptions) error {
+	return WriteFile(path, func(w io.Writer) error { return WriteWith(w, r, f, o) })
 }
 
 // WriteFile writes a document to path as write produces it, without
@@ -505,8 +545,11 @@ func (f *File) Abort() {
 
 // delimited writes r as CSV, or TSV with comma '\t'. csv.Writer buffers
 // on its own and keeps the first write error; its Error reports it. A SQL
-// NULL is an empty field (DelimitedRecord).
-func delimited(w io.Writer, r *model.Result, comma rune) error {
+// NULL is an empty field (DelimitedRecord); with guard, a cell a
+// spreadsheet would read as a formula is quoted with a ' (GuardFormula).
+// The header row is the columns' names, never guarded: a name is the
+// query's, not data.
+func delimited(w io.Writer, r *model.Result, comma rune, guard bool) error {
 	cw := csv.NewWriter(w)
 	cw.Comma = comma
 	if err := cw.Write(r.Columns); err != nil {
@@ -519,6 +562,9 @@ func delimited(w io.Writer, r *model.Result, comma rune) error {
 			raw = r.Raw[i]
 		}
 		rec = DelimitedRecord(rec, row, raw)
+		if guard {
+			GuardRecord(rec, raw)
+		}
 		if err := cw.Write(rec); err != nil {
 			return serr.Wrap(err)
 		}

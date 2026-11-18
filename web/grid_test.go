@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/rohanthewiz/dbc/config"
+	"github.com/rohanthewiz/dbc/export"
 	"github.com/rohanthewiz/dbc/userdata"
 )
 
@@ -367,6 +368,26 @@ func TestGridExportDownloads(t *testing.T) {
 		}
 	}
 	e.api("GET", "/api/v1/ws/"+id+"/export?format=xls&seq="+seq+"&cols=0", "", 400)
+}
+
+// N-334: the config's csv_bom and csv_formula_guard reach a download, and
+// not a copy: the copy is going into the user's own sheet, where a BOM is
+// a stray character.
+func TestGridExportCSVOptions(t *testing.T) {
+	e := newTestEnv(t, func(c *config.Config, _ *Options) { c.CSVBOM, c.CSVFormulaGuard = true, true })
+	id, s := e.connected()
+	e.runAndWait(id, s, "SELECT '=1+1' AS f, -5 AS n")
+	seq := itoa(e.page(id, "").Seq)
+	res := e.req("GET", "/api/v1/ws/"+id+"/export?format=csv&seq="+seq+"&cols=0,1", "", nil)
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != 200 || string(b) != export.BOM+"f,n\n'=1+1,-5\n" {
+		t.Fatalf("download = %d %q, want a BOM, the formula guarded, -5 as it is", res.StatusCode, b)
+	}
+	out := decodeData[copyOut](t, e.api("POST", "/api/v1/ws/"+id+"/copy", `{"seq":`+seq+`,"cols":[0,1],"format":"csv"}`, 200))
+	if strings.Contains(out.Text, export.BOM) || strings.Contains(out.Text, "'=1+1") {
+		t.Errorf("a copy took the export options: %q", out.Text)
+	}
 }
 
 // A transposed copy or export turns the piece the grid named — the rows

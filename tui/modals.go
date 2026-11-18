@@ -285,7 +285,7 @@ func (e *exportModal) run(m *Model, toClipboard bool) (tea.Cmd, bool) {
 	if n := len(p.rows); n > asyncSortRows {
 		m.logf(logInfo, "exporting %s as %s to %s…", p.what, f, path)
 	}
-	return exportCmd(p, f, out, path), true
+	return exportCmd(p, f, m.cfg.CSVOptions(), out, path), true
 }
 
 // exportDoneMsg reports an export to a file that ran as a command.
@@ -296,11 +296,12 @@ type exportDoneMsg struct {
 }
 
 // exportCmd builds p as the grid shows it, writes it to out in format f
-// and puts the file in place, on a command goroutine.
-func exportCmd(p *piece, f export.Format, out *export.File, path string) tea.Cmd {
+// — a CSV or TSV with the config's options o (csv_bom, csv_formula_guard)
+// — and puts the file in place, on a command goroutine.
+func exportCmd(p *piece, f export.Format, o export.CSVOptions, out *export.File, path string) tea.Cmd {
 	return func() tea.Msg {
 		bw := bufio.NewWriterSize(out, 64<<10)
-		err := export.Write(bw, p.buildTurned(), f)
+		err := export.WriteWith(bw, p.buildTurned(), f, o)
 		if err == nil {
 			err = bw.Flush()
 		}

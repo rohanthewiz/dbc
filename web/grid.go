@@ -471,7 +471,9 @@ func (s *Server) handleExport(ctx rweb.Context) error {
 	if req.Transpose {
 		r = export.Transpose(r, req.firstRow())
 	}
-	out, err := export.Render(r, f)
+	// a download is a file: the config's CSV options apply (csv_bom,
+	// csv_formula_guard); a copy (handleCopy) never takes them
+	out, err := export.RenderWith(r, f, s.cfg.CSVOptions())
 	if err != nil {
 		return fail(ctx, err)
 	}

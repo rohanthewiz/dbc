@@ -639,7 +639,7 @@ func (e *Engine) runOne(ctx context.Context, lr *liveRun, idx int, spec *pipelin
 			}
 		},
 		func(msg string) { line("info", msg) },
-	).WithContext(ctx).WithPaths(e.paths())
+	).WithContext(ctx).WithPaths(e.paths()).WithCSV(e.cfg.CSVOptions())
 	s.LogDDL()
 
 	opt.Log = func(text string) { line("info", text) }

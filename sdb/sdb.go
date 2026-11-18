@@ -52,6 +52,9 @@ type S struct {
 	ddl bool
 	// paths is where script and pipeline names resolve (WithPaths).
 	paths Paths
+	// csv is the host's CSV options for s.Export to a file (WithCSV): the
+	// config's csv_bom and csv_formula_guard.
+	csv export.CSVOptions
 	// jobs runs s.RunJob (WithJobs): the host's engine, or nil for
 	// DefaultJobRunner.
 	jobs JobRunner
@@ -329,6 +332,14 @@ func (s *S) Print(format string, args ...any) {
 	s.print(fmt.Sprintf(format, args...))
 }
 
+// WithCSV sets the CSV options s.Export writes a CSV or TSV file with —
+// the host's config (csv_bom, csv_formula_guard; config.CSVOptions) — and
+// returns s. A copy to the clipboard does not take them. Host-only.
+func (s *S) WithCSV(o export.CSVOptions) *S {
+	s.csv = o
+	return s
+}
+
 // Export renders a result in the named format (csv|tsv|markdown|html|json|text)
 // and writes it to path — or to the system clipboard when path is empty.
 // A relative path is in files_dir, as s.Path has it: "report.csv" is one
@@ -357,7 +368,7 @@ func (s *S) Export(r *Result, format, path string) error {
 			return serr.Wrap(err, "op", "make the directory", "dir", dir)
 		}
 	}
-	if err = export.ToFile(r, f, path); err != nil {
+	if err = export.ToFileWith(r, f, path, s.csv); err != nil {
 		return serr.Wrap(err, "format", format)
 	}
 	return nil

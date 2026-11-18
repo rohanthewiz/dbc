@@ -597,16 +597,6 @@ and `raised`.
   past `go vet`. Add a step that builds staticcheck (or golangci-lint)
   with the module's Go, run it once, and triage what it reports into
   fixes or a recorded ignore list. (RPU plan, phase 5)
-- **N-305** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  The live Postgres and MySQL suites in CI. `db/live_*`,
-  `workspace/live_test.go`, `etl/live_*` and the TUI navigator's live
-  tests skip without `DBC_LIVE_PG_DSN`/`DBC_LIVE_MYSQL_DSN`, so they run
-  only when someone starts the containers by hand. Add a Linux job to
-  `test.yml` with `postgres:17` and `mysql:8.4` service containers and
-  the two DSNs set (the TLS and Docker suites can stay opt-in). Phase 1
-  and 2 of the RPU plan change sessions, cancel and transactions
-  (N-251, N-253, N-270, N-271, N-276); this is what keeps those pinned.
-  (RPU plan, phase 5)
 - **N-308** · raised `2026-1110-1909-rpu-phase-1` · value low
   Three tests fail in a full run, none from a product change, found while
   running the live suites for N-251–N-253 (each also fails on `e62b012`,
@@ -951,6 +941,18 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-305** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  The live Postgres and MySQL suites in CI. `db/live_*`,
+  `workspace/live_test.go`, `etl/live_*` and the TUI navigator's live
+  tests skip without `DBC_LIVE_PG_DSN`/`DBC_LIVE_MYSQL_DSN`, so they run
+  only when someone starts the containers by hand. Add a Linux job to
+  `test.yml` with `postgres:17` and `mysql:8.4` service containers and
+  the two DSNs set (the TLS and Docker suites can stay opt-in). Phase 1
+  and 2 of the RPU plan change sessions, cancel and transactions
+  (N-251, N-253, N-270, N-271, N-276); this is what keeps those pinned.
+  (RPU plan, phase 5)
+  closed 2026-11-18, `@SESS@`, commit `@N-305@`: `test.yml` gains a `live` job on ubuntu-24.04. It runs postgres:17 and mysql:8.4 service containers (password `pw`, database `dbc`, health-checked), sets `DBC_LIVE_PG_DSN` and `DBC_LIVE_MYSQL_DSN`, and runs `go test -p 1 -count=1 -run Live ./...`. All 112 live tests are named `TestLive*`. The run is sequential because the packages share one database of each kind. Run here first with the same shape against Docker: every package passed once the MySQL database was named `dbc`. With a database named `t`, `tui.TestLiveNavigatorMySQL`'s picker filter "t" matched `dbc_tui_nav_other` first, so the job uses `dbc`, as the live tests' docs do. The TLS and Docker suites stay opt-in. CI result: see this session's doc.
 
 - **N-310** · raised `2026-1110-2001-rpu-phase-2-n265-n268` · value low
   A script run in the TUI or dbc web that ignores Stop has no backstop.

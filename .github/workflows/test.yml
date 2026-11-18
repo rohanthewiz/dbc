@@ -72,3 +72,50 @@ jobs:
             go test -run '^$' -fuzz "^${fn}\$" -fuzztime 10s "./$pkg"
             echo "::endgroup::"
           done
+
+  # The live Postgres and MySQL suites (N-305): every TestLive* test, which
+  # skips itself without DBC_LIVE_PG_DSN / DBC_LIVE_MYSQL_DSN, against
+  # throwaway service containers. Sessions, cancels, transactions and the
+  # catalog reads are what these pin, and nothing else in CI reaches a real
+  # server. -p 1: the packages share one database of each kind (their
+  # schemas and tables are named apart, but a parallel run of the designer
+  # and the navigator once raced on one). The databases are named dbc, as
+  # the live tests' docs have it: the TUI's navigator test picks its way
+  # back to the DSN's own database by typing its name. The TLS and Docker
+  # suites stay opt-in by hand.
+  live:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: pw
+          POSTGRES_DB: dbc
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: pw
+          MYSQL_DATABASE: dbc
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -ppw"
+          --health-interval 2s --health-timeout 5s --health-retries 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Live tests
+        env:
+          DBC_LIVE_PG_DSN: postgres://postgres:pw@127.0.0.1:5432/dbc?sslmode=disable
+          DBC_LIVE_MYSQL_DSN: root:pw@tcp(127.0.0.1:3306)/dbc
+        run: go test -p 1 -count=1 -run Live ./...

@@ -526,7 +526,7 @@ func trailingName(toks []tok) (parts []string, before int) {
 //	  PRIMARY KEY (id)
 //	)
 //
-// rels holds the foreign keys out of t (completer.relsFrom); any others in it
+// rels holds the foreign keys out of t (docBook.relsFrom); any others in it
 // are skipped.
 func ddl(t *erd.Table, rels []*erd.Rel) string {
 	if t == nil {
@@ -574,7 +574,7 @@ func ddl(t *erd.Table, rels []*erd.Rel) string {
 }
 
 // outgoing maps each of t's foreign-key columns to what it references,
-// "customers(id)", from rels: t's own foreign keys as completer.relsFrom
+// "customers(id)", from rels: t's own foreign keys as docBook.relsFrom
 // gives them, though any list will do — a relationship whose child is not t
 // is skipped. Taking the schema's whole Rels here, once per table or column
 // offered, was N-280's cost.

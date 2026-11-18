@@ -140,18 +140,6 @@ ten session docs in `ai_docs/claude_sessions/`
 - **Leave it.** A cut read inside a transaction reads to the end, as now: slow on a huge table, but correct.
 
 The question for the user: which, if any? A cursor seems the least surprising, if a different plan inside a transaction is acceptable.
-- **N-328** · raised `2026-1116-1446-n280-completion-costs-what-it-keeps` · value low
-  Completion still builds, and dbc web still sends, a doc for every item
-  it keeps — up to `MaxItems` (400) — though each UI shows one at a time.
-  After N-280 it is the part of a request that still grows with the
-  catalog: on 5,000 tables `SELECT * FROM ▮` carries 177 KB of DDL
-  (`BenchmarkCompleteBig`, its `docB` metric), sent as JSON again on each
-  keystroke while the result is Incomplete; the TUI builds the 400 and
-  reads one (`Items[cur].Doc`, `tui/complete.go:382`). Fix: docs on
-  demand — dbc web through Monaco's `resolveCompletionItem` and a doc
-  request (or docs for the first few dozen items only), the TUI by asking
-  for the focused item's. Neighbour: N-284. Measured in Go; the browser's
-  share (encode, parse) not timed. Raised while closing N-280.
 - **N-334** · raised `2026-1118-0042-n321-n286-n288-n291-plain-errors-value-text-status-error` · value low
   CSV has no formula guard and no BOM option, the two parts of N-288's
   audit it did not do (its "Fix:" named neither). A text cell starting
@@ -879,6 +867,30 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-328** · raised `2026-1116-1446-n280-completion-costs-what-it-keeps` · value low
+  Completion still builds, and dbc web still sends, a doc for every item
+  it keeps — up to `MaxItems` (400) — though each UI shows one at a time.
+  After N-280 it is the part of a request that still grows with the
+  catalog: on 5,000 tables `SELECT * FROM ▮` carries 177 KB of DDL
+  (`BenchmarkCompleteBig`, its `docB` metric), sent as JSON again on each
+  keystroke while the result is Incomplete; the TUI builds the 400 and
+  reads one (`Items[cur].Doc`, `tui/complete.go:382`). Fix: docs on
+  demand — dbc web through Monaco's `resolveCompletionItem` and a doc
+  request (or docs for the first few dozen items only), the TUI by asking
+  for the focused item's. Neighbour: N-284. Measured in Go; the browser's
+  share (encode, parse) not timed. Raised while closing N-280.
+  closed 2026-11-18, `@SESS@`, commit `@N-328@`: docs on demand, as the item's Fix put it.
+- **sqlcomplete.** A kept item with a catalog object's doc (table DDL, column declaration, routine overloads) carries a `heldDoc` on its result's `docBook` instead of the text. `Item.Documentation()` builds it on first read (once, shared by copies), and the book indexes the relationships on the first doc read, not before. `DocPending` says a doc is held. `BenchmarkCompleteBig/from-empty`: 2.8 → 2.3 ms, docs carried 177 KB → 0, allocs 27k → 15k.
+- **TUI.** The popup reads only the focused row's doc.
+- **dbc web.** An answer carries the docs of its first 20 items (`docsAhead`) and marks the rest `docLater`. Monaco's `resolveCompletionItem` asks for a focused one with `docOf {index, label, kind}` on the same request. The server keeps no list: it runs the request again and reads the item at the index, or finds it by label and kind if the list moved. `conn-complete` answers `docOf` the same way.
+
+Tests:
+- `TestDocsHeldBack`: nothing carried, the doc built on read, shared by a copy, safe under -race.
+- `TestCompleteDocsOnDemand`: 30 tables; the first 20 carry docs, the rest are later; `docOf` by index, by label, and on conn-complete.
+- A new web e2e step, "completion docs on demand": zz25's DDL shows in Monaco's details pane after a focus. It fails with the old `editor.js`.
+
+The full suite, vet, staticcheck, `-race` on sqlcomplete and web, the TUI e2e and two full web e2e runs pass.
 
 - **N-327** · raised `2026-1116-1423-n279-a-keystroke-costs-what-it-changes` · value low
   A key typed into a snippet's stop still costs the whole buffer, which

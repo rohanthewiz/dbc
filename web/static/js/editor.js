@@ -644,6 +644,7 @@
   // a table's or a column's documentation is DDL, shown as SQL; a
   // function's is a sentence, shown as text
   const SQL_DOC = new Set(["table", "view", "column", "join", "snippet"]);
+  const docOf = (kind, doc) => !doc ? undefined : SQL_DOC.has(kind) ? { value: "```sql\n" + doc + "\n```" } : doc;
 
   function registerCompletion() {
     const provider = {
@@ -665,10 +666,13 @@
         const ac = new AbortController();
         const sub = token.onCancellationRequested(() => ac.abort());
         let r;
+        // the request again, for a docLater item's doc (resolveCompletionItem)
+        const ask = { buffer: model.getValue(), caret: model.getOffsetAt(position) };
+        const send = (body, signal) => mini
+          ? dbc.api("POST", "/api/v1/conn-complete", Object.assign({ conn }, body), signal)
+          : dbc.api("POST", dbc.wsPath("/complete"), body, signal);
         try {
-          const ask = { buffer: model.getValue(), caret: model.getOffsetAt(position) };
-          r = mini ? await dbc.api("POST", "/api/v1/conn-complete", Object.assign({ conn }, ask), ac.signal)
-            : await dbc.api("POST", dbc.wsPath("/complete"), ask, ac.signal);
+          r = await send(ask, ac.signal);
         } catch (_) {
           // an abort lands here too; a lost server is the status bar's to report
           return { suggestions: [] };
@@ -681,7 +685,7 @@
         const range = new monaco.Range(a.lineNumber, a.column, b.lineNumber, b.column);
         return {
           incomplete: !!r.incomplete,
-          suggestions: (r.items || []).map((it) => {
+          suggestions: (r.items || []).map((it, index) => {
             const sn = snippet(it);
             // A snippet row inserts its name, then its command expands the
             // name as Tab would (expandSnippet): the expansion is the
@@ -694,8 +698,12 @@
               label: { label: it.label, description: it.detail || undefined },
               kind: kindOf(it.kind),
               detail: it.detail || undefined,
-              documentation: !it.doc ? undefined
-                : SQL_DOC.has(it.kind) ? { value: "```sql\n" + it.doc + "\n```" } : it.doc,
+              documentation: docOf(it.kind, it.doc),
+              // a doc the answer held back (past the first 20, web/complete.go's
+              // DOCS ON DEMAND): how to ask for it, once Monaco focuses this row
+              _later: it.docLater
+                ? { kind: it.kind, ask: () => send(Object.assign({ docOf: { index, label: it.label, kind: it.kind } }, ask)) }
+                : undefined,
               insertText: sn.text,
               insertTextRules: sn.rules,
               filterText: it.filter || undefined,
@@ -705,6 +713,23 @@
             };
           }),
         };
+      },
+      // Monaco asks this for the focused suggestion before it draws the
+      // details pane: a row whose doc was held back gets it now — one small
+      // request per row focused, where every keystroke used to carry all
+      // 400 (N-328). Asked once per row: the request is kept on the row
+      // (a focus that comes back while it is out waits on the same one),
+      // and its doc is kept even when Monaco no longer wants this answer —
+      // the next focus of the row shows it. A failed ask is not repeated.
+      async resolveCompletionItem(item) {
+        const later = item._later;
+        if (!later) return item;
+        later.p = later.p || later.ask();
+        try {
+          item.documentation = docOf(later.kind, (await later.p).doc);
+        } catch (_) { /* no doc: the row shows without one */ }
+        item._later = undefined;
+        return item;
       },
     };
     // a provider is per language, and setDriver moves models between these

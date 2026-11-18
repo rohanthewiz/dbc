@@ -378,8 +378,10 @@ func (p *complPopup) draw(c *Canvas, st styles, x, y int) {
 		}
 	}
 
-	// the documentation box, to the right of the list (or its left)
-	doc := p.res.Items[p.cur].Doc
+	// the documentation box, to the right of the list (or its left): the
+	// focused row's doc, built now if held back (sqlcomplete's
+	// Documentation: of the up to 400 rows kept, this is the one read)
+	doc := p.res.Items[p.cur].Documentation()
 	if doc == "" {
 		return
 	}

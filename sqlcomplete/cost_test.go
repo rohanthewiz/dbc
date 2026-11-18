@@ -36,7 +36,11 @@ func bigShop(n, cols int, schemas ...string) *erd.Schema {
 	return s
 }
 
-// benchComplete times one request at buf's ▮ marker against sc.
+// benchComplete times one request at buf's ▮ marker against sc. docB is
+// the doc bytes the result carries as it comes back — what dbc web would
+// send for it: since N-328 a catalog object's doc is held back (only a
+// keyword's or function's own text is carried), so for the catalog cases
+// it reads 0 where it read 177 KB.
 func benchComplete(b *testing.B, sc *erd.Schema, path []string, buf string) {
 	i := strings.Index(buf, "▮")
 	req := Request{Schema: sc, Driver: "postgres", SearchPath: path, Buffer: buf[:i] + buf[i+len("▮"):], Caret: i}
@@ -92,16 +96,16 @@ func TestDocsOfKeptItems(t *testing.T) {
 		"orders":      "  customer_id bigint NOT NULL,  -- → customers(id)\n",
 		"order_items": "  order_id bigint NOT NULL,  -- → orders(id)\n",
 	} {
-		if it, ok := find(r, label); !ok || !strings.Contains(it.Doc, want) {
-			t.Errorf("%s doc lacks %q:\n%s", label, want, it.Doc)
+		if it, ok := find(r, label); !ok || !strings.Contains(it.Documentation(), want) {
+			t.Errorf("%s doc lacks %q:\n%s", label, want, it.Documentation())
 		}
 	}
-	if it, _ := find(r, "customers"); !strings.HasPrefix(it.Doc, "CREATE TABLE public.customers (") || strings.Contains(it.Doc, "→") {
-		t.Errorf("customers doc, no keys out:\n%s", it.Doc)
+	if it, _ := find(r, "customers"); !strings.HasPrefix(it.Documentation(), "CREATE TABLE public.customers (") || strings.Contains(it.Documentation(), "→") {
+		t.Errorf("customers doc, no keys out:\n%s", it.Documentation())
 	}
 	r = at(t, "postgres", "SELECT * FROM orders o JOIN ▮")
 	it, ok := find(r, "customers c ON c.id = o.customer_id")
-	if !ok || !strings.HasPrefix(it.Doc, "CREATE TABLE public.customers (") {
+	if !ok || !strings.HasPrefix(it.Documentation(), "CREATE TABLE public.customers (") {
 		t.Errorf("join clause: %v %+v", ok, it)
 	}
 }
@@ -133,5 +137,44 @@ func TestCompleteCostsWhatItKeeps(t *testing.T) {
 			t.Errorf("%q: %.0f allocations on %d tables, want at most %.0f", c.buf, got, n, c.perTable*n)
 		}
 		t.Logf("%q: %.0f allocations (%.1f a table)", c.buf, got, got/n)
+	}
+}
+
+// N-328: a catalog object's doc is held back until it is read. The result
+// carries none (DocPending), Documentation builds the one asked for — the
+// same text as before — and a copy of the item reads it too. Reads from
+// several goroutines at once share the book's one index (run under -race).
+func TestDocsHeldBack(t *testing.T) {
+	sc := bigShop(1000, 4)
+	req := Request{Schema: sc, Driver: "postgres", Buffer: "SELECT * FROM ", Caret: len("SELECT * FROM ")}
+	r := Complete(req)
+	if len(r.Items) != MaxItems {
+		t.Fatalf("%d items, want the cap", len(r.Items))
+	}
+	for _, it := range r.Items {
+		if it.Kind == KindTable && (it.Doc != "" || !it.DocPending()) {
+			t.Fatalf("%s: doc carried (%d bytes) or not pending", it.Label, len(it.Doc))
+		}
+	}
+	it, ok := find(r, "t_00005")
+	if !ok {
+		t.Fatal("no t_00005")
+	}
+	doc := it.Documentation()
+	if !strings.HasPrefix(doc, "CREATE TABLE public.t_00005 (") || !strings.Contains(doc, "→ t_00004(id)") {
+		t.Fatalf("t_00005's doc:\n%s", doc)
+	}
+	if cp := it; cp.Documentation() != doc {
+		t.Fatal("a copy of the item reads another doc")
+	}
+
+	done := make(chan string, len(r.Items))
+	for _, it := range r.Items {
+		go func() { done <- it.Documentation() }()
+	}
+	for range r.Items {
+		if d := <-done; d == "" {
+			t.Fatal("a doc read concurrently came back empty")
+		}
 	}
 }

@@ -83,8 +83,8 @@ func TestColumnsOfAlias(t *testing.T) {
 		t.Fatalf("o. → %v", got)
 	}
 	it, _ := find(r, "customer_id")
-	if it.Detail != "bigint FK NOT NULL · orders" || !strings.Contains(it.Doc, "references customers(id)") {
-		t.Errorf("detail %q doc %q", it.Detail, it.Doc)
+	if it.Detail != "bigint FK NOT NULL · orders" || !strings.Contains(it.Documentation(), "references customers(id)") {
+		t.Errorf("detail %q doc %q", it.Detail, it.Documentation())
 	}
 }
 
@@ -103,8 +103,8 @@ func TestTablesAfterFrom(t *testing.T) {
 	if got := labels(r); len(got) < 2 || got[0] != "order_items" || got[1] != "orders" {
 		t.Fatalf("FROM ord → %v", got)
 	}
-	if it, _ := find(r, "orders"); !strings.HasPrefix(it.Doc, "CREATE TABLE public.orders (") {
-		t.Errorf("table doc:\n%s", it.Doc)
+	if it, _ := find(r, "orders"); !strings.HasPrefix(it.Documentation(), "CREATE TABLE public.orders (") {
+		t.Errorf("table doc:\n%s", it.Documentation())
 	}
 	// a table outside public is inserted qualified, and quoted where its
 	// name has capitals

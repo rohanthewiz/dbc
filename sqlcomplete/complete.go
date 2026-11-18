@@ -42,6 +42,7 @@ package sqlcomplete
 import (
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/rohanthewiz/dbc/erd"
 	"github.com/rohanthewiz/dbc/model"
@@ -82,7 +83,36 @@ type Item struct {
 	// between its parentheses.
 	Cursor int    `json:"cursor"`
 	Sort   string `json:"sort"` // ascending sort key; the order Items is already in
+
+	// later is the documentation held back for a catalog object — a
+	// table's DDL, a column's declaration, a routine's overloads — built
+	// when Documentation first asks (N-328). Doc is empty while it is
+	// pending. Unexported, so it never travels as JSON: a client that
+	// wants an item's doc asks for it (DocPending).
+	later *heldDoc
 }
+
+// Documentation is the item's longer text: Doc, or the documentation held
+// back for it (later), built now — once; a copy of the item shares it.
+//
+// WHY HELD BACK. A list keeps up to MaxItems items and each UI shows one
+// item's doc at a time: the TUI's popup the focused row's, Monaco's the
+// focused suggestion's. Building every kept item's up front — the DDL of
+// 400 tables, 177 KB on a 5,000-table catalog for SELECT * FROM ▮ — was
+// the part of a request that still grew with the catalog after N-280, and
+// dbc web sent it all as JSON on each keystroke while the list was
+// Incomplete. Now a doc costs only when it is read.
+func (it Item) Documentation() string {
+	if it.Doc != "" || it.later == nil {
+		return it.Doc
+	}
+	return it.later.text()
+}
+
+// DocPending reports whether the item has documentation Doc does not hold
+// yet: Documentation would build it. A client that sends items on (dbc
+// web) uses it to say which items have a doc to ask for.
+func (it Item) DocPending() bool { return it.Doc == "" && it.later != nil }
 
 // Result is the answer to a request.
 type Result struct {
@@ -297,10 +327,6 @@ type completer struct {
 	byName   map[string][]*erd.Table
 	bySchema map[string][]*erd.Table
 	schemas  []string // distinct schema names, in catalog order
-	// fromRels is the foreign keys out of each table whose doc is shown,
-	// by child table (finish fills it, relsFrom reads it). A pass over
-	// every relationship per doc was most of N-280's 32 ms.
-	fromRels map[*erd.Table][]*erd.Rel
 
 	// the routines, grouped by schema and name (routines.go): in catalog
 	// order, by lower(schema), and by exact schema + "\x00" + name
@@ -325,23 +351,26 @@ type cand struct {
 }
 
 // docSrc is what an item's documentation is made from, held back until the
-// item survives the cap (N-280).
+// item survives the cap (N-280), and then until the doc is read (N-328).
 //
 // A table's doc is its DDL and a column's its declaration, and both name the
 // foreign keys out of the table. Built for every candidate up front — before
 // add had even matched the prefix — each was a pass over all of the schema's
 // relationships: on 5,000 tables, 32 ms a keystroke for "SELECT col▮" with 5
-// items back. Now a candidate the prefix drops costs a name compare, and a
-// doc is built for at most MaxItems items, from relationships indexed by
-// child table, for the tables kept, in one pass (indexRels).
+// items back. Now a candidate the prefix drops costs a name compare; a kept
+// item carries its docSrc in a heldDoc; and a doc is built only when read,
+// from relationships indexed by child table, for the tables kept, in one
+// pass made by the first doc read (docBook).
 //
 //	catalog ─► matches(name)? ─no─► dropped: no item, no quoting, no doc
 //	              │yes
 //	              ▼
 //	           addDoc: Item (label, detail, insert, sort key) + docSrc
 //	              │
-//	           finish: sort ─► cap at MaxItems ─► indexRels ─► doc(docSrc)
-//	                                                           for those kept
+//	           finish: sort ─► cap at MaxItems ─► each kept item a heldDoc
+//	              │                                 on the result's docBook
+//	              ▼
+//	   Documentation() ─► docBook.index (the first read only) ─► doc(docSrc)
 type docSrc struct {
 	kind docKind
 	t    *erd.Table  // docTable, docColumn
@@ -358,13 +387,42 @@ const (
 	docRoutine                // g's kind, schema and every overload
 )
 
+// heldDoc is one item's documentation, held back until it is read
+// (Item.Documentation), then kept: a frame that draws the same focused row
+// again, or a copy of the item, reads the text built the first time.
+type heldDoc struct {
+	once sync.Once
+	book *docBook
+	src  docSrc
+	doc  string
+}
+
+func (h *heldDoc) text() string {
+	h.once.Do(func() { h.doc = h.book.doc(h.src) })
+	return h.doc
+}
+
+// docBook is what the held-back docs of one result share: the schema, the
+// tables of the items kept, and — made by the first doc read, not before —
+// the foreign keys out of each of those tables. A result whose docs are
+// never read never indexes anything.
+//
+// Safe for use by more than one goroutine: the index is made under a
+// sync.Once and only read after, and each heldDoc builds under its own.
+type docBook struct {
+	once   sync.Once
+	schema *erd.Schema
+	tables []*erd.Table // the kept items' tables: the only ones a doc may ask relsFrom about
+	rels   map[*erd.Table][]*erd.Rel
+}
+
 // doc builds the documentation src describes.
-func (c *completer) doc(src docSrc) string {
+func (b *docBook) doc(src docSrc) string {
 	switch src.kind {
 	case docTable:
-		return ddl(src.t, c.relsFrom(src.t))
+		return ddl(src.t, b.relsFrom(src.t))
 	case docColumn:
-		return colDoc(src.col, src.t, c.relsFrom(src.t))
+		return colDoc(src.col, src.t, b.relsFrom(src.t))
 	case docRoutine:
 		return routineDoc(src.g)
 	}
@@ -372,30 +430,31 @@ func (c *completer) doc(src docSrc) string {
 }
 
 // relsFrom is the foreign keys out of t (t the child), in the schema's order.
-// t must be a table indexRels was given.
-func (c *completer) relsFrom(t *erd.Table) []*erd.Rel { return c.fromRels[t] }
+// t must be one of the book's tables.
+func (b *docBook) relsFrom(t *erd.Table) []*erd.Rel {
+	b.once.Do(b.index)
+	return b.rels[t]
+}
 
-// indexRels fills fromRels for the tables whose docs the kept items show, in
-// one pass over the schema's relationships.
+// index fills rels for the book's tables, in one pass over the schema's
+// relationships.
 //
 // Only those tables are indexed. Indexing all of them cost an entry and an
 // append per relationship — on 5,000, more than the per-column scans it
 // replaced when the scope's two tables were all the docs needed. Here a
 // relationship costs one lookup in a map of at most MaxItems tables, and
 // only a kept table's own keys are appended.
-func (c *completer) indexRels(kept []cand) {
-	c.fromRels = map[*erd.Table][]*erd.Rel{}
-	for _, cd := range kept {
-		if cd.doc.kind == docTable || cd.doc.kind == docColumn {
-			c.fromRels[cd.doc.t] = nil
-		}
+func (b *docBook) index() {
+	b.rels = make(map[*erd.Table][]*erd.Rel, len(b.tables))
+	for _, t := range b.tables {
+		b.rels[t] = nil
 	}
-	if len(c.fromRels) == 0 || c.req.Schema == nil {
+	if len(b.rels) == 0 || b.schema == nil {
 		return
 	}
-	for _, r := range c.req.Schema.Rels {
-		if rels, ok := c.fromRels[r.Child]; ok {
-			c.fromRels[r.Child] = append(rels, r)
+	for _, r := range b.schema.Rels {
+		if rels, ok := b.rels[r.Child]; ok {
+			b.rels[r.Child] = append(rels, r)
 		}
 	}
 }
@@ -1297,22 +1356,28 @@ func quality(word, p string) (q int, ok bool) {
 	return 2, j == len(p)
 }
 
-// finish sorts the items, applies the cap, and builds the docs of the items
-// kept — at most MaxItems of them, however many the catalog offered (see
-// docSrc). No items is a nil list, as before the docs were deferred.
+// finish sorts the items, applies the cap, and gives each item kept that
+// has a catalog object's doc a heldDoc on one docBook — built only if read
+// (see docSrc). No items is a nil list, as before the docs were deferred.
 func (c *completer) finish() ([]Item, bool) {
 	slices.SortStableFunc(c.items, func(a, b cand) int { return strings.Compare(a.Sort, b.Sort) })
 	n := min(len(c.items), MaxItems)
 	if n == 0 {
 		return nil, false
 	}
-	c.indexRels(c.items[:n])
+	book := &docBook{schema: c.req.Schema}
 	out := make([]Item, n)
+	held := make([]heldDoc, 0, n) // one allocation for the lot, not one per item
 	for i, cd := range c.items[:n] {
 		out[i] = cd.Item
-		if cd.doc.kind != docNone {
-			out[i].Doc = c.doc(cd.doc)
+		if cd.doc.kind == docNone {
+			continue
 		}
+		if cd.doc.kind == docTable || cd.doc.kind == docColumn {
+			book.tables = append(book.tables, cd.doc.t)
+		}
+		held = append(held, heldDoc{book: book, src: cd.doc})
+		out[i].later = &held[len(held)-1]
 	}
 	return out, len(c.items) > MaxItems
 }

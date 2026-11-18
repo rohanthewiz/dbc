@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -145,5 +147,62 @@ func TestConnCompleteDoesNotWaitOutASlowRead(t *testing.T) {
 	a = decodeData[completeAnswerT](t, e.api("POST", "/api/v1/conn-complete", `{"conn":"nope","buffer":"SELECT coa","caret":10}`, 200))
 	if a.Incomplete || !a.has("coalesce") || a.Note == "" {
 		t.Fatalf("unknown connection: incomplete=%v coalesce=%v note=%q", a.Incomplete, a.has("coalesce"), a.Note)
+	}
+}
+
+// N-328, DOCS ON DEMAND: an answer carries the docs of its first docsAhead
+// items and marks the rest docLater; a docOf request gives one of those
+// back, found at its index or, if the list moved, by its label and kind.
+// conn-complete (a pipeline field) answers docOf the same way.
+func TestCompleteDocsOnDemand(t *testing.T) {
+	e := newTestEnv(t)
+	id, s := e.connected()
+	for i := range docsAhead + 10 {
+		e.runAndWait(id, s, fmt.Sprintf("CREATE TABLE zz%02d (id integer PRIMARY KEY, note text)", i))
+	}
+	const ask = `{"buffer":"SELECT * FROM zz","caret":16`
+	var a completeAnswerT
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		a = decodeData[completeAnswerT](t, e.api("POST", "/api/v1/ws/"+id+"/complete", ask+`}`, 200))
+		if len(a.Items) >= docsAhead+10 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if len(a.Items) < docsAhead+10 {
+		t.Fatalf("%d items for zz…, want the %d tables", len(a.Items), docsAhead+10)
+	}
+	for i, it := range a.Items {
+		if i < docsAhead && (it.Doc == "" || it.DocLater) {
+			t.Fatalf("item %d (%s), within the first %d: doc %q, later %v — want its doc carried", i, it.Label, docsAhead, it.Doc, it.DocLater)
+		}
+		if i >= docsAhead && (it.Doc != "" || !it.DocLater) {
+			t.Fatalf("item %d (%s), past the first %d: doc %d bytes, later %v — want it held back", i, it.Label, docsAhead, len(it.Doc), it.DocLater)
+		}
+	}
+
+	type docT struct {
+		Doc string `json:"doc"`
+	}
+	docOf := func(path, prefix string, index int, label string) string {
+		t.Helper()
+		body := fmt.Sprintf(`%s,"docOf":{"index":%d,"label":%q,"kind":"table"}}`, prefix, index, label)
+		return decodeData[docT](t, e.api("POST", path, body, 200)).Doc
+	}
+	far := a.Items[docsAhead+5]
+	if d := docOf("/api/v1/ws/"+id+"/complete", ask, docsAhead+5, far.Label); !strings.Contains(d, "CREATE TABLE") || !strings.Contains(d, far.Label) {
+		t.Fatalf("docOf %s: %q", far.Label, d)
+	}
+	// the list moved (a stale index): found by label and kind
+	if d := docOf("/api/v1/ws/"+id+"/complete", ask, 0, far.Label); !strings.Contains(d, far.Label) {
+		t.Fatalf("docOf %s at a stale index: %q", far.Label, d)
+	}
+	if d := docOf("/api/v1/ws/"+id+"/complete", ask, docsAhead+5, "no_such_table"); d != "" {
+		t.Fatalf("docOf a label not in the list: %q, want none", d)
+	}
+	connAsk := `{"conn":"demo-sqlite","buffer":"SELECT * FROM zz","caret":16`
+	if d := docOf("/api/v1/conn-complete", connAsk, docsAhead+5, far.Label); !strings.Contains(d, far.Label) {
+		t.Fatalf("conn-complete docOf %s: %q", far.Label, d)
 	}
 }

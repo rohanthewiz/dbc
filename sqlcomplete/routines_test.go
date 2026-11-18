@@ -40,8 +40,8 @@ func TestRoutinesInExpression(t *testing.T) {
 	if !ok || it.Kind != KindFunction || it.Insert != "order_total()" || it.Cursor != len("order_total(") {
 		t.Fatalf("order_total: %+v", it)
 	}
-	if !strings.Contains(it.Detail, "+1 overload") || !strings.Contains(it.Doc, "o bigint, tax boolean") {
-		t.Errorf("overloads: detail %q, doc %q", it.Detail, it.Doc)
+	if !strings.Contains(it.Detail, "+1 overload") || !strings.Contains(it.Documentation(), "o bigint, tax boolean") {
+		t.Errorf("overloads: detail %q, doc %q", it.Detail, it.Documentation())
 	}
 	if it, _ := find(r, "next_ref"); it.Insert != "next_ref()" || it.Cursor != -1 {
 		t.Errorf("a function of no arguments: %+v", it)

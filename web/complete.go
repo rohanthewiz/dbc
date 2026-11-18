@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/rohanthewiz/rweb"
@@ -56,13 +57,49 @@ import (
 type completeReq struct {
 	Buffer string `json:"buffer"`
 	Caret  int    `json:"caret"`
+	// DocOf asks for one item's documentation instead of the list: the
+	// item at Index of the list this buffer and caret give, which must be
+	// Label of Kind (see DOCS ON DEMAND).
+	DocOf *docAsk `json:"docOf,omitempty"`
+}
+
+// docAsk names the item a docOf request wants the doc of.
+type docAsk struct {
+	Index int    `json:"index"`
+	Label string `json:"label"`
+	Kind  string `json:"kind"`
 }
 
 // completeItem is sqlcomplete.Item with its cursor in UTF-16 units.
 type completeItem struct {
 	sqlcomplete.Item
 	Cursor int `json:"cursor"` // UTF-16 units into Insert; -1 for after it
+	// DocLater: the item has a doc the answer does not carry; ask for it
+	// with docOf (see DOCS ON DEMAND)
+	DocLater bool `json:"docLater,omitempty"`
 }
+
+// docsAhead is how many items, from the top of the list, an answer
+// carries the documentation of (see DOCS ON DEMAND).
+const docsAhead = 20
+
+// DOCS ON DEMAND (N-328). A list keeps up to sqlcomplete.MaxItems (400)
+// items and Monaco shows one doc at a time, the focused suggestion's.
+// Sending every kept item's — the DDL of 400 tables, 177 KB on a
+// 5,000-table catalog — on each keystroke while the list was incomplete
+// was most of an answer. Now an answer carries the docs of the first
+// docsAhead items, where the focus starts and mostly stays, and marks the
+// rest docLater. Monaco asks for one of those when it is focused
+// (editor.js's resolveCompletionItem):
+//
+//	keystroke ──{buffer, caret}──────────────────► items, the first 20 with docs
+//	focus row 57 ──{buffer, caret, docOf: {index: 57, label, kind}}──► {doc}
+//
+// The server keeps no list between the two: docOf runs the same request
+// again and reads the item it names, which comes out at the same index
+// because the list is a function of the buffer, the caret and the cache.
+// The label and kind guard that — a cache refreshed in between can move
+// it — and the item is then looked for by them; not found, the doc is "".
 
 // completeWait is how long a completion request waits for a schema read it
 // found missing before answering without it (see A COLD CACHE above). It is
@@ -136,7 +173,23 @@ func (s *Server) handleComplete(ctx rweb.Context) error {
 	// TUI's rule; a pipeline field (handleConnComplete) is not where a
 	// snippet goes, so that list has none
 	res = sqlcomplete.AddSnippets(res, req.Buffer, s.complSnippets())
+	if req.DocOf != nil {
+		return ok(ctx, docAnswer(res, *req.DocOf))
+	}
 	return ok(ctx, completeAnswer(req.Buffer, res, note))
+}
+
+// docAnswer is a docOf request's answer: the doc of the item ask names in
+// res, built now, or "" when res holds no such item (see DOCS ON DEMAND).
+func docAnswer(res sqlcomplete.Result, ask docAsk) map[string]any {
+	is := func(it sqlcomplete.Item) bool { return it.Label == ask.Label && string(it.Kind) == ask.Kind }
+	doc := ""
+	if ask.Index >= 0 && ask.Index < len(res.Items) && is(res.Items[ask.Index]) {
+		doc = res.Items[ask.Index].Documentation()
+	} else if i := slices.IndexFunc(res.Items, is); i >= 0 {
+		doc = res.Items[i].Documentation()
+	}
+	return map[string]any{"doc": doc}
 }
 
 // completeAnswer is a completion's answer in the page's terms: offsets in
@@ -148,7 +201,16 @@ func completeAnswer(buffer string, res sqlcomplete.Result, note string) map[stri
 		if it.Cursor >= 0 && it.Cursor <= len(it.Insert) {
 			cur = utf16Len(it.Insert[:it.Cursor])
 		}
-		items[i] = completeItem{Item: it, Cursor: cur}
+		later := false
+		if it.DocPending() {
+			// the first docsAhead carry theirs; the rest are asked for
+			if i < docsAhead {
+				it.Doc = it.Documentation()
+			} else {
+				later = true
+			}
+		}
+		items[i] = completeItem{Item: it, Cursor: cur, DocLater: later}
 	}
 	return map[string]any{
 		"from":       utf16Len(buffer[:res.From]),
@@ -183,6 +245,9 @@ func (s *Server) handleConnComplete(ctx rweb.Context) error {
 		if landed, _ := awaitLoad(nil, func() error { return loadConnCompletions(s.connCompl, req.Conn) }); landed {
 			res, _, err = s.connCompl.Ask(req.Conn, req.Buffer, caret)
 		}
+	}
+	if req.DocOf != nil {
+		return ok(ctx, docAnswer(res, *req.DocOf))
 	}
 	note := ""
 	if err != nil {

@@ -6,6 +6,9 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/rohanthewiz/serr"
 
 	"github.com/rohanthewiz/dbc/config"
 )
@@ -207,5 +210,27 @@ func TestSummarySlowMemory(t *testing.T) {
 	}
 	if !m.SummarySlow("pg/own") || !m.SummarySlow("other") {
 		t.Error("a Drop of pg forgot another configured connection's")
+	}
+}
+
+// A connection that cannot be opened is marked as such (N-287), under its
+// serr wrap so the fields still show; a statement's failure is not.
+func TestConnectErrMarked(t *testing.T) {
+	cfg := &config.Config{MaxRows: 10, ConnectTimeout: 2 * time.Second, Connections: []config.Connection{
+		{Name: "down", Driver: "postgres", DSN: "postgres://u:p@127.0.0.1:1/x?sslmode=disable"},
+		{Name: "lite", Driver: "sqlite", DSN: "file:connerr?mode=memory&cache=shared"},
+	}}
+	mgr := NewManager(cfg)
+	defer mgr.Close()
+	_, err := mgr.DB("down")
+	if err == nil || !IsConnectErr(err) {
+		t.Fatalf("an unreachable server: %v, IsConnectErr %v", err, IsConnectErr(err))
+	}
+	if f := serr.SErrFromErr(err).FieldsMap(); f["conn"] != "down" {
+		t.Errorf("the serr fields are hidden: %v (%T)", f, err)
+	}
+	_, err = mgr.Run("lite", "SELEC 1")
+	if err == nil || IsConnectErr(err) {
+		t.Errorf("a syntax error is not a connect failure: %v", err)
 	}
 }

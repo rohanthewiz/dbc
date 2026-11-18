@@ -148,13 +148,22 @@ func newCLI() *cli.Command {
 		// prints "dbc version x.y.z" and exits before any config is read.
 		Version:   version.Version,
 		ArgsUsage: `["SQL"]`,
+		// `dbc completion bash|zsh|fish|pwsh` prints the shell's completion
+		// script for the subcommands and flags (N-287); the README says how
+		// to load it
+		EnableShellCompletion: true,
 		Description: "With no SQL, dbc opens the TUI. SQL given as the argument, with --file, " +
 			"or piped to stdin runs headless: statements run in order on one connection " +
 			"and the results go to stdout (or --out) in --format.",
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "config", Usage: "config `FILE` (default: ./dbc.toml, then ~/.config/dbc/config.toml)",
+			&cli.StringFlag{Name: "config", Sources: cli.EnvVars("DBC_CONFIG"),
+				Usage:       "config `FILE` (default: ./dbc.toml, then ~/.config/dbc/config.toml)",
 				Destination: &flagConfig},
-			&cli.StringFlag{Name: "conn", Aliases: []string{"c"}, Usage: "connection `NAME` for a headless run",
+			// $DBC_CONN is not this flag's Source: an env var would read as
+			// a -c given, which copy and script --check refuse. pickConn
+			// takes it as the default instead.
+			&cli.StringFlag{Name: "conn", Aliases: []string{"c"},
+				Usage:       "connection `NAME` for a headless run (default: $DBC_CONN, else default_connection; dbc conns lists them)",
 				Destination: &flagConn},
 			&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Usage: "read the SQL to run from `FILE` (- for stdin)",
 				Destination: &flagFile},
@@ -245,6 +254,7 @@ func newCLI() *cli.Command {
 			webCommand(),
 			tutorialCommand(),
 			encryptCommand(),
+			connsCommand(),
 			{
 				// A subcommand as well as the --version / -v flag the cli
 				// package adds, since `dbc version` is what people type first.
@@ -535,7 +545,7 @@ func noteDemo(cfg *config.Config, conn string) {
 // $DBC_DEMO), -c naming a connection, or --dsn (the ad-hoc connection is no
 // demo).
 func demoNote(cfg *config.Config, conn string) string {
-	if !cfg.Demo || flagDemo != "" || flagConn != "" || flagDSN != "" {
+	if !cfg.Demo || flagDemo != "" || flagConn != "" || flagDSN != "" || os.Getenv(connEnv) != "" {
 		return ""
 	}
 	if cc, ok := cfg.ConnByName(conn); !ok || !cc.Demo {
@@ -793,6 +803,11 @@ func pickConn(cfg *config.Config) string {
 	conn := flagConn
 	if conn == "" && flagDSN != "" {
 		conn = adHocConnName
+	}
+	if conn == "" {
+		// $DBC_CONN: a shell's or a CI job's choice of connection, between
+		// the command line's and the config's (N-287)
+		conn = strings.TrimSpace(os.Getenv(connEnv))
 	}
 	if conn == "" {
 		conn = cfg.DefaultConnection
@@ -1526,9 +1541,24 @@ func canceled(what string) {
 }
 
 // fail reports err (see errLine: one plain line on stderr, or the
-// structured log line under DBC_LOG_ERRORS) and exits 1.
+// structured log line under DBC_LOG_ERRORS) and exits 1 — or exitConnect
+// when the error is a connection that could not be opened (db's
+// connectErr), so a script can tell "could not reach the database" from
+// "the statement failed" (N-287).
 func fail(err error, msg string) {
 	reportErr(err, msg)
 	logger.CloseLog()
+	if db.IsConnectErr(err) {
+		os.Exit(exitConnect)
+	}
 	os.Exit(1)
 }
+
+// exitConnect is the exit status of a run whose connection could not be
+// opened: unreachable, refused, a bad DSN or TLS file, a file in use. 3 is
+// explain's --fail-on.
+const exitConnect = 4
+
+// connEnv names the environment variable that picks a headless run's
+// connection when -c does not (pickConn).
+const connEnv = "DBC_CONN"

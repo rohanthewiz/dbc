@@ -78,12 +78,6 @@ ten session docs in `ai_docs/claude_sessions/`
   run `sh scripts/stamp.sh` into an env var and goreleaser's `ldflags` take
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
-- **N-287** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
-  CLI discoverability. There is no `dbc conns` to list connections; no
-  shell completion (`EnableShellCompletion` is not set); no `DBC_CONFIG`
-  or `DBC_CONN`; connect failures and SQL errors both exit 1, so a script
-  cannot tell "could not reach the database" from "the statement failed".
-  Each is small with urfave/cli v3. Audit, grep. (RPU plan, phase 4)
 - **N-293** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Keys are hard to find. F1 is about 130 rows with no filter
   (`tui/help.go`), there is no command palette, and the status bar's
@@ -1087,6 +1081,19 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-287** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
+  CLI discoverability. There is no `dbc conns` to list connections; no
+  shell completion (`EnableShellCompletion` is not set); no `DBC_CONFIG`
+  or `DBC_CONN`; connect failures and SQL errors both exit 1, so a script
+  cannot tell "could not reach the database" from "the statement failed".
+  Each is small with urfave/cli v3. Audit, grep. (RPU plan, phase 4)
+  closed 2026-11-18, `@SESS@`, commit `@N-287@`. All four parts:
+- **`dbc conns`** (alias `connections`, `conncmd.go`) lists name, driver, default and source: config, "added in dbc web/TUI", `--dsn`, or built-in demo. It takes `--format`, shows no DSN, and connects to nothing.
+- **Shell completion.** `EnableShellCompletion` makes `dbc completion bash|zsh|fish|pwsh` print the script.
+- **Environment variables.** `$DBC_CONFIG` is `--config`'s env source. `$DBC_CONN` is read by `pickConn`, after `-c` and `--dsn` and before `default_connection`. It is deliberately not `-c`'s source: as one it would read as a `-c` given, which `copy` and `script --check` refuse.
+- **Exit 4 for a connect failure** (`exitConnect`), against 1 for a statement that failed. `db` marks an open's failure with `connectErr`: `openPool`'s error, a bytdb file in use, or a ping that failed without the caller's cancel. The marker is put around the driver's error inside the serr wrap, because serr and the logger find an `*SErr` by type assertion on the outermost error; around the SErr it would hide the fields. `db.IsConnectErr` tells it, and `fail` exits 4 for it. 4 because 3 is explain's `--fail-on`.
+Real binary: `dbc conns` (text, JSON, CSV); `DBC_CONN=other dbc "select …"` runs on other; a refused Postgres port exits 4 with `[conn=dsn op=ping]` intact, while a syntax error exits 1; `DBC_CONN=other dbc copy …` is not refused. Tests: `db.TestConnectErrMarked` (an unreachable server is marked with its fields kept; a syntax error is not), `TestDBCConnEnv` (env between `-c` and the config, default marked in conns). The cats manifest's completions gain `conns`. README and the dbc skill document the command, the variables, completion and exit 4.
 
 - **N-285** · raised `2026-1110-1643-reliability-performance-usability-plan` · value low
   Every headless job or pipeline run parses every run record.

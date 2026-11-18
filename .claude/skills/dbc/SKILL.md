@@ -107,8 +107,12 @@ Rules that trip people up:
   An unknown `-c` exits 2 and lists the configured names.
   Postgres `NOTICE`s also go to stderr.
 
+`$DBC_CONN` picks the connection when `-c` does not (before `default_connection`),
+and `$DBC_CONFIG` the config file.
+
 Exit codes: `0` ok, `1` failure, `2` bad usage (incl. unknown connection),
-`3` `explain --fail-on` tripped, `130` Ctrl+C.
+`3` `explain --fail-on` tripped, `4` the connection could not be opened
+(unreachable, refused, bad DSN or TLS file, in use), `130` Ctrl+C.
 
 ## Subcommands
 
@@ -133,6 +137,8 @@ Exit codes: `0` ok, `1` failure, `2` bad usage (incl. unknown connection),
 | `dbc migrate status\|version\|up\|up-by-one\|up-to V\|down\|down-to V\|redo\|create NAME` | goose-compatible migrations; `--dir`, `--allow-missing` | Migrations |
 | `dbc web [--no-open] [--listen ADDR]` | browser workbench on 127.0.0.1:8450 | The browser workbench |
 | `dbc tutorial [init [DIR] \| step N [--run] [--files] [--force] \| check [N]] [--dir D]` | the scripting and ETL tutorial (`docs/scripting-and-etl-tutorial.md`) interactively: `init` makes a workspace (`dbc.toml` with `shop` SQLite + `warehouse` bytdb), `step N --run` writes lesson N's files and runs its commands, `check` verifies the state each lesson leaves (exit 1 on a failure). Lessons live in `tutorial/lessons.go`; `tutorial/workspace/` must match the doc's code blocks (`TestWorkspaceMatchesDoc`) | Scripting in Go |
+| `dbc conns` | list the connections `-c` can name — config, saved in dbc web/TUI, `--dsn`, demos — with the default marked; no DSNs; `-t json` | Configure connections |
+| `dbc completion bash\|zsh\|fish\|pwsh` | print the shell's completion script for the subcommands and flags | Build |
 | `dbc encrypt` | print the `enc:v1:` envelope of a DSN piped in (or typed at a no-echo prompt) for a config file's `dsn`; never an argument; reads no config | Configure connections |
 | `dbc version` | version | Build |
 

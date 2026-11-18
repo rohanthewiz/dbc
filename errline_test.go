@@ -98,3 +98,24 @@ func TestUnknownConn(t *testing.T) {
 		t.Errorf("empty: %s", got)
 	}
 }
+
+// $DBC_CONN picks the connection between -c and default_connection, and
+// dbc conns marks it the default (N-287).
+func TestDBCConnEnv(t *testing.T) {
+	cfg := &config.Config{DefaultConnection: "lite",
+		Connections: []config.Connection{{Name: "lite", Driver: "sqlite"}, {Name: "other", Driver: "sqlite", Web: true}}}
+	t.Setenv(connEnv, "other")
+	flagConn = ""
+	if got := pickConn(cfg); got != "other" {
+		t.Errorf("pickConn = %q, want other", got)
+	}
+	flagConn = "lite"
+	if got := pickConn(cfg); got != "lite" {
+		t.Errorf("-c over $DBC_CONN: %q", got)
+	}
+	flagConn = ""
+	r := connsResult(cfg)
+	if len(r.Rows) != 2 || r.Rows[1][2] != "yes" || r.Rows[0][2] != "" || r.Rows[1][3] != "added in dbc web/TUI" {
+		t.Errorf("conns = %v", r.Rows)
+	}
+}

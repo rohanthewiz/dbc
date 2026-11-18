@@ -3552,7 +3552,20 @@ those wait for the run to end. Either way the output is the same.
 
 A run stops at the first statement that fails — later statements are skipped —
 but the results before it are still written, and the error names the one that
-broke (`statement=2/3`). Exit status is 1 for a failure, 130 for a Ctrl+C.
+broke (`statement=2/3`). Exit status is 1 for a failure, 4 when the
+connection could not be opened (the server unreachable or refusing, a bad
+DSN or TLS file, a SQLite or bytdb file in use) — so a script can tell
+"could not reach the database" from "the statement failed" — and 130 for a
+Ctrl+C.
+
+`dbc conns` lists the connections `-c` can name: the config file's, those
+added in dbc web or the TUI, `--dsn`'s and the built-in demos, with the
+default marked and no DSN shown (`-t json` for a script). `$DBC_CONN`
+picks the connection when `-c` does not, ahead of `default_connection`,
+and `$DBC_CONFIG` names the config file as `--config` does. `dbc
+completion bash|zsh|fish|pwsh` prints the shell's completion script for
+the subcommands and flags; for zsh, `source <(dbc completion zsh)` in
+`~/.zshrc`.
 
 A failure is one plain line on stderr — what failed, the error, then the
 error's own fields in brackets:

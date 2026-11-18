@@ -261,9 +261,9 @@ func (m *Manager) open(ctx context.Context, name string) (dbh *sql.DB, anchor *s
 	dbh, err = openPool(drv, dsn, cc.TLSOpts, cc.Database)
 	if err != nil {
 		if errors.Is(err, bytdb.ErrLocked) {
-			return nil, nil, inUse(name, err)
+			return nil, nil, inUse(name, connectErr{err})
 		}
-		return nil, nil, serr.Wrap(err, "conn", name, "driver", drv)
+		return nil, nil, serr.Wrap(connectErr{err}, "conn", name, "driver", drv)
 	}
 	// conn_idle_timeout: see config.DefaultConnIdleTimeout for why an idle
 	// pooled connection is closed at all. 0 means never, which is also
@@ -291,7 +291,10 @@ func (m *Manager) open(ctx context.Context, name string) (dbh *sql.DB, anchor *s
 		_ = dbh.Close()
 		// wrapRunErr sees the caller's ctx, not pctx: only the caller giving
 		// up counts as a cancel. A ping timeout is a plain connect failure.
-		return nil, nil, wrapRunErr(ctx, err, name, "op", "ping")
+		if ctx.Err() != nil {
+			return nil, nil, wrapRunErr(ctx, err, name, "op", "ping") // the caller's stop, not a failure to connect
+		}
+		return nil, nil, wrapRunErr(ctx, connectErr{err}, name, "op", "ping")
 	}
 	if memory {
 		if anchor, err = dbh.Conn(pctx); err != nil {
@@ -314,6 +317,29 @@ func (m *Manager) open(ctx context.Context, name string) (dbh *sql.DB, anchor *s
 		}
 	}
 	return dbh, anchor, nil
+}
+
+// connectErr marks an error as the connection's own: the server could not
+// be reached, the DSN or its TLS files are wrong, the login was refused,
+// the file is in use — as against a statement that failed once connected.
+// A headless run exits with its own status for it (main.exitConnect), so
+// a script can tell "could not reach the database" from "the statement
+// failed" (N-287).
+//
+// It wraps the driver's error, INSIDE the serr wrap: serr and the logger
+// find an *SErr by type assertion on the outermost error, so a marker
+// around the SErr would hide its fields from every log line. Its text is
+// the driver's.
+type connectErr struct{ err error }
+
+func (e connectErr) Error() string { return e.err.Error() }
+func (e connectErr) Unwrap() error { return e.err }
+
+// IsConnectErr reports whether err is a connection failing to open
+// (connectErr), anywhere in its chain.
+func IsConnectErr(err error) bool {
+	var c connectErr
+	return errors.As(err, &c)
 }
 
 // openPool is sql.Open, except for Postgres. sql.Open("pgx", dsn) builds

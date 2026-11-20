@@ -79,25 +79,6 @@ ten session docs in `ai_docs/claude_sessions/`
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
 
-- **N-318** · raised `2026-1112-1634-n289-rows-by-result` · value low
-  Calls N-289 made without the user's word, each easy to flip:
-  - A statement's result sets are capped at 51 (`db.maxMoreSets` = 50
-    past the first), for the procedure that SELECTs in a loop; the rest
-    are dropped with a warning. Not a config key.
-  - Headless, a lone statement with several sets renders as a
-    multi-result document: banners `1/1`, `1/1` in text and markdown,
-    and in `-t json` an array of envelopes where a lone statement
-    otherwise gives a bare array of rows. A consumer that runs one
-    `CALL` and expects rows gets another shape once the procedure
-    returns a second set (before N-289 it got `rows_affected`).
-  - A verb in neither list (`queryVerbs`, `execVerbs`) runs as a Query
-    on Postgres and MySQL, which costs a round trip when it returns no
-    rows (a describe on Postgres, `SELECT ROW_COUNT()` on MySQL). The
-    other way round was a list of row-returning verbs, with a silent
-    "0 affected" for any verb missing from it.
-  - A different statement run with one of a `CALL`'s set tabs on screen
-    replaces that tab alone and leaves its siblings, as a single
-    statement does to a run-all's group.
 - **N-324** · raised `2026-1113-1804-n276-cut-reads-stop-on-server` · value low
   A read cut at `max_rows` inside a Postgres transaction the user opened
   still streams the rest of its result. N-276 stops a cut read with a
@@ -762,6 +743,26 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-318** · raised `2026-1112-1634-n289-rows-by-result` · value low
+  Calls N-289 made without the user's word, each easy to flip:
+  - A statement's result sets are capped at 51 (`db.maxMoreSets` = 50
+    past the first), for the procedure that SELECTs in a loop; the rest
+    are dropped with a warning. Not a config key.
+  - Headless, a lone statement with several sets renders as a
+    multi-result document: banners `1/1`, `1/1` in text and markdown,
+    and in `-t json` an array of envelopes where a lone statement
+    otherwise gives a bare array of rows. A consumer that runs one
+    `CALL` and expects rows gets another shape once the procedure
+    returns a second set (before N-289 it got `rows_affected`).
+  - A verb in neither list (`queryVerbs`, `execVerbs`) runs as a Query
+    on Postgres and MySQL, which costs a round trip when it returns no
+    rows (a describe on Postgres, `SELECT ROW_COUNT()` on MySQL). The
+    other way round was a list of row-returning verbs, with a silent
+    "0 affected" for any verb missing from it.
+  - A different statement run with one of a `CALL`'s set tabs on screen
+    replaces that tab alone and leaves its siblings, as a single
+    statement does to a run-all's group.
+  closed 2026-11-20, `2026-1120-1618-n318-max-result-sets-named-sets`: the user's answer, call by call. (1) The cap became a config key: `max_result_sets` (global, default 51 = `config.DefaultResultSets`, the first set included; unset, 0 or less is the default as `max_rows`' is; 1 keeps the first set alone; no ceiling, since each set is already cut at `max_rows`). `db.maxMoreSets` is gone; `readSets` reads `m.cfg.ResultSetLimit()` (which also covers a Config built in code). The headless note and the workspace's warning now name `max_result_sets`. (2) Kept the shapes, and named the set: `export.SetPositions` reads a run of equal positions in `at` as one statement's sets (no caller of `RenderRun`/`WriteRun` changed), so text and markdown banners read `1/1 · set 2/3` (`2/5 · set 1/3` amid other statements), HTML headings `Query Result · set 2 of 3`, and a JSON envelope of one of several sets gets `"set"` and `"sets"`. A statement with one set is never named, so every other document is byte-identical. The block stream gets the set from `runStatements`' `onResult` (now `(i, r, export.SetPos)`), and `export.WriteSetBlockWith` writes it; a script's shows stay `#i`. Truncation notes name the set (`statement 2/2 · set 2/2: result truncated …`, `set 2/2: …` for a lone statement, streamed CSV included), while the dropped-sets note names the statement. (3) Unknown verbs stay a Query, and (4) a different statement over a set tab still replaces that tab alone: both kept as built, by the user's word. Tests: `config.TestLoadMaxResultSets`; `db.TestReadSets` (default, 3, 1); `export.TestRenderRunSetsOfOneStatement` (every format), `TestRenderRunSetsAmidStatements`, `TestSetPositions`; main `TestBlockStreamNamesSets` (streamed = collected, both notes), a `TestWarnTruncated` case. Real binary against mysql:8.4: a three-SELECT `CALL` in text, markdown, JSON, CSV and HTML; two statements streamed; `--max-rows 2` cutting set 2 (lone CSV and text); `max_result_sets = 2` (two sets kept, the note). README (config block, result sets, headless formats), `dbc.example.toml`, the dbc skill and `sdb/sdbapi/api.json` updated.
 - **N-317** · raised `2026-1112-1634-n289-rows-by-result` · value low
   A script sees only the first of a statement's result sets unless it
   asks. `s.Query("my", "CALL monthly_report()")` returns a Result whose

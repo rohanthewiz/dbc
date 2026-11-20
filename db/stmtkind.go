@@ -129,14 +129,6 @@ func kindOf(stmt string, d sqlsplit.Dialect, drv string) stmtKind {
 	return kindMaybe
 }
 
-// maxMoreSets caps the result sets kept past a statement's first
-// (model.Result.More). Each set is already cut at max_rows; this bounds how
-// many of them there can be, for the procedure that SELECTs inside a loop
-// and so answers with a set per iteration. It is far more than a procedure
-// written to report several things returns, and far fewer than a runaway
-// loop does.
-const maxMoreSets = 50
-
 // query runs stmt as a Query on ex and reads every result set it returns
 // (readSets). The rows are closed before it returns, not only by a defer:
 // on Postgres the command tag reaches pgTagTracer when the rows close, and
@@ -190,8 +182,12 @@ func (m *Manager) query(ctx context.Context, ex execQuerier, name, stmt string, 
 // that returned none at all, which is how runMaybe knows it was not a
 // query.
 //
-// Sets past maxMoreSets are not read into memory: Result.MoreCut is set
-// and the loop stops, leaving rows.Close to discard them.
+// A statement keeps at most max_result_sets sets, its first included
+// (config.ResultSetLimit, 51 unless set): each set is already cut at
+// max_rows, and the cap bounds how many there can be, for the procedure
+// that SELECTs inside a loop and so answers with a set per iteration. Sets
+// past it are not read into memory: Result.MoreCut is set and the loop
+// stops, leaving rows.Close to discard them.
 //
 // pt, when not nil, is the statement's stmtcut.Point (query's cut). A first
 // set cut at max_rows is then closed through it: the statement is stopped
@@ -225,8 +221,11 @@ func (m *Manager) readSets(ctx context.Context, rows *sql.Rows, name, stmt strin
 		return first, nil
 	}
 	// NextResultSet also drops what a set cut at max_rows left unread.
+	// More holds the sets past the first, so it is full one short of the
+	// limit (at a limit of 1, from the start).
+	maxMore := m.cfg.ResultSetLimit() - 1
 	for rows.NextResultSet() {
-		if len(first.More) >= maxMoreSets {
+		if len(first.More) >= maxMore {
 			first.MoreCut = true
 			break
 		}

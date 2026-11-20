@@ -43,6 +43,15 @@ const (
 	DefaultResultTabs = 10
 	MaxResultTabs     = 50
 
+	// DefaultResultSets is how many result sets one statement keeps when
+	// max_result_sets is not set (see Config.MaxResultSets): the first and
+	// 50 more. A procedure written to report several things returns a
+	// handful; one that SELECTs inside a loop returns a set per iteration,
+	// and this is where such a runaway stops filling memory. There is no
+	// ceiling, unlike result_tabs: each set is already cut at max_rows, so
+	// a large value costs only what the procedure really sends.
+	DefaultResultSets = 51
+
 	// DefaultConnIdleTimeout is how long a pooled connection may sit unused
 	// before the pool closes it (conn_idle_timeout). database/sql's own
 	// default is forever, which keeps server-side backends — their memory and
@@ -249,6 +258,15 @@ type Config struct {
 	RunsKeep int `toml:"runs_keep"`
 	MaxRows  int `toml:"max_rows"` // rows fetched from the server
 
+	// MaxResultSets caps the result sets kept from one statement
+	// (model.Result and its More): a MySQL CALL whose procedure runs
+	// several SELECTs answers with a set for each. Sets past the cap are
+	// read off the wire and dropped, and the run says so
+	// (model.Result.MoreCut). Unset, or 0 or less, is DefaultResultSets, as
+	// max_rows' is its default; 1 keeps the first set alone. Read it
+	// through ResultSetLimit, which also covers a Config built in code.
+	MaxResultSets int `toml:"max_result_sets"`
+
 	// PGBin is the directory holding PostgreSQL's client tools (pg_dump,
 	// pg_restore) for dumps — `dbc dump` and both UIs' "Dump database…".
 	// Empty means look for them (pgdump.Locate). Resolved like scripts_dir:
@@ -383,7 +401,7 @@ func Load(explicit string) (*Config, error) {
 // active. The choice only matters when there is no config file: a real config
 // names its own default_connection.
 func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
-	cfg := &Config{MaxRows: defaultMaxRows,
+	cfg := &Config{MaxRows: defaultMaxRows, MaxResultSets: DefaultResultSets,
 		MaxDisplayRows: defaultMaxDisplayRows, AIContextRows: DefaultAIContextRows,
 		ResultTabs:      DefaultResultTabs,
 		ConnIdleTimeout: DefaultConnIdleTimeout, ConnectTimeout: DefaultConnectTimeout,
@@ -438,6 +456,9 @@ func LoadDemo(explicit string, demo DemoEngine) (*Config, error) {
 
 	if cfg.MaxRows <= 0 {
 		cfg.MaxRows = defaultMaxRows
+	}
+	if cfg.MaxResultSets <= 0 {
+		cfg.MaxResultSets = DefaultResultSets
 	}
 	if cfg.MaxDisplayRows < 0 {
 		cfg.MaxDisplayRows = defaultMaxDisplayRows
@@ -664,6 +685,17 @@ func (c *Config) ResultTabLimit() int {
 		return DefaultResultTabs
 	}
 	return min(c.ResultTabs, MaxResultTabs)
+}
+
+// ResultSetLimit is how many result sets one statement keeps:
+// MaxResultSets, or DefaultResultSets for a Config that never went through
+// Load (a test's, an ad-hoc one such as `dbc runs query`'s) and so left it
+// zero.
+func (c *Config) ResultSetLimit() int {
+	if c == nil || c.MaxResultSets < 1 {
+		return DefaultResultSets
+	}
+	return c.MaxResultSets
 }
 
 // demoFallback fills cfg with the built-in demo connections, used when there

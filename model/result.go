@@ -41,8 +41,9 @@ type Result struct {
 	// each of these, unchanged.
 	More []*Result
 	// MoreCut says sets past More's cap were dropped. The server sent more
-	// result sets than db keeps for one statement (its maxMoreSets); the
-	// ones past the cap were read off the wire and not kept.
+	// result sets than db keeps for one statement (max_result_sets in the
+	// config, 51 by default, this set included); the ones past the cap were
+	// read off the wire and not kept.
 	MoreCut bool
 }
 

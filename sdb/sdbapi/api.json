@@ -1516,7 +1516,7 @@
         {
           "name": "MoreCut",
           "type": "bool",
-          "doc": "MoreCut says sets past More's cap were dropped. The server sent more\nresult sets than db keeps for one statement (its maxMoreSets); the\nones past the cap were read off the wire and not kept."
+          "doc": "MoreCut says sets past More's cap were dropped. The server sent more\nresult sets than db keeps for one statement (max_result_sets in the\nconfig, 51 by default, this set included); the ones past the cap were\nread off the wire and not kept."
         }
       ],
       "methods": [

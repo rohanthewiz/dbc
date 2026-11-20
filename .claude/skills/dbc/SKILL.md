@@ -88,7 +88,9 @@ array of row objects; several give an array of envelopes
 `{"statement","conn","duration","columns","rows"}` (or `"rows_affected"`).
 A statement that returns several result sets (a MySQL `CALL` whose procedure
 runs several `SELECT`s) gives an envelope per set, even when it is the only
-statement.
+statement; each of those envelopes carries `"set"` (1-based) and `"sets"`,
+and text banners read `1/1 · set 2/3`. At most `max_result_sets` (config,
+default 51) sets are kept per statement.
 Duplicate column names become `a`, `a_2`.
 
 Rules that trip people up:

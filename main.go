@@ -909,12 +909,15 @@ func addAdHocConn(cfg *config.Config) error {
 // runHooks is how a caller shapes a run of statements. The zero value runs
 // every statement in order and stops at the first failure.
 type runHooks struct {
-	// onResult, when not nil, is handed each result (with its 0-based index)
-	// as soon as its statement finishes, which is what lets a headless run
-	// stream. An error from it stops the run before the next statement and
-	// comes back as is — it is the caller's failure, not the statement's, so
-	// it is not tagged with a position.
-	onResult func(i int, r *model.Result) error
+	// onResult, when not nil, is handed each result (with its statement's
+	// 0-based index) as soon as its statement finishes, which is what lets
+	// a headless run stream. A statement that returned several result sets
+	// hands each in turn, with set saying which (the zero SetPos for a
+	// statement's only set), so a banner can name it as the collected
+	// document does. An error from it stops the run before the next
+	// statement and comes back as is — it is the caller's failure, not the
+	// statement's, so it is not tagged with a position.
+	onResult func(i int, r *model.Result, set export.SetPos) error
 	// keepGoing goes on past a failed statement instead of stopping there
 	// (--keep-going). It still stops for a failure that says the rest cannot
 	// run: a cancel (Ctrl+C means stop) or a dead connection (see
@@ -976,12 +979,19 @@ func runStatements(ctx context.Context, sess *db.Session, stmts []sqlsplit.Stmt,
 		// A statement that answered with several result sets (a MySQL
 		// CALL whose procedure runs several SELECTs: model.Result.More)
 		// puts each in the output as a result of its own, all at the
-		// statement's position, so the banners read "2/5" for each.
-		for _, set := range res.Sets() {
+		// statement's position, and the banners name the set: "2/5 · set
+		// 1/3", "2/5 · set 2/3" … (export.SetPositions reads the same off
+		// out.at for the collected document).
+		sets := res.Sets()
+		for k, set := range sets {
 			out.results = append(out.results, set)
 			out.at = append(out.at, i+1)
 			if h.onResult != nil {
-				if err = h.onResult(i, set); err != nil {
+				var sp export.SetPos
+				if len(sets) > 1 {
+					sp = export.SetPos{K: k + 1, N: len(sets)}
+				}
+				if err = h.onResult(i, set, sp); err != nil {
 					return out, err
 				}
 			}
@@ -1030,8 +1040,9 @@ type blockStream struct {
 	err error
 }
 
-// add writes result i (0-based). Its signature fits runStatements' onResult.
-func (b *blockStream) add(i int, r *model.Result) error {
+// add writes result i (0-based), set set of its statement's (the zero
+// SetPos for its only one). Its signature fits runStatements' onResult.
+func (b *blockStream) add(i int, r *model.Result, set export.SetPos) error {
 	noun, pos := b.where(i + 1)
 	// the block, after the separator from the one before — or, first, the
 	// document's BOM when csv_bom asks for one; csv_formula_guard in each
@@ -1044,7 +1055,7 @@ func (b *blockStream) add(i int, r *model.Result) error {
 	}
 	o := csvOut
 	o.BOM = false
-	if err := export.WriteBlockWith(&sb, r, b.f, i+1, b.total, o); err != nil {
+	if err := export.WriteSetBlockWith(&sb, r, b.f, i+1, b.total, set, o); err != nil {
 		b.err = serr.Wrap(err, noun, pos)
 		return b.err
 	}
@@ -1054,7 +1065,7 @@ func (b *blockStream) add(i int, r *model.Result) error {
 		b.err = serr.Wrap(err, noun, pos)
 		return b.err
 	}
-	noteTruncated(b.notes, r, noun+" "+pos)
+	noteSetTruncatedAt(b.notes, r, noun+" "+pos, set, len(r.Rows))
 	return nil
 }
 
@@ -1067,7 +1078,9 @@ func (b *blockStream) show(r *model.Result, stop func()) {
 	if b.err != nil {
 		return
 	}
-	if b.add(b.wrote, r) != nil && stop != nil {
+	// a shown result is a result of its own, never one of a statement's
+	// sets: s.Show hands each set over as a show (sdb.Show), numbered "#i"
+	if b.add(b.wrote, r, export.SetPos{}) != nil && stop != nil {
 		stop()
 	}
 }
@@ -1373,13 +1386,14 @@ func (s *rowStream) end(run runOutcome, f export.Format) {
 		return
 	}
 	rows := 0
+	sets := export.SetPositions(run.at)
 	for i, r := range run.results {
 		n := len(r.Rows)
 		if i < len(s.counts) {
 			n = s.counts[i]
 		}
 		rows += n
-		noteTruncatedAt(os.Stderr, r, "", n)
+		noteSetTruncatedAt(os.Stderr, r, "", sets[i], n)
 	}
 	s.o.finish(os.Stderr, len(run.results), rows)
 }
@@ -1418,14 +1432,17 @@ func writeOutTo(note io.Writer, out string, results []*model.Result) {
 // single-statement CSV/TSV/text export would otherwise look complete while
 // quietly missing rows — and stderr keeps the note out of the data stream.
 //
-// at and total place each result in its run, as for emitRun.
+// at and total place each result in its run, as for emitRun; a result
+// that is one of its statement's several sets is named as such
+// (export.SetPositions), so "result truncated" says which set it was.
 func warnTruncated(w io.Writer, results []*model.Result, at []int, total int) {
+	sets := export.SetPositions(at)
 	for i, r := range results {
 		what := ""
 		if total > 1 {
 			what = "statement " + export.Pos(at[i], total)
 		}
-		noteTruncated(w, r, what)
+		noteSetTruncatedAt(w, r, what, sets[i], len(r.Rows))
 	}
 }
 
@@ -1443,18 +1460,42 @@ func noteTruncated(w io.Writer, r *model.Result, what string) {
 // noteTruncatedAt is noteTruncated for a result whose rows were streamed
 // rather than held (rowStream): rows is how many went out.
 func noteTruncatedAt(w io.Writer, r *model.Result, what string, rows int) {
-	if what != "" {
-		what += ": "
+	noteSetTruncatedAt(w, r, what, export.SetPos{}, rows)
+}
+
+// noteSetTruncatedAt is noteTruncatedAt for a result that is set set of its
+// statement's several (the zero SetPos: its only one). The two notes are
+// about different things, so they are named differently:
+//
+//   - the dropped sets are the statement's: "statement 2/5: the statement
+//     returned more than 51 result sets …", on its first set, which alone
+//     carries MoreCut
+//   - a cut at max_rows is one set's: "statement 2/5 · set 2/3: result
+//     truncated …", or "set 2/3: …" for a lone statement, whose what is ""
+func noteSetTruncatedAt(w io.Writer, r *model.Result, what string, set export.SetPos, rows int) {
+	stmt := what
+	if stmt != "" {
+		stmt += ": "
 	}
 	if r.MoreCut {
-		fmt.Fprintf(w, "note: %sthe statement returned more than %d result sets — the rest were dropped\n",
-			what, 1+len(r.More))
+		fmt.Fprintf(w, "note: %sthe statement returned more than %d result sets — the rest were dropped — max_result_sets in config for more\n",
+			stmt, 1+len(r.More))
 	}
 	if !r.Truncated {
 		return
 	}
+	one := what
+	if s := set.String(); s != "" {
+		if one != "" {
+			one += " · "
+		}
+		one += s
+	}
+	if one != "" {
+		one += ": "
+	}
 	fmt.Fprintf(w, "note: %sresult truncated at %d rows — --max-rows N (0: no cap) or max_rows in config for more\n",
-		what, rows)
+		one, rows)
 }
 
 // runScriptHeadless runs a Go script, a file or a built-in example. The

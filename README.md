@@ -71,6 +71,7 @@ Copy `dbc.example.toml` to `./dbc.toml` (or `~/.config/dbc/config.toml`):
 # files_dir        = "data"      # pipelines' and scripts' relative file paths; default ~ (see Pipelines)
 # runs_keep        = 200         # run records kept per job and per pipeline
 max_rows           = 1000   # rows fetched from the server
+max_result_sets    = 51     # result sets kept from one statement (a CALL's SELECTs)
 max_display_rows   = 2000   # rows the results table draws (0 = all)
 result_tabs        = 10     # result tabs per connection, per query tab (1–50; see Result tabs)
 conn_idle_timeout  = "1h"   # close pooled connections idle this long ("0" = never)
@@ -1655,9 +1656,10 @@ a statement fails, the results of the ones before it still land.
 `CALL monthly_report()` whose procedure runs three `SELECT`s returns three.
 Each gets a tab, titled `CALL monthly_report() · 1/3` and so on, with the
 last on screen, and the log says how many there were. Running the `CALL`
-again, or rerunning any one of its tabs, refills those tabs in order. (More
-than 51 sets from one statement — a `SELECT` inside a procedure's loop —
-are cut there, with a warning in the log.)
+again, or rerunning any one of its tabs, refills those tabs in order. Sets
+past `max_result_sets` (51 by default, the first included) — a `SELECT`
+inside a procedure's loop — are dropped, with a warning in the log; `1`
+keeps the first set alone.
 
 Whether a statement shows rows or a count is read from its result where its
 verb does not say. `CALL`, `EXECUTE`, `FETCH` and MySQL's
@@ -3658,13 +3660,16 @@ Each format keeps its own shape across statements:
 | `text`, `markdown` | a banner per statement (position, connection, rows, time) above each table |
 | `csv`, `tsv` | blocks separated by a blank line, each with its own header row — no banners to break parsing |
 | `html` | one page, a section per statement |
-| `json` | an array of envelopes: `{"statement", "conn", "duration", "columns", "rows"}`, or `"rows_affected"` for a non-query |
+| `json` | an array of envelopes: `{"statement", "conn", "duration", "columns", "rows"}`, or `"rows_affected"` for a non-query; `"set"` and `"sets"` on one of a statement's several result sets |
 
 A single statement renders exactly as it always did, in every format — with
 one exception: a statement that returns several result sets (a MySQL `CALL`
 whose procedure runs several `SELECT`s) renders each as a block of its own,
-all at the statement's position (`1/1`, `1/1`; in `json`, an envelope
-each). A result that hit `max_rows` is noted on stderr, so a truncated export
+at the statement's position and named by its set: banners `1/1 · set 1/2`
+and `1/1 · set 2/2`, headings `Query Result · set 2 of 2` in `html`, and in
+`json` an envelope each with `"set": 2, "sets": 2`. A statement among others
+does the same (`2/5 · set 1/3`), and one that returns a single set is never
+named. A result that hit `max_rows` is noted on stderr, so a truncated export
 cannot pass for the full set while the data stream stays clean. In `json`, duplicate
 column names are suffixed (`a`, `a_2`) rather than silently collapsed.
 

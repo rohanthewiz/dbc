@@ -153,6 +153,63 @@ dsn = "a.db"
 	}
 }
 
+// max_result_sets caps the result sets one statement keeps (N-318): absent,
+// 0 or less is the default, as max_rows' is; any positive value is kept,
+// 1 and a large one alike — there is no ceiling to pull it back to.
+func TestLoadMaxResultSets(t *testing.T) {
+	conn := `
+[[connection]]
+name = "db"
+driver = "sqlite"
+dsn = "a.db"
+`
+	cases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"absent", conn, DefaultResultSets},
+		{"set", "max_result_sets = 5\n" + conn, 5},
+		{"one", "max_result_sets = 1\n" + conn, 1},
+		{"large", "max_result_sets = 100000\n" + conn, 100000},
+		{"zero", "max_result_sets = 0\n" + conn, DefaultResultSets},
+		{"negative", "max_result_sets = -3\n" + conn, DefaultResultSets},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, c.body))
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if cfg.MaxResultSets != c.want || cfg.ResultSetLimit() != c.want {
+				t.Errorf("MaxResultSets = %d (limit %d), want %d", cfg.MaxResultSets, cfg.ResultSetLimit(), c.want)
+			}
+			// a known key: no "unknown key" warning (strict.go)
+			for _, w := range cfg.Warnings {
+				if strings.Contains(w, "max_result_sets") {
+					t.Errorf("warning: %q", w)
+				}
+			}
+		})
+	}
+
+	// a Config built in code never went through Load, nor did a nil one
+	if got := (&Config{}).ResultSetLimit(); got != DefaultResultSets {
+		t.Errorf("zero Config limit = %d, want %d", got, DefaultResultSets)
+	}
+	if got := (*Config)(nil).ResultSetLimit(); got != DefaultResultSets {
+		t.Errorf("nil Config limit = %d, want %d", got, DefaultResultSets)
+	}
+	isolateDemo(t)
+	demo, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if demo.ResultSetLimit() != DefaultResultSets {
+		t.Errorf("demo limit = %d", demo.ResultSetLimit())
+	}
+}
+
 func TestLoadConnIdleTimeout(t *testing.T) {
 	conn := `
 [[connection]]

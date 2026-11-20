@@ -2,6 +2,7 @@ package export
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -357,7 +358,8 @@ func TestRenderRunShapeFollowsTotal(t *testing.T) {
 // One statement that returned several result sets (a procedure call:
 // model.Result.More) is a multi-result document, each set a block at the
 // statement's position — not the first set alone, as a run of one
-// statement otherwise renders.
+// statement otherwise renders. Each block names its set (N-318): the
+// banners read "1/1 · set 1/2" and "1/1 · set 2/2", not "1/1" twice.
 func TestRenderRunSetsOfOneStatement(t *testing.T) {
 	a := query("demo", "CALL p()", []string{"n"}, [][]string{{"1"}})
 	b := query("demo", "CALL p()", []string{"total"}, [][]string{{"9"}})
@@ -365,13 +367,117 @@ func TestRenderRunSetsOfOneStatement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderRun: %v", err)
 	}
-	if strings.Count(out, "-- 1/1 │ demo │") != 2 || !strings.Contains(out, "total") {
-		t.Errorf("want both sets, each bannered 1/1, got:\n%s", out)
+	if !strings.Contains(out, "-- 1/1 · set 1/2 │ demo │") || !strings.Contains(out, "-- 1/1 · set 2/2 │ demo │") ||
+		!strings.Contains(out, "total") {
+		t.Errorf("want both sets, each bannered with its set, got:\n%s", out)
+	}
+	if strings.Contains(out, "-- 1/1 │") {
+		t.Errorf("a set's banner left without its set:\n%s", out)
+	}
+	out, err = RenderRun([]*model.Result{a, b}, []int{1, 1}, 1, Markdown)
+	if err != nil || !strings.Contains(out, "**1/1 · set 1/2** · `demo`") || !strings.Contains(out, "**1/1 · set 2/2** · `demo`") {
+		t.Errorf("markdown banners: %s (err %v)", out, err)
 	}
 	out, err = RenderRun([]*model.Result{a, b}, []int{1, 1}, 1, JSON)
 	var envs []map[string]any
 	if err != nil || json.Unmarshal([]byte(out), &envs) != nil || len(envs) != 2 {
-		t.Errorf("want two envelopes, got %s (err %v)", out, err)
+		t.Fatalf("want two envelopes, got %s (err %v)", out, err)
+	}
+	for i, e := range envs {
+		if e["set"] != float64(i+1) || e["sets"] != float64(2) {
+			t.Errorf("envelope %d: set %v of %v, want %d of 2", i, e["set"], e["sets"], i+1)
+		}
+	}
+	out, err = RenderRun([]*model.Result{a, b}, []int{1, 1}, 1, HTML)
+	if err != nil || !strings.Contains(out, "Query Result · set 1 of 2") || !strings.Contains(out, "Query Result · set 2 of 2") {
+		t.Errorf("html headings: %s (err %v)", out, err)
+	}
+	// CSV has no banner: the blocks are the data, as before
+	out, err = RenderRun([]*model.Result{a, b}, []int{1, 1}, 1, CSV)
+	if err != nil || out != "n\n1\n\ntotal\n9\n" {
+		t.Errorf("csv = %q (err %v)", out, err)
+	}
+}
+
+// A CALL's sets amid other statements: only its blocks name a set, and the
+// statements around it render as they did (N-318).
+func TestRenderRunSetsAmidStatements(t *testing.T) {
+	one := query("demo", "SELECT 1", []string{"n"}, [][]string{{"1"}})
+	a := query("demo", "CALL p()", []string{"x"}, [][]string{{"2"}})
+	b := query("demo", "CALL p()", []string{"y"}, [][]string{{"3"}})
+	four := query("demo", "SELECT 4", []string{"n"}, [][]string{{"4"}})
+	rs, at := []*model.Result{one, a, b, four}, []int{1, 2, 2, 4} // statement 3 failed
+
+	out, err := RenderRun(rs, at, 4, Text)
+	if err != nil {
+		t.Fatalf("RenderRun: %v", err)
+	}
+	for _, want := range []string{"-- 1/4 │ demo │", "-- 2/4 · set 1/2 │", "-- 2/4 · set 2/2 │", "-- 4/4 │ demo │"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("want banner %q in:\n%s", want, out)
+		}
+	}
+	out, err = RenderRun(rs, at, 4, JSON)
+	var envs []map[string]any
+	if err != nil || json.Unmarshal([]byte(out), &envs) != nil || len(envs) != 4 {
+		t.Fatalf("want four envelopes, got %s (err %v)", out, err)
+	}
+	for i, want := range []any{nil, float64(1), float64(2), nil} {
+		if envs[i]["set"] != want {
+			t.Errorf("envelope %d: set = %v, want %v", i, envs[i]["set"], want)
+		}
+	}
+	if _, ok := envs[0]["sets"]; ok {
+		t.Errorf("a statement's only set carries sets: %v", envs[0])
+	}
+	out, err = RenderRun(rs, at, 4, HTML)
+	if err != nil || !strings.Contains(out, "Statement 2 of 4 · set 2 of 2") || !strings.Contains(out, "Statement 4 of 4<") {
+		t.Errorf("html headings: %s (err %v)", out, err)
+	}
+}
+
+// SetPositions reads a run of equal positions as one statement's sets.
+func TestSetPositions(t *testing.T) {
+	// "-" for a statement's only set (the zero SetPos), else "k/n"
+	show := func(ps []SetPos) string {
+		parts := make([]string, len(ps))
+		for i, p := range ps {
+			parts[i] = "-"
+			if p != (SetPos{}) {
+				parts[i] = fmt.Sprintf("%d/%d", p.K, p.N)
+			}
+		}
+		return strings.Join(parts, " ")
+	}
+	for _, c := range []struct {
+		at   []int
+		want string
+	}{
+		{nil, ""},
+		{[]int{1}, "-"},
+		{[]int{1, 2, 3}, "- - -"},
+		{[]int{1, 1}, "1/2 2/2"},
+		{[]int{1, 2, 2, 2, 4}, "- 1/3 2/3 3/3 -"},
+		{[]int{3, 3, 5, 5}, "1/2 2/2 1/2 2/2"},
+	} {
+		if got := show(SetPositions(c.at)); got != c.want {
+			t.Errorf("SetPositions(%v) = %q, want %q", c.at, got, c.want)
+		}
+	}
+	for _, c := range []struct {
+		i, n int
+		s    SetPos
+		want string
+	}{
+		{2, 5, SetPos{}, "2/5"},
+		{2, 5, SetPos{2, 3}, "2/5 · set 2/3"},
+		{1, 1, SetPos{1, 2}, "1/1 · set 1/2"},
+		{3, 0, SetPos{}, "#3"},
+		{1, 1, SetPos{1, 1}, "1/1"}, // one of one is a statement's only set
+	} {
+		if got := PosSet(c.i, c.n, c.s); got != c.want {
+			t.Errorf("PosSet(%d, %d, %v) = %q, want %q", c.i, c.n, c.s, got, c.want)
+		}
 	}
 }
 

@@ -124,6 +124,13 @@ func (r *setsRows) NextResultSet() error {
 // readSets, with max_rows as given.
 func readSetsOf(t *testing.T, n, maxRows int) []string {
 	t.Helper()
+	return readSetsCapped(t, n, maxRows, 0)
+}
+
+// readSetsCapped is readSetsOf under max_result_sets maxSets (0: unset, so
+// config.DefaultResultSets).
+func readSetsCapped(t *testing.T, n, maxRows, maxSets int) []string {
+	t.Helper()
 	dbh, err := sql.Open("dbc-sets", strconv.Itoa(n))
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +141,7 @@ func readSetsOf(t *testing.T, n, maxRows int) []string {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	m := NewManager(&config.Config{MaxRows: maxRows})
+	m := NewManager(&config.Config{MaxRows: maxRows, MaxResultSets: maxSets})
 	res, err := m.readSets(context.Background(), rows, "c", "CALL p()", nil)
 	if err != nil {
 		t.Fatalf("readSets: %v", err)
@@ -154,8 +161,9 @@ func readSetsOf(t *testing.T, n, maxRows int) []string {
 }
 
 // Every result set a statement returns is read: the first into the Result,
-// the rest into More, each cut at max_rows on its own. Past maxMoreSets
-// the rest are dropped and the Result says so.
+// the rest into More, each cut at max_rows on its own. Past
+// max_result_sets (config.ResultSetLimit) the rest are dropped and the
+// Result says so.
 func TestReadSets(t *testing.T) {
 	if got := fmt.Sprint(readSetsOf(t, 1, 100)); got != "[[c1] [[10] [11]] false]" {
 		t.Errorf("one set: %s", got)
@@ -167,13 +175,28 @@ func TestReadSets(t *testing.T) {
 	if got := fmt.Sprint(readSetsOf(t, 2, 1)); got != "[[c1] [[10]] true [c2] [[20]] true]" {
 		t.Errorf("two sets at max_rows 1: %s", got)
 	}
-	// exactly the cap is not a cut
-	got := readSetsOf(t, 1+maxMoreSets, 100)
-	if len(got) != 1+maxMoreSets {
-		t.Errorf("%d sets: kept %d lines, want every set and no cut", 1+maxMoreSets, len(got))
+	// exactly the cap is not a cut; unset, the cap is the default
+	limit := config.DefaultResultSets
+	got := readSetsOf(t, limit, 100)
+	if len(got) != limit {
+		t.Errorf("%d sets: kept %d lines, want every set and no cut", limit, len(got))
 	}
-	got = readSetsOf(t, 5+maxMoreSets, 100)
-	if len(got) != 2+maxMoreSets || got[len(got)-1] != "cut" {
-		t.Errorf("%d sets: kept %d lines ending %q, want the first %d sets and the cut", 5+maxMoreSets, len(got), got[len(got)-1], 1+maxMoreSets)
+	got = readSetsOf(t, limit+4, 100)
+	if len(got) != limit+1 || got[len(got)-1] != "cut" {
+		t.Errorf("%d sets: kept %d lines ending %q, want the first %d sets and the cut", limit+4, len(got), got[len(got)-1], limit)
+	}
+	// max_result_sets set: the cap is the config's, the first set counted
+	if got := fmt.Sprint(readSetsCapped(t, 3, 100, 3)); got != "[[c1] [[10] [11]] false [c2] [[20] [21]] false [c3] [[30] [31]] false]" {
+		t.Errorf("three sets under max_result_sets 3: %s", got)
+	}
+	if got := fmt.Sprint(readSetsCapped(t, 4, 100, 3)); got != "[[c1] [[10] [11]] false [c2] [[20] [21]] false [c3] [[30] [31]] false cut]" {
+		t.Errorf("four sets under max_result_sets 3: %s", got)
+	}
+	// 1 keeps the first set alone
+	if got := fmt.Sprint(readSetsCapped(t, 2, 100, 1)); got != "[[c1] [[10] [11]] false cut]" {
+		t.Errorf("two sets under max_result_sets 1: %s", got)
+	}
+	if got := fmt.Sprint(readSetsCapped(t, 1, 100, 1)); got != "[[c1] [[10] [11]] false]" {
+		t.Errorf("one set under max_result_sets 1: %s", got)
 	}
 }

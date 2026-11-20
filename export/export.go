@@ -142,7 +142,9 @@ func RenderAll(rs []*model.Result, f Format) (string, error) {
 // renders exactly as Render does — unless that statement returned several
 // result sets (model.Result.More, which the caller passes as results of
 // their own at the statement's position): those are a multi-result
-// document too, each block bannered "1/1".
+// document too. Results sharing a position are one statement's sets, and
+// each is named as such (SetPositions): a banner "1/1 · set 2/3", an HTML
+// heading "… · set 2 of 3", a JSON envelope's "set": 2 and "sets": 3.
 func RenderRun(rs []*model.Result, at []int, total int, f Format) (string, error) {
 	var sb strings.Builder
 	if err := WriteRun(&sb, rs, at, total, f); err != nil {
@@ -170,10 +172,12 @@ func WriteRunWith(w io.Writer, rs []*model.Result, at []int, total int, f Format
 	case total == 1 && len(rs) == 1:
 		return WriteWith(w, rs[0], f, o)
 	}
+	sets := SetPositions(at)
 	switch f {
 	case CSV, TSV, Markdown, Text:
-		// Block formats go through WriteBlock, the same call a streaming
-		// caller makes one result at a time, so the two can never drift.
+		// Block formats go through WriteSetBlockWith, the same call a
+		// streaming caller makes one result at a time, so the two can
+		// never drift.
 		if err := WriteBOM(w, f, o); err != nil {
 			return err
 		}
@@ -184,7 +188,7 @@ func WriteRunWith(w io.Writer, rs []*model.Result, at []int, total int, f Format
 					return serr.Wrap(err)
 				}
 			}
-			if err := WriteBlockWith(w, r, f, at[i], total, o); err != nil {
+			if err := WriteSetBlockWith(w, r, f, at[i], total, sets[i], o); err != nil {
 				return err
 			}
 		}
@@ -195,7 +199,7 @@ func WriteRunWith(w io.Writer, rs []*model.Result, at []int, total int, f Format
 		}
 		return nil
 	case JSON:
-		return jsonAll(w, rs)
+		return jsonAll(w, rs, sets)
 	}
 	return serr.New("unknown format", "format", string(f))
 }
@@ -242,6 +246,65 @@ func Pos(i, n int) string {
 		return fmt.Sprintf("#%d", i)
 	}
 	return fmt.Sprintf("%d/%d", i, n)
+}
+
+// SetPos says which of its statement's result sets a result is: the Kth of
+// the N it returned. The zero value is a statement's only set, which is
+// what nearly every statement returns; only a procedure call that runs
+// several SELECTs (model.Result.More) has sets with N > 1.
+//
+// A banner names a set only when its statement had several, so a run whose
+// statements each returned one set renders as it did before sets were
+// named. Without the name, the sets of a lone CALL all read "1/1" — the
+// statement's place, said again for each — and nothing in the document told
+// the second set from the first but its order.
+type SetPos struct{ K, N int }
+
+// String is s as a banner or note says it: "set 2/3", or "" for a
+// statement's only set.
+func (s SetPos) String() string {
+	if s.N <= 1 {
+		return ""
+	}
+	return fmt.Sprintf("set %d/%d", s.K, s.N)
+}
+
+// PosSet is Pos with the result's set appended when its statement returned
+// several: "2/5 · set 2/3", "1/1 · set 1/2", "#3" (no set to name).
+func PosSet(i, n int, s SetPos) string {
+	if s.N <= 1 {
+		return Pos(i, n)
+	}
+	return Pos(i, n) + " · " + s.String()
+}
+
+// SetPositions reads, from the positions of a run's results (RenderRun's
+// at), which of its statement's sets each result is. A statement's sets are
+// passed as results of their own, one after another at the statement's
+// position, and no two statements share a position, so a run of equal
+// positions is one statement's sets and its length is their count:
+//
+//	at    1    2      2      2      4          (statement 3 failed)
+//	set   -    1/3    2/3    3/3    -
+//
+// Reading it off at, rather than taking it as an argument of its own, keeps
+// every caller of RenderRun and WriteRun as it was: the positions already
+// said it, and only the banners did not.
+func SetPositions(at []int) []SetPos {
+	out := make([]SetPos, len(at))
+	for i := 0; i < len(at); {
+		j := i + 1
+		for j < len(at) && at[j] == at[i] {
+			j++
+		}
+		if n := j - i; n > 1 {
+			for k := i; k < j; k++ {
+				out[k] = SetPos{K: k - i + 1, N: n}
+			}
+		}
+		i = j
+	}
+	return out
 }
 
 // Seq returns the positions 1…n, for a run in which every statement produced
@@ -297,13 +360,22 @@ func WriteBlock(w io.Writer, r *model.Result, f Format, i, n int) error {
 // block is not the document's start, so a streaming caller wants its BOM
 // written once by WriteBOM and passes o with BOM off (WriteRunWith).
 func WriteBlockWith(w io.Writer, r *model.Result, f Format, i, n int, o CSVOptions) error {
+	return WriteSetBlockWith(w, r, f, i, n, SetPos{}, o)
+}
+
+// WriteSetBlockWith is WriteBlockWith for a result that is set s of its
+// statement's several: the banner names the set ("1/1 · set 2/3"). A
+// streaming caller is handed each set as its statement returns, so it
+// knows s without the positions SetPositions reads it from. CSV and TSV
+// have no banner, so for them s changes nothing.
+func WriteSetBlockWith(w io.Writer, r *model.Result, f Format, i, n int, s SetPos, o CSVOptions) error {
 	if !Streamable(f) {
 		return serr.New("format is not a block format", "format", string(f))
 	}
 	if f == Markdown || f == Text {
-		banner := textBanner(r, Pos(i, n))
+		banner := textBanner(r, PosSet(i, n, s))
 		if f == Markdown {
-			banner = mdBanner(r, Pos(i, n))
+			banner = mdBanner(r, PosSet(i, n, s))
 		}
 		if _, err := io.WriteString(w, banner); err != nil {
 			return serr.Wrap(err)
@@ -781,18 +853,26 @@ func jsonKeys(cols []string) []string {
 // the statement it came from — a bare concatenation of row arrays would lose
 // which rows belong to which statement.
 //
+// sets says which of its statement's sets each result is (SetPositions).
+// The envelope of one of several gets "set" (1-based) and "sets", as the
+// "truncated" key is there only when it is true: a run whose statements
+// each returned one set has the envelopes it always had.
+//
 // The document is built whole, as it was (its envelopes' keys sort with
 // "rows" between "duration" and "statement", so a row cannot go out before
 // its envelope's head is known), and encoded straight to w: an Encoder
 // with the indent writes MarshalIndent's bytes and the newline marshal
 // adds, without the string and []byte copies of them.
-func jsonAll(w io.Writer, rs []*model.Result) error {
+func jsonAll(w io.Writer, rs []*model.Result, sets []SetPos) error {
 	out := make([]map[string]any, 0, len(rs))
-	for _, r := range rs {
+	for i, r := range rs {
 		m := map[string]any{
 			"statement": r.Query,
 			"conn":      r.Conn,
 			"duration":  durText(r.Duration),
+		}
+		if i < len(sets) && sets[i].N > 1 {
+			m["set"], m["sets"] = sets[i].K, sets[i].N
 		}
 		if r.IsExec {
 			m["rows_affected"] = r.Affected
@@ -838,9 +918,12 @@ tbody tr:hover { background: ` + theme.Sel + `; }
 func htmlDoc(r *model.Result) string { return htmlDocAll([]*model.Result{r}, []int{1}, 1) }
 
 // htmlDocAll builds one page with a section per result. With a single result
-// the section is the whole page, as a one-statement export always was.
+// the section is the whole page, as a one-statement export always was. A
+// section that is one of its statement's several sets says which in its
+// heading ("Query Result · set 2 of 3"), as a banner does.
 func htmlDocAll(rs []*model.Result, at []int, total int) string {
 	esc := stdhtml.EscapeString
+	sets := SetPositions(at)
 	b := element.B()
 	b.Html().R(
 		b.Head().R(
@@ -853,6 +936,9 @@ func htmlDocAll(rs []*model.Result, at []int, total int) string {
 				heading := "Query Result"
 				if total > 1 {
 					heading = fmt.Sprintf("Statement %d of %d", at[i], total)
+				}
+				if sets[i].N > 1 {
+					heading += fmt.Sprintf(" · set %d of %d", sets[i].K, sets[i].N)
 				}
 				b.H2().T(heading)
 				b.PClass("meta").T(esc(fmt.Sprintf("connection: %s · %s",

@@ -37,6 +37,13 @@
 # Query results are truncated at this many rows in the client
 max_rows = 1000
 
+# A statement can return several result sets: a MySQL CALL whose procedure
+# runs several SELECTs answers with a set for each, and one that SELECTs
+# inside a loop with a set per iteration. This many are kept, the first
+# included, each cut at max_rows; the rest are dropped with a warning.
+# 1 keeps the first set alone.
+max_result_sets = 51
+
 # ...and at most this many of them are drawn in the results table. Raise
 # max_rows for a bigger export without making the table crawl; the rows past
 # this cap are still fetched, and still exported. 0 draws all of them.

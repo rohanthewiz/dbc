@@ -266,7 +266,10 @@ func (w *Workspace) runLocked(stmts []string, tag string, again *resultTab) (Sta
 					}
 				}
 				if res.MoreCut {
-					notes = append(notes, notef(Warn, "statement %d/%d returned more than %d result sets — the rest were dropped — %s",
+					// max_result_sets is named, as the headless note
+					// names it: a cap the user can raise is said with
+					// the setting that raises it
+					notes = append(notes, notef(Warn, "statement %d/%d returned more than %d result sets — the rest were dropped (max_result_sets in config for more) — %s",
 						i+1, len(stmts), len(sets), Preview(stmt)))
 				}
 			}

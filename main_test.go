@@ -342,6 +342,14 @@ func TestWarnTruncated(t *testing.T) {
 	if got := sb.String(); !strings.Contains(got, "statement 4/5") {
 		t.Errorf("note after a gap = %q, want statement 4/5", got)
 	}
+
+	// a lone statement's sets (N-318): its second set's cut names the set,
+	// and with no statement to name, the set alone
+	sb.Reset()
+	warnTruncated(&sb, []*model.Result{full, cut}, []int{1, 1}, 1)
+	if got := sb.String(); !strings.HasPrefix(got, "note: set 2/2: result truncated at 2 rows") {
+		t.Errorf("lone statement's set note = %q, want it named set 2/2", got)
+	}
 }
 
 // A streamed run must write exactly the document the collected shape would
@@ -431,17 +439,57 @@ func TestBlockStreamNotesTruncation(t *testing.T) {
 	full := &model.Result{Columns: []string{"n"}, Rows: [][]string{{"1"}}}
 	cut := &model.Result{Columns: []string{"n"}, Rows: [][]string{{"1"}, {"2"}}, Truncated: true}
 
-	if err := st.add(0, full); err != nil {
+	if err := st.add(0, full, export.SetPos{}); err != nil {
 		t.Fatal(err)
 	}
 	if notes.Len() != 0 {
 		t.Errorf("untruncated block warned: %q", notes.String())
 	}
-	if err := st.add(1, cut); err != nil {
+	if err := st.add(1, cut, export.SetPos{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := notes.String(); !strings.Contains(got, "statement 2/3: result truncated at 2 rows") {
 		t.Errorf("note = %q, want the block's position in the run", got)
+	}
+}
+
+// A statement's several result sets stream as blocks naming their set, the
+// same bytes the collected document has (N-318), and a set's truncation
+// note names the set, while the dropped-sets note names the statement.
+func TestBlockStreamNamesSets(t *testing.T) {
+	var out, notes strings.Builder
+	st := &blockStream{out: &out, notes: &notes, f: export.Text, total: 2}
+	one := &model.Result{Conn: "c", Query: "SELECT 1", Columns: []string{"n"}, Rows: [][]string{{"1"}}}
+	b := &model.Result{Conn: "c", Query: "CALL p()", Columns: []string{"y"}, Rows: [][]string{{"3"}, {"4"}}, Truncated: true}
+	a := &model.Result{Conn: "c", Query: "CALL p()", Columns: []string{"x"}, Rows: [][]string{{"2"}},
+		More: []*model.Result{b}, MoreCut: true}
+
+	steps := []struct {
+		i   int
+		r   *model.Result
+		set export.SetPos
+	}{{0, one, export.SetPos{}}, {1, a, export.SetPos{K: 1, N: 2}}, {1, b, export.SetPos{K: 2, N: 2}}}
+	for _, s := range steps {
+		if err := st.add(s.i, s.r, s.set); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := export.RenderRun([]*model.Result{one, a, b}, []int{1, 2, 2}, 2, export.Text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != want {
+		t.Errorf("streamed output differs from collected:\n%s\n---\n%s", out.String(), want)
+	}
+	if !strings.Contains(want, "-- 2/2 · set 2/2 │ c │") {
+		t.Errorf("banner without its set:\n%s", want)
+	}
+	got := notes.String()
+	if !strings.Contains(got, "note: statement 2/2: the statement returned more than 2 result sets — the rest were dropped — max_result_sets in config for more") {
+		t.Errorf("notes = %q, want the dropped sets named by the statement and the setting", got)
+	}
+	if !strings.Contains(got, "note: statement 2/2 · set 2/2: result truncated at 2 rows") {
+		t.Errorf("notes = %q, want the cut named by its set", got)
 	}
 }
 

@@ -213,6 +213,46 @@ func TestSummarySlowMemory(t *testing.T) {
 	}
 }
 
+// The slow-summary memory lapses after slowSummaryTTL (N-314), so one
+// transient timeout does not cost a long-running process its counts for
+// good; a second mark restarts the window. The entry's time is backdated
+// rather than the test sleeping, so the window can stay at its real size.
+func TestSummarySlowLapses(t *testing.T) {
+	m := NewManager(&config.Config{MaxRows: 1000})
+	defer m.Close()
+	backdate := func(name string, by time.Duration) {
+		m.mu.Lock()
+		m.slowSummary[name] = m.slowSummary[name].Add(-by)
+		m.mu.Unlock()
+	}
+
+	m.MarkSummarySlow("pg")
+	backdate("pg", slowSummaryTTL-time.Minute)
+	if !m.SummarySlow("pg") {
+		t.Fatal("forgotten inside its window")
+	}
+
+	backdate("pg", 2*time.Minute) // now a minute past the window
+	if m.SummarySlow("pg") {
+		t.Fatal("still remembered after its window")
+	}
+	m.mu.Lock()
+	_, kept := m.slowSummary["pg"]
+	m.mu.Unlock()
+	if kept {
+		t.Error("the lapsed entry was left in the map")
+	}
+
+	// tried again and slow again: a fresh window, not the old one's end
+	m.MarkSummarySlow("pg")
+	backdate("pg", slowSummaryTTL/2)
+	m.MarkSummarySlow("pg")
+	backdate("pg", slowSummaryTTL/2+time.Minute)
+	if !m.SummarySlow("pg") {
+		t.Error("a second mark did not restart the window")
+	}
+}
+
 // A connection that cannot be opened is marked as such (N-287), under its
 // serr wrap so the fields still show; a statement's failure is not.
 func TestConnectErrMarked(t *testing.T) {

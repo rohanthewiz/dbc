@@ -79,17 +79,6 @@ ten session docs in `ai_docs/claude_sessions/`
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
 
-- **N-314** · raised `2026-1112-1610-n311-introspection-levels` · value low
-  Two calls inside N-311's adaptive default were the session's, made
-  without the user's word, and stand until the user says otherwise: a
-  Refresh does not try a remembered-slow schema summary again, and the
-  memory lasts the process (not written down). The cost: one transient
-  timeout on a small database takes its picker's counts and "all schemas"
-  away until dbc restarts or the connection's DSN is edited, which for a
-  long-running `dbc web` is a long time. Options if that bites: let the
-  user's Refresh retry (one flag at `connectLocked`'s `names`), expire
-  the memory after some minutes (as `complRetry` does a failed load), or
-  drop it on a Disconnect.
 - **N-317** · raised `2026-1112-1634-n289-rows-by-result` · value low
   A script sees only the first of a statement's result sets unless it
   asks. `s.Query("my", "CALL monthly_report()")` returns a Result whose
@@ -782,6 +771,18 @@ call.
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
 
+- **N-314** · raised `2026-1112-1610-n311-introspection-levels` · value low
+  Two calls inside N-311's adaptive default were the session's, made
+  without the user's word, and stand until the user says otherwise: a
+  Refresh does not try a remembered-slow schema summary again, and the
+  memory lasts the process (not written down). The cost: one transient
+  timeout on a small database takes its picker's counts and "all schemas"
+  away until dbc restarts or the connection's DSN is edited, which for a
+  long-running `dbc web` is a long time. Options if that bites: let the
+  user's Refresh retry (one flag at `connectLocked`'s `names`), expire
+  the memory after some minutes (as `complRetry` does a failed load), or
+  drop it on a Disconnect.
+  closed 2026-11-18: the user chose the expiry, of the three options. The slow-summary memory (`db.Manager.slowSummary`, now a `map[string]time.Time`) lapses `slowSummaryTTL` (15 min) after it was marked. `SummarySlow` deletes a lapsed entry and reports false, so the next read tries the summary again: counts come back when it finishes in time, and a timeout marks the connection again for a fresh window. A database that is really too big pays one 5 s wait per 15 minutes, not one per read. Within the window a Refresh still does not retry, and a Disconnect still keeps the memory; Drop and a restart end the window early, as before. The note now says "… is read by schema names for the next 15 minutes …" (`db.SlowSummaryTTL()`). 15 min, not `complRetry`'s 5, because a lapse on a big catalog is a wait the user sits through (connect or Refresh), where a retried completion load runs behind the editor. Tests: `db.TestSummarySlowLapses` (inside the window, lapsed and removed, a second mark restarting the window, with backdated timestamps and no sleep) and the live `TestLiveWorkspaceSlowSummaryRemembered` with its new note text. Full suite green against Postgres 17. README ("`full` adapts") and `dbc.example.toml` updated.
 - **N-334** · raised `2026-1118-0042-n321-n286-n288-n291-plain-errors-value-text-status-error` · value low
   CSV has no formula guard and no BOM option, the two parts of N-288's
   audit it did not do (its "Fix:" named neither). A text cell starting

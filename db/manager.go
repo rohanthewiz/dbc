@@ -76,8 +76,9 @@ type Manager struct {
 	rows rowCounter
 
 	// slowSummary holds the connections whose schema summary ran out its
-	// budget once (MarkSummarySlow); see navigate.go. Guarded by mu.
-	slowSummary map[string]bool
+	// budget, with when it did (MarkSummarySlow); an entry lapses after
+	// slowSummaryTTL. See navigate.go. Guarded by mu.
+	slowSummary map[string]time.Time
 }
 
 // openCall is one open-and-ping in progress. dbh and err are written before

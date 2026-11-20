@@ -22,17 +22,21 @@ import (
 //	full           yes                      names   ← the adaptive default
 //
 // The lowering is what makes full a safe default: a database too big to
-// count pays for finding that out once per run of dbc, not once per
-// connect, refresh and relist — and nobody has to edit a config to stop
-// it. It lowers the whole connection, completion included, rather than
+// count pays for finding that out once per window (db.SlowSummaryTTL), not
+// once per connect, refresh and relist — and nobody has to edit a config
+// to stop it. It lowers the whole connection, completion included, rather than
 // only the summary: a pg_class too big to count in five seconds is one
 // whose every-schema read for completion is the next thing to time out.
 //
-// It lasts as long as the process and nothing retries it — not a Refresh
-// either, which on such a database is pressed to see a new table, not to
-// wait five seconds for counts that will not come. What it costs is the
-// picker's counts and its "all schemas" entry; a restart, or an edit of
-// what the connection dials (db.Manager.Drop), tries the summary again.
+// It lapses after db.SlowSummaryTTL (N-314), so one bad moment on a small
+// database — a busy server, a lock on pg_class — does not cost a
+// long-running dbc web its counts for good: the first read after the
+// window tries the summary again, and a timeout there marks it again.
+// Within the window nothing retries it — not a Refresh either, which on a
+// big database is pressed to see a new table, not to wait five seconds
+// for counts that will not come. What the window costs is the picker's
+// counts and its "all schemas" entry; a restart, or an edit of what the
+// connection dials (db.Manager.Drop), ends it early.
 //
 // OFF IS A STATE AS WELL AS A LEVEL. A connect at off lands with nothing
 // read and nothing reading (Workspace.unread), which is neither "loading"

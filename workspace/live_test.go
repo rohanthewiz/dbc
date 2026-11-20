@@ -774,7 +774,7 @@ func TestLiveWorkspaceSlowSummaryRemembered(t *testing.T) {
 		}
 		said := noteTexts(ev.Notes)
 		if !strings.Contains(said, "schema table counts unavailable") ||
-			!strings.Contains(said, `live is read by schema names from here on`) ||
+			!strings.Contains(said, `live is read by schema names for the next 15 minutes`) ||
 			!strings.Contains(said, `introspect = "names"`) {
 			t.Errorf("notes %q, want the fallback and what was remembered", said)
 		}
@@ -797,7 +797,7 @@ func TestLiveWorkspaceSlowSummaryRemembered(t *testing.T) {
 				t.Errorf("schema %+v counted: the refresh tried the summary again", s)
 			}
 		}
-		if got := noteTexts(rev.Notes); strings.Contains(got, "counts unavailable") || strings.Contains(got, "from here on") {
+		if got := noteTexts(rev.Notes); strings.Contains(got, "counts unavailable") || strings.Contains(got, "is read by schema names") {
 			t.Errorf("the refresh explained the names again: %q", got)
 		}
 		if err = w.LoadCompletions(context.Background()); err != nil {
@@ -865,7 +865,7 @@ func TestLiveWorkspaceIntrospectNames(t *testing.T) {
 			t.Errorf("schemas %v, want public and dbc_live_win by name", names)
 		}
 		said := noteTexts(ev.Notes)
-		if strings.Contains(said, "counts unavailable") || strings.Contains(said, "from here on") {
+		if strings.Contains(said, "counts unavailable") || strings.Contains(said, "is read by schema names") {
 			t.Errorf("names explained itself as a fallback: %q", said)
 		}
 		if !strings.Contains(said, "are not counted") {

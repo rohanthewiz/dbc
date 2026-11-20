@@ -451,15 +451,17 @@ func (w *Workspace) cancelCatalogWorkLocked() {
 //	   └─fails─► names ──ok─────────────────► schemas, counts unknown (+ note)
 //	      │         └─fails──────────────────► err (loadTables reads whole)
 //	      └─ by running out its budget: db.Manager.MarkSummarySlow, so the
-//	         connection's later reads take the top row (levelOf)
+//	         connection's later reads take the top row (levelOf) until the
+//	         memory lapses (db.SlowSummaryTTL)
 //
 // names is the level the read runs at (introspect.go): set — by the
 // connection's introspect, or because the summary was slow before — the
 // summary is not tried and nothing is said, the uncounted picker being
 // what was asked for rather than a fallback to explain.
 //
-// A summary that fails by its deadline is remembered, and said once, with
-// the setting that skips even the first wait. One that fails otherwise —
+// A summary that fails by its deadline is remembered for a while
+// (db.SlowSummaryTTL), and said each time it is marked, with the setting
+// that skips even the first wait. One that fails otherwise —
 // a role that may not read pg_class, a dropped connection — is not: it
 // failed fast, so trying again costs nothing, and it may well work next
 // time.
@@ -493,9 +495,11 @@ func listSchemas(ctx context.Context, mgr *db.Manager, name string, names bool) 
 		serr.StringFromErr(err))}
 	if timedOut {
 		mgr.MarkSummarySlow(name)
+		// The window is said in whole minutes: the TTL is minutes long,
+		// and "15m0s" reads as a timer rather than a sentence.
 		notes = append(notes, notef(Info,
-			"%s is read by schema names from here on, without the counts — introspect = \"names\" on the connection skips this first wait too",
-			name))
+			"%s is read by schema names for the next %d minutes, without the counts — introspect = \"names\" on the connection skips this first wait too",
+			name, int(db.SlowSummaryTTL().Minutes())))
 	}
 	return byName, notes, nil
 }

@@ -292,29 +292,68 @@ func (m *Manager) SchemaNames(ctx context.Context, name string) ([]SchemaInfo, e
 // The memory is the Manager's rather than a workspace's so that every
 // workspace on it shares one: dbc web's query tabs, and the TUI's, are a
 // workspace each, and a tab opened on the connection must not pay for what
-// another already learned. It lasts as long as the process — nothing is
-// written down, so a restart tries the summary once more — and is dropped
-// with the connection when an edit may have pointed its name elsewhere
-// (Drop), but not by a Disconnect, after which the database is the same.
+// another already learned. Nothing is written down, so a restart tries the
+// summary once more. It is dropped with the connection when an edit may
+// have pointed its name elsewhere (Drop), but not by a Disconnect, after
+// which the database is the same.
+//
+// IT LAPSES after slowSummaryTTL (N-314). One timeout is not proof of a big
+// catalog: a busy server, a lock on pg_class or a slow network can run out
+// the budget once on a database that counts in milliseconds. Without the
+// lapse that one bad moment would cost a long-running dbc web its counts
+// and its "all schemas" until a restart. With it, the next read after the
+// window tries the summary again:
+//
+//	t0          timeout ─► MarkSummarySlow (at = t0)
+//	t0 … +TTL   reads go straight to the names (no wait)
+//	> t0+TTL    lapsed ─► the summary is tried again
+//	              ├─ in time ─► counts are back
+//	              └─ times out again ─► marked again (at = now)
+//
+// So a database that really is too big pays one 5 s wait per window rather
+// than one per read, and one that only had a bad moment heals by itself.
+// The window is long next to complRetry's 5 minutes because what a lapse
+// costs on a big catalog is a wait the user sits through (a connect or a
+// Refresh), where a retried completion load runs behind the editor.
+
+// slowSummaryTTL is how long a schema summary that ran out its budget is
+// remembered (SummarySlow) before the summary is tried again. A var rather
+// than a const so a test can shorten it.
+var slowSummaryTTL = 15 * time.Minute
+
+// SlowSummaryTTL is how long a slow schema summary is remembered, for the
+// note that tells the user so.
+func SlowSummaryTTL() time.Duration { return slowSummaryTTL }
 
 // MarkSummarySlow remembers that name's schema summary did not finish
-// within its budget; SummarySlow then reports it.
+// within its budget; SummarySlow then reports it for slowSummaryTTL. A
+// second mark restarts the window: the summary was tried again and was
+// slow again.
 func (m *Manager) MarkSummarySlow(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.slowSummary == nil {
-		m.slowSummary = map[string]bool{}
+		m.slowSummary = map[string]time.Time{}
 	}
-	m.slowSummary[name] = true
+	m.slowSummary[name] = time.Now()
 }
 
 // SummarySlow reports whether name's schema summary has run out its budget
-// before (MarkSummarySlow), which is a reader's cue to list the schemas by
-// name instead of trying it again.
+// within the last slowSummaryTTL (MarkSummarySlow), which is a reader's cue
+// to list the schemas by name instead of trying it again. A lapsed entry is
+// deleted here, its one reader, so the map holds only live memories.
 func (m *Manager) SummarySlow(name string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.slowSummary[name]
+	at, ok := m.slowSummary[name]
+	if !ok {
+		return false
+	}
+	if time.Since(at) >= slowSummaryTTL {
+		delete(m.slowSummary, name)
+		return false
+	}
+	return true
 }
 
 // forgetSummarySlowLocked drops what MarkSummarySlow remembered of name and

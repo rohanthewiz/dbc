@@ -83,8 +83,10 @@ catalog_timeout = "1m"
 #
 # This is the default for every connection; a [[connection]] may set its
 # own (see local-pg below). At "full", a connection whose schema
-# counts do not arrive within 5s is read as "names" for the rest of the run,
-# so the wait is paid once; "names" on that connection skips it altogether.
+# counts do not arrive within 5s is read as "names" for the next 15 minutes,
+# then the counts are tried again (a database that only had a slow moment
+# gets them back), so the wait is paid once per 15 minutes rather than on
+# every connect; "names" on that connection skips it altogether.
 # What you ask for by name — a schema pick, a diagram, the sidebar's row
 # counts and routines switches — is read at any level.
 introspect = "full"

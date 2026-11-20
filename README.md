@@ -189,10 +189,13 @@ server's databases (`ProdDr/analytics`) reads at its connection's level.
 
 **`full` adapts.** If the schema counts do not arrive within 5 seconds, dbc
 lists the schemas by name that once, says so in the log, and reads that
-connection as `names` from then on — every tab, every refresh — until dbc
-restarts (or the connection's name, driver, DSN or TLS is edited). So the wait is paid once per run
-rather than on every connect; `introspect = "names"` skips it the first
-time too.
+connection as `names` for the next 15 minutes — every tab, every refresh.
+After that the counts are tried again: a database that only had a slow
+moment gets them back, and one that times out again is read as `names` for
+another 15 minutes. So a catalog too big to count costs one wait per 15
+minutes rather than one on every connect. A restart, or an edit of the
+connection's name, driver, DSN or TLS, tries the counts at once;
+`introspect = "names"` skips the wait altogether.
 
 The level covers what dbc reads on its own. What you ask for by name is
 read whatever the level: a schema you pick, a diagram, **Show columns**, the

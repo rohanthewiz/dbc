@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rohanthewiz/dbc/config"
 	"github.com/rohanthewiz/dbc/model"
 )
 
@@ -17,7 +18,10 @@ import (
 // drop a dbc_live_kind table and dbc_live_kind_* procedures.
 
 // kindShape is a result in one line, for comparing: "rows [id] [[1] [2]]"
-// for each result set, or "affected 3".
+// for each result set, or "affected 3". A result with rows whose count the
+// server gave as well (Postgres's command tag of a FETCH or an EXECUTE,
+// kept in Affected: N-317) ends in " · counted 2", so a step expecting
+// none also checks that none came.
 func kindShape(r *model.Result) string {
 	if r.IsExec {
 		return fmt.Sprintf("affected %d", r.Affected)
@@ -28,6 +32,9 @@ func kindShape(r *model.Result) string {
 			b.WriteString(" + ")
 		}
 		fmt.Fprintf(&b, "rows %v %v", set.Columns, set.Rows)
+	}
+	if r.Affected != 0 {
+		fmt.Fprintf(&b, " · counted %d", r.Affected)
 	}
 	return b.String()
 }
@@ -71,7 +78,9 @@ func kindOnPool(t *testing.T, mgr *Manager, want, stmt string, args ...any) {
 // On Postgres a CALL with an INOUT parameter, an EXECUTE of a prepared
 // SELECT and a FETCH hand back their rows — each used to report "n
 // affected" — and the ones that return none still report their count: an
-// EXECUTE of a prepared INSERT says how many rows it wrote.
+// EXECUTE of a prepared INSERT says how many rows it wrote. The EXECUTE
+// and the FETCH keep their command tag's count beside the rows (N-317),
+// which is what a script's s.Exec of one returns; a CALL's tag has none.
 func TestLiveStmtKindPostgres(t *testing.T) {
 	mgr := liveMgr(t, "DBC_LIVE_PG_DSN", "postgres")
 	drop := []string{
@@ -101,22 +110,22 @@ func TestLiveStmtKindPostgres(t *testing.T) {
 		{`SELECT v FROM dbc_live_kind WHERE id = 1`, "rows [v] [[a!]]"},
 
 		{`PREPARE dbc_live_q AS SELECT id FROM dbc_live_kind ORDER BY id`, "affected 0"},
-		{`EXECUTE dbc_live_q`, "rows [id] [[1] [2] [3]]"},
+		{`EXECUTE dbc_live_q`, "rows [id] [[1] [2] [3]] · counted 3"},
 		{`PREPARE dbc_live_ins AS INSERT INTO dbc_live_kind VALUES (8, 'h'), (9, 'i')`, "affected 0"},
 		{`EXECUTE dbc_live_ins`, "affected 2"},
 		{`DELETE FROM dbc_live_kind WHERE id > 3`, "affected 2"},
 
 		{`BEGIN`, "affected 0"},
 		{`DECLARE dbc_live_c CURSOR FOR SELECT id FROM dbc_live_kind ORDER BY id`, "affected 0"},
-		{`FETCH 2 FROM dbc_live_c`, "rows [id] [[1] [2]]"},
-		{`FETCH 2 FROM dbc_live_c`, "rows [id] [[3]]"},
+		{`FETCH 2 FROM dbc_live_c`, "rows [id] [[1] [2]] · counted 2"},
+		{`FETCH 2 FROM dbc_live_c`, "rows [id] [[3]] · counted 1"},
 		{`CLOSE dbc_live_c`, "affected 0"},
 		// The same text, over another query: the rows must come back
 		// under THIS cursor's columns. With the statement prepared once
 		// and its columns remembered (pgx's default mode) they arrived
 		// under the first cursor's, and failed to decode.
 		{`DECLARE dbc_live_c CURSOR FOR SELECT v, id FROM dbc_live_kind ORDER BY id`, "affected 0"},
-		{`FETCH 2 FROM dbc_live_c`, "rows [v id] [[a! 1] [b! 2]]"},
+		{`FETCH 2 FROM dbc_live_c`, "rows [v id] [[a! 1] [b! 2]] · counted 2"},
 		{`COMMIT`, "affected 0"},
 
 		// rowless on Postgres, a result set on MySQL: a kindMaybe on both
@@ -134,6 +143,22 @@ func TestLiveStmtKindPostgres(t *testing.T) {
 	// two statements in one text keep to the simple protocol, which takes
 	// them; the extended protocol of a Query would refuse the pair
 	kindOnPool(t, mgr, "affected 0", `CALL dbc_live_kind_io(1); CALL dbc_live_kind_io(2)`)
+}
+
+// A FETCH cut at max_rows still counts every row it fetched (N-317). A
+// kindMaybe is no plain read, so query reads it to its end rather than
+// stopping it on the server (its cut is false), and the command tag that
+// arrives as the rows close says "FETCH 5" though two rows were kept. The
+// count is what a script's s.Exec of the FETCH returns, as it did when a
+// FETCH ran as an Exec.
+func TestLiveFetchCountPastMaxRows(t *testing.T) {
+	mgr := liveMgr(t, "DBC_LIVE_PG_DSN", "postgres", func(c *config.Config) { c.MaxRows = 2 })
+	kindOnSession(t, mgr, []kindStep{
+		{`BEGIN`, "affected 0"},
+		{`DECLARE dbc_live_c5 CURSOR FOR SELECT g FROM generate_series(1, 5) g`, "affected 0"},
+		{`FETCH ALL FROM dbc_live_c5`, "rows [g] [[1] [2]] · counted 5"},
+		{`COMMIT`, "affected 0"},
+	})
 }
 
 // On MySQL a CALL hands back every result set its procedure SELECTs, and

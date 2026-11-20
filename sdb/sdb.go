@@ -222,6 +222,14 @@ func (s *S) Query(conn, query string, args ...any) (*Result, error) {
 
 // Exec runs a non-query statement and returns the rows affected. Its server
 // notices are printed as Query's are.
+//
+// It is Query with the rows dropped: the statement goes out as Query's
+// does, and Exec hands back the Result's Affected. So a statement that
+// returns rows gives 0 (a SELECT; a MySQL CALL whose procedure selects),
+// except where the server counts them itself: on Postgres FETCH 10 FROM
+// cur gives the 10 rows it fetched, past max_rows too, and an EXECUTE of
+// a prepared SELECT gives its rows (model.Result.Affected, N-317). To
+// keep the rows as well, Query and read len(r.Rows).
 func (s *S) Exec(conn, stmt string, args ...any) (int64, error) {
 	r, err := s.run(conn, stmt, args...)
 	if err != nil {
@@ -272,12 +280,44 @@ func (s *S) DB(conn string) (*sql.DB, error) {
 	return s.mgr.DB(conn)
 }
 
-// Show pushes a result to the results view (TUI) or prints it (headless).
+// Show pushes every set of a result to the results view (TUI) or stdout
+// (headless). Each set (r.Sets()) is a result of its own there.
+//
+// A statement that returned several result sets (a MySQL CALL whose
+// procedure runs several SELECTs; Result.More) is shown whole, as the TUI
+// and dbc web land it when it runs from the editor and as a headless
+// `dbc -c` run prints it: r, then each set in More, in order. So
+// s.Show(r) needs no loop over r.Sets() — and a loop that shows each set
+// shows the later ones twice, since its first pass, r, brings them all.
+// A set taken from More has none of its own, so s.Show(r.More[0]) is
+// that set alone; to show r's first set alone, show a copy without the
+// rest:
+//
+//	one := *r
+//	one.More = nil
+//	s.Show(&one)
+//
+// Export is not so: it writes r alone (see Export).
 func (s *S) Show(r *Result) {
 	if r == nil || s.show == nil {
 		return
 	}
-	s.show(evenRows(r))
+	// Show does the ranging, not the hosts. The three hosts (the
+	// workspace for the TUI and dbc web, headless `dbc script`, the jobs
+	// engine for a pipeline's Go node) each take one result per call and
+	// read its first set alone; ranging here gives every one of them the
+	// sets in the same shape — a result of its own per set, which is what
+	// the workspace and a headless run make of a statement's sets — with
+	// no host left to learn about More.
+	//
+	// The first set handed on is r itself (evened), More and all, rather
+	// than a copy stripped of them: headless reads MoreCut off it to say
+	// that sets past the cap were dropped (noteTruncated), which it can
+	// only word from len(r.More). No host ranges a shown result's sets, so
+	// nothing is shown twice.
+	for _, set := range r.Sets() {
+		s.show(evenRows(set))
+	}
 }
 
 // evenRows is r with every row exactly as wide as its columns. A result a
@@ -340,11 +380,21 @@ func (s *S) WithCSV(o export.CSVOptions) *S {
 	return s
 }
 
-// Export renders a result in the named format (csv|tsv|markdown|html|json|text)
-// and writes it to path — or to the system clipboard when path is empty.
-// A relative path is in files_dir, as s.Path has it: "report.csv" is one
-// file whether a shell, dbc web or a schedule runs the script. Missing
-// directories are created, as csv.write creates them.
+// Export writes a result in the named format (csv|tsv|markdown|html|json|text)
+// to path, or to the clipboard when path is empty. A relative path is in
+// files_dir, as s.Path has it: "report.csv" is one file whether a shell,
+// dbc web or a schedule runs the script. Missing directories are created,
+// as csv.write creates them.
+//
+// It writes r alone, not the further result sets of its statement
+// (r.More): a CSV file holds one table, and a file per set is the
+// script's to name. So unlike Show, a statement's sets are exported in a
+// loop:
+//
+//	for i, set := range r.Sets() {
+//		err := s.Export(set, "csv", fmt.Sprintf("report-%d.csv", i+1))
+//		…
+//	}
 func (s *S) Export(r *Result, format, path string) error {
 	f, err := export.ParseFormat(format)
 	if err != nil {

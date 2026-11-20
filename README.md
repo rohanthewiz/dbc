@@ -2370,12 +2370,12 @@ passes. See [Scripts headless](#scripts-headless).
 | --- | --- |
 | `s.Conns() []string` | Configured connection names |
 | `s.Query(conn, sql, args...) (*sdb.Result, error)` | Run a query with params |
-| `s.Exec(conn, sql, args...) (int64, error)` | Run a statement, get rows affected |
+| `s.Exec(conn, sql, args...) (int64, error)` | Run a statement, get rows affected (its rows, if any, are dropped) |
 | `s.DB(conn) (*sql.DB, error)` | Raw `database/sql` handle — transactions, prepared stmts, anything |
 | `s.Explain(conn, sql, analyze) (*sdb.Plan, error)` | The plan, as `Ctrl+X` sees it: `p.Text(sdb.PlanText{Insights: true})`, `p.Insights`, `p.Root` — see [`scripts/plan_check.go`](scripts/plan_check.go) |
-| `s.Show(r)` | Push a result to the results table (stdout when headless) |
+| `s.Show(r)` | Push a result to the results table (stdout when headless), every result set of it |
 | `s.Print(format, args...)` | Log to the TUI log pane (stdout when headless) |
-| `s.Export(r, format, path)` | Export a result; empty path → clipboard; a relative path is in `files_dir` |
+| `s.Export(r, format, path)` | Export a result (that one set, not `r.More`); empty path → clipboard; a relative path is in `files_dir` |
 | `s.Path(p) string` | Where file `p` is: a relative path in `files_dir`, `~/` and absolute as written — open your own files through it |
 | `s.Canceled() bool` | True once the user has stopped this run |
 | `s.Ctx() context.Context` | The run's context, for `select` on `Done()`. A script run in the TUI or dbc web that never looks at it, nor passes it to a call, cannot be stopped: a minute after Stop its tab is freed and the run lands as stopped, while the script runs on in the background, holding what it holds, until it returns or dbc exits |
@@ -2384,6 +2384,34 @@ passes. See [Scripts headless](#scripts-headless).
 `sdb.Result` gives you `Columns []string`, `Rows [][]string`, `Raw [][]any`,
 `Duration`, and `Affected`. Use the placeholder style of the target driver
 (`$1` postgres/bytdb, `?` mysql/sqlite).
+
+A statement can return several result sets: a MySQL `CALL monthly_report()`
+whose procedure runs three `SELECT`s returns three. The Result is the first,
+`r.More` holds the rest, and `r.Sets()` is all of them in order. `s.Show(r)`
+shows every set, each as a result of its own, the way a run from the editor
+lands them in tabs. Don't loop over `r.Sets()` to show them: the first pass
+(`r` itself) already shows them all, so the loop shows the rest twice. To
+show one set, show `r.More[i]`, which has no sets of its own. `s.Export`
+writes only the result it is given, so export the sets one by one:
+
+```go
+r, err := s.Query("my", "CALL monthly_report()")
+if err != nil {
+	return err
+}
+s.Show(r) // all three
+for i, set := range r.Sets() {
+	if err := s.Export(set, "csv", fmt.Sprintf("report-%d.csv", i+1)); err != nil {
+		return err
+	}
+}
+```
+
+`s.Exec` is for a statement's effect. It returns the rows affected and
+drops any rows the statement returns, so a `SELECT` gives 0. The exception
+is a statement whose rows Postgres counts in its command tag: `FETCH 10
+FROM cur` gives the rows it fetched, even past `max_rows`, and an `EXECUTE`
+of a prepared `SELECT` gives its row count.
 
 #### Files
 
@@ -3435,7 +3463,8 @@ script pushes with `s.Show` is written the moment it is shown, so it lands in
 order among the `s.Print` lines around it. A script can show any number of
 results, so their banners count up without a total — `#1`, `#2` — where a
 multi-statement query's read `2/5`; a script that shows one result still
-gets its `#1`. With `-o`, or in `json` or `html`, the results are collected
+gets its `#1`, and one that shows a `CALL`'s three result sets gets `#1` to
+`#3`. With `-o`, or in `json` or `html`, the results are collected
 and rendered together when the script finishes — so `-t json` yields one
 array rather than a run of separate documents. A block format written with
 `-o` holds exactly what the stream would have written.

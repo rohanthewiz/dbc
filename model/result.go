@@ -12,7 +12,15 @@ type Result struct {
 	Duration  time.Duration // wall time for the statement
 	Truncated bool          // true when the row limit was hit
 	IsExec    bool          // true for non-query statements (INSERT/UPDATE/...)
-	Affected  int64         // rows affected, when IsExec
+	// Affected is rows affected, when IsExec. A result with rows has 0
+	// here, except where Postgres counted them in the command tag of a
+	// statement whose verb did not say it would return rows: FETCH 10 has
+	// 10, every row fetched, past a max_rows cut too, and so has an
+	// EXECUTE of a prepared SELECT. It is what a script's s.Exec of such a
+	// statement returns, as it did when one ran as an Exec. Every UI shows
+	// the rows of a result that has them and reads Affected only when
+	// IsExec.
+	Affected int64
 
 	// Transposed marks a result turned on its side (export.Transpose). Each
 	// row is one of the source's columns, its name in column 0, so the HTML
@@ -39,7 +47,8 @@ type Result struct {
 }
 
 // Sets is the statement's result sets in order: r, then r.More. It is what
-// a caller ranges over to treat a statement's every set alike.
+// a caller ranges over to treat a statement's every set alike. A script
+// need not range it to show them: s.Show(r) shows each set already.
 func (r *Result) Sets() []*Result {
 	return append([]*Result{r}, r.More...)
 }

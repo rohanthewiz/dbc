@@ -69,12 +69,12 @@ dbc runs it regardless. Connection names come from config /
 | --- | --- |
 | `Conns() []string` | configured connection names |
 | `Query(conn, sql, args...) (*sdb.Result, error)` | query with params (capped at `max_rows`) |
-| `Exec(conn, sql, args...) (int64, error)` | statement → rows affected |
+| `Exec(conn, sql, args...) (int64, error)` | statement → rows affected; any rows it returns are dropped (a `SELECT` → 0; Postgres `FETCH n`/`EXECUTE` → the rows its tag counts) |
 | `DB(conn) (*sql.DB, error)` | raw `database/sql` handle (transactions, prepared statements) |
 | `Explain(conn, sql, analyze) (*sdb.Plan, error)` | plan: `p.Text(sdb.PlanText{Insights: true})`, `p.Insights`, `p.Root` |
-| `Show(r)` | emit a result (TUI table, or stdout headless) |
+| `Show(r)` | emit a result (TUI table, or stdout headless): every result set of it, each a result of its own |
 | `Print(format, args...)` | progress log |
-| `Export(r, format, path)` | `csv`/`tsv`/`markdown`/`html`/`json`/`text`; empty path → clipboard; relative → `files_dir` |
+| `Export(r, format, path)` | `csv`/`tsv`/`markdown`/`html`/`json`/`text`, `r`'s one set (not `r.More`); empty path → clipboard; relative → `files_dir` |
 | `Path(p) string` | `p` as the script should open it: relative → `files_dir`, `~/` and absolute as written |
 | `Canceled() bool`, `Ctx() context.Context` | honor Ctrl+K / Ctrl+C in long loops |
 | `sdb.IsCanceled(err) bool` | tell a stop from a real failure |
@@ -82,8 +82,12 @@ dbc runs it regardless. Connection names come from config /
 `sdb.Result`: `Columns []string`, `Rows [][]string`, `Raw [][]any`,
 `Duration`, `Affected`. A statement that returned several result sets (a
 MySQL `CALL` whose procedure runs several `SELECT`s) has the first in the
-Result and the rest in `More []*Result`; `r.Sets()` is all of them in order
-(`for _, set := range r.Sets() { s.Show(set) }`).
+Result and the rest in `More []*Result`; `r.Sets()` is all of them in order.
+`s.Show(r)` shows every set already: do **not** write
+`for _, set := range r.Sets() { s.Show(set) }`, which shows sets 2…n twice
+(its first pass, `r`, brings them all). Range `r.Sets()` to export or count
+each set (`s.Export` writes the one set it is given); `s.Show(r.More[i])`
+shows that set alone.
 
 **Files: open every one through `s.Path`** — `os.Create(s.Path("out.csv"))`,
 `os.ReadFile(s.Path("in/ids.txt"))`. A relative path is then in `files_dir`

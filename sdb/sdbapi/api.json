@@ -1501,7 +1501,7 @@
         {
           "name": "Affected",
           "type": "int64",
-          "doc": "rows affected, when IsExec"
+          "doc": "Affected is rows affected, when IsExec. A result with rows has 0\nhere, except where Postgres counted them in the command tag of a\nstatement whose verb did not say it would return rows: FETCH 10 has\n10, every row fetched, past a max_rows cut too, and so has an\nEXECUTE of a prepared SELECT. It is what a script's s.Exec of such a\nstatement returns, as it did when one ran as an Exec. Every UI shows\nthe rows of a result that has them and reads Affected only when\nIsExec."
         },
         {
           "name": "Transposed",
@@ -1529,7 +1529,7 @@
         {
           "name": "Sets",
           "sig": "func (r *Result) Sets() []*Result",
-          "doc": "Sets is the statement's result sets in order: r, then r.More. It is what\na caller ranges over to treat a statement's every set alike.",
+          "doc": "Sets is the statement's result sets in order: r, then r.More. It is what\na caller ranges over to treat a statement's every set alike. A script\nneed not range it to show them: s.Show(r) shows each set already.",
           "params": []
         }
       ]
@@ -1658,7 +1658,7 @@
         {
           "name": "Exec",
           "sig": "func (s *S) Exec(conn, stmt string, args ...any) (int64, error)",
-          "doc": "Exec runs a non-query statement and returns the rows affected. Its server\nnotices are printed as Query's are.",
+          "doc": "Exec runs a non-query statement and returns the rows affected. Its server\nnotices are printed as Query's are.\n\nIt is Query with the rows dropped: the statement goes out as Query's\ndoes, and Exec hands back the Result's Affected. So a statement that\nreturns rows gives 0 (a SELECT; a MySQL CALL whose procedure selects),\nexcept where the server counts them itself: on Postgres FETCH 10 FROM\ncur gives the 10 rows it fetched, past max_rows too, and an EXECUTE of\na prepared SELECT gives its rows (model.Result.Affected, N-317). To\nkeep the rows as well, Query and read len(r.Rows).",
           "params": [
             {
               "name": "conn",
@@ -1702,7 +1702,7 @@
         {
           "name": "Export",
           "sig": "func (s *S) Export(r *Result, format, path string) error",
-          "doc": "Export renders a result in the named format (csv|tsv|markdown|html|json|text)\nand writes it to path — or to the system clipboard when path is empty.\nA relative path is in files_dir, as s.Path has it: \"report.csv\" is one\nfile whether a shell, dbc web or a schedule runs the script. Missing\ndirectories are created, as csv.write creates them.",
+          "doc": "Export writes a result in the named format (csv|tsv|markdown|html|json|text)\nto path, or to the clipboard when path is empty. A relative path is in\nfiles_dir, as s.Path has it: \"report.csv\" is one file whether a shell,\ndbc web or a schedule runs the script. Missing directories are created,\nas csv.write creates them.\n\nIt writes r alone, not the further result sets of its statement\n(r.More): a CSV file holds one table, and a file per set is the\nscript's to name. So unlike Show, a statement's sets are exported in a\nloop:\n\n\tfor i, set := range r.Sets() {\n\t\terr := s.Export(set, \"csv\", fmt.Sprintf(\"report-%d.csv\", i+1))\n\t\t…\n\t}",
           "params": [
             {
               "name": "r",
@@ -1868,7 +1868,7 @@
         {
           "name": "Show",
           "sig": "func (s *S) Show(r *Result)",
-          "doc": "Show pushes a result to the results view (TUI) or prints it (headless).",
+          "doc": "Show pushes every set of a result to the results view (TUI) or stdout\n(headless). Each set (r.Sets()) is a result of its own there.\n\nA statement that returned several result sets (a MySQL CALL whose\nprocedure runs several SELECTs; Result.More) is shown whole, as the TUI\nand dbc web land it when it runs from the editor and as a headless\n`dbc -c` run prints it: r, then each set in More, in order. So\ns.Show(r) needs no loop over r.Sets() — and a loop that shows each set\nshows the later ones twice, since its first pass, r, brings them all.\nA set taken from More has none of its own, so s.Show(r.More[0]) is\nthat set alone; to show r's first set alone, show a copy without the\nrest:\n\n\tone := *r\n\tone.More = nil\n\ts.Show(\u0026one)\n\nExport is not so: it writes r alone (see Export).",
           "params": [
             {
               "name": "r",

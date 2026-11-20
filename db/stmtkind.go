@@ -388,7 +388,10 @@ func affectedResult(name, stmt string, aff int64, start time.Time) *model.Result
 //	MySQL      SELECT ROW_COUNT(), on the same connection (mysqlMaybe)
 //
 // With that, an EXECUTE of a prepared INSERT or a CALL of a procedure that
-// only writes reports the count it reported as an Exec.
+// only writes reports the count it reported as an Exec. On Postgres a
+// statement that did return rows keeps its tag's count in Affected beside
+// them (FETCH 10 → 10), for a script's s.Exec; MySQL has no count for one
+// (ROW_COUNT() is -1 after a result set), and its Affected stays 0.
 //
 // On Postgres the Query goes out in pgx's QueryExecModeDescribeExec, not
 // the pool's default, which prepares each distinct text once and reuses
@@ -416,6 +419,17 @@ func (m *Manager) runMaybe(ctx context.Context, ex execQuerier, name, drv, stmt 
 	if len(res.Columns) == 0 {
 		return affectedResult(name, stmt, tag.Load(), start), nil
 	}
+	// The statement returned rows, and its command tag still counted them:
+	// "FETCH 2", "SELECT 3" for an EXECUTE of a prepared query. That count
+	// is kept on the rows result too (N-317). Every UI goes by IsExec and
+	// shows rows here, so none of them reads it; what does is a script's
+	// s.Exec of such a statement, which hands back Affected and used to get
+	// this very count when the statement ran as an Exec (before N-289), and
+	// got 0 once it ran as a Query. The tag counts every row the statement
+	// sent, so a FETCH cut at max_rows still says how many it fetched:
+	// query read it to its end (cut is false here), the tag arriving as the
+	// rows closed.
+	res.Affected = tag.Load()
 	return stamp(res, time.Since(start)), nil
 }
 

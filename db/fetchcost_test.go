@@ -510,7 +510,7 @@ func TestStreamRows(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer rows.Close()
-		res, err := m.readSets(StreamRows(context.Background(), sink), rows, "c", "SELECT *", nil)
+		res, err := m.readSets(StreamRows(context.Background(), sink), rows, "c", "SELECT *", nil, true)
 		if res != nil {
 			if len(res.Rows) != 0 || len(res.Raw) != 0 {
 				t.Errorf("%s: the Result held %d rows under a sink", dsn, len(res.Rows))
@@ -576,7 +576,7 @@ func TestStreamRowsSets(t *testing.T) {
 	defer rows.Close()
 	m := NewManager(&config.Config{MaxRows: 100})
 	s := &recSink{}
-	res, err := m.readSets(StreamRows(context.Background(), s), rows, "c", "CALL p()", nil)
+	res, err := m.readSets(StreamRows(context.Background(), s), rows, "c", "CALL p()", nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}

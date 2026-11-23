@@ -328,16 +328,7 @@ func (s *Session) pgSimple(ctx context.Context, q string) (string, error) {
 // pgTxStatus asks pgx for the connection's transaction status byte: 'I'
 // idle, 'T' in a transaction, 'E' in a failed one; 0 when the connection is
 // not a pgx one.
-func (s *Session) pgTxStatus() byte {
-	var st byte
-	_ = s.conn.Raw(func(dc any) error {
-		if pc, ok := dc.(*pgxstdlib.Conn); ok {
-			st = pc.Conn().PgConn().TxStatus()
-		}
-		return nil
-	})
-	return st
-}
+func (s *Session) pgTxStatus() byte { return pgTxStatusOf(s.conn) }
 
 // hasParams reports whether stmt holds a bind parameter ($1, ?, :name).
 // Its one caller is the Postgres explain, so stmt is read as Postgres

@@ -71,6 +71,7 @@ type Point struct {
 	kill    func() // ends the statement on the server, keeping its connection
 	cancels bool   // canceling the context stops the statement and keeps the connection
 	inTx    bool   // the statement went out inside a transaction (with cancels)
+	left    bool   // Close was called: the reader left the rows part way
 }
 
 // Watch returns a context for one statement — a child of ctx carrying a
@@ -113,7 +114,10 @@ func (p *Point) SetCancels(inTx bool) {
 
 // stopper returns what Stop would do, or nil when it would do nothing.
 // keepTx refuses a stop that would abort the transaction the statement
-// runs in: a user's open BEGIN must not end because dbc stopped reading.
+// runs in: a user's open BEGIN must not end because dbc stopped reading. A
+// holder that undoes such an abort itself passes false: db runs a cut read
+// inside the user's transaction under a savepoint of its own, and rolls
+// back to it after the stop (N-324).
 func (p *Point) stopper(keepTx bool) func() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -135,6 +139,9 @@ func (p *Point) stopper(keepTx bool) func() {
 // keepTx: see stopper. With it, a Postgres statement inside a transaction
 // is read to the end, as before.
 func (p *Point) Close(rows *sql.Rows, keepTx bool) (stopped bool) {
+	p.mu.Lock()
+	p.left = true
+	p.mu.Unlock()
 	stop := p.stopper(keepTx)
 	if stop == nil {
 		_ = rows.Close()
@@ -154,6 +161,17 @@ func (p *Point) Close(rows *sql.Rows, keepTx bool) (stopped bool) {
 	// the server after this connection's next statement has started.
 	<-fired
 	return true
+}
+
+// Left reports whether Close was called: the reader stopped before the
+// rows' end, at a cut or because it no longer wanted them, whether or not
+// a stop was then sent. db's read savepoint asks it (N-324): only a read
+// dbc left may be rolled back to its savepoint, since only then is an
+// aborted transaction dbc's doing rather than the statement's own error.
+func (p *Point) Left() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.left
 }
 
 // Release frees the statement's context. Call it once the rows are closed;

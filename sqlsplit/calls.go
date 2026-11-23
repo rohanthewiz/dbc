@@ -77,6 +77,66 @@ func (d Dialect) Calls(sql string) []string {
 	return out
 }
 
+// Word is one bare word of a statement's code, as Words reads it.
+type Word struct {
+	Text  string // lowercased: a keyword, a name or a number's digits
+	Depth int    // the parentheses open around it; 0 is the statement's own level
+}
+
+// Words returns the bare words of sql's code in order, each with the depth
+// of parentheses it sits at. Comments, strings, quoted identifiers and
+// dollar-quoted bodies are passed over as d reads them, as are parameters
+// and variables (a word right after ':', '@' or '$': $1, :name, @v). A
+// number is a word of its digits, so LIMIT 10 reads as "limit", "10"; what
+// stands between two words (an operator, a comma, a dot) is not given.
+//
+// db asks it about a statement's clauses where a verb is not enough: a
+// row-locking FOR UPDATE at any depth, a LIMIT at depth 0 (N-324). Like
+// Calls, it is a lexical superset to look things up in, not a parse:
+//
+//	SELECT a FROM (SELECT b FROM t LIMIT 5) s FOR UPDATE
+//	  select:0 a:0 from:0 select:1 b:1 from:1 t:1 limit:1 5:1 s:0 for:0 update:0
+//
+// A parenthesis inside a string or a comment does not change the depth,
+// and a stray ')' never takes it below 0.
+func (d Dialect) Words(sql string) []Word {
+	var out []Word
+	depth := 0
+	i := 0
+	for i < len(sql) {
+		if end := d.codeEnd(sql, i); end > i {
+			i = end
+			continue
+		}
+		switch c := sql[i]; {
+		case c == '(':
+			depth++
+			i++
+			continue
+		case c == ')':
+			depth = max(depth-1, 0)
+			i++
+			continue
+		case !isWordByte(c):
+			i++
+			continue
+		}
+		// A whole word at once, a $ past its first byte included (a$b is
+		// one name on Postgres and MySQL), as Calls reads it.
+		start := i
+		for i < len(sql) && (isWordByte(sql[i]) || sql[i] == '$') {
+			i++
+		}
+		if start > 0 {
+			if p := sql[start-1]; p == ':' || p == '@' || p == '$' {
+				continue
+			}
+		}
+		out = append(out, Word{Text: strings.ToLower(sql[start:i]), Depth: depth})
+	}
+	return out
+}
+
 // HasOp reports whether the operator op (":=", "=") appears in sql's code:
 // outside strings, quoted identifiers, comments and dollar-quoted bodies,
 // as d reads them. It matches text, not tokens — "=" is found inside "<="

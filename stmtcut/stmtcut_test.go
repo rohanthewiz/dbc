@@ -229,3 +229,22 @@ func TestFromAndRelease(t *testing.T) {
 		t.Error("Release left the statement's context running")
 	}
 }
+
+// Left is false until Close, and true after it whether or not a stop was
+// sent: db's read savepoint asks it to tell a cut from the statement's own
+// failure (N-324).
+func TestLeft(t *testing.T) {
+	withGrace(t, time.Hour)
+	ctx, p := Watch(context.Background())
+	defer p.Release()
+	if p.Left() {
+		t.Error("Left before Close")
+	}
+	rows := openRows(t, ctx, nil)
+	if p.Close(rows, true) {
+		t.Error("Close reported a stop it had no way to send")
+	}
+	if !p.Left() {
+		t.Error("Left false after Close")
+	}
+}

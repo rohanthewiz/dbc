@@ -142,7 +142,7 @@ func readSetsCapped(t *testing.T, n, maxRows, maxSets int) []string {
 	}
 	defer rows.Close()
 	m := NewManager(&config.Config{MaxRows: maxRows, MaxResultSets: maxSets})
-	res, err := m.readSets(context.Background(), rows, "c", "CALL p()", nil)
+	res, err := m.readSets(context.Background(), rows, "c", "CALL p()", nil, true)
 	if err != nil {
 		t.Fatalf("readSets: %v", err)
 	}

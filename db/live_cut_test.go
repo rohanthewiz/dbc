@@ -171,11 +171,15 @@ func TestLiveCut(t *testing.T) {
 	}
 }
 
-// TestLiveCutInTransaction: a cut inside the user's open transaction leaves
-// it open with its work. On Postgres a stop is a cancel, which would abort
-// the transaction, so the read is not stopped there at all — Grace 0 makes
-// a wrong stop certain to happen if it were allowed. On MySQL the stop is a
-// KILL QUERY, which ends the statement only.
+// TestLiveCutInTransaction: a cut inside the user's open transaction stops
+// the read and leaves the transaction open with its work. On Postgres a
+// stop is a cancel, which aborts the transaction, so the read runs inside a
+// savepoint of dbc's and the abort is rolled back to it (N-324); before
+// that, the read was not stopped there at all, and the big read took
+// seconds. Grace 0 makes the stop certain. On MySQL the stop is a KILL
+// QUERY, which ends the statement only. On Postgres, afterwards, dbc's
+// savepoint is gone (released), and a savepoint of the user's taken before
+// the read still works.
 func TestLiveCutInTransaction(t *testing.T) {
 	old := stmtcut.Grace
 	stmtcut.Grace = 0
@@ -192,19 +196,32 @@ func TestLiveCutInTransaction(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer s.Close()
-			for _, q := range []string{"BEGIN", "INSERT INTO dbc_cut_t VALUES (1)"} {
+			for _, q := range []string{"BEGIN", "INSERT INTO dbc_cut_t VALUES (1)", "SAVEPOINT mine"} {
 				if _, err = s.Run(ctx, q); err != nil {
 					t.Fatalf("%s: %v", q, err)
 				}
 			}
-			q := e.medium
-			if e.driver == "mysql" {
-				q = e.big // stopped, so it may be big
-			}
-			cutRun(t, mgr, s, q)
-			// 25P02 here on Postgres if the cut had aborted the transaction
+			cutRun(t, mgr, s, e.big) // within cutBudget: stopped, not streamed
+			// 25P02 here on Postgres if the cut had left the transaction aborted
 			if got := one(t, s, "SELECT count(*) FROM dbc_cut_t"); got != "1" {
 				t.Fatalf("rows in the transaction after the cut = %s, want 1", got)
+			}
+			if e.driver == "postgres" {
+				// dbc's savepoint is gone: ROLLBACK TO it fails (3B001), which
+				// aborts the transaction. Asked first, since a ROLLBACK TO
+				// the user's earlier savepoint would destroy it anyway.
+				if _, err = s.Run(ctx, "ROLLBACK TO SAVEPOINT "+readSavepointName); err == nil ||
+					!strings.Contains(err.Error(), "does not exist") {
+					t.Fatalf("ROLLBACK TO dbc's savepoint after the cut: %v; want it gone", err)
+				}
+				// the user's savepoint from before the read still works, and
+				// undoes that failure; the insert came before it
+				if _, err = s.Run(ctx, "ROLLBACK TO SAVEPOINT mine"); err != nil {
+					t.Fatalf("ROLLBACK TO the user's savepoint after the cut: %v", err)
+				}
+				if got := one(t, s, "SELECT count(*) FROM dbc_cut_t"); got != "1" {
+					t.Fatalf("rows after ROLLBACK TO mine = %s, want 1", got)
+				}
 			}
 			if _, err = s.Run(ctx, "ROLLBACK"); err != nil {
 				t.Fatal(err)
@@ -215,6 +232,104 @@ func TestLiveCutInTransaction(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLiveReadSavepoint: what the savepoint around a read inside the user's
+// Postgres transaction does not change, and what it does (N-324):
+//
+//   - a read's own error still aborts the transaction, as psql's does: the
+//     next statement fails, and the transaction's locks (an UPDATE's row
+//     lock) are let go at the error, not held until ROLLBACK
+//   - an error past the rows kept by a cut no longer does: it is in rows
+//     the user never saw, and is rolled back with the savepoint. Grace is
+//     an hour here, so no stop is sent and the error is certain to arrive
+//     first (before N-324 the transaction was left aborted without a word)
+//   - a FOR UPDATE read is not wrapped: read to its end, it keeps every
+//     row's lock until COMMIT. Grace 0 would make a wrong stop certain.
+func TestLiveReadSavepoint(t *testing.T) {
+	mgr := liveMgr(t, "DBC_LIVE_PG_DSN", "postgres")
+	ctx := context.Background()
+	liveExec(t, mgr, "DROP TABLE IF EXISTS dbc_cut_lock",
+		"CREATE TABLE dbc_cut_lock AS SELECT g AS n FROM generate_series(1, 5000) g")
+	t.Cleanup(func() { _, _ = mgr.Run("live", "DROP TABLE IF EXISTS dbc_cut_lock") })
+
+	begin := func(t *testing.T) *Session {
+		t.Helper()
+		s, err := mgr.Session(ctx, "live")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		if _, err = s.Run(ctx, "BEGIN"); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	aborted := func(err error) bool {
+		return err != nil && strings.Contains(err.Error(), "current transaction is aborted")
+	}
+
+	t.Run("own error aborts", func(t *testing.T) {
+		s := begin(t)
+		if _, err := s.Run(ctx, "UPDATE dbc_cut_lock SET n = n WHERE n = 1"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Run(ctx, "SELECT 1 / (g - 5) FROM generate_series(1, 10) g"); err == nil ||
+			!strings.Contains(err.Error(), "division by zero") {
+			t.Fatalf("failing read: %v; want its own error", err)
+		}
+		// aborted at the transaction's level, as without the savepoint: the
+		// UPDATE's row lock is let go at the error, not at ROLLBACK
+		free, err := mgr.Run("live", "SELECT count(*) FROM (SELECT n FROM dbc_cut_lock WHERE n = 1 FOR UPDATE SKIP LOCKED) s")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := free.Rows[0][0]; got != "1" {
+			t.Errorf("the aborted transaction still holds the UPDATE's row lock")
+		}
+		if _, err := s.Run(ctx, "SELECT 1"); !aborted(err) {
+			t.Fatalf("statement after the failed read: %v; want the transaction aborted", err)
+		}
+		if _, err := s.Run(ctx, "ROLLBACK"); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("error past the cut is rolled back", func(t *testing.T) {
+		old := stmtcut.Grace
+		stmtcut.Grace = time.Hour
+		t.Cleanup(func() { stmtcut.Grace = old })
+		s := begin(t)
+		res, err := s.Run(ctx, "SELECT 1 / (generate_series(1, 200000) - 100000) AS q")
+		if err != nil {
+			t.Fatalf("cut read: %v", err)
+		}
+		if len(res.Rows) != 1000 || !res.Truncated {
+			t.Fatalf("cut read: %d rows, truncated=%v", len(res.Rows), res.Truncated)
+		}
+		if got := one(t, s, "SELECT 1"); got != "1" {
+			t.Fatalf("statement after the cut = %s", got)
+		}
+	})
+
+	t.Run("FOR UPDATE keeps its locks", func(t *testing.T) {
+		old := stmtcut.Grace
+		stmtcut.Grace = 0
+		t.Cleanup(func() { stmtcut.Grace = old })
+		s := begin(t)
+		res, err := s.Run(ctx, "SELECT n FROM dbc_cut_lock FOR UPDATE")
+		if err != nil || !res.Truncated {
+			t.Fatalf("locking read: %v (truncated=%v)", err, res != nil && res.Truncated)
+		}
+		// on another connection, every row is locked
+		free, err := mgr.Run("live", "SELECT count(*) FROM (SELECT n FROM dbc_cut_lock FOR UPDATE SKIP LOCKED) s")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := free.Rows[0][0]; got != "0" {
+			t.Fatalf("%s of 5000 rows unlocked after the cut FOR UPDATE read; want 0", got)
+		}
+	})
 }
 
 // TestLiveCutOnlyPlainReads: only a plain read (isRead) is stopped once cut

@@ -145,6 +145,21 @@ func kindOf(stmt string, d sqlsplit.Dialect, drv string) stmtKind {
 // SELECT set_config(…) on each row, MySQL's @n := @n + 1 — is no plain
 // read either, and is read to its end so the state is the whole
 // statement's.
+//
+// Inside the user's own Postgres transaction a stop would abort it, so a
+// cut read there runs inside a savepoint of dbc's (saveRead, N-324), and a
+// stop is undone with ROLLBACK TO; a read saveRead declines to wrap is read
+// to its end, as before (keepTx):
+//
+//	cut? ─no──────────────────────────────────► Query, read every row
+//	 └yes─► saveRead ─► Query ─► readSets ─► rows closed ─► sp.end
+//	          │                    (keepTx = no savepoint)    (RELEASE, or
+//	          └ nil outside a transaction, or for a            ROLLBACK TO +
+//	            locking or LIMIT-bounded read                  RELEASE after
+//	                                                           a stop of dbc's)
+//
+// sp.end must wait for the rows to close: the savepoint's statements go out
+// on the same connection, which takes one statement at a time.
 func (m *Manager) query(ctx context.Context, ex execQuerier, name, stmt string, cut bool, args ...any) (*model.Result, error) {
 	// The statement runs under a context of its own when it may be cut, so
 	// the stop (on Postgres, a cancel of that context) reaches it and
@@ -152,22 +167,33 @@ func (m *Manager) query(ctx context.Context, ex execQuerier, name, stmt string, 
 	// cut's own cancel is never reported as the user's Stop.
 	qctx := ctx
 	var pt *stmtcut.Point
+	var sp *readSavepoint // nil: no savepoint (outside a transaction, or not wanted)
 	if cut {
 		qctx, pt = stmtcut.Watch(ctx)
 		defer pt.Release()
+		var err error
+		if sp, err = m.saveRead(ctx, ex, name, stmt); err != nil {
+			return nil, err
+		}
 	}
 	rows, err := ex.QueryContext(qctx, stmt, args...)
 	if err != nil {
-		return nil, wrapRunErr(ctx, err, name)
+		return nil, sp.end(ctx, pt, wrapRunErr(ctx, err, name))
 	}
 	defer rows.Close()
-	res, err := m.readSets(ctx, rows, name, stmt, pt)
+	// A read with a savepoint may be stopped inside the transaction: end
+	// undoes the abort. Without one, a stop there is refused (keepTx).
+	res, err := m.readSets(ctx, rows, name, stmt, pt, sp == nil)
 	if err != nil {
-		return nil, err
+		_ = rows.Close()
+		return nil, sp.end(ctx, pt, err)
 	}
 	// Close's error is the iteration's, which readSets has already
 	// reported or found nil.
 	_ = rows.Close()
+	if err = sp.end(ctx, pt, nil); err != nil {
+		return nil, err
+	}
 	return res, nil
 }
 
@@ -202,15 +228,17 @@ func (m *Manager) query(ctx context.Context, ex execQuerier, name, stmt string, 
 //
 // keepTx is passed to pt.Close: on Postgres a stop is a cancel, which aborts
 // the transaction the statement ran in, and a user's BEGIN must not end
-// because a grid holds only max_rows. Inside one, the rest is read as
-// before; MySQL's KILL QUERY ends only the statement and applies anywhere.
-func (m *Manager) readSets(ctx context.Context, rows *sql.Rows, name, stmt string, pt *stmtcut.Point) (*model.Result, error) {
+// because a grid holds only max_rows. With keepTx, the rest is read inside
+// one as before; query clears it when the read runs inside a savepoint that
+// undoes the abort (saveRead, N-324). MySQL's KILL QUERY ends only the
+// statement and applies anywhere.
+func (m *Manager) readSets(ctx context.Context, rows *sql.Rows, name, stmt string, pt *stmtcut.Point, keepTx bool) (*model.Result, error) {
 	first, err := m.readSet(ctx, rows, name, stmt)
 	if err != nil {
-		return nil, sinkStop(rows, pt, err)
+		return nil, sinkStop(rows, pt, keepTx, err)
 	}
 	if first.Truncated && pt != nil {
-		pt.Close(rows, true)
+		pt.Close(rows, keepTx)
 		// The rows' error is the stop's own, so it is not looked at; but a
 		// Stop the user pressed meanwhile is theirs to see, as it was when
 		// the drain ended in it — and for a session, the cue for the KILL
@@ -231,7 +259,7 @@ func (m *Manager) readSets(ctx context.Context, rows *sql.Rows, name, stmt strin
 		}
 		set, err := m.readSet(ctx, rows, name, stmt)
 		if err != nil {
-			return nil, sinkStop(rows, nil, err)
+			return nil, sinkStop(rows, nil, keepTx, err)
 		}
 		first.More = append(first.More, set)
 	}
@@ -248,14 +276,14 @@ func (m *Manager) readSets(ctx context.Context, rows *sql.Rows, name, stmt strin
 // error (sinkErr) means the rows are no longer wanted: a plain read (pt)
 // is stopped on the server, as a cut at max_rows is, instead of drained by
 // rows.Close; and the sink's error is handed back unwrapped. Any other
-// error is the statement's, and passes as it is.
-func sinkStop(rows *sql.Rows, pt *stmtcut.Point, err error) error {
+// error is the statement's, and passes as it is. keepTx is readSets'.
+func sinkStop(rows *sql.Rows, pt *stmtcut.Point, keepTx bool, err error) error {
 	var se sinkErr
 	if !errors.As(err, &se) {
 		return err
 	}
 	if pt != nil {
-		pt.Close(rows, true)
+		pt.Close(rows, keepTx)
 	}
 	return se.err
 }

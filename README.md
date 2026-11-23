@@ -1282,10 +1282,25 @@ end, so `SELECT * FROM events` over 100M rows is done once its 1,000 rows are
 in, not when the server has sent the rest. A result that finishes within
 100 ms of the cap is just read to the end. Past that, Postgres gets a cancel
 request and MySQL a `KILL QUERY`. Both keep the session, with its `SET`s and
-temp tables. Two cases are read to the end as before:
+temp tables.
 
-- a read inside a Postgres transaction you opened, because a cancel would
-  abort the transaction;
+Inside a Postgres transaction you opened, a cancel would abort the
+transaction, so dbc runs the read inside a savepoint of its own
+(`dbc_read`). After a cut it rolls back to that savepoint, and your
+transaction carries on with its work and its locks. This costs two more round
+trips (`SAVEPOINT`, `RELEASE`) on each such read, cut or not, unless a
+`LIMIT` no larger than `max_rows` means it cannot be cut. A cut read lets go
+of its tables' share locks at the cut. A read that fails on its own, or that
+you stop, still aborts the transaction, as in psql: its work is undone and
+its locks are freed at once, and it refuses statements until you `ROLLBACK`.
+To get there, dbc rolls back to its savepoint and fails a `DO` statement,
+which shows in the server's log.
+
+Two cases are read to the end as before:
+
+- a read that takes row locks (`FOR UPDATE`, `FOR SHARE`, …) or
+  transaction-level advisory locks inside a Postgres transaction, so that
+  it keeps every lock until `COMMIT`;
 - a statement that writes or leaves state, such as `DELETE … RETURNING` or
   `SELECT set_config(…)` per row, so all of its work still happens.
 

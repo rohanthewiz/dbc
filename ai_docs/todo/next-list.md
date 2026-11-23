@@ -79,26 +79,6 @@ ten session docs in `ai_docs/claude_sessions/`
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
 
-- **N-324** · raised `2026-1113-1804-n276-cut-reads-stop-on-server` · value low
-  A read cut at `max_rows` inside a Postgres transaction the user opened
-  still streams the rest of its result. N-276 stops a cut read with a
-  cancel, which would abort the transaction, so `readSets` passes
-  `keepTx` and such a read is read to its end as before (MySQL's
-  `KILL QUERY` ends only the statement and is used everywhere). Scenario:
-  `BEGIN; UPDATE …; SELECT * FROM events;` over 100M rows keeps 1,000 and
-  runs for minutes. Fix options: inside a transaction ('T' at the
-  statement's start, which the tracer already reads), wrap the read in
-  `SAVEPOINT` and, on a cut, cancel and `ROLLBACK TO SAVEPOINT` (two more
-  round trips per read in a transaction, and an error there would then
-  no longer abort the transaction, a change of its own); or fetch through a
-  portal with a row limit (pgconn has no Execute with maxRows; `DECLARE
-  … CURSOR` + `FETCH`). Read here. Raised while closing N-276.
-  Updated 2026-11-18 (`2026-1118-0242-n319-n220-n324-lock-probe-e2e-shots-cut-read-question`, `/work-next-list`): left open, because each fix changes behaviour in a way the user should weigh.
-- **SAVEPOINT around a read in a transaction.** On a cut, the read is stopped and `ROLLBACK TO SAVEPOINT` runs. A cut read then costs nothing more, but any error inside such a read (a typo'd SELECT) no longer aborts the user's transaction. Today it aborts it, as psql's does.
-- **A cursor (`DECLARE … CURSOR` + `FETCH max_rows+1`).** It keeps the error semantics, but Postgres plans a cursor for fast start (`cursor_tuple_fraction` 0.1), so the plan, and the time, can differ from the statement run plain. It also works only for what a cursor takes (a SELECT or VALUES, not a write with RETURNING), so writes still read to the end.
-- **Leave it.** A cut read inside a transaction reads to the end, as now: slow on a huge table, but correct.
-
-The question for the user: which, if any? A cursor seems the least surprising, if a different plan inside a transaction is acceptable.
 - **N-335** · raised `2026-1118-0111-n284-n290-n295-web-small-events-columns-load-errors` · value low
   Drop a dbc web tab's result sets at the idle release? This is the part
   of N-284 not done, because it changes what a returning user sees. A
@@ -742,6 +722,28 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-324** · raised `2026-1113-1804-n276-cut-reads-stop-on-server` · value low
+  A read cut at `max_rows` inside a Postgres transaction the user opened
+  still streams the rest of its result. N-276 stops a cut read with a
+  cancel, which would abort the transaction, so `readSets` passes
+  `keepTx` and such a read is read to its end as before (MySQL's
+  `KILL QUERY` ends only the statement and is used everywhere). Scenario:
+  `BEGIN; UPDATE …; SELECT * FROM events;` over 100M rows keeps 1,000 and
+  runs for minutes. Fix options: inside a transaction ('T' at the
+  statement's start, which the tracer already reads), wrap the read in
+  `SAVEPOINT` and, on a cut, cancel and `ROLLBACK TO SAVEPOINT` (two more
+  round trips per read in a transaction, and an error there would then
+  no longer abort the transaction, a change of its own); or fetch through a
+  portal with a row limit (pgconn has no Execute with maxRows; `DECLARE
+  … CURSOR` + `FETCH`). Read here. Raised while closing N-276.
+  Updated 2026-11-18 (`2026-1118-0242-n319-n220-n324-lock-probe-e2e-shots-cut-read-question`, `/work-next-list`): left open, because each fix changes behaviour in a way the user should weigh.
+  - **SAVEPOINT around a read in a transaction.** On a cut, the read is stopped and `ROLLBACK TO SAVEPOINT` runs. A cut read then costs nothing more, but any error inside such a read (a typo'd SELECT) no longer aborts the user's transaction. Today it aborts it, as psql's does.
+  - **A cursor (`DECLARE … CURSOR` + `FETCH max_rows+1`).** It keeps the error semantics, but Postgres plans a cursor for fast start (`cursor_tuple_fraction` 0.1), so the plan, and the time, can differ from the statement run plain. It also works only for what a cursor takes (a SELECT or VALUES, not a write with RETURNING), so writes still read to the end.
+  - **Leave it.** A cut read inside a transaction reads to the end, as now: slow on a huge table, but correct.
+
+  The question for the user: which, if any? A cursor seems the least surprising, if a different plan inside a transaction is acceptable.
+  closed 2026-11-23 (session doc and commit to be named at commit time): the user picked SAVEPOINT. Two findings first: the error-semantics cost the item named can be avoided (the savepoint is rolled back to only after a cut of dbc's), and a cursor is worse than the item said, since Postgres never runs a `DECLARE CURSOR` query in parallel, so a large aggregate inside a transaction would lose its workers. New `db/readsavepoint.go`. `query` calls `saveRead` for a cut read: on a pinned `*sql.Conn` whose pgconn status is 'T', it sends `SAVEPOINT dbc_read`, unless the read takes row locks (`locksRows`: FOR UPDATE/NO KEY UPDATE/SHARE/KEY SHARE at any depth, or a `pg_*advisory_xact_lock*` call), which is read to its end as before, or has a LIMIT / FETCH FIRST ≤ max_rows at depth 0 (`readBound`). `readSets`/`sinkStop` take `keepTx`, false under a savepoint, so the cut's cancel is allowed. After the rows close, `readSavepoint.end` reads the status: 'T' → RELEASE; 'E' with the rows left by dbc (new `stmtcut.Point.Left`) and the caller's ctx alive → ROLLBACK TO + RELEASE (the transaction carries on; an error in the rows not read is rolled back too, as outside a transaction); 'E' otherwise (the read's own error, the user's Stop) → ROLLBACK TO + RELEASE + a failing `DO … RAISE` (`reabortStmt`). Found live: without that last step, an error inside the savepoint aborts only the subtransaction, so the block refused statements but kept the transaction's work and row locks until ROLLBACK; `workspace` `TestLiveWorkspaceCancel` (in a transaction) caught it. The undo runs under `WithoutCancel` + 10 s, like explain's. New `sqlsplit.Dialect.Words` (code words with paren depth). `Session.pgTxStatus` now calls the shared `pgTxStatusOf`. Tests: `db/live_cut_test.go` `TestLiveCutInTransaction` now uses the 10M-row read on both engines, and checks that dbc's savepoint is gone and the user's `SAVEPOINT mine` from before the read still works; new `TestLiveReadSavepoint` (own error aborts and frees an UPDATE's row lock; an error past the cut is rolled back with Grace 1 h; a cut FOR UPDATE read keeps all 5,000 row locks). Unit: `TestLocksRows`, `TestReadBound`, `sqlsplit` `TestWords`, `stmtcut` `TestLeft`. Each guard was disabled in turn, and each time a test failed: no savepoint (2.26 s, over budget; 25P02), no rollback after a cut (25P02), rollback after any error (no abort), no RELEASE (savepoint left), locking reads wrapped (5000 of 5000 unlocked), no reabort (lock held, no 25P02, no ErrTxAborted). Full `./...` green; live suites green on throwaway Postgres 16 and MySQL 8.4 containers (db, etl, workspace, sdb, migrate, pipeline, tui, web, root). Real binary, headless `BEGIN; UPDATE …; SELECT * FROM` 3M rows: 949 ms before, 213 ms after, the UPDATE kept. README (`max_rows` paragraph) updated.
 
 - **N-318** · raised `2026-1112-1634-n289-rows-by-result` · value low
   Calls N-289 made without the user's word, each easy to flip:

@@ -403,7 +403,7 @@
         {
           "name": "String",
           "sig": "func (s CopyStats) String() string",
-          "doc": "",
+          "doc": "String is the copy's one-line summary:\n\n\tcopied 179982 rows pg1:orders → pg2:orders in 405ms at 444400 rows/s (direct COPY)\n\nThe rate is left out under a tenth of a second (RateText), where it is\nmostly the clock's grain.",
           "params": []
         }
       ]
@@ -1611,7 +1611,7 @@
         {
           "name": "Copy",
           "sig": "func (s *S) Copy(src, dst, table string, opt CopyOpts) (CopyStats, error)",
-          "doc": "Copy copies table from connection src into connection dst:\n\n\tst, err := s.Copy(\"prod\", \"local\", \"public.orders\", sdb.CopyOpts{\n\t\tCreate: true, Truncate: true, Where: \"created_at \u003e= now() - interval '7 days'\",\n\t})\n\ts.Print(\"%s\", st) // copied 48213 rows prod:public.orders → local:public.orders in 1.4s (direct COPY)\n\nPostgres to Postgres without a Transform or Args streams COPY to COPY and\nnever decodes a row; every other pairing goes row by row. Either way the\ndestination is loaded in one transaction (with its Create and Truncate),\nso a failed or stopped copy leaves it as it was.",
+          "doc": "Copy copies table from connection src into connection dst:\n\n\tst, err := s.Copy(\"prod\", \"local\", \"public.orders\", sdb.CopyOpts{\n\t\tCreate: true, Truncate: true, Where: \"created_at \u003e= now() - interval '7 days'\",\n\t})\n\ts.Print(\"%s\", st) // copied 48213 rows prod:public.orders → local:public.orders in 1.4s at 34438 rows/s (direct COPY)\n\nPostgres to Postgres without a Transform or Args streams COPY to COPY and\nnever decodes a row; every other pairing goes row by row. Either way the\ndestination is loaded in one transaction (with its Create and Truncate),\nso a failed or stopped copy leaves it as it was.",
           "params": [
             {
               "name": "src",

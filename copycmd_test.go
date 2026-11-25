@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/urfave/cli/v3"
 
@@ -685,4 +686,159 @@ func TestPlanMany(t *testing.T) {
 	if _, err := dbh.Exec("SELECT 1 FROM cats"); err == nil {
 		t.Error("the dry run created cats")
 	}
+}
+
+// TestCopyMeterLine: the progress line with and without a total, its
+// percentage and time left, the rate only from a tenth of a second, and a
+// copy that has passed its count (rows arrived since) back to the plain
+// count rather than "104%".
+func TestCopyMeterLine(t *testing.T) {
+	m := &copyMeter{label: "a:t → b:t", total: -1}
+	for _, c := range []struct {
+		total int64
+		n     int64
+		took  time.Duration
+		want  string
+	}{
+		{-1, 100000, 50 * time.Millisecond, "  a:t → b:t: 100000 rows"},
+		{-1, 100000, time.Second, "  a:t → b:t: 100000 rows, 100000 rows/s"},
+		{400000, 100000, time.Second, "  a:t → b:t: 100000 of 400000 rows (25%), 100000 rows/s, ~3s left"},
+		{400000, 100000, 10 * time.Millisecond, "  a:t → b:t: 100000 of 400000 rows (25%)"},
+		{400000, 400000, 4 * time.Second, "  a:t → b:t: 400000 of 400000 rows (100%), 100000 rows/s"},
+		{400000, 399000, 4 * time.Second, "  a:t → b:t: 399000 of 400000 rows (99%), 99750 rows/s"},
+		{400000, 500000, 5 * time.Second, "  a:t → b:t: 500000 rows, 100000 rows/s"},
+		{3000000, 100000, time.Second, "  a:t → b:t: 100000 of 3000000 rows (3%), 100000 rows/s, ~29s left"},
+		{30000000, 100000, time.Second, "  a:t → b:t: 100000 of 30000000 rows (0%), 100000 rows/s, ~4m59s left"},
+	} {
+		m.total = c.total
+		if got := m.line(c.n, c.took); got != c.want {
+			t.Errorf("total %d, %d rows in %s:\n got  %q\n want %q", c.total, c.n, c.took, got, c.want)
+		}
+	}
+
+	// the ends are named as the summary names them
+	for _, c := range []struct {
+		req  copyReq
+		want string
+	}{
+		{copyReq{from: "a", to: "b", table: "t"}, "a:t → b:t"},
+		{copyReq{from: "a", to: "b", table: "t", dest: "u"}, "a:t → b:u"},
+		{copyReq{from: "a", to: "b", dest: "x", opts: sdb.CopyOpts{Query: "SELECT 1", To: "x"}}, "a:query → b:x"},
+	} {
+		if got := newCopyMeter(io.Discard, c.req).label; got != c.want {
+			t.Errorf("label = %q, want %q", got, c.want)
+		}
+	}
+}
+
+// TestCopyMeterCounted: the count is said when progress lines will follow
+// it, not for a table too small to get any, and nothing is printed once
+// the copy has ended.
+func TestCopyMeterCounted(t *testing.T) {
+	var buf bytes.Buffer
+	m := &copyMeter{w: &buf, label: "a:t → b:t", total: -1, start: time.Now()}
+	m.counted(copyProgressEvery - 1)
+	if buf.Len() != 0 || m.total != copyProgressEvery-1 {
+		t.Errorf("a small count: %q, total %d", buf.String(), m.total)
+	}
+	m.counted(250000)
+	if got := buf.String(); got != "  a:t → b:t: 250000 rows to copy\n" {
+		t.Errorf("a big count: %q", got)
+	}
+	buf.Reset()
+	m.done = true
+	m.counted(300000)
+	m.progress(100000)
+	if buf.Len() != 0 || m.total != 250000 {
+		t.Errorf("after the copy: %q, total %d", buf.String(), m.total)
+	}
+}
+
+// TestCopyMeterCountBeside: the background count reaches the meter, and a
+// query that writes is never run by it.
+func TestCopyMeterCountBeside(t *testing.T) {
+	mgr := newCopyManager(t)
+	ctx := context.Background()
+	cats := count(t, mgr, "src", "cats")
+	s := sdb.New(mgr, nil, nil).WithContext(ctx)
+
+	req := copyReq{from: "src", to: "dst", table: "cats", opts: sdb.CopyOpts{Where: "id > 2"}}
+	m := newCopyMeter(io.Discard, req)
+	stop := m.countBeside(ctx, s, req)
+	want := int64(count(t, mgr, "src", "cats WHERE id > 2"))
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		m.mu.Lock()
+		total := m.total
+		m.mu.Unlock()
+		if total == want {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("total = %d after 10s, want %d", total, want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	stop()
+
+	move := copyReq{from: "src", to: "dst", dest: "moved",
+		opts: sdb.CopyOpts{Query: "DELETE FROM cats RETURNING *", To: "moved"}}
+	m = newCopyMeter(io.Discard, move)
+	m.countBeside(ctx, s, move)() // started and stopped: the goroutine has ended
+	if m.total != -1 || count(t, mgr, "src", "cats") != cats {
+		t.Errorf("a write: total %d, %d cats left of %d", m.total, count(t, mgr, "src", "cats"), cats)
+	}
+}
+
+// TestRunCopyProgress: a copy big enough for progress lines gets them,
+// each with its rate, and the percentage once the count is in; nothing
+// is written after runCopy returns.
+func TestRunCopyProgress(t *testing.T) {
+	mgr := newCopyManager(t)
+	dbh, err := mgr.DB("src")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const rows = 2*copyProgressEvery + 10_000
+	if _, err = dbh.Exec(`CREATE TABLE big (id INTEGER PRIMARY KEY, v TEXT);
+		WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < ` + strconv.Itoa(rows) + `)
+		INSERT INTO big SELECT x, 'v' || x FROM c`); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	st, err := runCopy(context.Background(), mgr, copyReq{from: "src", to: "dst", table: "big",
+		opts: sdb.CopyOpts{Create: true}}, &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Rows != rows {
+		t.Fatalf("copied %d rows, want %d", st.Rows, rows)
+	}
+	out := buf.String()
+	// which lines carry the total depends on when the count lands — on
+	// SQLite well before the first 100,000 rows are loaded, but that is
+	// not promised — so each line is checked for what it must hold either
+	// way
+	var progress int
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		switch {
+		case strings.HasSuffix(line, ": "+strconv.Itoa(rows)+" rows to copy"):
+		case strings.HasPrefix(line, "  src:big → dst:big: 100000 "), strings.HasPrefix(line, "  src:big → dst:big: 200000 "):
+			progress++
+			if strings.Contains(line, " of ") && !strings.Contains(line, " of "+strconv.Itoa(rows)+" rows (") {
+				t.Errorf("a percentage of the wrong total: %q", line)
+			}
+		default:
+			t.Errorf("unexpected line %q", line)
+		}
+	}
+	if progress != 2 {
+		t.Errorf("%d progress lines, want 2:\n%s", progress, out)
+	}
+	n := buf.Len()
+	time.Sleep(50 * time.Millisecond)
+	if buf.Len() != n {
+		t.Errorf("written after runCopy returned: %q", buf.String()[n:])
+	}
+	t.Logf("progress:\n%s", out)
 }

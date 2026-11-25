@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/x/term"
@@ -439,17 +440,146 @@ func planCopy(ctx context.Context, mgr *db.Manager, req copyReq) (etl.CopyPlan, 
 }
 
 // runCopy does the copy through sdb.S.Copy, the call a script would make.
-// progress, when not nil, receives a running row count every
-// copyProgressEvery rows (sdb's ProgressEvery formatting: "  src → dst: N
-// rows").
+// progress, when not nil, receives the copyMeter's lines: a running count
+// every copyProgressEvery rows, with the rate, and once the source's rows
+// are counted, the percentage and the time left.
+//
+// The count runs beside the copy, not before it (countBeside). Counting
+// first would hold the copy back by as long as the count takes, up to the
+// dry run's 30 s bound on a big table, which is where a percentage
+// matters most. Beside it, the copy starts at once and the percentage
+// joins the progress lines when the count lands. On Postgres a second
+// sequential scan of the same table mostly shares the first one's reads
+// (synchronized scans). The count runs only when someone is watching
+// (progress set: stderr is a terminal), so a cron copy reads its source
+// once, as before.
 func runCopy(ctx context.Context, mgr *db.Manager, req copyReq, progress io.Writer) (sdb.CopyStats, error) {
-	var print func(string)
+	s := sdb.New(mgr, nil, nil).WithContext(ctx)
 	if progress != nil {
-		print = func(msg string) { fmt.Fprintln(progress, msg) }
-		req.opts.ProgressEvery = copyProgressEvery
+		m := newCopyMeter(progress, req)
+		// a Progress of the command's own, which sdb leaves alone (it fills
+		// in its "  src → dst: N rows" only when Progress is nil)
+		req.opts.Progress, req.opts.ProgressEvery = m.progress, copyProgressEvery
+		defer m.countBeside(ctx, s, req)()
 	}
-	s := sdb.New(mgr, nil, print).WithContext(ctx)
 	return s.Copy(req.from, req.to, req.table, req.opts)
+}
+
+// copyMeter is one copy's progress on a terminal:
+//
+//	prod:orders → local:orders: 1000000 rows to copy            the count, when it lands
+//	prod:orders → local:orders: 300000 of 1000000 rows (30%), 412000 rows/s, ~2s left
+//	prod:orders → local:orders: 400000 rows, 398000 rows/s       not counted (yet)
+//
+// Its lines come from two goroutines, the copy's Progress callback and the
+// count's, hence the lock; done (set by countBeside's stop, under it) keeps
+// a count that lands as the copy ends from printing after its summary.
+type copyMeter struct {
+	w     io.Writer
+	label string // "src:table → dst:table", as the summary names the ends
+	start time.Time
+	mu    sync.Mutex
+	total int64 // the source's rows, once counted; -1 until then
+	done  bool
+}
+
+func newCopyMeter(w io.Writer, req copyReq) *copyMeter {
+	from := req.from + ":" + req.table
+	if req.opts.Query != "" {
+		from = req.from + ":query"
+	}
+	dest := req.dest
+	if dest == "" {
+		dest = req.table
+	}
+	return &copyMeter{w: w, label: from + " → " + req.to + ":" + dest, start: time.Now(), total: -1}
+}
+
+// progress is the copy's Progress callback: rows loaded so far.
+func (m *copyMeter) progress(n int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.done {
+		fmt.Fprintln(m.w, m.line(n, time.Since(m.start)))
+	}
+}
+
+// line is one progress line for n rows loaded after took. Pure, for the
+// tests.
+//
+// The total is the count's, taken from its own snapshot, so the copy can
+// pass it when rows arrive in the source meanwhile. Past it, "of N" and
+// the time left would be wrong, so the line falls back to the count and
+// rate alone rather than read 104%.
+func (m *copyMeter) line(n int64, took time.Duration) string {
+	msg := fmt.Sprintf("  %s: %d", m.label, n)
+	known := m.total > 0 && n <= m.total
+	if known {
+		msg += fmt.Sprintf(" of %d rows (%d%%)", m.total, n*100/m.total)
+	} else {
+		msg += " rows"
+	}
+	if r := etl.RateText(n, took); r != "" {
+		msg += ", " + r
+		if known && n < m.total {
+			// the rate so far, carried over what is left: a straight line,
+			// which is what a copy at a steady rate is
+			// what rounds to no time at all ("~0s left") is left out
+			left := time.Duration(float64(m.total-n) / (float64(n) / took.Seconds()) * float64(time.Second))
+			if left = left.Round(time.Second); left > 0 {
+				msg += ", ~" + left.String() + " left"
+			}
+		}
+	}
+	return msg
+}
+
+// counted takes the source's row count. It says it at once when the count
+// is big enough for progress lines to follow (copyProgressEvery or more):
+// the size of the job before its first progress line, which on a slow
+// row-by-row load is many seconds away. A smaller table finishes with no
+// progress line at all, as before, and stays quiet.
+func (m *copyMeter) counted(n int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.done {
+		return
+	}
+	m.total = n
+	if n >= copyProgressEvery {
+		fmt.Fprintf(m.w, "  %s: %d rows to copy\n", m.label, n)
+	}
+}
+
+// countBeside counts the copy's source rows in a goroutine (etl.CountCopy,
+// which never counts a query that writes) and returns the stop to call
+// once the copy has returned: no line after it, the count canceled if it
+// is still going, and waited for, so no query of the meter's is left
+// running on the pool when the next table's copy, or the manager's Close,
+// comes. Every driver dbc opens stops a query on its context's cancel
+// (pgx, MySQL's KILL, SQLite's interrupt, bytdb's row pumps), so the wait
+// is short. A count that fails (past its 30 s bound, say) leaves the lines
+// without a percentage; it is no error of the copy's.
+func (m *copyMeter) countBeside(ctx context.Context, s *sdb.S, req copyReq) (stop func()) {
+	cctx, cancel := context.WithCancel(ctx)
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		src, err := s.ETLConn(req.from)
+		if err != nil {
+			return // the copy opens the same connection and reports it
+		}
+		if n, err := etl.CountCopy(cctx, src, req.table, req.opts); err == nil {
+			m.counted(n)
+		}
+	}()
+	return func() {
+		m.mu.Lock()
+		m.done = true
+		m.mu.Unlock()
+		cancel()
+		<-ended
+	}
 }
 
 // manyRun is the outcome of a copy of several tables (--tables), or of its
@@ -470,6 +600,7 @@ type manyRun struct {
 // list just those — what failed, was canceled, or was not tried.
 //
 //	copied 2 of 3 tables, 1290 rows in 41ms; failed: items
+//	copied 3 of 3 tables, 2400000 rows in 2.4s at 1000000 rows/s
 //	copied 1 of 3 tables, 990 rows in 18ms; failed: orders; not tried: items
 //	dry run of 3 tables, nothing was written; problem: items
 func (r manyRun) String() string {
@@ -478,6 +609,9 @@ func (r manyRun) String() string {
 		msg = fmt.Sprintf("dry run of %d tables, nothing was written", r.tables)
 	} else {
 		msg = fmt.Sprintf("copied %d of %d tables, %d rows in %s", r.done, r.tables, r.rows, r.took.Round(time.Millisecond))
+		if rate := etl.RateText(r.rows, r.took); rate != "" {
+			msg += " at " + rate
+		}
 	}
 	if len(r.failed) > 0 {
 		word := "failed"

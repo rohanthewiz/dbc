@@ -81,7 +81,7 @@ func (s *S) ETLConn(name string) (etl.Conn, error) {
 //	st, err := s.Copy("prod", "local", "public.orders", sdb.CopyOpts{
 //		Create: true, Truncate: true, Where: "created_at >= now() - interval '7 days'",
 //	})
-//	s.Print("%s", st) // copied 48213 rows prod:public.orders → local:public.orders in 1.4s (direct COPY)
+//	s.Print("%s", st) // copied 48213 rows prod:public.orders → local:public.orders in 1.4s at 34438 rows/s (direct COPY)
 //
 // Postgres to Postgres without a Transform or Args streams COPY to COPY and
 // never decodes a row; every other pairing goes row by row. Either way the

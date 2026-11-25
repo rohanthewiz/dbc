@@ -71,9 +71,7 @@ func PlanCopy(ctx context.Context, src Conn, table string, dst Conn, opt CopyOpt
 		Direct: src.Engine == Postgres && dst.Engine == Postgres && opt.Transform == nil && len(opt.Args) == 0}
 	if opt.Query != "" {
 		p.From = src.Name + ":query"
-		// copySource has refused a write without RETURNING, so a write
-		// verb here is one that returns its rows: a move
-		p.Writes = writeVerbs[src.Engine.Dialect().Verbs(query).Main]
+		p.Writes = writes(src.Engine, query)
 	}
 
 	switch {
@@ -122,6 +120,29 @@ func PlanCopy(ctx context.Context, src Conn, table string, dst Conn, opt CopyOpt
 		}
 	}
 	return p, nil
+}
+
+// writes says a copy's source query changes rows. copySource has refused
+// a write without RETURNING, so a write verb here is one that returns its
+// rows: a move. Running it, to describe or to count it, would be the move.
+func writes(e Engine, query string) bool {
+	return writeVerbs[e.Dialect().Verbs(query).Main]
+}
+
+// CountCopy is the number of rows Copy(ctx, src, table, dst, opt) would
+// read, counted as the dry run counts them (countSource, within
+// planCountWait). `dbc copy` runs it beside the copy for its progress
+// line's percentage (N-336). A Query that writes is never counted:
+// counting it would run it, which is the move itself.
+func CountCopy(ctx context.Context, src Conn, table string, opt CopyOptions) (int64, error) {
+	query, _, err := copySource(src.Engine, table, opt)
+	if err != nil {
+		return -1, err
+	}
+	if opt.Query != "" && writes(src.Engine, query) {
+		return -1, errors.New("the query writes, and counting its rows would run it")
+	}
+	return countSource(ctx, src, query, opt.Args)
 }
 
 // countSource is the number of rows query returns, counted within

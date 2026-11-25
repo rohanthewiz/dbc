@@ -34,7 +34,7 @@ ten session docs in `ai_docs/claude_sessions/`
   reason). Moving among Open, Validate and Roadmap is fine.
 - Open, Validate and Roadmap stay in ID order. Never renumber, never delete.
 
-**Next ID:** N-339
+**Next ID:** N-340
 
 ## Open
 
@@ -94,20 +94,37 @@ ten session docs in `ai_docs/claude_sessions/`
   page needs telling, as `sayReleased` tells it of a session: a note,
   and result tabs that show "released — r reruns" rather than a grid
   whose pages 404.
-- **N-336** · raised `2026-1118-0133-n294-n296-n297-low-color-empty-loads-dry-runs` · value low
-  What N-297 listed besides the dry runs (it closed with `copy --dry-run`
-  and `migrate pending`):
-  - `dbc copy` has no `--columns`, `--query` or `--batch`, though
-    `etl.CopyOptions` takes all three (Columns, Query with To, BatchSize).
-  - It takes one table per call.
-  - It prints a bare row count, with no rate and no estimate before it
-    starts. The dry run's count could feed a progress percentage.
-  - A job re-run always starts at the root; there is no "from the failed
-    step" (`jobs` would need to know which pipelines' outputs a later
-    step can reuse).
-  Each part is independent. The flags are small, a multi-table copy is a
-  loop with one summary line each, and the job resume is a design
-  question of its own. Neighbour: N-151.
+- **N-339** · raised `@SESS@` · value low
+  Resume a failed job run from the step that failed, rather than from the
+  root (the part of N-336 not done). Today a re-run of a job runs every
+  step again. Steps hand each other nothing in memory: each pipeline
+  reads and writes databases and files. So a step that succeeded has
+  usually left its output in place, and a later step could reuse it.
+  A sketch: `dbc job run <job> --resume <run-id|last>` (and a Resume on a
+  failed run in the TUI's and dbc web's Runs views) starts a new run in
+  which the earlier run's succeeded steps are marked reused, not run. The
+  readiness walk in `executeJob` then starts from the steps whose afters
+  are all succeeded or reused. Questions to settle before building it:
+  - **Run values.** A step whose table name holds `${run.date}` or
+    `${run.id}` wrote under the earlier run's values. A resume the next
+    day would look for another table. Take over the earlier run's
+    `run.*` values (all but `id`?), or refuse a job that uses them?
+  - **Params.** Reuse is sound only with the earlier run's params:
+    refuse overrides, or reuse only the steps whose substituted params
+    are equal?
+  - **Edits since.** The job or a pipeline may have changed since the
+    run. Reuse a step only if its id, pipeline and params match, and
+    store a hash of each step's pipeline spec in the record to tell
+    whether it was edited?
+  - **Outputs that do not last.** A preview or `show` sink, a temp
+    table, or a file under a per-run directory is gone by the time a
+    resume comes. A pipeline could declare its outputs reusable, or not.
+    Or the resume could trust the user, who named the run.
+  - **The record.** A new status (`reused`, ↻) or Succeeded with a
+    `ReusedFrom` run id. Also how `runs` lists it, and what
+    `stepSummary` says.
+  Not N-151 (copy's DDL log).
+
 
 ## Validate
 
@@ -722,6 +739,22 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-336** · raised `2026-1118-0133-n294-n296-n297-low-color-empty-loads-dry-runs` · value low
+  What N-297 listed besides the dry runs (it closed with `copy --dry-run`
+  and `migrate pending`):
+  - `dbc copy` has no `--columns`, `--query` or `--batch`, though
+    `etl.CopyOptions` takes all three (Columns, Query with To, BatchSize).
+  - It takes one table per call.
+  - It prints a bare row count, with no rate and no estimate before it
+    starts. The dry run's count could feed a progress percentage.
+  - A job re-run always starts at the root; there is no "from the failed
+    step" (`jobs` would need to know which pipelines' outputs a later
+    step can reuse).
+  Each part is independent. The flags are small, a multi-table copy is a
+  loop with one summary line each, and the job resume is a design
+  question of its own. Neighbour: N-151.
+  closed 2026-11-25, `@SESS@`, commits `f3c5f51`, `6f98055` and `@N-336@`, one for each copy part; the job resume is raised as N-339. **Flags** (`f3c5f51`): `--columns a,b` (trimmed; empty or repeated names refused), `--query SQL <dest-table>` (with `--where`/`--columns`, no argument, two, or an empty `--query` refused; an empty `$Q` would otherwise take the destination's name for the source table), `--batch N` (below 0 refused; into Postgres refused in `checkCopyConns`, as COPY has no batches; `HideDefault` keeps "(default: 0)" out of the help). `--query` let the dry run see a write with RETURNING for the first time: `PlanCopy` ran it wrapped in a subquery, a syntax error off Postgres ("copy plan failed"). Now a write is neither counted nor, off Postgres, described (`ColumnsNote`, `Writes`, a `moves:` line), and Postgres still describes it through Parse. **Several tables** (`6f98055`): `--tables T1,T2` (a flag, as a second argument already means the destination's name) builds one `copyRequest` per table. `copyMany` runs them one after another, each in its own transaction, printing each summary line as it ends, then a total that names what failed, was canceled and was not tried. Without `-k` it stops at the first failure; `-k`, refused before, tries the rest. A connection error stops it either way. Exit 1, 4 for a connect error first, 130 on Ctrl+C. `planMany` plans every table. Refused: a table argument too, `--query`, a table twice, `--from` = `--to`. **Rate and progress** (`@N-336@`): `CopyStats.String` carries `at N rows/s` from 0.1 s on (`etl.RateText`, the TUI run monitor's grain rule), and so does the `--tables` total. On a terminal, `copyMeter` prints each 100,000-row line with the rate and, once counted, `of N rows (P%)` and `~T left`. The count (`etl.CountCopy`, which never counts a write) runs beside the copy, not before it, so the copy does not wait up to 30 s; it is canceled and waited for when the copy returns. It is said up front (`N rows to copy`) when progress lines will follow. Past its count the line drops the percentage rather than read 104%. Off a terminal there is no count, and the source is read once. Real binary on a pty: 2M rows by direct COPY (the first line came before the count, the rest had percentages), 300k rows Postgres to SQLite row by row, and off a tty only the summary. Not done: table patterns in `--tables` (a schema), per-table renames in it, `--query` from a file. Tests: `TestCopyCLIParsingN336`, `TestCopyRequestN336`, `TestRunCopyN336`, `TestCopyRequestsTables`, `TestCopyMany`, `TestPlanMany`, `TestCopyMeterLine`, `TestCopyMeterCounted`, `TestCopyMeterCountBeside`, `TestRunCopyProgress`; etl `TestPlanCopy` (a write), `TestCountCopy`, `TestCopyStatsRate`. README (Copy headless), the dbc skill, cats completions.
 
 - **N-324** · raised `2026-1113-1804-n276-cut-reads-stop-on-server` · value low
   A read cut at `max_rows` inside a Postgres transaction the user opened

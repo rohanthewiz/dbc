@@ -2500,7 +2500,7 @@ one Postgres to another is one call:
 st, err := s.Copy("prod-pg", "local-pg", "public.orders", sdb.CopyOpts{
 	Create: true, Truncate: true, ProgressEvery: 250_000,
 })
-s.Print("%s", st) // copied 500000 rows prod-pg:public.orders → local-pg:public.orders in 886ms (direct COPY)
+s.Print("%s", st) // copied 500000 rows prod-pg:public.orders → local-pg:public.orders in 886ms at 564334 rows/s (direct COPY)
 ```
 
 `"prod-pg"` and `"local-pg"` are connection **names**, not DSNs: the same
@@ -3292,9 +3292,24 @@ has the source's name. The copy is the same as `s.Copy` in a script:
 Postgres to Postgres streams `COPY` to `COPY`, and the destination loads in
 one transaction, so a failed or interrupted (`Ctrl+C`, exit 130) copy leaves
 it as it was. On success it prints one line to stdout
-(`copied 179982 rows pg1:public.orders → pg2:public.orders in 405ms (direct COPY)`).
-When stderr is a terminal, it also prints the row count there every
-100,000 rows. A cron job gets only the summary line. Exit status: 0
+(`copied 179982 rows pg1:public.orders → pg2:public.orders in 405ms at 444400 rows/s (direct COPY)`).
+The rate is left out of a copy that took less than a tenth of a second.
+
+When stderr is a terminal, a progress line goes there every 100,000 rows.
+It shows the rate and, once the source's rows are counted, how far along
+the copy is and the time left:
+
+```
+  pg1:big → pg2:big: 2000000 rows to copy
+  pg1:big → pg2:big: 300000 of 2000000 rows (15%), 846946 rows/s, ~2s left
+```
+
+The count runs beside the copy, so the copy does not wait for it; the
+percentage joins the lines when the count is in (within 30 s, as for
+`--dry-run`). A table under 100,000 rows gets no progress lines. A query
+that writes (`--query "DELETE … RETURNING *"`) is never counted, since
+counting it would run it. A cron job gets only the summary line, and its
+source is read once, with no count. Exit status: 0
 copied, 1 failed, 2 bad usage, including an unknown connection name or a
 table copied onto itself. `-c`, `-f`, `--tx`, `-t` and `-o` are
 refused, because a copy has no use for them, and so is `-k` without
@@ -3305,9 +3320,9 @@ transaction. Each table's summary line is printed as it ends, and a total
 line comes last:
 
 ```
-copied 179982 rows pg1:public.orders → pg2:public.orders in 405ms (direct COPY)
+copied 179982 rows pg1:public.orders → pg2:public.orders in 405ms at 444400 rows/s (direct COPY)
 dbc: copy of items failed: … (on stderr)
-copied 1 of 3 tables, 179982 rows in 590ms; failed: items; not tried: refunds
+copied 1 of 3 tables, 179982 rows in 590ms at 305054 rows/s; failed: items; not tried: refunds
 ```
 
 A table that fails is rolled back alone. The tables before it stay

@@ -85,17 +85,37 @@ type CopyStats struct {
 	Direct bool
 }
 
+// String is the copy's one-line summary:
+//
+//	copied 179982 rows pg1:orders → pg2:orders in 405ms at 444400 rows/s (direct COPY)
+//
+// The rate is left out under a tenth of a second (RateText), where it is
+// mostly the clock's grain.
 func (s CopyStats) String() string {
 	mode := "row by row"
 	if s.Direct {
 		mode = "direct COPY"
 	}
-	msg := fmt.Sprintf("copied %d rows %s → %s in %s (%s)", s.Rows, s.From, s.To,
-		s.Duration.Round(time.Millisecond), mode)
+	msg := fmt.Sprintf("copied %d rows %s → %s in %s", s.Rows, s.From, s.To, s.Duration.Round(time.Millisecond))
+	if r := RateText(s.Rows, s.Duration); r != "" {
+		msg += " at " + r
+	}
+	msg += " (" + mode + ")"
 	if s.Skipped > 0 {
 		msg += fmt.Sprintf(", %d skipped", s.Skipped)
 	}
 	return msg
+}
+
+// RateText is rows over took as "444400 rows/s", or "" when took is under
+// a tenth of a second or nothing moved: a speed over 8 rows in 2ms is the
+// clock's grain, not the copy's (the rule the TUI's run monitor keeps for
+// a node's speed).
+func RateText(rows int64, took time.Duration) string {
+	if rows <= 0 || took < 100*time.Millisecond {
+		return ""
+	}
+	return fmt.Sprintf("%.0f rows/s", float64(rows)/took.Seconds())
 }
 
 const defaultProgressEvery = 100_000

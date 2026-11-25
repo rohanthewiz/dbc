@@ -26,6 +26,9 @@ import (
 //	dbc copy --from prod --to local --truncate public.orders      … emptied first
 //	dbc copy --from prod --to local public.orders archive.orders  … under another name
 //	dbc copy --from prod --to local --where "created_at >= now() - interval '1 day'" orders
+//	dbc copy --from prod --to local --columns id,email,created_at users      a column subset
+//	dbc copy --from prod --to local --create --query "SELECT …" order_totals  a query's rows
+//	dbc copy --from prod --to mysql --batch 2000 orders                       bigger INSERTs
 //
 // It is exactly the one-call script it replaces —
 //
@@ -54,6 +57,15 @@ var (
 	flagTruncate bool
 	flagWhere    string
 	flagDryRun   bool
+	// --columns, --query and --batch are CopyOptions' Columns, Query and
+	// BatchSize, which a script could set and the command could not (N-336)
+	flagColumns []string
+	flagQuery   string
+	// flagQuerySet says --query was given at all, so `--query "$Q"` with
+	// an empty $Q is refused rather than read as no --query — which would
+	// take the destination table's name for the source table's
+	flagQuerySet bool
+	flagBatch    int
 )
 
 // copyProgressEvery is how often the terminal progress line is printed. It
@@ -66,12 +78,13 @@ func copyCommand() *cli.Command {
 	return &cli.Command{
 		Name:      "copy",
 		Usage:     "copy a table from one connection to another (any engines)",
-		ArgsUsage: "<table> [dest-table]",
+		ArgsUsage: "<table> [dest-table]  |  --query SQL <dest-table>",
 		Description: "Copies every row of <table> on --from into the table of the same name (or [dest-table]) " +
 			"on --to, which may be the same connection or a different engine. The destination loads in one " +
 			"transaction: a failed or canceled copy leaves it as it was. Postgres to Postgres streams COPY to " +
 			"COPY; other pairings go row by row. --create makes the destination when it is missing, " +
-			"--truncate empties it first, --where filters the source rows.",
+			"--truncate empties it first, --where filters the source rows, --columns picks some of them. " +
+			"--query copies a query's rows instead of a table, into <dest-table>.",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "from", Usage: "source connection `NAME`", Destination: &flagFrom},
 			&cli.StringFlag{Name: "to", Usage: "destination connection `NAME`", Destination: &flagTo},
@@ -81,6 +94,22 @@ func copyCommand() *cli.Command {
 				Usage: "empty the destination table first (rolled back if the copy fails)", Destination: &flagTruncate},
 			&cli.StringFlag{Name: "where",
 				Usage: "copy only the source rows matching this SQL `CONDITION`", Destination: &flagWhere},
+			&cli.StringSliceFlag{Name: "columns",
+				Usage:       "copy only these source `COLUMNS`, in this order (comma-separated, or repeated); the destination's have the same names",
+				Destination: &flagColumns},
+			&cli.StringFlag{Name: "query",
+				Usage:       "copy the rows this `SQL` returns instead of a table; the one argument is then the destination table",
+				Destination: &flagQuery,
+				Action: func(context.Context, *cli.Command, string) error {
+					flagQuerySet = true
+					return nil
+				}},
+			&cli.IntFlag{Name: "batch",
+				Usage: "`N` rows per INSERT into a destination that is not Postgres (default 500, lowered under the engine's bind-parameter limit)",
+				// 0 is "not given", which the help would print as "(default:
+				// 0)" beside the real default the usage names
+				HideDefault: true,
+				Destination: &flagBatch},
 			&cli.BoolFlag{Name: "dry-run",
 				Usage:       "say what the copy would do — columns, rows, the CREATE, the truncate — and write nothing",
 				Destination: &flagDryRun},
@@ -187,19 +216,38 @@ func checkCopyFlags() error {
 // with DELETE then, as TRUNCATE's lock would stall the copy's own read.)
 // The names are compared as typed, so `orders` against `public.orders` is
 // not caught; that is a guard against the slip, not a proof.
+//
+// With --query the source is the query, and the one argument is the
+// destination table (etl requires To with Query). A copy of a query onto
+// its own connection is no self-copy — the query names its own tables — so
+// that check does not apply.
 func copyRequest(args []string) (copyReq, error) {
-	const use = "usage: dbc copy --from <conn> --to <conn> [--create] [--truncate] [--where SQL] [--dry-run] <table> [dest-table]"
+	const use = "usage: dbc copy --from <conn> --to <conn> [--create] [--truncate] [--where SQL] [--columns COLS] [--batch N] [--dry-run] <table> [dest-table]\n" +
+		"       dbc copy --from <conn> --to <conn> --query SQL [--create] [--truncate] [--batch N] [--dry-run] <dest-table>"
 	switch {
 	case flagFrom == "" || flagTo == "":
 		return copyReq{}, errors.New("copy needs both --from and --to\n" + use)
+	case flagBatch < 0:
+		// 0 is "not given" (etl's default, 500); below it means nothing
+		return copyReq{}, fmt.Errorf("--batch takes a number of rows above 0, not %d", flagBatch)
+	}
+	cols, err := copyColumns(flagColumns)
+	if err != nil {
+		return copyReq{}, err
+	}
+	opts := sdb.CopyOpts{Create: flagCreate, Truncate: flagTruncate, Where: flagWhere, Columns: cols,
+		BatchSize: flagBatch}
+	if flagQuerySet || flagQuery != "" {
+		return queryCopyRequest(args, opts, use)
+	}
+	switch {
 	case len(args) == 0:
 		return copyReq{}, errors.New("no table given\n" + use)
 	case len(args) > 2:
 		return copyReq{}, fmt.Errorf("got %d arguments — copy takes a table and, optionally, the destination table's name\n%s",
 			len(args), use)
 	}
-	req := copyReq{from: flagFrom, to: flagTo, table: strings.TrimSpace(args[0]),
-		opts: sdb.CopyOpts{Create: flagCreate, Truncate: flagTruncate, Where: flagWhere}}
+	req := copyReq{from: flagFrom, to: flagTo, table: strings.TrimSpace(args[0]), opts: opts}
 	if len(args) == 2 {
 		req.dest = strings.TrimSpace(args[1])
 		req.opts.To = req.dest
@@ -216,15 +264,82 @@ func copyRequest(args []string) (copyReq, error) {
 	return req, nil
 }
 
+// queryCopyRequest is copyRequest's --query form: the query as the source,
+// the one argument as the destination table. --where and --columns are
+// refused here rather than by etl (which refuses them too), so the mistake
+// is a usage error, exit 2, before any connection is opened.
+func queryCopyRequest(args []string, opts sdb.CopyOpts, use string) (copyReq, error) {
+	q := strings.TrimSpace(flagQuery)
+	switch {
+	case q == "":
+		return copyReq{}, errors.New("--query is empty\n" + use)
+	case opts.Where != "" || len(opts.Columns) > 0:
+		return copyReq{}, errors.New("--query replaces --where and --columns — put them in the query")
+	case len(args) == 0:
+		return copyReq{}, errors.New("--query needs the destination table's name as its argument\n" + use)
+	case len(args) > 1:
+		return copyReq{}, fmt.Errorf("got %d arguments — with --query, copy takes one: the destination table\n%s",
+			len(args), use)
+	}
+	dest := strings.TrimSpace(args[0])
+	if dest == "" {
+		return copyReq{}, errors.New("the destination table name is empty\n" + use)
+	}
+	opts.Query, opts.To = q, dest
+	return copyReq{from: flagFrom, to: flagTo, dest: dest, opts: opts}, nil
+}
+
+// copyColumns is --columns as CopyOptions.Columns: each name trimmed (so
+// "id, name" works), none empty, none twice. The names are passed as typed
+// and quoted by etl for the source's engine, so they are column names, not
+// expressions; an expression belongs in --query.
+//
+// A duplicate is refused here because nothing after would say it plainly:
+// the SELECT would return the column twice, and the destination then
+// fails on a CREATE with two columns of one name, or loads one column
+// twice.
+func copyColumns(in []string) ([]string, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in))
+	for _, c := range in {
+		c = strings.TrimSpace(c)
+		switch {
+		case c == "":
+			return nil, errors.New("--columns has an empty name in it")
+		case seen[c]:
+			return nil, fmt.Errorf("--columns names %s twice", c)
+		}
+		seen[c] = true
+		out = append(out, c)
+	}
+	return out, nil
+}
+
 // checkCopyConns makes an unknown connection name a usage error (exit 2),
 // which it is, rather than the "copy failed" (exit 1) the manager's own
 // "unknown connection" would become — a cron script can then tell a broken
 // command line from a broken copy.
+//
+// It is also where --batch into Postgres is refused, as the first point
+// that knows the destination's engine: a Postgres load streams COPY FROM
+// STDIN and has no INSERTs to size, so the flag would do nothing — the
+// rule checkCopyFlags applies to the root flags.
 func checkCopyConns(cfg *config.Config, req copyReq) error {
 	for _, name := range []string{req.from, req.to} {
 		if _, ok := cfg.ConnByName(name); !ok {
 			// the same words as a query's -c (pickConn): the names there are
 			return errors.New(unknownConn(cfg, name))
+		}
+	}
+	if req.opts.BatchSize > 0 {
+		cn, _ := cfg.ConnByName(req.to)
+		// an unknown driver is left for the copy to report, as it was
+		if drv, err := db.Driver(cn.Driver); err == nil && drv == "pgx" {
+			return fmt.Errorf("--batch sizes the INSERTs a load is made of; %s is Postgres, which a copy loads "+
+				"with COPY, in no batches", req.to)
 		}
 	}
 	return nil

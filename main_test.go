@@ -895,11 +895,12 @@ func resetFlags(t *testing.T) {
 	t.Setenv("DBC_DEMO", "")
 	ptrs := []*string{&flagConfig, &flagConn, &flagFile, &flagFormat, &flagOut,
 		&flagDemo, &flagDriver, &flagDSN, &flagDir, &flagTLS, &flagTLSCA, &flagTLSCert, &flagTLSKey,
-		&flagFrom, &flagTo, &flagWhere}
+		&flagFrom, &flagTo, &flagWhere, &flagQuery}
 	for _, p := range ptrs {
 		setFlag(t, p, "")
 	}
-	for _, p := range []*bool{&flagMissing, &flagTx, &flagKeep, &flagCreate, &flagTruncate, &flagMaxRowsSet, &demoNoted} {
+	for _, p := range []*bool{&flagMissing, &flagTx, &flagKeep, &flagCreate, &flagTruncate, &flagMaxRowsSet, &demoNoted,
+		&flagDryRun, &flagQuerySet} {
 		old := *p
 		*p = false
 		t.Cleanup(func() { *p = old })
@@ -907,6 +908,10 @@ func resetFlags(t *testing.T) {
 	oldMax := flagMaxRows
 	flagMaxRows = 0
 	t.Cleanup(func() { flagMaxRows = oldMax })
+	// copy's --batch and --columns (N-336)
+	oldBatch, oldCols := flagBatch, flagColumns
+	flagBatch, flagColumns = 0, nil
+	t.Cleanup(func() { flagBatch, flagColumns = oldBatch, oldCols })
 }
 
 // TestRunStatementsNoticesOffPostgres: off Postgres there are no notices, so

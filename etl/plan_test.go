@@ -47,4 +47,28 @@ func TestPlanCopy(t *testing.T) {
 	if !strings.Contains(p.String(), "problem:") || !strings.Contains(p.String(), "nothing was written") {
 		t.Errorf("String:\n%s", p.String())
 	}
+
+	// a Query that writes, which `dbc copy --query` can now pass (N-336): the
+	// plan runs nothing of it — not a count, and off Postgres not a describe,
+	// which as a subquery is a syntax error there — and says so
+	move := CopyOptions{Query: "DELETE FROM cats WHERE id = 3 RETURNING *", To: "moved", Create: true}
+	if p, err = PlanCopy(ctx, src, "", dst, move); err != nil {
+		t.Fatalf("a write's plan: %v", err)
+	}
+	if !p.Writes || p.Rows != -1 || p.ColumnsNote == "" || len(p.Columns) != 0 || p.Create != "" || p.Problem != "" {
+		t.Errorf("a write's plan = %+v", p)
+	}
+	for _, want := range []string{"moves:", "only running it shows", "counting its rows would run it",
+		"would be created from the columns the query returns"} {
+		if !strings.Contains(p.String(), want) {
+			t.Errorf("String has no %q:\n%s", want, p.String())
+		}
+	}
+	if got := dump(t, src, "SELECT count(*) FROM cats")[0][0]; got != "3" {
+		t.Errorf("the dry run ran the write: %s rows left", got)
+	}
+	move.Create = false
+	if p, err = PlanCopy(ctx, src, "", dst, move); err != nil || !strings.Contains(p.Problem, "does not exist") {
+		t.Errorf("a write into a missing table without Create: %+v %v", p, err)
+	}
 }

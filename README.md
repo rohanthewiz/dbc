@@ -3266,6 +3266,11 @@ pipeline:
 ./dbc copy --from prod --to local public.orders archive.orders   # … under another name
 ./dbc copy --from prod --to local --truncate \
     --where "created_at >= now() - interval '1 day'" orders      # only some rows
+./dbc copy --from prod --to local --columns id,email users       # only some columns
+./dbc copy --from prod --to local --create \
+    --query "SELECT customer_id, sum(total) AS spent FROM orders GROUP BY 1" spend
+                                                                 # a query's rows, into spend
+./dbc copy --from prod --to mysql --batch 2000 orders            # bigger INSERTs off Postgres
 ```
 
 | Flag | |
@@ -3275,6 +3280,9 @@ pipeline:
 | `--truncate` | empty the destination first, in the load's transaction |
 | `--dry-run` | write nothing: print the source query, its columns and row count, whether the destination exists, the `CREATE TABLE` `--create` would run and the statement `--truncate` would empty it with; exit 1 when the copy would fail before its first row (a missing table without `--create`) |
 | `--where CONDITION` | copy only the source rows that match, written in the source's SQL |
+| `--columns COLS` | copy only these source columns, in this order (comma-separated, or repeated). They are column names, not expressions; the destination's have the same names |
+| `--query SQL` | copy the rows one statement returns instead of a table. The one argument is then the destination table. It replaces `--where` and `--columns`, which belong in the query. A write with `RETURNING` moves rows, as `Query` does under [ETL](#etl-across-connections) |
+| `--batch N` | rows per `INSERT` into a destination that is not Postgres (default 500, lowered to stay under the engine's bind-parameter limit). Refused into Postgres, which loads with `COPY` |
 
 A second table name is the destination table; without it, the destination
 has the source's name. The copy is the same as `s.Copy` in a script:

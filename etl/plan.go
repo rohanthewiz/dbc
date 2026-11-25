@@ -2,7 +2,7 @@ package etl
 
 import (
 	"context"
-
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -26,6 +26,13 @@ import (
 //
 // The CREATE comes from createDDL and the truncate from loadSetup, the
 // functions Copy itself uses, so the plan cannot drift from the copy.
+//
+// A Query that writes (DELETE … RETURNING: a move) is never run by the
+// plan, since running it is the change. Its rows are not counted, as a
+// count would run it. Its columns come from Postgres's Parse, which runs
+// nothing. Off Postgres there is no such describe: wrapping the write in a
+// subquery is a syntax error on every other engine. So its columns, and
+// a CREATE built from them, are left unknown, and the plan says why.
 
 // planCountWait bounds the dry run's row count: a count(*) of a big table
 // can take minutes, which is the copy's cost, not the plan's. Past it the
@@ -34,12 +41,18 @@ var planCountWait = 30 * time.Second
 
 // CopyPlan is a copy's dry run.
 type CopyPlan struct {
-	From, To  string // "conn:table", as CopyStats names them
-	Query     string // the SELECT the source would run
-	Direct    bool   // Postgres to Postgres: COPY to COPY
-	Columns   []string
-	Types     []string // the source's type names, one a column
-	Rows      int64    // -1 when not counted (RowsNote says why)
+	From, To string // "conn:table", as CopyStats names them
+	Query    string // the SELECT the source would run
+	Direct   bool   // Postgres to Postgres: COPY to COPY
+	Columns  []string
+	Types    []string // the source's type names, one a column
+	// ColumnsNote says why Columns is empty: a write off Postgres, which
+	// only running it would describe
+	ColumnsNote string
+	// Writes is a Query that changes rows (… RETURNING), so the copy
+	// moves them rather than copying them
+	Writes    bool
+	Rows      int64 // -1 when not counted (RowsNote says why)
 	RowsNote  string
 	DestThere bool
 	Create    string // the CREATE TABLE that would run, "" for none
@@ -58,28 +71,30 @@ func PlanCopy(ctx context.Context, src Conn, table string, dst Conn, opt CopyOpt
 		Direct: src.Engine == Postgres && dst.Engine == Postgres && opt.Transform == nil && len(opt.Args) == 0}
 	if opt.Query != "" {
 		p.From = src.Name + ":query"
+		// copySource has refused a write without RETURNING, so a write
+		// verb here is one that returns its rows: a move
+		p.Writes = writeVerbs[src.Engine.Dialect().Verbs(query).Main]
 	}
 
-	if src.Engine == Postgres {
+	switch {
+	case src.Engine == Postgres:
 		p.Columns, p.Types, err = describe(ctx, src, query)
-	} else {
+	case p.Writes:
+		p.ColumnsNote = "not known: the query writes, and off Postgres only running it shows its columns"
+	default:
 		p.Columns, p.Types, err = probeColumns(ctx, src, query, opt.Args)
 	}
 	if err != nil {
 		return CopyPlan{}, serr.Wrap(err, "from", p.From)
 	}
 
-	cctx, cancel := context.WithTimeout(ctx, planCountWait)
-	err = src.DB.QueryRowContext(cctx, "SELECT count(*) FROM ("+query+") dbc_plan", opt.Args...).Scan(&p.Rows)
-	cancel()
-	switch {
-	case err == nil:
-	case ctx.Err() != nil:
-		return CopyPlan{}, canceled(ctx, err)
-	case cctx.Err() != nil:
-		p.Rows, p.RowsNote = -1, "not counted: the count ran past "+planCountWait.String()
-	default:
-		p.Rows, p.RowsNote = -1, "not counted: "+err.Error()
+	if p.Writes {
+		p.RowsNote = "not counted: the query writes, and counting its rows would run it"
+	} else if p.Rows, err = countSource(ctx, src, query, opt.Args); err != nil {
+		if ctx.Err() != nil {
+			return CopyPlan{}, canceled(ctx, err)
+		}
+		p.RowsNote = "not counted: " + err.Error()
 	}
 
 	if _, err = dst.DB.ExecContext(ctx, "SELECT 1 FROM "+dst.Engine.QuoteTable(dest)+" WHERE 1 = 0"); err == nil {
@@ -88,6 +103,10 @@ func PlanCopy(ctx context.Context, src Conn, table string, dst Conn, opt CopyOpt
 		return CopyPlan{}, canceled(ctx, err)
 	}
 	switch {
+	case !p.DestThere && opt.Create && len(p.Columns) == 0 && p.ColumnsNote != "":
+		// the copy would make it from the columns the write returns, which
+		// the plan cannot know without running it: no CREATE to show, and
+		// no problem either. String says the table would be made.
 	case !p.DestThere && opt.Create:
 		if p.Create, err = createDDL(ctx, src, table, opt.Query != "", dst, dest, p.Columns, p.Types); err != nil {
 			p.Problem = "the destination table could not be planned: " + err.Error()
@@ -103,6 +122,25 @@ func PlanCopy(ctx context.Context, src Conn, table string, dst Conn, opt CopyOpt
 		}
 	}
 	return p, nil
+}
+
+// countSource is the number of rows query returns, counted within
+// planCountWait: past it, -1 and an error that says so. A count of a big
+// table costs a scan, which is the copy's cost, not the plan's. When ctx
+// itself ends, its error comes back as is, for the caller to call a
+// cancel.
+func countSource(ctx context.Context, src Conn, query string, args []any) (int64, error) {
+	cctx, cancel := context.WithTimeout(ctx, planCountWait)
+	defer cancel()
+	var n int64
+	err := src.DB.QueryRowContext(cctx, "SELECT count(*) FROM ("+query+") dbc_plan", args...).Scan(&n)
+	switch {
+	case err == nil:
+		return n, nil
+	case ctx.Err() == nil && cctx.Err() != nil:
+		return -1, errors.New("the count ran past " + planCountWait.String())
+	}
+	return -1, err
 }
 
 // probeColumns is a query's columns and types off Postgres: the query run
@@ -141,7 +179,14 @@ func (p CopyPlan) String() string {
 			cols[i] += " " + p.Types[i]
 		}
 	}
-	fmt.Fprintf(&b, "  columns:  %s\n", strings.Join(cols, ", "))
+	if len(cols) == 0 && p.ColumnsNote != "" {
+		fmt.Fprintf(&b, "  columns:  %s\n", p.ColumnsNote)
+	} else {
+		fmt.Fprintf(&b, "  columns:  %s\n", strings.Join(cols, ", "))
+	}
+	if p.Writes {
+		fmt.Fprintf(&b, "  moves:    the query writes, so the copy moves its rows; the dry run did not run it\n")
+	}
 	if p.Rows >= 0 {
 		fmt.Fprintf(&b, "  rows:     %d\n", p.Rows)
 	} else {
@@ -152,6 +197,10 @@ func (p CopyPlan) String() string {
 		fmt.Fprintf(&b, "  dest:     exists\n")
 	case p.Create != "":
 		fmt.Fprintf(&b, "  dest:     missing; would be created:\n            %s\n", strings.ReplaceAll(p.Create, "\n", "\n            "))
+	case p.Problem == "":
+		// missing, to be created, from columns the plan could not learn
+		// (a write off Postgres: see ColumnsNote)
+		fmt.Fprintf(&b, "  dest:     missing; would be created from the columns the query returns\n")
 	}
 	if p.Truncate != "" {
 		fmt.Fprintf(&b, "  first:    %s (in the load's transaction)\n", p.Truncate)

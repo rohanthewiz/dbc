@@ -55,6 +55,50 @@ func TestCopyCLIParsing(t *testing.T) {
 	}
 }
 
+// TestCopyCLIParsingN336: --columns splits on commas and repeats, --batch
+// is a number, and --query marks itself given even when empty, so an empty
+// $Q in `--query "$Q"` is not taken for no --query at all.
+func TestCopyCLIParsingN336(t *testing.T) {
+	parse := func(t *testing.T, argv ...string) []string {
+		t.Helper()
+		resetFlags(t)
+		var args []string
+		app := newCLI()
+		for _, sub := range app.Commands {
+			if sub.Name == "copy" {
+				sub.Action = func(_ context.Context, cmd *cli.Command) error {
+					args = cmd.Args().Slice()
+					return nil
+				}
+			}
+		}
+		if err := app.Run(context.Background(), append([]string{"dbc", "copy", "--from", "a", "--to", "b"}, argv...)); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		return args
+	}
+
+	args := parse(t, "--columns", "id, name", "--columns", "email", "--batch", "50", "users")
+	if want := []string{"id", " name", "email"}; !reflect.DeepEqual(flagColumns, want) {
+		t.Errorf("--columns = %q, want %q (trimmed later, by copyColumns)", flagColumns, want)
+	}
+	if flagBatch != 50 || !reflect.DeepEqual(args, []string{"users"}) {
+		t.Errorf("--batch = %d, args = %q", flagBatch, args)
+	}
+	if flagQuerySet {
+		t.Error("--query marked given when it was not")
+	}
+
+	args = parse(t, "--query", "SELECT 1 AS n", "totals")
+	if flagQuery != "SELECT 1 AS n" || !flagQuerySet || !reflect.DeepEqual(args, []string{"totals"}) {
+		t.Errorf("--query = %q (set %v), args = %q", flagQuery, flagQuerySet, args)
+	}
+	parse(t, "--query", "", "totals")
+	if !flagQuerySet {
+		t.Error("an empty --query was not marked given")
+	}
+}
+
 func TestCopyRequest(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -108,6 +152,79 @@ func TestCopyRequest(t *testing.T) {
 	}
 }
 
+// TestCopyRequestN336 covers --columns, --query and --batch: what each
+// becomes in CopyOpts, and the shapes refused before anything is opened.
+func TestCopyRequestN336(t *testing.T) {
+	type flags struct {
+		where    string
+		columns  []string
+		query    string
+		querySet bool
+		batch    int
+	}
+	cases := []struct {
+		name     string
+		from, to string
+		f        flags
+		args     []string
+		want     copyReq
+		err      string
+	}{
+		{name: "columns, trimmed", from: "a", to: "b", f: flags{columns: []string{"id", " name ", "email"}},
+			args: []string{"users"},
+			want: copyReq{from: "a", to: "b", table: "users", opts: sdb.CopyOpts{Columns: []string{"id", "name", "email"}}}},
+		{name: "an empty column", from: "a", to: "b", f: flags{columns: []string{"id", " "}}, args: []string{"users"},
+			err: "empty name"},
+		{name: "a column twice", from: "a", to: "b", f: flags{columns: []string{"id", "name", "id"}}, args: []string{"users"},
+			err: "names id twice"},
+		{name: "batch", from: "a", to: "b", f: flags{batch: 2000}, args: []string{"t"},
+			want: copyReq{from: "a", to: "b", table: "t", opts: sdb.CopyOpts{BatchSize: 2000}}},
+		{name: "negative batch", from: "a", to: "b", f: flags{batch: -1}, args: []string{"t"}, err: "above 0"},
+		{name: "query", from: "a", to: "b", f: flags{query: " SELECT 1 AS n ", querySet: true}, args: []string{"totals"},
+			want: copyReq{from: "a", to: "b", dest: "totals", opts: sdb.CopyOpts{Query: "SELECT 1 AS n", To: "totals"}}},
+		// a query's rows onto its own connection are no self-copy
+		{name: "query on one connection", from: "a", to: "a", f: flags{query: "SELECT * FROM t", querySet: true},
+			args: []string{"t_summary"},
+			want: copyReq{from: "a", to: "a", dest: "t_summary", opts: sdb.CopyOpts{Query: "SELECT * FROM t", To: "t_summary"}}},
+		{name: "query and batch", from: "a", to: "b", f: flags{query: "SELECT 1", querySet: true, batch: 10},
+			args: []string{"x"},
+			want: copyReq{from: "a", to: "b", dest: "x", opts: sdb.CopyOpts{Query: "SELECT 1", To: "x", BatchSize: 10}}},
+		{name: "empty query", from: "a", to: "b", f: flags{querySet: true}, args: []string{"t"}, err: "--query is empty"},
+		{name: "blank query", from: "a", to: "b", f: flags{query: "  ", querySet: true}, args: []string{"t"},
+			err: "--query is empty"},
+		{name: "query without a destination", from: "a", to: "b", f: flags{query: "SELECT 1", querySet: true},
+			err: "destination table's name"},
+		{name: "query with two arguments", from: "a", to: "b", f: flags{query: "SELECT 1", querySet: true},
+			args: []string{"src", "dst"}, err: "takes one: the destination table"},
+		{name: "query with a blank destination", from: "a", to: "b", f: flags{query: "SELECT 1", querySet: true},
+			args: []string{" "}, err: "destination table name is empty"},
+		{name: "query and where", from: "a", to: "b", f: flags{query: "SELECT 1", querySet: true, where: "x > 1"},
+			args: []string{"t"}, err: "replaces --where and --columns"},
+		{name: "query and columns", from: "a", to: "b", f: flags{query: "SELECT 1", querySet: true, columns: []string{"x"}},
+			args: []string{"t"}, err: "replaces --where and --columns"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			resetFlags(t)
+			flagFrom, flagTo = c.from, c.to
+			flagWhere, flagColumns, flagQuery, flagQuerySet, flagBatch = c.f.where, c.f.columns, c.f.query, c.f.querySet, c.f.batch
+			got, err := copyRequest(c.args)
+			if c.err != "" {
+				if err == nil || !strings.Contains(err.Error(), c.err) {
+					t.Fatalf("err = %v, want one containing %q", err, c.err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("err = %v", err)
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("got  %+v\nwant %+v", got, c.want)
+			}
+		})
+	}
+}
+
 // TestCheckCopyFlags: every root flag copy would ignore is refused, and the
 // defaults (including an explicit -t text) are not.
 func TestCheckCopyFlags(t *testing.T) {
@@ -154,6 +271,23 @@ func TestCheckCopyConns(t *testing.T) {
 	}
 	if err := checkCopyConns(cfg, copyReq{from: "a", to: "nope"}); err == nil || !strings.Contains(err.Error(), `"nope"`) {
 		t.Errorf("unknown --to: err = %v", err)
+	}
+
+	// --batch: refused into Postgres (a derived database of it too), which
+	// loads by COPY; taken into anything else, and from Postgres
+	cfg.Connections = append(cfg.Connections, config.Connection{Name: "lite", Driver: "sqlite"})
+	batch := sdb.CopyOpts{BatchSize: 100}
+	for _, to := range []string{"pg", "pg/reporting"} {
+		if err := checkCopyConns(cfg, copyReq{from: "lite", to: to, opts: batch}); err == nil ||
+			!strings.Contains(err.Error(), "--batch") {
+			t.Errorf("--batch into %s: err = %v", to, err)
+		}
+	}
+	if err := checkCopyConns(cfg, copyReq{from: "pg", to: "lite", opts: batch}); err != nil {
+		t.Errorf("--batch into sqlite: %v", err)
+	}
+	if err := checkCopyConns(cfg, copyReq{from: "lite", to: "pg"}); err != nil {
+		t.Errorf("into Postgres without --batch: %v", err)
 	}
 }
 
@@ -253,6 +387,96 @@ func TestRunCopy(t *testing.T) {
 	if progress.Len() != 0 {
 		t.Errorf("progress for %d rows: %q", all, progress.String())
 	}
+}
+
+// columnsOf is table's column names on conn, in order.
+func columnsOf(t *testing.T, mgr *db.Manager, conn, table string) []string {
+	t.Helper()
+	dbh, err := mgr.DB(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := dbh.Query("SELECT * FROM " + table + " WHERE 1 = 0")
+	if err != nil {
+		t.Fatalf("columns of %s:%s: %v", conn, table, err)
+	}
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cols
+}
+
+// TestRunCopyN336 runs --columns, --query and --batch end to end, each
+// through copyRequest as the command line would build it, so the flags are
+// checked to reach etl and not only to parse.
+func TestRunCopyN336(t *testing.T) {
+	mgr := newCopyManager(t)
+	ctx := context.Background()
+	all := count(t, mgr, "src", "cats")
+	build := func(t *testing.T, set func(), args ...string) copyReq {
+		t.Helper()
+		resetFlags(t)
+		flagFrom, flagTo = "src", "dst"
+		set()
+		req, err := copyRequest(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return req
+	}
+
+	t.Run("columns", func(t *testing.T) {
+		req := build(t, func() { flagCreate, flagColumns = true, []string{"name", " id"} }, "cats", "cat_names")
+		st, err := runCopy(ctx, mgr, req, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// made with only the named columns, in the order named
+		if got := columnsOf(t, mgr, "dst", "cat_names"); !reflect.DeepEqual(got, []string{"name", "id"}) {
+			t.Errorf("columns = %q", got)
+		}
+		if st.Rows != int64(all) || count(t, mgr, "dst", "cat_names") != all {
+			t.Errorf("%s; dst has %d", st, count(t, mgr, "dst", "cat_names"))
+		}
+	})
+
+	t.Run("query", func(t *testing.T) {
+		req := build(t, func() {
+			flagCreate, flagQuerySet = true, true
+			flagQuery = "SELECT breed, count(*) AS n FROM cats GROUP BY breed"
+		}, "breeds")
+		st, err := runCopy(ctx, mgr, req, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := count(t, mgr, "src", "(SELECT DISTINCT breed FROM cats)")
+		if st.Rows != int64(want) || count(t, mgr, "dst", "breeds") != want {
+			t.Errorf("%s; dst has %d, want %d", st, count(t, mgr, "dst", "breeds"), want)
+		}
+		if !strings.Contains(st.String(), "src:query → dst:breeds") {
+			t.Errorf("summary = %q", st)
+		}
+		if got := columnsOf(t, mgr, "dst", "breeds"); !reflect.DeepEqual(got, []string{"breed", "n"}) {
+			t.Errorf("columns = %q", got)
+		}
+	})
+
+	t.Run("batch", func(t *testing.T) {
+		// a batch of 1: one INSERT a row, and every row still lands
+		req := build(t, func() { flagCreate, flagBatch = true, 1 }, "cats", "cats_one_by_one")
+		if req.opts.BatchSize != 1 {
+			t.Fatalf("BatchSize = %d", req.opts.BatchSize)
+		}
+		st, err := runCopy(ctx, mgr, req, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Rows != int64(all) || count(t, mgr, "dst", "cats_one_by_one") != all {
+			t.Errorf("%s; dst has %d", st, count(t, mgr, "dst", "cats_one_by_one"))
+		}
+	})
 }
 
 // TestRunCopyCanceled: a canceled copy is reported as a cancellation, so

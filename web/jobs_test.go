@@ -213,6 +213,53 @@ func TestJobRunAndWebhook(t *testing.T) {
 	e.api("GET", "/api/v1/runs?since=yesterday", "", 400)
 }
 
+// A resume through the run route (N-339), as the run page's ↻ Resume sends
+// it: {"resume": "last"} starts a new run that reuses the step the failed
+// run finished and runs the one that failed; the listing marks it; one
+// with nothing left to run is a 400.
+func TestJobResume(t *testing.T) {
+	e, d := jobEnv(t)
+	_, s := e.open()
+	flaky := filepath.Join(d.pipelines, "flaky.json")
+	write := func(sql string) {
+		t.Helper()
+		text := `{"name": "flaky", "fragments": [{"name": "f", "nodes": [
+		  {"id": "x", "plugin": "sql.exec", "cfg": {"conn": "demo-sqlite", "sql": "` + sql + `"}}]}]}`
+		if err := os.WriteFile(flaky, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("SELECT nope FROM no_such_table")
+	e.putJob("res.json", `{"name": "res", "pipelines": [{"id": "a", "pipeline": "quick"}, {"id": "b", "pipeline": "flaky", "after": ["a"]}],
+	  "triggers": {"webhook": true}}`, "", 200)
+	first := decodeData[runEnvelope](t, e.api("POST", "/api/v1/jobs/res.json/run", "", 200)).Run
+	if done := awaitJob[runEnvelope](t, s, "job.done").Run; done.ID != first.ID || done.Status != "failed" {
+		t.Fatalf("first run = %s %s", done.ID, done.Status)
+	}
+
+	write("SELECT 1")
+	res := decodeData[runEnvelope](t, e.api("POST", "/api/v1/jobs/res.json/run", `{"resume": "last"}`, 200)).Run
+	if res.Resumes != first.ID || res.Pipelines[0].Status != "reused" || res.Pipelines[0].ReusedFrom != first.ID {
+		t.Fatalf("resume = %+v", res)
+	}
+	if done := awaitJob[runEnvelope](t, s, "job.done").Run; done.ID != res.ID || done.Status != "succeeded" {
+		t.Fatalf("resume ended %s %s %q", done.ID, done.Status, done.Error)
+	}
+	type runsList struct {
+		Runs []jobs.Summary `json:"runs"`
+	}
+	all := decodeData[runsList](t, e.api("GET", "/api/v1/runs?name=res", "", 200))
+	if len(all.Runs) != 2 || all.Runs[0].ID != res.ID || all.Runs[0].Resumes != first.ID || all.Runs[1].Resumes != "" {
+		t.Errorf("history = %+v", all.Runs)
+	}
+	if env := e.api("POST", "/api/v1/jobs/res.json/run", `{"resume": "last"}`, 400); !strings.Contains(env.Error, "nothing to resume") {
+		t.Errorf("nothing left = %q", env.Error)
+	}
+	if env := e.api("POST", "/api/v1/jobs/res.json/run", `{"rerun": ["a"]}`, 400); !strings.Contains(env.Error, "needs a run to resume") {
+		t.Errorf("rerun alone = %q", env.Error)
+	}
+}
+
 // The layout: job-check lays out the text being edited, and
 // /api/v1/jobs/:name/layout a saved job — a diamond's root left, its two
 // middle steps stacked in the next column, its last step right.

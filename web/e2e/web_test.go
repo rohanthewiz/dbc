@@ -81,6 +81,7 @@ func TestWeb(t *testing.T) {
 		{"pipeline tabs", pipelineTabs},
 		{"job runs in the log", jobRuns},
 		{"job tabs and the runs view", jobTabs},
+		{"job resume on the run page", jobResume},
 		{"plugin files and the palette", pluginFiles},
 		{"query designer", queryDesigner},
 		{"connection clicks and failed connects", connClicks},

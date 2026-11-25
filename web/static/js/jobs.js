@@ -718,7 +718,7 @@
         diags && diags.length ? el("span", "cd", "⚠" + diags.length) : null),
       el("div", "cp", "⛓ " + (s.pipeline || "—")),
       el("div", "csum", params || (s.after.length ? "after " + s.after.join(", ") : "the root")),
-      el("div", pr && pr.error ? "cerr" : "cnum", !pr ? "" : pr.error ? pr.error : st === "queued" || st === "skipped" ? st :
+      el("div", pr && pr.error ? "cerr" : "cnum", !pr ? "" : pr.error ? pr.error : st === "queued" || st === "skipped" || st === "reused" ? st :
         dbc.runs.fmtRows((pr.fragments || []).reduce((n, f) => n + (f.rows || 0), 0)) + " rows" + (took > 0 ? " · " + dbc.runs.fmtDur(took) : "")));
       c.append(el("span", { class: "pport in", title: "input: drop a wire here — this step waits for that one" }));
       c.append(el("span", { class: "pport out", title: "output: drag to a step that waits for this one" }));

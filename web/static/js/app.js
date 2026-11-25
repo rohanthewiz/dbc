@@ -3377,6 +3377,15 @@
       return r.kind === "job" ? jobKit.edit(file) : pipeKit.edit(file);
     },
     tabOfOrigin: (ws) => (ws ? tabOf(ws) || null : null),
+    // a run page's ↻ Resume (N-339): the job's file, resumed from run r;
+    // the job's tab, when one is open, is the new run's origin, as its
+    // ▶ Run would make it, so its previews and its Stop go there
+    resume: (r) => {
+      const file = r.source || r.name + ".json";
+      const t = tabs.find((x) => x.job === file);
+      return api("POST", "/api/v1/jobs/" + encodeURIComponent(file) + "/run",
+        { resume: r.id, ws: t && t.ws ? t.ws : undefined });
+    },
     // a run page's ◎ Open preview: the tab whose grid holds its rows — the
     // job tab on screen itself, folded under its run page, shows its
     // canvas again, and the grid with it

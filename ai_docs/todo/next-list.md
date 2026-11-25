@@ -94,36 +94,6 @@ ten session docs in `ai_docs/claude_sessions/`
   page needs telling, as `sayReleased` tells it of a session: a note,
   and result tabs that show "released — r reruns" rather than a grid
   whose pages 404.
-- **N-339** · raised `2026-1125-1133-n336-copy-flags-tables-progress` · value low
-  Resume a failed job run from the step that failed, rather than from the
-  root (the part of N-336 not done). Today a re-run of a job runs every
-  step again. Steps hand each other nothing in memory: each pipeline
-  reads and writes databases and files. So a step that succeeded has
-  usually left its output in place, and a later step could reuse it.
-  A sketch: `dbc job run <job> --resume <run-id|last>` (and a Resume on a
-  failed run in the TUI's and dbc web's Runs views) starts a new run in
-  which the earlier run's succeeded steps are marked reused, not run. The
-  readiness walk in `executeJob` then starts from the steps whose afters
-  are all succeeded or reused. Questions to settle before building it:
-  - **Run values.** A step whose table name holds `${run.date}` or
-    `${run.id}` wrote under the earlier run's values. A resume the next
-    day would look for another table. Take over the earlier run's
-    `run.*` values (all but `id`?), or refuse a job that uses them?
-  - **Params.** Reuse is sound only with the earlier run's params:
-    refuse overrides, or reuse only the steps whose substituted params
-    are equal?
-  - **Edits since.** The job or a pipeline may have changed since the
-    run. Reuse a step only if its id, pipeline and params match, and
-    store a hash of each step's pipeline spec in the record to tell
-    whether it was edited?
-  - **Outputs that do not last.** A preview or `show` sink, a temp
-    table, or a file under a per-run directory is gone by the time a
-    resume comes. A pipeline could declare its outputs reusable, or not.
-    Or the resume could trust the user, who named the run.
-  - **The record.** A new status (`reused`, ↻) or Succeeded with a
-    `ReusedFrom` run id. Also how `runs` lists it, and what
-    `stepSummary` says.
-  Not N-151 (copy's DDL log).
 
 
 ## Validate
@@ -739,6 +709,38 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-339** · raised `2026-1125-1133-n336-copy-flags-tables-progress` · value low
+  Resume a failed job run from the step that failed, rather than from the
+  root (the part of N-336 not done). Today a re-run of a job runs every
+  step again. Steps hand each other nothing in memory: each pipeline
+  reads and writes databases and files. So a step that succeeded has
+  usually left its output in place, and a later step could reuse it.
+  A sketch: `dbc job run <job> --resume <run-id|last>` (and a Resume on a
+  failed run in the TUI's and dbc web's Runs views) starts a new run in
+  which the earlier run's succeeded steps are marked reused, not run. The
+  readiness walk in `executeJob` then starts from the steps whose afters
+  are all succeeded or reused. Questions to settle before building it:
+  - **Run values.** A step whose table name holds `${run.date}` or
+    `${run.id}` wrote under the earlier run's values. A resume the next
+    day would look for another table. Take over the earlier run's
+    `run.*` values (all but `id`?), or refuse a job that uses them?
+  - **Params.** Reuse is sound only with the earlier run's params:
+    refuse overrides, or reuse only the steps whose substituted params
+    are equal?
+  - **Edits since.** The job or a pipeline may have changed since the
+    run. Reuse a step only if its id, pipeline and params match, and
+    store a hash of each step's pipeline spec in the record to tell
+    whether it was edited?
+  - **Outputs that do not last.** A preview or `show` sink, a temp
+    table, or a file under a per-run directory is gone by the time a
+    resume comes. A pipeline could declare its outputs reusable, or not.
+    Or the resume could trust the user, who named the run.
+  - **The record.** A new status (`reused`, ↻) or Succeeded with a
+    `ReusedFrom` run id. Also how `runs` lists it, and what
+    `stepSummary` says.
+  Not N-151 (copy's DDL log).
+  closed 2026-11-25, `@SESS@`, commits `9b9bc5c` (engine and CLI), `6c524a0` (TUI) and `@N-339@` (dbc web). The user settled the questions: **run values** — all of the first run's (`id`, `date`, `time`, `started`, down a chain of resumes; kept in the resume's `run_values`), `trigger` the resume's own; **reuse** — only if unchanged: the earlier run finished the step (or reused it), same pipeline, same `spec_hash` (new in every job step's record: the first 16 hex digits of the SHA-256 of the pipeline's JSON), same substituted params, and every after reused, so a step that runs again runs everything after it, and a record without a hash re-runs; **outputs** — trusted, plus `--rerun STEPS`; **record** — new status `reused` ↻ (`pipeline.Reused`) with `reused_from`, no rows counted, the run's `resumes` and `by` "resumes ID". New `jobs/resume.go` (`earlierRun`, `earlierValues`, `resumeParams`, `SpecHash`, `substStepParams` factored out of `runStep`, `resumePlan`, `readinessOrder`, `markReused`). `StartJob`'s pre-flight is `prepareJob` now, and `Engine.CheckStart` runs it alone: `dbc job run --wait=false` asks it in the parent, so the detached child never refuses unheard. `executeJob`: `waiting[s]` counts only afters that run; `ready` is every running step whose afters are all reused (for a fresh run, the root, as before); `resumeLines` logs what is reused and why a finished step runs again. A resume of any ended run (a succeeded one re-runs what was edited); one with nothing to run, of another job's run, or of one still going is refused before anything starts. Params: the earlier run's under any `-p`. `RunHead.Resumes` (read off the record); `dbc runs` shows a resume's trigger as `cli (resumes ID)` (no other row's cell changes). **TUI** (`6c524a0`): `r` in the Runs list and the monitor (`resumeRun`: the job from `jobs_dir` by the record's file name), `↻ resumes ID` in the list, reused rows without time or rows. **Web** (`@N-339@`): the run route takes `resume`/`rerun`; a run page's ↻ Resume on an ended job run (the job's open tab is the origin), dashed reused cards, `reused: run ID ran it` and `resumes run ID` as links, ↻ by the list's trigger. Found while building: a step whose params hold `${run.trigger}` differs whenever the trigger does, so it re-runs (logged with the param; documented). Real binary: a 3-step job failing at its middle step, resumed (`load` read `stage`'s rows by the first run's `${run.id}`), an edited `report` re-run, `--rerun stage` detached, the refusals. Not done: `--rerun` in the TUI and the page (CLI and API only), a resume dry run, `s.RunJob` resumes. Tests: jobs `TestResumeRunsFromTheFailure`, `TestResumeCarriesRunValues`, `TestResumePlan`, `TestResumeRefusals`, `TestResumeParams`; `TestResumeFlags`; tui `TestRunMonitorResumesAJob`; web `TestJobResume`; e2e step "job resume on the run page". README (Resuming a run, Jobs headless, the TUI, the Runs view), the dbc skill.
 
 - **N-336** · raised `2026-1118-0133-n294-n296-n297-low-color-empty-loads-dry-runs` · value low
   What N-297 listed besides the dry runs (it closed with `copy --dry-run`

@@ -45,7 +45,7 @@ import (
 //
 // RUNNING ONE — and the webhook, which is the same route:
 //
-//	POST   /api/v1/jobs/:name/run           {params, ws?} → {run}
+//	POST   /api/v1/jobs/:name/run           {params, ws?, resume?, rerun?} → {run}
 //
 //	  the page (session cookie)        trigger "manual"; ws, when given, is
 //	                                   the run's origin (its Stop)
@@ -58,6 +58,12 @@ import (
 //	  409 when the job is running (overlap: skip) or a queued run already
 //	  waits; 400 when it does not check out. GET /api/v1/runs/:id follows
 //	  the run, from memory or its record.
+//
+//	  resume (a run id, or "last") makes it a resume of that run (N-339,
+//	  jobs/resume.go): the steps it finished, unchanged since, are reused,
+//	  and rerun names steps to run again anyway. The run page's ↻ Resume
+//	  sends it. 400 when the run is not the job's, has not ended, or
+//	  leaves nothing to run.
 //
 // RUNS, with the record on disk now, list across processes — a cron's
 // `dbc job run` included:
@@ -347,9 +353,12 @@ func (s *Server) handleJobLayout(ctx rweb.Context) error {
 }
 
 // jobRunReq is POST /api/v1/jobs/:name/run's body; empty is fine.
+// Resume and Rerun are jobs.JobRequest's (a resume of an ended run).
 type jobRunReq struct {
 	WS     string            `json:"ws"`
 	Params map[string]string `json:"params"`
+	Resume string            `json:"resume"`
+	Rerun  []string          `json:"rerun"`
 }
 
 // handleJobRun runs a job — the user's file, else the example of that
@@ -385,7 +394,7 @@ func (s *Server) handleJobRun(ctx rweb.Context) error {
 		trigger, by = jobs.TriggerWebhook, ctx.ClientIP()
 	}
 	run, err := s.jobs.StartJob(jobs.JobRequest{Spec: spec, Params: req.Params, Trigger: trigger, By: by,
-		Origin: req.WS, Source: file})
+		Origin: req.WS, Source: file, Resume: req.Resume, Rerun: req.Rerun})
 	switch {
 	case errors.Is(err, jobs.ErrBusy):
 		return fail(ctx, conflict("%s", err.Error()))

@@ -1352,7 +1352,8 @@ body.insp-dragging { cursor: col-resize; user-select: none; }
    A card per step, placed by the server's layout (package dag); an SVG of
    Bezier edges under them. The card's left edge and glyph carry its state
    in the run it shows: ● running ✓ succeeded ✗ failed ↷ skipped ■ stopped
-   ⚠ interrupted. On a run page the critical path — the chain of steps that
+   ⚠ interrupted ↻ reused (a resume took over what an earlier run did: done,
+   but not here — the left edge dashed). On a run page the critical path — the chain of steps that
    set when the run ended — is drawn bold. */
 .dlayer, .jstage { position: absolute; left: 0; top: 0; }
 .dlayer { position: relative; }
@@ -1369,6 +1370,7 @@ body.insp-dragging { cursor: col-resize; user-select: none; }
 .dcard.s-succeeded { border-left-color: var(--accent); }
 .dcard.s-failed, .dcard.s-interrupted { border-left-color: var(--err); background: color-mix(in srgb, var(--err) 12%, var(--panel2)); }
 .dcard.s-skipped, .dcard.s-canceled { opacity: .7; }
+.dcard.s-reused { opacity: .8; border-left-style: dashed; border-left-color: var(--accent); }
 .dcard.crit { border-width: 2px; border-left-width: 4px; }
 .dcard.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .dcard.drop { box-shadow: 0 0 0 2px var(--accent); }

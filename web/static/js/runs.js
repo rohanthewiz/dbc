@@ -52,7 +52,11 @@
   const dbc = window.dbc;
   const { api, log, el } = dbc;
 
-  const STATE = { queued: "○", running: "●", succeeded: "✓", failed: "✗", canceled: "■", skipped: "↷", interrupted: "⚠" };
+  // reused (↻) is a job step a resume did not run: the run it resumes
+  // finished it (N-339)
+  const STATE = { queued: "○", running: "●", succeeded: "✓", failed: "✗", canceled: "■", skipped: "↷", interrupted: "⚠", reused: "↻" };
+  // NOTRUN is a state with nothing of its own to count: no time, no rows
+  const NOTRUN = (s) => s === "queued" || s === "skipped" || s === "reused";
   const LIVE = (s) => s === "running" || s === "queued";
   const NS = "http://www.w3.org/2000/svg";
 
@@ -401,7 +405,8 @@
           ul.append(el("div", { class: "rvrow" + (i === v.cur ? " cur" : ""), role: "option", "data-id": r.id, "data-i": String(i),
             title: "run " + r.id + (r.by ? " — " + r.by : "") + (r.error ? "\n" + r.error : "") },
           el("span", "rvst s-" + r.status, STATE[r.status] || "?"),
-          el("span", "rvname", r.name), el("span", "rvkind", r.kind), el("span", "rvtrig", r.trigger),
+          el("span", "rvname", r.name), el("span", "rvkind", r.kind),
+          el("span", { class: "rvtrig", title: r.resumes ? "resumes run " + r.resumes : null }, r.trigger + (r.resumes ? " ↻" : "")),
           el("span", "rvwhen", when(r.started)), el("span", "rvtook", took >= 0 ? fmtDur(took) : ""), what2));
         });
         if (!rows.length) {
@@ -475,8 +480,13 @@
           el("b", "rvname", r.name), el("span", "rvkind", r.kind),
           el("span", "rvmeta", [r.trigger + (r.by ? " (" + r.by + ")" : ""), when(r.started), took >= 0 ? fmtDur(took) : "",
             fmtRows(runRows(r)) + " rows", r.fragment ? "fragment " + r.fragment + " only" : ""].filter(Boolean).join(" · ")));
+        // ↻ Resume on a job run that has ended (N-339): a new run of the job
+        // as saved now, its steps this run finished reused, the rest run
+        const canResume = r.kind === "job" && !LIVE(r.status) && !!host.resume;
         const acts = el("span", "rvacts",
           LIVE(r.status) ? el("button", { type: "button", "data-act": "stop", title: "Stop the run: every fragment in flight rolls back" }, "■ Stop") : null,
+          canResume ? el("button", { type: "button", "data-act": "resume",
+            title: "Run the job again from where this run stopped: the steps it finished, unchanged since, are reused, the rest run" }, "↻ Resume") : null,
           el("button", { type: "button", "data-act": "copyid", title: "Copy the run's id (dbc run show " + r.id + ")" }, "⧉ " + r.id),
           host.canOpen(r) ? el("button", { type: "button", "data-act": "openfile", title: "Open the " + r.kind + " in a tab" },
             "↗ " + (r.kind === "job" ? "job" : "pipeline")) : null);
@@ -485,6 +495,13 @@
         if (r.error) parts.push(el("div", "rverrline", "✗ " + r.error));
         if (r.params && Object.keys(r.params).length) {
           parts.push(el("div", "rvparams", "params: " + Object.keys(r.params).sort().map((k) => k + "=" + r.params[k]).join(" · ")));
+        }
+        if (r.resumes) {
+          // the run values are the first run's, down a chain of resumes
+          const first = r.run_values && r.run_values.id && r.run_values.id !== r.resumes ? r.run_values.id : "";
+          parts.push(el("div", "rvparams", "resumes run ", runLink(r.resumes),
+            first ? el("span", null, " — its ${run.id} and ${run.date} are run ", runLink(first), "'s, the first of the chain")
+              : " — its ${run.id} and ${run.date} are that run's"));
         }
         if (r.kind === "job") parts.push(drawRunDag(r));
         const p = (r.pipelines || []).find((x) => x.id === v.sel.pipeline);
@@ -525,11 +542,12 @@
           const p = r.pipelines.find((x) => x.id === s.id);
           const st = p.status || "queued", took = tookOf(p);
           return el("div", { class: "dcard s-" + st + (crit.steps.has(p.id) ? " crit" : "") + (v.sel.pipeline === p.id ? " sel" : ""),
-            "data-step": p.id, title: p.id + " — pipeline " + (p.pipeline || "") + " — " + st + (p.error ? "\n" + p.error : "") },
+            "data-step": p.id, title: p.id + " — pipeline " + (p.pipeline || "") + " — " + st +
+              (p.reused_from ? " from run " + p.reused_from : "") + (p.error ? "\n" + p.error : "") },
           el("div", "ctop", el("span", "dst s-" + st, STATE[st] || "○"), el("b", "cid", p.id),
-            el("span", "ctime", took >= 0 && st !== "queued" && st !== "skipped" ? fmtDur(took) : "")),
+            el("span", "ctime", took >= 0 && !NOTRUN(st) ? fmtDur(took) : "")),
           el("div", "cp", "⛓ " + (p.pipeline || "")),
-          el("div", p.error ? "cerr" : "cnum", p.error ? p.error : st === "queued" || st === "skipped" ? st :
+          el("div", p.error ? "cerr" : "cnum", p.error ? p.error : NOTRUN(st) ? st :
             fmtRows(rowsOf(p)) + " rows" + ((p.fragments || []).length ? " · " + dbc.plural(p.fragments.length, "fragment") : "")));
         }, { edgeClass: (a, b) => (crit.edges.has(a + ">" + b) ? "crit" : "") + " to-" + (((r.pipelines || []).find((x) => x.id === b) || {}).status || "") });
         return el("section", "rvdag", el("div", "rvsub", "the job · " + dbc.plural((r.pipelines || []).length, "pipeline") +
@@ -550,7 +568,7 @@
             title: f.name + " — " + f.status + (f.error ? "\n" + f.error : "") },
           el("span", "tname", el("span", "dst s-" + f.status, STATE[f.status] || "○"), " " + f.name),
           el("span", "ttrack", bar),
-          el("span", f.error ? "terr" : "tmeta", f.error ? f.error : f.status === "queued" || f.status === "skipped" ? f.status :
+          el("span", f.error ? "terr" : "tmeta", f.error ? f.error : NOTRUN(f.status) ? f.status :
             fmtRows(f.rows) + " rows · " + fmtDur(tookOf(f)) + (f.direct ? " · direct COPY" : "")));
         });
         const took = tookOf(p);
@@ -562,6 +580,7 @@
             (p.params && Object.keys(p.params).length ? " · " + Object.keys(p.params).sort().map((k) => k + "=" + p.params[k]).join(" ") : "") +
             " — click a fragment for its nodes"),
           p.error ? el("div", "rverrline", "✗ " + p.error) : null,
+          p.reused_from ? el("div", "rvparams", "reused: run ", runLink(p.reused_from), " ran it, and this run took its output over") : null,
           rows.length ? el("div", "tline", ...rows, ax) : el("div", "pnote", p.status === "skipped" ? "skipped — a step it waits for did not succeed" : "not started"));
       }
 
@@ -616,6 +635,11 @@
           title: "This run's preview rows went to no tab here — preview the fragment again, now, into a pipeline tab" }, "◎ Preview again");
       }
 
+      // runLink is a run id that opens that run's page here.
+      function runLink(id) {
+        return el("button", { type: "button", class: "linkish", "data-act": "openrun", "data-id": id, title: "Open run " + id }, id);
+      }
+
       function drawLog(r) {
         const lines = logLines(r, v.sel);
         const where = [v.sel.pipeline && (r.pipelines || []).length > 1 ? v.sel.pipeline : "", v.sel.fragment].filter(Boolean).join("/");
@@ -639,7 +663,19 @@
           else if (act === "all") { v.sel = { pipeline: "", fragment: "" }; v.auto = false; v.redraw(); }
           else if (act === "stop" && r) {
             try { await api("POST", "/api/v1/runs/" + encodeURIComponent(r.id) + "/cancel"); } catch (err) { log(err.status === 409 ? "warn" : "err", err.message); }
-          } else if (act === "copyid" && r) dbc.clip.copyText(r.id, "the run's id");
+          } else if (act === "resume" && r) {
+            // the new run's page replaces this one; a refusal (nothing left
+            // to run, the job running) is said in the log
+            b.disabled = true;
+            try {
+              const res = await host.resume(r);
+              if (res && res.run) open(res.run.id);
+            } catch (err) {
+              log(err.status === 409 ? "warn" : "err", "resume: " + err.message);
+              b.disabled = false;
+            }
+          } else if (act === "openrun") open(b.dataset.id);
+          else if (act === "copyid" && r) dbc.clip.copyText(r.id, "the run's id");
           else if (act === "openfile" && r) { if (opts.close) opts.close(); host.openFile(r); }
           else if (act === "origin" && r) { if (opts.close) opts.close(); host.showOrigin(r.origin); }
           else if (act === "repreview") { if (opts.close) opts.close(); host.preview(b.dataset.pipe, b.dataset.frag); }

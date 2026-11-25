@@ -3060,6 +3060,14 @@ page** that drills down:
 A running run's page moves with it (one another process runs is read
 again every two seconds); ■ Stop stops it; ↗ opens its job or pipeline;
 ◎ Open preview goes to the tab whose grid holds a preview sink's rows.
+A job run that has ended offers **↻ Resume** ([Resuming a run](#jobs)):
+the job as saved now runs again from where that run stopped, and its page
+opens in place of this one — the steps it took over drawn ↻ with a dashed
+edge, each linking to the run that ran it, and the run it resumes linked
+under the header (the list marks a resume ↻ by its trigger). The job's
+tab, when open, is its origin, as its ▶ Run would make it. The API is the
+run route's: `POST /api/v1/jobs/<name>.json/run` with `{"resume": "last"}`
+(or a run id, and `"rerun": ["step"]`).
 `Backspace` goes back to the list.
 
 ### Pipelines and jobs in the TUI

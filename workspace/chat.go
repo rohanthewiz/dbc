@@ -72,7 +72,7 @@ func (w *Workspace) ChatContext(question string, ed Editor, views ...GridView) (
 	}
 	ctx.Query = cur
 	w.planForChatLocked(&ctx, cur)
-	sh, at := w.activeSetLocked().sharedTab()
+	sh, at := w.activeSetLocked().sharedRows()
 	if sh != nil {
 		refs = w.mentionedLocked(&ctx, cur+"\n"+sh.stmt, question)
 		if cur != "" && cur == last.lastStmt {
@@ -150,7 +150,7 @@ func (w *Workspace) ScriptChatContext(question, name, source string, views ...Gr
 	}
 	// a shared result tab goes as it does from a query tab (ChatContext):
 	// in place of this script's own last run, which is then not asked about
-	if sh, at := w.activeSetLocked().sharedTab(); sh != nil {
+	if sh, at := w.activeSetLocked().sharedRows(); sh != nil {
 		refs = w.mentionedLocked(&ctx, source+"\n"+sh.stmt, question)
 		attachShared(&ctx, sh, at, "", views)
 		return ctx, refs
@@ -195,7 +195,7 @@ func (w *Workspace) PipelineChatContext(question, kind, name, source, runErr str
 		cc, _ := w.cfg.ConnByName(n)
 		ctx.ScriptConns = append(ctx.ScriptConns, n+" ("+cc.Driver+")")
 	}
-	if sh, at := w.activeSetLocked().sharedTab(); sh != nil {
+	if sh, at := w.activeSetLocked().sharedRows(); sh != nil {
 		refs = w.mentionedLocked(&ctx, source+"\n"+sh.stmt, question)
 		attachShared(&ctx, sh, at, "", views)
 		return ctx, refs

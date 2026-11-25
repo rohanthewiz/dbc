@@ -130,7 +130,11 @@ func (p Workbench) Render() string {
 							),
 						),
 						b.DivClass("rpane", "id", "rpane-results").R(
-							b.DivClass("grid-msg", "id", "grid-msg").R(),
+							// tabindex -1: a click on the message (an exec's "n
+							// rows affected", a released result's note) puts the
+							// focus in the results pane, so its keys — r reruns,
+							// { } step tabs — work from there; Tab still skips it
+							b.DivClass("grid-msg", "id", "grid-msg", "tabindex", "-1").R(),
 							// role=grid: grid.js draws its rows and cells with
 							// the matching roles and indices, and moves
 							// aria-activedescendant with the cursor

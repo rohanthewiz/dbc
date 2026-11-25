@@ -271,9 +271,17 @@
     viewChanged();
   }
 
-  function clear() {
+  // clear empties the grid. note, when given, is what to say in its place
+  // instead of the "how to run" hint: a result tab whose rows were
+  // released (app.js showResultOf, N-335) says so and how to get them back.
+  function clear(note) {
     Object.assign(g, { seq: 0, cols: [], vis: [], total: 0, rows: 0, pages: new Map() });
     viewChanged();
+    if (typeof note === "string" && note) {
+      showMsg(note, "released");
+      info.textContent = "";
+      return;
+    }
     // the hint follows the tab: a script tab's editor holds Go, not SQL,
     // and a pipeline tab's is the canvas
     const t = dbc.state.tab;

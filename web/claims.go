@@ -140,10 +140,15 @@ func (h *hub) unclaim(key string) {
 // release is a window's goodbye (its page is going away): every tab it
 // holds is free at once, rather than after claimGrace, so a browser tab
 // opened right after this one closed gets them.
+//
+// It also marks the window as having said goodbye, for the idle reaper: if
+// no stream comes back by the idle release, its result rows go with its
+// sessions (hub.go, WHY ROWS GO ONLY AFTER A GOODBYE). A reload says
+// goodbye too, and its stream back a moment later clears the mark.
 func (h *hub) release(w *window) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	w.handedOff = true
+	w.handedOff, w.goodbye = true, true
 	for k, o := range h.claims {
 		if o == w {
 			delete(h.claims, k)

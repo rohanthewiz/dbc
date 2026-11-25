@@ -1024,3 +1024,90 @@ func TestRerunGroupTab(t *testing.T) {
 		t.Errorf("titles = %v", titles(w))
 	}
 }
+
+// ReleaseResults (N-335: dbc web, for a window whose browser tab closed)
+// drops every tab's rows and keeps the tabs — title, statement, pin,
+// share, seq — so a rerun fills one again in place. While released, a
+// shared tab is not sent to the assistant (a share with nothing in it),
+// and a script's switcher has nothing to switch to.
+func TestReleaseResults(t *testing.T) {
+	w := newTestWorkspace(t)
+	w.cfg.Connections[0].AIRows = true
+	run(t, w, "SELECT id, name FROM cats ORDER BY id")
+	shared := got(w)
+	if err := w.ShareResultTab(shared, true); err != nil {
+		t.Fatal(err)
+	}
+	run(t, w, "SELECT 1 AS n") // a new tab: the shared one keeps its result
+	cur := got(w)
+	_, seq := w.LastResultSeq()
+	before, _ := w.ResultTabs()
+
+	if n := w.ReleaseResults(); n != 2 {
+		t.Fatalf("released %d tabs, want 2", n)
+	}
+	if n := w.ReleaseResults(); n != 0 {
+		t.Errorf("a second release found %d tabs with rows", n)
+	}
+	tabs, at := w.ResultTabs()
+	if len(tabs) != 2 || tabs[at].ID != cur {
+		t.Fatalf("tabs %+v, on screen %d: want both kept, %d on screen", tabs, at, cur)
+	}
+	for i, rt := range tabs {
+		b := before[i]
+		if !rt.Released || rt.Result != nil || rt.ID != b.ID || rt.Seq != b.Seq || rt.Title != b.Title ||
+			rt.Stmt != b.Stmt || rt.Shared != b.Shared {
+			t.Errorf("tab %d = %+v, want %+v released and otherwise as it was", i, rt, b)
+		}
+	}
+	if r, s := w.LastResultSeq(); r != nil || s != 0 {
+		t.Errorf("LastResultSeq = %v, %d: a released tab has no result on screen", r, s)
+	}
+	// the share stands, but sends nothing until it is refilled
+	if ctx, _ := w.ChatContext("", Editor{Text: "SELECT 1 AS n"}); ctx.Shared || ctx.Rows != nil {
+		t.Errorf("a released share went with the question: %+v", ctx)
+	}
+
+	// the tab on screen rerun: refilled in place, naming the seq the page last saw
+	if ev := rerun(t, w, cur); ev.Err != nil {
+		t.Fatal(ev.Err)
+	}
+	tabs, _ = w.ResultTabs()
+	if rt := tabs[1]; rt.Released || rt.Result == nil || rt.RerunOf != seq || rt.ID != cur {
+		t.Errorf("after its rerun = %+v, want rows back and rerunOf %d", rt, seq)
+	}
+	if !tabs[0].Released {
+		t.Error("a rerun of one tab refilled another")
+	}
+	// the shared one rerun: it goes to the assistant again
+	if ev := rerun(t, w, shared); ev.Err != nil {
+		t.Fatal(ev.Err)
+	}
+	if ctx, _ := w.ChatContext("", Editor{Text: "SELECT 1 AS n"}); !ctx.Shared || len(ctx.Rows) == 0 {
+		t.Errorf("the refilled share did not go: %+v", ctx)
+	}
+
+	// a script's shows: dropped, counted into cut, so a later show that
+	// joins the tab is numbered after them
+	res := func(v string) *model.Result { return &model.Result{Columns: []string{"v"}, Rows: [][]string{{v}}} }
+	_ = w.CloseUnpinnedResultTabs()
+	for _, v := range []string{"x", "y"} {
+		if err := w.ShowResult("run1", "preview", res(v)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.ReleaseResults()
+	if n, _, cut := w.ScriptResults(); n != 0 || cut != 2 {
+		t.Errorf("ScriptResults = %d, cut %d after the release, want 0, 2", n, cut)
+	}
+	refusal(t, w.ShowScriptResult(0), Invalid)
+	if err := w.ShowResult("run1", "preview", res("z")); err != nil {
+		t.Fatal(err)
+	}
+	if n, at, cut := w.ScriptResults(); n != 1 || at != 0 || cut != 2 || w.LastResult().Rows[0][0] != "z" {
+		t.Errorf("the next show: ScriptResults = %d, %d, cut %d", n, at, cut)
+	}
+	if tabs, at := w.ResultTabs(); tabs[at].Released {
+		t.Error("a show into the released tab left it marked released")
+	}
+}

@@ -1811,7 +1811,7 @@
     else setStatus(on ? "ready on " + on : "not connected", "");
     if (st.hasResult) {
       if (fresh) dbc.grid.restore(viewFor(t, st) || t.grid); else dbc.grid.load();
-    }
+    } else if (releasedNote(st)) dbc.grid.clear(releasedNote(st));
     drawResultTabs(st);
     drawSets(st.sets);
     if (dbc.cmd.onState) dbc.cmd.onState(Object.assign({}, st, { openPlan: fresh && t.planOpen }));
@@ -1845,7 +1845,7 @@
     else setStatus(t.script + " — Ctrl+Enter saves and runs it, Ctrl+S saves", "");
     if (st.hasResult) {
       if (fresh) dbc.grid.restore(viewFor(t, st) || t.grid); else dbc.grid.load();
-    }
+    } else if (releasedNote(st)) dbc.grid.clear(releasedNote(st));
     drawResultTabs(st);
     drawSets(st.sets);
     if (dbc.cmd.onState) dbc.cmd.onState(Object.assign({}, st, { openPlan: fresh && t.planOpen }));
@@ -3591,11 +3591,26 @@
     return m.get(cur.seq) || (cur.rerunOf && m.get(cur.rerunOf)) || null;
   }
 
+  // releasedNote is what the grid says in place of the result d says is on
+  // screen when that result tab's rows were released (N-335): dbc web
+  // drops them an idle hour (conn_idle_timeout) after a browser tab closes,
+  // and a page that comes back ("reopen closed tab", a restored session)
+  // finds the tabs, statements and all, but no rows. "" when the tab on
+  // screen is not released. (The grid's kept views live in this page's
+  // memory only, so a reopened page's rerun starts unsorted, as any new
+  // result does.)
+  function releasedNote(d) {
+    const cur = d && (d.resultTabs || []).find((r) => r.id === d.resultTab);
+    if (!cur || !cur.released) return "";
+    return "Released — this result's rows were dropped to free memory while its browser tab was closed. " +
+      (cur.stmt ? "r (or ↻) reruns its query into this tab." : "Run the script again to show its results.");
+  }
+
   // showResultOf puts on the grid the result d says is on screen: with
   // its kept view, or loaded fresh (which keeps the transpose and, for
   // the same columns, the hidden ones), or nothing.
   function showResultOf(t, d) {
-    if (!d.hasResult) { dbc.grid.clear(); return; }
+    if (!d.hasResult) { dbc.grid.clear(releasedNote(d)); return; }
     const snap = viewFor(t, d);
     if (snap) dbc.grid.restore(snap); else dbc.grid.load();
   }
@@ -3638,7 +3653,7 @@
       // it is the hover card (resultTabCard below); a title too would put
       // the browser's plain box over the card. Screen readers still read
       // the same text the title used to carry.
-      box.append(el("button", { type: "button", role: "tab", class: "rt" + (r.id === rtabState.resultTab ? " on" : ""),
+      box.append(el("button", { type: "button", role: "tab", class: "rt" + (r.id === rtabState.resultTab ? " on" : "") + (r.released ? " rel" : ""),
         "data-rt": String(r.id), "aria-selected": r.id === rtabState.resultTab ? "true" : "false", "aria-description": tip },
       el("span", "n", String(i + 1)),
       r.pinned ? el("span", { class: "pin", "aria-label": "pinned" }, "⚑") : null,
@@ -3957,6 +3972,7 @@
   // resultWhat is what a tab holds, in words: "19 rows", "3 rows
   // affected", "2 results shown".
   function resultWhat(r) {
+    if (r.released) return "released"; // its rows went while the browser tab was closed (N-335)
     return r.exec ? dbc.plural(r.affected || 0, "row") + " affected"
       : r.shows ? dbc.plural(r.shows, "result") + " shown" : dbc.plural(r.rows, "row");
   }
@@ -4025,6 +4041,8 @@
     if (sql) frag.append(cardSQL(sql));
     // what the tab's marks mean: each line only when the tab has the mark
     const note = (cls, glyph, text) => el("div", "hc-note", el("span", "g " + cls, glyph), text);
+    if (r.released) frag.append(note("", "○", "Released — its rows were dropped to free memory while the browser tab was closed; " +
+      (r.stmt ? "rerun it to get them back" : "run the script again to get them back")));
     if (!r.stmt) frag.append(note("", "▤", "A script's results — run the script again to refresh them"));
     if (r.pinned) frag.append(note("pin", "⚑", "Pinned — a run opens a new tab instead of replacing this one"));
     if (r.shared) frag.append(note("shr", "✦", "Shared with the assistant — it goes with every question on this connection"));

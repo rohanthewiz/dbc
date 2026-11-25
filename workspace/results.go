@@ -160,6 +160,11 @@ type resultTab struct {
 	// when a run-all called the same procedure twice.
 	set, sets int
 	nth       int
+	// released: ReleaseResults dropped the tab's rows (res and shows are
+	// nil) and kept the rest — title, name, statement, pin, share, seq —
+	// so a rerun fills it again where it stood. Cleared by whatever puts a
+	// result back in it (placeRunLocked, showIntoLocked).
+	released bool
 }
 
 // setSuffix is what ends the title of a tab holding result set k of n of
@@ -244,6 +249,19 @@ func (s *resultSet) sharedTab() (*resultTab, int) {
 	}
 	if i := slices.Index(s.tabs, s.shared); i >= 0 {
 		return s.shared, i
+	}
+	return nil, -1
+}
+
+// sharedRows is sharedTab for the assistant: nil while the shared tab's
+// rows are released (ReleaseResults). The share itself stands — the strip
+// still marks it, and a rerun fills it again — but a share with nothing in
+// it would put "the user shared a result" in the prompt with no result
+// under it, and take the place of the result the question is about. Until
+// the rerun, the question goes as though nothing were shared.
+func (s *resultSet) sharedRows() (*resultTab, int) {
+	if t, i := s.sharedTab(); t != nil && !t.released {
+		return t, i
 	}
 	return nil, -1
 }
@@ -396,7 +414,7 @@ func (w *Workspace) placeRunLocked(conn string, target *resultTab, run int, grou
 			}
 			t.title, t.stmt, t.res, t.seq, t.run = l.title, l.stmt, l.res, w.resSeq, run
 			t.set, t.sets, t.nth = l.set, l.sets, l.n
-			t.shows, t.cut = nil, 0
+			t.shows, t.cut, t.released = nil, 0, false
 			placed = append(placed, t)
 			continue
 		}
@@ -478,7 +496,7 @@ func (w *Workspace) showIntoLocked(conn string, target *resultTab, title string,
 		t.shows = slices.Clone(t.shows[1:])
 		t.cut++
 	}
-	t.res, t.seq, t.rerunOf = r, w.resSeq, 0
+	t.res, t.seq, t.rerunOf, t.released = r, w.resSeq, 0, false
 	s.cur = i // a show moves the grid to it, as a landed run does
 }
 
@@ -544,6 +562,10 @@ type ResultTab struct {
 	// of the tab's own statement (RerunResultTab), 0 for any other landing.
 	// A UI keeps its grid's sort across a rerun on it — see resultTab.
 	RerunOf int
+	// Released: the tab's rows were dropped (ReleaseResults) and Result is
+	// nil. The tab is otherwise as it was: a rerun (Stmt) fills it again,
+	// and a UI says so in place of a grid.
+	Released bool
 }
 
 // ResultTabs is the active connection's result set: its tabs in strip
@@ -560,7 +582,7 @@ func (w *Workspace) ResultTabs() (tabs []ResultTab, cur int) {
 	for i, t := range s.tabs {
 		tabs[i] = ResultTab{ID: t.id, Seq: t.seq, Title: t.label(), Named: t.name != "", Stmt: t.stmt, Pinned: t.pinned,
 			Result: t.res, Shows: len(t.shows), Shared: t == shared,
-			Writes: t.stmt != "" && db.ChangesRows(t.stmt), RerunOf: t.rerunOf}
+			Writes: t.stmt != "" && db.ChangesRows(t.stmt), RerunOf: t.rerunOf, Released: t.released}
 	}
 	return tabs, s.cur
 }
@@ -771,4 +793,51 @@ func (w *Workspace) DropResults(conn string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	delete(w.sets, conn)
+}
+
+// ReleaseResults drops the rows of every result tab on every connection
+// the workspace has been on, and reports how many tabs had rows to drop.
+// dbc web calls it for a window whose browser tab closed (N-335): with no
+// page left, a tab's results — up to result_tabs × max_rows rows per
+// connection, cells of any size — would otherwise sit in memory until the
+// window is forgotten a day later.
+//
+// The tabs themselves stay, rows aside: title, name, statement, pin,
+// share, group, position and seq. That is what makes the release cheap to
+// undo. A page that does come back (the browser's "reopen closed tab",
+// a restored session) finds its strip as it left it, each tab marked
+// released (ResultTab.Released), and a rerun fills a tab again in place —
+// pinned or shared, with its name — as RerunResultTab always does. The seq
+// is kept so the rerun's rerunOf names the result the page last saw, and
+// the page's kept sort and layout carry over to the fresh rows.
+//
+//	before   [#1 ⚑ orders: 1000 rows] [#4 cats: 12 rows]   #4 current
+//	release  [#1 ⚑ orders: released] [#4 cats: released]   #4 current, no result on screen
+//	rerun #1 [#1 ⚑ orders: 1000 rows] [#4 cats: released]   #1 current
+//
+// What is not dropped: the plans (small, and the Plan tab has its own
+// reasons to keep one) and each set's last statement and error, which the
+// assistant reads as text. A script's shows go, and cut moves on by as
+// many, so a later show that joins the tab is numbered after them.
+//
+// A run in flight is left alone: its target tab is filled when it lands,
+// which clears the mark. dbc web calls this only for a workspace that is
+// not busy, so that is the rare case of outside work (a pipeline preview)
+// landing meanwhile.
+func (w *Workspace) ReleaseResults() (n int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, s := range w.sets {
+		for _, t := range s.tabs {
+			if t.released {
+				continue
+			}
+			if t.res != nil || len(t.shows) > 0 {
+				n++
+			}
+			t.cut += len(t.shows)
+			t.res, t.shows, t.released = nil, nil, true
+		}
+	}
+	return n
 }

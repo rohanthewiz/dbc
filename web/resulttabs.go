@@ -64,6 +64,10 @@ type resultTabRef struct {
 	// has no view kept under its own seq; the page then restores the
 	// sort and layout it kept for the result it replaced (app.js viewFor).
 	RerunOf int `json:"rerunOf,omitempty"`
+	// Released: the tab's rows were dropped while its browser tab was
+	// closed (hub.go, N-335). Rows is 0 and there is no result to fetch:
+	// the page says "released" in place of a grid, and r reruns it.
+	Released bool `json:"released,omitempty"`
 }
 
 // resultTabsState is the active connection's result set: its tabs in strip
@@ -86,7 +90,7 @@ func resultTabsOf(ws *workspace.Workspace) resultTabsState {
 		CanShare: ws.CanShareResults()}
 	for i, t := range tabs {
 		ref := resultTabRef{ID: t.ID, Seq: t.Seq, Title: t.Title, Named: t.Named, Stmt: t.Stmt, Pinned: t.Pinned, Shows: t.Shows,
-			Shared: t.Shared, Writes: t.Writes, RerunOf: t.RerunOf}
+			Shared: t.Shared, Writes: t.Writes, RerunOf: t.RerunOf, Released: t.Released}
 		if r := t.Result; r != nil {
 			ref.Rows, ref.Exec, ref.Affected = len(r.Rows), r.IsExec, r.Affected
 		}

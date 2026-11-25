@@ -53,13 +53,33 @@ import (
 //	idle > releaseAfter (conn_idle_timeout) ──► every idle query tab's
 //	  session released (transactions rolled back); the workspaces stay
 //	  usable. A tab still running a statement waits for it to end; one
-//	  released with state is told so when a page attaches (sayReleased)
+//	  released with state is told so when a page attaches (sayReleased).
+//	  When the page SAID GOODBYE (POST …/release on pagehide) and no
+//	  stream came back, its result tabs' rows go too (N-335)
 //	idle > forgetAfter (a day) ──► the window and its query tabs forgotten;
 //	  their ids now answer 404 and the page opens new ones
 //
 // Why a clock rather than closing on disconnect: EventSource drops and
 // reconnects on its own — a flaky network, a sleeping laptop, a reload —
 // and a transaction the user left open must survive that.
+//
+// WHY ROWS GO ONLY AFTER A GOODBYE: a window's result tabs hold up to
+// result_tabs × max_rows rows per connection, and a cell has no size cap,
+// so a browser tab closed for good would otherwise pin them for the whole
+// day. But "no stream" alone does not mean "closed": a laptop asleep over
+// lunch, or a tab Chrome discarded to save memory, sends nothing and comes
+// back expecting its results. The goodbye is the one sign the page meant
+// to go:
+//
+//	                          goodbye?   at releaseAfter        at forgetAfter
+//	browser tab closed          yes      session + rows go      window goes
+//	reload / bfcache return     yes      — (a stream is back within seconds)
+//	laptop asleep, tab dropped  no       session goes, rows kept  window goes
+//	by Chrome, network gone
+//
+// A page that does come back after its rows went ("reopen closed tab", a
+// restored browser session) finds its result tabs, each marked released,
+// and a rerun fills one again (workspace.ReleaseResults).
 
 // forgetAfter is how long a window with no stream is kept at all.
 const forgetAfter = 24 * time.Hour
@@ -106,6 +126,13 @@ type window struct {
 	// reaper state, guarded by hub.mu
 	idleSince time.Time // zero while a stream is attached
 	released  bool      // the idle release has run since the last attach
+	// goodbye: the page said goodbye (hub.release) and no stream has been
+	// seen since — the idle release drops its result rows too (see WHY
+	// ROWS GO ONLY AFTER A GOODBYE above). Kept apart from handedOff,
+	// which the claims reset on a boot claim and read for another purpose
+	// (a reload is not a copy); this one is reset only by a stream, the
+	// sign that a page is really back.
+	goodbye bool
 
 	// claim state (claims.go). detached is when the last stream went away
 	// (unix nanos; the window's birth before any did) — set from the SSE
@@ -147,6 +174,9 @@ type tab struct {
 	// until a page attaches to say it to (sayReleased); "" when there is
 	// none
 	released atomic.Pointer[string]
+	// dropped is its word on the tab's result rows, when they went with
+	// the session (a window that said goodbye): said the same way
+	dropped atomic.Pointer[string]
 }
 
 func newHub(newWS func(sink func(workspace.Event)) *workspace.Workspace, releaseAfter time.Duration) *hub {
@@ -273,14 +303,21 @@ func (h *hub) close(id string) (*tab, error) {
 // once the run is over; the forget rule still ends a window abandoned for
 // good. A session released while it may have held a transaction leaves
 // the tab a note (releaseIdle), said when a page next attaches.
+//
+// A window that said goodbye has its result rows dropped in the same
+// release (see WHY ROWS GO ONLY AFTER A GOODBYE). The flag is read here,
+// under the lock, and carried with each tab: releaseIdle runs off it.
 func (h *hub) reap(now time.Time) {
-	var release []*tab
+	var release []idleRelease
 	var forget []*window
 	var forgetTabs [][]*tab
 	h.mu.Lock()
 	for id, w := range h.wins {
 		if w.sse.ClientCount() > 0 {
-			w.idleSince, w.released = time.Time{}, false
+			// a stream is the page back: a goodbye that landed after it
+			// attached (a reload's old page, its keepalive late) is undone
+			// here, at the latest one tick on
+			w.idleSince, w.released, w.goodbye = time.Time{}, false, false
 			continue
 		}
 		if w.idleSince.IsZero() {
@@ -298,17 +335,19 @@ func (h *hub) reap(now time.Time) {
 			forget, forgetTabs = append(forget, w), append(forgetTabs, ts)
 		case h.releaseAfter > 0 && idle >= h.releaseAfter && !w.released:
 			w.released = true
-			release = append(release, h.tabsOfLocked(w)...)
+			for _, t := range h.tabsOfLocked(w) {
+				release = append(release, idleRelease{t: t, rows: w.goodbye})
+			}
 		}
 	}
 	h.mu.Unlock()
 	var retry []*window
-	for _, t := range release {
-		if t.ws.Busy() {
-			retry = append(retry, t.win)
+	for _, r := range release {
+		if r.t.ws.Busy() {
+			retry = append(retry, r.t.win)
 			continue
 		}
-		goSafe(nil, "releasing an idle tab", func() { h.releaseIdle(t) })
+		goSafe(nil, "releasing an idle tab", func() { h.releaseIdle(r.t, r.rows) })
 	}
 	if len(retry) > 0 {
 		h.mu.Lock()
@@ -333,12 +372,25 @@ func (h *hub) reap(now time.Time) {
 	}
 }
 
+// idleRelease is one query tab the reaper releases, and whether its
+// result rows go too (its window said goodbye).
+type idleRelease struct {
+	t    *tab
+	rows bool
+}
+
 // releaseIdle closes an idle tab's session. One that may have held a
 // transaction (Session's stateful) leaves the tab a note: the page that
 // comes back would otherwise find the "session state" badge simply gone,
 // and the rest of a BEGIN … COMMIT it was in the middle of would run in
 // autocommit on a new session.
-func (h *hub) releaseIdle(t *tab) {
+//
+// rows: the window said goodbye, so the tab's result rows are dropped
+// too (workspace.ReleaseResults) — and the grid's cache of the one on
+// screen, which holds the same rows and would keep them alive. A tab that
+// had rows to drop gets a note of its own; the page also learns it from
+// the strip, each tab marked released.
+func (h *hub) releaseIdle(t *tab, rows bool) {
 	conn, stateful := t.ws.Session()
 	t.ws.Close()
 	if stateful {
@@ -347,12 +399,42 @@ func (h *hub) releaseIdle(t *tab) {
 			"what runs next runs on a new session", conn, h.releaseAfter)
 		t.released.Store(&note)
 	}
+	if !rows {
+		return
+	}
+	n := t.ws.ReleaseResults()
+	t.viewMu.Lock()
+	t.rv = resultView{}
+	t.viewMu.Unlock()
+	// a retried release (another tab of the window was busy) finds nothing
+	// left to drop, and must not replace the first pass's note with none
+	if n > 0 {
+		keep := "keep their statements"
+		if n == 1 {
+			keep = "keeps its statement"
+		}
+		note := fmt.Sprintf("this tab's results were released %s after its browser tab closed, to free their memory: "+
+			"%s %s — r reruns the one on screen (a script's: run the script again)",
+			h.releaseAfter, plural(n, "result tab"), keep)
+		t.dropped.Store(&note)
+	}
+}
+
+// attached notes that a page attached a stream to w: it is back, whatever
+// goodbye it said before (see window.goodbye). The reaper also clears it
+// on its next tick while the stream lasts; this covers a stream that
+// comes and goes between two ticks.
+func (h *hub) attached(w *window) {
+	h.mu.Lock()
+	w.goodbye = false
+	h.mu.Unlock()
 }
 
 // sayReleased tells w's tabs what the idle reaper did to them while no page
-// was attached, once one is: a log line in each tab released with state.
-// It runs beside handleEvents, which blocks for the stream's life, so it
-// waits (briefly) for the stream to be counted before it sends.
+// was attached, once one is: a log line in each tab released with state,
+// and one in each tab whose result rows went. It runs beside the stream's
+// handler, which blocks for the stream's life, so it waits (briefly) for
+// the stream to be counted before it sends.
 func (h *hub) sayReleased(w *window) {
 	for i := 0; i < 150 && w.sse.ClientCount() == 0; i++ {
 		time.Sleep(20 * time.Millisecond)
@@ -363,6 +445,9 @@ func (h *hub) sayReleased(w *window) {
 	for _, t := range ts {
 		if note := t.released.Swap(nil); note != nil {
 			t.logOn("", "warn", *note)
+		}
+		if note := t.dropped.Swap(nil); note != nil {
+			t.logOn("", "info", *note)
 		}
 	}
 }

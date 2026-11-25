@@ -477,6 +477,9 @@ body.side-dragging { cursor: col-resize; user-select: none; }
 #plan { flex: 1 1 auto; min-width: 0; }
 .results.plan-on .grid-info, .results.plan-on .ractions { visibility: hidden; }
 .grid-msg.exec { color: var(--fg); }
+/* focusable only so a click puts the results pane's keys in reach
+   (workbench.go): no ring for a message nobody tabs to */
+.grid-msg:focus { outline: none; }
 
 /* ── the grid ──────────────────────────────────────────────────────────────
    #grid scrolls; .gh (header) sticks to its top and .rn (row numbers) to
@@ -1142,6 +1145,10 @@ a.btnlink:hover { border-color: var(--accent); }
 .rstrip .rt .x { flex: none; visibility: hidden; padding: 0 2px; border-radius: 2px; }
 .rstrip .rt:hover .x, .rstrip .rt.on .x { visibility: visible; }
 .rstrip .rt .x:hover { color: var(--err); background: var(--panel); }
+/* a tab whose rows were released while its browser tab was closed (N-335):
+   its title in italics, so a strip of them reads as "these need a rerun"
+   before any is clicked */
+.rstrip .rt.rel .tt { font-style: italic; }
 .rstrip .rt .rr { flex: none; padding: 0 2px; border-radius: 2px; }
 .rstrip .rt .rr:hover { color: var(--fg); background: var(--panel); }
 /* a tab's name being edited (app.js renameResultTab): the box in place of

@@ -359,6 +359,12 @@ func (s *Server) handleWindowEvents(ctx rweb.Context) error {
 		return fail(ctx, err)
 	}
 	ctx.Response().SetHeader("Cache-Control", "no-store")
+	// the page is back, whatever goodbye it said; and it hears what the
+	// idle reaper did meanwhile. (The page's own stream is this one: until
+	// N-335, only handleEvents below said the reaper's notes, so a page
+	// never heard of a session released under it.)
+	s.hub.attached(w)
+	goSafe(nil, "a reattach's notes", func() { s.hub.sayReleased(w) })
 	return w.sse.Handler(s.rw)(ctx)
 }
 
@@ -381,6 +387,7 @@ func (s *Server) handleEvents(ctx rweb.Context) error {
 	}
 	ctx.Response().SetHeader("Cache-Control", "no-store")
 	// a page attaching after the idle reaper released a session hears so
+	s.hub.attached(t.win)
 	goSafe(nil, "a reattach's notes", func() { s.hub.sayReleased(t.win) })
 	return t.win.sse.Handler(s.rw)(ctx)
 }

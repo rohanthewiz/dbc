@@ -495,7 +495,9 @@ func (w *Workspace) LastResultSeq() (*model.Result, int) {
 func (w *Workspace) LastResultRerun() (r *model.Result, seq, rerunOf int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if t := w.curLocked(); t != nil {
+	// a released tab (ReleaseResults) keeps its seq for the strip, but has
+	// no result on screen: 0, as "no result" always reads here
+	if t := w.curLocked(); t != nil && !t.released {
 		return t.res, t.seq, t.rerunOf
 	}
 	return nil, 0, 0
@@ -536,6 +538,9 @@ func (w *Workspace) ShowScriptResult(i int) error {
 		return refuse(Busy, Warn, "busy — %s is still running; pick a result once it is done", w.runTag)
 	}
 	t := w.curLocked()
+	if t != nil && t.released {
+		return refuse(Invalid, Warn, "this result tab's results were released while no page was open — run the script again to show them")
+	}
 	if t == nil || i < 0 || i >= len(t.shows) {
 		n := 0
 		if t != nil {

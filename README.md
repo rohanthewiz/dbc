@@ -1855,6 +1855,17 @@ is shown by one browser tab of dbc web at a time: a second browser tab gets
 the saved tabs the first is not showing, or a fresh one, with sessions of its
 own. Closing a browser tab frees its tabs for the next one opened.
 
+A browser tab with no page attached keeps its sessions for
+`conn_idle_timeout` (an hour by default). After that its sessions are
+released, rolling back any open transaction. If the page comes back and a
+session held a transaction or other state, the log says what was lost.
+If the browser tab was closed, rather than asleep or offline,
+its result rows are released at the same time, to free their memory. The
+result tabs stay, with their titles, pins and statements. If the tab is
+brought back (reopen closed tab, a restored browser session), each shows
+*Released* in place of its grid, and `r` (or `↻`) reruns it into the same
+tab. Everything is forgotten after a day.
+
 **Postgres in Docker…**, under **+** or in a connection's right-click menu,
 starts a local PostgreSQL in a container and adds its connection; see
 [Postgres in Docker](#postgres-in-docker).

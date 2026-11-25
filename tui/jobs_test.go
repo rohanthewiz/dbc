@@ -257,6 +257,64 @@ func TestPipesBrowserRunsAJob(t *testing.T) {
 	}
 }
 
+// r resumes an ended job run (N-339): in the monitor of a run whose second
+// step failed, r starts a new run that reuses the first step (↻, reused
+// from the failed run) and runs the second, now fixed; the new run's
+// monitor opens. The Runs list marks the resume, and r there on a run
+// with nothing left to run says so in the list's note.
+func TestRunMonitorResumesAJob(t *testing.T) {
+	m, q, pdir, jdir := newJobsModel(t)
+	writeSpec(t, pdir, "first.json", catsPipe("first", "", "SELECT name FROM cats"))
+	writeSpec(t, pdir, "second.json", catsPipe("second", "", "SELECT nope FROM no_such_table"))
+	writeSpec(t, jdir, "two.json", `{"name": "two", "pipelines": [{"id": "a", "pipeline": "first"}, {"id": "b", "pipeline": "second", "after": ["a"]}]}`)
+
+	key(t, m, "ctrl+j")
+	pipeCursorTo(t, pipes(t, m), prMine, specJob, "two.json")
+	key(t, m, "enter")
+	first := monitor(t, m)
+	q.until(t, m, "the job's end", ended(first.id))
+	if first.run.Status != pipeline.Failed {
+		t.Fatalf("first run: %s", first.run.Status)
+	}
+	findText(t, frame(m), "r resume")
+
+	writeSpec(t, pdir, "second.json", catsPipe("second", "", "SELECT breed FROM cats"))
+	key(t, m, "r")
+	mon := monitor(t, m)
+	if mon.id == first.id {
+		t.Fatalf("r did not open a new run; note %q, log:\n%s", first.note, logText(m))
+	}
+	q.until(t, m, "the resume's end", ended(mon.id))
+	if mon.run.Status != pipeline.Succeeded || mon.run.Resumes != first.id ||
+		mon.run.Pipelines[0].Status != pipeline.Reused || mon.run.Pipelines[1].Status != pipeline.Succeeded {
+		t.Fatalf("the resume: %s resumes %q, steps %s %s", mon.run.Status, mon.run.Resumes,
+			mon.run.Pipelines[0].Status, mon.run.Pipelines[1].Status)
+	}
+	c := frame(m)
+	findText(t, c, "↻ a  first")
+	findText(t, c, "reused from "+first.id)
+	findText(t, c, "manual (terminal, resumes "+first.id+")")
+	if log := logText(m); !strings.Contains(log, "[two] job two: resuming run "+first.id+": reusing a; running b") {
+		t.Errorf("log lacks the resume's line:\n%s", log)
+	}
+
+	// the list: the resume marked; r on it — nothing left to run — refused
+	key(t, m, "esc")
+	key(t, m, "alt+j")
+	rm, ok := m.modal.(*runsModal)
+	if !ok {
+		t.Fatalf("modal = %T", m.modal)
+	}
+	findText(t, frame(m), "↻ resumes "+first.id)
+	if h, _ := rm.current(); h.ID != mon.id {
+		t.Fatalf("the list's first run is %s, want the resume %s", h.ID, mon.id)
+	}
+	key(t, m, "r")
+	if _, still := m.modal.(*runsModal); !still || !strings.Contains(rm.note, "did not resume: nothing to resume") {
+		t.Errorf("r on a run with nothing left: modal %T, note %q", m.modal, rm.note)
+	}
+}
+
 // A param with no default is asked for before the run, and the run gets
 // the value typed; an empty answer is refused in the prompt. p asks for
 // every param, offering each default.

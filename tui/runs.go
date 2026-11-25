@@ -34,7 +34,7 @@ import (
 //	│   ▸ ○ report  cats-report                            after clean  │
 //	│ ── log · clean ─────────────────────────────────────────────────── │
 //	│ 02:00:01 ▶ clean: pipeline clean-and-load                         │
-//	│ ↑↓ move · Enter fold · ^K stop · y id · Y as text · ⌫ list · Esc   │
+//	│ ↑↓ move · Enter fold · ^K stop · r resume · y id · ⌫ list · Esc    │
 //	╰────────────────────────────────────────────────────────────────────╯
 //
 // The tree is the record's: run → pipelines (a job's steps; one for a
@@ -50,6 +50,10 @@ import (
 // record. A run another process runs sends this engine nothing, so the
 // 1s tick re-reads it every 2s while it is live (jobTick). Stop (^K)
 // stops a run of this process; another's is refused with where it runs.
+//
+// RESUME (r, N-339) in the list or the monitor starts a resume of a job
+// run that has ended: a new run that reuses the steps it finished (↻)
+// and runs the rest (resumeRun); the new run's monitor opens.
 
 // runsListMax bounds the Runs list: the newest this many.
 const runsListMax = 300
@@ -126,6 +130,9 @@ func (rm *runsModal) build(m *Model) {
 		st := pipeline.Status(h.Status)
 		mark := m.runStyle(st)
 		desc := fmt.Sprintf("%-8s  %-8s  %s", h.Kind, h.Trigger, when(h.Started, now))
+		if h.Resumes != "" {
+			desc += " · ↻ resumes " + h.Resumes
+		}
 		if h.Error != "" && st != pipeline.Succeeded {
 			desc += " · " + h.Error
 		}
@@ -217,9 +224,9 @@ func (rm *runsModal) footer() string {
 	if rm.filtering {
 		return "typing filters · ↑↓ move · Enter opens · Esc/Tab: back to the list"
 	}
-	f := "Enter opens · ^K stops · y copies the id · / filter · Esc close"
+	f := "Enter opens · ^K stops · r resumes · y copies the id · / filter · Esc close"
 	if rm.name != "" {
-		f = "Enter opens · ^K stops · y copies the id · a all runs · / filter · Esc close"
+		f = "Enter opens · ^K stops · r resumes · y copies the id · a all runs · / filter · Esc close"
 	}
 	return f
 }
@@ -281,6 +288,14 @@ func (rm *runsModal) key(m *Model, k tea.KeyPressMsg) (tea.Cmd, bool) {
 	case "ctrl+k":
 		if h, ok := rm.current(); ok {
 			rm.note = m.stopRun(h.ID, h.Status)
+		}
+	case "r":
+		if h, ok := rm.current(); ok {
+			cmd, note := m.resumeRun(h.ID)
+			if note != "" {
+				rm.note = note
+			}
+			return cmd, false
 		}
 	case "y":
 		if h, ok := rm.current(); ok {
@@ -679,6 +694,10 @@ func (mon *runMonitor) draw(m *Model, s Surface) *caret {
 	if mon.back != nil {
 		foot = "↑↓ move · Enter fold · ^K stop · y id · Y as text · ⌫ the runs · Esc close"
 	}
+	// an ended job run can be resumed (N-339): said where it can
+	if r.Kind == jobs.KindJob && !mon.live() {
+		foot = strings.Replace(foot, " · y id", " · r resume · y id", 1)
+	}
 	s.Put(1, s.H()-1, truncate(foot, s.W()-2), muted)
 	return nil
 }
@@ -792,10 +811,13 @@ func (mon *runMonitor) rowFacts(row monRow, now time.Time) (status pipeline.Stat
 		if len(p.After) > 0 {
 			more = "after " + strings.Join(p.After, ", ")
 		}
+		if p.ReusedFrom != "" {
+			more = strings.TrimSpace("reused from " + p.ReusedFrom + "  " + more)
+		}
 		if p.Error != "" {
 			more = "✗ " + firstLine(p.Error)
 		}
-		if p.Status == pipeline.Queued || p.Status == pipeline.Skipped {
+		if p.Status == pipeline.Queued || p.Status == pipeline.Skipped || p.Status == pipeline.Reused {
 			return p.Status, "", "", more
 		}
 		return p.Status, took(p.Started, p.Ended, now), plural(int(p.Rows()), "row"), more
@@ -815,7 +837,7 @@ func (mon *runMonitor) rowFacts(row monRow, now time.Time) (status pipeline.Stat
 		if f.Error != "" {
 			more = "✗ " + firstLine(f.Error)
 		}
-		if f.Status == pipeline.Queued || f.Status == pipeline.Skipped {
+		if f.Status == pipeline.Queued || f.Status == pipeline.Skipped || f.Status == pipeline.Reused {
 			return f.Status, "", "", more
 		}
 		return f.Status, took(f.Started, f.Ended, now), plural(int(f.Rows), "row"), more
@@ -919,6 +941,12 @@ func (mon *runMonitor) key(m *Model, k tea.KeyPressMsg) (tea.Cmd, bool) {
 		mon.setFold(false)
 	case "ctrl+k":
 		mon.note = m.stopRun(mon.id, string(mon.run.Status))
+	case "r":
+		cmd, note := m.resumeRun(mon.id)
+		if note != "" {
+			mon.note = note
+		}
+		return cmd, false
 	case "y":
 		mon.note = "copied the run's id"
 		return m.copyString(mon.id, "the run's id"), false

@@ -375,7 +375,8 @@ func shortDur(d time.Duration) string {
 }
 
 // runGlyph is a state's mark, as the run tree (`dbc run show`) and dbc
-// web draw it: ○ queued, ● running, ✓ ✗ ■ done, ↷ skipped, ⚠ interrupted.
+// web draw it: ○ queued, ● running, ✓ ✗ ■ done, ↷ skipped, ⚠ interrupted,
+// ↻ reused by a resume (N-339).
 func runGlyph(s pipeline.Status) string {
 	switch s {
 	case pipeline.Succeeded:
@@ -390,11 +391,14 @@ func runGlyph(s pipeline.Status) string {
 		return "●"
 	case pipeline.Interrupted:
 		return "⚠"
+	case pipeline.Reused:
+		return "↻"
 	}
 	return "○"
 }
 
-// runStyle is a state's color.
+// runStyle is a state's color. Reused is muted, as skipped is: the step
+// did nothing in this run.
 func (m *Model) runStyle(s pipeline.Status) Style {
 	switch s {
 	case pipeline.Succeeded:
@@ -500,6 +504,42 @@ func (m *Model) startJob(file, text string, params map[string]string) tea.Cmd {
 	head, err := m.jobs.StartJob(jobs.JobRequest{Spec: spec, Params: params, Trigger: jobs.TriggerManual,
 		By: "terminal", Source: file})
 	return m.started(head, err)
+}
+
+// resumeRun resumes run id (N-339, jobs/resume.go): a new run of its job,
+// read from jobs_dir as it is now, that reuses the steps the run finished
+// (unchanged since) and runs the rest. It opens the new run's monitor, as
+// ▶ Run does; refused, it answers why, for the Runs list's or the
+// monitor's note (the log has it too). Any ended job run may be resumed:
+// a succeeded one re-runs what was edited since, and the engine refuses
+// one with nothing left to run.
+func (m *Model) resumeRun(id string) (tea.Cmd, string) {
+	r, ok := m.jobs.Get(id)
+	switch {
+	case !ok:
+		return nil, "no run " + id + " to resume"
+	case r.Kind != jobs.KindJob:
+		return nil, "only a job's run can be resumed — a pipeline run runs whole (Ctrl+J runs it again)"
+	case r.Status == pipeline.Running || r.Status == pipeline.Queued:
+		return nil, "that run is still going — it can be resumed once it has ended"
+	}
+	// the record's file name when it has one (the job as saved), else
+	// its name; a job run from a file outside jobs_dir is not found
+	// here, and `dbc job run FILE --resume ID` resumes it
+	spec, file, err := jobs.LoadJob(m.cfg.JobsDir, cmpOr(r.Source, r.Name))
+	if err != nil {
+		msg := "cannot resume run " + id + ": " + serr.UserMsgFromErr(err, err.Error())
+		m.log(logErr, msg)
+		return nil, msg
+	}
+	m.syncPlugins()
+	head, err := m.jobs.StartJob(jobs.JobRequest{Spec: spec, Trigger: jobs.TriggerManual, By: "terminal",
+		Source: file, Resume: id})
+	if err != nil {
+		cmd := m.started(head, err) // logs it
+		return cmd, "did not resume: " + firstLine(serr.UserMsgFromErr(err, err.Error()))
+	}
+	return m.started(head, nil), ""
 }
 
 // started lands a start's answer: the run tied to the tab on screen (its

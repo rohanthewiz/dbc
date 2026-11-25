@@ -3100,11 +3100,15 @@ tab's run slot, so a tab is not busy while a job loads — and opens its
 
 — the job, its steps, each step's fragments, each fragment's nodes with
 rows in and out, batches and time, the state glyphs `dbc run show` prints
-(`○ ● ✓ ✗ ■ ↷ ⚠`). `↑↓` move, `Enter` folds, `←` `→` fold and unfold; the
+(`○ ● ✓ ✗ ■ ↷ ⚠`, and `↻` for a step a resume reused). `↑↓` move, `Enter`
+folds, `←` `→` fold and unfold; the
 row under the cursor narrows the log below it (a step's lines, a
 fragment's) and pins its error above it in full. `Ctrl+K` stops the run —
 every fragment in flight rolls back — `y` copies its id, `Y` the run as
-text. `Esc` leaves it running.
+text. `r` on a job run that has ended **resumes** it
+([Resuming a run](#jobs)): the job as saved now runs again from where
+that run stopped, its finished steps reused, and the new run's monitor
+opens. `Esc` leaves it running.
 
 While a run goes, its lines go to the log too, tagged with whose they are
 (`[nightly › clean] …`), and the status bar's right end says
@@ -3116,8 +3120,9 @@ the same way; its preview sinks' rows join the script's own results.
 
 `Alt+J` (or ◷ Runs in the browser) lists **the runs**: this TUI's, and the
 records in `runs_dir` — `dbc web`'s, a cron's `dbc job run` — newest
-first, filtered by typing; `Enter` opens one in the monitor, `Backspace`
-comes back. A run another process runs is read again while it goes; a
+first, filtered by typing (a resume reads `↻ resumes ID`); `Enter` opens
+one in the monitor, `Backspace` comes back, `r` resumes the run under the
+cursor. A run another process runs is read again while it goes; a
 `dbc job run`'s on this machine can be stopped from here too (it is
 interrupted, as Ctrl+C there would), another dbc web's only there. The
 TUI does not schedule: a job's cron lines fire

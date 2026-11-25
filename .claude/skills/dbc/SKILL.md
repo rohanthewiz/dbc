@@ -135,7 +135,7 @@ Exit codes: `0` ok, `1` failure, `2` bad usage (incl. unknown connection),
 | `dbc runs [--job N\|--pipeline N] [--status S] [--since 7d] [--limit N]` | the run records in `runs_dir` (every process's: dbc web's schedule, cron, headless), newest first; a dead process's `running` reads `interrupted` | Jobs headless |
 | `dbc runs --sql "SELECT …"` / `dbc run show ID [-t json]` | query the records as tables `runs`, `pipelines`, `fragments`, `nodes` (a throwaway bytdb) / one run as a tree, or its record | Jobs headless |
 | `dbc run cancel ID [--url U] [--secret S]` | stop a run: a `dbc job run`/`dbc pipeline run` on this machine by interrupting its process (its record names it; no dbc web needed), else a running `dbc web`'s (a scheduled job, a run started in the browser) through its API, with the secret dbc web was started with (`$DBC_WEB_SECRET`); waits for it to end | Jobs headless |
-| `dbc copy --from A --to B [--create] [--truncate] [--where C] [--columns a,b] [--batch N] [--dry-run] SRC [DST]` | copy a table across connections/engines in one transaction; `--query SQL DST` copies a query's rows instead; `--batch` sizes INSERTs off Postgres; `--dry-run` prints the plan (query, rows, CREATE, truncate) and writes nothing | Copy headless |
+| `dbc copy --from A --to B [--create] [--truncate] [--where C] [--columns a,b] [--batch N] [--dry-run] SRC [DST]` | copy a table across connections/engines in one transaction; `--query SQL DST` copies a query's rows instead; `--tables a,b [-k]` copies several, each under its own name, with a total line; `--batch` sizes INSERTs off Postgres; `--dry-run` prints the plan (query, rows, CREATE, truncate) and writes nothing | Copy headless |
 | `dbc explain [-a] [-t text\|json\|markdown\|html\|pdf\|png\|jpeg\|mermaid] [--fail-on warn\|crit] "SQL"` | plan + findings; one statement | Explain headless |
 | `dbc erd [-t mermaid\|markdown\|png\|jpeg] [--table T] [--depth N] [--views]` | schema diagram | Diagrams headless |
 | `dbc dump [-t plain\|custom\|directory\|tar\|split] [-j N] [-o PATH] [--schema-only] [--table P] [--dry-run] [-- pg_dump opts]` | Postgres only: runs pg_dump (found on PATH, Homebrew kegs, or `--pg-bin`; when none is new enough for the server, `postgres:<major>`'s in Docker) on the connection; `split` = SQL file per table + `restore.sql`; config `pg_bin` names the tools' dir. Also "Dump database…" in the TUI/web connections menu | Dumps headless (Postgres) |
@@ -163,7 +163,7 @@ process ran it, is in dbc web's Runs view (`Alt+R`) and the TUI's (`Alt+J`).
 
 Binary outputs (`pdf`, `png`, `jpeg`) need `-o` or a pipe — dbc refuses to
 print them on a terminal. `explain -t json | jq .insights` is the
-tool-friendly form. `copy` refuses `-c`, `-f`, `--tx`, `-k`, `-t`, `-o`.
+tool-friendly form. `copy` refuses `-c`, `-f`, `--tx`, `-t`, `-o`, and `-k` without `--tables`.
 
 ## Go scripts
 

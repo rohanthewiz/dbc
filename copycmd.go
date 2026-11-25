@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/x/term"
 	"github.com/rohanthewiz/logger"
@@ -29,6 +30,7 @@ import (
 //	dbc copy --from prod --to local --columns id,email,created_at users      a column subset
 //	dbc copy --from prod --to local --create --query "SELECT …" order_totals  a query's rows
 //	dbc copy --from prod --to mysql --batch 2000 orders                       bigger INSERTs
+//	dbc copy --from prod --to local --create --tables customers,orders,items  several tables
 //
 // It is exactly the one-call script it replaces —
 //
@@ -49,6 +51,13 @@ import (
 //
 // Exit status: 0 copied, 1 the copy failed (the destination is as it was),
 // 2 bad usage, 130 Ctrl+C (rolled back too).
+//
+// Several tables (--tables) are as many copies, one after another, each
+// in its own transaction, each with its own summary line as it ends; a
+// total line follows them. A table that fails is rolled back on its own:
+// the ones before it stay copied, and by default the ones after it are not
+// tried (-k tries them). The total line names what failed and what was not
+// tried, so a re-run can name just those. See copyMany.
 
 var (
 	flagFrom     string
@@ -66,6 +75,8 @@ var (
 	// take the destination table's name for the source table's
 	flagQuerySet bool
 	flagBatch    int
+	// --tables: several tables, each copied under its own name (N-336)
+	flagTables []string
 )
 
 // copyProgressEvery is how often the terminal progress line is printed. It
@@ -78,13 +89,15 @@ func copyCommand() *cli.Command {
 	return &cli.Command{
 		Name:      "copy",
 		Usage:     "copy a table from one connection to another (any engines)",
-		ArgsUsage: "<table> [dest-table]  |  --query SQL <dest-table>",
+		ArgsUsage: "<table> [dest-table]  |  --query SQL <dest-table>  |  --tables T1,T2,…",
 		Description: "Copies every row of <table> on --from into the table of the same name (or [dest-table]) " +
 			"on --to, which may be the same connection or a different engine. The destination loads in one " +
 			"transaction: a failed or canceled copy leaves it as it was. Postgres to Postgres streams COPY to " +
 			"COPY; other pairings go row by row. --create makes the destination when it is missing, " +
 			"--truncate empties it first, --where filters the source rows, --columns picks some of them. " +
-			"--query copies a query's rows instead of a table, into <dest-table>.",
+			"--query copies a query's rows instead of a table, into <dest-table>. --tables copies several " +
+			"tables, each under its own name and in its own transaction, stopping at the first that fails " +
+			"unless -k is given.",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "from", Usage: "source connection `NAME`", Destination: &flagFrom},
 			&cli.StringFlag{Name: "to", Usage: "destination connection `NAME`", Destination: &flagTo},
@@ -104,6 +117,9 @@ func copyCommand() *cli.Command {
 					flagQuerySet = true
 					return nil
 				}},
+			&cli.StringSliceFlag{Name: "tables",
+				Usage:       "copy each of these `TABLES` (comma-separated, or repeated) under its own name, in this order, in place of a table argument; -k goes on past one that fails",
+				Destination: &flagTables},
 			&cli.IntFlag{Name: "batch",
 				Usage: "`N` rows per INSERT into a destination that is not Postgres (default 500, lowered under the engine's bind-parameter limit)",
 				// 0 is "not given", which the help would print as "(default:
@@ -130,7 +146,7 @@ func copyAction(ctx context.Context, cmd *cli.Command) error {
 	if err := checkCopyFlags(); err != nil {
 		usage(err.Error())
 	}
-	req, err := copyRequest(cmd.Args().Slice())
+	reqs, err := copyRequests(cmd.Args().Slice())
 	if err != nil {
 		usage(err.Error())
 	}
@@ -139,7 +155,8 @@ func copyAction(ctx context.Context, cmd *cli.Command) error {
 	cfg, mgr := setup(demoLazy)
 	defer mgr.Close()
 	warnConfig(cfg)
-	if err = checkCopyConns(cfg, req); err != nil {
+	// every request has the same connections and options: one check does
+	if err = checkCopyConns(cfg, reqs[0]); err != nil {
 		usage(err.Error())
 	}
 
@@ -149,6 +166,11 @@ func copyAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	runCtx, stop := interruptible()
 	defer stop()
+	if len(reqs) > 1 {
+		copyManyAction(runCtx, mgr, reqs, progress)
+		return nil
+	}
+	req := reqs[0]
 	if flagDryRun {
 		// the plan, on stdout as the summary would be; a copy that would
 		// fail before its first row (a missing table without --create)
@@ -184,7 +206,9 @@ func copyAction(ctx context.Context, cmd *cli.Command) error {
 // (-c reads as "copy from here"; -o as "the summary goes there").
 //
 //   - -c, --conn: the two ends are --from and --to; one name cannot say which.
-//   - --file, --tx, --keep-going: a copy runs no SQL buffer.
+//   - --file, --tx: a copy runs no SQL buffer.
+//   - --keep-going, unless --tables: a copy of one table has nothing to go
+//     on to; with several, -k tries the rest past one that fails.
 //   - --format, --out: the output is one summary line, not a result set.
 func checkCopyFlags() error {
 	switch {
@@ -194,14 +218,65 @@ func checkCopyFlags() error {
 		return errors.New("--file is SQL for a headless query; `dbc copy` does not read it")
 	case flagTx:
 		return errors.New("--tx wraps a headless query; a copy always loads in one transaction of its own")
-	case flagKeep:
-		return errors.New("--keep-going is for a headless query; a copy stops at its first failure")
+	case flagKeep && len(flagTables) == 0:
+		return errors.New("--keep-going is for a headless query, or a copy of several --tables; a copy of one table stops at its failure")
 	case flagFormat != "" && flagFormat != "text":
 		return errors.New("copy prints a one-line summary; --format does not apply")
 	case flagOut != "":
 		return errors.New("copy prints a one-line summary; --out does not apply (redirect stdout)")
 	}
 	return nil
+}
+
+// copyRequests is the command line's copies: one, from copyRequest, or one
+// a table for --tables. Each of those is built by copyRequest too, as if
+// the table had been the argument, so it is checked by the same rules and
+// carries the same options (Where, Columns, Create, Truncate, BatchSize).
+//
+// --tables is a flag, not more arguments, because a second argument
+// already means something: `copy orders archive.orders` copies under
+// another name. Taking a third as a third table would make two arguments
+// mean a rename and three mean three tables.
+//
+// Refused with --tables: a table argument as well (which list wins?),
+// --query (one source, not several), a table named twice (its second copy
+// would duplicate or replace the first), and --from equal to --to, which
+// with every table under its own name would copy each onto itself.
+func copyRequests(args []string) ([]copyReq, error) {
+	if len(flagTables) == 0 {
+		req, err := copyRequest(args)
+		if err != nil {
+			return nil, err
+		}
+		return []copyReq{req}, nil
+	}
+	switch {
+	case len(args) > 0:
+		return nil, fmt.Errorf("--tables names the tables to copy; got %s as well — put it in --tables", strings.Join(args, " "))
+	case flagQuerySet || flagQuery != "":
+		return nil, errors.New("--query copies one query's rows, --tables several tables: give one of them")
+	case flagFrom != "" && flagFrom == flagTo:
+		return nil, fmt.Errorf("--tables copies each table under its own name, so on one connection (%s) each would "+
+			"be copied onto itself — copy them one at a time, each with a destination name", flagFrom)
+	}
+	seen := map[string]bool{}
+	reqs := make([]copyReq, 0, len(flagTables))
+	for _, t := range flagTables {
+		t = strings.TrimSpace(t)
+		switch {
+		case t == "":
+			return nil, errors.New("--tables has an empty name in it")
+		case seen[t]:
+			return nil, fmt.Errorf("--tables names %s twice", t)
+		}
+		seen[t] = true
+		req, err := copyRequest([]string{t})
+		if err != nil {
+			return nil, err
+		}
+		reqs = append(reqs, req)
+	}
+	return reqs, nil
 }
 
 // copyRequest turns the flags and arguments into a copyReq, refusing the
@@ -223,7 +298,8 @@ func checkCopyFlags() error {
 // that check does not apply.
 func copyRequest(args []string) (copyReq, error) {
 	const use = "usage: dbc copy --from <conn> --to <conn> [--create] [--truncate] [--where SQL] [--columns COLS] [--batch N] [--dry-run] <table> [dest-table]\n" +
-		"       dbc copy --from <conn> --to <conn> --query SQL [--create] [--truncate] [--batch N] [--dry-run] <dest-table>"
+		"       dbc copy --from <conn> --to <conn> --query SQL [--create] [--truncate] [--batch N] [--dry-run] <dest-table>\n" +
+		"       dbc copy --from <conn> --to <conn> --tables T1,T2,… [-k] [--create] [--truncate] [--where SQL] [--columns COLS] [--batch N] [--dry-run]"
 	switch {
 	case flagFrom == "" || flagTo == "":
 		return copyReq{}, errors.New("copy needs both --from and --to\n" + use)
@@ -374,4 +450,172 @@ func runCopy(ctx context.Context, mgr *db.Manager, req copyReq, progress io.Writ
 	}
 	s := sdb.New(mgr, nil, print).WithContext(ctx)
 	return s.Copy(req.from, req.to, req.table, req.opts)
+}
+
+// manyRun is the outcome of a copy of several tables (--tables), or of its
+// dry run: what the total line says and the exit status follows from.
+type manyRun struct {
+	dry      bool // a dry run: done counts plans with no problem
+	tables   int
+	done     int      // tables copied (or planned with no problem)
+	rows     int64    // rows copied, summed over the tables done
+	failed   []string // tables whose copy failed, or whose plan has a problem
+	canceled string   // the table Ctrl+C stopped, "" for none
+	notTried []string // tables after a stop, in order
+	firstErr error    // the first failure's error, for its exit status
+	took     time.Duration
+}
+
+// String is the total line: what was done, then — named, so a re-run can
+// list just those — what failed, was canceled, or was not tried.
+//
+//	copied 2 of 3 tables, 1290 rows in 41ms; failed: items
+//	copied 1 of 3 tables, 990 rows in 18ms; failed: orders; not tried: items
+//	dry run of 3 tables, nothing was written; problem: items
+func (r manyRun) String() string {
+	var msg string
+	if r.dry {
+		msg = fmt.Sprintf("dry run of %d tables, nothing was written", r.tables)
+	} else {
+		msg = fmt.Sprintf("copied %d of %d tables, %d rows in %s", r.done, r.tables, r.rows, r.took.Round(time.Millisecond))
+	}
+	if len(r.failed) > 0 {
+		word := "failed"
+		if r.dry {
+			word = "problem"
+		}
+		msg += "; " + word + ": " + strings.Join(r.failed, ", ")
+	}
+	if r.canceled != "" {
+		msg += "; canceled: " + r.canceled
+	}
+	if len(r.notTried) > 0 {
+		msg += "; not tried: " + strings.Join(r.notTried, ", ")
+	}
+	return msg
+}
+
+// tableNames is the source tables of reqs, for a manyRun's lists.
+func tableNames(reqs []copyReq) []string {
+	out := make([]string, len(reqs))
+	for i, r := range reqs {
+		out[i] = r.table
+	}
+	return out
+}
+
+// copyMany copies each of reqs in turn, each in its own transaction (it is
+// runCopy, one table at a time), printing a table's summary line to out as
+// it ends and handing a failure to onFail (copyManyAction prints it on
+// stderr). The tables run one after another, not side by side: the order
+// is the user's (a parent before the child whose foreign key needs it),
+// and one at a time is what each table's copy already assumes of the two
+// servers.
+//
+//	for each table:
+//	    copied    ─► its summary line; next
+//	    canceled  ─► stop: it rolled back, the rest are not tried
+//	    failed    ─► onFail; with keepGoing next, else stop
+//	                 (a connection that could not be opened stops either
+//	                 way: every table after would fail on it too)
+func copyMany(ctx context.Context, mgr *db.Manager, reqs []copyReq, keepGoing bool,
+	out, progress io.Writer, onFail func(copyReq, error)) manyRun {
+	start := time.Now()
+	r := manyRun{tables: len(reqs)}
+	for i, req := range reqs {
+		st, err := runCopy(ctx, mgr, req, progress)
+		if err == nil {
+			r.done++
+			r.rows += st.Rows
+			fmt.Fprintln(out, st.String())
+			continue
+		}
+		if sdb.IsCanceled(err) {
+			r.canceled, r.notTried = req.table, tableNames(reqs[i+1:])
+			break
+		}
+		r.failed = append(r.failed, req.table)
+		if r.firstErr == nil {
+			r.firstErr = err
+		}
+		onFail(req, err)
+		if !keepGoing || db.IsConnectErr(err) {
+			r.notTried = tableNames(reqs[i+1:])
+			break
+		}
+	}
+	r.took = time.Since(start)
+	return r
+}
+
+// planMany is copyMany's dry run: each table's plan to out, a blank line
+// between them. It goes through every table, whatever -k says, since a dry
+// run is for finding the problems, all of them; only a cancel, or a
+// connection that could not be opened, stops it.
+func planMany(ctx context.Context, mgr *db.Manager, reqs []copyReq, out io.Writer,
+	onErr func(copyReq, error)) manyRun {
+	r := manyRun{dry: true, tables: len(reqs)}
+	for i, req := range reqs {
+		if i > 0 {
+			fmt.Fprintln(out)
+		}
+		plan, err := planCopy(ctx, mgr, req)
+		switch {
+		case err != nil && sdb.IsCanceled(err):
+			r.canceled, r.notTried = req.table, tableNames(reqs[i+1:])
+			return r
+		case err != nil:
+			r.failed = append(r.failed, req.table)
+			if r.firstErr == nil {
+				r.firstErr = err
+			}
+			onErr(req, err)
+			if db.IsConnectErr(err) {
+				r.notTried = tableNames(reqs[i+1:])
+				return r
+			}
+			continue
+		}
+		fmt.Fprint(out, plan.String())
+		if plan.Problem != "" {
+			r.failed = append(r.failed, req.table)
+		} else {
+			r.done++
+		}
+	}
+	return r
+}
+
+// copyManyAction is copyAction for several tables: the copies, or with
+// --dry-run their plans, then the total line on stdout and the exit status.
+//
+//	0    every table copied (planned without a problem)
+//	1    one or more failed (had a problem), the rest as the total line says
+//	4    … where the first failure was a connection that could not be opened
+//	130  Ctrl+C: the table being copied rolled back, those before it stay
+func copyManyAction(ctx context.Context, mgr *db.Manager, reqs []copyReq, progress io.Writer) {
+	var r manyRun
+	if flagDryRun {
+		r = planMany(ctx, mgr, reqs, os.Stdout, func(req copyReq, err error) {
+			reportErr(err, "copy plan of "+req.table+" failed")
+		})
+	} else {
+		r = copyMany(ctx, mgr, reqs, flagKeep, os.Stdout, progress, func(req copyReq, err error) {
+			reportErr(err, "copy of "+req.table+" failed")
+		})
+	}
+	if flagDryRun {
+		fmt.Println() // the total apart from the last plan, as the plans are from each other
+	}
+	fmt.Println(r.String())
+	switch {
+	case r.canceled != "":
+		canceled("copy")
+	case r.firstErr != nil && db.IsConnectErr(r.firstErr):
+		logger.CloseLog()
+		os.Exit(exitConnect)
+	case len(r.failed) > 0:
+		logger.CloseLog()
+		os.Exit(1)
+	}
 }

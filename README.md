@@ -3271,6 +3271,8 @@ pipeline:
     --query "SELECT customer_id, sum(total) AS spent FROM orders GROUP BY 1" spend
                                                                  # a query's rows, into spend
 ./dbc copy --from prod --to mysql --batch 2000 orders            # bigger INSERTs off Postgres
+./dbc copy --from prod --to local --create \
+    --tables customers,orders,items                              # several tables, in this order
 ```
 
 | Flag | |
@@ -3283,6 +3285,7 @@ pipeline:
 | `--columns COLS` | copy only these source columns, in this order (comma-separated, or repeated). They are column names, not expressions; the destination's have the same names |
 | `--query SQL` | copy the rows one statement returns instead of a table. The one argument is then the destination table. It replaces `--where` and `--columns`, which belong in the query. A write with `RETURNING` moves rows, as `Query` does under [ETL](#etl-across-connections) |
 | `--batch N` | rows per `INSERT` into a destination that is not Postgres (default 500, lowered to stay under the engine's bind-parameter limit). Refused into Postgres, which loads with `COPY` |
+| `--tables T1,T2,…` | copy several tables (comma-separated, or repeated), each under its own name, in this order, in place of a table argument. The other flags apply to each. `-k` goes on past a table that fails |
 
 A second table name is the destination table; without it, the destination
 has the source's name. The copy is the same as `s.Copy` in a script:
@@ -3293,8 +3296,29 @@ it as it was. On success it prints one line to stdout
 When stderr is a terminal, it also prints the row count there every
 100,000 rows. A cron job gets only the summary line. Exit status: 0
 copied, 1 failed, 2 bad usage, including an unknown connection name or a
-table copied onto itself. `-c`, `-f`, `--tx`, `-k`, `-t` and `-o` are
-refused, because a copy has no use for them.
+table copied onto itself. `-c`, `-f`, `--tx`, `-t` and `-o` are
+refused, because a copy has no use for them, and so is `-k` without
+`--tables`.
+
+With `--tables`, the tables are copied one after another, each in its own
+transaction. Each table's summary line is printed as it ends, and a total
+line comes last:
+
+```
+copied 179982 rows pg1:public.orders → pg2:public.orders in 405ms (direct COPY)
+dbc: copy of items failed: … (on stderr)
+copied 1 of 3 tables, 179982 rows in 590ms; failed: items; not tried: refunds
+```
+
+A table that fails is rolled back alone. The tables before it stay
+copied, and the ones after it are not tried unless `-k` is given (a
+connection that cannot be opened stops it either way). The total line
+names what failed and what was not tried, so a re-run can list just
+those. The exit status is 1 when any table failed, 4 when the first
+failure was a connection that could not be opened, and 130 on `Ctrl+C`
+(the table being copied rolls back). A `--dry-run` plans every table and
+exits 1 if any plan has a problem. The tables must be on two different
+connections, since each keeps its name.
 
 ### Explain headless
 

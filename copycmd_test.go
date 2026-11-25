@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -488,5 +490,199 @@ func TestRunCopyCanceled(t *testing.T) {
 	_, err := runCopy(ctx, mgr, copyReq{from: "src", to: "dst", table: "cats", opts: sdb.CopyOpts{Create: true}}, nil)
 	if err == nil || !sdb.IsCanceled(err) {
 		t.Fatalf("err = %v, want a cancellation", err)
+	}
+}
+
+// TestCopyRequestsTables: --tables is one copyReq a table, each with the
+// options a single copy would have, and the shapes it cannot mean are
+// refused before anything is opened.
+func TestCopyRequestsTables(t *testing.T) {
+	// no --tables: copyRequest's one request
+	resetFlags(t)
+	flagFrom, flagTo = "a", "b"
+	reqs, err := copyRequests([]string{"t", "t2"})
+	if err != nil || len(reqs) != 1 || reqs[0].dest != "t2" {
+		t.Fatalf("one table: %+v %v", reqs, err)
+	}
+
+	resetFlags(t)
+	flagFrom, flagTo, flagCreate, flagWhere = "a", "b", true, "id > 1"
+	flagColumns, flagTables = []string{"id"}, []string{"cats", " owners ", "public.toys"}
+	reqs, err = copyRequests(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tableNames(reqs); !reflect.DeepEqual(got, []string{"cats", "owners", "public.toys"}) {
+		t.Errorf("tables = %q", got)
+	}
+	for _, r := range reqs {
+		want := sdb.CopyOpts{Create: true, Where: "id > 1", Columns: []string{"id"}}
+		if r.from != "a" || r.to != "b" || r.dest != "" || !reflect.DeepEqual(r.opts, want) {
+			t.Errorf("%s: %+v", r.table, r)
+		}
+	}
+
+	cases := []struct {
+		name string
+		set  func()
+		args []string
+		err  string
+	}{
+		{"and a table argument", func() {}, []string{"orders"}, "put it in --tables"},
+		{"and --query", func() { flagQuery, flagQuerySet = "SELECT 1", true }, nil, "give one of them"},
+		{"on one connection", func() { flagTo = "a" }, nil, "onto itself"},
+		{"a table twice", func() { flagTables = []string{"cats", "owners", "cats"} }, nil, "names cats twice"},
+		{"an empty name", func() { flagTables = []string{"cats", " "} }, nil, "empty name"},
+		{"no --to", func() { flagTo = "" }, nil, "both --from and --to"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			resetFlags(t)
+			flagFrom, flagTo, flagTables = "a", "b", []string{"cats", "owners"}
+			c.set()
+			if _, err := copyRequests(c.args); err == nil || !strings.Contains(err.Error(), c.err) {
+				t.Fatalf("err = %v, want one containing %q", err, c.err)
+			}
+		})
+	}
+
+	// -k is a copy flag once there are tables to go on to
+	resetFlags(t)
+	flagKeep, flagTables = true, []string{"cats", "owners"}
+	if err := checkCopyFlags(); err != nil {
+		t.Errorf("-k with --tables: %v", err)
+	}
+	flagTables = nil
+	if err := checkCopyFlags(); err == nil {
+		t.Error("-k with one table was not refused")
+	}
+}
+
+// seedOwners adds a second table to the copy manager's src, so a copy of
+// several tables has more than cats to go through.
+func seedOwners(t *testing.T, mgr *db.Manager) {
+	t.Helper()
+	dbh, err := mgr.DB("src")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = dbh.Exec(`CREATE TABLE owners (id INTEGER PRIMARY KEY, name TEXT);
+		INSERT INTO owners VALUES (1, 'ann'), (2, 'bo')`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCopyMany walks --tables through a failure in the middle: without -k
+// it stops there, with it it goes on; each table's summary line comes as
+// it ends, and the total names what failed and what was not tried.
+func TestCopyMany(t *testing.T) {
+	mgr := newCopyManager(t)
+	seedOwners(t, mgr)
+	ctx := context.Background()
+	cats := count(t, mgr, "src", "cats")
+	reqs := func(opts sdb.CopyOpts) []copyReq {
+		var out []copyReq
+		for _, tb := range []string{"cats", "missing", "owners"} {
+			out = append(out, copyReq{from: "src", to: "dst", table: tb, opts: opts})
+		}
+		return out
+	}
+	var failed []string
+	onFail := func(r copyReq, err error) { failed = append(failed, r.table) }
+
+	// stop at the first failure: cats stays copied, owners is not tried
+	var out bytes.Buffer
+	r := copyMany(ctx, mgr, reqs(sdb.CopyOpts{Create: true}), false, &out, nil, onFail)
+	if r.done != 1 || r.rows != int64(cats) || !reflect.DeepEqual(r.failed, []string{"missing"}) ||
+		!reflect.DeepEqual(r.notTried, []string{"owners"}) || r.firstErr == nil || r.canceled != "" {
+		t.Errorf("without -k: %+v", r)
+	}
+	if lines := strings.Split(strings.TrimSpace(out.String()), "\n"); len(lines) != 1 ||
+		!strings.Contains(lines[0], "src:cats → dst:cats") {
+		t.Errorf("summary lines:\n%s", out.String())
+	}
+	if !reflect.DeepEqual(failed, []string{"missing"}) {
+		t.Errorf("onFail saw %q", failed)
+	}
+	total := r.String()
+	for _, want := range []string{"copied 1 of 3 tables, " + strconv.Itoa(cats) + " rows in ", "; failed: missing",
+		"; not tried: owners"} {
+		if !strings.Contains(total, want) {
+			t.Errorf("total %q has no %q", total, want)
+		}
+	}
+	if count(t, mgr, "dst", "cats") != cats {
+		t.Error("cats was not kept after a later table failed")
+	}
+
+	// -k: past the failure to owners (--truncate, as cats is there now)
+	out.Reset()
+	failed = nil
+	r = copyMany(ctx, mgr, reqs(sdb.CopyOpts{Create: true, Truncate: true}), true, &out, nil, onFail)
+	if r.done != 2 || r.rows != int64(cats+2) || !reflect.DeepEqual(r.failed, []string{"missing"}) || len(r.notTried) != 0 {
+		t.Errorf("with -k: %+v", r)
+	}
+	if !strings.Contains(r.String(), "copied 2 of 3 tables") || strings.Contains(r.String(), "not tried") {
+		t.Errorf("total = %q", r.String())
+	}
+	if count(t, mgr, "dst", "owners") != 2 || count(t, mgr, "dst", "cats") != cats {
+		t.Errorf("dst: %d owners, %d cats", count(t, mgr, "dst", "owners"), count(t, mgr, "dst", "cats"))
+	}
+
+	// all copied: nothing failed, nothing named
+	r = copyMany(ctx, mgr, []copyReq{reqs(sdb.CopyOpts{Truncate: true})[0], reqs(sdb.CopyOpts{Truncate: true})[2]},
+		false, io.Discard, nil, onFail)
+	if r.done != 2 || len(r.failed) != 0 || strings.Contains(r.String(), ";") {
+		t.Errorf("all copied: %+v %q", r, r.String())
+	}
+
+	// a cancel stops it at once, with or without -k: the table it stopped
+	// rolled back, the rest not tried
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	r = copyMany(cctx, mgr, reqs(sdb.CopyOpts{Truncate: true}), true, io.Discard, nil, onFail)
+	if r.canceled != "cats" || !reflect.DeepEqual(r.notTried, []string{"missing", "owners"}) || len(r.failed) != 0 {
+		t.Errorf("canceled: %+v", r)
+	}
+	if !strings.Contains(r.String(), "; canceled: cats; not tried: missing, owners") {
+		t.Errorf("canceled total = %q", r.String())
+	}
+	if count(t, mgr, "dst", "cats") != cats {
+		t.Error("the canceled copy's truncate was not rolled back")
+	}
+}
+
+// TestPlanMany: the dry run of several tables plans every one, whatever
+// fails, and lists the problems in its total.
+func TestPlanMany(t *testing.T) {
+	mgr := newCopyManager(t)
+	seedOwners(t, mgr)
+	ctx := context.Background()
+	reqs := []copyReq{
+		{from: "src", to: "dst", table: "cats", opts: sdb.CopyOpts{Create: true}}, // missing, would be made
+		{from: "src", to: "dst", table: "nope"},                                   // no such source: an error
+		{from: "src", to: "dst", table: "owners"},                                 // missing, no --create: a problem
+	}
+	var out bytes.Buffer
+	var errs []string
+	r := planMany(ctx, mgr, reqs, &out, func(r copyReq, err error) { errs = append(errs, r.table) })
+	if r.done != 1 || !reflect.DeepEqual(r.failed, []string{"nope", "owners"}) || !reflect.DeepEqual(errs, []string{"nope"}) {
+		t.Errorf("plans: %+v, errors for %q", r, errs)
+	}
+	if n := strings.Count(out.String(), "dry run: "); n != 2 {
+		t.Errorf("%d plans printed:\n%s", n, out.String())
+	}
+	if !strings.Contains(out.String(), "\n\ndry run: src:owners") {
+		t.Errorf("plans not set apart by a blank line:\n%s", out.String())
+	}
+	if want := "dry run of 3 tables, nothing was written; problem: nope, owners"; r.String() != want {
+		t.Errorf("total = %q, want %q", r.String(), want)
+	}
+	dbh, err := mgr.DB("dst")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dbh.Exec("SELECT 1 FROM cats"); err == nil {
+		t.Error("the dry run created cats")
 	}
 }

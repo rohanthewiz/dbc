@@ -909,9 +909,9 @@ func resetFlags(t *testing.T) {
 	flagMaxRows = 0
 	t.Cleanup(func() { flagMaxRows = oldMax })
 	// copy's --batch and --columns (N-336)
-	oldBatch, oldCols := flagBatch, flagColumns
-	flagBatch, flagColumns = 0, nil
-	t.Cleanup(func() { flagBatch, flagColumns = oldBatch, oldCols })
+	oldBatch, oldCols, oldTables := flagBatch, flagColumns, flagTables
+	flagBatch, flagColumns, flagTables = 0, nil, nil
+	t.Cleanup(func() { flagBatch, flagColumns, flagTables = oldBatch, oldCols, oldTables })
 }
 
 // TestRunStatementsNoticesOffPostgres: off Postgres there are no notices, so

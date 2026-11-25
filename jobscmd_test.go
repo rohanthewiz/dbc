@@ -171,3 +171,29 @@ func TestPipelineRunJSONOneDocument(t *testing.T) {
 		t.Errorf("the -o file: %s %v", bs, err)
 	}
 }
+
+// --resume and --rerun as the command line checks them (N-339): a run id
+// or last, step names trimmed, none empty, and --rerun only with --resume.
+func TestResumeFlags(t *testing.T) {
+	for _, tc := range []struct {
+		resume string
+		rerun  []string
+		want   string // the error, or "resume|steps" when none
+	}{
+		{"", nil, "|"},
+		{"last", nil, "last|"},
+		{" 20261125-020000-7f3a ", []string{" copy", "clean "}, "20261125-020000-7f3a|copy,clean"},
+		{"yesterday", nil, `--resume takes a run id (20261009-020000-7f3a; dbc runs --job NAME lists them) or last, not "yesterday"`},
+		{"last", []string{"copy", " "}, "--rerun has an empty step name in it"},
+		{"", []string{"copy"}, "--rerun names steps a resume runs again: give --resume RUN too"},
+	} {
+		resume, steps, err := resumeFlags(tc.resume, tc.rerun)
+		got := resume + "|" + strings.Join(steps, ",")
+		if err != nil {
+			got = err.Error()
+		}
+		if got != tc.want {
+			t.Errorf("resumeFlags(%q, %q) = %s, want %s", tc.resume, tc.rerun, got, tc.want)
+		}
+	}
+}

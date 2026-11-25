@@ -2952,6 +2952,44 @@ newest `runs_keep` (200) per name are kept. Any process reads them —
 `dbc runs` from a shell sees what `dbc web`'s schedule ran, and the
 other way round. In dbc web they are the [Runs view](#job-tabs-and-the-runs-view-in-dbc-web).
 
+**Resuming a run.** A job that failed half-way need not run again from its
+root: `dbc job run nightly --resume last` (or a run's id) starts a new run
+that takes over the steps the earlier one finished and runs the rest.
+Steps hand each other nothing in memory — each pipeline reads and writes
+tables and files — so a step that succeeded has left its output where the
+next step reads it. A taken-over step is **reused** (`↻`): not run, no
+rows counted (they are the earlier run's), and its record names the run
+it last ran in (`reused_from`); the new run's record names the run it
+resumes (`resumes`, and `by`: `cli (resumes 20261125-020000-7f3a)`).
+
+```
+job nightly: resuming run 20261125-020000-7f3a: reusing copy, breeds; running clean, report, from clean (2 at a time, cli)
+[copy] ↻ copy: reused from run 20261125-020000-7f3a
+…
+job nightly succeeded in 1.02s: copy ↻ reused, clean ✓ 7 rows, breeds ↻ reused, report ✓ 1 rows
+```
+
+- **Only what has not changed is reused.** A step is reused when the
+  earlier run finished it, its pipeline is the same one, unedited (each
+  step's record keeps a hash of its pipeline, `spec_hash`), and its params
+  substitute to what they were — and every step it waits for is reused
+  too. Anything else runs, and so does every step after it; the log says
+  why (`clean runs again: pipeline clean-and-load was edited since`). A
+  record from before resumes has no hash, so its steps run again. A
+  succeeded run can be resumed too: what was edited since runs, the rest
+  is reused; one with nothing left to run is refused.
+- **Its run values are the earlier run's.** `${run.id}`, `${run.date}`,
+  `${run.time}` and `${run.started}` are the first run's (down a chain of
+  resumes too), so `orders_${run.date}` or a batch column stamped
+  `'${run.id}'` names what the reused steps wrote, even the next day.
+  `${run.trigger}` is the resume's own — a step whose params hold it runs
+  again when the trigger differs.
+- **Its params are the earlier run's**, under any `-p` given; a step whose
+  params an override changes runs again, with everything after it.
+- **A reused step's output is not checked.** A file someone cleaned up, a
+  staging table another job dropped: name the step in `--rerun copy,clean`
+  and it runs again, with everything after it.
+
 ### Job tabs and the Runs view in dbc web
 
 `Ctrl+O` lists your jobs (with when each fires next and how its last run
@@ -3579,6 +3617,8 @@ on its own (`--fragment`, or the lane's ◎).
 ./dbc job run nightly -p min_age=3                # run it here and wait; a path, a name, or an example
 ./dbc job run nightly -t json | jq .status        # the whole run record as the document
 ./dbc job run nightly --wait=false                # start it, print its id, return: it runs on, detached
+./dbc job run nightly --resume last               # take over the steps the last run finished, run the rest
+./dbc job run nightly --resume 20261125-020000-7f3a --rerun copy   # …and run copy (and what follows) again
 ./dbc job check nightly                           # the job and every pipeline it runs; exit 1 on an error
 ./dbc runs                                        # the run records, newest first (any process's)
 ./dbc runs --job nightly --status failed --since 7d
@@ -3602,6 +3642,12 @@ or waits rather than loading the same tables at once.
 scheduler): it checks the job, starts the run in a detached copy of dbc,
 and prints its id once the run has started (`-t json`: `{"id", …}`), so
 `dbc run show ID` follows it and `dbc run cancel ID` stops it.
+`--resume RUN` (an id, or `last`: the job's newest run) resumes a run
+that has ended — see [Resuming a run](#jobs): the steps it finished,
+unchanged since, are reused, and `--rerun STEPS` names ones to run again.
+A resume that is refused (another job's run, one still going, nothing
+left to run) exits 1 before anything starts, `--wait=false` included.
+`dbc runs` shows a resume's trigger as `cli (resumes ID)`.
 `--sql` loads the records as four tables — `runs`, `pipelines`
 (`run_id`, `step`, …), `fragments` and `nodes`, each with its status,
 times, `seconds` and rows — into a throwaway bytdb and runs the query in

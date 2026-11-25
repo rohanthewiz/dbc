@@ -28,6 +28,16 @@ type JobRequest struct {
 	// run --wait=false` prints the id of a run its detached child starts.
 	// "" makes one.
 	ID string
+	// Resume, when set, makes the run a resume of an earlier run of the
+	// job (N-339, resume.go): that run's id, or "last" for the job's
+	// newest. The steps it finished, unchanged since, are reused rather
+	// than run; its params are the base Params override, and its run
+	// values are the ones the steps see.
+	Resume string
+	// Rerun is steps a resume runs again though it could reuse them —
+	// their output did not last — and with each every step after it.
+	// Refused without Resume, and when it names a step the job lacks.
+	Rerun []string
 	// Show, when set, takes the rows the run's preview sinks show, in
 	// place of the Sink's Preview events: s.RunJob's script shows them as
 	// its own s.Show results (runForScript, N-186). Its run has no origin
@@ -47,29 +57,15 @@ type JobRequest struct {
 // a job that has one going. Under "queue" the new run is accepted queued
 // and starts when the one before it ends; one waits at most, a third is
 // refused.
+//
+// A resume (req.Resume) is refused too when its earlier run is not one of
+// the job's, has not ended, or leaves nothing to run (prepareJob).
 func (e *Engine) StartJob(req JobRequest) (Run, error) {
-	if req.Spec == nil {
-		return Run{}, serr.New("no job to run")
-	}
-	if diags := CheckJob(req.Spec, CheckOptions{Find: e.opt.Find}); pipeline.HasError(diags) {
-		return Run{}, serr.New("the job does not check out: "+errorDiags(diags), "job", req.Spec.Name)
-	}
-	spec := req.Spec.Clone()
-	params, err := jobParams(spec, req.Params)
+	jp, err := e.prepareJob(&req)
 	if err != nil {
 		return Run{}, err
 	}
-	pipes := map[string]*pipeline.Spec{}
-	for _, st := range spec.Pipelines {
-		ps, err := e.opt.Find(st.Pipeline)
-		if err != nil {
-			return Run{}, serr.Wrap(err, "job", spec.Name, "step", st.ID)
-		}
-		pipes[st.ID] = ps.Clone()
-	}
-	if req.Trigger == "" {
-		req.Trigger = TriggerManual
-	}
+	spec, params, pipes, hashes, plan, earlier := jp.spec, jp.params, jp.pipes, jp.hashes, jp.plan, jp.earlier
 
 	id := req.ID
 	if id == "" {
@@ -86,11 +82,17 @@ func (e *Engine) StartJob(req JobRequest) (Run, error) {
 		Params: params, Origin: req.Origin, Started: now, Status: pipeline.Running,
 	}
 	e.stampProc(&lr.rec)
+	if earlier != nil {
+		lr.rec.Resumes, lr.rec.RunValues = earlier.ID, jp.vals
+	}
 	for _, st := range spec.Pipelines {
 		rs := queued(pipes[st.ID], now, false)
 		rs.Status, rs.Started = pipeline.Queued, time.Time{}
 		lr.rec.Pipelines = append(lr.rec.Pipelines, PipelineRun{ID: st.ID, After: slices.Clone(st.After),
-			Params: maps.Clone(st.Params), RunStats: rs})
+			Params: maps.Clone(st.Params), SpecHash: hashes[st.ID], RunStats: rs})
+		if u := plan[st.ID]; u.from != nil {
+			markReused(&lr.rec.Pipelines[len(lr.rec.Pipelines)-1], u)
+		}
 	}
 
 	e.mu.Lock()
@@ -158,8 +160,99 @@ func (e *Engine) StartJob(req JobRequest) (Run, error) {
 
 	head := lr.header()
 	e.emit(lr, &RunStarted{Run: head})
-	go e.executeJob(ctx, lr, spec, pipes, queuedRun, waitFor)
+	go e.executeJob(ctx, lr, spec, pipes, plan, queuedRun, waitFor)
 	return head, nil
+}
+
+// jobPrep is what a job run is started from, settled before anything is
+// taken (prepareJob).
+type jobPrep struct {
+	spec    *Spec                     // the run's own copy
+	params  map[string]string         // the job params, settled
+	pipes   map[string]*pipeline.Spec // each step's pipeline, loaded now
+	hashes  map[string]string         // each step's pipeline's SpecHash
+	earlier *Run                      // a resume's earlier run; nil for a fresh run
+	plan    map[string]reuse          // a resume's plan; nil for a fresh run
+	vals    map[string]string         // a resume's run values; nil for a fresh run
+}
+
+// prepareJob is StartJob's pre-flight, which takes and changes nothing:
+// the job checked, its params settled, its pipelines loaded and hashed,
+// and for a resume the earlier run found and the plan made. It fills in
+// req's defaults (Trigger) and, for a resume, notes it in By.
+func (e *Engine) prepareJob(req *JobRequest) (*jobPrep, error) {
+	if req.Spec == nil {
+		return nil, serr.New("no job to run")
+	}
+	if diags := CheckJob(req.Spec, CheckOptions{Find: e.opt.Find}); pipeline.HasError(diags) {
+		return nil, serr.New("the job does not check out: "+errorDiags(diags), "job", req.Spec.Name)
+	}
+	jp := &jobPrep{spec: req.Spec.Clone(), pipes: map[string]*pipeline.Spec{}, hashes: map[string]string{}}
+	spec := jp.spec
+	// a resume's earlier run, found and checked before anything is taken
+	switch {
+	case req.Resume != "":
+		r, err := e.earlierRun(spec.Name, req.Resume)
+		if err != nil {
+			return nil, err
+		}
+		jp.earlier = &r
+	case len(req.Rerun) > 0:
+		return nil, serr.New("rerun names steps a resume runs again: it needs a run to resume", "job", spec.Name)
+	}
+	for _, id := range req.Rerun {
+		if spec.Step(id) == nil {
+			return nil, serr.New(fmt.Sprintf("job %s has no step %s to rerun", spec.Name, id), "job", spec.Name)
+		}
+	}
+	given := req.Params
+	if jp.earlier != nil {
+		given = resumeParams(spec, jp.earlier, req.Params)
+	}
+	var err error
+	if jp.params, err = jobParams(spec, given); err != nil {
+		return nil, err
+	}
+	for _, st := range spec.Pipelines {
+		ps, err := e.opt.Find(st.Pipeline)
+		if err != nil {
+			return nil, serr.Wrap(err, "job", spec.Name, "step", st.ID)
+		}
+		jp.pipes[st.ID] = ps.Clone()
+		jp.hashes[st.ID] = SpecHash(jp.pipes[st.ID])
+	}
+	if req.Trigger == "" {
+		req.Trigger = TriggerManual
+	}
+	if jp.earlier == nil {
+		return jp, nil
+	}
+	// a resume's plan: which steps it reuses, and the run values its
+	// steps see (the earlier run's, the trigger its own). One that would
+	// run nothing is refused: there is nothing to resume.
+	jp.vals = earlierValues(jp.earlier)
+	jp.vals["trigger"], jp.vals["job"] = req.Trigger, spec.Name
+	jp.plan = resumePlan(spec, jp.pipes, jp.hashes, jp.earlier, jp.params, jp.vals, req.Rerun)
+	if !slices.ContainsFunc(spec.Pipelines, func(st Step) bool { return jp.plan[st.ID].from == nil }) {
+		return nil, serr.New(fmt.Sprintf("nothing to resume: every step of run %s succeeded and is unchanged "+
+			"(--rerun STEP runs one again)", jp.earlier.ID), "job", spec.Name, "run", jp.earlier.ID)
+	}
+	by := "resumes " + jp.earlier.ID
+	if req.By != "" {
+		by = req.By + ", " + by
+	}
+	req.By = by
+	return jp, nil
+}
+
+// CheckStart reports what StartJob would refuse req for before it takes
+// anything: a job that does not check out, a param, a resume's earlier
+// run or empty plan. Not what depends on the runs going (overlap, a busy
+// origin). `dbc job run --wait=false` asks it before it starts its
+// detached child, which would refuse with no one to tell.
+func (e *Engine) CheckStart(req JobRequest) error {
+	_, err := e.prepareJob(&req)
+	return err
 }
 
 // jobParams settles a run's job params: the defaults, then the overrides,
@@ -204,11 +297,16 @@ var errTimedOut = errors.New("timed out")
 // anywhere upstream skips it; with finish_branches the branches that do not
 // depend on the failure run to the end, and the job ends failed.
 //
+// A resume (plan non-nil, resume.go) starts the walk past the steps it
+// reuses: they count as succeeded, so waiting[s] counts only the afters
+// that run, and ready is every step that runs whose afters are all
+// reused. A run started afresh reuses nothing, and ready is the root.
+//
 // A queued run (overlap: queue) first waits its turn (waitTurn): for the
 // run before it here, waitFor, and for the job's lock another process may
 // hold.
 func (e *Engine) executeJob(ctx context.Context, lr *liveRun, spec *Spec, pipes map[string]*pipeline.Spec,
-	queuedRun bool, waitFor <-chan struct{}) {
+	plan map[string]reuse, queuedRun bool, waitFor <-chan struct{}) {
 	defer e.wg.Done()
 	stop := e.background(lr)
 	if queuedRun {
@@ -239,22 +337,36 @@ func (e *Engine) executeJob(ctx context.Context, lr *liveRun, spec *Spec, pipes 
 	root := spec.RootID()
 	vars := e.runVars(lr, spec.Name)
 	params := lr.header().Params
-	e.line(lr, "", "info", fmt.Sprintf("job %s: %d pipelines from %s, %d at a time (%s)",
-		spec.Name, len(spec.Pipelines), root, spec.Policy.Parallel(), lr.header().Trigger))
-
+	reused := func(id string) bool { return plan[id].from != nil }
 	index := map[string]int{}
 	waiting := map[string]int{}
+	var ready []string
 	for i, st := range spec.Pipelines {
 		index[st.ID] = i
-		waiting[st.ID] = len(st.After)
+		for _, a := range st.After {
+			if !reused(a) {
+				waiting[st.ID]++
+			}
+		}
 	}
+	for _, st := range spec.Pipelines {
+		if !reused(st.ID) && waiting[st.ID] == 0 {
+			ready = append(ready, st.ID)
+		}
+	}
+	if plan == nil {
+		e.line(lr, "", "info", fmt.Sprintf("job %s: %d pipelines from %s, %d at a time (%s)",
+			spec.Name, len(spec.Pipelines), root, spec.Policy.Parallel(), lr.header().Trigger))
+	} else {
+		e.resumeLines(lr, spec, plan, ready)
+	}
+
 	type result struct {
 		id     string
 		status pipeline.Status
 		msg    string
 	}
 	results := make(chan result)
-	ready := []string{root}
 	running := 0
 	var firstErr string
 	for {
@@ -376,17 +488,57 @@ func cmpOr(a, b string) string {
 	return b
 }
 
-// stepSummary is each step's outcome in a line: "copy ✓ 12 rows, clean ✗, report ↷".
+// stepSummary is each step's outcome in a line: "copy ✓ 12 rows, clean ✗,
+// report ↷" — and in a resume "copy ↻ reused, clean ✓ 7 rows".
 func stepSummary(r Run) string {
 	var parts []string
 	for _, p := range r.Pipelines {
 		s := p.ID + " " + glyph(p.Status)
-		if p.Status == pipeline.Succeeded {
+		switch p.Status {
+		case pipeline.Succeeded:
 			s += fmt.Sprintf(" %d rows", p.Rows())
+		case pipeline.Reused:
+			s += " reused"
 		}
 		parts = append(parts, s)
 	}
 	return strings.Join(parts, ", ")
+}
+
+// resumeLines opens a resume's log: what it resumes, which steps it
+// reuses and where it starts, one line for the run; then, in each step's
+// own lines, a reused step's "↻ reused from run …", and why a step the
+// earlier run finished runs again (an edit, a param, --rerun), which is
+// the one a user would not guess.
+//
+//	job nightly: resuming run 20261124-020000-7f3a: reusing copy, clean; running report (2 at a time, cli)
+//	[copy] ↻ copy: reused from run 20261124-020000-7f3a
+//	[clean] clean runs again: pipeline clean-and-load was edited since
+func (e *Engine) resumeLines(lr *liveRun, spec *Spec, plan map[string]reuse, ready []string) {
+	h := lr.header()
+	var use, run []string
+	for _, st := range spec.Pipelines {
+		if plan[st.ID].from != nil {
+			use = append(use, st.ID)
+		} else {
+			run = append(run, st.ID)
+		}
+	}
+	text := fmt.Sprintf("job %s: resuming run %s: ", spec.Name, h.Resumes)
+	if len(use) > 0 {
+		text += "reusing " + strings.Join(use, ", ") + "; "
+	}
+	text += fmt.Sprintf("running %s, from %s (%d at a time, %s)", strings.Join(run, ", "),
+		strings.Join(ready, ", "), spec.Policy.Parallel(), h.Trigger)
+	e.line(lr, "", "info", text)
+	for _, st := range spec.Pipelines {
+		switch u := plan[st.ID]; {
+		case u.from != nil:
+			e.line(lr, st.ID, "info", fmt.Sprintf("↻ %s: reused from run %s", st.ID, u.fromID))
+		case u.why != "":
+			e.line(lr, st.ID, "info", fmt.Sprintf("%s runs again: %s", st.ID, u.why))
+		}
+	}
 }
 
 // glyph is a state's mark in a line or a tree.
@@ -404,6 +556,8 @@ func glyph(s pipeline.Status) string {
 		return "●"
 	case pipeline.Interrupted:
 		return "⚠"
+	case pipeline.Reused:
+		return "↻"
 	}
 	return "○"
 }
@@ -456,22 +610,9 @@ func (e *Engine) runStep(ctx context.Context, lr *liveRun, idx int, spec *Spec, 
 
 	// the step's params: each value with the job's params and the run's
 	// values substituted (${min_age}, ${run.date})
-	stepParams := map[string]string{}
-	for k, v := range st.Params {
-		sv, err := pipeline.Subst(v, func(name string) (string, bool) {
-			if pv, ok := params[name]; ok {
-				return pv, true
-			}
-			if rn, ok := strings.CutPrefix(name, "run."); ok {
-				rv, ok := vars[rn]
-				return rv, ok
-			}
-			return "", false
-		})
-		if err != nil {
-			return fail(serr.Wrap(err, "param", k))
-		}
-		stepParams[k] = sv
+	stepParams, err := substStepParams(st, params, vars)
+	if err != nil {
+		return fail(err)
 	}
 
 	lr.mu.Lock()

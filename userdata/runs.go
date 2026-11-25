@@ -63,6 +63,10 @@ type RunHead struct {
 	Started time.Time `json:"started"`
 	Ended   time.Time `json:"ended"`
 	Error   string    `json:"error,omitempty"`
+	// Resumes is the run a job run resumes (N-339), "" for one started
+	// afresh: read off the record's head like the rest, so a listing can
+	// mark a resume without reading its steps.
+	Resumes string `json:"resumes,omitempty"`
 	// Rows is every fragment's committed rows, over all its pipelines.
 	Rows int64 `json:"rows"`
 	// Mod is when the file was last written: a "running" record that has

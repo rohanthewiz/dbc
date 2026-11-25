@@ -212,6 +212,11 @@ const (
 	// it died (a crash, a kill, a power cut) before it could say how it
 	// ended. Only package jobs sets it, on records it reads back from disk.
 	Interrupted Status = "interrupted"
+	// Reused is a job step a resume did not run (N-339): the run it
+	// resumes finished it, nothing it was run with has changed, and its
+	// output is taken to be where it left it (jobs/resume.go). Only
+	// package jobs sets it, on a resumed run's steps and their fragments.
+	Reused Status = "reused"
 )
 
 // NodeStats counts what went through one node.

@@ -23,6 +23,13 @@ import (
 //	      ✓ stamp     1 rows     0s    log 0→1
 //	  ↷ report   cats-report                         after clean, breeds
 //	  error: breeds: …
+//
+// A resume's reused step (N-339) has no counts — its rows are the run's
+// it names — and says where it last ran:
+//
+//	run 20261125-093000-1c2d · job nightly · cli (resumes 20261125-020000-7f3a) · ✓ succeeded · 1.02s
+//	  ↻ copy     copy-cats                           reused from 20261125-020000-7f3a
+//	      ↻ cats
 func (r *Run) Tree() string {
 	var sb strings.Builder
 	head := []string{"run " + r.ID, r.Kind + " " + r.Name}
@@ -51,10 +58,13 @@ func (r *Run) Tree() string {
 		if r.Kind == KindJob {
 			line += fmt.Sprintf(" %-*s", nameW, p.Pipeline)
 		}
-		if p.Status == pipeline.Queued || p.Status == pipeline.Skipped {
+		if notRun(p.Status) {
 			line += fmt.Sprintf(" %10s %8s", "", "")
 		} else {
 			line += fmt.Sprintf(" %5d rows %8s", p.Rows(), took(p.Started, p.Ended))
+		}
+		if p.ReusedFrom != "" {
+			line += "   reused from " + p.ReusedFrom
 		}
 		if len(p.After) > 0 {
 			line += "   after " + strings.Join(p.After, ", ")
@@ -62,7 +72,7 @@ func (r *Run) Tree() string {
 		sb.WriteString(strings.TrimRight(line, " ") + "\n")
 		for _, f := range p.Fragments {
 			fl := fmt.Sprintf("      %s %-10s", glyph(f.Status), f.Name)
-			if f.Status != pipeline.Queued && f.Status != pipeline.Skipped {
+			if !notRun(f.Status) {
 				fl += fmt.Sprintf(" %5d rows %8s", f.Rows, took(f.Started, f.Ended))
 				var nodes []string
 				for _, n := range f.Nodes {
@@ -95,6 +105,12 @@ func (r *Run) Tree() string {
 		sb.WriteString("  error: " + r.Error + "\n")
 	}
 	return sb.String()
+}
+
+// notRun reports whether a pipeline or fragment in a state has nothing of
+// its own to count: never started (queued, skipped), or reused by a resume.
+func notRun(s pipeline.Status) bool {
+	return s == pipeline.Queued || s == pipeline.Skipped || s == pipeline.Reused
 }
 
 // fragmentSaid reports whether a fragment's line already carries the

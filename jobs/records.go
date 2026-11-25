@@ -299,7 +299,7 @@ func matches(s Summary, f userdata.RunFilter) bool {
 // summaryOf is a run's header as a listing row.
 func summaryOf(r *Run, mod time.Time) Summary {
 	s := Summary{ID: r.ID, Kind: r.Kind, Name: r.Name, Trigger: r.Trigger, By: r.By, Status: string(r.Status),
-		Started: r.Started, Ended: r.Ended, Error: r.Error, Mod: mod}
+		Started: r.Started, Ended: r.Ended, Error: r.Error, Resumes: r.Resumes, Mod: mod}
 	for _, p := range r.Pipelines {
 		s.Rows += p.Rows()
 	}

@@ -111,6 +111,16 @@ type Run struct {
 	Ended   time.Time       `json:"ended"`
 	Status  pipeline.Status `json:"status"`
 	Error   string          `json:"error,omitempty"`
+	// Resumes is the run this one resumes (N-339, resume.go): its steps
+	// that finished, and have not changed since, are reused here. ""
+	// for a run started afresh.
+	Resumes string `json:"resumes,omitempty"`
+	// RunValues is the ${run.…} values a resume's steps saw, which are the
+	// first run's (id, date, time, started) and the resume's own trigger
+	// and job; nil for a run started afresh, whose values its id, start
+	// and trigger make (runVars). Kept so a resume of a resume carries the
+	// same values on.
+	RunValues map[string]string `json:"run_values,omitempty"`
 	// Pipelines is the run's pipelines: one for a pipeline run; a job's
 	// steps in its spec's order, each queued from the start.
 	Pipelines []PipelineRun `json:"pipelines"`
@@ -126,6 +136,14 @@ type PipelineRun struct {
 	ID     string            `json:"id"`
 	After  []string          `json:"after,omitempty"`
 	Params map[string]string `json:"params,omitempty"`
+	// SpecHash is the step's pipeline spec's fingerprint as the run loaded
+	// it (SpecHash), so a later resume can tell whether the pipeline was
+	// edited since; a job step's only.
+	SpecHash string `json:"spec_hash,omitempty"`
+	// ReusedFrom is, for a step a resume reused (status reused), the run
+	// where the step last ran: the run resumed, or further back for a
+	// resume of a resume.
+	ReusedFrom string `json:"reused_from,omitempty"`
 	pipeline.RunStats
 	// Shown is what the pipeline showed — each preview sink's rows, a go
 	// node's s.Show — cut down to keep (keepShown), so a run's page has
@@ -604,8 +622,14 @@ func (e *Engine) execute(ctx context.Context, lr *liveRun, spec *pipeline.Spec, 
 // runVars is the ${run.…} values of a run's pipelines: its id and trigger,
 // its start's date and time (the run's, not each step's, so every step of
 // a job sees the same day), and the job's name when it is one.
+//
+// A resume's are in its record (Run.RunValues, set by StartJob): the
+// first run's, so its steps name what the steps it reuses named.
 func (e *Engine) runVars(lr *liveRun, job string) map[string]string {
 	h := lr.header()
+	if len(h.RunValues) > 0 {
+		return h.RunValues
+	}
 	t := h.Started.Local()
 	return map[string]string{
 		"id": h.ID, "trigger": h.Trigger, "job": job,
@@ -988,6 +1012,7 @@ func keepShown(lr *liveRun, idx int, r *model.Result) {
 func (r *Run) clone() Run {
 	c := *r
 	c.Params = maps.Clone(r.Params)
+	c.RunValues = maps.Clone(r.RunValues)
 	c.Pipelines = make([]PipelineRun, len(r.Pipelines))
 	for i, p := range r.Pipelines {
 		cp := p

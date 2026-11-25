@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -73,6 +74,12 @@ func jobCommand() *cli.Command {
 					&cli.BoolFlag{Name: "wait", Value: true, Destination: &flagJobWait,
 						Usage: "wait for the run to end; --wait=false prints its id once it has started and leaves it running " +
 							"(dbc run show ID follows it, dbc run cancel ID stops it)"},
+					&cli.StringFlag{Name: "resume", Destination: &flagJobResume,
+						Usage: "resume run `RUN` of the job (its id, or last): the steps it finished, unchanged since, are reused " +
+							"rather than run, and the rest run with its ${run.id} and ${run.date}; --param overrides its params"},
+					&cli.StringSliceFlag{Name: "rerun", Destination: &flagJobRerun,
+						Usage: "with --resume, run these `STEPS` again though they could be reused, and every step after them " +
+							"(comma-separated, or repeated): their output did not last"},
 				},
 				Action: jobRunAction,
 			},
@@ -225,12 +232,46 @@ func findJob(cfg *config.Config, arg string) config.JobRef {
 // flagJobWait is `dbc job run --wait`: false detaches the run (detach.go).
 var flagJobWait bool
 
+// flagJobResume and flagJobRerun are `dbc job run --resume RUN` and
+// `--rerun STEPS` (N-339, jobs/resume.go).
+var (
+	flagJobResume string
+	flagJobRerun  []string
+)
+
+// resumeFlags is --resume and --rerun checked as far as the command line
+// can tell: a run id or last, and step names, each trimmed, none empty.
+// The engine checks the rest (the run is the job's and has ended, the
+// steps are the job's).
+func resumeFlags(resume string, rerun []string) (string, []string, error) {
+	resume = strings.TrimSpace(resume)
+	if resume != "" && resume != "last" && !userdata.ValidRunID(resume) {
+		return "", nil, fmt.Errorf("--resume takes a run id (20261009-020000-7f3a; dbc runs --job NAME lists them) or last, not %q", resume)
+	}
+	var steps []string
+	for _, st := range rerun {
+		st = strings.TrimSpace(st)
+		if st == "" {
+			return "", nil, errors.New("--rerun has an empty step name in it")
+		}
+		steps = append(steps, st)
+	}
+	if len(steps) > 0 && resume == "" {
+		return "", nil, errors.New("--rerun names steps a resume runs again: give --resume RUN too")
+	}
+	return resume, steps, nil
+}
+
 func jobRunAction(ctx context.Context, cmd *cli.Command) error {
 	refuseQueryFlags("job run")
 	if cmd.Args().Len() != 1 {
-		usage("usage: dbc job run [--param k=v]... <file.json|NAME>")
+		usage("usage: dbc job run [--param k=v]... [--resume RUN|last [--rerun STEPS]] [--wait=false] <file.json|NAME>")
 	}
 	params, err := parseParams(flagParams)
+	if err != nil {
+		usage(err.Error())
+	}
+	resume, rerun, err := resumeFlags(flagJobResume, flagJobRerun)
 	if err != nil {
 		usage(err.Error())
 	}
@@ -269,6 +310,15 @@ func jobRunAction(ctx context.Context, cmd *cli.Command) error {
 			}
 			fail(serr.New("the job does not check out", "job", spec.Name), "the run did not start")
 		}
+		// and a resume, which the child would refuse with no one to hear:
+		// its run, its plan (CheckStart reads the records, runs nothing)
+		if resume != "" {
+			ce := jobs.New(cfg, nil, jobs.Options{RunsDir: cfg.RunsDir})
+			if err := ce.CheckStart(jobs.JobRequest{Spec: spec, Params: params, Trigger: jobs.TriggerCLI,
+				Resume: resume, Rerun: rerun}); err != nil {
+				fail(err, "the run did not start")
+			}
+		}
 		mgr.Close()
 		return startDetached(ctx, cfg, spec.Name, f)
 	}
@@ -294,7 +344,7 @@ func jobRunAction(ctx context.Context, cmd *cli.Command) error {
 	runCtx, stop := interruptible()
 	defer stop()
 	head, err := e.StartJob(jobs.JobRequest{Spec: spec, Params: params, Trigger: jobs.TriggerCLI, Source: ref.FileName(),
-		ID: detachedID})
+		ID: detachedID, Resume: resume, Rerun: rerun})
 	if err != nil {
 		fail(err, "the job did not start")
 	}
@@ -464,7 +514,14 @@ func runsAction(ctx context.Context, cmd *cli.Command) error {
 		if !h.Ended.IsZero() {
 			took = h.Ended.Sub(h.Started).Round(time.Millisecond).String()
 		}
-		r.Rows = append(r.Rows, []string{h.ID, h.Kind, h.Name, h.Trigger, h.Started.Local().Format("2006-01-02 15:04:05"),
+		// a resume says which run it resumes (N-339), as `dbc run show`'s
+		// head does; no other row's trigger changes, so a CSV of the
+		// listing reads as it did
+		trig := h.Trigger
+		if h.Resumes != "" {
+			trig += " (resumes " + h.Resumes + ")"
+		}
+		r.Rows = append(r.Rows, []string{h.ID, h.Kind, h.Name, trig, h.Started.Local().Format("2006-01-02 15:04:05"),
 			took, h.Status, strconv.FormatInt(h.Rows, 10), h.Error})
 		r.Raw = append(r.Raw, []any{h.ID, h.Kind, h.Name, h.Trigger, h.Started, took, h.Status, h.Rows, h.Error})
 	}

@@ -79,23 +79,6 @@ ten session docs in `ai_docs/claude_sessions/`
   it via `{{ .Env.… }}`. Only matters if the subject is wanted on releases,
   whose head commit is "Release vX.Y.Z" anyway.
 
-- **N-335** · raised `2026-1118-0111-n284-n290-n295-web-small-events-columns-load-errors` · value low
-  Drop a dbc web tab's result sets at the idle release? This is the part
-  of N-284 not done, because it changes what a returning user sees. A
-  window with no stream keeps every tab's result sets until it is
-  forgotten (`forgetAfter`, 24 h; `web/hub.go` `reap`). Cells have no
-  size cap, so `max_rows` bounds the rows held, not the bytes. N-284's
-  fix was to drop them at the idle release, which is `conn_idle_timeout`,
-  1 h by default. A browser tab closed for good would then free its
-  results after an hour, not a day. But a laptop asleep over lunch would
-  come back to empty result tabs: a rerun (`r`) refills each one, but
-  the rows are gone. The question for the user: drop them at the
-  release, drop only past some size, or keep the day? If they go, the
-  page needs telling, as `sayReleased` tells it of a session: a note,
-  and result tabs that show "released — r reruns" rather than a grid
-  whose pages 404.
-
-
 ## Validate
 
 Items whose remaining work is purely testing: hand checks in a real terminal
@@ -709,6 +692,28 @@ call.
 
 Newest first. Everything closed before the list existed (2026-09-24) is
 written up in the session docs themselves.
+
+- **N-335** · raised `2026-1118-0111-n284-n290-n295-web-small-events-columns-load-errors` · value low
+  Drop a dbc web tab's result sets at the idle release? This is the part
+  of N-284 not done, because it changes what a returning user sees. A
+  window with no stream keeps every tab's result sets until it is
+  forgotten (`forgetAfter`, 24 h; `web/hub.go` `reap`). Cells have no
+  size cap, so `max_rows` bounds the rows held, not the bytes. N-284's
+  fix was to drop them at the idle release, which is `conn_idle_timeout`,
+  1 h by default. A browser tab closed for good would then free its
+  results after an hour, not a day. But a laptop asleep over lunch would
+  come back to empty result tabs: a rerun (`r`) refills each one, but
+  the rows are gone. The question for the user: drop them at the
+  release, drop only past some size, or keep the day? If they go, the
+  page needs telling, as `sayReleased` tells it of a session: a note,
+  and result tabs that show "released — r reruns" rather than a grid
+  whose pages 404.
+  closed 2026-11-25, `2026-1125-1407-n335-release-rows-after-goodbye`, commit `8214352`. The user chose to drop the rows only for a window whose page said goodbye. `hub.release` (the page's pagehide → `POST /win/:id/release`) sets `window.goodbye`. A stream attaching clears it (`hub.attached` in both stream handlers, and the reaper's tick while a stream lasts), so a reload, or a goodbye that lands late, counts for nothing. At the idle release (`conn_idle_timeout`), `reap` carries the flag with each tab (`idleRelease`). `releaseIdle` then calls `workspace.ReleaseResults` and empties the grid's cache (`t.rv`), which held the same rows. A laptop asleep, a tab Chrome discarded or a lost network sends no goodbye, so it keeps its rows for the day, as before.
+  - **The workspace side.** `ReleaseResults` drops every tab's `res` and `shows` on every connection and keeps the tab: title, name, statement, pin, share, group and seq. `resultTab.released` marks it, and `ResultTab.Released` exposes it. Whatever fills the tab again clears it (`placeRunLocked`, `showIntoLocked`). A rerun's `rerunOf` names the released seq. `LastResultRerun` answers 0 for a released tab. The assistant reads a shared tab through `sharedRows`, which is nil while released, so an empty share does not take the question's place. `ShowScriptResult` refuses with "run the script again". The dropped shows count into `cut`.
+  - **The page side.** The strip's `released` flag italicises the tab (`.rt.rel`). Its tooltip and hover card say "released". In place of a grid, `showResultOf` and `applyState` show the note "Released — … r (or ↻) reruns its query into this tab" (`releasedNote`, `grid.clear(note)`). `#grid-msg` now takes focus on a click (`tabindex -1`), so `r` works from the message.
+  - **A gap closed on the way.** The page's own stream (`/win/:id/events`) never called `sayReleased`; only the per-tab `/ws/:id/events` did. So N-261's "session released" note never reached a real page. Both handlers now say it, along with the new "results were released" note.
+  - **Tests.** `web.TestIdleReleaseDropsRowsAfterGoodbye`: goodbye, then detach, then reap. The rows and the grid cache are gone, and the pinned tab is kept, released, with its statement. `/result` answers no data. The window stream hears the note. The rerun refills the same tab, still pinned, with `rerunOf` = the old seq. `TestIdleReleaseKeepsRowsWithoutGoodbye` has two cases: the stream lost, and a goodbye followed by a reload's stream and then a detach. `workspace.TestReleaseResults` covers the share, the rerun, `LastResultSeq`, and the shows/cut/next show. A throwaway headless-Chrome run (not committed: it waits out the reaper's 1-minute tick) checked the real page: navigate away, then come back in the same tab after the release. The tab was italic, the grid showed the note, the log had the line, and `r` brought back 3 rows. The full web e2e passes.
+  - README: the browser workbench section says when sessions and result rows are released.
 
 - **N-339** · raised `2026-1125-1133-n336-copy-flags-tables-progress` · value low
   Resume a failed job run from the step that failed, rather than from the
